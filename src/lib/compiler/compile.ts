@@ -68,6 +68,37 @@ export type CompileOutput = {
 };
 
 /**
+ * Convert a JSON value to a Rhai literal expression string.
+ * Maps become `#{ ... }`, arrays become `[ ... ]`, primitives are emitted directly.
+ * This avoids the need for a `parse_json()` function in the Rhai runtime.
+ */
+function jsonToRhaiLiteral(value: unknown): string {
+	if (value === null || value === undefined) return '()';
+	if (typeof value === 'boolean') return String(value);
+	if (typeof value === 'number') return String(value);
+	if (typeof value === 'string') {
+		const escaped = value
+			.replace(/\\/g, '\\\\')
+			.replace(/"/g, '\\"')
+			.replace(/\n/g, '\\n')
+			.replace(/\r/g, '\\r');
+		return `"${escaped}"`;
+	}
+	if (Array.isArray(value)) {
+		return `[${value.map(jsonToRhaiLiteral).join(', ')}]`;
+	}
+	if (typeof value === 'object') {
+		const entries = Object.entries(value as Record<string, unknown>)
+			.map(([k, v]) => {
+				const escapedKey = k.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+				return `"${escapedKey}": ${jsonToRhaiLiteral(v)}`;
+			});
+		return `#{${entries.join(', ')}}`;
+	}
+	return '()';
+}
+
+/**
  * Compile a WorkflowGraph to AIR JSON.
  * This is the client-side compiler for instant preview.
  */
@@ -162,7 +193,41 @@ export function compileToAIR(
 		const inputPlace = nodeInputPlace.get(edge.target);
 		if (!outputPlace || !inputPlace) continue;
 
-		// Create pass-through transition
+		// Build edge transition logic — inject human task form data if targeting a human_task
+		let edgeLogic: AIRLogic = { type: 'rhai', source: '#{ output: input }' };
+		if (targetNode.data.type === 'human_task') {
+			const htData = targetNode.data as HumanTaskNodeData;
+			const title = htData.taskTitle?.replace(/\\/g, '\\\\').replace(/"/g, '\\"') ?? '';
+			const instructions = (htData.instructionsMdsvex ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+			const stepsValue = htData.steps.map((step) => ({
+				id: step.id,
+				title: step.title,
+				description_mdsvex: step.descriptionMdsvex ?? null,
+				blocks: step.blocks.map((block) => {
+					if (block.type === 'input') {
+						return {
+							type: 'input',
+							field: {
+								name: block.field.name,
+								label: block.field.label,
+								kind: block.field.kind,
+								required: block.field.required ?? false,
+								placeholder: block.field.placeholder ?? null,
+								options: block.field.options ?? null
+							}
+						};
+					}
+					return block;
+				})
+			}));
+			const stepsRhai = jsonToRhaiLiteral(stepsValue);
+			edgeLogic = {
+				type: 'rhai',
+				source: `let d = input; d.title = "${title}"; d.instructions_mdsvex = "${instructions}"; d.steps = ${stepsRhai}; #{ output: d }`
+			};
+		}
+
+		// Create edge transition
 		transitions.push({
 			id: `t_edge_${edge.id}`,
 			name: `${sourceNode.data.label} -> ${targetNode.data.label}`,
@@ -170,7 +235,7 @@ export function compileToAIR(
 			output_ports: [{ name: 'output', cardinality: 'single' }],
 			inputs: [{ place: outputPlace, port: 'input' }],
 			outputs: [{ port: 'output', place: inputPlace }],
-			logic: { type: 'rhai', source: '#{ output: input }' }
+			logic: edgeLogic
 		});
 	}
 
@@ -238,31 +303,6 @@ function expandHumanTask(
 	);
 
 	groups.push({ id: `grp_${id}`, name: data.label });
-
-	// Serialize the task form definition into Rhai logic
-	const stepsJson = JSON.stringify(
-		data.steps.map((step) => ({
-			id: step.id,
-			title: step.title,
-			description_mdsvex: step.descriptionMdsvex,
-			blocks: step.blocks.map((block) => {
-				if (block.type === 'input') {
-					return {
-						type: 'input',
-						field: {
-							name: block.field.name,
-							label: block.field.label,
-							kind: block.field.kind,
-							required: block.field.required ?? false,
-							placeholder: block.field.placeholder,
-							options: block.field.options
-						}
-					};
-				}
-				return block;
-			})
-		}))
-	).replace(/"/g, '\\"');
 
 	// Request transition (effect: human_task)
 	transitions.push({
