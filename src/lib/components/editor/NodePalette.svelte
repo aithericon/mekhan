@@ -27,7 +27,7 @@
 	}
 </script>
 
-<div class="flex w-56 flex-col border-r border-sidebar-border bg-sidebar">
+<div class="flex w-56 flex-col border-r border-sidebar-border bg-sidebar" data-testid="node-palette">
 	<div class="border-b border-sidebar-border px-3 py-2.5">
 		<h2 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Blocks</h2>
 	</div>
@@ -38,6 +38,7 @@
 			<div
 				class="group flex cursor-grab items-center gap-2.5 rounded-lg border border-transparent px-2.5 py-2 text-sm transition-colors hover:border-border hover:bg-accent active:cursor-grabbing"
 				draggable="true"
+				data-testid="palette-item-{item.type}"
 				ondragstart={(e) => onDragStart(e, item.type)}
 			>
 				<div

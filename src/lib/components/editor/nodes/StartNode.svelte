@@ -11,6 +11,7 @@
 		? 'border-green-500 shadow-md shadow-green-200'
 		: 'border-green-400 shadow-sm'}"
 	style="background: linear-gradient(135deg, #f0fdf4, #dcfce7);"
+	data-testid="node-start"
 >
 	<Play class="size-4 text-green-600" />
 	<span class="text-sm font-medium text-green-800">{data.label}</span>

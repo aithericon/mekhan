@@ -14,6 +14,7 @@
 		? 'border-amber-500 shadow-md shadow-amber-200'
 		: 'border-amber-300 shadow-sm'}"
 	style="background: linear-gradient(135deg, #fffbeb, #fef3c7);"
+	data-testid="node-decision"
 >
 	<div class="flex items-center gap-2 border-b border-amber-200 px-3 py-2">
 		<div class="flex size-6 items-center justify-center rounded-md bg-amber-500">

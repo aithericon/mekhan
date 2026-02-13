@@ -12,6 +12,7 @@
 		? 'border-pink-500 shadow-md shadow-pink-200'
 		: 'border-pink-300 shadow-sm'}"
 	style="background: linear-gradient(135deg, #fdf2f8, #fce7f3);"
+	data-testid="node-loop"
 >
 	<div class="flex items-center gap-2 border-b border-pink-200 px-3 py-2">
 		<div class="flex size-6 items-center justify-center rounded-md bg-pink-500">

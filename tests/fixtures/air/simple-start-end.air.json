@@ -1,0 +1,57 @@
+{
+  "name": "Simple Start-End",
+  "places": [
+    {
+      "id": "p_start-1_ready",
+      "name": "Start",
+      "type": "state",
+      "initial_tokens": [
+        {
+          "_instance_id": "__INSTANCE_ID__",
+          "_created_at": "__TIMESTAMP__"
+        }
+      ]
+    },
+    {
+      "id": "p_end-1_done",
+      "name": "End",
+      "type": "terminal"
+    }
+  ],
+  "transitions": [
+    {
+      "id": "t_edge_e1",
+      "name": "Start -> End",
+      "input_ports": [
+        {
+          "name": "input",
+          "cardinality": "single"
+        }
+      ],
+      "output_ports": [
+        {
+          "name": "output",
+          "cardinality": "single"
+        }
+      ],
+      "inputs": [
+        {
+          "place": "p_start-1_ready",
+          "port": "input"
+        }
+      ],
+      "outputs": [
+        {
+          "port": "output",
+          "place": "p_end-1_done"
+        }
+      ],
+      "logic": {
+        "type": "rhai",
+        "source": "#{ output: input }"
+      }
+    }
+  ],
+  "groups": [],
+  "definitions": {}
+}

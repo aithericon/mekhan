@@ -1,0 +1,57 @@
+{
+  "name": "Start-End Fixture",
+  "places": [
+    {
+      "id": "p_n-start_ready",
+      "name": "Start",
+      "type": "state",
+      "initial_tokens": [
+        {
+          "_instance_id": "__INSTANCE_ID__",
+          "_created_at": "__TIMESTAMP__"
+        }
+      ]
+    },
+    {
+      "id": "p_n-end_done",
+      "name": "End",
+      "type": "terminal"
+    }
+  ],
+  "transitions": [
+    {
+      "id": "t_edge_e-1",
+      "name": "Start -> End",
+      "input_ports": [
+        {
+          "name": "input",
+          "cardinality": "single"
+        }
+      ],
+      "output_ports": [
+        {
+          "name": "output",
+          "cardinality": "single"
+        }
+      ],
+      "inputs": [
+        {
+          "place": "p_n-start_ready",
+          "port": "input"
+        }
+      ],
+      "outputs": [
+        {
+          "port": "output",
+          "place": "p_n-end_done"
+        }
+      ],
+      "logic": {
+        "type": "rhai",
+        "source": "#{ output: input }"
+      }
+    }
+  ],
+  "groups": [],
+  "definitions": {}
+}

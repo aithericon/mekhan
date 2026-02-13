@@ -12,6 +12,7 @@
 		? 'border-violet-500 shadow-md shadow-violet-200'
 		: 'border-violet-300 shadow-sm'}"
 	style="background: linear-gradient(135deg, #f5f3ff, #ede9fe);"
+	data-testid="node-automated-step"
 >
 	<div class="flex items-center gap-2 border-b border-violet-200 px-3 py-2">
 		<div class="flex size-6 items-center justify-center rounded-md bg-violet-500">

@@ -12,6 +12,7 @@
 		? 'border-cyan-500 shadow-md shadow-cyan-200'
 		: 'border-cyan-300 shadow-sm'}"
 	style="background: linear-gradient(135deg, #ecfeff, #cffafe);"
+	data-testid="node-parallel-join"
 >
 	<div class="flex size-6 items-center justify-center rounded-md bg-cyan-500">
 		<GitMerge class="size-3.5 text-white" />

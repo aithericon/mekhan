@@ -12,6 +12,7 @@
 		? 'border-red-500 shadow-md shadow-red-200'
 		: 'border-red-400 shadow-sm'}"
 	style="background: linear-gradient(135deg, #fef2f2, #fecaca);"
+	data-testid="node-end"
 >
 	<Square class="size-4 text-red-600" />
 	<span class="text-sm font-medium text-red-800">{data.label}</span>

@@ -57,7 +57,7 @@
 	});
 </script>
 
-<div class="h-full overflow-y-auto">
+<div class="h-full overflow-y-auto" data-testid="templates-page">
 	<div class="mx-auto max-w-5xl px-6 py-8">
 		<div class="mb-6 flex items-center justify-between">
 			<div>
@@ -69,6 +69,7 @@
 			<button
 				type="button"
 				class="flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+				data-testid="btn-create-template"
 				onclick={handleCreate}
 			>
 				<Plus class="size-4" />
@@ -100,11 +101,12 @@
 				</button>
 			</div>
 		{:else}
-			<div class="space-y-2">
+			<div class="space-y-2" data-testid="template-list">
 				{#each templates as template (template.id)}
 					<a
 						href="/templates/{template.id}"
 						class="group flex items-center justify-between rounded-lg border border-border bg-card p-4 transition-colors hover:bg-accent/50"
+						data-testid="template-item-{template.id}"
 					>
 						<div class="min-w-0">
 							<div class="flex items-center gap-2">
@@ -123,6 +125,7 @@
 						<button
 							type="button"
 							class="rounded p-1.5 text-muted-foreground opacity-0 transition-all hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
+							data-testid="btn-delete-template-{template.id}"
 							onclick={(e) => {
 								e.preventDefault();
 								e.stopPropagation();

@@ -107,7 +107,7 @@
 	}
 </script>
 
-<div class="flex w-80 flex-col border-l border-border bg-card">
+<div class="flex w-80 flex-col border-l border-border bg-card" data-testid="node-property-panel">
 	<div class="flex items-center justify-between border-b border-border px-3 py-2.5">
 		<h2 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
 			Properties
@@ -115,6 +115,7 @@
 		<button
 			type="button"
 			class="rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+			data-testid="btn-close-properties"
 			onclick={onclose}
 		>
 			<X class="size-4" />
@@ -129,6 +130,7 @@
 				id="node-label"
 				type="text"
 				value={data.label}
+				data-testid="input-node-label"
 				oninput={(e) => updateField('label', (e.currentTarget as HTMLInputElement).value)}
 				class="w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-sm text-foreground focus:border-ring focus:outline-none"
 			/>
@@ -140,6 +142,7 @@
 			<textarea
 				id="node-desc"
 				value={data.description ?? ''}
+				data-testid="input-node-description"
 				oninput={(e) => updateField('description', (e.currentTarget as HTMLTextAreaElement).value)}
 				rows={2}
 				class="w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-sm text-foreground focus:border-ring focus:outline-none"

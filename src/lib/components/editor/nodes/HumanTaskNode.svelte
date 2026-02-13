@@ -17,6 +17,7 @@
 		? 'border-blue-500 shadow-md shadow-blue-200'
 		: 'border-blue-300 shadow-sm'}"
 	style="background: linear-gradient(135deg, #eff6ff, #dbeafe);"
+	data-testid="node-human-task"
 >
 	<div class="flex items-center gap-2 border-b border-blue-200 px-3 py-2">
 		<div class="flex size-6 items-center justify-center rounded-md bg-blue-500">

@@ -63,7 +63,7 @@
 	);
 </script>
 
-<div class="flex h-full flex-col">
+<div class="flex h-full flex-col" data-testid="demo-page">
 	<EditorToolbar
 		templateName="Demo Workflow"
 		published={false}
@@ -102,7 +102,7 @@
 	</div>
 
 	{#if airPreview}
-		<div class="border-t border-border bg-muted/50">
+		<div class="border-t border-border bg-muted/50" data-testid="air-preview-panel">
 			<div class="flex items-center justify-between px-3 py-1.5">
 				<span class="text-xs font-medium text-muted-foreground">AIR Preview</span>
 				<button

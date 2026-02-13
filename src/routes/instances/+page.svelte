@@ -46,7 +46,7 @@
 	});
 </script>
 
-<div class="h-full overflow-y-auto">
+<div class="h-full overflow-y-auto" data-testid="instances-page">
 	<div class="mx-auto max-w-5xl px-6 py-8">
 		<div class="mb-6">
 			<h1 class="text-2xl font-semibold tracking-tight text-foreground">Instances</h1>
@@ -79,6 +79,7 @@
 					<a
 						href="/instances/{instance.id}"
 						class="group flex items-center justify-between rounded-lg border border-border bg-card p-4 transition-colors hover:bg-accent/50"
+						data-testid="instance-item-{instance.id}"
 					>
 						<div class="min-w-0">
 							<div class="flex items-center gap-2">

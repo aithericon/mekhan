@@ -168,11 +168,11 @@
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="flex" style="width: 100%; height: 100%;">
+<div class="flex" style="width: 100%; height: 100%;" data-testid="canvas-container">
 	{#if !readonly}
 		<NodePalette />
 	{/if}
-	<div style="flex: 1; height: 100%; position: relative;" ondrop={onDrop} ondragover={onDragOver}>
+	<div style="flex: 1; height: 100%; position: relative;" data-testid="canvas-drop-zone" ondrop={onDrop} ondragover={onDragOver}>
 		<SvelteFlow
 			{nodeTypes}
 			bind:nodes
@@ -188,7 +188,7 @@
 			<DropHandler oninit={handleFlowInit} />
 			<Controls position="bottom-right" />
 			<Background variant={BackgroundVariant.Dots} gap={20} size={1} />
-			<MiniMap position="bottom-left" />
+			<MiniMap position="bottom-left" data-testid="canvas-minimap" />
 		</SvelteFlow>
 	</div>
 </div>
