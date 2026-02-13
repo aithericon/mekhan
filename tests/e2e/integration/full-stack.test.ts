@@ -397,7 +397,7 @@ test.describe('Test 4: Cancel a running instance', () => {
 										field: {
 											name: 'approved',
 											label: 'Approved?',
-											kind: 'boolean',
+											kind: 'checkbox',
 											required: true
 										}
 									}
@@ -509,7 +509,7 @@ test.describe('Test 5: Human task completion via signal injection', () => {
 										field: {
 											name: 'approved',
 											label: 'Approved?',
-											kind: 'boolean',
+											kind: 'checkbox',
 											required: true
 										}
 									}
