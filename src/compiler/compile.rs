@@ -409,8 +409,9 @@ fn expand_node(
             air.add_place(&p_error, &format!("{label} - Error"), "state");
 
             // t_{id}_prepare — build ExecutionSpec
-            let spec_json = serde_json::to_string(&execution_spec)
-                .unwrap_or_else(|_| "{}".to_string());
+            let spec_value = serde_json::to_value(&execution_spec)
+                .unwrap_or_else(|_| json!({}));
+            let spec_rhai = json_to_rhai_literal(&spec_value);
             air.add_transition(json!({
                 "id": format!("t_{id}_prepare"),
                 "name": format!("{label} - Prepare"),
@@ -421,8 +422,7 @@ fn expand_node(
                 "logic": {
                     "type": "rhai",
                     "source": format!(
-                        "let d = input; d._execution_spec = parse_json(`{}`); #{{ job: d }}",
-                        spec_json.replace('`', "\\`")
+                        "let d = input; d._execution_spec = {spec_rhai}; #{{ job: d }}"
                     )
                 }
             }));
@@ -882,6 +882,44 @@ fn find_output_place(
 
 // --- Rhai code generation helpers ---
 
+/// Convert a serde_json::Value to a Rhai literal expression.
+///
+/// This avoids the need for a `parse_json()` function in the Rhai runtime.
+/// Maps become `#{ ... }`, arrays become `[ ... ]`, strings/numbers/bools
+/// are emitted as literals.
+fn json_to_rhai_literal(value: &Value) -> String {
+    match value {
+        Value::Null => "()".to_string(),
+        Value::Bool(b) => b.to_string(),
+        Value::Number(n) => n.to_string(),
+        Value::String(s) => {
+            // Escape backslashes, double quotes, and newlines
+            let escaped = s
+                .replace('\\', "\\\\")
+                .replace('"', "\\\"")
+                .replace('\n', "\\n")
+                .replace('\r', "\\r");
+            format!("\"{}\"", escaped)
+        }
+        Value::Array(arr) => {
+            let items: Vec<String> = arr.iter().map(json_to_rhai_literal).collect();
+            format!("[{}]", items.join(", "))
+        }
+        Value::Object(obj) => {
+            let entries: Vec<String> = obj
+                .iter()
+                .map(|(k, v)| {
+                    let escaped_key = k
+                        .replace('\\', "\\\\")
+                        .replace('"', "\\\"");
+                    format!("\"{}\": {}", escaped_key, json_to_rhai_literal(v))
+                })
+                .collect();
+            format!("#{{{}}}", entries.join(", "))
+        }
+    }
+}
+
 fn build_merge_logic(state_var: &str, signal_var: &str) -> String {
     // Rhai doesn't have a spread operator. We use a simple merge approach:
     // iterate signal keys and add them to state.
@@ -901,23 +939,22 @@ fn build_human_task_injection_logic(target_node: &WorkflowNode) -> String {
         ..
     } = &target_node.data
     {
-        let steps_json = serde_json::to_string(steps).unwrap_or_else(|_| "[]".to_string());
+        let steps_value = serde_json::to_value(steps).unwrap_or_else(|_| json!([]));
+        let steps_rhai = json_to_rhai_literal(&steps_value);
         let instructions = instructions_mdsvex
             .as_deref()
             .unwrap_or("")
             .replace('\\', "\\\\")
-            .replace('`', "\\`")
             .replace('"', "\\\"");
         let title = task_title
             .replace('\\', "\\\\")
-            .replace('`', "\\`")
             .replace('"', "\\\"");
 
         format!(
             "let d = input; \
              d.title = \"{title}\"; \
              d.instructions_mdsvex = \"{instructions}\"; \
-             d.steps = parse_json(`{steps_json}`); \
+             d.steps = {steps_rhai}; \
              #{{ output: d }}"
         )
     } else {
