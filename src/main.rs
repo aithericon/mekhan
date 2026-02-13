@@ -1,34 +1,11 @@
-#![allow(dead_code)]
-
-mod compiler;
-mod config;
-mod db;
-mod handlers;
-mod lifecycle;
-mod models;
-mod nats;
-mod petri;
-
-use axum::{
-    routing::{delete, get, post, put},
-    Router,
-};
-use sqlx::PgPool;
 use std::net::SocketAddr;
-use tower_http::cors::CorsLayer;
-use tower_http::trace::TraceLayer;
 
-use crate::config::AppConfig;
-use crate::nats::MekhanNats;
-use crate::petri::client::PetriClient;
-
-#[derive(Clone)]
-pub struct AppState {
-    pub db: PgPool,
-    pub petri: PetriClient,
-    pub nats: MekhanNats,
-    pub config: AppConfig,
-}
+use mekhan_service::config::AppConfig;
+use mekhan_service::db;
+use mekhan_service::lifecycle;
+use mekhan_service::nats::MekhanNats;
+use mekhan_service::petri::client::PetriClient;
+use mekhan_service::{build_router, AppState};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -75,70 +52,7 @@ async fn main() -> anyhow::Result<()> {
         config: config.clone(),
     };
 
-    let app = Router::new()
-        // Template endpoints
-        .route("/api/templates", get(handlers::templates::list_templates))
-        .route("/api/templates", post(handlers::templates::create_template))
-        .route(
-            "/api/templates/{id}",
-            get(handlers::templates::get_template),
-        )
-        .route(
-            "/api/templates/{id}",
-            put(handlers::templates::update_template),
-        )
-        .route(
-            "/api/templates/{id}",
-            delete(handlers::templates::delete_template),
-        )
-        .route(
-            "/api/templates/{id}/publish",
-            post(handlers::templates::publish_template),
-        )
-        .route(
-            "/api/templates/{id}/new-version",
-            post(handlers::templates::new_version),
-        )
-        .route(
-            "/api/templates/{id}/versions",
-            get(handlers::templates::list_versions),
-        )
-        .route(
-            "/api/templates/{id}/air",
-            get(handlers::templates::get_air),
-        )
-        .route(
-            "/api/templates/{id}/compile",
-            post(handlers::templates::compile_preview),
-        )
-        // Instance endpoints
-        .route(
-            "/api/instances",
-            get(handlers::instances::list_instances),
-        )
-        .route(
-            "/api/instances",
-            post(handlers::instances::create_instance),
-        )
-        .route(
-            "/api/instances/{id}",
-            get(handlers::instances::get_instance),
-        )
-        .route(
-            "/api/instances/{id}/state",
-            get(handlers::instances::get_instance_state),
-        )
-        .route(
-            "/api/instances/{id}/events",
-            get(handlers::instances::get_instance_events),
-        )
-        .route(
-            "/api/instances/{id}",
-            delete(handlers::instances::cancel_instance),
-        )
-        .layer(CorsLayer::permissive())
-        .layer(TraceLayer::new_for_http())
-        .with_state(state);
+    let app = build_router(state);
 
     let addr: SocketAddr = format!("{}:{}", config.host, config.port).parse()?;
     tracing::info!("listening on {addr}");
