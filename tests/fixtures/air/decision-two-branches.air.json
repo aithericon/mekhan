@@ -142,6 +142,70 @@
         "type": "rhai",
         "source": "#{ output: input }"
       }
+    },
+    {
+      "id": "t_edge_e-a",
+      "name": "Check Value -> End A",
+      "input_ports": [
+        {
+          "name": "input",
+          "cardinality": "single"
+        }
+      ],
+      "output_ports": [
+        {
+          "name": "output",
+          "cardinality": "single"
+        }
+      ],
+      "inputs": [
+        {
+          "place": "p_dec-1_out_branch-a",
+          "port": "input"
+        }
+      ],
+      "outputs": [
+        {
+          "port": "output",
+          "place": "p_end-a_done"
+        }
+      ],
+      "logic": {
+        "type": "rhai",
+        "source": "#{ output: input }"
+      }
+    },
+    {
+      "id": "t_edge_e-b",
+      "name": "Check Value -> End B",
+      "input_ports": [
+        {
+          "name": "input",
+          "cardinality": "single"
+        }
+      ],
+      "output_ports": [
+        {
+          "name": "output",
+          "cardinality": "single"
+        }
+      ],
+      "inputs": [
+        {
+          "place": "p_dec-1_out_branch-b",
+          "port": "input"
+        }
+      ],
+      "outputs": [
+        {
+          "port": "output",
+          "place": "p_end-b_done"
+        }
+      ],
+      "logic": {
+        "type": "rhai",
+        "source": "#{ output: input }"
+      }
     }
   ],
   "groups": [],

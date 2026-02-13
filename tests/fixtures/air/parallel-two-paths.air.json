@@ -372,6 +372,70 @@
       }
     },
     {
+      "id": "t_edge_e2",
+      "name": "Split -> Task A",
+      "input_ports": [
+        {
+          "name": "input",
+          "cardinality": "single"
+        }
+      ],
+      "output_ports": [
+        {
+          "name": "output",
+          "cardinality": "single"
+        }
+      ],
+      "inputs": [
+        {
+          "place": "p_split-1_out_0",
+          "port": "input"
+        }
+      ],
+      "outputs": [
+        {
+          "port": "output",
+          "place": "p_ht-a_input"
+        }
+      ],
+      "logic": {
+        "type": "rhai",
+        "source": "#{ output: input }"
+      }
+    },
+    {
+      "id": "t_edge_e3",
+      "name": "Split -> Task B",
+      "input_ports": [
+        {
+          "name": "input",
+          "cardinality": "single"
+        }
+      ],
+      "output_ports": [
+        {
+          "name": "output",
+          "cardinality": "single"
+        }
+      ],
+      "inputs": [
+        {
+          "place": "p_split-1_out_1",
+          "port": "input"
+        }
+      ],
+      "outputs": [
+        {
+          "port": "output",
+          "place": "p_ht-b_input"
+        }
+      ],
+      "logic": {
+        "type": "rhai",
+        "source": "#{ output: input }"
+      }
+    },
+    {
       "id": "t_edge_e4",
       "name": "Task A -> Join",
       "input_ports": [

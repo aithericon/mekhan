@@ -213,18 +213,27 @@ describe('AIR node expansion: Decision', () => {
 		}
 	});
 
-	it('creates edge transition for start->decision (branch wiring is order-dependent)', () => {
+	it('creates edge transitions for all edges including decision branches', () => {
 		const { air } = compileToAIR(makeDecisionGraph(), 'Test');
-		// NOTE: The main edge loop skips edges sourced from decision nodes (compile.ts:142).
-		// expandDecision tries to wire branch->target internally, but only succeeds when
-		// the target node's input place is already registered (i.e., target appears before
-		// decision in graph.nodes). In the standard case where targets come after,
-		// the internal wiring transitions are NOT created.
-		// This is a known ordering dependency in the compiler.
+		// All edges get wired in the unified edge wiring pass, including
+		// edges sourced from decision nodes.
 		const edgeTransitions = air.transitions.filter((t) => t.id.startsWith('t_edge_'));
-		expect(edgeTransitions).toHaveLength(1); // only e1 (start->decision)
-		expect(edgeTransitions[0].inputs[0].place).toBe('p_start-1_ready');
-		expect(edgeTransitions[0].outputs[0].place).toBe('p_dec-1_input');
+		expect(edgeTransitions).toHaveLength(3); // e1 (start->decision), e-a (decision->end-a), e-b (decision->end-b)
+
+		const e1 = edgeTransitions.find((t) => t.id === 't_edge_e1')!;
+		expect(e1).toBeDefined();
+		expect(e1.inputs[0].place).toBe('p_start-1_ready');
+		expect(e1.outputs[0].place).toBe('p_dec-1_input');
+
+		const eA = edgeTransitions.find((t) => t.id === 't_edge_e-a')!;
+		expect(eA).toBeDefined();
+		expect(eA.inputs[0].place).toBe('p_dec-1_out_branch-a');
+		expect(eA.outputs[0].place).toBe('p_end-a_done');
+
+		const eB = edgeTransitions.find((t) => t.id === 't_edge_e-b')!;
+		expect(eB).toBeDefined();
+		expect(eB.inputs[0].place).toBe('p_dec-1_out_branch-b');
+		expect(eB.outputs[0].place).toBe('p_end-b_done');
 	});
 });
 

@@ -94,6 +94,8 @@ export function compileToAIR(
 	// Track input/output places for each node (for wiring)
 	const nodeInputPlace = new Map<string, string>();
 	const nodeOutputPlace = new Map<string, string>();
+	// For decision/parallel_split: maps "nodeId:edgeIdentifier" -> output place
+	const nodeOutputPlaceByEdge = new Map<string, string>();
 
 	// Build adjacency
 	const outgoing = new Map<string, string[]>();
@@ -118,10 +120,10 @@ export function compileToAIR(
 				expandAutomatedStep(node.id, node.data, places, transitions, groups, nodeInputPlace, nodeOutputPlace);
 				break;
 			case 'decision':
-				expandDecision(node.id, node.data, graph, places, transitions, nodeInputPlace, nodeOutputPlace);
+				expandDecision(node.id, node.data, graph, places, transitions, nodeInputPlace, nodeOutputPlace, nodeOutputPlaceByEdge);
 				break;
 			case 'parallel_split':
-				expandParallelSplit(node.id, node.data, graph, places, transitions, nodeInputPlace, nodeOutputPlace);
+				expandParallelSplit(node.id, node.data, graph, places, transitions, nodeInputPlace, nodeOutputPlace, nodeOutputPlaceByEdge);
 				break;
 			case 'parallel_join':
 				expandParallelJoin(node.id, node.data, graph, places, transitions, nodeInputPlace, nodeOutputPlace);
@@ -132,18 +134,31 @@ export function compileToAIR(
 		}
 	}
 
-	// Step 2: Wire edges (create pass-through transitions)
+	// Step 2: Wire ALL edges (create pass-through transitions)
 	for (const edge of graph.edges) {
 		const sourceNode = graph.nodes.find((n) => n.id === edge.source);
 		const targetNode = graph.nodes.find((n) => n.id === edge.target);
 		if (!sourceNode || !targetNode) continue;
 
-		// Decision and parallel split handle their own output wiring
-		if (sourceNode.data.type === 'decision' || sourceNode.data.type === 'parallel_split') {
-			continue;
+		// Determine the output place for this edge's source
+		let outputPlace: string | undefined;
+
+		if (sourceNode.data.type === 'decision') {
+			// For decision nodes: look up the output place by sourceHandle (condition edgeId)
+			if (edge.sourceHandle) {
+				outputPlace = nodeOutputPlaceByEdge.get(`${edge.source}:${edge.sourceHandle}`);
+			}
+			// If no sourceHandle match, try the default branch
+			if (!outputPlace) {
+				outputPlace = nodeOutputPlaceByEdge.get(`${edge.source}:default`);
+			}
+		} else if (sourceNode.data.type === 'parallel_split') {
+			// For parallel_split nodes: look up the output place by edge id
+			outputPlace = nodeOutputPlaceByEdge.get(`${edge.source}:${edge.id}`);
+		} else {
+			outputPlace = nodeOutputPlace.get(edge.source);
 		}
 
-		const outputPlace = nodeOutputPlace.get(edge.source);
 		const inputPlace = nodeInputPlace.get(edge.target);
 		if (!outputPlace || !inputPlace) continue;
 
@@ -411,20 +426,15 @@ function expandDecision(
 	places: AIRPlace[],
 	transitions: AIRTransition[],
 	nodeInput: Map<string, string>,
-	nodeOutput: Map<string, string>
+	nodeOutput: Map<string, string>,
+	nodeOutputByEdge: Map<string, string>
 ) {
 	const inputPlace = `p_${id}_input`;
 	places.push({ id: inputPlace, name: `${data.label} - Input`, type: 'state' });
 	nodeInput.set(id, inputPlace);
 
-	// Find outgoing edges from this node
-	const outEdges = graph.edges.filter((e) => e.source === id);
-
-	// Create a transition + output place for each branch
+	// Create a guarded branch transition + output place for each condition
 	for (const condition of data.conditions) {
-		const edgeForBranch = outEdges.find((e) => e.sourceHandle === condition.edgeId);
-		if (!edgeForBranch) continue;
-
 		const outPlace = `p_${id}_out_${condition.edgeId}`;
 		places.push({ id: outPlace, name: `${data.label} - ${condition.label}`, type: 'state' });
 
@@ -439,25 +449,12 @@ function expandDecision(
 			logic: { type: 'rhai', source: '#{ output: input }' }
 		});
 
-		// Wire this output place to the target node's input
-		const targetNode = graph.nodes.find((n) => n.id === edgeForBranch.target);
-		if (targetNode) {
-			const targetInput = nodeInput.get(edgeForBranch.target);
-			if (targetInput) {
-				transitions.push({
-					id: `t_edge_${edgeForBranch.id}`,
-					name: `${condition.label} -> ${targetNode.data.label}`,
-					input_ports: [{ name: 'input', cardinality: 'single' }],
-					output_ports: [{ name: 'output', cardinality: 'single' }],
-					inputs: [{ place: outPlace, port: 'input' }],
-					outputs: [{ port: 'output', place: targetInput }],
-					logic: { type: 'rhai', source: '#{ output: input }' }
-				});
-			}
-		}
+		// Register this output place keyed by the condition's edgeId (matches edge.sourceHandle)
+		nodeOutputByEdge.set(`${id}:${condition.edgeId}`, outPlace);
 	}
 
-	// Default branch (no guard)
+	// Default branch (no guard) — find outgoing edges not covered by any condition
+	const outEdges = graph.edges.filter((e) => e.source === id);
 	const defaultEdge = outEdges.find(
 		(e) => !data.conditions.some((c) => c.edgeId === e.sourceHandle)
 	);
@@ -475,22 +472,12 @@ function expandDecision(
 			logic: { type: 'rhai', source: '#{ output: input }' }
 		});
 
-		const targetInput = nodeInput.get(defaultEdge.target);
-		if (targetInput) {
-			transitions.push({
-				id: `t_edge_${defaultEdge.id}`,
-				name: `Default -> next`,
-				input_ports: [{ name: 'input', cardinality: 'single' }],
-				output_ports: [{ name: 'output', cardinality: 'single' }],
-				inputs: [{ place: outPlace, port: 'input' }],
-				outputs: [{ port: 'output', place: targetInput }],
-				logic: { type: 'rhai', source: '#{ output: input }' }
-			});
-		}
+		// Register the default output using the edge's sourceHandle if present, or 'default'
+		const key = defaultEdge.sourceHandle ?? 'default';
+		nodeOutputByEdge.set(`${id}:${key}`, outPlace);
 	}
 
-	// Decision doesn't have a single output place (branches handle their own)
-	// Set a placeholder for safety
+	// Decision doesn't have a single output place
 	nodeOutput.set(id, `p_${id}_out_default`);
 }
 
@@ -501,7 +488,8 @@ function expandParallelSplit(
 	places: AIRPlace[],
 	transitions: AIRTransition[],
 	nodeInput: Map<string, string>,
-	nodeOutput: Map<string, string>
+	nodeOutput: Map<string, string>,
+	nodeOutputByEdge: Map<string, string>
 ) {
 	const inputPlace = `p_${id}_input`;
 	places.push({ id: inputPlace, name: `${data.label} - Input`, type: 'state' });
@@ -520,19 +508,8 @@ function expandParallelSplit(
 		outputPorts.push({ name: portName, cardinality: 'single' });
 		outputs.push({ port: portName, place: outPlace });
 
-		// Wire to target
-		const targetInput = nodeInput.get(edge.target);
-		if (targetInput) {
-			transitions.push({
-				id: `t_edge_${edge.id}`,
-				name: `Split branch ${i}`,
-				input_ports: [{ name: 'input', cardinality: 'single' }],
-				output_ports: [{ name: 'output', cardinality: 'single' }],
-				inputs: [{ place: outPlace, port: 'input' }],
-				outputs: [{ port: 'output', place: targetInput }],
-				logic: { type: 'rhai', source: '#{ output: input }' }
-			});
-		}
+		// Register this output place keyed by edge id for the wiring pass
+		nodeOutputByEdge.set(`${id}:${edge.id}`, outPlace);
 	}
 
 	// Fork transition: one input, N outputs
