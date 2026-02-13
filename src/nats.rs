@@ -31,7 +31,9 @@ impl MekhanNats {
     }
 
     /// Create or get the durable consumer for Mekhan lifecycle events.
-    /// Filters on `petri.events.mekhan-*.net.>` to catch NetCompleted/NetCancelled.
+    /// Filters on `petri.events.*.net.>` to catch NetCompleted/NetCancelled.
+    /// Note: NATS `*` matches an entire dot-delimited token; net IDs like
+    /// `mekhan-{uuid}` are single tokens (no dots), so `*` matches them.
     pub async fn lifecycle_consumer(&self) -> Result<PullConsumer, async_nats::Error> {
         let stream = self.jetstream.get_stream("PETRI_GLOBAL").await?;
         let consumer = stream
@@ -39,7 +41,7 @@ impl MekhanNats {
                 "mekhan-lifecycle",
                 jetstream::consumer::pull::Config {
                     durable_name: Some("mekhan-lifecycle".into()),
-                    filter_subject: "petri.events.mekhan-*.net.>".into(),
+                    filter_subject: "petri.events.*.net.>".into(),
                     ack_policy: jetstream::consumer::AckPolicy::Explicit,
                     deliver_policy: jetstream::consumer::DeliverPolicy::New,
                     ..Default::default()
