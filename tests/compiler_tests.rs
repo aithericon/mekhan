@@ -239,7 +239,7 @@ fn human_task_produces_group_signal_and_transitions() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn automated_step_produces_executor_submit() {
+fn automated_step_produces_executor_lifecycle() {
     let graph = WorkflowGraph {
         nodes: vec![
             start_node("s"),
@@ -264,32 +264,52 @@ fn automated_step_produces_executor_submit() {
 
     let air = compile_to_air(&graph, "auto_test", "").expect("should compile");
 
-    // Submit transition with executor_submit effect
+    // Prepare transition (compiler-specific, prefixed with node id)
     assert!(
-        has_transition(&air, "t_auto_submit"),
+        has_transition(&air, "auto/prepare"),
+        "expected prepare transition"
+    );
+
+    // Submit transition with executor_submit effect (lifecycle, prefixed)
+    assert!(
+        has_transition(&air, "auto/submit"),
         "expected submit transition"
     );
-    let t_submit = get_transition(&air, "t_auto_submit").unwrap();
+    let t_submit = get_transition(&air, "auto/submit").unwrap();
     assert_eq!(t_submit["logic"]["handler_id"], "executor_submit");
 
-    // Signal places for complete and failed
+    // Lifecycle signal places (prefixed)
     assert!(
-        has_place(&air, "p_auto_sig_complete"),
-        "expected sig_complete place"
+        has_place(&air, "auto/sig_completed"),
+        "expected sig_completed place"
     );
     assert!(
-        has_place(&air, "p_auto_sig_failed"),
+        has_place(&air, "auto/sig_failed"),
         "expected sig_failed place"
     );
-
-    // Done and failed transitions
     assert!(
-        has_transition(&air, "t_auto_done"),
-        "expected done transition"
+        has_place(&air, "auto/sig_accepted"),
+        "expected sig_accepted place"
+    );
+
+    // Lifecycle infrastructure
+    assert!(
+        has_place(&air, "auto/dead_letter"),
+        "expected dead_letter place"
     );
     assert!(
-        has_transition(&air, "t_auto_failed"),
-        "expected failed transition"
+        has_transition(&air, "auto/retry"),
+        "expected retry transition"
+    );
+
+    // Bridging transitions from lifecycle to node interface
+    assert!(
+        has_transition(&air, "t_auto_to_output"),
+        "expected to_output transition"
+    );
+    assert!(
+        has_transition(&air, "t_auto_to_error"),
+        "expected to_error transition"
     );
 }
 
@@ -682,15 +702,38 @@ fn decision_with_default_branch() {
 }
 
 // ---------------------------------------------------------------------------
-// Effect errors place is always emitted
+// Executor lifecycle creates scoped effect_errors places
 // ---------------------------------------------------------------------------
 
 #[test]
-fn effect_errors_place_is_always_present() {
-    let graph = WorkflowGraph::default_graph();
+fn automated_step_has_scoped_effect_errors() {
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            WorkflowNode {
+                id: "auto".to_string(),
+                node_type: "automated_step".to_string(),
+                position: pos(),
+                data: WorkflowNodeData::AutomatedStep {
+                    label: "Run Script".to_string(),
+                    description: None,
+                    execution_spec: ExecutionSpecConfig {
+                        backend_type: "docker".to_string(),
+                        config: json!({"image": "alpine:latest"}),
+                    },
+                },
+            },
+            end_node("e"),
+        ],
+        edges: vec![edge("e1", "s", "auto"), edge("e2", "auto", "e")],
+        viewport: None,
+    };
+
     let air = compile_to_air(&graph, "test", "").expect("should compile");
+
+    // Each AutomatedStep node gets its own lifecycle-scoped effect_errors place.
     assert!(
-        has_place(&air, "p_effect_errors"),
-        "expected p_effect_errors place"
+        has_place(&air, "auto/effect_errors"),
+        "expected scoped effect_errors for auto node"
     );
 }

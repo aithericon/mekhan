@@ -1,8 +1,20 @@
 use crate::models::template::{
     WorkflowEdge, WorkflowGraph, WorkflowNode, WorkflowNodeData,
 };
+use aithericon_sdk::components::executor_lifecycle::{executor_lifecycle, ExecutorBridges};
+use aithericon_sdk::scenario::ScenarioGroup;
+use aithericon_sdk::{Context, DynamicToken, PlaceHandle};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet, VecDeque};
+
+/// Tracks post-processing fixups that must be applied after ctx.build().
+#[derive(Default)]
+struct PostProcess {
+    /// Place IDs that should be changed to "terminal" type.
+    terminal_place_ids: Vec<String>,
+    /// Groups to add (with explicit IDs matching the old compiler format).
+    groups: Vec<(String, String)>, // (id, name)
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum CompileError {
@@ -12,76 +24,16 @@ pub enum CompileError {
     Compilation(String),
 }
 
-/// Compiled AIR output: places, transitions, groups.
-struct AirBuilder {
-    name: String,
-    description: String,
-    places: Vec<Value>,
-    transitions: Vec<Value>,
-    groups: Vec<Value>,
-}
-
-impl AirBuilder {
-    fn new(name: &str, description: &str) -> Self {
-        Self {
-            name: name.to_string(),
-            description: description.to_string(),
-            places: Vec::new(),
-            transitions: Vec::new(),
-            groups: Vec::new(),
-        }
-    }
-
-    fn add_place(&mut self, id: &str, name: &str, place_type: &str) {
-        self.places.push(json!({
-            "id": id,
-            "name": name,
-            "type": place_type,
-        }));
-    }
-
-    fn add_place_with_tokens(&mut self, id: &str, name: &str, place_type: &str, tokens: Vec<Value>) {
-        self.places.push(json!({
-            "id": id,
-            "name": name,
-            "type": place_type,
-            "initial_tokens": tokens,
-        }));
-    }
-
-    fn add_transition(&mut self, t: Value) {
-        self.transitions.push(t);
-    }
-
-    fn add_group(&mut self, id: &str, name: &str) {
-        self.groups.push(json!({
-            "id": id,
-            "name": name,
-        }));
-    }
-
-    fn build(self) -> Value {
-        json!({
-            "name": self.name,
-            "description": self.description,
-            "places": self.places,
-            "transitions": self.transitions,
-            "groups": self.groups,
-            "definitions": {},
-        })
-    }
-}
-
 /// Tracks which places are the input/output interface of each expanded node.
 struct NodePorts {
     /// The place where tokens enter this node block.
-    input_place: String,
+    input_place: PlaceHandle<DynamicToken>,
     /// The place(s) where tokens leave this node block.
     /// For decision nodes, there are multiple outputs keyed by edge_id.
-    output_places: Vec<(Option<String>, String)>, // (edge_id_or_none, place_id)
-    /// For ParallelJoin nodes: maps incoming edge_id -> input place_id.
+    output_places: Vec<(Option<String>, PlaceHandle<DynamicToken>)>,
+    /// For ParallelJoin nodes: maps incoming edge_id -> input place.
     /// Empty for all other node types.
-    input_places: HashMap<String, String>,
+    input_places: HashMap<String, PlaceHandle<DynamicToken>>,
 }
 
 /// Compile a WorkflowGraph to AIR JSON.
@@ -124,25 +76,44 @@ pub fn compile_to_air(
     let sorted = topological_sort(start_id, &edges_from, &node_map)?;
 
     // 4. Expand nodes
-    let mut air = AirBuilder::new(name, description);
+    let mut ctx = Context::new(name).description(description);
     let mut node_ports: HashMap<String, NodePorts> = HashMap::new();
+    let mut fixups = PostProcess::default();
 
     for node_id in &sorted {
         let node = node_map[node_id.as_str()];
         let outgoing = edges_from.get(node_id.as_str()).cloned().unwrap_or_default();
         let incoming = edges_to.get(node_id.as_str()).cloned().unwrap_or_default();
-        expand_node(node, &outgoing, &incoming, &mut air, &mut node_ports)?;
+        expand_node(node, &outgoing, &incoming, &mut ctx, &mut node_ports, &mut fixups)?;
     }
-
-    // Add an effect errors place
-    air.add_place("p_effect_errors", "Effect Errors", "state");
 
     // 5. Wire edges (connect output of source to input of target via pass-through transitions)
     for edge in &graph.edges {
-        wire_edge(edge, &node_ports, &node_map, &mut air)?;
+        wire_edge(edge, &node_ports, &node_map, &mut ctx)?;
     }
 
-    Ok(air.build())
+    let mut scenario = ctx.build();
+
+    // Apply post-processing fixups
+    for place in &mut scenario.places {
+        if fixups.terminal_place_ids.contains(&place.id) {
+            place.place_type = "terminal".to_string();
+        }
+    }
+    for (group_id, group_name) in fixups.groups {
+        scenario.groups.push(ScenarioGroup {
+            id: group_id,
+            name: group_name,
+            parent_id: None,
+            metadata: None,
+        });
+    }
+
+    let air_value = serde_json::to_value(&scenario).map_err(|e| {
+        CompileError::Compilation(format!("failed to serialize scenario: {e}"))
+    })?;
+
+    Ok(air_value)
 }
 
 // --- Validation ---
@@ -261,7 +232,6 @@ fn topological_sort(
                     continue;
                 }
                 if visited.insert(edge.target.clone()) {
-                    // Only enqueue if we haven't seen it
                     queue.push_back(edge.target.clone());
                 }
             }
@@ -286,22 +256,24 @@ fn expand_node(
     node: &WorkflowNode,
     outgoing_edges: &[&WorkflowEdge],
     incoming_edges: &[&WorkflowEdge],
-    air: &mut AirBuilder,
+    ctx: &mut Context,
     ports: &mut HashMap<String, NodePorts>,
+    fixups: &mut PostProcess,
 ) -> Result<(), CompileError> {
     let id = &node.id;
 
     match &node.data {
         WorkflowNodeData::Start { label, initial_data, .. } => {
             let place_id = format!("p_{id}_ready");
+            let place: PlaceHandle<DynamicToken> = ctx.state(&place_id, label);
             let token = initial_data.clone().unwrap_or_else(|| json!({}));
-            air.add_place_with_tokens(&place_id, label, "state", vec![token]);
+            ctx.seed_one(&place, DynamicToken::new(token));
 
             ports.insert(
                 id.clone(),
                 NodePorts {
-                    input_place: place_id.clone(),
-                    output_places: vec![(None, place_id)],
+                    input_place: place.clone(),
+                    output_places: vec![(None, place)],
                     input_places: HashMap::new(),
                 },
             );
@@ -309,73 +281,44 @@ fn expand_node(
 
         WorkflowNodeData::End { label, .. } => {
             let place_id = format!("p_{id}_done");
-            air.add_place(&place_id, label, "terminal");
+            let place: PlaceHandle<DynamicToken> = ctx.state(&place_id, label);
+            fixups.terminal_place_ids.push(place_id);
 
             ports.insert(
                 id.clone(),
                 NodePorts {
-                    input_place: place_id.clone(),
+                    input_place: place,
                     output_places: vec![],
                     input_places: HashMap::new(),
                 },
             );
         }
 
-        WorkflowNodeData::HumanTask {
-            label,
-            ..
-        } => {
-            let p_input = format!("p_{id}_input");
-            let p_active = format!("p_{id}_active");
-            let p_signal = format!("p_{id}_signal");
-            let p_output = format!("p_{id}_output");
+        WorkflowNodeData::HumanTask { label, .. } => {
+            let p_input: PlaceHandle<DynamicToken> =
+                ctx.state(format!("p_{id}_input"), format!("{label} - Input"));
+            let p_active: PlaceHandle<DynamicToken> =
+                ctx.state(format!("p_{id}_active"), format!("{label} - Active"));
+            let p_signal: PlaceHandle<DynamicToken> =
+                ctx.signal(format!("p_{id}_signal"), format!("{label} - Signal"));
+            let p_output: PlaceHandle<DynamicToken> =
+                ctx.state(format!("p_{id}_output"), format!("{label} - Output"));
 
-            air.add_place(&p_input, &format!("{label} - Input"), "state");
-            air.add_place(&p_active, &format!("{label} - Active"), "state");
-            air.add_place(&p_signal, &format!("{label} - Signal"), "signal");
-            air.add_place(&p_output, &format!("{label} - Output"), "state");
+            // t_{id}_request — human_task effect (SDK convenience method)
+            ctx.transition(format!("t_{id}_request"), format!("{label} - Request Human Task"))
+                .auto_input("task", &p_input)
+                .auto_output("assigned", &p_active)
+                .human_task_to(&p_signal);
 
-            // t_{id}_request — human_task effect
-            let t_request = format!("t_{id}_request");
-            air.add_transition(json!({
-                "id": t_request,
-                "name": format!("{label} - Request Human Task"),
-                "input_ports": [{"name": "task", "cardinality": "single"}],
-                "output_ports": [{"name": "assigned", "cardinality": "single"}],
-                "inputs": [{"place": p_input, "port": "task"}],
-                "outputs": [{"port": "assigned", "place": p_active}],
-                "logic": {
-                    "type": "effect",
-                    "handler_id": "human_task",
-                    "config": {"place": p_signal}
-                }
-            }));
+            // t_{id}_finalize — merge signal data into token (SDK correlate)
+            ctx.transition(format!("t_{id}_finalize"), format!("{label} - Finalize"))
+                .auto_input("state", &p_active)
+                .auto_input("signal", &p_signal)
+                .correlate("signal", "state", "task_id")
+                .auto_output("done", &p_output)
+                .logic(build_merge_logic("state", "signal"));
 
-            // t_{id}_finalize — merge signal data into token
-            let t_finalize = format!("t_{id}_finalize");
-            // Build merge logic: take all fields from signal (human input) and
-            // preserve system fields from state
-            air.add_transition(json!({
-                "id": t_finalize,
-                "name": format!("{label} - Finalize"),
-                "input_ports": [
-                    {"name": "state", "cardinality": "single"},
-                    {"name": "signal", "cardinality": "single"}
-                ],
-                "output_ports": [{"name": "done", "cardinality": "single"}],
-                "inputs": [
-                    {"place": p_active, "port": "state"},
-                    {"place": p_signal, "port": "signal"}
-                ],
-                "outputs": [{"port": "done", "place": p_output}],
-                "guard": {"type": "rhai", "source": "signal.task_id == state.task_id"},
-                "logic": {
-                    "type": "rhai",
-                    "source": build_merge_logic("state", "signal")
-                }
-            }));
-
-            air.add_group(&format!("grp_{id}"), label);
+            fixups.groups.push((format!("grp_{id}"), label.clone()));
 
             ports.insert(
                 id.clone(),
@@ -392,104 +335,45 @@ fn expand_node(
             execution_spec,
             ..
         } => {
-            let p_input = format!("p_{id}_input");
-            let p_job = format!("p_{id}_job");
-            let p_submitted = format!("p_{id}_submitted");
-            let p_sig_complete = format!("p_{id}_sig_complete");
-            let p_sig_failed = format!("p_{id}_sig_failed");
-            let p_output = format!("p_{id}_output");
-            let p_error = format!("p_{id}_error");
+            // Node interface places (outside prefix scope)
+            let p_input: PlaceHandle<DynamicToken> =
+                ctx.state(format!("p_{id}_input"), format!("{label} - Input"));
+            let p_output: PlaceHandle<DynamicToken> =
+                ctx.state(format!("p_{id}_output"), format!("{label} - Output"));
+            let p_error: PlaceHandle<DynamicToken> =
+                ctx.state(format!("p_{id}_error"), format!("{label} - Error"));
 
-            air.add_place(&p_input, &format!("{label} - Input"), "state");
-            air.add_place(&p_job, &format!("{label} - Job"), "state");
-            air.add_place(&p_submitted, &format!("{label} - Submitted"), "state");
-            air.add_place(&p_sig_complete, &format!("{label} - Sig Complete"), "signal");
-            air.add_place(&p_sig_failed, &format!("{label} - Sig Failed"), "signal");
-            air.add_place(&p_output, &format!("{label} - Output"), "state");
-            air.add_place(&p_error, &format!("{label} - Error"), "state");
+            // Scoped prefix: all lifecycle IDs become "{id}/submitted", "{id}/completed", etc.
+            let handles = ctx.scoped_prefix(id, label, |ctx| {
+                let exec_inbox = ctx.state::<DynamicToken>("inbox", "Inbox");
 
-            // t_{id}_prepare — build ExecutionSpec
-            let spec_value = serde_json::to_value(&execution_spec)
-                .unwrap_or_else(|_| json!({}));
-            let spec_rhai = json_to_rhai_literal(&spec_value);
-            air.add_transition(json!({
-                "id": format!("t_{id}_prepare"),
-                "name": format!("{label} - Prepare"),
-                "input_ports": [{"name": "input", "cardinality": "single"}],
-                "output_ports": [{"name": "job", "cardinality": "single"}],
-                "inputs": [{"place": p_input, "port": "input"}],
-                "outputs": [{"port": "job", "place": p_job}],
-                "logic": {
-                    "type": "rhai",
-                    "source": format!(
-                        "let d = input; d._execution_spec = {spec_rhai}; #{{ job: d }}"
-                    )
-                }
-            }));
+                // Prepare: remap editor ExecutionSpecConfig → executor format
+                let config_rhai = json_to_rhai_literal(&execution_spec.config);
+                let backend_type = &execution_spec.backend_type;
+                ctx.transition("prepare", format!("{label} - Prepare"))
+                    .auto_input("input", &p_input)
+                    .auto_output("job", &exec_inbox)
+                    .logic(format!(
+                        r#"let d = input; d.job_id = "{id}"; d.run = 0; d.retries = 0; d.max_retries = 3; d.spec = #{{ "type": "{backend_type}", "inputs": [], "outputs": [], "config": {config_rhai} }}; #{{ job: d }}"#
+                    ));
 
-            // t_{id}_submit — executor_submit effect
-            air.add_transition(json!({
-                "id": format!("t_{id}_submit"),
-                "name": format!("{label} - Submit"),
-                "input_ports": [{"name": "job", "cardinality": "single"}],
-                "output_ports": [{"name": "submitted", "cardinality": "single"}],
-                "inputs": [{"place": p_job, "port": "job"}],
-                "outputs": [{"port": "submitted", "place": p_submitted}],
-                "logic": {
-                    "type": "effect",
-                    "handler_id": "executor_submit",
-                    "config": {
-                        "causes": [
-                            {"status": "completed", "signal_place": p_sig_complete},
-                            {"status": "failed", "signal_place": p_sig_failed}
-                        ]
-                    }
-                }
-            }));
+                executor_lifecycle(ctx, ExecutorBridges {
+                    inbox: exec_inbox,
+                    result_out: None,
+                    failure_out: None,
+                })
+            });
 
-            // t_{id}_done — join submitted + completion signal
-            air.add_transition(json!({
-                "id": format!("t_{id}_done"),
-                "name": format!("{label} - Done"),
-                "input_ports": [
-                    {"name": "state", "cardinality": "single"},
-                    {"name": "signal", "cardinality": "single"}
-                ],
-                "output_ports": [{"name": "output", "cardinality": "single"}],
-                "inputs": [
-                    {"place": p_submitted, "port": "state"},
-                    {"place": p_sig_complete, "port": "signal"}
-                ],
-                "outputs": [{"port": "output", "place": p_output}],
-                "guard": {"type": "rhai", "source": "signal.execution_id == state.execution_id"},
-                "logic": {
-                    "type": "rhai",
-                    "source": build_merge_logic("state", "signal")
-                }
-            }));
+            // Bridge lifecycle outputs to node interface
+            ctx.transition(format!("t_{id}_to_output"), format!("{label} - To Output"))
+                .auto_input("done", &handles.completed)
+                .auto_output("output", &p_output)
+                .logic(r#"#{ output: done }"#);
 
-            // t_{id}_failed — join submitted + failure signal
-            air.add_transition(json!({
-                "id": format!("t_{id}_failed"),
-                "name": format!("{label} - Failed"),
-                "input_ports": [
-                    {"name": "state", "cardinality": "single"},
-                    {"name": "signal", "cardinality": "single"}
-                ],
-                "output_ports": [{"name": "error", "cardinality": "single"}],
-                "inputs": [
-                    {"place": p_submitted, "port": "state"},
-                    {"place": p_sig_failed, "port": "signal"}
-                ],
-                "outputs": [{"port": "error", "place": p_error}],
-                "guard": {"type": "rhai", "source": "signal.execution_id == state.execution_id"},
-                "logic": {
-                    "type": "rhai",
-                    "source": build_merge_logic("state", "signal")
-                }
-            }));
-
-            air.add_group(&format!("grp_{id}"), label);
+            ctx.transition(format!("t_{id}_to_error"), format!("{label} - To Error"))
+                .auto_input("dead", &handles.dead_letter)
+                .auto_output("error", &p_error)
+                .logic(r#"#{ error: dead }"#);
 
             ports.insert(
                 id.clone(),
@@ -504,44 +388,36 @@ fn expand_node(
         WorkflowNodeData::Decision {
             label, conditions, default_branch, ..
         } => {
-            let p_input = format!("p_{id}_input");
-            air.add_place(&p_input, &format!("{label} - Input"), "state");
+            let p_input: PlaceHandle<DynamicToken> =
+                ctx.state(format!("p_{id}_input"), format!("{label} - Input"));
 
             let mut output_places = Vec::new();
 
             // One transition per condition (competing transitions from the same input)
             for (i, cond) in conditions.iter().enumerate() {
-                let p_out = format!("p_{id}_out_{i}");
-                air.add_place(&p_out, &format!("{label} - {}", cond.label), "state");
+                let p_out: PlaceHandle<DynamicToken> =
+                    ctx.state(format!("p_{id}_out_{i}"), format!("{label} - {}", cond.label));
 
-                air.add_transition(json!({
-                    "id": format!("t_{id}_branch_{i}"),
-                    "name": format!("{label} - {}", cond.label),
-                    "input_ports": [{"name": "input", "cardinality": "single"}],
-                    "output_ports": [{"name": "output", "cardinality": "single"}],
-                    "inputs": [{"place": p_input, "port": "input"}],
-                    "outputs": [{"port": "output", "place": p_out}],
-                    "guard": {"type": "rhai", "source": &cond.guard},
-                    "logic": {"type": "rhai", "source": "#{ output: input }"}
-                }));
+                ctx.transition(format!("t_{id}_branch_{i}"), format!("{label} - {}", cond.label))
+                    .auto_input("input", &p_input)
+                    .auto_output("output", &p_out)
+                    .guard_rhai(&cond.guard)
+                    .logic_rhai("#{ output: input }")
+                    .done();
 
                 output_places.push((Some(cond.edge_id.clone()), p_out));
             }
 
             // Default branch (no guard)
             if let Some(default_edge_id) = default_branch {
-                let p_default = format!("p_{id}_out_default");
-                air.add_place(&p_default, &format!("{label} - Default"), "state");
+                let p_default: PlaceHandle<DynamicToken> =
+                    ctx.state(format!("p_{id}_out_default"), format!("{label} - Default"));
 
-                air.add_transition(json!({
-                    "id": format!("t_{id}_default"),
-                    "name": format!("{label} - Default"),
-                    "input_ports": [{"name": "input", "cardinality": "single"}],
-                    "output_ports": [{"name": "output", "cardinality": "single"}],
-                    "inputs": [{"place": p_input, "port": "input"}],
-                    "outputs": [{"port": "output", "place": p_default}],
-                    "logic": {"type": "rhai", "source": "#{ output: input }"}
-                }));
+                ctx.transition(format!("t_{id}_default"), format!("{label} - Default"))
+                    .auto_input("input", &p_input)
+                    .auto_output("output", &p_default)
+                    .logic_rhai("#{ output: input }")
+                    .done();
 
                 output_places.push((Some(default_edge_id.clone()), p_default));
             }
@@ -557,22 +433,24 @@ fn expand_node(
         }
 
         WorkflowNodeData::ParallelSplit { label, .. } => {
-            let p_input = format!("p_{id}_input");
-            air.add_place(&p_input, &format!("{label} - Input"), "state");
+            let p_input: PlaceHandle<DynamicToken> =
+                ctx.state(format!("p_{id}_input"), format!("{label} - Input"));
 
-            // Create one output place per outgoing edge
-            let mut output_ports_json = Vec::new();
-            let mut outputs_json = Vec::new();
-            let mut output_places = Vec::new();
-
+            // Pre-create output places before starting the transition builder
+            let mut output_places: Vec<(Option<String>, PlaceHandle<DynamicToken>)> = Vec::new();
             for (i, edge) in outgoing_edges.iter().enumerate() {
-                let p_out = format!("p_{id}_out_{i}");
-                let port_name = format!("out_{i}");
-                air.add_place(&p_out, &format!("{label} - Fork {i}"), "state");
-
-                output_ports_json.push(json!({"name": port_name, "cardinality": "single"}));
-                outputs_json.push(json!({"port": port_name, "place": p_out}));
+                let p_out: PlaceHandle<DynamicToken> =
+                    ctx.state(format!("p_{id}_out_{i}"), format!("{label} - Fork {i}"));
                 output_places.push((Some(edge.id.clone()), p_out));
+            }
+
+            // Build the transition with multiple outputs
+            let mut tb = ctx.transition(format!("t_{id}_fork"), format!("{label} - Fork"))
+                .auto_input("input", &p_input);
+
+            for (i, (_, p_out)) in output_places.iter().enumerate() {
+                let port_name = format!("out_{i}");
+                tb = tb.auto_output(&port_name, p_out);
             }
 
             // Build Rhai source that duplicates input to all output ports
@@ -585,15 +463,7 @@ fn expand_node(
                 .collect();
             let rhai_source = format!("#{{ {} }}", rhai_entries.join(", "));
 
-            air.add_transition(json!({
-                "id": format!("t_{id}_fork"),
-                "name": format!("{label} - Fork"),
-                "input_ports": [{"name": "input", "cardinality": "single"}],
-                "output_ports": output_ports_json,
-                "inputs": [{"place": p_input, "port": "input"}],
-                "outputs": outputs_json,
-                "logic": {"type": "rhai", "source": rhai_source}
-            }));
+            tb.logic_rhai(rhai_source).done();
 
             ports.insert(
                 id.clone(),
@@ -606,23 +476,28 @@ fn expand_node(
         }
 
         WorkflowNodeData::ParallelJoin { label, .. } => {
-            let p_output = format!("p_{id}_output");
-            air.add_place(&p_output, &format!("{label} - Output"), "state");
+            let p_output: PlaceHandle<DynamicToken> =
+                ctx.state(format!("p_{id}_output"), format!("{label} - Output"));
 
-            // Create one input place per incoming edge
-            let mut input_ports_json = Vec::new();
-            let mut inputs_json = Vec::new();
-            let mut input_place_ids = Vec::new();
-
+            // Pre-create input places before starting the transition builder
+            let mut input_place_ids: Vec<(Option<String>, PlaceHandle<DynamicToken>)> = Vec::new();
             for (i, edge) in incoming_edges.iter().enumerate() {
-                let p_in = format!("p_{id}_in_{i}");
-                let port_name = format!("in_{i}");
-                air.add_place(&p_in, &format!("{label} - Join Input {i}"), "state");
-
-                input_ports_json.push(json!({"name": port_name, "cardinality": "single"}));
-                inputs_json.push(json!({"place": p_in, "port": port_name}));
+                let p_in: PlaceHandle<DynamicToken> = ctx.state(
+                    format!("p_{id}_in_{i}"),
+                    format!("{label} - Join Input {i}"),
+                );
                 input_place_ids.push((Some(edge.id.clone()), p_in));
             }
+
+            // Build the transition with multiple inputs
+            let mut tb = ctx.transition(format!("t_{id}_join"), format!("{label} - Join"));
+
+            for (i, (_, p_in)) in input_place_ids.iter().enumerate() {
+                let port_name = format!("in_{i}");
+                tb = tb.auto_input(&port_name, p_in);
+            }
+
+            tb = tb.auto_output("output", &p_output);
 
             // Build Rhai merge logic: merge all inputs into one output
             let port_names: Vec<String> = (0..incoming_edges.len())
@@ -631,7 +506,6 @@ fn expand_node(
             let rhai_source = if port_names.len() == 1 {
                 format!("#{{ output: {} }}", port_names[0])
             } else {
-                // Merge: start with first input, then merge others
                 let mut merge = port_names[0].clone();
                 for name in &port_names[1..] {
                     merge = format!("merge_maps({merge}, {name})");
@@ -639,32 +513,25 @@ fn expand_node(
                 format!("#{{ output: {merge} }}")
             };
 
-            air.add_transition(json!({
-                "id": format!("t_{id}_join"),
-                "name": format!("{label} - Join"),
-                "input_ports": input_ports_json,
-                "output_ports": [{"name": "output", "cardinality": "single"}],
-                "inputs": inputs_json,
-                "outputs": [{"port": "output", "place": p_output}],
-                "logic": {"type": "rhai", "source": rhai_source}
-            }));
+            tb.logic_rhai(rhai_source).done();
 
             // Build edge_id -> input_place mapping for wire_edge to resolve
-            let join_input_map: HashMap<String, String> = input_place_ids
+            let join_input_map: HashMap<String, PlaceHandle<DynamicToken>> = input_place_ids
                 .iter()
                 .filter_map(|(edge_id, place)| {
                     edge_id.as_ref().map(|eid| (eid.clone(), place.clone()))
                 })
                 .collect();
 
+            let default_input = input_place_ids
+                .first()
+                .map(|(_, p)| p.clone())
+                .unwrap_or_else(|| ctx.state(format!("p_{id}_in_fallback"), "Fallback"));
+
             ports.insert(
                 id.clone(),
                 NodePorts {
-                    // Placeholder — wire_edge uses input_places map for parallel join
-                    input_place: input_place_ids
-                        .first()
-                        .map(|(_, p)| p.clone())
-                        .unwrap_or_default(),
+                    input_place: default_input,
                     output_places: vec![(None, p_output)],
                     input_places: join_input_map,
                 },
@@ -677,76 +544,50 @@ fn expand_node(
             loop_condition,
             ..
         } => {
-            let p_input = format!("p_{id}_input");
-            let p_body_in = format!("p_{id}_body_in");
-            let p_body_out = format!("p_{id}_body_out");
-            let p_output = format!("p_{id}_output");
-
-            air.add_place(&p_input, &format!("{label} - Input"), "state");
-            air.add_place(&p_body_in, &format!("{label} - Body In"), "state");
-            air.add_place(&p_body_out, &format!("{label} - Body Out"), "state");
-            air.add_place(&p_output, &format!("{label} - Output"), "state");
+            let p_input: PlaceHandle<DynamicToken> =
+                ctx.state(format!("p_{id}_input"), format!("{label} - Input"));
+            let p_body_in: PlaceHandle<DynamicToken> =
+                ctx.state(format!("p_{id}_body_in"), format!("{label} - Body In"));
+            let p_body_out: PlaceHandle<DynamicToken> =
+                ctx.state(format!("p_{id}_body_out"), format!("{label} - Body Out"));
+            let p_output: PlaceHandle<DynamicToken> =
+                ctx.state(format!("p_{id}_output"), format!("{label} - Output"));
 
             let counter_key = format!("_loop_{id}_count");
 
             // t_{id}_enter — initialize loop counter
-            air.add_transition(json!({
-                "id": format!("t_{id}_enter"),
-                "name": format!("{label} - Enter Loop"),
-                "input_ports": [{"name": "input", "cardinality": "single"}],
-                "output_ports": [{"name": "body", "cardinality": "single"}],
-                "inputs": [{"place": p_input, "port": "input"}],
-                "outputs": [{"port": "body", "place": p_body_in}],
-                "logic": {
-                    "type": "rhai",
-                    "source": format!("let d = input; d.{counter_key} = 0; #{{ body: d }}")
-                }
-            }));
+            ctx.transition(format!("t_{id}_enter"), format!("{label} - Enter Loop"))
+                .auto_input("input", &p_input)
+                .auto_output("body", &p_body_in)
+                .logic_rhai(format!(
+                    "let d = input; d.{counter_key} = 0; #{{ body: d }}"
+                ))
+                .done();
 
             // t_{id}_continue — loop back
-            air.add_transition(json!({
-                "id": format!("t_{id}_continue"),
-                "name": format!("{label} - Continue"),
-                "input_ports": [{"name": "input", "cardinality": "single"}],
-                "output_ports": [{"name": "body", "cardinality": "single"}],
-                "inputs": [{"place": p_body_out, "port": "input"}],
-                "outputs": [{"port": "body", "place": p_body_in}],
-                "guard": {
-                    "type": "rhai",
-                    "source": format!(
-                        "input.{counter_key} < {max_iterations} && ({loop_condition})"
-                    )
-                },
-                "logic": {
-                    "type": "rhai",
-                    "source": format!(
-                        "let d = input; d.{counter_key} = d.{counter_key} + 1; #{{ body: d }}"
-                    )
-                }
-            }));
+            ctx.transition(format!("t_{id}_continue"), format!("{label} - Continue"))
+                .auto_input("input", &p_body_out)
+                .auto_output("body", &p_body_in)
+                .guard_rhai(format!(
+                    "input.{counter_key} < {max_iterations} && ({loop_condition})"
+                ))
+                .logic_rhai(format!(
+                    "let d = input; d.{counter_key} = d.{counter_key} + 1; #{{ body: d }}"
+                ))
+                .done();
 
             // t_{id}_exit — exit loop
-            air.add_transition(json!({
-                "id": format!("t_{id}_exit"),
-                "name": format!("{label} - Exit"),
-                "input_ports": [{"name": "input", "cardinality": "single"}],
-                "output_ports": [{"name": "output", "cardinality": "single"}],
-                "inputs": [{"place": p_body_out, "port": "input"}],
-                "outputs": [{"port": "output", "place": p_output}],
-                "guard": {
-                    "type": "rhai",
-                    "source": format!(
-                        "input.{counter_key} >= {max_iterations} || !({loop_condition})"
-                    )
-                },
-                "logic": {"type": "rhai", "source": "#{ output: input }"}
-            }));
+            ctx.transition(format!("t_{id}_exit"), format!("{label} - Exit"))
+                .auto_input("input", &p_body_out)
+                .auto_output("output", &p_output)
+                .guard_rhai(format!(
+                    "input.{counter_key} >= {max_iterations} || !({loop_condition})"
+                ))
+                .logic_rhai("#{ output: input }")
+                .done();
 
-            air.add_group(&format!("grp_{id}"), label);
+            fixups.groups.push((format!("grp_{id}"), label.clone()));
 
-            // The loop body_in is for internal connections from the loop body.
-            // The loop body_out is where the body terminates.
-            // For external wiring: input → p_input, output → p_output
             ports.insert(
                 id.clone(),
                 NodePorts {
@@ -767,7 +608,7 @@ fn wire_edge(
     edge: &WorkflowEdge,
     node_ports: &HashMap<String, NodePorts>,
     node_map: &HashMap<&str, &WorkflowNode>,
-    air: &mut AirBuilder,
+    ctx: &mut Context,
 ) -> Result<(), CompileError> {
     let source_ports = node_ports.get(&edge.source).ok_or_else(|| {
         CompileError::Compilation(format!("no ports for source node '{}'", edge.source))
@@ -787,9 +628,6 @@ fn wire_edge(
     let source_place = find_output_place(source_ports, edge)?;
 
     // Determine target input place
-    let target_place = &target_ports.input_place;
-
-    // For parallel join targets, look up the specific input place for this edge
     let actual_target = if matches!(target_node.data, WorkflowNodeData::ParallelJoin { .. }) {
         target_ports
             .input_places
@@ -802,40 +640,32 @@ fn wire_edge(
                 ))
             })?
     } else {
-        target_place.clone()
+        target_ports.input_place.clone()
     };
 
-    // For Start nodes, the output place IS the ready place (no transition needed for
-    // Start → first_node; we still create a pass-through for consistency, and the edge
-    // transition injects human task form data if the target is a human task).
     let needs_data_injection = matches!(
         target_node.data,
         WorkflowNodeData::HumanTask { .. }
     );
 
+    let edge_label = edge
+        .label
+        .clone()
+        .unwrap_or_else(|| format!("{} -> {}", source_node.data.label(), target_node.data.label()));
+
     if needs_data_injection {
-        // Inject task form schema into the token via the edge transition
         let logic_source = build_human_task_injection_logic(target_node);
-        air.add_transition(json!({
-            "id": format!("t_edge_{}", edge.id),
-            "name": edge.label.as_deref().unwrap_or(&format!("{} -> {}", source_node.data.label(), target_node.data.label())),
-            "input_ports": [{"name": "input", "cardinality": "single"}],
-            "output_ports": [{"name": "output", "cardinality": "single"}],
-            "inputs": [{"place": source_place, "port": "input"}],
-            "outputs": [{"port": "output", "place": actual_target}],
-            "logic": {"type": "rhai", "source": logic_source}
-        }));
+        ctx.transition(format!("t_edge_{}", edge.id), &edge_label)
+            .auto_input("input", &source_place)
+            .auto_output("output", &actual_target)
+            .logic_rhai(logic_source)
+            .done();
     } else {
-        // Simple pass-through
-        air.add_transition(json!({
-            "id": format!("t_edge_{}", edge.id),
-            "name": edge.label.as_deref().unwrap_or(&format!("{} -> {}", source_node.data.label(), target_node.data.label())),
-            "input_ports": [{"name": "input", "cardinality": "single"}],
-            "output_ports": [{"name": "output", "cardinality": "single"}],
-            "inputs": [{"place": source_place, "port": "input"}],
-            "outputs": [{"port": "output", "place": actual_target}],
-            "logic": {"type": "rhai", "source": "#{ output: input }"}
-        }));
+        ctx.transition(format!("t_edge_{}", edge.id), &edge_label)
+            .auto_input("input", &source_place)
+            .auto_output("output", &actual_target)
+            .logic_rhai("#{ output: input }")
+            .done();
     }
 
     Ok(())
@@ -844,7 +674,7 @@ fn wire_edge(
 fn find_output_place(
     ports: &NodePorts,
     edge: &WorkflowEdge,
-) -> Result<String, CompileError> {
+) -> Result<PlaceHandle<DynamicToken>, CompileError> {
     // For decision nodes, find the output place matching the edge_id
     if let Some(ref handle) = edge.source_handle {
         for (edge_id, place) in &ports.output_places {
@@ -883,17 +713,12 @@ fn find_output_place(
 // --- Rhai code generation helpers ---
 
 /// Convert a serde_json::Value to a Rhai literal expression.
-///
-/// This avoids the need for a `parse_json()` function in the Rhai runtime.
-/// Maps become `#{ ... }`, arrays become `[ ... ]`, strings/numbers/bools
-/// are emitted as literals.
 fn json_to_rhai_literal(value: &Value) -> String {
     match value {
         Value::Null => "()".to_string(),
         Value::Bool(b) => b.to_string(),
         Value::Number(n) => n.to_string(),
         Value::String(s) => {
-            // Escape backslashes, double quotes, and newlines
             let escaped = s
                 .replace('\\', "\\\\")
                 .replace('"', "\\\"")
@@ -921,8 +746,6 @@ fn json_to_rhai_literal(value: &Value) -> String {
 }
 
 fn build_merge_logic(state_var: &str, signal_var: &str) -> String {
-    // Rhai doesn't have a spread operator. We use a simple merge approach:
-    // iterate signal keys and add them to state.
     format!(
         "let result = {state_var}; \
          let keys = {signal_var}.keys(); \
@@ -959,5 +782,191 @@ fn build_human_task_injection_logic(target_node: &WorkflowNode) -> String {
         )
     } else {
         "#{ output: input }".to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::template::*;
+
+    fn start_node(id: &str) -> WorkflowNode {
+        WorkflowNode {
+            id: id.to_string(),
+            node_type: "start".to_string(),
+            position: Position { x: 0.0, y: 0.0 },
+            data: WorkflowNodeData::Start {
+                label: "Start".to_string(),
+                description: None,
+                initial_data: None,
+            },
+        }
+    }
+
+    fn end_node(id: &str) -> WorkflowNode {
+        WorkflowNode {
+            id: id.to_string(),
+            node_type: "end".to_string(),
+            position: Position { x: 0.0, y: 100.0 },
+            data: WorkflowNodeData::End {
+                label: "End".to_string(),
+                description: None,
+            },
+        }
+    }
+
+    fn edge(id: &str, source: &str, target: &str) -> WorkflowEdge {
+        WorkflowEdge {
+            id: id.to_string(),
+            source: source.to_string(),
+            target: target.to_string(),
+            source_handle: None,
+            label: None,
+            edge_type: "sequence".to_string(),
+        }
+    }
+
+    #[test]
+    fn test_start_to_end() {
+        let graph = WorkflowGraph {
+            nodes: vec![start_node("s"), end_node("e")],
+            edges: vec![edge("e1", "s", "e")],
+            viewport: None,
+        };
+
+        let result = compile_to_air(&graph, "test", "desc");
+        assert!(result.is_ok(), "compile failed: {:?}", result.err());
+
+        let air = result.unwrap();
+        let places = air["places"].as_array().unwrap();
+        let transitions = air["transitions"].as_array().unwrap();
+
+        // Start place + End place = 2
+        assert_eq!(places.len(), 2);
+        // One edge transition
+        assert_eq!(transitions.len(), 1);
+
+        // Verify start place has initial tokens
+        let start_place = places.iter().find(|p| p["id"] == "p_s_ready").unwrap();
+        assert!(!start_place["initial_tokens"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_human_task_expands() {
+        let graph = WorkflowGraph {
+            nodes: vec![
+                start_node("s"),
+                WorkflowNode {
+                    id: "ht".to_string(),
+                    node_type: "human_task".to_string(),
+                    position: Position { x: 0.0, y: 50.0 },
+                    data: WorkflowNodeData::HumanTask {
+                        label: "Review".to_string(),
+                        description: None,
+                        task_title: "Review Task".to_string(),
+                        instructions_mdsvex: Some("Please review".to_string()),
+                        steps: vec![],
+                    },
+                },
+                end_node("e"),
+            ],
+            edges: vec![
+                edge("e1", "s", "ht"),
+                edge("e2", "ht", "e"),
+            ],
+            viewport: None,
+        };
+
+        let result = compile_to_air(&graph, "test", "desc");
+        assert!(result.is_ok(), "compile failed: {:?}", result.err());
+
+        let air = result.unwrap();
+        let places = air["places"].as_array().unwrap();
+        let transitions = air["transitions"].as_array().unwrap();
+
+        // HumanTask creates 4 places (input, active, signal, output)
+        // + Start place + End place = 6
+        assert_eq!(places.len(), 6);
+
+        // HumanTask creates 2 transitions (request, finalize) + 2 edge transitions = 4
+        assert_eq!(transitions.len(), 4);
+    }
+
+    #[test]
+    fn test_decision_creates_branches() {
+        let graph = WorkflowGraph {
+            nodes: vec![
+                start_node("s"),
+                WorkflowNode {
+                    id: "d".to_string(),
+                    node_type: "decision".to_string(),
+                    position: Position { x: 0.0, y: 50.0 },
+                    data: WorkflowNodeData::Decision {
+                        label: "Route".to_string(),
+                        description: None,
+                        conditions: vec![
+                            BranchCondition {
+                                edge_id: "cond1".to_string(),
+                                label: "Yes".to_string(),
+                                guard: "input.approved == true".to_string(),
+                            },
+                        ],
+                        default_branch: Some("default1".to_string()),
+                    },
+                },
+                end_node("e1"),
+                end_node_with_id("e2"),
+            ],
+            edges: vec![
+                edge("e0", "s", "d"),
+                edge_with_handle("econd1", "d", "e1", "cond1"),
+                edge_with_handle("edefault", "d", "e2", "default1"),
+            ],
+            viewport: None,
+        };
+
+        let result = compile_to_air(&graph, "test", "desc");
+        assert!(result.is_ok(), "compile failed: {:?}", result.err());
+
+        let air = result.unwrap();
+        let transitions = air["transitions"].as_array().unwrap();
+
+        // 1 branch + 1 default + 3 edge transitions = 5
+        assert_eq!(transitions.len(), 5);
+
+        // Verify the branch has a guard
+        let branch = transitions.iter().find(|t| t["id"] == "t_d_branch_0").unwrap();
+        assert!(branch.get("guard").is_some());
+    }
+
+    fn end_node_with_id(id: &str) -> WorkflowNode {
+        WorkflowNode {
+            id: id.to_string(),
+            node_type: "end".to_string(),
+            position: Position { x: 100.0, y: 100.0 },
+            data: WorkflowNodeData::End {
+                label: format!("End {id}"),
+                description: None,
+            },
+        }
+    }
+
+    fn edge_with_handle(id: &str, source: &str, target: &str, handle: &str) -> WorkflowEdge {
+        WorkflowEdge {
+            id: id.to_string(),
+            source: source.to_string(),
+            target: target.to_string(),
+            source_handle: Some(handle.to_string()),
+            label: None,
+            edge_type: "sequence".to_string(),
+        }
+    }
+
+    #[test]
+    fn test_full_showcase_graph_compiles() {
+        // Use the default graph to verify basic compilation works
+        let graph = WorkflowGraph::default_graph();
+        let result = compile_to_air(&graph, "showcase", "A test workflow");
+        assert!(result.is_ok(), "showcase compile failed: {:?}", result.err());
     }
 }
