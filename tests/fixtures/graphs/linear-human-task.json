@@ -1,0 +1,57 @@
+{
+	"nodes": [
+		{
+			"id": "start-1",
+			"type": "start",
+			"position": { "x": 250, "y": 100 },
+			"data": { "type": "start", "label": "Start" }
+		},
+		{
+			"id": "ht-1",
+			"type": "human_task",
+			"position": { "x": 250, "y": 250 },
+			"data": {
+				"type": "human_task",
+				"label": "Review Task",
+				"taskTitle": "Review Document",
+				"steps": [
+					{
+						"id": "step-1",
+						"title": "Review",
+						"blocks": [
+							{
+								"type": "input",
+								"field": {
+									"name": "approved",
+									"label": "Approved",
+									"kind": "checkbox",
+									"required": true
+								}
+							}
+						]
+					}
+				]
+			}
+		},
+		{
+			"id": "end-1",
+			"type": "end",
+			"position": { "x": 250, "y": 400 },
+			"data": { "type": "end", "label": "End" }
+		}
+	],
+	"edges": [
+		{
+			"id": "edge-start-ht",
+			"source": "start-1",
+			"target": "ht-1",
+			"type": "sequence"
+		},
+		{
+			"id": "edge-ht-end",
+			"source": "ht-1",
+			"target": "end-1",
+			"type": "sequence"
+		}
+	]
+}
