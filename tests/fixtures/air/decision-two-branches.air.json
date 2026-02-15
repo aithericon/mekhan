@@ -1,213 +1,148 @@
 {
+  "definitions": {
+    "DynamicToken": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Dynamic token - untyped JSON data.\n\nUse when you need flexibility and don't want compile-time type checking. Rhai scripts can manipulate these freely.",
+      "title": "DynamicToken"
+    }
+  },
+  "description": "",
   "name": "Decision Two Branches",
   "places": [
     {
       "id": "p_start-1_ready",
-      "name": "Start",
-      "type": "state",
       "initial_tokens": [
-        {
-          "_instance_id": "__INSTANCE_ID__",
-          "_created_at": "__TIMESTAMP__"
-        }
-      ]
-    },
-    {
-      "id": "p_dec-1_input",
-      "name": "Check Value - Input",
+        {}
+      ],
+      "name": "Start",
+      "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
-      "id": "p_dec-1_out_branch-a",
+      "id": "p_dec-1_out_0",
       "name": "Check Value - Branch A",
-      "type": "state"
-    },
-    {
-      "id": "p_dec-1_out_branch-b",
-      "name": "Check Value - Branch B",
-      "type": "state"
-    },
-    {
-      "id": "p_end-a_done",
-      "name": "End A",
+      "token_schema": "#/definitions/DynamicToken",
       "type": "terminal"
     },
     {
-      "id": "p_end-b_done",
-      "name": "End B",
+      "id": "p_dec-1_out_1",
+      "name": "Check Value - Branch B",
+      "token_schema": "#/definitions/DynamicToken",
       "type": "terminal"
     }
   ],
   "transitions": [
     {
-      "id": "t_dec-1_branch_branch-a",
-      "name": "Check Value - Branch A",
-      "input_ports": [
-        {
-          "name": "input",
-          "cardinality": "single"
-        }
-      ],
-      "output_ports": [
-        {
-          "name": "output",
-          "cardinality": "single"
-        }
-      ],
-      "inputs": [
-        {
-          "place": "p_dec-1_input",
-          "port": "input"
-        }
-      ],
-      "outputs": [
-        {
-          "port": "output",
-          "place": "p_dec-1_out_branch-a"
-        }
-      ],
       "guard": {
-        "type": "rhai",
-        "source": "input.value > 10"
+        "source": "input.value > 10",
+        "type": "rhai"
       },
-      "logic": {
-        "type": "rhai",
-        "source": "#{ output: input }"
-      }
-    },
-    {
-      "id": "t_dec-1_branch_branch-b",
-      "name": "Check Value - Branch B",
+      "id": "t_dec-1_branch_0",
       "input_ports": [
         {
+          "cardinality": "single",
           "name": "input",
-          "cardinality": "single"
+          "schema_ref": "#/definitions/DynamicToken"
         }
       ],
-      "output_ports": [
-        {
-          "name": "output",
-          "cardinality": "single"
-        }
-      ],
-      "inputs": [
-        {
-          "place": "p_dec-1_input",
-          "port": "input"
-        }
-      ],
-      "outputs": [
-        {
-          "port": "output",
-          "place": "p_dec-1_out_branch-b"
-        }
-      ],
-      "guard": {
-        "type": "rhai",
-        "source": "input.value <= 10"
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
       },
-      "logic": {
-        "type": "rhai",
-        "source": "#{ output: input }"
-      }
-    },
-    {
-      "id": "t_edge_e1",
-      "name": "Start -> Check Value",
-      "input_ports": [
-        {
-          "name": "input",
-          "cardinality": "single"
-        }
-      ],
-      "output_ports": [
-        {
-          "name": "output",
-          "cardinality": "single"
-        }
-      ],
       "inputs": [
         {
           "place": "p_start-1_ready",
-          "port": "input"
-        }
-      ],
-      "outputs": [
-        {
-          "port": "output",
-          "place": "p_dec-1_input"
+          "port": "input",
+          "weight": 1
         }
       ],
       "logic": {
-        "type": "rhai",
-        "source": "#{ output: input }"
-      }
-    },
-    {
-      "id": "t_edge_e-a",
-      "name": "Check Value -> End A",
-      "input_ports": [
-        {
-          "name": "input",
-          "cardinality": "single"
-        }
-      ],
+        "source": "#{ output: input }",
+        "type": "rhai"
+      },
+      "name": "Check Value - Branch A",
       "output_ports": [
         {
+          "cardinality": "single",
           "name": "output",
-          "cardinality": "single"
+          "schema_ref": "#/definitions/DynamicToken"
         }
       ],
-      "inputs": [
-        {
-          "place": "p_dec-1_out_branch-a",
-          "port": "input"
-        }
-      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
       "outputs": [
         {
+          "place": "p_dec-1_out_0",
           "port": "output",
-          "place": "p_end-a_done"
+          "weight": 1
         }
-      ],
-      "logic": {
-        "type": "rhai",
-        "source": "#{ output: input }"
-      }
+      ]
     },
     {
-      "id": "t_edge_e-b",
-      "name": "Check Value -> End B",
+      "guard": {
+        "source": "input.value <= 10",
+        "type": "rhai"
+      },
+      "id": "t_dec-1_branch_1",
       "input_ports": [
         {
+          "cardinality": "single",
           "name": "input",
-          "cardinality": "single"
+          "schema_ref": "#/definitions/DynamicToken"
         }
       ],
-      "output_ports": [
-        {
-          "name": "output",
-          "cardinality": "single"
-        }
-      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
       "inputs": [
         {
-          "place": "p_dec-1_out_branch-b",
-          "port": "input"
-        }
-      ],
-      "outputs": [
-        {
-          "port": "output",
-          "place": "p_end-b_done"
+          "place": "p_start-1_ready",
+          "port": "input",
+          "weight": 1
         }
       ],
       "logic": {
-        "type": "rhai",
-        "source": "#{ output: input }"
-      }
+        "source": "#{ output: input }",
+        "type": "rhai"
+      },
+      "name": "Check Value - Branch B",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "output",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_dec-1_out_1",
+          "port": "output",
+          "weight": 1
+        }
+      ]
     }
-  ],
-  "groups": [],
-  "definitions": {}
+  ]
 }

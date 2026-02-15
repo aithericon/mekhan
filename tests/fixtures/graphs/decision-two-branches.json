@@ -1,0 +1,65 @@
+{
+	"nodes": [
+		{
+			"id": "start-1",
+			"type": "start",
+			"position": { "x": 250, "y": 100 },
+			"data": { "type": "start", "label": "Start" }
+		},
+		{
+			"id": "dec-1",
+			"type": "decision",
+			"position": { "x": 250, "y": 250 },
+			"data": {
+				"type": "decision",
+				"label": "Check Value",
+				"conditions": [
+					{
+						"edgeId": "branch-a",
+						"label": "Branch A",
+						"guard": "input.value > 10"
+					},
+					{
+						"edgeId": "branch-b",
+						"label": "Branch B",
+						"guard": "input.value <= 10"
+					}
+				]
+			}
+		},
+		{
+			"id": "end-a",
+			"type": "end",
+			"position": { "x": 100, "y": 400 },
+			"data": { "type": "end", "label": "End A" }
+		},
+		{
+			"id": "end-b",
+			"type": "end",
+			"position": { "x": 400, "y": 400 },
+			"data": { "type": "end", "label": "End B" }
+		}
+	],
+	"edges": [
+		{
+			"id": "e1",
+			"source": "start-1",
+			"target": "dec-1",
+			"type": "sequence"
+		},
+		{
+			"id": "e-a",
+			"source": "dec-1",
+			"target": "end-a",
+			"sourceHandle": "branch-a",
+			"type": "sequence"
+		},
+		{
+			"id": "e-b",
+			"source": "dec-1",
+			"target": "end-b",
+			"sourceHandle": "branch-b",
+			"type": "sequence"
+		}
+	]
+}
