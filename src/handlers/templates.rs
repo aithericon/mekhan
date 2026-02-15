@@ -7,6 +7,8 @@ use axum::{
 use serde_json::json;
 use uuid::Uuid;
 
+use serde::Deserialize;
+
 use crate::compiler::compile_to_air;
 use crate::lifecycle::cleanup_net;
 use crate::models::template::{
@@ -14,6 +16,15 @@ use crate::models::template::{
     WorkflowGraph, WorkflowTemplate,
 };
 use crate::AppState;
+
+/// Request body for stateless compilation.
+#[derive(Debug, Deserialize)]
+pub struct CompileRequest {
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    pub graph: WorkflowGraph,
+}
 
 /// POST /api/templates
 pub async fn create_template(
@@ -583,6 +594,20 @@ pub async fn compile_preview(
     };
 
     match compile_to_air(&graph, &existing.name, &existing.description) {
+        Ok(air) => Json(air).into_response(),
+        Err(e) => {
+            (StatusCode::BAD_REQUEST, Json(json!({"error": format!("compilation failed: {e}")}))).into_response()
+        }
+    }
+}
+
+/// POST /api/compile
+/// Stateless compilation: accepts a graph and returns AIR JSON without database access.
+pub async fn compile_graph(
+    Json(body): Json<CompileRequest>,
+) -> impl IntoResponse {
+    let description = body.description.as_deref().unwrap_or("");
+    match compile_to_air(&body.graph, &body.name, description) {
         Ok(air) => Json(air).into_response(),
         Err(e) => {
             (StatusCode::BAD_REQUEST, Json(json!({"error": format!("compilation failed: {e}")}))).into_response()

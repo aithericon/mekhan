@@ -1,3 +1,3 @@
 mod compile;
 
-pub use compile::compile_to_air;
+pub use compile::{compile_to_air, CompileError};

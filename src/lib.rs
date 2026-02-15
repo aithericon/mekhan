@@ -69,6 +69,8 @@ pub fn build_router(state: AppState) -> Router {
             "/api/templates/{id}/compile",
             post(handlers::templates::compile_preview),
         )
+        // Stateless compile endpoint
+        .route("/api/compile", post(handlers::templates::compile_graph))
         // Instance endpoints
         .route(
             "/api/instances",

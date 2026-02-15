@@ -73,7 +73,7 @@ pub enum WorkflowNodeData {
         label: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         description: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(rename = "initialData", skip_serializing_if = "Option::is_none")]
         initial_data: Option<serde_json::Value>,
     },
     #[serde(rename = "end")]
@@ -87,8 +87,9 @@ pub enum WorkflowNodeData {
         label: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         description: Option<String>,
+        #[serde(rename = "taskTitle")]
         task_title: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(rename = "instructionsMdsvex", skip_serializing_if = "Option::is_none")]
         instructions_mdsvex: Option<String>,
         steps: Vec<TaskStepConfig>,
     },
@@ -97,6 +98,7 @@ pub enum WorkflowNodeData {
         label: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         description: Option<String>,
+        #[serde(rename = "executionSpec")]
         execution_spec: ExecutionSpecConfig,
     },
     #[serde(rename = "decision")]
@@ -105,7 +107,7 @@ pub enum WorkflowNodeData {
         #[serde(skip_serializing_if = "Option::is_none")]
         description: Option<String>,
         conditions: Vec<BranchCondition>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(rename = "defaultBranch", skip_serializing_if = "Option::is_none")]
         default_branch: Option<String>,
     },
     #[serde(rename = "parallel_split")]
@@ -125,7 +127,9 @@ pub enum WorkflowNodeData {
         label: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         description: Option<String>,
+        #[serde(rename = "maxIterations")]
         max_iterations: i32,
+        #[serde(rename = "loopCondition")]
         loop_condition: String,
     },
 }

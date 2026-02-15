@@ -46,6 +46,10 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 thiserror = "2"
 anyhow = "1"
 
+# SDK for compiling workflow graphs to AIR
+aithericon-sdk = { path = "../petri-lab/sdk" }
+schemars = "0.8"
+
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
