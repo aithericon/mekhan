@@ -108,7 +108,7 @@ fn _count_places_of_type(air: &Value, place_type: &str) -> usize {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn start_to_end_produces_state_and_terminal_places() {
+fn start_to_end_produces_terminal_place() {
     let graph = WorkflowGraph {
         nodes: vec![start_node("s"), end_node("e")],
         edges: vec![edge("e1", "s", "e")],
@@ -117,17 +117,15 @@ fn start_to_end_produces_state_and_terminal_places() {
 
     let air = compile_to_air(&graph, "test", "desc").expect("should compile");
 
-    // At least one state place and one terminal place
-    assert!(has_place_of_type(&air, "state"), "expected a state place");
+    // End place merged into Start: single terminal place with initial tokens
     assert!(
         has_place_of_type(&air, "terminal"),
         "expected a terminal place"
     );
-
-    // At least one transition (the edge wiring)
+    assert_eq!(places(&air).len(), 1, "expected 1 place after merge");
     assert!(
-        !transitions(&air).is_empty(),
-        "expected at least one transition"
+        transitions(&air).is_empty(),
+        "expected no transitions after merge"
     );
 }
 
@@ -144,7 +142,7 @@ fn start_to_end_has_correct_structure() {
     assert_eq!(air["name"], "my_workflow");
     assert_eq!(air["description"], "a test workflow");
 
-    // Start place should have initial_tokens
+    // After merge: Start place absorbs End's terminal type
     let start_place = places(&air)
         .iter()
         .find(|p| p["id"] == "p_start_ready")
@@ -153,13 +151,7 @@ fn start_to_end_has_correct_structure() {
         start_place.get("initial_tokens").is_some(),
         "start place should have initial_tokens"
     );
-
-    // End place is terminal
-    let end_place = places(&air)
-        .iter()
-        .find(|p| p["id"] == "p_end_done")
-        .expect("missing end done place");
-    assert_eq!(end_place["type"], "terminal");
+    assert_eq!(start_place["type"], "terminal", "start place should be terminal after merge");
 }
 
 // ---------------------------------------------------------------------------
@@ -702,6 +694,93 @@ fn decision_with_default_branch() {
 }
 
 // ---------------------------------------------------------------------------
+// Cycle detection (petgraph)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn cycle_in_non_loop_edges_fails() {
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            WorkflowNode {
+                id: "a".to_string(),
+                node_type: "human_task".to_string(),
+                position: pos(),
+                data: WorkflowNodeData::HumanTask {
+                    label: "A".to_string(),
+                    description: None,
+                    task_title: "A".to_string(),
+                    instructions_mdsvex: None,
+                    steps: vec![],
+                },
+            },
+            WorkflowNode {
+                id: "b".to_string(),
+                node_type: "human_task".to_string(),
+                position: pos(),
+                data: WorkflowNodeData::HumanTask {
+                    label: "B".to_string(),
+                    description: None,
+                    task_title: "B".to_string(),
+                    instructions_mdsvex: None,
+                    steps: vec![],
+                },
+            },
+            end_node("e"),
+        ],
+        edges: vec![
+            edge("e1", "s", "a"),
+            edge("e2", "a", "b"),
+            edge("e3", "b", "a"), // cycle (sequence edge, not loop_back)
+            edge("e4", "b", "e"),
+        ],
+        viewport: None,
+    };
+
+    let err = compile_to_air(&graph, "test", "").expect_err("should fail with cycle");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("cycle"),
+        "error should mention cycle: {msg}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// ParallelSplit must have >= 2 outgoing edges
+// ---------------------------------------------------------------------------
+
+#[test]
+fn parallel_split_with_one_branch_fails() {
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            WorkflowNode {
+                id: "split".to_string(),
+                node_type: "parallel_split".to_string(),
+                position: pos(),
+                data: WorkflowNodeData::ParallelSplit {
+                    label: "Fork".to_string(),
+                    description: None,
+                },
+            },
+            end_node("e"),
+        ],
+        edges: vec![
+            edge("e1", "s", "split"),
+            edge("e2", "split", "e"), // only 1 outgoing edge
+        ],
+        viewport: None,
+    };
+
+    let err = compile_to_air(&graph, "test", "").expect_err("should fail with 1 branch");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("parallel split") || msg.contains("outgoing"),
+        "error should mention parallel split: {msg}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Executor lifecycle creates scoped effect_errors places
 // ---------------------------------------------------------------------------
 
@@ -735,5 +814,340 @@ fn automated_step_has_scoped_effect_errors() {
     assert!(
         has_place(&air, "auto/effect_errors"),
         "expected scoped effect_errors for auto node"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Merge optimization: chain of pass-through edges
+// ---------------------------------------------------------------------------
+
+fn auto_node(id: &str, label: &str) -> WorkflowNode {
+    WorkflowNode {
+        id: id.to_string(),
+        node_type: "automated_step".to_string(),
+        position: pos(),
+        data: WorkflowNodeData::AutomatedStep {
+            label: label.to_string(),
+            description: None,
+            execution_spec: ExecutionSpecConfig {
+                backend_type: "docker".to_string(),
+                config: json!({"image": "alpine:latest"}),
+            },
+        },
+    }
+}
+
+/// S -> A -> B -> C -> E: intermediate pass-through edges are merged away.
+/// Each AutomatedStep has its own internal transitions, but the wiring
+/// between nodes (A→B, B→C, C→E, S→A) should produce NO pass-through
+/// transitions — their places are merged instead.
+#[test]
+fn chain_merges_intermediate_pass_through_places() {
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            auto_node("a", "Step A"),
+            auto_node("b", "Step B"),
+            auto_node("c", "Step C"),
+            end_node("e"),
+        ],
+        edges: vec![
+            edge("e1", "s", "a"),
+            edge("e2", "a", "b"),
+            edge("e3", "b", "c"),
+            edge("e4", "c", "e"),
+        ],
+        viewport: None,
+    };
+
+    let air = compile_to_air(&graph, "chain_test", "").expect("should compile");
+
+    // No pass-through wiring transitions should exist
+    let pass_throughs: Vec<_> = transitions(&air)
+        .iter()
+        .filter(|t| {
+            t["id"]
+                .as_str()
+                .map(|id| id.starts_with("t_edge_"))
+                .unwrap_or(false)
+        })
+        .collect();
+    assert!(
+        pass_throughs.is_empty(),
+        "expected no pass-through edge transitions, got: {:?}",
+        pass_throughs.iter().map(|t| &t["id"]).collect::<Vec<_>>()
+    );
+
+    // The End place should have been merged (no p_e_done place)
+    assert!(
+        !has_place(&air, "p_e_done"),
+        "End's input place should be merged into predecessor's output"
+    );
+
+    // But each AutomatedStep's internal places and transitions still exist
+    for node_id in &["a", "b", "c"] {
+        assert!(
+            has_transition(&air, &format!("{node_id}/prepare")),
+            "expected {node_id}/prepare transition"
+        );
+        assert!(
+            has_transition(&air, &format!("{node_id}/submit")),
+            "expected {node_id}/submit transition"
+        );
+    }
+
+    // Terminal type propagated through merges
+    assert!(
+        has_place_of_type(&air, "terminal"),
+        "expected at least one terminal place"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Merge optimization: transitive alias resolution (A→B→C chain)
+// ---------------------------------------------------------------------------
+
+/// S -> A -> E where S's output, A's input, A's output, and E's input
+/// form a chain of merges: p_a_input merges into p_s_ready, p_e_done
+/// merges into p_a_output. This tests that the alias resolution correctly
+/// handles multiple independent merge pairs (not a transitive chain per se,
+/// but validates the alias map doesn't corrupt unrelated entries).
+///
+/// For a true transitive test: S -> End1 -> End2 isn't valid (two Ends).
+/// Instead we verify that in the S->A->B->E chain, the start place
+/// doesn't accidentally get aliased to something wrong.
+#[test]
+fn transitive_merge_chain_resolves_correctly() {
+    // S -> A -> B -> E: creates merges s_ready←a_input, a_output←b_input, b_output←e_done
+    // Each is independent (no transitive chain needed), but if resolve_aliases
+    // had a bug in chain-following, this pattern would expose it.
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            auto_node("a", "Step A"),
+            auto_node("b", "Step B"),
+            end_node("e"),
+        ],
+        edges: vec![
+            edge("e1", "s", "a"),
+            edge("e2", "a", "b"),
+            edge("e3", "b", "e"),
+        ],
+        viewport: None,
+    };
+
+    let air = compile_to_air(&graph, "transitive_test", "").expect("should compile");
+
+    // Start place still exists with its initial token
+    let start_place = places(&air)
+        .iter()
+        .find(|p| p["id"] == "p_s_ready")
+        .expect("start place should survive merges");
+    assert!(
+        !start_place["initial_tokens"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "start place should retain initial tokens"
+    );
+
+    // A's input place (p_a_input) should be merged away (into p_s_ready)
+    assert!(
+        !has_place(&air, "p_a_input"),
+        "p_a_input should be merged into p_s_ready"
+    );
+
+    // B's input place (p_b_input) should be merged away (into p_a_output)
+    assert!(
+        !has_place(&air, "p_b_input"),
+        "p_b_input should be merged into p_a_output"
+    );
+
+    // E's place (p_e_done) should be merged away (into p_b_output)
+    assert!(
+        !has_place(&air, "p_e_done"),
+        "p_e_done should be merged into p_b_output"
+    );
+
+    // B's output should have become terminal (via alias resolution of p_e_done → p_b_output)
+    let b_output = places(&air)
+        .iter()
+        .find(|p| p["id"] == "p_b_output")
+        .expect("p_b_output should be the surviving terminal place");
+    assert_eq!(
+        b_output["type"], "terminal",
+        "p_b_output should be terminal after merge"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Merge optimization: ParallelJoin per-edge input places merge
+// ---------------------------------------------------------------------------
+
+/// S -> Split -> (AutoA, AutoB) -> Join -> E
+/// The per-edge input places of the Join (p_join_in_0, p_join_in_1) should
+/// be merged into the output places of AutoA and AutoB respectively.
+#[test]
+fn parallel_join_merges_per_edge_input_places() {
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            WorkflowNode {
+                id: "split".to_string(),
+                node_type: "parallel_split".to_string(),
+                position: pos(),
+                data: WorkflowNodeData::ParallelSplit {
+                    label: "Fork".to_string(),
+                    description: None,
+                },
+            },
+            auto_node("aa", "Auto A"),
+            auto_node("ab", "Auto B"),
+            WorkflowNode {
+                id: "join".to_string(),
+                node_type: "parallel_join".to_string(),
+                position: pos(),
+                data: WorkflowNodeData::ParallelJoin {
+                    label: "Join".to_string(),
+                    description: None,
+                },
+            },
+            end_node("e"),
+        ],
+        edges: vec![
+            edge("e_in", "s", "split"),
+            edge("e_fork_a", "split", "aa"),
+            edge("e_fork_b", "split", "ab"),
+            edge("e_join_a", "aa", "join"),
+            edge("e_join_b", "ab", "join"),
+            edge("e_out", "join", "e"),
+        ],
+        viewport: None,
+    };
+
+    let air = compile_to_air(&graph, "join_merge_test", "").expect("should compile");
+
+    // Join's per-edge input places should be merged away
+    assert!(
+        !has_place(&air, "p_join_in_0"),
+        "p_join_in_0 should be merged into auto A's output"
+    );
+    assert!(
+        !has_place(&air, "p_join_in_1"),
+        "p_join_in_1 should be merged into auto B's output"
+    );
+
+    // The join transition's input arcs should reference the auto outputs directly
+    let t_join = get_transition(&air, "t_join_join").expect("join transition should exist");
+    let input_arcs: Vec<&str> = t_join["inputs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|arc| arc["place"].as_str().unwrap())
+        .collect();
+
+    assert!(
+        input_arcs.contains(&"p_aa_output"),
+        "join input should reference p_aa_output, got: {:?}",
+        input_arcs
+    );
+    assert!(
+        input_arcs.contains(&"p_ab_output"),
+        "join input should reference p_ab_output, got: {:?}",
+        input_arcs
+    );
+
+    // No pass-through wiring transitions
+    let pass_throughs: Vec<_> = transitions(&air)
+        .iter()
+        .filter(|t| {
+            t["id"]
+                .as_str()
+                .map(|id| id.starts_with("t_edge_"))
+                .unwrap_or(false)
+        })
+        .collect();
+    assert!(
+        pass_throughs.is_empty(),
+        "expected no pass-through transitions, got: {:?}",
+        pass_throughs.iter().map(|t| &t["id"]).collect::<Vec<_>>()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Merge optimization: multi-input non-join retains pass-through
+// ---------------------------------------------------------------------------
+
+/// Two edges converge on the same non-join node (Decision). Since it has
+/// multiple incoming edges and is not a ParallelJoin, the pass-through
+/// transitions must be RETAINED (not merged).
+#[test]
+fn multi_input_non_join_retains_pass_through_transitions() {
+    // S -> Split -> (A, B) with both A and B targeting the same Decision node.
+    // Decision has 2 incoming edges and is not a ParallelJoin, so pass-throughs stay.
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            WorkflowNode {
+                id: "split".to_string(),
+                node_type: "parallel_split".to_string(),
+                position: pos(),
+                data: WorkflowNodeData::ParallelSplit {
+                    label: "Fork".to_string(),
+                    description: None,
+                },
+            },
+            auto_node("a", "Step A"),
+            auto_node("b", "Step B"),
+            WorkflowNode {
+                id: "dec".to_string(),
+                node_type: "decision".to_string(),
+                position: pos(),
+                data: WorkflowNodeData::Decision {
+                    label: "Decide".to_string(),
+                    description: None,
+                    conditions: vec![BranchCondition {
+                        edge_id: "cond_yes".to_string(),
+                        label: "Yes".to_string(),
+                        guard: "input.ok == true".to_string(),
+                    }],
+                    default_branch: Some("cond_no".to_string()),
+                },
+            },
+            end_node("ey"),
+            end_node("en"),
+        ],
+        edges: vec![
+            edge("e_in", "s", "split"),
+            edge("e_fork_a", "split", "a"),
+            edge("e_fork_b", "split", "b"),
+            edge("e_to_dec_a", "a", "dec"),
+            edge("e_to_dec_b", "b", "dec"),
+            edge_with_handle("e_yes", "dec", "ey", "cond_yes"),
+            edge_with_handle("e_no", "dec", "en", "cond_no"),
+        ],
+        viewport: None,
+    };
+
+    let mut graph = graph;
+    graph.nodes[5].id = "ey".to_string();
+    graph.nodes[6].id = "en".to_string();
+
+    let air = compile_to_air(&graph, "multi_input_test", "").expect("should compile");
+
+    // Decision's input place (p_dec_input) should still exist — not merged
+    assert!(
+        has_place(&air, "p_dec_input"),
+        "p_dec_input should be retained for multi-input non-join"
+    );
+
+    // Both edges into Decision should produce pass-through transitions
+    assert!(
+        has_transition(&air, "t_edge_e_to_dec_a"),
+        "expected pass-through transition for edge a→dec"
+    );
+    assert!(
+        has_transition(&air, "t_edge_e_to_dec_b"),
+        "expected pass-through transition for edge b→dec"
     );
 }

@@ -2,10 +2,21 @@ use crate::models::template::{
     WorkflowEdge, WorkflowGraph, WorkflowNode, WorkflowNodeData,
 };
 use aithericon_sdk::components::executor_lifecycle::{executor_lifecycle, ExecutorBridges};
-use aithericon_sdk::scenario::ScenarioGroup;
+use aithericon_sdk::scenario::{ScenarioDefinition, ScenarioGroup};
 use aithericon_sdk::{Context, DynamicToken, PlaceHandle};
 use serde_json::{json, Value};
-use std::collections::{HashMap, HashSet, VecDeque};
+use petgraph::algo::{is_cyclic_directed, toposort};
+use petgraph::graph::{DiGraph, NodeIndex};
+use petgraph::visit::Bfs;
+use petgraph::Direction;
+use std::collections::{HashMap, HashSet};
+
+/// Instruction to merge `dead` place into `survivor` place.
+/// All references to `dead` become references to `survivor`, then `dead` is removed.
+struct PlaceMerge {
+    dead: String,
+    survivor: String,
+}
 
 /// Tracks post-processing fixups that must be applied after ctx.build().
 #[derive(Default)]
@@ -14,6 +25,8 @@ struct PostProcess {
     terminal_place_ids: Vec<String>,
     /// Groups to add (with explicit IDs matching the old compiler format).
     groups: Vec<(String, String)>, // (id, name)
+    /// Pass-through edge merges: dead place → survivor place.
+    merges: Vec<PlaceMerge>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -36,70 +49,145 @@ struct NodePorts {
     input_places: HashMap<String, PlaceHandle<DynamicToken>>,
 }
 
+/// Wraps petgraph directed graphs for the workflow.
+///
+/// Two graphs share the same `NodeIndex` values:
+/// - `full`: all edges (for wiring and reachability queries)
+/// - `dag`: loop_back edges removed (for topological sort and cycle detection)
+struct WorkflowDiGraph<'a> {
+    full: DiGraph<&'a WorkflowNode, &'a WorkflowEdge>,
+    dag: DiGraph<&'a WorkflowNode, &'a WorkflowEdge>,
+    indices: HashMap<&'a str, NodeIndex>,
+    start: NodeIndex,
+}
+
+impl<'a> WorkflowDiGraph<'a> {
+    fn build(graph: &'a WorkflowGraph) -> Result<Self, CompileError> {
+        let mut full = DiGraph::new();
+        let mut dag = DiGraph::new();
+        let mut indices = HashMap::new();
+        let mut start = None;
+
+        for node in &graph.nodes {
+            let fi = full.add_node(node);
+            let di = dag.add_node(node);
+            debug_assert_eq!(fi, di);
+            indices.insert(node.id.as_str(), fi);
+            if matches!(node.data, WorkflowNodeData::Start { .. }) {
+                start = Some(fi);
+            }
+        }
+
+        let start = start.ok_or_else(|| {
+            CompileError::Validation("expected exactly one Start node, found 0".into())
+        })?;
+
+        for edge in &graph.edges {
+            let &src = indices.get(edge.source.as_str()).ok_or_else(|| {
+                CompileError::Validation(format!(
+                    "edge '{}' references unknown source node '{}'",
+                    edge.id, edge.source
+                ))
+            })?;
+            let &tgt = indices.get(edge.target.as_str()).ok_or_else(|| {
+                CompileError::Validation(format!(
+                    "edge '{}' references unknown target node '{}'",
+                    edge.id, edge.target
+                ))
+            })?;
+            full.add_edge(src, tgt, edge);
+            if edge.edge_type != "loop_back" {
+                dag.add_edge(src, tgt, edge);
+            }
+        }
+
+        Ok(Self {
+            full,
+            dag,
+            indices,
+            start,
+        })
+    }
+
+    fn node(&self, id: &str) -> &'a WorkflowNode {
+        *self.full.node_weight(self.indices[id]).unwrap()
+    }
+
+    /// Outgoing edges in original insertion order.
+    fn outgoing(&self, id: &str) -> Vec<&'a WorkflowEdge> {
+        let idx = self.indices[id];
+        let mut edges: Vec<_> = self
+            .full
+            .edges_directed(idx, Direction::Outgoing)
+            .map(|e| *e.weight())
+            .collect();
+        edges.reverse(); // petgraph iterates newest-first; restore insertion order
+        edges
+    }
+
+    /// Incoming edges in original insertion order.
+    fn incoming(&self, id: &str) -> Vec<&'a WorkflowEdge> {
+        let idx = self.indices[id];
+        let mut edges: Vec<_> = self
+            .full
+            .edges_directed(idx, Direction::Incoming)
+            .map(|e| *e.weight())
+            .collect();
+        edges.reverse();
+        edges
+    }
+}
+
 /// Compile a WorkflowGraph to AIR JSON.
 pub fn compile_to_air(
     graph: &WorkflowGraph,
     name: &str,
     description: &str,
 ) -> Result<Value, CompileError> {
-    // 1. Validate
-    validate(graph)?;
+    // 1. Build directed graph
+    let wg = WorkflowDiGraph::build(graph)?;
 
-    // 2. Build adjacency and index
-    let node_map: HashMap<&str, &WorkflowNode> =
-        graph.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+    // 2. Validate
+    validate(graph, &wg)?;
 
-    let edges_from: HashMap<&str, Vec<&WorkflowEdge>> = {
-        let mut map: HashMap<&str, Vec<&WorkflowEdge>> = HashMap::new();
-        for edge in &graph.edges {
-            map.entry(edge.source.as_str()).or_default().push(edge);
-        }
-        map
-    };
-
-    let edges_to: HashMap<&str, Vec<&WorkflowEdge>> = {
-        let mut map: HashMap<&str, Vec<&WorkflowEdge>> = HashMap::new();
-        for edge in &graph.edges {
-            map.entry(edge.target.as_str()).or_default().push(edge);
-        }
-        map
-    };
-
-    // 3. Topological sort (BFS from start)
-    let start_id = graph
-        .nodes
-        .iter()
-        .find(|n| matches!(n.data, WorkflowNodeData::Start { .. }))
-        .map(|n| n.id.as_str())
-        .unwrap(); // validated above
-
-    let sorted = topological_sort(start_id, &edges_from, &node_map)?;
+    // 3. Topological sort (on DAG — loop_back edges excluded)
+    let sorted = topo_order(&wg)?;
 
     // 4. Expand nodes
     let mut ctx = Context::new(name).description(description);
     let mut node_ports: HashMap<String, NodePorts> = HashMap::new();
     let mut fixups = PostProcess::default();
 
-    for node_id in &sorted {
-        let node = node_map[node_id.as_str()];
-        let outgoing = edges_from.get(node_id.as_str()).cloned().unwrap_or_default();
-        let incoming = edges_to.get(node_id.as_str()).cloned().unwrap_or_default();
+    for ni in &sorted {
+        let node = *wg.full.node_weight(*ni).unwrap();
+        let outgoing = wg.outgoing(&node.id);
+        let incoming = wg.incoming(&node.id);
         expand_node(node, &outgoing, &incoming, &mut ctx, &mut node_ports, &mut fixups)?;
     }
 
-    // 5. Wire edges (connect output of source to input of target via pass-through transitions)
+    // 5. Wire edges (may record merges instead of creating transitions)
     for edge in &graph.edges {
-        wire_edge(edge, &node_ports, &node_map, &mut ctx)?;
+        wire_edge(edge, &node_ports, &wg, &mut ctx, &mut fixups)?;
     }
 
     let mut scenario = ctx.build();
 
-    // Apply post-processing fixups
+    // 6. Resolve place aliases from merges
+    let alias = resolve_aliases(&fixups.merges);
+
+    // 7. Resolve terminal place IDs through aliases, then apply fixups
+    let resolved_terminal_ids: Vec<String> = fixups
+        .terminal_place_ids
+        .iter()
+        .map(|id| alias.get(id).cloned().unwrap_or_else(|| id.clone()))
+        .collect();
     for place in &mut scenario.places {
-        if fixups.terminal_place_ids.contains(&place.id) {
+        if resolved_terminal_ids.contains(&place.id) {
             place.place_type = "terminal".to_string();
         }
     }
+
+    // 8. Apply group fixups
     for (group_id, group_name) in fixups.groups {
         scenario.groups.push(ScenarioGroup {
             id: group_id,
@@ -108,6 +196,9 @@ pub fn compile_to_air(
             metadata: None,
         });
     }
+
+    // 9. Apply place merges (rewrite arcs, remove dead places)
+    apply_merges(&mut scenario, &alias);
 
     let air_value = serde_json::to_value(&scenario).map_err(|e| {
         CompileError::Compilation(format!("failed to serialize scenario: {e}"))
@@ -118,7 +209,7 @@ pub fn compile_to_air(
 
 // --- Validation ---
 
-fn validate(graph: &WorkflowGraph) -> Result<(), CompileError> {
+fn validate(graph: &WorkflowGraph, wg: &WorkflowDiGraph) -> Result<(), CompileError> {
     let start_count = graph
         .nodes
         .iter()
@@ -141,46 +232,31 @@ fn validate(graph: &WorkflowGraph) -> Result<(), CompileError> {
         ));
     }
 
-    // All nodes reachable from Start
-    let start_id = graph
-        .nodes
-        .iter()
-        .find(|n| matches!(n.data, WorkflowNodeData::Start { .. }))
-        .unwrap()
-        .id
-        .as_str();
-
-    let edges_from: HashMap<&str, Vec<&str>> = {
-        let mut map: HashMap<&str, Vec<&str>> = HashMap::new();
-        for edge in &graph.edges {
-            map.entry(edge.source.as_str())
-                .or_default()
-                .push(edge.target.as_str());
-        }
-        map
-    };
-
+    // Reachability: BFS on full graph (includes loop_back edges)
+    let mut bfs = Bfs::new(&wg.full, wg.start);
     let mut visited = HashSet::new();
-    let mut queue = VecDeque::new();
-    queue.push_back(start_id);
-    visited.insert(start_id);
-    while let Some(current) = queue.pop_front() {
-        if let Some(targets) = edges_from.get(current) {
-            for &target in targets {
-                if visited.insert(target) {
-                    queue.push_back(target);
-                }
-            }
-        }
+    while let Some(ni) = bfs.next(&wg.full) {
+        visited.insert(ni);
     }
 
-    let node_ids: HashSet<&str> = graph.nodes.iter().map(|n| n.id.as_str()).collect();
-    let unreachable: Vec<&str> = node_ids.difference(&visited).copied().collect();
+    let unreachable: Vec<&str> = wg
+        .indices
+        .iter()
+        .filter(|(_, &ni)| !visited.contains(&ni))
+        .map(|(&id, _)| id)
+        .collect();
     if !unreachable.is_empty() {
         return Err(CompileError::Validation(format!(
             "unreachable nodes: {}",
             unreachable.join(", ")
         )));
+    }
+
+    // Cycle detection on DAG (loop_back edges excluded)
+    if is_cyclic_directed(&wg.dag) {
+        return Err(CompileError::Validation(
+            "cycle detected in non-loop edges".to_string(),
+        ));
     }
 
     // Validate loop blocks
@@ -206,48 +282,99 @@ fn validate(graph: &WorkflowGraph) -> Result<(), CompileError> {
         }
     }
 
+    // ParallelSplit must have >= 2 outgoing edges
+    for node in &graph.nodes {
+        if matches!(node.data, WorkflowNodeData::ParallelSplit { .. }) {
+            let idx = wg.indices[node.id.as_str()];
+            let out_count = wg.full.edges_directed(idx, Direction::Outgoing).count();
+            if out_count < 2 {
+                return Err(CompileError::Validation(format!(
+                    "parallel split '{}' must have at least 2 outgoing edges, found {out_count}",
+                    node.id
+                )));
+            }
+        }
+    }
+
     Ok(())
 }
 
 // --- Topological sort ---
 
-fn topological_sort(
-    start_id: &str,
-    edges_from: &HashMap<&str, Vec<&WorkflowEdge>>,
-    node_map: &HashMap<&str, &WorkflowNode>,
-) -> Result<Vec<String>, CompileError> {
-    let mut result = Vec::new();
-    let mut visited = HashSet::new();
-    let mut queue = VecDeque::new();
+fn topo_order(wg: &WorkflowDiGraph) -> Result<Vec<NodeIndex>, CompileError> {
+    toposort(&wg.dag, None).map_err(|cycle| {
+        let node = *wg.dag.node_weight(cycle.node_id()).unwrap();
+        CompileError::Compilation(format!("cycle detected at node '{}'", node.id))
+    })
+}
 
-    queue.push_back(start_id.to_string());
-    visited.insert(start_id.to_string());
+// --- Place merge optimization ---
 
-    while let Some(current) = queue.pop_front() {
-        result.push(current.clone());
-        if let Some(outgoing) = edges_from.get(current.as_str()) {
-            for edge in outgoing {
-                // Skip loop_back edges to avoid cycles in topo sort
-                if edge.edge_type == "loop_back" {
-                    continue;
-                }
-                if visited.insert(edge.target.clone()) {
-                    queue.push_back(edge.target.clone());
-                }
+/// Build a dead→survivor alias map, resolving transitive chains.
+fn resolve_aliases(merges: &[PlaceMerge]) -> HashMap<String, String> {
+    let mut alias: HashMap<String, String> = HashMap::new();
+    for m in merges {
+        alias.insert(m.dead.clone(), m.survivor.clone());
+    }
+    // Resolve transitive chains: if A→B and B→C, make A→C
+    let keys: Vec<String> = alias.keys().cloned().collect();
+    for key in &keys {
+        let mut target = alias[key].clone();
+        let mut seen = HashSet::new();
+        seen.insert(key.clone());
+        while let Some(next) = alias.get(&target) {
+            if seen.contains(next) {
+                break;
+            }
+            seen.insert(target.clone());
+            target = next.clone();
+        }
+        alias.insert(key.clone(), target);
+    }
+    alias
+}
+
+/// Rewrite all place references through the alias map, then remove dead places.
+fn apply_merges(scenario: &mut ScenarioDefinition, alias: &HashMap<String, String>) {
+    if alias.is_empty() {
+        return;
+    }
+    let dead: HashSet<&String> = alias.keys().collect();
+
+    // Rewrite arc place references in all transitions
+    for t in &mut scenario.transitions {
+        for arc in &mut t.inputs {
+            if let Some(survivor) = alias.get(&arc.place) {
+                arc.place = survivor.clone();
+            }
+        }
+        for arc in &mut t.outputs {
+            if let Some(survivor) = alias.get(&arc.place) {
+                arc.place = survivor.clone();
             }
         }
     }
 
-    // Check we covered all nodes in node_map
-    for &node_id in node_map.keys() {
-        if !visited.contains(node_id) {
-            return Err(CompileError::Compilation(format!(
-                "node '{node_id}' not reachable during topological sort"
-            )));
+    // Transfer initial_tokens from dead places to survivors
+    let mut tokens_to_move: HashMap<String, Vec<_>> = HashMap::new();
+    for place in &scenario.places {
+        if let Some(survivor) = alias.get(&place.id) {
+            if !place.initial_tokens.is_empty() {
+                tokens_to_move
+                    .entry(survivor.clone())
+                    .or_default()
+                    .extend(place.initial_tokens.clone());
+            }
+        }
+    }
+    for place in &mut scenario.places {
+        if let Some(tokens) = tokens_to_move.remove(&place.id) {
+            place.initial_tokens.extend(tokens);
         }
     }
 
-    Ok(result)
+    // Remove dead places
+    scenario.places.retain(|p| !dead.contains(&p.id));
 }
 
 // --- Node expansion ---
@@ -604,11 +731,21 @@ fn expand_node(
 
 // --- Edge wiring ---
 
+/// Returns `Some(script)` if an edge targeting this node needs a data-transforming
+/// wiring transition, or `None` if the wiring is a pure pass-through.
+fn wiring_logic(target_node: &WorkflowNode) -> Option<String> {
+    match &target_node.data {
+        WorkflowNodeData::HumanTask { .. } => Some(build_human_task_injection_logic(target_node)),
+        _ => None,
+    }
+}
+
 fn wire_edge(
     edge: &WorkflowEdge,
     node_ports: &HashMap<String, NodePorts>,
-    node_map: &HashMap<&str, &WorkflowNode>,
+    wg: &WorkflowDiGraph,
     ctx: &mut Context,
+    fixups: &mut PostProcess,
 ) -> Result<(), CompileError> {
     let source_ports = node_ports.get(&edge.source).ok_or_else(|| {
         CompileError::Compilation(format!("no ports for source node '{}'", edge.source))
@@ -617,12 +754,8 @@ fn wire_edge(
         CompileError::Compilation(format!("no ports for target node '{}'", edge.target))
     })?;
 
-    let source_node = node_map.get(edge.source.as_str()).ok_or_else(|| {
-        CompileError::Compilation(format!("source node '{}' not found", edge.source))
-    })?;
-    let target_node = node_map.get(edge.target.as_str()).ok_or_else(|| {
-        CompileError::Compilation(format!("target node '{}' not found", edge.target))
-    })?;
+    let source_node = wg.node(&edge.source);
+    let target_node = wg.node(&edge.target);
 
     // Determine source output place
     let source_place = find_output_place(source_ports, edge)?;
@@ -643,29 +776,39 @@ fn wire_edge(
         target_ports.input_place.clone()
     };
 
-    let needs_data_injection = matches!(
-        target_node.data,
-        WorkflowNodeData::HumanTask { .. }
-    );
+    let logic = wiring_logic(target_node);
 
-    let edge_label = edge
-        .label
-        .clone()
-        .unwrap_or_else(|| format!("{} -> {}", source_node.data.label(), target_node.data.label()));
-
-    if needs_data_injection {
-        let logic_source = build_human_task_injection_logic(target_node);
+    if let Some(script) = logic {
+        // Real transformation — must keep this transition
+        let edge_label = edge.label.clone().unwrap_or_else(|| {
+            format!("{} -> {}", source_node.data.label(), target_node.data.label())
+        });
         ctx.transition(format!("t_edge_{}", edge.id), &edge_label)
             .auto_input("input", &source_place)
             .auto_output("output", &actual_target)
-            .logic_rhai(logic_source)
+            .logic_rhai(script)
             .done();
     } else {
-        ctx.transition(format!("t_edge_{}", edge.id), &edge_label)
-            .auto_input("input", &source_place)
-            .auto_output("output", &actual_target)
-            .logic_rhai("#{ output: input }")
-            .done();
+        // Pure pass-through — try to merge places instead of creating a transition
+        let is_join = matches!(target_node.data, WorkflowNodeData::ParallelJoin { .. });
+        let can_merge = is_join || wg.incoming(&edge.target).len() == 1;
+
+        if can_merge {
+            fixups.merges.push(PlaceMerge {
+                dead: actual_target.id().to_string(),
+                survivor: source_place.id().to_string(),
+            });
+        } else {
+            // Multi-input non-join: keep pass-through transition
+            let edge_label = edge.label.clone().unwrap_or_else(|| {
+                format!("{} -> {}", source_node.data.label(), target_node.data.label())
+            });
+            ctx.transition(format!("t_edge_{}", edge.id), &edge_label)
+                .auto_input("input", &source_place)
+                .auto_output("output", &actual_target)
+                .logic_rhai("#{ output: input }")
+                .done();
+        }
     }
 
     Ok(())
@@ -841,14 +984,14 @@ mod tests {
         let places = air["places"].as_array().unwrap();
         let transitions = air["transitions"].as_array().unwrap();
 
-        // Start place + End place = 2
-        assert_eq!(places.len(), 2);
-        // One edge transition
-        assert_eq!(transitions.len(), 1);
+        // End place merged into Start place = 1 place, 0 transitions
+        assert_eq!(places.len(), 1);
+        assert_eq!(transitions.len(), 0);
 
-        // Verify start place has initial tokens
+        // Start place absorbs terminal type and has initial tokens
         let start_place = places.iter().find(|p| p["id"] == "p_s_ready").unwrap();
         assert!(!start_place["initial_tokens"].as_array().unwrap().is_empty());
+        assert_eq!(start_place["type"], "terminal");
     }
 
     #[test]
@@ -885,11 +1028,12 @@ mod tests {
         let transitions = air["transitions"].as_array().unwrap();
 
         // HumanTask creates 4 places (input, active, signal, output)
-        // + Start place + End place = 6
-        assert_eq!(places.len(), 6);
+        // + Start place = 5 (End place merged into HumanTask output)
+        assert_eq!(places.len(), 5);
 
-        // HumanTask creates 2 transitions (request, finalize) + 2 edge transitions = 4
-        assert_eq!(transitions.len(), 4);
+        // HumanTask creates 2 transitions (request, finalize) + 1 injection edge (s->ht) = 3
+        // (ht->e edge merged, no pass-through transition)
+        assert_eq!(transitions.len(), 3);
     }
 
     #[test]
@@ -931,8 +1075,8 @@ mod tests {
         let air = result.unwrap();
         let transitions = air["transitions"].as_array().unwrap();
 
-        // 1 branch + 1 default + 3 edge transitions = 5
-        assert_eq!(transitions.len(), 5);
+        // 1 branch + 1 default = 2 (3 pass-through edge transitions merged)
+        assert_eq!(transitions.len(), 2);
 
         // Verify the branch has a guard
         let branch = transitions.iter().find(|t| t["id"] == "t_d_branch_0").unwrap();

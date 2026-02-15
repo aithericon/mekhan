@@ -49,6 +49,7 @@ anyhow = "1"
 # SDK for compiling workflow graphs to AIR
 aithericon-sdk = { path = "../petri-lab/sdk" }
 schemars = "0.8"
+petgraph = "0.6"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
