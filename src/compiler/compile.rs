@@ -3,7 +3,7 @@ use crate::models::template::{
 };
 use aithericon_sdk::components::executor_lifecycle::{executor_lifecycle, ExecutorBridges};
 use aithericon_sdk::scenario::{ScenarioDefinition, ScenarioGroup};
-use aithericon_sdk::{Context, DynamicToken, PlaceHandle};
+use aithericon_sdk::{Context, DynamicToken, ExecutorSubmitInput, HumanTaskSubmit, PlaceHandle};
 use serde_json::{json, Value};
 use petgraph::algo::{is_cyclic_directed, toposort};
 use petgraph::graph::{DiGraph, NodeIndex};
@@ -430,12 +430,17 @@ fn expand_node(
                 ctx.signal(format!("p_{id}_signal"), format!("{label} - Signal"));
             let p_output: PlaceHandle<DynamicToken> =
                 ctx.state(format!("p_{id}_output"), format!("{label} - Output"));
+            let p_errors: PlaceHandle<DynamicToken> =
+                ctx.state(format!("p_{id}_errors"), format!("{label} - Errors"));
 
-            // t_{id}_request — human_task effect (SDK convenience method)
+            // t_{id}_request — human_task effect (typed contract)
             ctx.transition(format!("t_{id}_request"), format!("{label} - Request Human Task"))
-                .auto_input("task", &p_input)
-                .auto_output("assigned", &p_active)
-                .human_task_to(&p_signal);
+                .human_task_to(HumanTaskSubmit {
+                    task: &p_input,
+                    assigned: &p_active,
+                    errors: &p_errors,
+                    response_signal: &p_signal,
+                });
 
             // t_{id}_finalize — merge signal data into token (SDK correlate)
             ctx.transition(format!("t_{id}_finalize"), format!("{label} - Finalize"))
@@ -472,7 +477,7 @@ fn expand_node(
 
             // Scoped prefix: all lifecycle IDs become "{id}/submitted", "{id}/completed", etc.
             let handles = ctx.scoped_prefix(id, label, |ctx| {
-                let exec_inbox = ctx.state::<DynamicToken>("inbox", "Inbox");
+                let exec_inbox = ctx.state::<ExecutorSubmitInput>("inbox", "Inbox");
 
                 // Prepare: remap editor ExecutionSpecConfig → executor format
                 let config_rhai = json_to_rhai_literal(&execution_spec.config);
@@ -488,6 +493,8 @@ fn expand_node(
                     inbox: exec_inbox,
                     result_out: None,
                     failure_out: None,
+                    process_id: None,
+                    process_step: None,
                 })
             });
 
@@ -1027,9 +1034,9 @@ mod tests {
         let places = air["places"].as_array().unwrap();
         let transitions = air["transitions"].as_array().unwrap();
 
-        // HumanTask creates 4 places (input, active, signal, output)
-        // + Start place = 5 (End place merged into HumanTask output)
-        assert_eq!(places.len(), 5);
+        // HumanTask creates 5 places (input, active, signal, output, errors)
+        // + Start place = 6 (End place merged into HumanTask output)
+        assert_eq!(places.len(), 6);
 
         // HumanTask creates 2 transitions (request, finalize) + 1 injection edge (s->ht) = 3
         // (ht->e edge merged, no pass-through transition)

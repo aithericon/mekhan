@@ -133,9 +133,9 @@ fn ui_linear_human_task_deserializes_and_compiles() {
 
     let air = compile_to_air(&graph, "linear", "Linear workflow").expect("should compile");
 
-    // HumanTask internal: input, active, signal, output = 4 places
-    // + Start place = 5 (End merged into HumanTask output)
-    assert_eq!(places(&air).len(), 5);
+    // HumanTask internal: input, active, signal, errors, output = 5 places
+    // + Start place = 6 (End merged into HumanTask output)
+    assert_eq!(places(&air).len(), 6);
     assert!(has_place_of_type(&air, "terminal"));
     assert!(has_place_of_type(&air, "signal"));
     assert_single_seeded_place(&air);
