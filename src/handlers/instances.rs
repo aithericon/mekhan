@@ -61,14 +61,9 @@ pub async fn create_instance(
         req.metadata.as_ref(),
     );
 
-    // Deploy to petri-lab
-    if let Err(e) = deploy_instance(&state.petri, &net_id, &parameterized_air).await {
-        tracing::error!("failed to deploy instance to petri-lab: {e}");
-        return (StatusCode::BAD_GATEWAY, Json(json!({"error": format!("failed to deploy to engine: {e}")}))).into_response();
-    }
-
-    // Insert instance record
-    let result = sqlx::query_as::<_, WorkflowInstance>(
+    // Insert instance record FIRST so the lifecycle listener can find it
+    // if the net completes before we return.
+    let instance = match sqlx::query_as::<_, WorkflowInstance>(
         r#"
         INSERT INTO workflow_instances (id, template_id, template_version, net_id, status, created_by, started_at, metadata)
         VALUES ($1, $2, $3, $4, 'running', $5, NOW(), $6)
@@ -82,17 +77,27 @@ pub async fn create_instance(
     .bind(req.created_by)
     .bind(&metadata)
     .fetch_one(&state.db)
-    .await;
-
-    match result {
-        Ok(instance) => (StatusCode::CREATED, Json(json!(instance))).into_response(),
+    .await
+    {
+        Ok(i) => i,
         Err(e) => {
             tracing::error!("failed to insert instance: {e}");
-            // Best effort: try to clean up the deployed net
-            let _ = state.petri.delete_net(&net_id).await;
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response()
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response();
         }
+    };
+
+    // Deploy to petri-lab (DB row already exists for lifecycle listener)
+    if let Err(e) = deploy_instance(&state.petri, &net_id, &parameterized_air).await {
+        tracing::error!("failed to deploy instance to petri-lab: {e}");
+        // Clean up the DB row
+        let _ = sqlx::query("DELETE FROM workflow_instances WHERE id = $1")
+            .bind(instance_id)
+            .execute(&state.db)
+            .await;
+        return (StatusCode::BAD_GATEWAY, Json(json!({"error": format!("failed to deploy to engine: {e}")}))).into_response();
     }
+
+    (StatusCode::CREATED, Json(json!(instance))).into_response()
 }
 
 /// GET /api/instances

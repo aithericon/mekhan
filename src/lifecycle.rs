@@ -1,3 +1,4 @@
+use async_nats::jetstream::AckKind;
 use futures::StreamExt;
 use sqlx::PgPool;
 use std::time::Duration;
@@ -61,8 +62,18 @@ pub async fn start_lifecycle_listener(nats: MekhanNats, db: PgPool) {
                 .execute(&db)
                 .await;
 
-                if let Err(e) = result {
-                    tracing::error!("failed to update instance status for {net_id}: {e}");
+                match result {
+                    Ok(r) if r.rows_affected() == 0 => {
+                        tracing::warn!("no running instance found for {net_id}, will retry");
+                        let _ = msg.ack_with(AckKind::Nak(Some(Duration::from_secs(1)))).await;
+                        continue;
+                    }
+                    Err(e) => {
+                        tracing::error!("failed to update instance status for {net_id}: {e}");
+                        let _ = msg.ack_with(AckKind::Nak(Some(Duration::from_secs(1)))).await;
+                        continue;
+                    }
+                    Ok(_) => {}
                 }
             }
             "cancelled" => {
@@ -74,8 +85,18 @@ pub async fn start_lifecycle_listener(nats: MekhanNats, db: PgPool) {
                 .execute(&db)
                 .await;
 
-                if let Err(e) = result {
-                    tracing::error!("failed to update instance status for {net_id}: {e}");
+                match result {
+                    Ok(r) if r.rows_affected() == 0 => {
+                        tracing::warn!("no running instance found for {net_id}, will retry");
+                        let _ = msg.ack_with(AckKind::Nak(Some(Duration::from_secs(1)))).await;
+                        continue;
+                    }
+                    Err(e) => {
+                        tracing::error!("failed to update instance status for {net_id}: {e}");
+                        let _ = msg.ack_with(AckKind::Nak(Some(Duration::from_secs(1)))).await;
+                        continue;
+                    }
+                    Ok(_) => {}
                 }
             }
             _ => {

@@ -3,7 +3,7 @@ use crate::models::template::{
 };
 use aithericon_sdk::components::executor_lifecycle::{executor_lifecycle, ExecutorBridges};
 use aithericon_sdk::scenario::{ScenarioDefinition, ScenarioGroup};
-use aithericon_sdk::{Context, DynamicToken, ExecutorSubmitInput, HumanTaskSubmit, PlaceHandle};
+use aithericon_sdk::{Context, DynamicToken, EffectError, ExecutorSubmitInput, HumanTaskSubmit, PlaceHandle};
 use serde_json::{json, Value};
 use petgraph::algo::{is_cyclic_directed, toposort};
 use petgraph::graph::{DiGraph, NodeIndex};
@@ -430,7 +430,7 @@ fn expand_node(
                 ctx.signal(format!("p_{id}_signal"), format!("{label} - Signal"));
             let p_output: PlaceHandle<DynamicToken> =
                 ctx.state(format!("p_{id}_output"), format!("{label} - Output"));
-            let p_errors: PlaceHandle<DynamicToken> =
+            let p_errors: PlaceHandle<EffectError> =
                 ctx.state(format!("p_{id}_errors"), format!("{label} - Errors"));
 
             // t_{id}_request — human_task effect (typed contract)
