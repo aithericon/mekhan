@@ -8,9 +8,11 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::models::instance::{
-    CreateInstanceRequest, InstanceStateResponse, ListInstancesQuery, WorkflowInstance,
+    CreateInstanceRequest, EngineStatus, InstanceStateResponse, ListInstancesQuery,
+    WorkflowInstance,
 };
 use crate::models::template::{PaginatedResponse, WorkflowTemplate};
+use crate::petri::events::fetch_events;
 use crate::petri::instance::{deploy_instance, parameterize_air};
 use crate::AppState;
 
@@ -225,6 +227,9 @@ pub async fn get_instance(
 }
 
 /// GET /api/instances/:id/state
+///
+/// Returns instance state with marking projected from JetStream events (source
+/// of truth) and best-effort engine status for enabled transitions / run mode.
 pub async fn get_instance_state(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
@@ -246,35 +251,67 @@ pub async fn get_instance_state(
         }
     };
 
-    // Proxy to petri-lab engine
-    let engine_state = match state.petri.get_state(&instance.net_id).await {
-        Ok(s) => s,
+    // 1. Fetch events from JetStream (source of truth)
+    let events = match fetch_events(&state.nats, &instance.net_id).await {
+        Ok(e) => e,
         Err(e) => {
-            tracing::error!("failed to get state from petri-lab: {e}");
-            return (StatusCode::BAD_GATEWAY, Json(json!({"error": format!("engine error: {e}")}))).into_response();
+            tracing::error!("failed to fetch events from JetStream: {e}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("event fetch failed: {e}")}))).into_response();
         }
     };
 
-    // Extract marking and enabled transitions from engine response
-    let marking = engine_state
-        .get("marking")
-        .cloned()
-        .unwrap_or(json!({}));
-    let enabled_transitions: Vec<String> = engine_state
-        .get("enabled_transitions")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                .collect()
-        })
-        .unwrap_or_default();
+    // 2. Project marking from events
+    let marking = petri_domain::project_marking(&events);
+    let marking_json = serde_json::to_value(&marking).unwrap_or(json!({}));
+
+    // 3. Serialize events as JSON values
+    let event_count = events.len();
+    let events_json: Vec<serde_json::Value> = events
+        .iter()
+        .filter_map(|e| serde_json::to_value(e).ok())
+        .collect();
+
+    // 4. Best-effort engine query for status + enabled transitions + run mode
+    let (engine, enabled_transitions) = match state.petri.try_get_state(&instance.net_id).await {
+        Some(engine_state) => {
+            let run_mode = engine_state
+                .get("run_mode")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let transitions: Vec<String> = engine_state
+                .get("enabled_transitions")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            (
+                EngineStatus {
+                    available: true,
+                    run_mode,
+                },
+                transitions,
+            )
+        }
+        None => (
+            EngineStatus {
+                available: false,
+                run_mode: None,
+            },
+            vec![],
+        ),
+    };
 
     Json(json!(InstanceStateResponse {
         instance_id: instance.id,
         net_id: instance.net_id,
         status: instance.status,
-        marking,
+        events: events_json,
+        event_count,
+        marking: marking_json,
+        engine,
         enabled_transitions,
         current_step: instance.current_step,
     }))
@@ -282,6 +319,8 @@ pub async fn get_instance_state(
 }
 
 /// GET /api/instances/:id/events
+///
+/// Returns the full event log for an instance from JetStream.
 pub async fn get_instance_events(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
@@ -303,12 +342,23 @@ pub async fn get_instance_events(
         }
     };
 
-    // Return the SSE stream URL for the frontend to connect to directly
-    // In production, this would proxy the SSE stream. For MVP, redirect.
-    let events_url = state.petri.events_stream_url(&instance.net_id);
+    let events = match fetch_events(&state.nats, &instance.net_id).await {
+        Ok(e) => e,
+        Err(e) => {
+            tracing::error!("failed to fetch events from JetStream: {e}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("event fetch failed: {e}")}))).into_response();
+        }
+    };
+
+    let events_json: Vec<serde_json::Value> = events
+        .iter()
+        .filter_map(|e| serde_json::to_value(e).ok())
+        .collect();
+
     Json(json!({
-        "events_url": events_url,
         "net_id": instance.net_id,
+        "events": events_json,
+        "event_count": events_json.len(),
     }))
     .into_response()
 }

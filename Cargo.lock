@@ -1393,6 +1393,7 @@ dependencies = [
  "futures",
  "http-body-util",
  "petgraph",
+ "petri-domain",
  "reqwest",
  "schemars",
  "serde",

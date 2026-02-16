@@ -102,6 +102,25 @@ impl PetriClient {
         self.delete_net(net_id).await
     }
 
+    /// Try to get engine state. Returns None if the engine doesn't have the net
+    /// loaded (404, timeout, connection refused, etc.)
+    pub async fn try_get_state(&self, net_id: &str) -> Option<Value> {
+        self.get_state(net_id).await.ok()
+    }
+
+    /// Try to get run mode. Returns None on any error.
+    pub async fn try_get_run_mode(&self, net_id: &str) -> Option<String> {
+        let url = format!("{}/api/nets/{}/run-mode", self.base_url, net_id);
+        let resp = self.client.get(&url).send().await.ok()?;
+        if !resp.status().is_success() {
+            return None;
+        }
+        let body: Value = resp.json().await.ok()?;
+        body.get("current_mode")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    }
+
     /// Get the SSE event stream URL for a net (caller connects directly).
     pub fn events_stream_url(&self, net_id: &str) -> String {
         format!("{}/api/nets/{}/events/stream", self.base_url, net_id)

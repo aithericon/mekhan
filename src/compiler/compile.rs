@@ -3,7 +3,7 @@ use crate::models::template::{
 };
 use aithericon_sdk::components::executor_lifecycle::{executor_lifecycle, ExecutorBridges};
 use aithericon_sdk::scenario::{ScenarioDefinition, ScenarioGroup};
-use aithericon_sdk::{Context, DynamicToken, EffectError, ExecutorSubmitInput, HumanTaskSubmit, PlaceHandle};
+use aithericon_sdk::{Context, DynamicToken, EffectError, ExecutorSubmitInput, HumanTaskAssigned, HumanTaskRequest, HumanTaskResponse, HumanTaskSubmit, PlaceHandle};
 use serde_json::{json, Value};
 use petgraph::algo::{is_cyclic_directed, toposort};
 use petgraph::graph::{DiGraph, NodeIndex};
@@ -434,12 +434,15 @@ fn expand_node(
                 ctx.state(format!("p_{id}_errors"), format!("{label} - Errors"));
 
             // t_{id}_request — human_task effect (typed contract)
+            let ht_input = p_input.clone().retyped::<HumanTaskRequest>();
+            let ht_active = p_active.clone().retyped::<HumanTaskAssigned>();
+            let ht_signal = p_signal.clone().retyped::<HumanTaskResponse>();
             ctx.transition(format!("t_{id}_request"), format!("{label} - Request Human Task"))
                 .human_task_to(HumanTaskSubmit {
-                    task: &p_input,
-                    assigned: &p_active,
+                    task: &ht_input,
+                    assigned: &ht_active,
                     errors: &p_errors,
-                    response_signal: &p_signal,
+                    response_signal: &ht_signal,
                 });
 
             // t_{id}_finalize — merge signal data into token (SDK correlate)

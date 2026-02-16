@@ -51,6 +51,9 @@ aithericon-sdk = { path = "../petri-lab/sdk" }
 schemars = "0.8"
 petgraph = "0.6"
 
+# Petri-net domain types (events, marking, tokens)
+petri-domain = { path = "../petri-lab/core-engine/crates/domain" }
+
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"

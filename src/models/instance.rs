@@ -77,7 +77,16 @@ pub struct InstanceStateResponse {
     pub instance_id: Uuid,
     pub net_id: String,
     pub status: String,
+    pub events: Vec<serde_json::Value>,
+    pub event_count: usize,
     pub marking: serde_json::Value,
+    pub engine: EngineStatus,
     pub enabled_transitions: Vec<String>,
     pub current_step: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct EngineStatus {
+    pub available: bool,
+    pub run_mode: Option<String>,
 }
