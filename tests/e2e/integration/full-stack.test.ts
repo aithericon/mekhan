@@ -9,148 +9,19 @@
  */
 
 import { test, expect } from '@playwright/test';
-
-// ---------------------------------------------------------------------------
-// Config
-// ---------------------------------------------------------------------------
-
-const BACKEND = 'http://localhost:3100';
-const PETRI = 'http://localhost:3030';
-
-// A well-known author id (arbitrary UUID) used for all test requests.
-const AUTHOR_ID = '00000000-0000-0000-0000-000000000001';
-
-// Polling config
-const POLL_INTERVAL_MS = 500;
-const POLL_TIMEOUT_MS = 30_000;
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/** POST JSON to a backend API path. */
-async function apiPost(path: string, body: unknown): Promise<Response> {
-	return fetch(`${BACKEND}${path}`, {
-		method: 'POST',
-		headers: { 'content-type': 'application/json' },
-		body: JSON.stringify(body)
-	});
-}
-
-/** PUT JSON to a backend API path. */
-async function apiPut(path: string, body: unknown): Promise<Response> {
-	return fetch(`${BACKEND}${path}`, {
-		method: 'PUT',
-		headers: { 'content-type': 'application/json' },
-		body: JSON.stringify(body)
-	});
-}
-
-/** GET a backend API path. */
-async function apiGet(path: string): Promise<Response> {
-	return fetch(`${BACKEND}${path}`);
-}
-
-/** DELETE a backend API path. */
-async function apiDelete(path: string): Promise<Response> {
-	return fetch(`${BACKEND}${path}`, { method: 'DELETE' });
-}
-
-/** GET from petri-lab directly. */
-async function petriGet(path: string): Promise<Response> {
-	return fetch(`${PETRI}${path}`);
-}
-
-/** POST JSON to petri-lab directly. */
-async function petriPost(path: string, body: unknown): Promise<Response> {
-	return fetch(`${PETRI}${path}`, {
-		method: 'POST',
-		headers: { 'content-type': 'application/json' },
-		body: JSON.stringify(body)
-	});
-}
-
-/**
- * Poll a condition until it returns true, or throw after timeout.
- */
-async function pollUntil(
-	fn: () => Promise<boolean>,
-	description: string,
-	interval = POLL_INTERVAL_MS,
-	timeout = POLL_TIMEOUT_MS
-): Promise<void> {
-	const start = Date.now();
-	while (Date.now() - start < timeout) {
-		if (await fn()) return;
-		await new Promise((r) => setTimeout(r, interval));
-	}
-	throw new Error(`Timed out waiting for: ${description} (${timeout}ms)`);
-}
-
-/** Check that both services are reachable. Returns true if healthy. */
-async function servicesHealthy(): Promise<boolean> {
-	try {
-		const [backend, petri] = await Promise.all([
-			fetch(`${BACKEND}/api/templates?page=1&per_page=1`).then((r) => r.ok),
-			fetch(`${PETRI}/api/nets`).then((r) => r.ok)
-		]);
-		return backend && petri;
-	} catch {
-		return false;
-	}
-}
-
-/**
- * Create a template with a given graph, publish it, return the published template JSON.
- */
-async function createAndPublish(name: string, graph?: unknown) {
-	const createBody: Record<string, unknown> = { name, author_id: AUTHOR_ID };
-	if (graph) createBody.graph = graph;
-
-	const createRes = await apiPost('/api/templates', createBody);
-	expect(createRes.status).toBe(201);
-	const template = await createRes.json();
-
-	const pubRes = await apiPost(`/api/templates/${template.id}/publish`, {});
-	expect(pubRes.status).toBe(200);
-	const published = await pubRes.json();
-	return published;
-}
-
-/**
- * Create an instance from a published template and return the instance JSON.
- */
-async function createInstance(templateId: string) {
-	const res = await apiPost('/api/instances', {
-		template_id: templateId,
-		created_by: AUTHOR_ID
-	});
-	expect(res.status).toBe(201);
-	return res.json();
-}
-
-/**
- * Wait for an instance to reach one of the given statuses.
- */
-async function waitForInstanceStatus(
-	instanceId: string,
-	statuses: string[],
-	timeout = POLL_TIMEOUT_MS
-) {
-	let lastStatus = '';
-	await pollUntil(
-		async () => {
-			const res = await apiGet(`/api/instances/${instanceId}`);
-			if (!res.ok) return false;
-			const data = await res.json();
-			lastStatus = data.status;
-			return statuses.includes(data.status);
-		},
-		`instance ${instanceId} to reach status [${statuses.join(', ')}] (last: ${lastStatus})`,
-		POLL_INTERVAL_MS,
-		timeout
-	);
-}
+import {
+	AUTHOR_ID,
+	apiPost,
+	apiPut,
+	apiGet,
+	apiDelete,
+	petriGet,
+	petriPost,
+	servicesHealthy,
+	createAndPublish,
+	createInstance,
+	waitForInstanceStatus
+} from './helpers';
 
 // ---------------------------------------------------------------------------
 // Test setup: skip entire suite if services are not running
@@ -218,10 +89,12 @@ test.describe('Test 1: Simple Start->End Lifecycle', () => {
 		expect(air.transitions).toBeDefined();
 		expect(Array.isArray(air.places)).toBe(true);
 		expect(Array.isArray(air.transitions)).toBe(true);
-		// Should have at least start ready place and end done place
+		// Chain merge collapses Start→End into a single place: p_start_ready
+		// absorbs the terminal type from p_end_done (0 transitions, 1 place).
 		const placeIds = air.places.map((p: { id: string }) => p.id);
 		expect(placeIds).toContain('p_start_ready');
-		expect(placeIds).toContain('p_end_done');
+		const startPlace = air.places.find((p: { id: string }) => p.id === 'p_start_ready');
+		expect(startPlace.type).toBe('terminal');
 
 		// 4. Create instance (deploys to petri-lab)
 		const instRes = await apiPost('/api/instances', {
@@ -235,11 +108,9 @@ test.describe('Test 1: Simple Start->End Lifecycle', () => {
 		expect(instance.net_id).toMatch(/^mekhan-/);
 
 		// 5. Poll until instance is completed
-		//    The Start -> End graph should auto-evaluate because:
-		//    - Start place has an initial token
-		//    - The edge transition fires (pass-through)
-		//    - Token reaches End (terminal place)
-		//    - petri-lab emits NetCompleted
+		//    The Start→End graph auto-completes because:
+		//    - Chain merge collapses to 1 terminal place with initial token
+		//    - Quiescence + token in terminal → NetCompleted
 		//    - Lifecycle listener updates DB status
 		await waitForInstanceStatus(instance.id, ['completed']);
 
@@ -373,7 +244,7 @@ test.describe('Test 4: Cancel a running instance', () => {
 						type: 'start',
 						label: 'Start',
 						description: null,
-						initial_data: null
+						initialData: null
 					}
 				},
 				{
@@ -384,13 +255,13 @@ test.describe('Test 4: Cancel a running instance', () => {
 						type: 'human_task',
 						label: 'Review',
 						description: null,
-						task_title: 'Review Task',
-						instructions_mdsvex: null,
+						taskTitle: 'Review Task',
+						instructionsMdsvex: null,
 						steps: [
 							{
 								id: 'step1',
 								title: 'Approve',
-								description_mdsvex: null,
+								descriptionMdsvex: null,
 								blocks: [
 									{
 										type: 'input',
@@ -485,7 +356,7 @@ test.describe('Test 5: Human task completion via signal injection', () => {
 						type: 'start',
 						label: 'Start',
 						description: null,
-						initial_data: null
+						initialData: null
 					}
 				},
 				{
@@ -496,13 +367,13 @@ test.describe('Test 5: Human task completion via signal injection', () => {
 						type: 'human_task',
 						label: 'Review',
 						description: null,
-						task_title: 'Review Task',
-						instructions_mdsvex: null,
+						taskTitle: 'Review Task',
+						instructionsMdsvex: null,
 						steps: [
 							{
 								id: 'step1',
 								title: 'Approve',
-								description_mdsvex: null,
+								descriptionMdsvex: null,
 								blocks: [
 									{
 										type: 'input',
@@ -743,5 +614,206 @@ test.describe('Test 6: Error cases', () => {
 		// Try to cancel
 		const res = await apiDelete(`/api/instances/${instance.id}`);
 		expect(res.status).toBe(409);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Test 7: Demo showcase graph — create, publish, deploy
+// ---------------------------------------------------------------------------
+
+test.describe('Test 7: Demo showcase graph lifecycle', () => {
+	test('creates, publishes, and deploys the full showcase graph with all 8 node types', async () => {
+		// This is the same graph the /demo page sends when you click "Run Instance".
+		// It tests all 8 node types, realistic field configs, and end-to-end deployment.
+		const showcaseGraph = {
+			nodes: [
+				{
+					id: 'start',
+					type: 'start',
+					position: { x: 40, y: 280 },
+					data: { type: 'start', label: 'Start', initialData: { invoice_id: 'INV-TEST-001' } }
+				},
+				{
+					id: 'review',
+					type: 'human_task',
+					position: { x: 240, y: 250 },
+					data: {
+						type: 'human_task',
+						label: 'Review Invoice',
+						taskTitle: 'Review Incoming Invoice',
+						instructionsMdsvex: 'Review the invoice details.',
+						steps: [
+							{
+								id: 'step-verify',
+								title: 'Verify Details',
+								blocks: [
+									{ type: 'input', field: { name: 'vendor_name', label: 'Vendor Name', kind: 'text', required: true } },
+									{ type: 'input', field: { name: 'invoice_amount', label: 'Amount', kind: 'number', required: true } },
+									{ type: 'input', field: { name: 'verified', label: 'Confirmed', kind: 'checkbox', required: true } }
+								]
+							}
+						]
+					}
+				},
+				{
+					id: 'extract',
+					type: 'automated_step',
+					position: { x: 520, y: 250 },
+					data: {
+						type: 'automated_step',
+						label: 'Extract Data',
+						executionSpec: { backendType: 'python', config: { script: 'extract.py' } }
+					}
+				},
+				{
+					id: 'check-amount',
+					type: 'decision',
+					position: { x: 800, y: 255 },
+					data: {
+						type: 'decision',
+						label: 'Amount Check',
+						conditions: [
+							{ edgeId: 'branch-high', label: 'High Value', guard: 'input.invoice_amount > 5000' }
+						],
+						defaultBranch: 'default'
+					}
+				},
+				{
+					id: 'split',
+					type: 'parallel_split',
+					position: { x: 1080, y: 120 },
+					data: { type: 'parallel_split', label: 'Dual Review' }
+				},
+				{
+					id: 'manager-approval',
+					type: 'human_task',
+					position: { x: 1320, y: 40 },
+					data: {
+						type: 'human_task',
+						label: 'Manager Approval',
+						taskTitle: 'Approve High-Value Invoice',
+						steps: [
+							{
+								id: 'step-decide',
+								title: 'Decision',
+								blocks: [
+									{ type: 'input', field: { name: 'decision', label: 'Decision', kind: 'select', required: true, options: ['Approve', 'Reject'] } },
+									{ type: 'input', field: { name: 'signature', label: 'Signature', kind: 'signature', required: true } }
+								]
+							}
+						]
+					}
+				},
+				{
+					id: 'compliance',
+					type: 'automated_step',
+					position: { x: 1320, y: 210 },
+					data: {
+						type: 'automated_step',
+						label: 'Compliance Check',
+						executionSpec: { backendType: 'docker', config: { image: 'compliance:latest' } }
+					}
+				},
+				{
+					id: 'join',
+					type: 'parallel_join',
+					position: { x: 1600, y: 120 },
+					data: { type: 'parallel_join', label: 'Merge Results' }
+				},
+				{
+					id: 'end-approved',
+					type: 'end',
+					position: { x: 1820, y: 120 },
+					data: { type: 'end', label: 'Approved' }
+				},
+				{
+					id: 'auto-validate',
+					type: 'loop',
+					position: { x: 1080, y: 400 },
+					data: {
+						type: 'loop',
+						label: 'Auto-Validate',
+						maxIterations: 3,
+						loopCondition: 'input.validation_passed != true'
+					}
+				},
+				{
+					id: 'end-processed',
+					type: 'end',
+					position: { x: 1380, y: 410 },
+					data: { type: 'end', label: 'Processed' }
+				}
+			],
+			edges: [
+				{ id: 'e-start-review', source: 'start', target: 'review', type: 'sequence' },
+				{ id: 'e-review-extract', source: 'review', target: 'extract', type: 'sequence' },
+				{ id: 'e-extract-decision', source: 'extract', target: 'check-amount', type: 'sequence' },
+				{ id: 'e-decision-split', source: 'check-amount', target: 'split', sourceHandle: 'branch-high', label: '> $5,000', type: 'conditional' },
+				{ id: 'e-decision-loop', source: 'check-amount', target: 'auto-validate', sourceHandle: 'default', label: '≤ $5,000', type: 'conditional' },
+				{ id: 'e-split-manager', source: 'split', target: 'manager-approval', type: 'sequence' },
+				{ id: 'e-split-compliance', source: 'split', target: 'compliance', type: 'sequence' },
+				{ id: 'e-manager-join', source: 'manager-approval', target: 'join', type: 'sequence' },
+				{ id: 'e-compliance-join', source: 'compliance', target: 'join', type: 'sequence' },
+				{ id: 'e-join-end', source: 'join', target: 'end-approved', type: 'sequence' },
+				{ id: 'e-loop-end', source: 'auto-validate', target: 'end-processed', type: 'sequence' }
+			]
+		};
+
+		// Step 1: Create template with showcase graph
+		const createRes = await apiPost('/api/templates', {
+			name: 'Showcase Demo Test',
+			description: 'E2E test of the demo showcase graph',
+			graph: showcaseGraph,
+			author_id: AUTHOR_ID
+		});
+		expect(createRes.status).toBe(201);
+		const template = await createRes.json();
+		expect(template.id).toBeTruthy();
+
+		// Verify the stored graph round-trips with camelCase fields
+		const getRes = await apiGet(`/api/templates/${template.id}`);
+		expect(getRes.status).toBe(200);
+		const stored = await getRes.json();
+		const htNode = stored.graph.nodes.find((n: any) => n.data.type === 'human_task');
+		expect(htNode.data.taskTitle).toBe('Review Incoming Invoice');
+		const asNode = stored.graph.nodes.find((n: any) => n.data.type === 'automated_step');
+		expect(asNode.data.executionSpec.backendType).toBe('python');
+		const loopNode = stored.graph.nodes.find((n: any) => n.data.type === 'loop');
+		expect(loopNode.data.maxIterations).toBe(3);
+		expect(loopNode.data.loopCondition).toBe('input.validation_passed != true');
+
+		// Step 2: Publish (triggers compilation)
+		const pubRes = await apiPost(`/api/templates/${template.id}/publish`, {});
+		expect(pubRes.status).toBe(200);
+		const published = await pubRes.json();
+		expect(published.published).toBe(true);
+		expect(published.air_json).toBeTruthy();
+
+		// Step 3: Deploy an instance
+		const instRes = await apiPost('/api/instances', {
+			template_id: template.id,
+			created_by: AUTHOR_ID
+		});
+		expect(instRes.status).toBe(201);
+		const instance = await instRes.json();
+		expect(instance.status).toBe('running');
+		expect(instance.net_id).toContain('mekhan-');
+
+		// Step 4: Verify petri-lab has the net with correct topology
+		const topoRes = await petriGet(`/api/nets/${instance.net_id}/topology`);
+		expect(topoRes.status).toBe(200);
+		const topoBody = await topoRes.json();
+		const topology = topoBody.topology;
+		// The compiled AIR should have places and transitions from all 8 node types
+		expect(topology.places.length).toBeGreaterThan(10);
+		expect(topology.transitions.length).toBeGreaterThan(5);
+
+		// Step 5: Verify token is in the first place (review input)
+		const stateRes = await petriGet(`/api/nets/${instance.net_id}/state`);
+		expect(stateRes.status).toBe(200);
+
+		// Cleanup: cancel the instance (it won't complete on its own - has human tasks)
+		const cancelRes = await apiDelete(`/api/instances/${instance.id}`);
+		expect([200, 204].includes(cancelRes.status)).toBe(true);
 	});
 });
