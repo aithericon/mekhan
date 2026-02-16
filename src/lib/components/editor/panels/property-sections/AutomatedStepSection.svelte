@@ -13,9 +13,10 @@
 		data: AutomatedStepNodeData;
 		readonly?: boolean;
 		onchange: (data: AutomatedStepNodeData) => void;
+		onexpand?: () => void;
 	};
 
-	let { data, readonly = false, onchange }: Props = $props();
+	let { data, readonly = false, onchange, onexpand }: Props = $props();
 
 	const defaultConfigs: Record<ExecutionBackendType, Record<string, unknown>> = {
 		python: { script: '', timeout_seconds: 30 },
@@ -79,7 +80,7 @@
 </div>
 
 {#if data.executionSpec.backendType === 'python'}
-	<PythonConfigPanel config={data.executionSpec.config} {readonly} onchange={handleConfigChange} />
+	<PythonConfigPanel config={data.executionSpec.config} {readonly} onchange={handleConfigChange} {onexpand} />
 {:else if data.executionSpec.backendType === 'docker'}
 	<DockerConfigPanel config={data.executionSpec.config} {readonly} onchange={handleConfigChange} />
 {:else if data.executionSpec.backendType === 'process'}

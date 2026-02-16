@@ -2,6 +2,8 @@
 	import { page } from '$app/state';
 	import WorkflowCanvas from '$lib/components/editor/WorkflowCanvas.svelte';
 	import NodePropertyPanel from '$lib/components/editor/panels/NodePropertyPanel.svelte';
+	import { Sheet, SheetContent, SheetTitle, SheetDescription } from '$lib/components/ui/sheet';
+	import { getSheetWidthClass } from '$lib/components/editor/panels/panel-width';
 	import EditorToolbar from '$lib/components/editor/toolbar/EditorToolbar.svelte';
 	import { getTemplate, updateTemplate, publishTemplate, compileGraph } from '$lib/api/client';
 	import type { Template } from '$lib/types/api';
@@ -14,6 +16,7 @@
 	let saving = $state(false);
 	let error = $state<string | null>(null);
 	let selectedNodeId = $state<string | null>(null);
+	let panelExpanded = $state(false);
 	let airPreview = $state<object | null>(null);
 
 	// Current graph state (kept in sync with canvas)
@@ -109,6 +112,7 @@
 
 	function handleNodeSelect(nodeId: string | null) {
 		selectedNodeId = nodeId;
+		panelExpanded = false;
 	}
 
 	function handleNodeDataChange(data: WorkflowNodeData) {
@@ -166,13 +170,34 @@
 				onselect={handleNodeSelect}
 			/>
 
-			{#if selectedNodeData}
+			{#if selectedNodeData && !panelExpanded}
 				<NodePropertyPanel
 					data={selectedNodeData}
 					readonly={template?.published ?? false}
 					onchange={handleNodeDataChange}
 					onclose={() => (selectedNodeId = null)}
+					onexpand={() => (panelExpanded = true)}
 				/>
+			{/if}
+
+			{#if panelExpanded && selectedNodeData}
+				<Sheet.Root
+					open
+					onOpenChange={(open) => { if (!open) panelExpanded = false; }}
+				>
+					<SheetContent class={getSheetWidthClass(selectedNodeData)}>
+						<SheetTitle>Node Properties</SheetTitle>
+						<SheetDescription>Edit the selected node</SheetDescription>
+						<NodePropertyPanel
+							data={selectedNodeData}
+							readonly={template?.published ?? false}
+							expanded
+							onchange={handleNodeDataChange}
+							onclose={() => (selectedNodeId = null)}
+							oncollapse={() => (panelExpanded = false)}
+						/>
+					</SheetContent>
+				</Sheet.Root>
 			{/if}
 		</div>
 

@@ -1,6 +1,8 @@
 <script lang="ts">
 	import type { WorkflowNodeData } from '$lib/types/editor';
 	import X from '@lucide/svelte/icons/x';
+	import Maximize2 from '@lucide/svelte/icons/maximize-2';
+	import Minimize2 from '@lucide/svelte/icons/minimize-2';
 	import StartNodeSection from './property-sections/StartNodeSection.svelte';
 	import HumanTaskSection from './property-sections/HumanTaskSection.svelte';
 	import AutomatedStepSection from './property-sections/AutomatedStepSection.svelte';
@@ -10,11 +12,22 @@
 	type Props = {
 		data: WorkflowNodeData;
 		readonly?: boolean;
+		expanded?: boolean;
 		onchange: (data: WorkflowNodeData) => void;
 		onclose: () => void;
+		onexpand?: () => void;
+		oncollapse?: () => void;
 	};
 
-	let { data, readonly = false, onchange, onclose }: Props = $props();
+	let {
+		data,
+		readonly = false,
+		expanded = false,
+		onchange,
+		onclose,
+		onexpand,
+		oncollapse
+	}: Props = $props();
 
 	function updateField<K extends keyof WorkflowNodeData>(
 		key: K,
@@ -24,19 +37,46 @@
 	}
 </script>
 
-<div class="flex w-80 flex-col border-l border-border bg-card" data-testid="node-property-panel">
+<div
+	class="flex flex-col border-l border-border bg-card {expanded ? 'h-full w-full' : 'w-80'}"
+	data-testid="node-property-panel"
+>
 	<div class="flex items-center justify-between border-b border-border px-3 py-2.5">
 		<h2 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
 			{readonly ? 'Inspector' : 'Properties'}
 		</h2>
-		<button
-			type="button"
-			class="rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-			data-testid="btn-close-properties"
-			onclick={onclose}
-		>
-			<X class="size-4" />
-		</button>
+		<div class="flex items-center gap-0.5">
+			{#if !expanded && onexpand}
+				<button
+					type="button"
+					class="rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+					data-testid="btn-expand-properties"
+					onclick={onexpand}
+					title="Expand panel"
+				>
+					<Maximize2 class="size-4" />
+				</button>
+			{/if}
+			{#if expanded && oncollapse}
+				<button
+					type="button"
+					class="rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+					data-testid="btn-collapse-properties"
+					onclick={oncollapse}
+					title="Collapse panel"
+				>
+					<Minimize2 class="size-4" />
+				</button>
+			{/if}
+			<button
+				type="button"
+				class="rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+				data-testid="btn-close-properties"
+				onclick={onclose}
+			>
+				<X class="size-4" />
+			</button>
+		</div>
 	</div>
 
 	<div class="flex-1 space-y-4 overflow-y-auto p-3">
@@ -72,9 +112,9 @@
 		{#if data.type === 'start'}
 			<StartNodeSection {data} {readonly} {onchange} />
 		{:else if data.type === 'human_task'}
-			<HumanTaskSection {data} {readonly} {onchange} />
+			<HumanTaskSection {data} {readonly} {onchange} {onexpand} />
 		{:else if data.type === 'automated_step'}
-			<AutomatedStepSection {data} {readonly} {onchange} />
+			<AutomatedStepSection {data} {readonly} {onchange} {onexpand} />
 		{:else if data.type === 'decision'}
 			<DecisionNodeSection {data} {readonly} {onchange} />
 		{:else if data.type === 'loop'}

@@ -1,41 +1,60 @@
 <script lang="ts">
+	import { goto } from '$app/navigation';
 	import WorkflowCanvas from '$lib/components/editor/WorkflowCanvas.svelte';
 	import NodePropertyPanel from '$lib/components/editor/panels/NodePropertyPanel.svelte';
-	import EditorToolbar from '$lib/components/editor/toolbar/EditorToolbar.svelte';
-	import { compileToAIR } from '$lib/compiler/compile';
+	import { Sheet, SheetContent, SheetTitle, SheetDescription } from '$lib/components/ui/sheet';
+	import { getSheetWidthClass } from '$lib/components/editor/panels/panel-width';
+	import { compileGraph, createTemplate, publishTemplate, createInstance } from '$lib/api/client';
 	import type { WorkflowGraph, WorkflowNodeData } from '$lib/types/editor';
+	import { showcaseGraph } from './showcase-graph';
+	import Rocket from '@lucide/svelte/icons/rocket';
 
 	let error = $state<string | null>(null);
 	let selectedNodeId = $state<string | null>(null);
+	let panelExpanded = $state(false);
 	let airPreview = $state<object | null>(null);
+	let deploying = $state(false);
 
-	let currentGraph = $state<WorkflowGraph>({
-		nodes: [
-			{
-				id: 'node-start',
-				type: 'start',
-				position: { x: 100, y: 200 },
-				data: { type: 'start', label: 'Start' }
-			},
-			{
-				id: 'node-end',
-				type: 'end',
-				position: { x: 600, y: 200 },
-				data: { type: 'end', label: 'End' }
-			}
-		],
-		edges: []
-	});
+	let currentGraph = $state<WorkflowGraph>(structuredClone(showcaseGraph));
 
-	function handlePreview() {
-		const result = compileToAIR(currentGraph, 'Demo Workflow');
-		if (result.errors.length > 0) {
-			error = result.errors.map((e) => e.message).join('; ');
+	async function handlePreview() {
+		try {
+			airPreview = await compileGraph({ name: 'Invoice Processing Demo', graph: currentGraph });
+			error = null;
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Compilation failed';
 			airPreview = null;
-			return;
 		}
+	}
+
+	async function handleRunInstance() {
+		deploying = true;
 		error = null;
-		airPreview = result.air as unknown as object;
+		try {
+			// 1. Create template from demo graph
+			const template = await createTemplate({
+				name: 'Invoice Processing Demo',
+				description: 'Auto-created from demo page showcase workflow',
+				graph: currentGraph,
+				author_id: '00000000-0000-0000-0000-000000000000'
+			});
+
+			// 2. Publish it
+			await publishTemplate(template.id);
+
+			// 3. Create an instance
+			const instance = await createInstance({
+				template_id: template.id,
+				created_by: '00000000-0000-0000-0000-000000000000'
+			});
+
+			// 4. Navigate to watch it run
+			goto(`/instances/${instance.id}`);
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Failed to deploy. Is mekhan-service running?';
+		} finally {
+			deploying = false;
+		}
 	}
 
 	function handleGraphChange(graph: WorkflowGraph) {
@@ -44,6 +63,7 @@
 
 	function handleNodeSelect(nodeId: string | null) {
 		selectedNodeId = nodeId;
+		panelExpanded = false;
 	}
 
 	function handleNodeDataChange(data: WorkflowNodeData) {
@@ -56,6 +76,13 @@
 		};
 	}
 
+	function handleReset() {
+		currentGraph = structuredClone(showcaseGraph);
+		selectedNodeId = null;
+		airPreview = null;
+		error = null;
+	}
+
 	const selectedNodeData = $derived(
 		selectedNodeId
 			? currentGraph.nodes.find((n) => n.id === selectedNodeId)?.data ?? null
@@ -64,14 +91,44 @@
 </script>
 
 <div class="flex h-full flex-col" data-testid="demo-page">
-	<EditorToolbar
-		templateName="Demo Workflow"
-		published={false}
-		saving={false}
-		onsave={() => {}}
-		onpublish={() => {}}
-		onpreview={handlePreview}
-	/>
+	<div class="flex h-10 items-center justify-between border-b border-border bg-card px-3" data-testid="demo-toolbar">
+		<div class="flex items-center gap-3">
+			<span class="text-sm font-medium text-foreground">Invoice Processing Demo</span>
+			<span class="rounded-full bg-cyan-100 px-2 py-0.5 text-[10px] font-medium text-cyan-700">
+				Showcase
+			</span>
+		</div>
+
+		<div class="flex items-center gap-1.5">
+			<button
+				type="button"
+				class="rounded-md px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+				onclick={handleReset}
+			>
+				Reset
+			</button>
+
+			<button
+				type="button"
+				class="flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+				data-testid="btn-preview-air"
+				onclick={handlePreview}
+			>
+				Preview AIR
+			</button>
+
+			<button
+				type="button"
+				class="flex items-center gap-1.5 rounded-md bg-primary px-2.5 py-1 text-xs text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
+				data-testid="btn-run-instance"
+				disabled={deploying}
+				onclick={handleRunInstance}
+			>
+				<Rocket class="size-3.5" />
+				{deploying ? 'Deploying...' : 'Run Instance'}
+			</button>
+		</div>
+	</div>
 
 	{#if error}
 		<div class="border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-800">
@@ -92,12 +149,32 @@
 			onselect={handleNodeSelect}
 		/>
 
-		{#if selectedNodeData}
+		{#if selectedNodeData && !panelExpanded}
 			<NodePropertyPanel
 				data={selectedNodeData}
 				onchange={handleNodeDataChange}
 				onclose={() => (selectedNodeId = null)}
+				onexpand={() => (panelExpanded = true)}
 			/>
+		{/if}
+
+		{#if panelExpanded && selectedNodeData}
+			<Sheet.Root
+				open
+				onOpenChange={(open) => { if (!open) panelExpanded = false; }}
+			>
+				<SheetContent class={getSheetWidthClass(selectedNodeData)}>
+					<SheetTitle>Node Properties</SheetTitle>
+					<SheetDescription>Edit the selected node</SheetDescription>
+					<NodePropertyPanel
+						data={selectedNodeData}
+						expanded
+						onchange={handleNodeDataChange}
+						onclose={() => (selectedNodeId = null)}
+						oncollapse={() => (panelExpanded = false)}
+					/>
+				</SheetContent>
+			</Sheet.Root>
 		{/if}
 	</div>
 

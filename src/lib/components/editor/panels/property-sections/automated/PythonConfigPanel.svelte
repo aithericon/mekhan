@@ -7,9 +7,10 @@
 		config: Record<string, unknown>;
 		readonly?: boolean;
 		onchange: (config: Record<string, unknown>) => void;
+		onexpand?: () => void;
 	};
 
-	let { config, readonly = false, onchange }: Props = $props();
+	let { config, readonly = false, onchange, onexpand }: Props = $props();
 
 	const scriptMode = $derived(
 		typeof config.scriptContent === 'string' ? 'inline' : 'file'
@@ -22,6 +23,7 @@
 		} else {
 			const { script: _, ...rest } = config;
 			onchange({ ...rest, scriptContent: config.scriptContent ?? '' });
+			onexpand?.();
 		}
 	}
 </script>

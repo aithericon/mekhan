@@ -7,9 +7,10 @@
 		data: HumanTaskNodeData;
 		readonly?: boolean;
 		onchange: (data: HumanTaskNodeData) => void;
+		onexpand?: () => void;
 	};
 
-	let { data, readonly = false, onchange }: Props = $props();
+	let { data, readonly = false, onchange, onexpand }: Props = $props();
 
 	function addStep() {
 		onchange({
@@ -23,6 +24,7 @@
 				}
 			]
 		});
+		onexpand?.();
 	}
 </script>
 
