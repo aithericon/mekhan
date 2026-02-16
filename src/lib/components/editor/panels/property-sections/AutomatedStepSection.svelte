@@ -1,0 +1,95 @@
+<script lang="ts">
+	import type { AutomatedStepNodeData, ExecutionBackendType } from '$lib/types/editor';
+	import { Select, SelectTrigger, SelectContent, SelectItem } from '$lib/components/ui/select';
+	import PythonConfigPanel from './automated/PythonConfigPanel.svelte';
+	import DockerConfigPanel from './automated/DockerConfigPanel.svelte';
+	import ProcessConfigPanel from './automated/ProcessConfigPanel.svelte';
+	import HttpConfigPanel from './automated/HttpConfigPanel.svelte';
+	import LlmConfigPanel from './automated/LlmConfigPanel.svelte';
+	import FileOpsConfigPanel from './automated/FileOpsConfigPanel.svelte';
+	import KreuzbergConfigPanel from './automated/KreuzbergConfigPanel.svelte';
+
+	type Props = {
+		data: AutomatedStepNodeData;
+		readonly?: boolean;
+		onchange: (data: AutomatedStepNodeData) => void;
+	};
+
+	let { data, readonly = false, onchange }: Props = $props();
+
+	const defaultConfigs: Record<ExecutionBackendType, Record<string, unknown>> = {
+		python: { script: '', timeout_seconds: 30 },
+		docker: { image: '', env: {} },
+		process: { command: '', args: [] },
+		http: { method: 'GET', url: '' },
+		llm: { provider: 'openai', model: '', prompt: '' },
+		file_ops: { operation: 'stat', path: '', storage: { backend: 'local', endpoint: '' } },
+		kreuzberg: { mode: 'single' }
+	};
+
+	const backendLabels: Record<ExecutionBackendType, string> = {
+		python: 'Python',
+		process: 'Process',
+		docker: 'Docker',
+		http: 'HTTP Request',
+		llm: 'LLM (AI Model)',
+		file_ops: 'File Operations',
+		kreuzberg: 'Document Extraction'
+	};
+
+	function handleBackendTypeChange(backendType: ExecutionBackendType) {
+		onchange({
+			...data,
+			executionSpec: {
+				backendType,
+				config: defaultConfigs[backendType]
+			}
+		});
+	}
+
+	function handleConfigChange(config: Record<string, unknown>) {
+		onchange({
+			...data,
+			executionSpec: { ...data.executionSpec, config }
+		});
+	}
+</script>
+
+<div class="space-y-1.5">
+	<span class="text-xs font-medium text-muted-foreground">Backend Type</span>
+	<Select.Root
+		type="single"
+		value={data.executionSpec.backendType}
+		onValueChange={(v) => { if (v) handleBackendTypeChange(v as ExecutionBackendType); }}
+		disabled={readonly}
+	>
+		<SelectTrigger disabled={readonly}>
+			{backendLabels[data.executionSpec.backendType] ?? data.executionSpec.backendType}
+		</SelectTrigger>
+		<SelectContent>
+			<SelectItem value="python" label="Python" />
+			<SelectItem value="process" label="Process" />
+			<SelectItem value="docker" label="Docker" />
+			<SelectItem value="http" label="HTTP Request" />
+			<SelectItem value="llm" label="LLM (AI Model)" />
+			<SelectItem value="file_ops" label="File Operations" />
+			<SelectItem value="kreuzberg" label="Document Extraction" />
+		</SelectContent>
+	</Select.Root>
+</div>
+
+{#if data.executionSpec.backendType === 'python'}
+	<PythonConfigPanel config={data.executionSpec.config} {readonly} onchange={handleConfigChange} />
+{:else if data.executionSpec.backendType === 'docker'}
+	<DockerConfigPanel config={data.executionSpec.config} {readonly} onchange={handleConfigChange} />
+{:else if data.executionSpec.backendType === 'process'}
+	<ProcessConfigPanel config={data.executionSpec.config} {readonly} onchange={handleConfigChange} />
+{:else if data.executionSpec.backendType === 'http'}
+	<HttpConfigPanel config={data.executionSpec.config} {readonly} onchange={handleConfigChange} />
+{:else if data.executionSpec.backendType === 'llm'}
+	<LlmConfigPanel config={data.executionSpec.config} {readonly} onchange={handleConfigChange} />
+{:else if data.executionSpec.backendType === 'file_ops'}
+	<FileOpsConfigPanel config={data.executionSpec.config} {readonly} onchange={handleConfigChange} />
+{:else if data.executionSpec.backendType === 'kreuzberg'}
+	<KreuzbergConfigPanel config={data.executionSpec.config} {readonly} onchange={handleConfigChange} />
+{/if}

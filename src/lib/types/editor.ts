@@ -100,8 +100,17 @@ export type BranchCondition = {
 	guard: string;
 };
 
+export type ExecutionBackendType =
+	| 'python'
+	| 'process'
+	| 'docker'
+	| 'http'
+	| 'llm'
+	| 'file_ops'
+	| 'kreuzberg';
+
 export type ExecutionSpecConfig = {
-	backendType: 'python' | 'process' | 'docker';
+	backendType: ExecutionBackendType;
 	config: Record<string, unknown>;
 };
 

@@ -3,8 +3,7 @@
 	import WorkflowCanvas from '$lib/components/editor/WorkflowCanvas.svelte';
 	import NodePropertyPanel from '$lib/components/editor/panels/NodePropertyPanel.svelte';
 	import EditorToolbar from '$lib/components/editor/toolbar/EditorToolbar.svelte';
-	import { getTemplate, updateTemplate, publishTemplate } from '$lib/api/client';
-	import { compileToAIR } from '$lib/compiler/compile';
+	import { getTemplate, updateTemplate, publishTemplate, compileGraph } from '$lib/api/client';
 	import type { Template } from '$lib/types/api';
 	import type { WorkflowGraph, WorkflowNodeData, WorkflowNodeType } from '$lib/types/editor';
 
@@ -90,17 +89,18 @@
 		}
 	}
 
-	function handlePreview() {
-		const result = compileToAIR(
-			currentGraph,
-			template?.name ?? 'Untitled',
-			template?.description
-		);
-		if (result.errors.length > 0) {
-			error = result.errors.map((e) => e.message).join('; ');
-			return;
+	async function handlePreview() {
+		try {
+			airPreview = await compileGraph({
+				name: template?.name ?? 'Untitled',
+				description: template?.description,
+				graph: currentGraph
+			});
+			error = null;
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Compilation failed';
+			airPreview = null;
 		}
-		airPreview = result.air as unknown as object;
 	}
 
 	function handleGraphChange(graph: WorkflowGraph) {
@@ -166,9 +166,10 @@
 				onselect={handleNodeSelect}
 			/>
 
-			{#if selectedNodeData && !(template?.published)}
+			{#if selectedNodeData}
 				<NodePropertyPanel
 					data={selectedNodeData}
+					readonly={template?.published ?? false}
 					onchange={handleNodeDataChange}
 					onclose={() => (selectedNodeId = null)}
 				/>
