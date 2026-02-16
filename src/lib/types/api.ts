@@ -1,3 +1,4 @@
+import type { Marking, PersistedEvent, EngineStatus } from './petri';
 import type { WorkflowGraph } from './editor';
 
 /** Template as returned by the API */
@@ -76,12 +77,15 @@ export type CreateInstanceRequest = {
 	metadata?: Record<string, unknown>;
 };
 
-/** Instance state from petri-lab */
+/** Instance state — marking from JetStream events, engine status best-effort */
 export type InstanceState = {
 	instance_id: string;
 	net_id: string;
-	status: 'running' | 'completed' | 'failed' | 'cancelled';
-	marking: Record<string, Array<{ id: string; color: object }>>;
+	status: string;
+	events?: PersistedEvent[];
+	event_count?: number;
+	marking: Marking;
+	engine?: EngineStatus;
 	enabled_transitions: string[];
 	current_step?: string;
 };
