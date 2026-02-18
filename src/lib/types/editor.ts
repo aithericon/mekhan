@@ -53,6 +53,11 @@ export type LoopNodeData = BaseNodeData & {
 	loopCondition: string;
 };
 
+/** Scope block - visual container for grouping related nodes */
+export type ScopeNodeData = BaseNodeData & {
+	type: 'scope';
+};
+
 export type WorkflowNodeData =
 	| StartNodeData
 	| EndNodeData
@@ -61,7 +66,8 @@ export type WorkflowNodeData =
 	| DecisionNodeData
 	| ParallelSplitNodeData
 	| ParallelJoinNodeData
-	| LoopNodeData;
+	| LoopNodeData
+	| ScopeNodeData;
 
 export type WorkflowNodeType = WorkflowNodeData['type'];
 
@@ -133,6 +139,12 @@ export type WorkflowGraph = {
 		type: WorkflowNodeType;
 		position: { x: number; y: number };
 		data: WorkflowNodeData;
+		/** Parent scope node id — child positions are relative to the parent */
+		parentId?: string;
+		/** Explicit width (used by scope nodes) */
+		width?: number;
+		/** Explicit height (used by scope nodes) */
+		height?: number;
 	}>;
 	edges: WorkflowEdge[];
 	viewport?: { x: number; y: number; zoom: number };
@@ -205,6 +217,13 @@ export const NODE_PALETTE: NodePaletteItem[] = [
 		description: 'Retry or iterate with conditions',
 		icon: 'repeat',
 		color: '#ec4899'
+	},
+	{
+		type: 'scope',
+		label: 'Scope',
+		description: 'Visual container for grouping nodes',
+		icon: 'group',
+		color: '#64748b'
 	}
 ];
 
@@ -254,5 +273,7 @@ export function createDefaultNodeData(type: WorkflowNodeType): WorkflowNodeData 
 				maxIterations: 3,
 				loopCondition: 'true'
 			};
+		case 'scope':
+			return { type: 'scope', label: 'Scope' };
 	}
 }

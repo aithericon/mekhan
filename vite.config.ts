@@ -3,5 +3,14 @@ import { sveltekit } from '@sveltejs/kit/vite';
 import { defineConfig } from 'vite';
 
 export default defineConfig({
-	plugins: [tailwindcss(), sveltekit()]
+	plugins: [tailwindcss(), sveltekit()],
+	server: {
+		proxy: {
+			'/api/yjs': {
+				target: 'http://localhost:3100',
+				ws: true,
+				changeOrigin: true
+			}
+		}
+	}
 });

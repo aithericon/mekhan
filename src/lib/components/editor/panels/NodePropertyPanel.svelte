@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { WorkflowNodeData } from '$lib/types/editor';
+	import type { YjsGraphBinding } from '$lib/yjs/graph-binding.svelte';
 	import X from '@lucide/svelte/icons/x';
 	import Maximize2 from '@lucide/svelte/icons/maximize-2';
 	import Minimize2 from '@lucide/svelte/icons/minimize-2';
@@ -17,6 +18,8 @@
 		onclose: () => void;
 		onexpand?: () => void;
 		oncollapse?: () => void;
+		binding?: YjsGraphBinding;
+		nodeId?: string;
 	};
 
 	let {
@@ -26,7 +29,9 @@
 		onchange,
 		onclose,
 		onexpand,
-		oncollapse
+		oncollapse,
+		binding,
+		nodeId
 	}: Props = $props();
 
 	function updateField<K extends keyof WorkflowNodeData>(
@@ -114,7 +119,7 @@
 		{:else if data.type === 'human_task'}
 			<HumanTaskSection {data} {readonly} {onchange} {onexpand} />
 		{:else if data.type === 'automated_step'}
-			<AutomatedStepSection {data} {readonly} {onchange} {onexpand} />
+			<AutomatedStepSection {data} {readonly} {onchange} {onexpand} {binding} {nodeId} />
 		{:else if data.type === 'decision'}
 			<DecisionNodeSection {data} {readonly} {onchange} />
 		{:else if data.type === 'loop'}

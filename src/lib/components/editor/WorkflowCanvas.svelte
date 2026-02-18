@@ -18,6 +18,7 @@
 		createDefaultNodeData,
 		type WorkflowNodeData,
 		type WorkflowNodeType,
+		type WorkflowEdge,
 		type WorkflowGraph
 	} from '$lib/types/editor';
 	import type { XYPosition } from '@xyflow/svelte';
@@ -27,9 +28,16 @@
 		readonly?: boolean;
 		onchange?: (graph: WorkflowGraph) => void;
 		onselect?: (nodeId: string | null) => void;
+		onAddNode?: (id: string, type: WorkflowNodeType, position: { x: number; y: number }, data: WorkflowNodeData, opts?: { parentId?: string; width?: number; height?: number }) => void;
+		onRemoveNodes?: (ids: string[]) => void;
+		onMoveNodes?: (moves: Array<{ id: string; position: { x: number; y: number } }>) => void;
+		onAddEdge?: (edge: WorkflowEdge) => void;
+		onRemoveEdges?: (ids: string[]) => void;
 	};
 
-	let { graph, readonly = false, onchange, onselect }: Props = $props();
+	let { graph, readonly = false, onchange, onselect, onAddNode, onRemoveNodes, onMoveNodes, onAddEdge, onRemoveEdges }: Props = $props();
+
+	const useGranular = $derived(!!(onAddNode || onRemoveNodes || onMoveNodes || onAddEdge || onRemoveEdges));
 
 	// Track graph identity to avoid re-syncing our own changes
 	let lastGraphRef: WorkflowGraph | null = graph;
@@ -38,11 +46,20 @@
 	let edges = $state.raw<Edge[]>(toFlowEdges(graph));
 
 	function toFlowNodes(g: WorkflowGraph): Node[] {
-		return g.nodes.map((n) => ({
+		// Scope/group nodes must come before their children in the array
+		const sorted = [...g.nodes].sort((a, b) => {
+			if (a.type === 'scope' && b.type !== 'scope') return -1;
+			if (a.type !== 'scope' && b.type === 'scope') return 1;
+			return 0;
+		});
+		return sorted.map((n) => ({
 			id: n.id,
 			type: n.type,
 			position: n.position,
-			data: n.data
+			data: n.data,
+			...(n.parentId ? { parentId: n.parentId, extent: 'parent' as const } : {}),
+			...(n.width != null ? { width: n.width } : {}),
+			...(n.height != null ? { height: n.height } : {})
 		}));
 	}
 
@@ -63,13 +80,22 @@
 		if (graph !== lastGraphRef) {
 			lastGraphRef = graph;
 			const currentNodes = new Map(nodes.map((n) => [n.id, n]));
-			nodes = graph.nodes.map((n) => {
+			// Scope nodes must come before their children
+			const sorted = [...graph.nodes].sort((a, b) => {
+				if (a.type === 'scope' && b.type !== 'scope') return -1;
+				if (a.type !== 'scope' && b.type === 'scope') return 1;
+				return 0;
+			});
+			nodes = sorted.map((n) => {
 				const existing = currentNodes.get(n.id);
 				return {
 					id: n.id,
 					type: n.type,
 					position: existing?.position ?? n.position,
 					data: n.data,
+					...(n.parentId ? { parentId: n.parentId, extent: 'parent' as const } : {}),
+					...(n.width != null ? { width: n.width } : {}),
+					...(n.height != null ? { height: n.height } : {}),
 					...(existing?.selected != null ? { selected: existing.selected } : {})
 				};
 			});
@@ -83,7 +109,10 @@
 				id: n.id,
 				type: n.type as WorkflowNodeType,
 				position: n.position,
-				data: n.data as WorkflowNodeData
+				data: n.data as WorkflowNodeData,
+				...(n.parentId ? { parentId: n.parentId } : {}),
+				...(n.width != null ? { width: n.width } : {}),
+				...(n.height != null ? { height: n.height } : {})
 			})),
 			edges: edges.map((e) => ({
 				id: e.id,
@@ -100,8 +129,9 @@
 
 	function onConnect(connection: Connection) {
 		if (readonly) return;
+		const edgeId = `e-${connection.source}-${connection.target}-${Date.now()}`;
 		const newEdge: Edge = {
-			id: `e-${connection.source}-${connection.target}-${Date.now()}`,
+			id: edgeId,
 			source: connection.source!,
 			target: connection.target!,
 			sourceHandle: connection.sourceHandle,
@@ -109,7 +139,18 @@
 			type: 'default'
 		};
 		edges = [...edges, newEdge];
-		serializeAndEmit();
+
+		if (useGranular && onAddEdge) {
+			onAddEdge({
+				id: edgeId,
+				source: connection.source!,
+				target: connection.target!,
+				sourceHandle: connection.sourceHandle ?? undefined,
+				type: 'sequence'
+			});
+		} else {
+			serializeAndEmit();
+		}
 	}
 
 	function handleSelectionChange({ nodes: selectedNodes }: { nodes: Node[] }) {
@@ -120,16 +161,47 @@
 		}
 	}
 
-	function handleNodeDragStop() {
-		serializeAndEmit();
+	function handleNodeDragStop({ nodes: draggedNodes }: { nodes: Node[] }) {
+		if (useGranular && onMoveNodes) {
+			onMoveNodes(draggedNodes.map((n) => ({ id: n.id, position: n.position })));
+		} else {
+			serializeAndEmit();
+		}
 	}
 
-	function handleDelete({ nodes: deletedNodes }: { nodes: Node[] }) {
+	function handleDelete({ nodes: deletedNodes, edges: deletedEdges }: { nodes: Node[]; edges: Edge[] }) {
 		if (readonly) return;
 		const idsToDelete = new Set(deletedNodes.map((n) => n.id));
+		// Also delete children of deleted scope nodes
+		for (const n of nodes) {
+			if (n.parentId && idsToDelete.has(n.parentId)) {
+				idsToDelete.add(n.id);
+			}
+		}
+
+		// Collect edge ids that will be removed (connected to deleted nodes + explicitly deleted edges)
+		const edgeIdsToDelete = new Set(deletedEdges.map((e) => e.id));
+		for (const e of edges) {
+			if (idsToDelete.has(e.source) || idsToDelete.has(e.target)) {
+				edgeIdsToDelete.add(e.id);
+			}
+		}
+
 		nodes = nodes.filter((n) => !idsToDelete.has(n.id));
-		edges = edges.filter((e) => !idsToDelete.has(e.source) && !idsToDelete.has(e.target));
-		serializeAndEmit();
+		edges = edges.filter((e) => !edgeIdsToDelete.has(e.id));
+
+		if (useGranular) {
+			if (idsToDelete.size > 0 && onRemoveNodes) {
+				onRemoveNodes([...idsToDelete]);
+			}
+			if (edgeIdsToDelete.size > 0 && onRemoveEdges) {
+				// Only report edges not already removed by node deletion
+				const standaloneEdgeIds = deletedEdges.map((e) => e.id);
+				if (standaloneEdgeIds.length > 0) onRemoveEdges(standaloneEdgeIds);
+			}
+		} else {
+			serializeAndEmit();
+		}
 	}
 
 	// Flow helpers provided by DropHandler child (inside SvelteFlow context)
@@ -148,15 +220,29 @@
 		event.preventDefault();
 
 		const position = screenToFlowPos({ x: event.clientX, y: event.clientY });
+		const nodeId = `node-${Date.now()}`;
+		const data = createDefaultNodeData(nodeType);
+		const opts = nodeType === 'scope' ? { width: 400, height: 200 } : undefined;
 		const newNode: Node = {
-			id: `node-${Date.now()}`,
+			id: nodeId,
 			type: nodeType,
 			position,
-			data: createDefaultNodeData(nodeType)
+			data,
+			...(opts ?? {})
 		};
 
-		nodes = [...nodes, newNode];
-		serializeAndEmit();
+		// Scope nodes must come before their children
+		if (nodeType === 'scope') {
+			nodes = [newNode, ...nodes];
+		} else {
+			nodes = [...nodes, newNode];
+		}
+
+		if (useGranular && onAddNode) {
+			onAddNode(nodeId, nodeType, position, data, opts);
+		} else {
+			serializeAndEmit();
+		}
 	}
 
 	function onDragOver(event: DragEvent) {

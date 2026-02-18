@@ -7,6 +7,7 @@ import DecisionNode from './DecisionNode.svelte';
 import ParallelSplitNode from './ParallelSplitNode.svelte';
 import ParallelJoinNode from './ParallelJoinNode.svelte';
 import LoopNode from './LoopNode.svelte';
+import ScopeNode from './ScopeNode.svelte';
 
 export const nodeTypes: NodeTypes = {
 	start: StartNode as any,
@@ -16,5 +17,6 @@ export const nodeTypes: NodeTypes = {
 	decision: DecisionNode as any,
 	parallel_split: ParallelSplitNode as any,
 	parallel_join: ParallelJoinNode as any,
-	loop: LoopNode as any
+	loop: LoopNode as any,
+	scope: ScopeNode as any
 };

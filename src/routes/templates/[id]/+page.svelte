@@ -1,13 +1,20 @@
 <script lang="ts">
 	import { page } from '$app/state';
+	import { onDestroy } from 'svelte';
 	import WorkflowCanvas from '$lib/components/editor/WorkflowCanvas.svelte';
 	import NodePropertyPanel from '$lib/components/editor/panels/NodePropertyPanel.svelte';
 	import { Sheet, SheetContent, SheetTitle, SheetDescription } from '$lib/components/ui/sheet';
 	import { getSheetWidthClass } from '$lib/components/editor/panels/panel-width';
 	import EditorToolbar from '$lib/components/editor/toolbar/EditorToolbar.svelte';
-	import { getTemplate, updateTemplate, publishTemplate, compileGraph } from '$lib/api/client';
+	import { getTemplate, publishTemplate, compileGraph } from '$lib/api/client';
+	import { getSession, releaseSession } from '$lib/yjs/session-store';
+	import { YjsGraphBinding } from '$lib/yjs/graph-binding.svelte';
 	import type { Template } from '$lib/types/api';
-	import type { WorkflowGraph, WorkflowNodeData, WorkflowNodeType } from '$lib/types/editor';
+	import type {
+		WorkflowNodeData,
+		WorkflowNodeType,
+		WorkflowEdge
+	} from '$lib/types/editor';
 
 	const templateId = $derived(page.params.id!);
 
@@ -19,35 +26,14 @@
 	let panelExpanded = $state(false);
 	let airPreview = $state<object | null>(null);
 
-	// Current graph state (kept in sync with canvas)
-	let currentGraph = $state<WorkflowGraph>(defaultGraph());
+	// Yjs session + binding
+	const session = getSession(templateId);
+	const binding = new YjsGraphBinding(session.doc);
 
-	function defaultGraph(): WorkflowGraph {
-		return {
-			nodes: [
-				{
-					id: 'node-start',
-					type: 'start',
-					position: { x: 100, y: 200 },
-					data: { type: 'start', label: 'Start' }
-				},
-				{
-					id: 'node-end',
-					type: 'end',
-					position: { x: 500, y: 200 },
-					data: { type: 'end', label: 'End' }
-				}
-			],
-			edges: []
-		};
-	}
-
-	// Load template from API
+	// Load template metadata from API
 	async function load() {
 		if (templateId === 'new') {
-			// New template mode - use defaults
 			template = null;
-			currentGraph = defaultGraph();
 			loading = false;
 			return;
 		}
@@ -56,34 +42,17 @@
 		error = null;
 		try {
 			template = await getTemplate(templateId);
-			currentGraph = template.graph ?? defaultGraph();
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load template';
-			// Fallback to default graph for development
-			currentGraph = defaultGraph();
 		} finally {
 			loading = false;
 		}
 	}
 
-	async function handleSave() {
-		if (!template || template.published) return;
-		saving = true;
-		try {
-			template = await updateTemplate(template.id, { graph: currentGraph });
-		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to save';
-		} finally {
-			saving = false;
-		}
-	}
-
 	async function handlePublish() {
 		if (!template || template.published) return;
-		// Save first, then publish
 		try {
 			saving = true;
-			await updateTemplate(template.id, { graph: currentGraph });
 			template = await publishTemplate(template.id);
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to publish';
@@ -97,7 +66,7 @@
 			airPreview = await compileGraph({
 				name: template?.name ?? 'Untitled',
 				description: template?.description,
-				graph: currentGraph
+				graph: binding.graph
 			});
 			error = null;
 		} catch (e) {
@@ -106,8 +75,37 @@
 		}
 	}
 
-	function handleGraphChange(graph: WorkflowGraph) {
-		currentGraph = graph;
+	// Granular canvas callbacks → Yjs binding
+	function handleAddNode(
+		id: string,
+		type: WorkflowNodeType,
+		position: { x: number; y: number },
+		data: WorkflowNodeData,
+		opts?: { parentId?: string; width?: number; height?: number }
+	) {
+		binding.addNode(id, type, position, data, opts);
+	}
+
+	function handleRemoveNodes(ids: string[]) {
+		for (const id of ids) {
+			binding.removeNode(id);
+		}
+	}
+
+	function handleMoveNodes(moves: Array<{ id: string; position: { x: number; y: number } }>) {
+		for (const { id, position } of moves) {
+			binding.updateNodePosition(id, position);
+		}
+	}
+
+	function handleAddEdge(edge: WorkflowEdge) {
+		binding.addEdge(edge);
+	}
+
+	function handleRemoveEdges(ids: string[]) {
+		for (const id of ids) {
+			binding.removeEdge(id);
+		}
 	}
 
 	function handleNodeSelect(nodeId: string | null) {
@@ -117,22 +115,22 @@
 
 	function handleNodeDataChange(data: WorkflowNodeData) {
 		if (!selectedNodeId) return;
-		currentGraph = {
-			...currentGraph,
-			nodes: currentGraph.nodes.map((n) =>
-				n.id === selectedNodeId ? { ...n, data } : n
-			)
-		};
+		binding.updateNodeData(selectedNodeId, data);
 	}
 
 	const selectedNodeData = $derived(
 		selectedNodeId
-			? currentGraph.nodes.find((n) => n.id === selectedNodeId)?.data ?? null
+			? binding.graph.nodes.find((n) => n.id === selectedNodeId)?.data ?? null
 			: null
 	);
 
 	$effect(() => {
 		load();
+	});
+
+	onDestroy(() => {
+		binding.destroy();
+		releaseSession(templateId);
 	});
 </script>
 
@@ -146,7 +144,9 @@
 			templateName={template?.name ?? 'New Workflow'}
 			published={template?.published ?? false}
 			{saving}
-			onsave={handleSave}
+			{templateId}
+			awareness={session.awareness}
+			provider={session.provider}
 			onpublish={handlePublish}
 			onpreview={handlePreview}
 		/>
@@ -164,10 +164,14 @@
 
 		<div class="relative flex flex-1 overflow-hidden">
 			<WorkflowCanvas
-				graph={currentGraph}
+				graph={binding.graph}
 				readonly={template?.published ?? false}
-				onchange={handleGraphChange}
 				onselect={handleNodeSelect}
+				onAddNode={handleAddNode}
+				onRemoveNodes={handleRemoveNodes}
+				onMoveNodes={handleMoveNodes}
+				onAddEdge={handleAddEdge}
+				onRemoveEdges={handleRemoveEdges}
 			/>
 
 			{#if selectedNodeData && !panelExpanded}
@@ -177,6 +181,8 @@
 					onchange={handleNodeDataChange}
 					onclose={() => (selectedNodeId = null)}
 					onexpand={() => (panelExpanded = true)}
+					{binding}
+					nodeId={selectedNodeId ?? undefined}
 				/>
 			{/if}
 
@@ -195,6 +201,8 @@
 							onchange={handleNodeDataChange}
 							onclose={() => (selectedNodeId = null)}
 							oncollapse={() => (panelExpanded = false)}
+							{binding}
+							nodeId={selectedNodeId ?? undefined}
 						/>
 					</SheetContent>
 				</Sheet.Root>

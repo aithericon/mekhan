@@ -8,15 +8,18 @@
 	import LlmConfigPanel from './automated/LlmConfigPanel.svelte';
 	import FileOpsConfigPanel from './automated/FileOpsConfigPanel.svelte';
 	import KreuzbergConfigPanel from './automated/KreuzbergConfigPanel.svelte';
+	import type { YjsGraphBinding } from '$lib/yjs/graph-binding.svelte';
 
 	type Props = {
 		data: AutomatedStepNodeData;
 		readonly?: boolean;
 		onchange: (data: AutomatedStepNodeData) => void;
 		onexpand?: () => void;
+		binding?: YjsGraphBinding;
+		nodeId?: string;
 	};
 
-	let { data, readonly = false, onchange, onexpand }: Props = $props();
+	let { data, readonly = false, onchange, onexpand, binding, nodeId }: Props = $props();
 
 	const defaultConfigs: Record<ExecutionBackendType, Record<string, unknown>> = {
 		python: { script: '', timeout_seconds: 30 },
@@ -80,7 +83,7 @@
 </div>
 
 {#if data.executionSpec.backendType === 'python'}
-	<PythonConfigPanel config={data.executionSpec.config} {readonly} onchange={handleConfigChange} {onexpand} />
+	<PythonConfigPanel config={data.executionSpec.config} {readonly} onchange={handleConfigChange} {onexpand} {binding} {nodeId} />
 {:else if data.executionSpec.backendType === 'docker'}
 	<DockerConfigPanel config={data.executionSpec.config} {readonly} onchange={handleConfigChange} />
 {:else if data.executionSpec.backendType === 'process'}

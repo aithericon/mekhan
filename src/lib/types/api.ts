@@ -68,6 +68,7 @@ export type WorkflowInstance = {
 	completed_at: string | null;
 	current_step: string | null;
 	metadata: Record<string, unknown>;
+	template_name?: string;
 };
 
 /** Create instance request */

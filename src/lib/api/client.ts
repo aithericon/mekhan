@@ -9,6 +9,7 @@ import type {
 	InstanceState,
 	CompileResult
 } from '$lib/types/api';
+import type { WorkflowGraph } from '$lib/types/editor';
 
 const API_BASE = '/api';
 
@@ -82,6 +83,15 @@ export async function compileTemplate(id: string): Promise<CompileResult> {
 
 export async function getTemplateAir(id: string): Promise<object> {
 	return request(`/templates/${id}/air`);
+}
+
+// Compile graph (without saving as template)
+export async function compileGraph(data: {
+	name: string;
+	description?: string;
+	graph: WorkflowGraph;
+}): Promise<object> {
+	return request('/compile', { method: 'POST', body: JSON.stringify(data) });
 }
 
 // Instance endpoints

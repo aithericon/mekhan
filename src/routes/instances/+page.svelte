@@ -83,7 +83,12 @@
 					>
 						<div class="min-w-0">
 							<div class="flex items-center gap-2">
-								<span class="font-mono text-xs text-foreground">{instance.net_id}</span>
+								<span class="text-sm font-medium text-foreground">
+									{instance.template_name ?? instance.net_id}
+								</span>
+								<span class="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+									v{instance.template_version}
+								</span>
 								<span class="rounded-full px-2 py-0.5 text-[10px] font-medium {statusColors[instance.status] ?? ''}">
 									{instance.status}
 								</span>
@@ -94,7 +99,9 @@
 								</p>
 							{/if}
 							<p class="mt-1 text-[10px] text-muted-foreground">
-								Created {formatDate(instance.created_at)}
+								<span class="font-mono">{instance.net_id}</span>
+								<span class="mx-1">·</span>
+								{formatDate(instance.created_at)}
 							</p>
 						</div>
 						{#if instance.status === 'running' || instance.status === 'created'}
