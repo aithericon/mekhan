@@ -14,6 +14,7 @@ Thumbs.db
 
 # Agent
 .agent_status/
+.claude/
 
 # Env
 .env
@@ -25,3 +26,10 @@ Thumbs.db
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 test-results/
+playwright-report/
+
+# Playwright CLI
+.playwright-cli/
+
+# Temp scripts
+check-nodes.mjs
