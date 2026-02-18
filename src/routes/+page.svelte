@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { Button } from '$lib/components/ui/button';
 	import Play from '@lucide/svelte/icons/play';
 	import Square from '@lucide/svelte/icons/square';
 	import User from '@lucide/svelte/icons/user';
@@ -25,33 +26,21 @@
 </script>
 
 <div class="flex h-full items-center justify-center" data-testid="home-page">
-	<div class="w-full max-w-2xl px-6">
+	<div class="w-full max-w-2xl px-6 animate-rise">
 		<div class="text-center">
 			<h1 class="text-3xl font-semibold tracking-tight text-foreground">Mekhan</h1>
 			<p class="mt-2 text-sm text-muted-foreground">Visual workflow editor for Petri-Lab</p>
 			<div class="mt-6 flex items-center justify-center gap-3">
-				<a
-					href="/demo"
-					class="flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
-					data-testid="btn-try-demo"
-				>
+				<Button href="/demo" data-testid="btn-try-demo">
 					<Rocket class="size-4" />
 					Try Demo
-				</a>
-				<a
-					href="/templates"
-					class="rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-accent"
-					data-testid="btn-view-templates"
-				>
+				</Button>
+				<Button variant="outline" href="/templates" data-testid="btn-view-templates">
 					Templates
-				</a>
-				<a
-					href="/instances"
-					class="rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-accent"
-					data-testid="btn-view-instances"
-				>
+				</Button>
+				<Button variant="outline" href="/instances" data-testid="btn-view-instances">
 					Instances
-				</a>
+				</Button>
 			</div>
 		</div>
 

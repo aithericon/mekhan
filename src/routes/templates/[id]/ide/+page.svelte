@@ -7,6 +7,7 @@
 	import FileTree from '$lib/components/ide/FileTree.svelte';
 	import EditorTabs from '$lib/components/ide/EditorTabs.svelte';
 	import NodeConfigPanel from '$lib/components/ide/NodeConfigPanel.svelte';
+	import HumanTaskFormEditor from '$lib/components/ide/HumanTaskFormEditor.svelte';
 	import { getSession, releaseSession } from '$lib/yjs/session-store';
 	import { YjsGraphBinding } from '$lib/yjs/graph-binding.svelte';
 	import { getTemplate, publishTemplate } from '$lib/api/client';
@@ -27,6 +28,14 @@
 	let activeTabKey = $state<string | null>(null);
 	let selectedNodeId = $state<string | null>(null);
 	let selectedFile = $state<{ nodeId: string; filename: string } | undefined>(undefined);
+
+	// Derive whether the selected node is a human_task (show form editor instead of code tabs)
+	const selectedNodeData = $derived(
+		selectedNodeId ? binding.graph.nodes.find((n) => n.id === selectedNodeId)?.data ?? null : null
+	);
+	const showHumanTaskEditor = $derived(
+		selectedNodeData?.type === 'human_task' && !activeTabKey
+	);
 
 	function tabKey(nodeId: string, filename: string): string {
 		return `${nodeId}:${filename}`;
@@ -56,6 +65,17 @@
 		const qs = params.toString();
 		const path = resolveRoute('/templates/[id]/ide', { id: templateId });
 		replaceState(`${path}${qs ? '?' + qs : ''}`, {});
+	}
+
+	function handleSelectNode(nodeId: string) {
+		selectedNodeId = nodeId;
+		selectedFile = undefined;
+		// Clear active tab so center panel shows node-specific editor (e.g. human task form)
+		const nodeData = binding.graph.nodes.find((n) => n.id === nodeId)?.data;
+		if (nodeData?.type === 'human_task') {
+			activeTabKey = null;
+		}
+		syncUrlState();
 	}
 
 	function handleSelectFile(nodeId: string, filename: string) {
@@ -130,7 +150,14 @@
 		const fileParam = page.url.searchParams.get('file');
 		const nodeParam = page.url.searchParams.get('node');
 
-		if (nodeParam) selectedNodeId = nodeParam;
+		if (nodeParam) {
+			selectedNodeId = nodeParam;
+			// If it's a human_task node and no file param, show form editor
+			const nodeData = binding.graph.nodes.find((n) => n.id === nodeParam)?.data;
+			if (nodeData?.type === 'human_task' && !fileParam) {
+				activeTabKey = null;
+			}
+		}
 		if (fileParam) {
 			const [nodeId, ...rest] = fileParam.split(':');
 			const filename = rest.join(':');
@@ -170,7 +197,9 @@
 			<FileTree
 				{binding}
 				{selectedFile}
+				{selectedNodeId}
 				onSelectFile={handleSelectFile}
+				onSelectNode={handleSelectNode}
 				onCreateFile={handleCreateFile}
 				onDeleteFile={handleDeleteFile}
 				onRenameFile={handleRenameFile}
@@ -178,14 +207,22 @@
 		</div>
 
 		<div class="flex-1 overflow-hidden">
-			<EditorTabs
-				tabs={openTabs}
-				activeTab={activeTabKey}
-				{binding}
-				awareness={session.awareness}
-				onCloseTab={handleCloseTab}
-				onSelectTab={handleSelectTab}
-			/>
+			{#if showHumanTaskEditor && selectedNodeId}
+				<HumanTaskFormEditor
+					{binding}
+					nodeId={selectedNodeId}
+					readonly={template?.published ?? false}
+				/>
+			{:else}
+				<EditorTabs
+					tabs={openTabs}
+					activeTab={activeTabKey}
+					{binding}
+					awareness={session.awareness}
+					onCloseTab={handleCloseTab}
+					onSelectTab={handleSelectTab}
+				/>
+			{/if}
 		</div>
 
 		<div class="w-[320px] shrink-0">

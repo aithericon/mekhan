@@ -1,6 +1,10 @@
 <script lang="ts">
 	import type { HumanTaskNodeData } from '$lib/types/editor';
 	import Plus from '@lucide/svelte/icons/plus';
+	import { Input } from '$lib/components/ui/input';
+	import { Label } from '$lib/components/ui/label';
+	import { Textarea } from '$lib/components/ui/textarea';
+	import { Button } from '$lib/components/ui/button';
 	import StepEditor from './human-task/StepEditor.svelte';
 
 	type Props = {
@@ -28,9 +32,9 @@
 	}
 </script>
 
-<div class="space-y-1.5">
-	<label for="task-title" class="text-xs font-medium text-muted-foreground">Task Title</label>
-	<input
+<div class="space-y-2">
+	<Label for="task-title">Task Title</Label>
+	<Input
 		id="task-title"
 		type="text"
 		value={data.taskTitle}
@@ -40,15 +44,12 @@
 				...data,
 				taskTitle: (e.currentTarget as HTMLInputElement).value
 			})}
-		class="w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-sm text-foreground focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70"
 	/>
 </div>
 
-<div class="space-y-1.5">
-	<label for="task-instructions" class="text-xs font-medium text-muted-foreground"
-		>Instructions (Markdown)</label
-	>
-	<textarea
+<div class="space-y-2">
+	<Label for="task-instructions">Instructions (Markdown)</Label>
+	<Textarea
 		id="task-instructions"
 		value={data.instructionsMdsvex ?? ''}
 		disabled={readonly}
@@ -57,23 +58,18 @@
 				...data,
 				instructionsMdsvex: (e.currentTarget as HTMLTextAreaElement).value
 			})}
-		rows={3}
-		class="w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-sm text-foreground focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70"
-	></textarea>
+		rows={4}
+	/>
 </div>
 
-<div class="space-y-2">
+<div class="space-y-3">
 	<div class="flex items-center justify-between">
-		<span class="text-xs font-medium text-muted-foreground">Steps</span>
+		<Label>Steps</Label>
 		{#if !readonly}
-			<button
-				type="button"
-				class="flex items-center gap-1 rounded-md px-2 py-0.5 text-[10px] font-medium text-primary transition-colors hover:bg-accent"
-				onclick={addStep}
-			>
-				<Plus class="size-3" />
+			<Button variant="ghost" size="sm" onclick={addStep}>
+				<Plus class="size-3.5" />
 				Add Step
-			</button>
+			</Button>
 		{/if}
 	</div>
 

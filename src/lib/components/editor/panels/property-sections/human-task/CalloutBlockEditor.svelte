@@ -1,5 +1,7 @@
 <script lang="ts">
 	import Trash2 from '@lucide/svelte/icons/trash-2';
+	import { Input } from '$lib/components/ui/input';
+	import { Textarea } from '$lib/components/ui/textarea';
 	import { Select, SelectTrigger, SelectContent, SelectItem } from '$lib/components/ui/select';
 
 	type Props = {
@@ -47,24 +49,24 @@
 </script>
 
 <div
-	class="rounded border border-border/50 border-l-2 bg-background p-1.5 {borderColors[severity]}"
+	class="rounded-md border border-border/50 border-l-2 bg-background p-3 {borderColors[severity]}"
 >
-	<div class="mb-1.5 flex items-center justify-between">
-		<span class="rounded px-1.5 py-0.5 text-[9px] font-medium {badgeColors[severity]}">
+	<div class="mb-2 flex items-center justify-between">
+		<span class="rounded px-2 py-0.5 text-xs font-medium {badgeColors[severity]}">
 			Callout
 		</span>
 		{#if !readonly}
 			<button
 				type="button"
-				class="rounded p-0.5 text-muted-foreground transition-colors hover:text-destructive"
+				class="rounded p-1 text-muted-foreground transition-colors hover:text-destructive"
 				onclick={onremove}
 			>
-				<Trash2 class="size-3" />
+				<Trash2 class="size-4" />
 			</button>
 		{/if}
 	</div>
 
-	<div class="space-y-1.5">
+	<div class="space-y-2">
 		<Select.Root
 			type="single"
 			value={severity}
@@ -78,7 +80,7 @@
 			}}
 			disabled={readonly}
 		>
-			<SelectTrigger disabled={readonly} class="h-5 px-1 py-0 text-[10px]">
+			<SelectTrigger disabled={readonly} class="h-9 px-2 text-sm">
 				{severityLabels[severity] ?? severity}
 			</SelectTrigger>
 			<SelectContent>
@@ -89,7 +91,7 @@
 			</SelectContent>
 		</Select.Root>
 
-		<input
+		<Input
 			type="text"
 			value={title ?? ''}
 			placeholder="Title (optional)"
@@ -100,10 +102,9 @@
 					title: (e.currentTarget as HTMLInputElement).value || undefined,
 					content
 				})}
-			class="w-full rounded border border-input bg-background px-1.5 py-0.5 text-[10px] focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70"
 		/>
 
-		<textarea
+		<Textarea
 			value={content}
 			placeholder="Callout message..."
 			disabled={readonly}
@@ -113,8 +114,7 @@
 					title,
 					content: (e.currentTarget as HTMLTextAreaElement).value
 				})}
-			rows={2}
-			class="w-full rounded border border-input bg-background px-1.5 py-1 text-[10px] text-foreground focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70"
-		></textarea>
+			rows={3}
+		/>
 	</div>
 </div>

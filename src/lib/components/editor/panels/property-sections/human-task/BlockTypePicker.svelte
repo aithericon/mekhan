@@ -42,10 +42,10 @@
 <div class="relative">
 	<button
 		type="button"
-		class="flex w-full items-center justify-center gap-1 rounded border border-dashed border-border py-1 text-[10px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+		class="flex w-full items-center justify-center gap-1.5 rounded-md border border-dashed border-border py-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
 		onclick={() => (open = !open)}
 	>
-		<Plus class="size-3" />
+		<Plus class="size-3.5" />
 		Add Block
 	</button>
 
@@ -61,34 +61,34 @@
 		>
 			<button
 				type="button"
-				class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-[10px] text-foreground transition-colors hover:bg-accent"
+				class="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-accent"
 				onclick={addInput}
 			>
-				<span class="size-2 rounded-sm bg-blue-400"></span>
+				<span class="size-2.5 rounded-sm bg-blue-400"></span>
 				Input Field
 			</button>
 			<button
 				type="button"
-				class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-[10px] text-foreground transition-colors hover:bg-accent"
+				class="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-accent"
 				onclick={addMdsvex}
 			>
-				<span class="size-2 rounded-sm bg-purple-400"></span>
+				<span class="size-2.5 rounded-sm bg-purple-400"></span>
 				Markdown Content
 			</button>
 			<button
 				type="button"
-				class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-[10px] text-foreground transition-colors hover:bg-accent"
+				class="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-accent"
 				onclick={addCallout}
 			>
-				<span class="size-2 rounded-sm bg-amber-400"></span>
+				<span class="size-2.5 rounded-sm bg-amber-400"></span>
 				Callout
 			</button>
 			<button
 				type="button"
-				class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-[10px] text-foreground transition-colors hover:bg-accent"
+				class="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-accent"
 				onclick={addDivider}
 			>
-				<span class="size-2 rounded-sm bg-gray-400"></span>
+				<span class="size-2.5 rounded-sm bg-gray-400"></span>
 				Divider
 			</button>
 		</div>

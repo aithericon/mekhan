@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 	import { Dialog } from 'bits-ui';
+	import { cn } from '$lib/utils.js';
 
 	type Props = {
 		children?: Snippet;
@@ -16,7 +17,7 @@
 	<Dialog.Content
 		preventScroll={false}
 		{onInteractOutside}
-		class="fixed inset-y-0 right-0 z-50 flex flex-col border-l border-border bg-card shadow-lg duration-200 ease-in-out data-[state=open]:animate-in data-[state=open]:slide-in-from-right data-[state=closed]:animate-out data-[state=closed]:slide-out-to-right {className ?? ''}"
+		class={cn("fixed inset-y-0 right-0 z-50 flex flex-col border-l border-border bg-card shadow-lg duration-200 ease-in-out data-[state=open]:animate-in data-[state=open]:slide-in-from-right data-[state=closed]:animate-out data-[state=closed]:slide-out-to-right", className)}
 	>
 		{@render children?.()}
 	</Dialog.Content>

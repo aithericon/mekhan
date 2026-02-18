@@ -10,18 +10,18 @@
 </script>
 
 <div
-	class="flex items-center gap-2 rounded border border-border/50 bg-background px-2 py-1.5"
+	class="flex items-center gap-2 rounded-md border border-border/50 bg-background px-3 py-2"
 >
 	<hr class="flex-1 border-border" />
-	<span class="text-[9px] text-muted-foreground">Divider</span>
+	<span class="text-xs text-muted-foreground">Divider</span>
 	<hr class="flex-1 border-border" />
 	{#if !readonly}
 		<button
 			type="button"
-			class="rounded p-0.5 text-muted-foreground transition-colors hover:text-destructive"
+			class="rounded p-1 text-muted-foreground transition-colors hover:text-destructive"
 			onclick={onremove}
 		>
-			<Trash2 class="size-3" />
+			<Trash2 class="size-4" />
 		</button>
 	{/if}
 </div>

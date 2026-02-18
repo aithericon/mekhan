@@ -1,10 +1,13 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
-	import { listTemplates, createTemplate, deleteTemplate } from '$lib/api/client';
+	import { listTemplates, createTemplate, deleteTemplate, createInstance } from '$lib/api/client';
 	import type { TemplateSummary } from '$lib/types/api';
+	import { Button } from '$lib/components/ui/button';
+	import { Badge } from '$lib/components/ui/badge';
 	import Plus from '@lucide/svelte/icons/plus';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import FileText from '@lucide/svelte/icons/file-text';
+	import Rocket from '@lucide/svelte/icons/rocket';
 
 	let templates = $state<TemplateSummary[]>([]);
 	let loading = $state(true);
@@ -49,6 +52,18 @@
 		}
 	}
 
+	async function handleCreateInstance(templateId: string) {
+		try {
+			const instance = await createInstance({
+				template_id: templateId,
+				created_by: 'default-user'
+			});
+			goto(`/instances/${instance.id}`);
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Failed to create instance';
+		}
+	}
+
 	const formatDate = (s: string) => new Date(s).toLocaleDateString();
 
 	// Load on mount
@@ -58,7 +73,7 @@
 </script>
 
 <div class="h-full overflow-y-auto" data-testid="templates-page">
-	<div class="mx-auto max-w-5xl px-6 py-8">
+	<div class="mx-auto max-w-5xl px-6 py-8 animate-rise">
 		<div class="mb-6 flex items-center justify-between">
 			<div>
 				<h1 class="text-2xl font-semibold tracking-tight text-foreground">Templates</h1>
@@ -66,15 +81,10 @@
 					Create and manage workflow templates
 				</p>
 			</div>
-			<button
-				type="button"
-				class="flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
-				data-testid="btn-create-template"
-				onclick={handleCreate}
-			>
+			<Button data-testid="btn-create-template" onclick={handleCreate}>
 				<Plus class="size-4" />
 				New Template
-			</button>
+			</Button>
 		</div>
 
 		{#if error}
@@ -91,14 +101,10 @@
 			<div class="flex flex-col items-center justify-center rounded-xl border border-dashed border-border py-16">
 				<FileText class="size-10 text-muted-foreground/40" />
 				<p class="mt-3 text-sm text-muted-foreground">No templates yet</p>
-				<button
-					type="button"
-					class="mt-3 flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
-					onclick={handleCreate}
-				>
+				<Button class="mt-3" onclick={handleCreate}>
 					<Plus class="size-4" />
 					Create your first template
-				</button>
+				</Button>
 			</div>
 		{:else}
 			<div class="space-y-2" data-testid="template-list">
@@ -111,9 +117,9 @@
 						<div class="min-w-0">
 							<div class="flex items-center gap-2">
 								<span class="text-sm font-medium text-foreground">{template.name}</span>
-								<span class="rounded-full px-2 py-0.5 text-[10px] font-medium {template.published ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}">
+								<Badge class={template.published ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'} variant="secondary">
 									{template.published ? 'Published' : 'Draft'} v{template.version}
-								</span>
+								</Badge>
 							</div>
 							{#if template.description}
 								<p class="mt-1 truncate text-xs text-muted-foreground">{template.description}</p>
@@ -122,18 +128,36 @@
 								Updated {formatDate(template.updated_at)}
 							</p>
 						</div>
-						<button
-							type="button"
-							class="rounded p-1.5 text-muted-foreground opacity-0 transition-all hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
-							data-testid="btn-delete-template-{template.id}"
-							onclick={(e) => {
-								e.preventDefault();
-								e.stopPropagation();
-								handleDelete(template.id);
-							}}
-						>
-							<Trash2 class="size-4" />
-						</button>
+						<div class="flex items-center gap-1">
+							{#if template.published}
+								<Button
+									variant="ghost"
+									size="icon-sm"
+									class="text-muted-foreground opacity-0 transition-all hover:bg-primary/10 hover:text-primary group-hover:opacity-100"
+									data-testid="btn-run-template-{template.id}"
+									onclick={(e: MouseEvent) => {
+										e.preventDefault();
+										e.stopPropagation();
+										handleCreateInstance(template.id);
+									}}
+								>
+									<Rocket class="size-4" />
+								</Button>
+							{/if}
+							<Button
+								variant="ghost"
+								size="icon-sm"
+								class="text-muted-foreground opacity-0 transition-all hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
+								data-testid="btn-delete-template-{template.id}"
+								onclick={(e: MouseEvent) => {
+									e.preventDefault();
+									e.stopPropagation();
+									handleDelete(template.id);
+								}}
+							>
+								<Trash2 class="size-4" />
+							</Button>
+						</div>
 					</a>
 				{/each}
 			</div>

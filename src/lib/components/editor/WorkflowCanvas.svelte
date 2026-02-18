@@ -12,6 +12,7 @@
 	import '@xyflow/svelte/dist/style.css';
 
 	import { nodeTypes } from './nodes';
+	import { edgeTypes } from './edges';
 	import NodePalette from './NodePalette.svelte';
 	import DropHandler from './DropHandler.svelte';
 	import {
@@ -43,7 +44,7 @@
 	let lastGraphRef: WorkflowGraph | null = graph;
 
 	let nodes = $state.raw<Node[]>(toFlowNodes(graph));
-	let edges = $state.raw<Edge[]>(toFlowEdges(graph));
+	let edges = $state.raw<Edge[]>(toFlowEdges(graph, readonly));
 
 	function toFlowNodes(g: WorkflowGraph): Node[] {
 		// Scope/group nodes must come before their children in the array
@@ -63,15 +64,16 @@
 		}));
 	}
 
-	function toFlowEdges(g: WorkflowGraph): Edge[] {
+	function toFlowEdges(g: WorkflowGraph, isReadonly: boolean): Edge[] {
 		return g.edges.map((e) => ({
 			id: e.id,
 			source: e.source,
 			target: e.target,
 			sourceHandle: e.sourceHandle,
 			label: e.label,
-			type: 'default' as const,
-			animated: e.type === 'loop_back'
+			type: 'deletable' as const,
+			animated: e.type === 'loop_back',
+			deletable: !isReadonly
 		}));
 	}
 
@@ -99,7 +101,7 @@
 					...(existing?.selected != null ? { selected: existing.selected } : {})
 				};
 			});
-			edges = toFlowEdges(graph);
+			edges = toFlowEdges(graph, readonly);
 		}
 	});
 
@@ -136,7 +138,7 @@
 			target: connection.target!,
 			sourceHandle: connection.sourceHandle,
 			targetHandle: connection.targetHandle,
-			type: 'default'
+			type: 'deletable'
 		};
 		edges = [...edges, newEdge];
 
@@ -261,6 +263,7 @@
 	<div style="flex: 1; height: 100%; position: relative;" data-testid="canvas-drop-zone" ondrop={onDrop} ondragover={onDragOver}>
 		<SvelteFlow
 			{nodeTypes}
+			{edgeTypes}
 			bind:nodes
 			bind:edges
 			onconnect={onConnect}

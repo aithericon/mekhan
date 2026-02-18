@@ -12,13 +12,15 @@
 	type Props = {
 		binding: YjsGraphBinding;
 		selectedFile?: FileSelection;
+		selectedNodeId?: string | null;
 		onSelectFile: (nodeId: string, filename: string) => void;
+		onSelectNode?: (nodeId: string) => void;
 		onCreateFile: (nodeId: string) => void;
 		onDeleteFile: (nodeId: string, filename: string) => void;
 		onRenameFile: (nodeId: string, oldName: string, newName: string) => void;
 	};
 
-	let { binding, selectedFile, onSelectFile, onCreateFile, onDeleteFile, onRenameFile }: Props = $props();
+	let { binding, selectedFile, selectedNodeId, onSelectFile, onSelectNode, onCreateFile, onDeleteFile, onRenameFile }: Props = $props();
 
 	const expandedNodes = new SvelteSet<string>();
 
@@ -53,12 +55,12 @@
 			{@const isExpanded = expandedNodes.has(node.id)}
 			<div>
 				<div
-					class="flex w-full items-center gap-1 px-2 py-1 text-xs text-foreground transition-colors hover:bg-accent"
+					class="flex w-full items-center gap-1 px-2 py-1 text-xs transition-colors hover:bg-accent {selectedNodeId === node.id && !selectedFile ? 'bg-accent text-foreground' : 'text-foreground'}"
 				>
 					<button
 						type="button"
 						class="flex flex-1 items-center gap-1 truncate text-left"
-						onclick={() => toggleNode(node.id)}
+						onclick={() => { toggleNode(node.id); onSelectNode?.(node.id); }}
 					>
 						{#if isExpanded}
 							<ChevronDown class="size-3 shrink-0 text-muted-foreground" />

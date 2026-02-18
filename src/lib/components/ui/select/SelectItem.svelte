@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Select } from 'bits-ui';
 	import Check from '@lucide/svelte/icons/check';
+	import { cn } from '$lib/utils.js';
 
 	type Props = {
 		value: string;
@@ -16,7 +17,7 @@
 	{value}
 	{label}
 	{disabled}
-	class="relative flex w-full cursor-default select-none items-center rounded-sm py-1.5 pl-7 pr-2 text-sm outline-none data-[disabled]:pointer-events-none data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground data-[disabled]:opacity-50 {className ?? ''}"
+	class={cn("relative flex w-full cursor-default select-none items-center rounded-sm py-1.5 pl-7 pr-2 text-sm outline-none data-[disabled]:pointer-events-none data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground data-[disabled]:opacity-50", className)}
 >
 	{#snippet children({ selected })}
 		<span class="absolute left-2 flex size-3.5 items-center justify-center">

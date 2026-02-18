@@ -66,7 +66,11 @@
 			{#if nodeData.type === 'start'}
 				<StartNodeSection data={nodeData} {readonly} onchange={handleChange} />
 			{:else if nodeData.type === 'human_task'}
-				<HumanTaskSection data={nodeData} {readonly} onchange={handleChange} />
+				<div class="rounded-lg border border-dashed border-border bg-muted/20 p-3">
+					<p class="text-xs text-muted-foreground">
+						Task form is edited in the center panel
+					</p>
+				</div>
 			{:else if nodeData.type === 'automated_step'}
 				<AutomatedStepSection data={nodeData} {readonly} onchange={handleChange} {binding} {nodeId} />
 			{:else if nodeData.type === 'decision'}

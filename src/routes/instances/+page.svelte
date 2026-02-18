@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { listInstances, cancelInstance } from '$lib/api/client';
 	import type { WorkflowInstance } from '$lib/types/api';
+	import { Button } from '$lib/components/ui/button';
+	import { Badge } from '$lib/components/ui/badge';
 	import Activity from '@lucide/svelte/icons/activity';
 
 	let instances = $state<WorkflowInstance[]>([]);
@@ -47,7 +49,7 @@
 </script>
 
 <div class="h-full overflow-y-auto" data-testid="instances-page">
-	<div class="mx-auto max-w-5xl px-6 py-8">
+	<div class="mx-auto max-w-5xl px-6 py-8 animate-rise">
 		<div class="mb-6">
 			<h1 class="text-2xl font-semibold tracking-tight text-foreground">Instances</h1>
 			<p class="mt-1 text-sm text-muted-foreground">
@@ -86,12 +88,12 @@
 								<span class="text-sm font-medium text-foreground">
 									{instance.template_name ?? instance.net_id}
 								</span>
-								<span class="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+								<Badge variant="secondary">
 									v{instance.template_version}
-								</span>
-								<span class="rounded-full px-2 py-0.5 text-[10px] font-medium {statusColors[instance.status] ?? ''}">
+								</Badge>
+								<Badge class={statusColors[instance.status] ?? ''} variant="secondary">
 									{instance.status}
-								</span>
+								</Badge>
 							</div>
 							{#if instance.current_step}
 								<p class="mt-1 text-xs text-muted-foreground">
@@ -100,22 +102,23 @@
 							{/if}
 							<p class="mt-1 text-[10px] text-muted-foreground">
 								<span class="font-mono">{instance.net_id}</span>
-								<span class="mx-1">·</span>
+								<span class="mx-1">&middot;</span>
 								{formatDate(instance.created_at)}
 							</p>
 						</div>
 						{#if instance.status === 'running' || instance.status === 'created'}
-							<button
-								type="button"
-								class="rounded px-2 py-1 text-xs text-muted-foreground opacity-0 transition-all hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
-								onclick={(e) => {
+							<Button
+								variant="ghost"
+								size="sm"
+								class="text-muted-foreground opacity-0 transition-all hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
+								onclick={(e: MouseEvent) => {
 									e.preventDefault();
 									e.stopPropagation();
 									handleCancel(instance.id);
 								}}
 							>
 								Cancel
-							</button>
+							</Button>
 						{/if}
 					</a>
 				{/each}

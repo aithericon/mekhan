@@ -4,11 +4,13 @@
 	import X from '@lucide/svelte/icons/x';
 	import Maximize2 from '@lucide/svelte/icons/maximize-2';
 	import Minimize2 from '@lucide/svelte/icons/minimize-2';
+	import Pencil from '@lucide/svelte/icons/pencil';
 	import StartNodeSection from './property-sections/StartNodeSection.svelte';
 	import HumanTaskSection from './property-sections/HumanTaskSection.svelte';
 	import AutomatedStepSection from './property-sections/AutomatedStepSection.svelte';
 	import DecisionNodeSection from './property-sections/DecisionNodeSection.svelte';
 	import LoopNodeSection from './property-sections/LoopNodeSection.svelte';
+	import { Button } from '$lib/components/ui/button';
 
 	type Props = {
 		data: WorkflowNodeData;
@@ -20,6 +22,7 @@
 		oncollapse?: () => void;
 		binding?: YjsGraphBinding;
 		nodeId?: string;
+		templateId?: string;
 	};
 
 	let {
@@ -31,7 +34,8 @@
 		onexpand,
 		oncollapse,
 		binding,
-		nodeId
+		nodeId,
+		templateId
 	}: Props = $props();
 
 	function updateField<K extends keyof WorkflowNodeData>(
@@ -117,7 +121,29 @@
 		{#if data.type === 'start'}
 			<StartNodeSection {data} {readonly} {onchange} />
 		{:else if data.type === 'human_task'}
-			<HumanTaskSection {data} {readonly} {onchange} {onexpand} />
+			{#if templateId && nodeId}
+				<div class="space-y-3">
+					<div class="rounded-lg border border-border bg-muted/30 p-3">
+						<p class="text-xs text-muted-foreground">
+							{data.steps.length} step{data.steps.length !== 1 ? 's' : ''} configured
+						</p>
+						{#if data.taskTitle}
+							<p class="mt-1 truncate text-xs font-medium text-foreground">{data.taskTitle}</p>
+						{/if}
+					</div>
+					<Button
+						variant="outline"
+						size="sm"
+						class="w-full"
+						href="/templates/{templateId}/ide?node={nodeId}"
+					>
+						<Pencil class="size-3.5" />
+						Edit Task Form
+					</Button>
+				</div>
+			{:else}
+				<HumanTaskSection {data} {readonly} {onchange} {onexpand} />
+			{/if}
 		{:else if data.type === 'automated_step'}
 			<AutomatedStepSection {data} {readonly} {onchange} {onexpand} {binding} {nodeId} />
 		{:else if data.type === 'decision'}

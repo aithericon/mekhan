@@ -3,6 +3,8 @@
 	import { getInstance, getInstanceState, cancelInstance } from '$lib/api/client';
 	import type { WorkflowInstance, InstanceState } from '$lib/types/api';
 	import type { PersistedEvent } from '$lib/types/petri';
+	import { Button } from '$lib/components/ui/button';
+	import { Badge } from '$lib/components/ui/badge';
 	import Activity from '@lucide/svelte/icons/activity';
 	import RefreshCw from '@lucide/svelte/icons/refresh-cw';
 	import CircleDot from '@lucide/svelte/icons/circle-dot';
@@ -153,43 +155,41 @@
 				<div>
 					<div class="flex items-center gap-2">
 						<h1 class="text-2xl font-semibold tracking-tight text-foreground" data-testid="instance-heading">Instance</h1>
-						<span class="rounded-full px-2.5 py-0.5 text-xs font-medium {statusColors[instance.status] ?? ''}">
+						<Badge class={statusColors[instance.status] ?? ''} variant="secondary">
 							{instance.status}
-						</span>
+						</Badge>
 						{#if instanceState?.engine}
 							{@const engine = instanceState.engine}
-							<span
+							<Badge
 								data-testid="engine-status"
-								class="rounded-full px-2 py-0.5 text-[10px] font-medium {engine.available
+								class={engine.available
 									? 'bg-emerald-100 text-emerald-700'
-									: 'bg-gray-100 text-gray-500'}"
+									: 'bg-gray-100 text-gray-500'}
+								variant="secondary"
 								title={engine.available
 									? `Engine hot — ${engine.run_mode ?? 'unknown'}`
 									: 'Engine offline'}
 							>
 								{engine.available ? 'Engine hot' : 'Engine offline'}
-							</span>
+							</Badge>
 						{/if}
 					</div>
 					<p class="mt-1 font-mono text-xs text-muted-foreground">{instance.net_id}</p>
 				</div>
 				<div class="flex items-center gap-2">
-					<button
-						type="button"
-						class="flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs text-foreground transition-colors hover:bg-accent"
-						onclick={refresh}
-					>
+					<Button variant="outline" size="sm" onclick={refresh}>
 						<RefreshCw class="size-3.5" />
 						Refresh
-					</button>
+					</Button>
 					{#if instance.status === 'running' || instance.status === 'created'}
-						<button
-							type="button"
-							class="rounded-md border border-destructive/30 px-3 py-1.5 text-xs text-destructive transition-colors hover:bg-destructive/10"
+						<Button
+							variant="outline"
+							size="sm"
+							class="border-destructive/30 text-destructive hover:bg-destructive/10"
 							onclick={handleCancel}
 						>
 							Cancel
-						</button>
+						</Button>
 					{/if}
 				</div>
 			</div>
@@ -283,17 +283,17 @@
 																{token.id.slice(0, 8)}
 															</span>
 															{#if token.color.type === 'Unit'}
-																<span class="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-medium text-gray-600 dark:bg-gray-800 dark:text-gray-400">
+																<Badge variant="secondary" class="bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400">
 																	Unit
-																</span>
+																</Badge>
 															{:else if token.color.type === 'Integer'}
-																<span class="rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-medium text-blue-700 dark:bg-blue-900 dark:text-blue-300">
+																<Badge variant="secondary" class="bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300">
 																	{token.color.value}
-																</span>
+																</Badge>
 															{:else if token.color.type === 'Data'}
-																<span class="rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-medium text-violet-700 dark:bg-violet-900 dark:text-violet-300">
+																<Badge variant="secondary" class="bg-violet-100 text-violet-700 dark:bg-violet-900 dark:text-violet-300">
 																	Data
-																</span>
+																</Badge>
 															{/if}
 														</div>
 														{#if token.color.type === 'Data'}

@@ -3,6 +3,8 @@
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
 	import ChevronRight from '@lucide/svelte/icons/chevron-right';
+	import { Input } from '$lib/components/ui/input';
+	import { Label } from '$lib/components/ui/label';
 	import StringListEditor from '../../shared/StringListEditor.svelte';
 	import { Select, SelectTrigger, SelectContent, SelectItem } from '$lib/components/ui/select';
 
@@ -35,21 +37,21 @@
 	};
 </script>
 
-<div class="rounded border border-border/50 bg-background text-[10px]">
+<div class="rounded-md border border-border/50 bg-background text-sm">
 	<!-- Collapsed row -->
-	<div class="flex items-center gap-1 p-1.5">
+	<div class="flex items-center gap-2 p-2.5">
 		<button
 			type="button"
 			class="rounded p-0.5 text-muted-foreground transition-colors hover:text-foreground"
 			onclick={() => (expanded = !expanded)}
 		>
 			{#if expanded}
-				<ChevronDown class="size-3" />
+				<ChevronDown class="size-4" />
 			{:else}
-				<ChevronRight class="size-3" />
+				<ChevronRight class="size-4" />
 			{/if}
 		</button>
-		<input
+		<Input
 			type="text"
 			value={field.label}
 			placeholder="Label"
@@ -57,15 +59,14 @@
 			oninput={(e) => {
 				const label = (e.currentTarget as HTMLInputElement).value;
 				const update: TaskFieldConfig = { ...field, label };
-				// Auto-generate name from label if name is empty or was auto-generated
 				if (!field.name || field.name === slugify(field.label)) {
 					update.name = slugify(label);
 				}
 				onchange(update);
 			}}
-			class="flex-1 rounded border border-input bg-background px-1.5 py-0.5 text-[10px] focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70"
+			class="flex-1"
 		/>
-		<div class="w-[85px] shrink-0">
+		<div class="w-[110px] shrink-0">
 			<Select.Root
 				type="single"
 				value={field.kind}
@@ -74,7 +75,7 @@
 				}}
 				disabled={readonly}
 			>
-				<SelectTrigger disabled={readonly} class="h-5 px-1 py-0 text-[10px]">
+				<SelectTrigger disabled={readonly} class="h-9 px-2 text-sm">
 					{kindLabels[field.kind] ?? field.kind}
 				</SelectTrigger>
 				<SelectContent>
@@ -88,7 +89,7 @@
 				</SelectContent>
 			</Select.Root>
 		</div>
-		<label class="flex items-center gap-0.5">
+		<label class="flex items-center gap-1.5">
 			<input
 				type="checkbox"
 				checked={field.required ?? false}
@@ -98,40 +99,40 @@
 						...field,
 						required: (e.currentTarget as HTMLInputElement).checked
 					})}
-				class="size-3 disabled:cursor-default disabled:opacity-70"
+				class="size-4 disabled:cursor-default disabled:opacity-70"
 			/>
-			<span class="text-muted-foreground">Req</span>
+			<span class="text-xs text-muted-foreground">Required</span>
 		</label>
 		{#if !readonly}
 			<button
 				type="button"
-				class="rounded p-0.5 text-muted-foreground transition-colors hover:text-destructive"
+				class="rounded p-1 text-muted-foreground transition-colors hover:text-destructive"
 				onclick={onremove}
 			>
-				<Trash2 class="size-3" />
+				<Trash2 class="size-4" />
 			</button>
 		{/if}
 	</div>
 
 	<!-- Expanded section -->
 	{#if expanded}
-		<div class="space-y-2 border-t border-border/50 p-2">
-			<div class="space-y-0.5">
-				<span class="text-[9px] text-muted-foreground">Field Name (API key)</span>
-				<input
+		<div class="space-y-3 border-t border-border/50 p-3">
+			<div class="space-y-1.5">
+				<Label class="text-xs text-muted-foreground">Field Name (API key)</Label>
+				<Input
 					type="text"
 					value={field.name}
 					placeholder="field_name"
 					disabled={readonly}
 					oninput={(e) =>
 						onchange({ ...field, name: (e.currentTarget as HTMLInputElement).value })}
-					class="w-full rounded border border-input bg-background px-1.5 py-0.5 font-mono text-[10px] focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70"
+					class="font-mono"
 				/>
 			</div>
 
-			<div class="space-y-0.5">
-				<span class="text-[9px] text-muted-foreground">Placeholder</span>
-				<input
+			<div class="space-y-1.5">
+				<Label class="text-xs text-muted-foreground">Placeholder</Label>
+				<Input
 					type="text"
 					value={field.placeholder ?? ''}
 					placeholder="Placeholder text..."
@@ -141,13 +142,12 @@
 							...field,
 							placeholder: (e.currentTarget as HTMLInputElement).value || undefined
 						})}
-					class="w-full rounded border border-input bg-background px-1.5 py-0.5 text-[10px] focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70"
 				/>
 			</div>
 
 			{#if field.kind === 'select'}
-				<div class="space-y-0.5">
-					<span class="text-[9px] text-muted-foreground">Options</span>
+				<div class="space-y-1.5">
+					<Label class="text-xs text-muted-foreground">Options</Label>
 					<StringListEditor
 						items={field.options ?? []}
 						{readonly}

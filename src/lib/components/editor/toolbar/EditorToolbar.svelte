@@ -7,6 +7,8 @@
 	import type { MekhanWsProvider } from '$lib/yjs/ws-provider';
 	import AwarenessBar from '../AwarenessBar.svelte';
 	import ConnectionStatus from '../ConnectionStatus.svelte';
+	import { Button } from '$lib/components/ui/button';
+	import { Badge } from '$lib/components/ui/badge';
 
 	type Props = {
 		templateName: string;
@@ -27,13 +29,13 @@
 	<div class="flex items-center gap-3">
 		<span class="text-sm font-medium text-foreground" data-testid="toolbar-template-name">{templateName}</span>
 		{#if published}
-			<span class="rounded-full bg-green-100 px-2 py-0.5 text-[10px] font-medium text-green-700">
+			<Badge class="bg-green-100 text-green-700" variant="secondary">
 				Published
-			</span>
+			</Badge>
 		{:else}
-			<span class="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-700">
+			<Badge class="bg-amber-100 text-amber-700" variant="secondary">
 				Draft
-			</span>
+			</Badge>
 		{/if}
 		{#if provider}
 			<ConnectionStatus {provider} />
@@ -45,48 +47,48 @@
 
 	<div class="flex items-center gap-1.5">
 		{#if templateId}
-			<a
+			<Button
+				variant="ghost"
+				size="sm"
 				href="/templates/{templateId}/ide"
-				class="flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
 				data-testid="btn-ide-mode"
 			>
 				<Code class="size-3.5" />
 				IDE Mode
-			</a>
+			</Button>
 		{/if}
 
-		<button
-			type="button"
-			class="flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"
+		<Button
+			variant="ghost"
+			size="sm"
 			data-testid="btn-preview-air"
 			onclick={onpreview}
 		>
 			<Eye class="size-3.5" />
 			Preview AIR
-		</button>
+		</Button>
 
 		{#if onsave}
-			<button
-				type="button"
-				class="flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"
+			<Button
+				variant="ghost"
+				size="sm"
 				data-testid="btn-save"
 				disabled={saving || published}
 				onclick={onsave}
 			>
 				<Save class="size-3.5" />
 				{saving ? 'Saving...' : 'Save'}
-			</button>
+			</Button>
 		{/if}
 
-		<button
-			type="button"
-			class="flex items-center gap-1.5 rounded-md bg-primary px-2.5 py-1 text-xs text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
+		<Button
+			size="sm"
 			data-testid="btn-publish"
 			disabled={published}
 			onclick={onpublish}
 		>
 			<Upload class="size-3.5" />
 			Publish
-		</button>
+		</Button>
 	</div>
 </div>

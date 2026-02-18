@@ -1,6 +1,8 @@
 <script lang="ts">
 	import type { TaskStepConfig, TaskBlockConfig, TaskFieldConfig } from '$lib/types/editor';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
+	import { Input } from '$lib/components/ui/input';
+	import { Textarea } from '$lib/components/ui/textarea';
 	import InputBlockEditor from './InputBlockEditor.svelte';
 	import MdsvexBlockEditor from './MdsvexBlockEditor.svelte';
 	import CalloutBlockEditor from './CalloutBlockEditor.svelte';
@@ -39,40 +41,39 @@
 	}
 </script>
 
-<div class="rounded-lg border border-border bg-muted/30 p-2">
-	<div class="mb-2 flex items-center gap-2">
-		<input
+<div class="rounded-lg border border-border bg-muted/30 p-3">
+	<div class="mb-3 flex items-center gap-2">
+		<Input
 			type="text"
 			value={step.title}
 			disabled={readonly}
 			oninput={(e) => updateTitle((e.currentTarget as HTMLInputElement).value)}
-			class="flex-1 rounded-md border border-input bg-background px-2 py-1 text-xs text-foreground focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70"
+			class="flex-1 font-medium"
 		/>
 		{#if !readonly}
 			<button
 				type="button"
-				class="rounded p-0.5 text-muted-foreground transition-colors hover:text-destructive"
+				class="rounded p-1 text-muted-foreground transition-colors hover:text-destructive"
 				onclick={onremove}
 			>
-				<Trash2 class="size-3.5" />
+				<Trash2 class="size-4" />
 			</button>
 		{/if}
 	</div>
 
 	<!-- Step description -->
-	<div class="mb-2">
-		<textarea
+	<div class="mb-3">
+		<Textarea
 			value={step.descriptionMdsvex ?? ''}
 			placeholder="Step description (Markdown)..."
 			disabled={readonly}
 			oninput={(e) => updateDescription((e.currentTarget as HTMLTextAreaElement).value)}
 			rows={2}
-			class="w-full rounded border border-input bg-background px-1.5 py-1 text-[10px] text-foreground focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70"
-		></textarea>
+		/>
 	</div>
 
 	<!-- Blocks -->
-	<div class="space-y-1.5">
+	<div class="space-y-2">
 		{#each step.blocks as block, blockIdx (blockIdx)}
 			{#if block.type === 'input'}
 				<InputBlockEditor
@@ -105,7 +106,7 @@
 	</div>
 
 	{#if !readonly}
-		<div class="mt-2">
+		<div class="mt-3">
 			<BlockTypePicker onadd={addBlock} />
 		</div>
 	{/if}

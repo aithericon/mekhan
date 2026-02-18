@@ -2,6 +2,7 @@
 	import type { Snippet } from 'svelte';
 	import { Select } from 'bits-ui';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
+	import { cn } from '$lib/utils.js';
 
 	type Props = {
 		children?: Snippet;
@@ -14,7 +15,7 @@
 
 <Select.Trigger
 	{disabled}
-	class="flex h-8 w-full items-center justify-between rounded-md border border-input bg-background px-2.5 py-1.5 text-sm text-foreground transition-colors focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70 data-[placeholder]:text-muted-foreground {className ?? ''}"
+	class={cn("flex h-8 w-full items-center justify-between rounded-md border border-input bg-background px-2.5 py-1.5 text-sm text-foreground transition-colors focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70 data-[placeholder]:text-muted-foreground", className)}
 >
 	<span class="truncate">
 		{@render children?.()}

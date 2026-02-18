@@ -5,6 +5,8 @@
 	import type { MekhanWsProvider } from '$lib/yjs/ws-provider';
 	import AwarenessBar from '$lib/components/editor/AwarenessBar.svelte';
 	import ConnectionStatus from '$lib/components/editor/ConnectionStatus.svelte';
+	import { Button } from '$lib/components/ui/button';
+	import { Badge } from '$lib/components/ui/badge';
 
 	type Props = {
 		templateName: string;
@@ -22,13 +24,13 @@
 	<div class="flex items-center gap-3">
 		<span class="text-sm font-medium text-foreground">{templateName}</span>
 		{#if published}
-			<span class="rounded-full bg-green-100 px-2 py-0.5 text-[10px] font-medium text-green-700">
+			<Badge class="bg-green-100 text-green-700" variant="secondary">
 				Published
-			</span>
+			</Badge>
 		{:else}
-			<span class="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-700">
+			<Badge class="bg-amber-100 text-amber-700" variant="secondary">
 				Draft
-			</span>
+			</Badge>
 		{/if}
 		{#if provider}
 			<ConnectionStatus {provider} />
@@ -39,22 +41,14 @@
 	</div>
 
 	<div class="flex items-center gap-1.5">
-		<a
-			href="/templates/{templateId}"
-			class="flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-		>
+		<Button variant="ghost" size="sm" href="/templates/{templateId}">
 			<LayoutGrid class="size-3.5" />
 			Canvas Mode
-		</a>
+		</Button>
 
-		<button
-			type="button"
-			class="flex items-center gap-1.5 rounded-md bg-primary px-2.5 py-1 text-xs text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
-			disabled={published}
-			onclick={onPublish}
-		>
+		<Button size="sm" disabled={published} onclick={onPublish}>
 			<Upload class="size-3.5" />
 			Publish
-		</button>
+		</Button>
 	</div>
 </div>

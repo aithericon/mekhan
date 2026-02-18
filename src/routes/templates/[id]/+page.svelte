@@ -183,6 +183,7 @@
 					onexpand={() => (panelExpanded = true)}
 					{binding}
 					nodeId={selectedNodeId ?? undefined}
+					{templateId}
 				/>
 			{/if}
 
@@ -203,6 +204,7 @@
 							oncollapse={() => (panelExpanded = false)}
 							{binding}
 							nodeId={selectedNodeId ?? undefined}
+							{templateId}
 						/>
 					</SheetContent>
 				</Sheet.Root>

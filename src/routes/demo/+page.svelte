@@ -7,6 +7,8 @@
 	import { compileGraph, createTemplate, publishTemplate, createInstance } from '$lib/api/client';
 	import type { WorkflowGraph, WorkflowNodeData } from '$lib/types/editor';
 	import { showcaseGraph } from './showcase-graph';
+	import { Button } from '$lib/components/ui/button';
+	import { Badge } from '$lib/components/ui/badge';
 	import Rocket from '@lucide/svelte/icons/rocket';
 
 	let error = $state<string | null>(null);
@@ -94,50 +96,31 @@
 	<div class="flex h-10 items-center justify-between border-b border-border bg-card px-3" data-testid="demo-toolbar">
 		<div class="flex items-center gap-3">
 			<span class="text-sm font-medium text-foreground">Invoice Processing Demo</span>
-			<span class="rounded-full bg-cyan-100 px-2 py-0.5 text-[10px] font-medium text-cyan-700">
+			<Badge class="bg-cyan-100 text-cyan-700" variant="secondary">
 				Showcase
-			</span>
+			</Badge>
 		</div>
 
 		<div class="flex items-center gap-1.5">
-			<button
-				type="button"
-				class="rounded-md px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-				onclick={handleReset}
-			>
+			<Button variant="ghost" size="sm" onclick={handleReset}>
 				Reset
-			</button>
+			</Button>
 
-			<button
-				type="button"
-				class="flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-				data-testid="btn-preview-air"
-				onclick={handlePreview}
-			>
+			<Button variant="ghost" size="sm" data-testid="btn-preview-air" onclick={handlePreview}>
 				Preview AIR
-			</button>
+			</Button>
 
-			<button
-				type="button"
-				class="flex items-center gap-1.5 rounded-md bg-primary px-2.5 py-1 text-xs text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
-				data-testid="btn-run-instance"
-				disabled={deploying}
-				onclick={handleRunInstance}
-			>
+			<Button size="sm" data-testid="btn-run-instance" disabled={deploying} onclick={handleRunInstance}>
 				<Rocket class="size-3.5" />
 				{deploying ? 'Deploying...' : 'Run Instance'}
-			</button>
+			</Button>
 		</div>
 	</div>
 
 	{#if error}
 		<div class="border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-800">
 			{error}
-			<button
-				type="button"
-				class="ml-2 underline"
-				onclick={() => (error = null)}>dismiss</button
-			>
+			<Button variant="link" size="sm" class="ml-2 h-auto p-0 text-xs" onclick={() => (error = null)}>dismiss</Button>
 		</div>
 	{/if}
 
@@ -182,11 +165,7 @@
 		<div class="border-t border-border bg-muted/50" data-testid="air-preview-panel">
 			<div class="flex items-center justify-between px-3 py-1.5">
 				<span class="text-xs font-medium text-muted-foreground">AIR Preview</span>
-				<button
-					type="button"
-					class="text-xs text-muted-foreground underline"
-					onclick={() => (airPreview = null)}>close</button
-				>
+				<Button variant="link" size="sm" class="h-auto p-0 text-xs" onclick={() => (airPreview = null)}>close</Button>
 			</div>
 			<pre class="max-h-64 overflow-auto px-3 pb-2 font-mono text-[10px] text-foreground">
 {JSON.stringify(airPreview, null, 2)}
