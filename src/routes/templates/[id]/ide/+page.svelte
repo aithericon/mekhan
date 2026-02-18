@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/state';
+	import { replaceState } from '$app/navigation';
+	import { resolveRoute } from '$app/paths';
 	import { onDestroy } from 'svelte';
 	import IdeToolbar from '$lib/components/ide/IdeToolbar.svelte';
 	import FileTree from '$lib/components/ide/FileTree.svelte';
@@ -47,6 +49,15 @@
 		}
 	}
 
+	function syncUrlState() {
+		const params = new URLSearchParams();
+		if (activeTabKey) params.set('file', activeTabKey);
+		if (selectedNodeId) params.set('node', selectedNodeId);
+		const qs = params.toString();
+		const path = resolveRoute('/templates/[id]/ide', { id: templateId });
+		replaceState(`${path}${qs ? '?' + qs : ''}`, {});
+	}
+
 	function handleSelectFile(nodeId: string, filename: string) {
 		selectedNodeId = nodeId;
 		selectedFile = { nodeId, filename };
@@ -58,6 +69,7 @@
 			openTabs = [...openTabs, { nodeId, filename, label: node?.data.label ?? nodeId }];
 		}
 		activeTabKey = key;
+		syncUrlState();
 	}
 
 	function handleCreateFile(nodeId: string) {
@@ -77,6 +89,7 @@
 		if (selectedFile?.nodeId === nodeId && selectedFile?.filename === filename) {
 			selectedFile = undefined;
 		}
+		syncUrlState();
 	}
 
 	function handleRenameFile(nodeId: string, oldName: string, newName: string) {
@@ -95,6 +108,7 @@
 		if (activeTabKey === key) {
 			activeTabKey = openTabs.length > 0 ? tabKey(openTabs[0].nodeId, openTabs[0].filename) : null;
 		}
+		syncUrlState();
 	}
 
 	function handleSelectTab(key: string) {
@@ -104,7 +118,25 @@
 			selectedNodeId = tab.nodeId;
 			selectedFile = { nodeId: tab.nodeId, filename: tab.filename };
 		}
+		syncUrlState();
 	}
+
+	// Restore state from URL query params once the Y.Doc has synced
+	let initialStateApplied = false;
+	$effect(() => {
+		if (initialStateApplied || binding.graph.nodes.length === 0) return;
+		initialStateApplied = true;
+
+		const fileParam = page.url.searchParams.get('file');
+		const nodeParam = page.url.searchParams.get('node');
+
+		if (nodeParam) selectedNodeId = nodeParam;
+		if (fileParam) {
+			const [nodeId, ...rest] = fileParam.split(':');
+			const filename = rest.join(':');
+			if (nodeId && filename) handleSelectFile(nodeId, filename);
+		}
+	});
 
 	$effect(() => {
 		load();

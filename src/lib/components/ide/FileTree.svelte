@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { YjsGraphBinding } from '$lib/yjs/graph-binding.svelte';
+	import { SvelteSet } from 'svelte/reactivity';
 	import ChevronRight from '@lucide/svelte/icons/chevron-right';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
 	import File from '@lucide/svelte/icons/file';
@@ -19,17 +20,22 @@
 
 	let { binding, selectedFile, onSelectFile, onCreateFile, onDeleteFile, onRenameFile }: Props = $props();
 
-	let expandedNodes = $state<Set<string>>(new Set());
+	const expandedNodes = new SvelteSet<string>();
 
 	function toggleNode(nodeId: string) {
-		const next = new Set(expandedNodes);
-		if (next.has(nodeId)) {
-			next.delete(nodeId);
+		if (expandedNodes.has(nodeId)) {
+			expandedNodes.delete(nodeId);
 		} else {
-			next.add(nodeId);
+			expandedNodes.add(nodeId);
 		}
-		expandedNodes = next;
 	}
+
+	// Auto-expand the tree node containing the selected file (e.g. after URL restore)
+	$effect(() => {
+		if (selectedFile) {
+			expandedNodes.add(selectedFile.nodeId);
+		}
+	});
 
 	function isSelected(nodeId: string, filename: string): boolean {
 		return selectedFile?.nodeId === nodeId && selectedFile?.filename === filename;
@@ -42,7 +48,7 @@
 	</div>
 
 	<div class="flex-1 overflow-y-auto py-1">
-		{#each binding.graph.nodes as node}
+		{#each binding.graph.nodes as node (node.id)}
 			{@const files = binding.getNodeFiles(node.id)}
 			{@const isExpanded = expandedNodes.has(node.id)}
 			<div>
@@ -75,7 +81,7 @@
 					{#if files.size === 0}
 						<div class="py-1 pl-7 text-[10px] italic text-muted-foreground">No files</div>
 					{:else}
-						{#each [...files.keys()] as filename}
+						{#each [...files.keys()] as filename (filename)}
 							<div
 								class="group flex items-center gap-1 py-0.5 pl-6 pr-2 text-xs transition-colors {isSelected(node.id, filename)
 									? 'bg-accent text-foreground'
