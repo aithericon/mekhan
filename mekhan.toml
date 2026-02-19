@@ -4,6 +4,13 @@ database_url = "postgres://mekhan:mekhan@localhost:5432/mekhan"
 nats_url = "nats://localhost:4222"
 petri_lab_url = "http://localhost:3030"
 
+[s3]
+endpoint = "http://localhost:9000"
+bucket = "mekhan-artifacts"
+access_key = "minioadmin"
+secret_key = "minioadmin"
+region = "us-east-1"
+
 [cleanup]
 retention_hours = 72
 sweep_interval_minutes = 60

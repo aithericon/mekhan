@@ -8,6 +8,10 @@ pub mod lifecycle;
 pub mod models;
 pub mod nats;
 pub mod petri;
+pub mod s3;
+pub mod yjs;
+
+use std::sync::Arc;
 
 use axum::{
     routing::{delete, get, post, put},
@@ -20,6 +24,8 @@ use tower_http::trace::TraceLayer;
 use crate::config::AppConfig;
 use crate::nats::MekhanNats;
 use crate::petri::client::PetriClient;
+use crate::s3::ArtifactStore;
+use crate::yjs::manager::YjsManager;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -27,6 +33,8 @@ pub struct AppState {
     pub petri: PetriClient,
     pub nats: MekhanNats,
     pub config: AppConfig,
+    pub yjs: Arc<YjsManager>,
+    pub s3: Arc<ArtifactStore>,
 }
 
 pub fn build_router(state: AppState) -> Router {
@@ -95,6 +103,17 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/instances/{id}",
             delete(handlers::instances::cancel_instance),
+        )
+        // File upload/download endpoints
+        .route(
+            "/api/templates/{id}/files/{node_id}",
+            post(handlers::files::upload_file),
+        )
+        .route("/api/files/{*key}", get(handlers::files::get_file))
+        // Yjs WebSocket endpoint
+        .route(
+            "/api/yjs/{template_id}",
+            get(handlers::yjs_sync::ws_handler),
         )
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())

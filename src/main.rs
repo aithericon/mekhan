@@ -1,10 +1,14 @@
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 use mekhan_service::config::AppConfig;
 use mekhan_service::db;
 use mekhan_service::lifecycle;
 use mekhan_service::nats::MekhanNats;
 use mekhan_service::petri::client::PetriClient;
+use mekhan_service::s3::ArtifactStore;
+use mekhan_service::yjs::manager::YjsManager;
+use mekhan_service::yjs::persistence::YjsPersistence;
 use mekhan_service::{build_router, AppState};
 
 #[tokio::main]
@@ -45,11 +49,24 @@ async fn main() -> anyhow::Result<()> {
         petri.clone(),
     ));
 
+    let yjs_persistence = YjsPersistence::new(db.clone());
+    let yjs_manager = Arc::new(YjsManager::new(yjs_persistence));
+    tracing::info!("Yjs collaboration manager initialized");
+
+    let artifact_store = Arc::new(ArtifactStore::new(&config.s3));
+    if let Err(e) = artifact_store.ensure_bucket().await {
+        tracing::warn!("S3 bucket check failed (non-fatal): {e}");
+    } else {
+        tracing::info!("S3 artifact store ready (bucket: {})", config.s3.bucket);
+    }
+
     let state = AppState {
         db,
         petri,
         nats: mekhan_nats,
         config: config.clone(),
+        yjs: yjs_manager,
+        s3: artifact_store,
     };
 
     let app = build_router(state);

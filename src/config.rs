@@ -14,6 +14,46 @@ pub struct AppConfig {
     pub nats_url: String,
     #[serde(default)]
     pub cleanup: CleanupConfig,
+    #[serde(default)]
+    pub s3: S3Config,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct S3Config {
+    #[serde(default = "default_s3_endpoint")]
+    pub endpoint: String,
+    #[serde(default = "default_s3_bucket")]
+    pub bucket: String,
+    #[serde(default)]
+    pub access_key: String,
+    #[serde(default)]
+    pub secret_key: String,
+    #[serde(default = "default_s3_region")]
+    pub region: String,
+}
+
+impl Default for S3Config {
+    fn default() -> Self {
+        Self {
+            endpoint: default_s3_endpoint(),
+            bucket: default_s3_bucket(),
+            access_key: String::new(),
+            secret_key: String::new(),
+            region: default_s3_region(),
+        }
+    }
+}
+
+fn default_s3_endpoint() -> String {
+    "http://localhost:9000".to_string()
+}
+
+fn default_s3_bucket() -> String {
+    "mekhan-artifacts".to_string()
+}
+
+fn default_s3_region() -> String {
+    "us-east-1".to_string()
 }
 
 #[derive(Debug, Deserialize, Clone)]
