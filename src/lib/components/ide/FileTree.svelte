@@ -3,8 +3,10 @@
 	import { SvelteSet } from 'svelte/reactivity';
 	import ChevronRight from '@lucide/svelte/icons/chevron-right';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
-	import File from '@lucide/svelte/icons/file';
+	import FileIcon from '@lucide/svelte/icons/file';
+	import ImageIcon from '@lucide/svelte/icons/image';
 	import Plus from '@lucide/svelte/icons/plus';
+	import Upload from '@lucide/svelte/icons/upload';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 
 	type FileSelection = { nodeId: string; filename: string };
@@ -16,11 +18,36 @@
 		onSelectFile: (nodeId: string, filename: string) => void;
 		onSelectNode?: (nodeId: string) => void;
 		onCreateFile: (nodeId: string) => void;
+		onUploadFile?: (nodeId: string, file: File) => void;
 		onDeleteFile: (nodeId: string, filename: string) => void;
 		onRenameFile: (nodeId: string, oldName: string, newName: string) => void;
 	};
 
-	let { binding, selectedFile, selectedNodeId, onSelectFile, onSelectNode, onCreateFile, onDeleteFile, onRenameFile }: Props = $props();
+	let { binding, selectedFile, selectedNodeId, onSelectFile, onSelectNode, onCreateFile, onUploadFile, onDeleteFile, onRenameFile }: Props = $props();
+
+	const IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg'];
+
+	function isImageFile(filename: string): boolean {
+		return IMAGE_EXTENSIONS.some((ext) => filename.toLowerCase().endsWith(ext));
+	}
+
+	let fileInputNodeId = $state<string | null>(null);
+	let fileInputRef = $state<HTMLInputElement | null>(null);
+
+	function triggerUpload(nodeId: string) {
+		fileInputNodeId = nodeId;
+		setTimeout(() => fileInputRef?.click(), 0);
+	}
+
+	function handleFileSelected(e: Event) {
+		const input = e.currentTarget as HTMLInputElement;
+		const file = input.files?.[0];
+		if (file && fileInputNodeId && onUploadFile) {
+			onUploadFile(fileInputNodeId, file);
+		}
+		input.value = '';
+		fileInputNodeId = null;
+	}
 
 	const expandedNodes = new SvelteSet<string>();
 
@@ -43,6 +70,15 @@
 		return selectedFile?.nodeId === nodeId && selectedFile?.filename === filename;
 	}
 </script>
+
+<!-- Hidden file input for image upload -->
+<input
+	bind:this={fileInputRef}
+	type="file"
+	accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml"
+	class="hidden"
+	onchange={handleFileSelected}
+/>
 
 <div class="flex h-full flex-col overflow-y-auto border-r border-border bg-card">
 	<div class="border-b border-border px-3 py-2">
@@ -69,6 +105,16 @@
 						{/if}
 						<span class="truncate font-medium">{node.data.label}</span>
 					</button>
+					{#if onUploadFile}
+						<button
+							type="button"
+							class="rounded p-0.5 text-muted-foreground transition-colors hover:text-foreground"
+							onclick={() => triggerUpload(node.id)}
+							title="Upload image"
+						>
+							<Upload class="size-3" />
+						</button>
+					{/if}
 					<button
 						type="button"
 						class="rounded p-0.5 text-muted-foreground transition-colors hover:text-foreground"
@@ -94,7 +140,11 @@
 									class="flex flex-1 items-center gap-1.5 truncate text-left"
 									onclick={() => onSelectFile(node.id, filename)}
 								>
-									<File class="size-3 shrink-0" />
+									{#if isImageFile(filename)}
+										<ImageIcon class="size-3 shrink-0" />
+									{:else}
+										<FileIcon class="size-3 shrink-0" />
+									{/if}
 									<span class="truncate font-mono">{filename}</span>
 								</button>
 								<button

@@ -2,6 +2,7 @@
 	import type { YjsGraphBinding } from '$lib/yjs/graph-binding.svelte';
 	import type { Awareness } from 'y-protocols/awareness';
 	import CollabCodeEditor from '$lib/components/editor/panels/shared/CollabCodeEditor.svelte';
+	import ImageViewer from './ImageViewer.svelte';
 	import X from '@lucide/svelte/icons/x';
 
 	type TabInfo = {
@@ -25,6 +26,13 @@
 		return `${tab.nodeId}:${tab.filename}`;
 	}
 
+	const IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg'];
+
+	function isImageFile(filename: string): boolean {
+		const lower = filename.toLowerCase();
+		return IMAGE_EXTENSIONS.some((ext) => lower.endsWith(ext));
+	}
+
 	function detectLanguage(filename: string): 'python' | 'json' | 'dockerfile' | 'text' {
 		if (filename.endsWith('.py')) return 'python';
 		if (filename.endsWith('.json')) return 'json';
@@ -38,6 +46,13 @@
 
 	const activeYText = $derived(
 		activeTabInfo ? binding.getFileText(activeTabInfo.nodeId, activeTabInfo.filename) : null
+	);
+
+	// For image files, the Y.Text content is the S3 key — build the URL
+	const activeImageSrc = $derived(
+		activeTabInfo && activeYText && isImageFile(activeTabInfo.filename)
+			? `/api/files/${activeYText.toString()}`
+			: null
 	);
 </script>
 
@@ -77,7 +92,11 @@
 		</div>
 
 		<div class="flex-1 overflow-hidden">
-			{#if activeYText && activeTabInfo}
+			{#if activeTabInfo && activeImageSrc}
+				{#key activeTab}
+					<ImageViewer src={activeImageSrc} filename={activeTabInfo.filename} />
+				{/key}
+			{:else if activeYText && activeTabInfo}
 				{#key activeTab}
 					<CollabCodeEditor
 						ytext={activeYText}

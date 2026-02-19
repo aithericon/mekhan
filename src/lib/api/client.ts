@@ -121,3 +121,25 @@ export async function getInstanceState(id: string): Promise<InstanceState> {
 export async function cancelInstance(id: string): Promise<void> {
 	await request(`/instances/${id}`, { method: 'DELETE' });
 }
+
+// File upload
+export async function uploadFile(
+	templateId: string,
+	nodeId: string,
+	file: File
+): Promise<{ key: string; filename: string; content_type: string; size: number }> {
+	const formData = new FormData();
+	formData.append('file', file);
+
+	const res = await fetch(`${API_BASE}/templates/${templateId}/files/${nodeId}`, {
+		method: 'POST',
+		body: formData
+	});
+
+	if (!res.ok) {
+		const body = await res.text();
+		throw new Error(`Upload error ${res.status}: ${body}`);
+	}
+
+	return res.json();
+}

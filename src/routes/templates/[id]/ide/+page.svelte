@@ -10,7 +10,7 @@
 	import HumanTaskFormEditor from '$lib/components/ide/HumanTaskFormEditor.svelte';
 	import { getSession, releaseSession } from '$lib/yjs/session-store';
 	import { YjsGraphBinding } from '$lib/yjs/graph-binding.svelte';
-	import { getTemplate, publishTemplate } from '$lib/api/client';
+	import { getTemplate, publishTemplate, uploadFile } from '$lib/api/client';
 	import type { Template } from '$lib/types/api';
 
 	const templateId = $derived(page.params.id!);
@@ -90,6 +90,17 @@
 		}
 		activeTabKey = key;
 		syncUrlState();
+	}
+
+	async function handleUploadFile(nodeId: string, file: File) {
+		try {
+			const result = await uploadFile(templateId, nodeId, file);
+			// Store the S3 key as the Y.Text content
+			binding.createFile(nodeId, file.name, result.key);
+			handleSelectFile(nodeId, file.name);
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Upload failed';
+		}
 	}
 
 	function handleCreateFile(nodeId: string) {
@@ -201,6 +212,7 @@
 				onSelectFile={handleSelectFile}
 				onSelectNode={handleSelectNode}
 				onCreateFile={handleCreateFile}
+				onUploadFile={handleUploadFile}
 				onDeleteFile={handleDeleteFile}
 				onRenameFile={handleRenameFile}
 			/>

@@ -18,9 +18,9 @@ const handler: RequestHandler = async ({ params, request }) => {
 		headers
 	};
 
-	// Forward body for methods that have one
+	// Forward body for methods that have one (use arrayBuffer to preserve binary/multipart)
 	if (request.method !== 'GET' && request.method !== 'HEAD') {
-		init.body = await request.text();
+		init.body = new Uint8Array(await request.arrayBuffer());
 	}
 
 	let response: Response;
