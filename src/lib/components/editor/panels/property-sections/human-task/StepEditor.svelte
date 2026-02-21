@@ -10,6 +10,7 @@
 	import DividerBlockDisplay from './DividerBlockDisplay.svelte';
 	import ImageBlockEditor from './ImageBlockEditor.svelte';
 	import FileBlockEditor from './FileBlockEditor.svelte';
+	import PdfBlockEditor from './PdfBlockEditor.svelte';
 	import BlockTypePicker from './BlockTypePicker.svelte';
 
 	type Props = {
@@ -125,6 +126,18 @@
 					{readonly}
 					onchange={(filename) =>
 						updateBlock(blockIdx, { type: 'file', filename })}
+					onremove={() => removeBlock(blockIdx)}
+				/>
+			{:else if block.type === 'pdf'}
+				<PdfBlockEditor
+					filename={block.filename}
+					caption={block.caption}
+					height={block.height}
+					{binding}
+					{nodeId}
+					{readonly}
+					onchange={(filename, caption, height) =>
+						updateBlock(blockIdx, { type: 'pdf', filename, caption, height })}
 					onremove={() => removeBlock(blockIdx)}
 				/>
 			{/if}

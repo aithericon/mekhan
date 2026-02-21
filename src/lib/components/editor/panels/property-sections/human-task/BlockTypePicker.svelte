@@ -47,6 +47,11 @@
 		onadd({ type: 'file', filename: '' });
 		open = false;
 	}
+
+	function addPdf() {
+		onadd({ type: 'pdf', filename: '', height: '400px' });
+		open = false;
+	}
 </script>
 
 <div class="relative">
@@ -116,6 +121,14 @@
 			>
 				<span class="size-2.5 rounded-sm bg-sky-400"></span>
 				File
+			</button>
+			<button
+				type="button"
+				class="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-accent"
+				onclick={addPdf}
+			>
+				<span class="size-2.5 rounded-sm bg-rose-400"></span>
+				PDF
 			</button>
 		</div>
 	{/if}
