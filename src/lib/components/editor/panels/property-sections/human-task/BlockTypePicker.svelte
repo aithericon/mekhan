@@ -37,6 +37,16 @@
 		onadd({ type: 'divider' });
 		open = false;
 	}
+
+	function addImage() {
+		onadd({ type: 'image', filenames: [], display: 'single' });
+		open = false;
+	}
+
+	function addFile() {
+		onadd({ type: 'file', filename: '' });
+		open = false;
+	}
 </script>
 
 <div class="relative">
@@ -90,6 +100,22 @@
 			>
 				<span class="size-2.5 rounded-sm bg-gray-400"></span>
 				Divider
+			</button>
+			<button
+				type="button"
+				class="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-accent"
+				onclick={addImage}
+			>
+				<span class="size-2.5 rounded-sm bg-emerald-400"></span>
+				Image
+			</button>
+			<button
+				type="button"
+				class="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-accent"
+				onclick={addFile}
+			>
+				<span class="size-2.5 rounded-sm bg-sky-400"></span>
+				File
 			</button>
 		</div>
 	{/if}

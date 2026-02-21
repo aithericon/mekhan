@@ -10,23 +10,31 @@ const handler: RequestHandler = async ({ params, request }) => {
 	const target = `${BACKEND_URL}/api/${path}${url.search}`;
 
 	const headers = new Headers(request.headers);
-	// Remove host header so the backend gets the correct one
+	// Remove hop-by-hop / mismatched headers that break the re-sent request
 	headers.delete('host');
+	headers.delete('content-length');
+	headers.delete('transfer-encoding');
+	headers.delete('content-encoding');
+	headers.delete('connection');
 
 	const init: RequestInit = {
 		method: request.method,
 		headers
 	};
 
-	// Forward body for methods that have one (use arrayBuffer to preserve binary/multipart)
+	// Forward body for methods that have one
 	if (request.method !== 'GET' && request.method !== 'HEAD') {
-		init.body = new Uint8Array(await request.arrayBuffer());
+		const buf = await request.arrayBuffer();
+		if (buf.byteLength > 0) {
+			init.body = new Uint8Array(buf);
+		}
 	}
 
 	let response: Response;
 	try {
 		response = await fetch(target, init);
-	} catch {
+	} catch (e) {
+		console.error('[proxy] fetch failed:', e);
 		return new Response(JSON.stringify({ error: 'Backend not available' }), {
 			status: 503,
 			headers: { 'content-type': 'application/json' }

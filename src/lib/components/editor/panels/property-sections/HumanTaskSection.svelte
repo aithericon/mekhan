@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { HumanTaskNodeData } from '$lib/types/editor';
+	import type { YjsGraphBinding } from '$lib/yjs/graph-binding.svelte';
 	import Plus from '@lucide/svelte/icons/plus';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
@@ -10,11 +11,13 @@
 	type Props = {
 		data: HumanTaskNodeData;
 		readonly?: boolean;
+		binding?: YjsGraphBinding;
+		nodeId?: string;
 		onchange: (data: HumanTaskNodeData) => void;
 		onexpand?: () => void;
 	};
 
-	let { data, readonly = false, onchange, onexpand }: Props = $props();
+	let { data, readonly = false, binding, nodeId, onchange, onexpand }: Props = $props();
 
 	function addStep() {
 		onchange({
@@ -77,6 +80,8 @@
 		<StepEditor
 			{step}
 			{readonly}
+			{binding}
+			{nodeId}
 			onchange={(updatedStep) => {
 				const steps = [...data.steps];
 				steps[stepIdx] = updatedStep;

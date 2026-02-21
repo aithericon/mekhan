@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { TaskStepConfig, TaskBlockConfig, TaskFieldConfig } from '$lib/types/editor';
+	import type { YjsGraphBinding } from '$lib/yjs/graph-binding.svelte';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import { Input } from '$lib/components/ui/input';
 	import { Textarea } from '$lib/components/ui/textarea';
@@ -7,16 +8,20 @@
 	import MdsvexBlockEditor from './MdsvexBlockEditor.svelte';
 	import CalloutBlockEditor from './CalloutBlockEditor.svelte';
 	import DividerBlockDisplay from './DividerBlockDisplay.svelte';
+	import ImageBlockEditor from './ImageBlockEditor.svelte';
+	import FileBlockEditor from './FileBlockEditor.svelte';
 	import BlockTypePicker from './BlockTypePicker.svelte';
 
 	type Props = {
 		step: TaskStepConfig;
 		readonly?: boolean;
+		binding?: YjsGraphBinding;
+		nodeId?: string;
 		onchange: (step: TaskStepConfig) => void;
 		onremove: () => void;
 	};
 
-	let { step, readonly = false, onchange, onremove }: Props = $props();
+	let { step, readonly = false, binding, nodeId, onchange, onremove }: Props = $props();
 
 	function updateTitle(title: string) {
 		onchange({ ...step, title });
@@ -101,6 +106,27 @@
 				/>
 			{:else if block.type === 'divider'}
 				<DividerBlockDisplay {readonly} onremove={() => removeBlock(blockIdx)} />
+			{:else if block.type === 'image'}
+				<ImageBlockEditor
+					filenames={block.filenames}
+					display={block.display}
+					{binding}
+					{nodeId}
+					{readonly}
+					onchange={(filenames, display) =>
+						updateBlock(blockIdx, { type: 'image', filenames, display })}
+					onremove={() => removeBlock(blockIdx)}
+				/>
+			{:else if block.type === 'file'}
+				<FileBlockEditor
+					filename={block.filename}
+					{binding}
+					{nodeId}
+					{readonly}
+					onchange={(filename) =>
+						updateBlock(blockIdx, { type: 'file', filename })}
+					onremove={() => removeBlock(blockIdx)}
+				/>
 			{/if}
 		{/each}
 	</div>

@@ -131,7 +131,7 @@ export async function uploadFile(
 	const formData = new FormData();
 	formData.append('file', file);
 
-	const res = await fetch(`${API_BASE}/templates/${templateId}/files/${nodeId}`, {
+	const res = await fetch(`${API_BASE}/files/upload/${templateId}/${nodeId}`, {
 		method: 'POST',
 		body: formData
 	});

@@ -89,7 +89,9 @@ export type TaskBlockConfig =
 			title?: string;
 			content: string;
 	  }
-	| { type: 'divider' };
+	| { type: 'divider' }
+	| { type: 'image'; filenames: string[]; display: 'single' | 'grid' | 'gallery' }
+	| { type: 'file'; filename: string };
 
 export type TaskFieldConfig = {
 	name: string;

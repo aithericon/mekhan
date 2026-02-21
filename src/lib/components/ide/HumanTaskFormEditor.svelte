@@ -38,6 +38,8 @@
 				<HumanTaskSection
 					data={nodeData}
 					{readonly}
+					{binding}
+					{nodeId}
 					onchange={handleChange}
 				/>
 			</div>

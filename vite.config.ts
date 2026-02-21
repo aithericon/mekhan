@@ -10,6 +10,11 @@ export default defineConfig({
 				target: 'http://localhost:3100',
 				ws: true,
 				changeOrigin: true
+			},
+			// File upload/serve — bypass SvelteKit to avoid body size limits
+			'/api/files': {
+				target: 'http://localhost:3100',
+				changeOrigin: true
 			}
 		}
 	}

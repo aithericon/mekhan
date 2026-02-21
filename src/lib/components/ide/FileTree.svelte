@@ -71,11 +71,10 @@
 	}
 </script>
 
-<!-- Hidden file input for image upload -->
+<!-- Hidden file input for upload -->
 <input
 	bind:this={fileInputRef}
 	type="file"
-	accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml"
 	class="hidden"
 	onchange={handleFileSelected}
 />
