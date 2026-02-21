@@ -27,6 +27,9 @@ fn start_node(id: &str) -> WorkflowNode {
             description: None,
             initial_data: None,
         },
+        parent_id: None,
+        width: None,
+        height: None,
     }
 }
 
@@ -39,6 +42,9 @@ fn end_node(id: &str) -> WorkflowNode {
             label: "End".to_string(),
             description: None,
         },
+        parent_id: None,
+        width: None,
+        height: None,
     }
 }
 
@@ -188,6 +194,9 @@ fn human_task_produces_group_signal_and_transitions() {
                         }],
                     }],
                 },
+                parent_id: None,
+                width: None,
+                height: None,
             },
             end_node("e"),
         ],
@@ -247,6 +256,9 @@ fn automated_step_produces_executor_lifecycle() {
                         config: json!({"image": "alpine:latest"}),
                     },
                 },
+                parent_id: None,
+                width: None,
+                height: None,
             },
             end_node("e"),
         ],
@@ -335,6 +347,9 @@ fn decision_produces_guard_transitions() {
                     ],
                     default_branch: None,
                 },
+                parent_id: None,
+                width: None,
+                height: None,
             },
             end_node("ea"),
             end_node("eb"),
@@ -389,6 +404,9 @@ fn parallel_split_join_produces_fork_and_join() {
                     label: "Fork".to_string(),
                     description: None,
                 },
+                parent_id: None,
+                width: None,
+                height: None,
             },
             WorkflowNode {
                 id: "task_a".to_string(),
@@ -401,6 +419,9 @@ fn parallel_split_join_produces_fork_and_join() {
                     instructions_mdsvex: None,
                     steps: vec![],
                 },
+                parent_id: None,
+                width: None,
+                height: None,
             },
             WorkflowNode {
                 id: "task_b".to_string(),
@@ -413,6 +434,9 @@ fn parallel_split_join_produces_fork_and_join() {
                     instructions_mdsvex: None,
                     steps: vec![],
                 },
+                parent_id: None,
+                width: None,
+                height: None,
             },
             WorkflowNode {
                 id: "join".to_string(),
@@ -422,6 +446,9 @@ fn parallel_split_join_produces_fork_and_join() {
                     label: "Join".to_string(),
                     description: None,
                 },
+                parent_id: None,
+                width: None,
+                height: None,
             },
             end_node("e"),
         ],
@@ -478,6 +505,9 @@ fn loop_produces_enter_continue_exit() {
                     max_iterations: 5,
                     loop_condition: "input.needs_retry == true".to_string(),
                 },
+                parent_id: None,
+                width: None,
+                height: None,
             },
             end_node("e"),
         ],
@@ -566,6 +596,9 @@ fn unreachable_node_fails() {
                     instructions_mdsvex: None,
                     steps: vec![],
                 },
+                parent_id: None,
+                width: None,
+                height: None,
             },
         ],
         edges: vec![edge("e1", "s", "e")],
@@ -595,6 +628,9 @@ fn loop_with_zero_iterations_fails() {
                     max_iterations: 0,
                     loop_condition: "true".to_string(),
                 },
+                parent_id: None,
+                width: None,
+                height: None,
             },
             end_node("e"),
         ],
@@ -625,6 +661,9 @@ fn loop_with_empty_condition_fails() {
                     max_iterations: 3,
                     loop_condition: "  ".to_string(),
                 },
+                parent_id: None,
+                width: None,
+                height: None,
             },
             end_node("e"),
         ],
@@ -664,6 +703,9 @@ fn decision_with_default_branch() {
                     }],
                     default_branch: Some("cond_no".to_string()),
                 },
+                parent_id: None,
+                width: None,
+                height: None,
             },
             end_node("e_yes"),
             end_node("e_no"),
@@ -713,6 +755,9 @@ fn cycle_in_non_loop_edges_fails() {
                     instructions_mdsvex: None,
                     steps: vec![],
                 },
+                parent_id: None,
+                width: None,
+                height: None,
             },
             WorkflowNode {
                 id: "b".to_string(),
@@ -725,6 +770,9 @@ fn cycle_in_non_loop_edges_fails() {
                     instructions_mdsvex: None,
                     steps: vec![],
                 },
+                parent_id: None,
+                width: None,
+                height: None,
             },
             end_node("e"),
         ],
@@ -762,6 +810,9 @@ fn parallel_split_with_one_branch_fails() {
                     label: "Fork".to_string(),
                     description: None,
                 },
+                parent_id: None,
+                width: None,
+                height: None,
             },
             end_node("e"),
         ],
@@ -801,6 +852,9 @@ fn automated_step_has_scoped_effect_errors() {
                         config: json!({"image": "alpine:latest"}),
                     },
                 },
+                parent_id: None,
+                width: None,
+                height: None,
             },
             end_node("e"),
         ],
@@ -834,6 +888,9 @@ fn auto_node(id: &str, label: &str) -> WorkflowNode {
                 config: json!({"image": "alpine:latest"}),
             },
         },
+        parent_id: None,
+        width: None,
+        height: None,
     }
 }
 
@@ -1000,6 +1057,9 @@ fn parallel_join_merges_per_edge_input_places() {
                     label: "Fork".to_string(),
                     description: None,
                 },
+                parent_id: None,
+                width: None,
+                height: None,
             },
             auto_node("aa", "Auto A"),
             auto_node("ab", "Auto B"),
@@ -1011,6 +1071,9 @@ fn parallel_join_merges_per_edge_input_places() {
                     label: "Join".to_string(),
                     description: None,
                 },
+                parent_id: None,
+                width: None,
+                height: None,
             },
             end_node("e"),
         ],
@@ -1096,6 +1159,9 @@ fn multi_input_non_join_retains_pass_through_transitions() {
                     label: "Fork".to_string(),
                     description: None,
                 },
+                parent_id: None,
+                width: None,
+                height: None,
             },
             auto_node("a", "Step A"),
             auto_node("b", "Step B"),
@@ -1113,6 +1179,9 @@ fn multi_input_non_join_retains_pass_through_transitions() {
                     }],
                     default_branch: Some("cond_no".to_string()),
                 },
+                parent_id: None,
+                width: None,
+                height: None,
             },
             end_node("ey"),
             end_node("en"),
@@ -1149,5 +1218,115 @@ fn multi_input_non_join_retains_pass_through_transitions() {
     assert!(
         has_transition(&air, "t_edge_e_to_dec_b"),
         "expected pass-through transition for edge b→dec"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Scope node → AIR group
+// ---------------------------------------------------------------------------
+
+#[test]
+fn scope_creates_group_in_air() {
+    // S -> HT -> E, with HT inside a scope
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            WorkflowNode {
+                id: "my_scope".to_string(),
+                node_type: "scope".to_string(),
+                position: pos(),
+                data: WorkflowNodeData::Scope {
+                    label: "Approval Process".to_string(),
+                    description: None,
+                },
+                parent_id: None,
+                width: Some(500.0),
+                height: Some(400.0),
+            },
+            WorkflowNode {
+                id: "ht".to_string(),
+                node_type: "human_task".to_string(),
+                position: pos(),
+                data: WorkflowNodeData::HumanTask {
+                    label: "Review".to_string(),
+                    description: None,
+                    task_title: "Review".to_string(),
+                    instructions_mdsvex: None,
+                    steps: vec![],
+                },
+                parent_id: Some("my_scope".to_string()),
+                width: None,
+                height: None,
+            },
+            end_node("e"),
+        ],
+        edges: vec![
+            edge("e1", "s", "ht"),
+            edge("e2", "ht", "e"),
+        ],
+        viewport: None,
+    };
+
+    let air = compile_to_air(&graph, "scope_test", "").expect("should compile");
+
+    // Scope should produce a group
+    let groups = air["groups"].as_array().expect("groups should be an array");
+    let scope_group = groups
+        .iter()
+        .find(|g| g["id"] == "grp_my_scope")
+        .expect("expected group grp_my_scope");
+    assert_eq!(scope_group["name"], "Approval Process");
+
+    // HumanTask's inner group should have the scope as parent
+    let ht_group = groups
+        .iter()
+        .find(|g| g["id"] == "grp_ht")
+        .expect("expected group grp_ht for HumanTask");
+    assert_eq!(
+        ht_group["parent_id"], "grp_my_scope",
+        "HumanTask group should be nested under scope"
+    );
+
+    // HumanTask places should be tagged with the scope group
+    let places = air["places"].as_array().unwrap();
+    let ht_input = places
+        .iter()
+        .find(|p| p["id"] == "p_ht_input")
+        .expect("expected p_ht_input place");
+    assert_eq!(
+        ht_input["group_id"], "grp_my_scope",
+        "HumanTask place should be tagged with scope group_id"
+    );
+}
+
+#[test]
+fn scope_without_children_compiles() {
+    // Empty scope doesn't break compilation
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            WorkflowNode {
+                id: "empty_scope".to_string(),
+                node_type: "scope".to_string(),
+                position: pos(),
+                data: WorkflowNodeData::Scope {
+                    label: "Empty".to_string(),
+                    description: None,
+                },
+                parent_id: None,
+                width: Some(300.0),
+                height: Some(200.0),
+            },
+            end_node("e"),
+        ],
+        edges: vec![edge("e1", "s", "e")],
+        viewport: None,
+    };
+
+    let air = compile_to_air(&graph, "empty_scope_test", "").expect("should compile");
+    let groups = air["groups"].as_array().expect("groups array");
+    assert!(
+        groups.iter().any(|g| g["id"] == "grp_empty_scope"),
+        "empty scope should still produce a group"
     );
 }

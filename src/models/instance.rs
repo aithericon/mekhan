@@ -45,6 +45,23 @@ impl std::fmt::Display for InstanceStatus {
     }
 }
 
+/// Instance with template name, returned by list queries (JOIN with workflow_templates).
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct InstanceListItem {
+    pub id: Uuid,
+    pub template_id: Uuid,
+    pub template_version: i32,
+    pub net_id: String,
+    pub status: String,
+    pub created_by: Uuid,
+    pub created_at: DateTime<Utc>,
+    pub started_at: Option<DateTime<Utc>>,
+    pub completed_at: Option<DateTime<Utc>>,
+    pub current_step: Option<String>,
+    pub metadata: serde_json::Value,
+    pub template_name: String,
+}
+
 // --- API request/response types ---
 
 #[derive(Debug, Deserialize)]

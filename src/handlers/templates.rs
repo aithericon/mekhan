@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
@@ -13,7 +15,7 @@ use crate::compiler::compile_to_air;
 use crate::lifecycle::cleanup_net;
 use crate::models::template::{
     CreateTemplateRequest, ListTemplatesQuery, PaginatedResponse, UpdateTemplateRequest,
-    WorkflowGraph, WorkflowTemplate,
+    WorkflowGraph, WorkflowNodeData, WorkflowTemplate,
 };
 use crate::AppState;
 
@@ -52,7 +54,20 @@ pub async fn create_template(
     .await;
 
     match result {
-        Ok(template) => (StatusCode::CREATED, Json(json!(template))).into_response(),
+        Ok(template) => {
+            // Initialize Y.Doc from the graph for real-time collaboration
+            if let Err(e) = state
+                .yjs
+                .persistence
+                .init_doc_from_graph(id, &graph)
+                .await
+            {
+                tracing::error!("failed to init Y.Doc for template {id}: {e}");
+                // Non-fatal: template is created, Y.Doc can be initialized later
+            }
+
+            (StatusCode::CREATED, Json(json!(template))).into_response()
+        }
         Err(e) => {
             tracing::error!("failed to create template: {e}");
             (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response()
@@ -379,14 +394,37 @@ pub async fn publish_template(
         return (StatusCode::CONFLICT, Json(json!({"error": "template is already published"}))).into_response();
     }
 
-    // Parse graph and compile to AIR
-    let graph: WorkflowGraph = match serde_json::from_value(existing.graph.clone()) {
-        Ok(g) => g,
+    // Try to reconstruct graph + files from Y.Doc first (collaborative editing source of truth),
+    // falling back to the DB graph column for legacy templates.
+    let (graph, ydoc_files): (WorkflowGraph, HashMap<String, HashMap<String, String>>) = match reconstruct_graph_from_ydoc(&state, id).await {
+        Ok(Some((g, f))) => (g, f),
+        Ok(None) => {
+            // No Y.Doc exists — fall back to DB graph
+            match serde_json::from_value(existing.graph.clone()) {
+                Ok(g) => (g, HashMap::new()),
+                Err(e) => {
+                    return (StatusCode::BAD_REQUEST, Json(json!({"error": format!("invalid graph: {e}")}))).into_response();
+                }
+            }
+        }
         Err(e) => {
-            return (StatusCode::BAD_REQUEST, Json(json!({"error": format!("invalid graph: {e}")}))).into_response();
+            tracing::error!("failed to load Y.Doc for template {id}: {e}");
+            // Fall back to DB graph
+            match serde_json::from_value(existing.graph.clone()) {
+                Ok(g) => (g, HashMap::new()),
+                Err(e) => {
+                    return (StatusCode::BAD_REQUEST, Json(json!({"error": format!("invalid graph: {e}")}))).into_response();
+                }
+            }
         }
     };
 
+    // Upload node file contents to S3 (Y.Text files from Y.Doc + inline config files)
+    if let Err(e) = upload_node_files(&state, id, existing.version, &graph, &ydoc_files).await {
+        tracing::warn!("S3 file upload failed (non-fatal): {e}");
+    }
+
+    // Compile to AIR
     let air_json = match compile_to_air(&graph, &existing.name, &existing.description) {
         Ok(air) => air,
         Err(e) => {
@@ -414,6 +452,137 @@ pub async fn publish_template(
             (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response()
         }
     }
+}
+
+/// Try to reconstruct a WorkflowGraph and file contents from the Y.Doc stored for this template.
+/// Returns Ok(None) if no Y.Doc exists.
+///
+/// Reads from the new schema: Y.Map("nodes"), Y.Array("edges"), Y.Map("viewport").
+/// Also extracts Y.Text file entries from `nodes[nodeId].files`.
+async fn reconstruct_graph_from_ydoc(
+    state: &AppState,
+    template_id: Uuid,
+) -> Result<Option<(WorkflowGraph, HashMap<String, HashMap<String, String>>)>, String> {
+    let has_doc = state
+        .yjs
+        .persistence
+        .has_doc(template_id)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !has_doc {
+        return Ok(None);
+    }
+
+    // Load raw updates and build the doc in spawn_blocking (yrs Doc is !Send)
+    let (snapshot, updates) = state
+        .yjs
+        .persistence
+        .load_raw_updates(template_id)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let result = tokio::task::spawn_blocking(move || -> Result<(WorkflowGraph, HashMap<String, HashMap<String, String>>), String> {
+        use crate::yjs::persistence::YjsPersistence;
+        use crate::yjs::doc_ops;
+
+        let doc = YjsPersistence::build_doc_from_raw(snapshot.as_deref(), &updates)
+            .map_err(|e| e.to_string())?;
+
+        let graph = doc_ops::doc_to_graph(&doc)?;
+        let files = doc_ops::extract_files_from_doc(&doc);
+        Ok((graph, files))
+    })
+    .await
+    .map_err(|e| format!("spawn_blocking: {e}"))??;
+
+    Ok(Some(result))
+}
+
+/// Upload file contents from nodes to S3 for archival.
+///
+/// Uploads files from two sources:
+/// 1. Y.Text files extracted from the Y.Doc (`nodes[nodeId].files[filename]`)
+/// 2. Inline files embedded in `execution_spec.config.files` (legacy/fallback)
+///
+/// Y.Doc files take priority — if the same filename exists in both sources,
+/// the Y.Doc version is used.
+async fn upload_node_files(
+    state: &AppState,
+    template_id: Uuid,
+    version: i32,
+    graph: &WorkflowGraph,
+    ydoc_files: &HashMap<String, HashMap<String, String>>,
+) -> Result<(), String> {
+    // Upload Y.Text files from Y.Doc (primary source)
+    for (node_id, node_files) in ydoc_files {
+        for (filename, content) in node_files {
+            match state
+                .s3
+                .upload_file(template_id, version, node_id, filename, content.as_bytes())
+                .await
+            {
+                Ok(key) => {
+                    tracing::info!(
+                        node_id = %node_id,
+                        filename,
+                        key = %key,
+                        "uploaded node file to S3"
+                    );
+                }
+                Err(e) => {
+                    return Err(format!("upload {}/{}: {}", node_id, filename, e));
+                }
+            }
+        }
+    }
+
+    // Also upload inline files from execution_spec.config.files (fallback for nodes
+    // that don't have Y.Text files, e.g. created via API without Y.Doc)
+    for node in &graph.nodes {
+        if let WorkflowNodeData::AutomatedStep { execution_spec, .. } = &node.data {
+            if let Some(files) = execution_spec.config.get("files") {
+                if let Some(files_obj) = files.as_object() {
+                    // Skip if this node already has Y.Doc files (avoid duplicates)
+                    let has_ydoc_files = ydoc_files.contains_key(&node.id);
+                    if has_ydoc_files {
+                        continue;
+                    }
+                    for (filename, content_val) in files_obj {
+                        if let Some(content) = content_val.as_str() {
+                            match state
+                                .s3
+                                .upload_file(
+                                    template_id,
+                                    version,
+                                    &node.id,
+                                    filename,
+                                    content.as_bytes(),
+                                )
+                                .await
+                            {
+                                Ok(key) => {
+                                    tracing::info!(
+                                        node_id = %node.id,
+                                        filename,
+                                        key = %key,
+                                        "uploaded inline config file to S3"
+                                    );
+                                }
+                                Err(e) => {
+                                    return Err(format!(
+                                        "upload {}/{}: {}",
+                                        node.id, filename, e
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// POST /api/templates/:id/new-version
@@ -487,6 +656,20 @@ pub async fn new_version(
             if let Err(e) = tx.commit().await {
                 return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response();
             }
+
+            // Seed Y.Doc for the new version so WS collaboration works immediately
+            let graph: WorkflowGraph = serde_json::from_value(existing.graph.clone())
+                .unwrap_or_else(|_| WorkflowGraph::default_graph());
+            if let Err(e) = state
+                .yjs
+                .persistence
+                .init_doc_from_graph(new_id, &graph)
+                .await
+            {
+                tracing::error!("failed to init Y.Doc for new version {new_id}: {e}");
+                // Non-fatal: template is created, Y.Doc can be initialized later
+            }
+
             (StatusCode::CREATED, Json(json!(template))).into_response()
         }
         Err(e) => {

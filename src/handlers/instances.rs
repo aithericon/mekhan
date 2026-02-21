@@ -8,8 +8,8 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::models::instance::{
-    CreateInstanceRequest, EngineStatus, InstanceStateResponse, ListInstancesQuery,
-    WorkflowInstance,
+    CreateInstanceRequest, EngineStatus, InstanceListItem, InstanceStateResponse,
+    ListInstancesQuery, WorkflowInstance,
 };
 use crate::models::template::{PaginatedResponse, WorkflowTemplate};
 use crate::petri::events::fetch_events;
@@ -109,93 +109,59 @@ pub async fn list_instances(
 ) -> impl IntoResponse {
     let offset = (params.page - 1) * params.per_page;
 
-    // All filter parameters are bound safely to prevent SQL injection
-    let (items, total) = match (params.template_id, &params.status) {
-        (Some(template_id), Some(status)) => {
-            let items = sqlx::query_as::<_, WorkflowInstance>(
-                "SELECT * FROM workflow_instances WHERE template_id = $1 AND status = $2 ORDER BY created_at DESC LIMIT $3 OFFSET $4",
-            )
-            .bind(template_id)
-            .bind(status)
-            .bind(params.per_page)
-            .bind(offset)
-            .fetch_all(&state.db)
-            .await
-            .unwrap_or_default();
-
-            let total: (i64,) = sqlx::query_as(
-                "SELECT COUNT(*) FROM workflow_instances WHERE template_id = $1 AND status = $2",
-            )
-            .bind(template_id)
-            .bind(status)
-            .fetch_one(&state.db)
-            .await
-            .unwrap_or((0,));
-
-            (items, total.0)
-        }
-        (Some(template_id), None) => {
-            let items = sqlx::query_as::<_, WorkflowInstance>(
-                "SELECT * FROM workflow_instances WHERE template_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
-            )
-            .bind(template_id)
-            .bind(params.per_page)
-            .bind(offset)
-            .fetch_all(&state.db)
-            .await
-            .unwrap_or_default();
-
-            let total: (i64,) = sqlx::query_as(
-                "SELECT COUNT(*) FROM workflow_instances WHERE template_id = $1",
-            )
-            .bind(template_id)
-            .fetch_one(&state.db)
-            .await
-            .unwrap_or((0,));
-
-            (items, total.0)
-        }
-        (None, Some(status)) => {
-            let items = sqlx::query_as::<_, WorkflowInstance>(
-                "SELECT * FROM workflow_instances WHERE status = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
-            )
-            .bind(status)
-            .bind(params.per_page)
-            .bind(offset)
-            .fetch_all(&state.db)
-            .await
-            .unwrap_or_default();
-
-            let total: (i64,) = sqlx::query_as(
-                "SELECT COUNT(*) FROM workflow_instances WHERE status = $1",
-            )
-            .bind(status)
-            .fetch_one(&state.db)
-            .await
-            .unwrap_or((0,));
-
-            (items, total.0)
-        }
-        (None, None) => {
-            let items = sqlx::query_as::<_, WorkflowInstance>(
-                "SELECT * FROM workflow_instances ORDER BY created_at DESC LIMIT $1 OFFSET $2",
-            )
-            .bind(params.per_page)
-            .bind(offset)
-            .fetch_all(&state.db)
-            .await
-            .unwrap_or_default();
-
-            let total: (i64,) = sqlx::query_as(
-                "SELECT COUNT(*) FROM workflow_instances",
-            )
-            .fetch_one(&state.db)
-            .await
-            .unwrap_or((0,));
-
-            (items, total.0)
-        }
+    // Build WHERE clause based on filter parameters
+    let mut conditions = Vec::new();
+    if params.template_id.is_some() {
+        conditions.push("wi.template_id = $1");
+    }
+    if params.status.is_some() {
+        conditions.push(if params.template_id.is_some() {
+            "wi.status = $2"
+        } else {
+            "wi.status = $1"
+        });
+    }
+    let where_clause = if conditions.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {}", conditions.join(" AND "))
     };
+
+    let next_param = 1 + params.template_id.is_some() as u8 + params.status.is_some() as u8;
+
+    let list_sql = format!(
+        "SELECT wi.*, wt.name as template_name \
+         FROM workflow_instances wi \
+         JOIN workflow_templates wt ON wt.id = wi.template_id AND wt.version = wi.template_version \
+         {} ORDER BY wi.created_at DESC LIMIT ${} OFFSET ${}",
+        where_clause,
+        next_param,
+        next_param + 1
+    );
+    let count_sql = format!(
+        "SELECT COUNT(*) FROM workflow_instances wi {}",
+        where_clause
+    );
+
+    let mut list_query = sqlx::query_as::<_, InstanceListItem>(&list_sql);
+    let mut count_query = sqlx::query_as::<_, (i64,)>(&count_sql);
+
+    if let Some(tid) = params.template_id {
+        list_query = list_query.bind(tid);
+        count_query = count_query.bind(tid);
+    }
+    if let Some(ref status) = params.status {
+        list_query = list_query.bind(status);
+        count_query = count_query.bind(status);
+    }
+    list_query = list_query.bind(params.per_page).bind(offset);
+
+    let items = list_query.fetch_all(&state.db).await.unwrap_or_default();
+    let total = count_query
+        .fetch_one(&state.db)
+        .await
+        .unwrap_or((0,))
+        .0;
 
     Json(PaginatedResponse {
         items,

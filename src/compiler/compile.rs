@@ -23,10 +23,13 @@ struct PlaceMerge {
 struct PostProcess {
     /// Place IDs that should be changed to "terminal" type.
     terminal_place_ids: Vec<String>,
-    /// Groups to add (with explicit IDs matching the old compiler format).
-    groups: Vec<(String, String)>, // (id, name)
+    /// Groups to add: (id, name, parent_id).
+    groups: Vec<(String, String, Option<String>)>,
     /// Pass-through edge merges: dead place → survivor place.
     merges: Vec<PlaceMerge>,
+    /// Maps node_id → group_id for scope children.
+    /// Used to tag places/transitions with the correct group after build().
+    scope_groups: HashMap<String, String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -158,6 +161,16 @@ pub fn compile_to_air(
     let mut node_ports: HashMap<String, NodePorts> = HashMap::new();
     let mut fixups = PostProcess::default();
 
+    // Pre-populate scope_groups: map child node_id → parent scope's group_id
+    for node in &graph.nodes {
+        if let Some(ref pid) = node.parent_id {
+            // Only map if the parent is actually a scope node
+            if graph.nodes.iter().any(|n| n.id == *pid && matches!(n.data, WorkflowNodeData::Scope { .. })) {
+                fixups.scope_groups.insert(node.id.clone(), format!("grp_{}", pid));
+            }
+        }
+    }
+
     for ni in &sorted {
         let node = *wg.full.node_weight(*ni).unwrap();
         let outgoing = wg.outgoing(&node.id);
@@ -188,13 +201,29 @@ pub fn compile_to_air(
     }
 
     // 8. Apply group fixups
-    for (group_id, group_name) in fixups.groups {
+    for (group_id, group_name, parent_id) in &fixups.groups {
         scenario.groups.push(ScenarioGroup {
-            id: group_id,
-            name: group_name,
-            parent_id: None,
+            id: group_id.clone(),
+            name: group_name.clone(),
+            parent_id: parent_id.clone(),
             metadata: None,
         });
+    }
+
+    // 8b. Tag places/transitions of scope children with their group_id
+    for (node_id, group_id) in &fixups.scope_groups {
+        let prefix = format!("p_{}_", node_id);
+        let t_prefix = format!("t_{}_", node_id);
+        for place in &mut scenario.places {
+            if place.id.starts_with(&prefix) && place.group_id.is_none() {
+                place.group_id = Some(group_id.clone());
+            }
+        }
+        for transition in &mut scenario.transitions {
+            if transition.id.starts_with(&t_prefix) && transition.group_id.is_none() {
+                transition.group_id = Some(group_id.clone());
+            }
+        }
     }
 
     // 9. Apply place merges (rewrite arcs, remove dead places)
@@ -243,6 +272,10 @@ fn validate(graph: &WorkflowGraph, wg: &WorkflowDiGraph) -> Result<(), CompileEr
         .indices
         .iter()
         .filter(|(_, &ni)| !visited.contains(&ni))
+        .filter(|(_, &ni)| {
+            // Scope nodes are containers — they have no edges and are not reachable via BFS
+            !matches!(wg.full.node_weight(ni).unwrap().data, WorkflowNodeData::Scope { .. })
+        })
         .map(|(&id, _)| id)
         .collect();
     if !unreachable.is_empty() {
@@ -453,7 +486,7 @@ fn expand_node(
                 .auto_output("done", &p_output)
                 .logic(build_merge_logic("state", "signal"));
 
-            fixups.groups.push((format!("grp_{id}"), label.clone()));
+            fixups.groups.push((format!("grp_{id}"), label.clone(), fixups.scope_groups.get(id).cloned()));
 
             ports.insert(
                 id.clone(),
@@ -723,7 +756,7 @@ fn expand_node(
                 .logic_rhai("#{ output: input }")
                 .done();
 
-            fixups.groups.push((format!("grp_{id}"), label.clone()));
+            fixups.groups.push((format!("grp_{id}"), label.clone(), fixups.scope_groups.get(id).cloned()));
 
             ports.insert(
                 id.clone(),
@@ -733,6 +766,14 @@ fn expand_node(
                     input_places: HashMap::new(),
                 },
             );
+        }
+
+        WorkflowNodeData::Scope { label, .. } => {
+            // Scope compiles to a ScenarioGroup. No places/transitions —
+            // children are compiled as normal nodes and tagged with this group's ID.
+            let group_id = format!("grp_{id}");
+            let parent_group = fixups.scope_groups.get(id).cloned();
+            fixups.groups.push((group_id, label.clone(), parent_group));
         }
     }
 
@@ -953,6 +994,9 @@ mod tests {
                 description: None,
                 initial_data: None,
             },
+            parent_id: None,
+            width: None,
+            height: None,
         }
     }
 
@@ -965,6 +1009,9 @@ mod tests {
                 label: "End".to_string(),
                 description: None,
             },
+            parent_id: None,
+            width: None,
+            height: None,
         }
     }
 
@@ -1020,6 +1067,9 @@ mod tests {
                         instructions_mdsvex: Some("Please review".to_string()),
                         steps: vec![],
                     },
+                    parent_id: None,
+                    width: None,
+                    height: None,
                 },
                 end_node("e"),
             ],
@@ -1067,6 +1117,9 @@ mod tests {
                         ],
                         default_branch: Some("default1".to_string()),
                     },
+                    parent_id: None,
+                    width: None,
+                    height: None,
                 },
                 end_node("e1"),
                 end_node_with_id("e2"),
@@ -1102,6 +1155,9 @@ mod tests {
                 label: format!("End {id}"),
                 description: None,
             },
+            parent_id: None,
+            width: None,
+            height: None,
         }
     }
 
