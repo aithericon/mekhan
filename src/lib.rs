@@ -14,6 +14,7 @@ pub mod yjs;
 use std::sync::Arc;
 
 use axum::{
+    extract::DefaultBodyLimit,
     routing::{delete, get, post, put},
     Router,
 };
@@ -104,10 +105,11 @@ pub fn build_router(state: AppState) -> Router {
             "/api/instances/{id}",
             delete(handlers::instances::cancel_instance),
         )
-        // File upload/download endpoints
+        // File upload/download endpoints (50 MB limit)
         .route(
-            "/api/templates/{id}/files/{node_id}",
-            post(handlers::files::upload_file),
+            "/api/files/upload/{id}/{node_id}",
+            post(handlers::files::upload_file)
+                .layer(DefaultBodyLimit::max(50 * 1024 * 1024)),
         )
         .route("/api/files/{*key}", get(handlers::files::get_file))
         // Yjs WebSocket endpoint

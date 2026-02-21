@@ -9,15 +9,26 @@ use uuid::Uuid;
 
 use crate::AppState;
 
-const ALLOWED_IMAGE_TYPES: &[&str] = &[
+const ALLOWED_TYPES: &[&str] = &[
     "image/png",
     "image/jpeg",
     "image/gif",
     "image/webp",
     "image/svg+xml",
+    "application/pdf",
+    "text/plain",
+    "text/csv",
+    "application/json",
+    "application/zip",
+    "application/x-tar",
+    "application/gzip",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "application/octet-stream",
 ];
 
-/// POST /api/templates/{id}/files/{node_id}
+/// POST /api/files/upload/{id}/{node_id}
 /// Accepts multipart/form-data with a `file` field.
 pub async fn upload_file(
     State(state): State<AppState>,
@@ -47,10 +58,10 @@ pub async fn upload_file(
         .unwrap_or("application/octet-stream")
         .to_string();
 
-    if !ALLOWED_IMAGE_TYPES.contains(&content_type.as_str()) {
+    if !ALLOWED_TYPES.contains(&content_type.as_str()) {
         return (
             StatusCode::BAD_REQUEST,
-            Json(json!({ "error": format!("Unsupported content type: {content_type}. Allowed: {ALLOWED_IMAGE_TYPES:?}") })),
+            Json(json!({ "error": format!("Unsupported content type: {content_type}. Allowed: {ALLOWED_TYPES:?}") })),
         )
             .into_response();
     }
