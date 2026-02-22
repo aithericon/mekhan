@@ -1,0 +1,24 @@
+{
+	"nodes": [
+		{
+			"id": "start-1",
+			"type": "start",
+			"position": { "x": 250, "y": 100 },
+			"data": { "type": "start", "label": "Start" }
+		},
+		{
+			"id": "end-1",
+			"type": "end",
+			"position": { "x": 250, "y": 300 },
+			"data": { "type": "end", "label": "End" }
+		}
+	],
+	"edges": [
+		{
+			"id": "edge-start-end",
+			"source": "start-1",
+			"target": "end-1",
+			"type": "sequence"
+		}
+	]
+}
