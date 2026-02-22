@@ -51,12 +51,12 @@ thiserror = "2"
 anyhow = "1"
 
 # SDK for compiling workflow graphs to AIR
-aithericon-sdk = { path = "../petri-lab/sdk" }
+aithericon-sdk = { path = "../../petri-lab/sdk" }
 schemars = "0.8"
 petgraph = "0.6"
 
 # Petri-net domain types (events, marking, tokens)
-petri-domain = { path = "../petri-lab/core-engine/crates/domain" }
+petri-domain = { path = "../../petri-lab/core-engine/crates/domain" }
 
 # Yjs CRDT for real-time collaborative editing
 yrs = "0.21"

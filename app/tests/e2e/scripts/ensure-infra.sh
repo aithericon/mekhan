@@ -22,9 +22,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MEKHAN_APP_DIR="$(cd "$SCRIPT_DIR/../../.." && pwd)"
-MEKHAN_SERVICE_DIR="$(cd "$MEKHAN_APP_DIR/../mekhan-service" && pwd)"
-PETRI_LAB_DIR="$(cd "$MEKHAN_APP_DIR/../petri-lab" && pwd)"
-EXECUTOR_REPO="$(cd "$MEKHAN_APP_DIR/../aithericon-executor" && pwd)"
+MEKHAN_ROOT="$(cd "$MEKHAN_APP_DIR/.." && pwd)"
+MEKHAN_SERVICE_DIR="$MEKHAN_ROOT/service"
+PETRI_LAB_DIR="$(cd "$MEKHAN_ROOT/../petri-lab" && pwd)"
+EXECUTOR_REPO="$(cd "$MEKHAN_ROOT/../aithericon-executor" && pwd)"
 
 BACKEND_URL="http://localhost:3100"
 PETRI_URL="http://localhost:3030"
@@ -83,7 +84,7 @@ if [ "${1:-}" = "--stop" ]; then
     kill_pid_file "$PID_DIR/mekhan-service.pid" "mekhan-service"
     kill_pid_file "$PID_DIR/executor.pid" "aithericon-executor"
     kill_pid_file "$PID_DIR/petri-lab.pid" "petri-lab"
-    docker compose -f "$MEKHAN_SERVICE_DIR/docker-compose.yml" down 2>/dev/null || true
+    docker compose -f "$MEKHAN_ROOT/docker-compose.yml" down 2>/dev/null || true
     log "All services stopped."
     exit 0
 fi
@@ -118,7 +119,7 @@ if [ "$docker_healthy" = true ]; then
     log "Docker containers already healthy"
 else
     log "Starting Docker containers..."
-    docker compose -f "$MEKHAN_SERVICE_DIR/docker-compose.yml" up -d --wait
+    docker compose -f "$MEKHAN_ROOT/docker-compose.yml" up -d --wait
     log "Docker containers started"
 fi
 

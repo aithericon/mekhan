@@ -1,0 +1,30 @@
+# Rust
+service/target/
+
+# Node
+app/node_modules/
+app/.output/
+app/.svelte-kit/
+app/build/
+
+# IDE / OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.*
+!.env.example
+!.env.test
+
+# Test artifacts
+test-results/
+playwright-report/
+
+# Agent / tooling
+.agent_status/
+.claude/
+
+# Vite temp files
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*
