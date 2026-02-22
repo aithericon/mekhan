@@ -33,3 +33,4 @@ playwright-report/
 
 # Temp scripts
 check-nodes.mjs
+test-results/
