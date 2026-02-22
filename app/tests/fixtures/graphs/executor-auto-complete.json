@@ -1,0 +1,33 @@
+{
+	"nodes": [
+		{
+			"id": "start",
+			"type": "start",
+			"position": { "x": 0, "y": 0 },
+			"data": { "type": "start", "label": "Start" }
+		},
+		{
+			"id": "exec",
+			"type": "automated_step",
+			"position": { "x": 200, "y": 0 },
+			"data": {
+				"type": "automated_step",
+				"label": "Run Job",
+				"executionSpec": {
+					"backendType": "process",
+					"config": { "command": "echo", "args": ["hello"] }
+				}
+			}
+		},
+		{
+			"id": "end",
+			"type": "end",
+			"position": { "x": 400, "y": 0 },
+			"data": { "type": "end", "label": "Done" }
+		}
+	],
+	"edges": [
+		{ "id": "e1", "source": "start", "target": "exec", "type": "sequence" },
+		{ "id": "e2", "source": "exec", "target": "end", "type": "sequence" }
+	]
+}

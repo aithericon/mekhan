@@ -1,0 +1,23 @@
+{
+  "definitions": {
+    "DynamicToken": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Dynamic token - untyped JSON data.\n\nUse when you need flexibility and don't want compile-time type checking. Rhai scripts can manipulate these freely.",
+      "title": "DynamicToken"
+    }
+  },
+  "description": "",
+  "name": "Simple Start-End",
+  "places": [
+    {
+      "id": "p_start-1_ready",
+      "initial_tokens": [
+        {}
+      ],
+      "name": "Start",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "terminal"
+    }
+  ],
+  "transitions": []
+}

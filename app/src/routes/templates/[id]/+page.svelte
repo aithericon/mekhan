@@ -1,0 +1,230 @@
+<script lang="ts">
+	import { page } from '$app/state';
+	import { onDestroy } from 'svelte';
+	import WorkflowCanvas from '$lib/components/editor/WorkflowCanvas.svelte';
+	import NodePropertyPanel from '$lib/components/editor/panels/NodePropertyPanel.svelte';
+	import { Sheet, SheetContent, SheetTitle, SheetDescription } from '$lib/components/ui/sheet';
+	import { getSheetWidthClass } from '$lib/components/editor/panels/panel-width';
+	import EditorToolbar from '$lib/components/editor/toolbar/EditorToolbar.svelte';
+	import { getTemplate, publishTemplate, compileGraph } from '$lib/api/client';
+	import { getSession, releaseSession } from '$lib/yjs/session-store';
+	import { YjsGraphBinding } from '$lib/yjs/graph-binding.svelte';
+	import type { Template } from '$lib/types/api';
+	import type {
+		WorkflowNodeData,
+		WorkflowNodeType,
+		WorkflowEdge
+	} from '$lib/types/editor';
+
+	const templateId = $derived(page.params.id!);
+
+	let template = $state<Template | null>(null);
+	let loading = $state(true);
+	let saving = $state(false);
+	let error = $state<string | null>(null);
+	let selectedNodeId = $state<string | null>(null);
+	let panelExpanded = $state(false);
+	let airPreview = $state<object | null>(null);
+
+	// Yjs session + binding
+	const session = getSession(templateId);
+	const binding = new YjsGraphBinding(session.doc);
+
+	// Load template metadata from API
+	async function load() {
+		if (templateId === 'new') {
+			template = null;
+			loading = false;
+			return;
+		}
+
+		loading = true;
+		error = null;
+		try {
+			template = await getTemplate(templateId);
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Failed to load template';
+		} finally {
+			loading = false;
+		}
+	}
+
+	async function handlePublish() {
+		if (!template || template.published) return;
+		try {
+			saving = true;
+			template = await publishTemplate(template.id);
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Failed to publish';
+		} finally {
+			saving = false;
+		}
+	}
+
+	async function handlePreview() {
+		try {
+			airPreview = await compileGraph({
+				name: template?.name ?? 'Untitled',
+				description: template?.description,
+				graph: binding.graph
+			});
+			error = null;
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Compilation failed';
+			airPreview = null;
+		}
+	}
+
+	// Granular canvas callbacks → Yjs binding
+	function handleAddNode(
+		id: string,
+		type: WorkflowNodeType,
+		position: { x: number; y: number },
+		data: WorkflowNodeData,
+		opts?: { parentId?: string; width?: number; height?: number }
+	) {
+		binding.addNode(id, type, position, data, opts);
+	}
+
+	function handleRemoveNodes(ids: string[]) {
+		for (const id of ids) {
+			binding.removeNode(id);
+		}
+	}
+
+	function handleMoveNodes(moves: Array<{ id: string; position: { x: number; y: number } }>) {
+		for (const { id, position } of moves) {
+			binding.updateNodePosition(id, position);
+		}
+	}
+
+	function handleAddEdge(edge: WorkflowEdge) {
+		binding.addEdge(edge);
+	}
+
+	function handleRemoveEdges(ids: string[]) {
+		for (const id of ids) {
+			binding.removeEdge(id);
+		}
+	}
+
+	function handleNodeSelect(nodeId: string | null) {
+		selectedNodeId = nodeId;
+		panelExpanded = false;
+	}
+
+	function handleNodeDataChange(data: WorkflowNodeData) {
+		if (!selectedNodeId) return;
+		binding.updateNodeData(selectedNodeId, data);
+	}
+
+	const selectedNodeData = $derived(
+		selectedNodeId
+			? binding.graph.nodes.find((n) => n.id === selectedNodeId)?.data ?? null
+			: null
+	);
+
+	$effect(() => {
+		load();
+	});
+
+	onDestroy(() => {
+		binding.destroy();
+		releaseSession(templateId);
+	});
+</script>
+
+{#if loading}
+	<div class="flex h-full items-center justify-center text-sm text-muted-foreground">
+		Loading editor...
+	</div>
+{:else}
+	<div class="flex h-full flex-col" data-testid="template-editor-page">
+		<EditorToolbar
+			templateName={template?.name ?? 'New Workflow'}
+			published={template?.published ?? false}
+			{saving}
+			{templateId}
+			awareness={session.awareness}
+			provider={session.provider}
+			onpublish={handlePublish}
+			onpreview={handlePreview}
+		/>
+
+		{#if error}
+			<div class="border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-800">
+				{error}
+				<button
+					type="button"
+					class="ml-2 underline"
+					onclick={() => (error = null)}>dismiss</button
+				>
+			</div>
+		{/if}
+
+		<div class="relative flex flex-1 overflow-hidden">
+			<WorkflowCanvas
+				graph={binding.graph}
+				readonly={template?.published ?? false}
+				onselect={handleNodeSelect}
+				onAddNode={handleAddNode}
+				onRemoveNodes={handleRemoveNodes}
+				onMoveNodes={handleMoveNodes}
+				onAddEdge={handleAddEdge}
+				onRemoveEdges={handleRemoveEdges}
+			/>
+
+			{#if selectedNodeData && !panelExpanded}
+				<NodePropertyPanel
+					data={selectedNodeData}
+					readonly={template?.published ?? false}
+					onchange={handleNodeDataChange}
+					onclose={() => (selectedNodeId = null)}
+					onexpand={() => (panelExpanded = true)}
+					{binding}
+					nodeId={selectedNodeId ?? undefined}
+					{templateId}
+				/>
+			{/if}
+
+			{#if panelExpanded && selectedNodeData}
+				<Sheet.Root
+					open
+					onOpenChange={(open) => { if (!open) panelExpanded = false; }}
+				>
+					<SheetContent class={getSheetWidthClass(selectedNodeData)}>
+						<SheetTitle>Node Properties</SheetTitle>
+						<SheetDescription>Edit the selected node</SheetDescription>
+						<NodePropertyPanel
+							data={selectedNodeData}
+							readonly={template?.published ?? false}
+							expanded
+							onchange={handleNodeDataChange}
+							onclose={() => (selectedNodeId = null)}
+							oncollapse={() => (panelExpanded = false)}
+							{binding}
+							nodeId={selectedNodeId ?? undefined}
+							{templateId}
+						/>
+					</SheetContent>
+				</Sheet.Root>
+			{/if}
+		</div>
+
+		{#if airPreview}
+			<div class="border-t border-border bg-muted/50" data-testid="air-preview-panel">
+				<div class="flex items-center justify-between px-3 py-1.5">
+					<span class="text-xs font-medium text-muted-foreground">AIR Preview</span>
+					<button
+						type="button"
+						class="text-xs text-muted-foreground underline"
+						onclick={() => (airPreview = null)}>close</button
+					>
+				</div>
+				<pre class="max-h-64 overflow-auto px-3 pb-2 font-mono text-[10px] text-foreground">
+{JSON.stringify(airPreview, null, 2)}
+				</pre>
+			</div>
+		{/if}
+	</div>
+{/if}

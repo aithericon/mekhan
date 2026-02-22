@@ -1,0 +1,590 @@
+{
+  "definitions": {
+    "DynamicToken": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Dynamic token - untyped JSON data.\n\nUse when you need flexibility and don't want compile-time type checking. Rhai scripts can manipulate these freely.",
+      "title": "DynamicToken"
+    }
+  },
+  "description": "",
+  "groups": [
+    {
+      "id": "grp_ht-b",
+      "name": "Task B"
+    },
+    {
+      "id": "grp_ht-a",
+      "name": "Task A"
+    }
+  ],
+  "name": "Parallel Two Paths",
+  "places": [
+    {
+      "id": "p_start-1_ready",
+      "initial_tokens": [
+        {}
+      ],
+      "name": "Start",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_split-1_out_0",
+      "name": "Split - Fork 0",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_split-1_out_1",
+      "name": "Split - Fork 1",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_ht-b_input",
+      "name": "Task B - Input",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_ht-b_active",
+      "name": "Task B - Active",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_ht-b_signal",
+      "name": "Task B - Signal",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "signal"
+    },
+    {
+      "id": "p_ht-b_output",
+      "name": "Task B - Output",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_ht-a_input",
+      "name": "Task A - Input",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_ht-a_active",
+      "name": "Task A - Active",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_ht-a_signal",
+      "name": "Task A - Signal",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "signal"
+    },
+    {
+      "id": "p_ht-a_output",
+      "name": "Task A - Output",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_join-1_output",
+      "name": "Join - Output",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "terminal"
+    }
+  ],
+  "requirements": [
+    {
+      "category": "human",
+      "handler_ids": [
+        "human_task"
+      ]
+    }
+  ],
+  "transitions": [
+    {
+      "id": "t_split-1_fork",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "input",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_start-1_ready",
+          "port": "input",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{ out_0: input, out_1: input }",
+        "type": "rhai"
+      },
+      "name": "Split - Fork",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "out_0",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "out_1",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_split-1_out_0",
+          "port": "out_0",
+          "weight": 1
+        },
+        {
+          "place": "p_split-1_out_1",
+          "port": "out_1",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "caused_signals": [
+        "p_ht-b_signal"
+      ],
+      "effect_config": {
+        "place": "p_ht-b_signal"
+      },
+      "id": "t_ht-b_request",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "task",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_ht-b_input",
+          "port": "task",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "config": {
+          "place": "p_ht-b_signal"
+        },
+        "handler_id": "human_task",
+        "type": "effect"
+      },
+      "name": "Task B - Request Human Task",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "assigned",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_ht-b_active",
+          "port": "assigned",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "guard": {
+        "source": "signal.task_id == state.task_id",
+        "type": "rhai"
+      },
+      "id": "t_ht-b_finalize",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "state",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "signal",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_ht-b_active",
+          "port": "state",
+          "weight": 1
+        },
+        {
+          "place": "p_ht-b_signal",
+          "port": "signal",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "let result = state; let keys = signal.keys(); for key in keys { result[key] = signal[key]; } #{ done: result }",
+        "type": "rhai"
+      },
+      "name": "Task B - Finalize",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "done",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_ht-b_output",
+          "port": "done",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "caused_signals": [
+        "p_ht-a_signal"
+      ],
+      "effect_config": {
+        "place": "p_ht-a_signal"
+      },
+      "id": "t_ht-a_request",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "task",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_ht-a_input",
+          "port": "task",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "config": {
+          "place": "p_ht-a_signal"
+        },
+        "handler_id": "human_task",
+        "type": "effect"
+      },
+      "name": "Task A - Request Human Task",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "assigned",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_ht-a_active",
+          "port": "assigned",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "guard": {
+        "source": "signal.task_id == state.task_id",
+        "type": "rhai"
+      },
+      "id": "t_ht-a_finalize",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "state",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "signal",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_ht-a_active",
+          "port": "state",
+          "weight": 1
+        },
+        {
+          "place": "p_ht-a_signal",
+          "port": "signal",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "let result = state; let keys = signal.keys(); for key in keys { result[key] = signal[key]; } #{ done: result }",
+        "type": "rhai"
+      },
+      "name": "Task A - Finalize",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "done",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_ht-a_output",
+          "port": "done",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "t_join-1_join",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "in_0",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "in_1",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_ht-a_output",
+          "port": "in_0",
+          "weight": 1
+        },
+        {
+          "place": "p_ht-b_output",
+          "port": "in_1",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{ output: merge_maps(in_0, in_1) }",
+        "type": "rhai"
+      },
+      "name": "Join - Join",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "output",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_join-1_output",
+          "port": "output",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "t_edge_e2",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "input",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_split-1_out_0",
+          "port": "input",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "let d = input; d.title = \"Task A\"; d.instructions_mdsvex = \"\"; d.steps = [#{\"blocks\": [#{\"field\": #{\"kind\": \"text\", \"label\": \"Result A\", \"name\": \"a_result\"}, \"type\": \"input\"}], \"id\": \"s1\", \"title\": \"Step\"}]; #{ output: d }",
+        "type": "rhai"
+      },
+      "name": "Split -> Task A",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "output",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_ht-a_input",
+          "port": "output",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "t_edge_e3",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "input",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_split-1_out_1",
+          "port": "input",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "let d = input; d.title = \"Task B\"; d.instructions_mdsvex = \"\"; d.steps = [#{\"blocks\": [#{\"field\": #{\"kind\": \"text\", \"label\": \"Result B\", \"name\": \"b_result\"}, \"type\": \"input\"}], \"id\": \"s2\", \"title\": \"Step\"}]; #{ output: d }",
+        "type": "rhai"
+      },
+      "name": "Split -> Task B",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "output",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_ht-b_input",
+          "port": "output",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

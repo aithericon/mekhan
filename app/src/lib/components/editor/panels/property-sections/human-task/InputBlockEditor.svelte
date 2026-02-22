@@ -1,0 +1,161 @@
+<script lang="ts">
+	import type { TaskFieldConfig } from '$lib/types/editor';
+	import Trash2 from '@lucide/svelte/icons/trash-2';
+	import ChevronDown from '@lucide/svelte/icons/chevron-down';
+	import ChevronRight from '@lucide/svelte/icons/chevron-right';
+	import { Input } from '$lib/components/ui/input';
+	import { Label } from '$lib/components/ui/label';
+	import StringListEditor from '../../shared/StringListEditor.svelte';
+	import { Select, SelectTrigger, SelectContent, SelectItem } from '$lib/components/ui/select';
+
+	type Props = {
+		field: TaskFieldConfig;
+		readonly?: boolean;
+		onchange: (field: TaskFieldConfig) => void;
+		onremove: () => void;
+	};
+
+	let { field, readonly = false, onchange, onremove }: Props = $props();
+
+	let expanded = $state(false);
+
+	function slugify(label: string): string {
+		return label
+			.toLowerCase()
+			.replace(/[^a-z0-9]+/g, '_')
+			.replace(/^_|_$/g, '');
+	}
+
+	const kindLabels: Record<string, string> = {
+		text: 'Text',
+		textarea: 'Textarea',
+		number: 'Number',
+		select: 'Select',
+		checkbox: 'Checkbox',
+		file: 'File',
+		signature: 'Signature'
+	};
+</script>
+
+<div class="rounded-md border border-border/50 bg-background text-sm">
+	<!-- Collapsed row -->
+	<div class="flex items-center gap-2 p-2.5">
+		<button
+			type="button"
+			class="rounded p-0.5 text-muted-foreground transition-colors hover:text-foreground"
+			onclick={() => (expanded = !expanded)}
+		>
+			{#if expanded}
+				<ChevronDown class="size-4" />
+			{:else}
+				<ChevronRight class="size-4" />
+			{/if}
+		</button>
+		<Input
+			type="text"
+			value={field.label}
+			placeholder="Label"
+			disabled={readonly}
+			oninput={(e) => {
+				const label = (e.currentTarget as HTMLInputElement).value;
+				const update: TaskFieldConfig = { ...field, label };
+				if (!field.name || field.name === slugify(field.label)) {
+					update.name = slugify(label);
+				}
+				onchange(update);
+			}}
+			class="flex-1"
+		/>
+		<div class="w-[110px] shrink-0">
+			<Select.Root
+				type="single"
+				value={field.kind}
+				onValueChange={(v) => {
+					if (v) onchange({ ...field, kind: v as TaskFieldConfig['kind'] });
+				}}
+				disabled={readonly}
+			>
+				<SelectTrigger disabled={readonly} class="h-9 px-2 text-sm">
+					{kindLabels[field.kind] ?? field.kind}
+				</SelectTrigger>
+				<SelectContent>
+					<SelectItem value="text" label="Text" />
+					<SelectItem value="textarea" label="Textarea" />
+					<SelectItem value="number" label="Number" />
+					<SelectItem value="select" label="Select" />
+					<SelectItem value="checkbox" label="Checkbox" />
+					<SelectItem value="file" label="File" />
+					<SelectItem value="signature" label="Signature" />
+				</SelectContent>
+			</Select.Root>
+		</div>
+		<label class="flex items-center gap-1.5">
+			<input
+				type="checkbox"
+				checked={field.required ?? false}
+				disabled={readonly}
+				onchange={(e) =>
+					onchange({
+						...field,
+						required: (e.currentTarget as HTMLInputElement).checked
+					})}
+				class="size-4 disabled:cursor-default disabled:opacity-70"
+			/>
+			<span class="text-xs text-muted-foreground">Required</span>
+		</label>
+		{#if !readonly}
+			<button
+				type="button"
+				class="rounded p-1 text-muted-foreground transition-colors hover:text-destructive"
+				onclick={onremove}
+			>
+				<Trash2 class="size-4" />
+			</button>
+		{/if}
+	</div>
+
+	<!-- Expanded section -->
+	{#if expanded}
+		<div class="space-y-3 border-t border-border/50 p-3">
+			<div class="space-y-1.5">
+				<Label class="text-xs text-muted-foreground">Field Name (API key)</Label>
+				<Input
+					type="text"
+					value={field.name}
+					placeholder="field_name"
+					disabled={readonly}
+					oninput={(e) =>
+						onchange({ ...field, name: (e.currentTarget as HTMLInputElement).value })}
+					class="font-mono"
+				/>
+			</div>
+
+			<div class="space-y-1.5">
+				<Label class="text-xs text-muted-foreground">Placeholder</Label>
+				<Input
+					type="text"
+					value={field.placeholder ?? ''}
+					placeholder="Placeholder text..."
+					disabled={readonly}
+					oninput={(e) =>
+						onchange({
+							...field,
+							placeholder: (e.currentTarget as HTMLInputElement).value || undefined
+						})}
+				/>
+			</div>
+
+			{#if field.kind === 'select'}
+				<div class="space-y-1.5">
+					<Label class="text-xs text-muted-foreground">Options</Label>
+					<StringListEditor
+						items={field.options ?? []}
+						{readonly}
+						placeholder="Option value"
+						onchange={(options) => onchange({ ...field, options })}
+					/>
+				</div>
+			{/if}
+		</div>
+	{/if}
+</div>

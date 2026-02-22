@@ -1,0 +1,118 @@
+{
+	"nodes": [
+		{
+			"id": "start-1",
+			"type": "start",
+			"position": { "x": 250, "y": 50 },
+			"data": { "type": "start", "label": "Start" }
+		},
+		{
+			"id": "split-1",
+			"type": "parallel_split",
+			"position": { "x": 250, "y": 150 },
+			"data": { "type": "parallel_split", "label": "Split" }
+		},
+		{
+			"id": "ht-a",
+			"type": "human_task",
+			"position": { "x": 100, "y": 300 },
+			"data": {
+				"type": "human_task",
+				"label": "Task A",
+				"taskTitle": "Task A",
+				"steps": [
+					{
+						"id": "s1",
+						"title": "Step",
+						"blocks": [
+							{
+								"type": "input",
+								"field": {
+									"name": "a_result",
+									"label": "Result A",
+									"kind": "text"
+								}
+							}
+						]
+					}
+				]
+			}
+		},
+		{
+			"id": "ht-b",
+			"type": "human_task",
+			"position": { "x": 400, "y": 300 },
+			"data": {
+				"type": "human_task",
+				"label": "Task B",
+				"taskTitle": "Task B",
+				"steps": [
+					{
+						"id": "s2",
+						"title": "Step",
+						"blocks": [
+							{
+								"type": "input",
+								"field": {
+									"name": "b_result",
+									"label": "Result B",
+									"kind": "text"
+								}
+							}
+						]
+					}
+				]
+			}
+		},
+		{
+			"id": "join-1",
+			"type": "parallel_join",
+			"position": { "x": 250, "y": 450 },
+			"data": { "type": "parallel_join", "label": "Join" }
+		},
+		{
+			"id": "end-1",
+			"type": "end",
+			"position": { "x": 250, "y": 550 },
+			"data": { "type": "end", "label": "End" }
+		}
+	],
+	"edges": [
+		{
+			"id": "e1",
+			"source": "start-1",
+			"target": "split-1",
+			"type": "sequence"
+		},
+		{
+			"id": "e2",
+			"source": "split-1",
+			"target": "ht-a",
+			"type": "sequence"
+		},
+		{
+			"id": "e3",
+			"source": "split-1",
+			"target": "ht-b",
+			"type": "sequence"
+		},
+		{
+			"id": "e4",
+			"source": "ht-a",
+			"target": "join-1",
+			"type": "sequence"
+		},
+		{
+			"id": "e5",
+			"source": "ht-b",
+			"target": "join-1",
+			"type": "sequence"
+		},
+		{
+			"id": "e6",
+			"source": "join-1",
+			"target": "end-1",
+			"type": "sequence"
+		}
+	]
+}

@@ -1,0 +1,241 @@
+{
+  "definitions": {
+    "DynamicToken": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Dynamic token - untyped JSON data.\n\nUse when you need flexibility and don't want compile-time type checking. Rhai scripts can manipulate these freely.",
+      "title": "DynamicToken"
+    }
+  },
+  "description": "",
+  "groups": [
+    {
+      "id": "grp_ht-1",
+      "name": "Review Task"
+    }
+  ],
+  "name": "Linear Human Task",
+  "places": [
+    {
+      "id": "p_start-1_ready",
+      "initial_tokens": [
+        {}
+      ],
+      "name": "Start",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_ht-1_input",
+      "name": "Review Task - Input",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_ht-1_active",
+      "name": "Review Task - Active",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_ht-1_signal",
+      "name": "Review Task - Signal",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "signal"
+    },
+    {
+      "id": "p_ht-1_output",
+      "name": "Review Task - Output",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "terminal"
+    }
+  ],
+  "requirements": [
+    {
+      "category": "human",
+      "handler_ids": [
+        "human_task"
+      ]
+    }
+  ],
+  "transitions": [
+    {
+      "caused_signals": [
+        "p_ht-1_signal"
+      ],
+      "effect_config": {
+        "place": "p_ht-1_signal"
+      },
+      "id": "t_ht-1_request",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "task",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_ht-1_input",
+          "port": "task",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "config": {
+          "place": "p_ht-1_signal"
+        },
+        "handler_id": "human_task",
+        "type": "effect"
+      },
+      "name": "Review Task - Request Human Task",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "assigned",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_ht-1_active",
+          "port": "assigned",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "guard": {
+        "source": "signal.task_id == state.task_id",
+        "type": "rhai"
+      },
+      "id": "t_ht-1_finalize",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "state",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "signal",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_ht-1_active",
+          "port": "state",
+          "weight": 1
+        },
+        {
+          "place": "p_ht-1_signal",
+          "port": "signal",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "let result = state; let keys = signal.keys(); for key in keys { result[key] = signal[key]; } #{ done: result }",
+        "type": "rhai"
+      },
+      "name": "Review Task - Finalize",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "done",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_ht-1_output",
+          "port": "done",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "t_edge_edge-start-ht",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "input",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_start-1_ready",
+          "port": "input",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "let d = input; d.title = \"Review Document\"; d.instructions_mdsvex = \"\"; d.steps = [#{\"blocks\": [#{\"field\": #{\"kind\": \"checkbox\", \"label\": \"Approved\", \"name\": \"approved\", \"required\": true}, \"type\": \"input\"}], \"id\": \"step-1\", \"title\": \"Review\"}]; #{ output: d }",
+        "type": "rhai"
+      },
+      "name": "Start -> Review Task",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "output",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_ht-1_input",
+          "port": "output",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}
