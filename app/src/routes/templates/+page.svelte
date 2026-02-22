@@ -33,7 +33,7 @@
 			const template = await createTemplate({
 				name: 'Untitled Workflow',
 				description: '',
-				author_id: 'default-user'
+				author_id: '00000000-0000-0000-0000-000000000000'
 			});
 			goto(`/templates/${template.id}`);
 		} catch (e) {

@@ -41,7 +41,7 @@
 				name: name.trim(),
 				description: description.trim(),
 				graph: defaultGraph,
-				author_id: 'default-user'
+				author_id: '00000000-0000-0000-0000-000000000000'
 			});
 			goto(`/templates/${template.id}`);
 		} catch (err) {
