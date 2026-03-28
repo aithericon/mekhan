@@ -109,3 +109,136 @@ export type DomainEvent =
 	| { type: 'NetCompleted'; net_id: string; terminal_place_id: string }
 	| { type: 'NetCancelled'; net_id: string; reason?: string }
 	| { type: 'ErrorOccurred'; message: string };
+
+// ---------------------------------------------------------------------------
+// Topology types (matches petri-lab's PetriNet / Place / Transition / Arc)
+// ---------------------------------------------------------------------------
+
+export type ArcDirection = 'place_to_transition' | 'transition_to_place';
+
+export type Arc = {
+	transition_id: string;
+	place_id: string;
+	direction: ArcDirection;
+	weight?: number;
+	read?: boolean;
+};
+
+export type PlaceKind = 'internal' | 'signal' | 'bridge_in' | 'bridge_out' | 'bridge_reply' | 'terminal';
+
+export type Place = {
+	id: string;
+	name: string;
+	kind?: PlaceKind;
+	capacity?: number | null;
+	token_schema?: string | null;
+	bridge_target?: {
+		target_net_id: string;
+		target_place_name: string;
+		reply_to?: string;
+	} | null;
+	bridge_source?: {
+		source_net_id: string;
+		source_place_name: string;
+	} | null;
+};
+
+export type Port = {
+	name: string;
+	schema_ref?: string | null;
+	cardinality?: 'single' | 'batch';
+};
+
+export type Transition = {
+	id: string;
+	name: string;
+	guard?: string | null;
+	script?: string;
+	input_ports?: Port[];
+	output_ports?: Port[];
+	effect_handler_id?: string | null;
+	logic_type?: 'rhai' | 'wasm' | 'effect';
+};
+
+export type PetriNet = {
+	places: Place[];
+	transitions: Transition[];
+	arcs: Arc[];
+};
+
+export type TransitionStatus =
+	| 'enabled'
+	| 'disabled_no_tokens'
+	| 'disabled_guard_failed'
+	| 'disabled_guard_error';
+
+// ---------------------------------------------------------------------------
+// Scenario / groups
+// ---------------------------------------------------------------------------
+
+export type ScenarioGroup = {
+	id: string;
+	name: string;
+	parent_id?: string | null;
+	metadata?: Record<string, unknown>;
+};
+
+// ---------------------------------------------------------------------------
+// Visualization types (used by Petri visualizer components)
+// ---------------------------------------------------------------------------
+
+export type SelectedElement =
+	| { type: 'place'; id: string }
+	| { type: 'transition'; id: string }
+	| { type: 'token'; placeId: string; tokenId: string }
+	| { type: 'event'; sequence: number }
+	| { type: 'group'; id: string }
+	| {
+			type: 'remotenet';
+			id: string;
+			label: string;
+			targets: string[];
+			sources: string[];
+			childNetIds: string[];
+		}
+	| null;
+
+export type EventSpotlight = {
+	transitionId: string | null;
+	consumedPlaceIds: string[];
+	producedPlaceIds: string[];
+	targetPlaceId: string | null;
+	allNodeIds: string[];
+};
+
+export type MarkingDiff = {
+	appeared: string[];
+	disappeared: string[];
+	firedTransition: string | null;
+};
+
+export type IssueLevel = 'error' | 'warning' | 'info';
+
+export type ValidationIssue = {
+	level: IssueLevel;
+	message: string;
+	node_id?: string;
+	node_type?: 'place' | 'transition';
+};
+
+export type AnalysisReport = {
+	issues: ValidationIssue[];
+};
+
+// ---------------------------------------------------------------------------
+// Multi-net metadata
+// ---------------------------------------------------------------------------
+
+export type NetMeta = {
+	net_id: string;
+	label?: string;
+	status: string;
+	in_memory: boolean;
+	template_id?: string;
+	created_by?: string;
+};

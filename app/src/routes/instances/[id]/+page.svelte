@@ -1,27 +1,32 @@
 <script lang="ts">
 	import { page } from '$app/state';
-	import { getInstance, getInstanceState, cancelInstance } from '$lib/api/client';
-	import type { WorkflowInstance, InstanceState } from '$lib/types/api';
-	import type { PersistedEvent } from '$lib/types/petri';
+	import { onDestroy } from 'svelte';
+	import { getInstance, cancelInstance } from '$lib/api/client';
+	import type { WorkflowInstance } from '$lib/types/api';
+	import { createPetriStore, type PetriStore } from '$lib/stores/petri.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
-	import Activity from '@lucide/svelte/icons/activity';
+	import { LabCanvas } from '$lib/components/petri';
+	import { Timeline } from '$lib/components/petri';
+	import { EventLog } from '$lib/components/petri';
+	import { Inspector } from '$lib/components/petri';
+	import { TokenDetailSheet } from '$lib/components/petri';
+	import { TransitionScriptSheet } from '$lib/components/petri';
 	import RefreshCw from '@lucide/svelte/icons/refresh-cw';
-	import CircleDot from '@lucide/svelte/icons/circle-dot';
-	import ChevronDown from '@lucide/svelte/icons/chevron-down';
-	import ChevronRight from '@lucide/svelte/icons/chevron-right';
-	import Zap from '@lucide/svelte/icons/zap';
-	import { SvelteSet } from 'svelte/reactivity';
+	import Layers from '@lucide/svelte/icons/layers';
+	import Info from '@lucide/svelte/icons/info';
 
 	const instanceId = $derived(page.params.id!);
 
 	let instance = $state<WorkflowInstance | null>(null);
-	let instanceState = $state<InstanceState | null>(null);
 	let loading = $state(true);
 	let error = $state<string | null>(null);
-	let expandedPlaces = new SvelteSet<string>();
-	let showEventLog = $state(false);
-	let expandedEvents = new SvelteSet<number>();
+	let activeTab = $state<'petri' | 'details'>('petri');
+	let petriStore = $state<PetriStore | null>(null);
+
+	// Token/Script sheet state
+	let tokenSheetOpen = $state(false);
+	let scriptSheetOpen = $state(false);
 
 	const statusColors: Record<string, string> = {
 		created: 'bg-gray-100 text-gray-700',
@@ -31,95 +36,23 @@
 		cancelled: 'bg-slate-100 text-slate-700'
 	};
 
-	const eventTypeColors: Record<string, string> = {
-		TokenCreated: 'text-green-600',
-		TransitionFired: 'text-blue-600',
-		EffectCompleted: 'text-blue-600',
-		EffectFailed: 'text-red-600',
-		TokenConsumed: 'text-orange-600',
-		TokenRemoved: 'text-orange-600',
-		TokenUpdated: 'text-violet-600',
-		NetInitialized: 'text-gray-500',
-		NetCreated: 'text-gray-500',
-		NetCompleted: 'text-green-700',
-		NetCancelled: 'text-slate-600',
-		ErrorOccurred: 'text-red-700',
-		TokenBridgedOut: 'text-cyan-600'
-	};
-
-	const markingTokens = $derived(instanceState?.marking?.tokens ?? {});
-
-	const hasTokens = $derived(
-		Object.values(markingTokens).some((tokens) => tokens.length > 0)
-	);
-
-	function togglePlace(placeId: string) {
-		if (expandedPlaces.has(placeId)) {
-			expandedPlaces.delete(placeId);
-		} else {
-			expandedPlaces.add(placeId);
-		}
-	}
-
-	function toggleEvent(seq: number) {
-		if (expandedEvents.has(seq)) {
-			expandedEvents.delete(seq);
-		} else {
-			expandedEvents.add(seq);
-		}
-	}
-
-	function eventSummary(event: PersistedEvent): string {
-		const e = event.event;
-		switch (e.type) {
-			case 'TokenCreated':
-				return e.place_name ?? e.place_id;
-			case 'TransitionFired':
-				return e.transition_name ?? e.transition_id;
-			case 'EffectCompleted':
-				return `${e.transition_name ?? e.transition_id} (${e.effect_handler_id})`;
-			case 'EffectFailed':
-				return `${e.transition_name ?? e.transition_id}: ${e.error_message}`;
-			case 'TokenConsumed':
-			case 'TokenRemoved':
-				return e.place_id;
-			case 'TokenUpdated':
-				return `${e.place_id} → ${e.new_color.type}`;
-			case 'NetCompleted':
-				return e.terminal_place_id;
-			case 'NetCancelled':
-				return e.reason ?? '';
-			case 'ErrorOccurred':
-				return e.message;
-			default:
-				return '';
-		}
-	}
+	const formatDate = (s: string | null) => (s ? new Date(s).toLocaleString() : '-');
 
 	async function load() {
 		loading = true;
 		error = null;
 		try {
 			instance = await getInstance(instanceId);
-			if (instance.status !== 'created') {
-				instanceState = await getInstanceState(instanceId);
+			if (instance.net_id && instance.status !== 'created') {
+				petriStore?.destroy();
+				const store = createPetriStore(instance.net_id);
+				await store.init();
+				petriStore = store;
 			}
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load instance';
 		} finally {
 			loading = false;
-		}
-	}
-
-	async function refresh() {
-		if (!instance) return;
-		try {
-			instance = await getInstance(instanceId);
-			if (instance.status !== 'created') {
-				instanceState = await getInstanceState(instanceId);
-			}
-		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to refresh';
 		}
 	}
 
@@ -133,265 +66,234 @@
 		}
 	}
 
-	const formatDate = (s: string | null) => (s ? new Date(s).toLocaleString() : '-');
-
 	$effect(() => {
 		load();
 	});
+
+	onDestroy(() => {
+		petriStore?.destroy();
+	});
 </script>
 
-<div class="h-full overflow-y-auto" data-testid="instance-page">
-	<div class="mx-auto max-w-3xl px-6 py-8">
-		{#if loading}
-			<div class="flex items-center justify-center py-16 text-sm text-muted-foreground">
-				Loading...
+<div class="flex h-full flex-col" data-testid="instance-page">
+	{#if loading}
+		<div class="flex items-center justify-center py-16 text-sm text-muted-foreground">
+			Loading...
+		</div>
+	{:else if error}
+		<div class="mx-6 mt-6 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+			{error}
+		</div>
+	{:else if instance}
+		<!-- Header bar -->
+		<div class="flex items-center justify-between border-b border-border px-4 py-2 bg-card shrink-0">
+			<div class="flex items-center gap-3">
+				<h1 class="text-sm font-semibold text-foreground">Instance</h1>
+				<Badge class={statusColors[instance.status] ?? ''} variant="secondary">
+					{instance.status}
+				</Badge>
+				<span class="font-mono text-[11px] text-muted-foreground">{instance.net_id}</span>
 			</div>
-		{:else if error}
-			<div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-				{error}
-			</div>
-		{:else if instance}
-			<div class="mb-6 flex items-start justify-between">
-				<div>
-					<div class="flex items-center gap-2">
-						<h1 class="text-2xl font-semibold tracking-tight text-foreground" data-testid="instance-heading">Instance</h1>
-						<Badge class={statusColors[instance.status] ?? ''} variant="secondary">
-							{instance.status}
-						</Badge>
-						{#if instanceState?.engine}
-							{@const engine = instanceState.engine}
-							<Badge
-								data-testid="engine-status"
-								class={engine.available
-									? 'bg-emerald-100 text-emerald-700'
-									: 'bg-gray-100 text-gray-500'}
-								variant="secondary"
-								title={engine.available
-									? `Engine hot — ${engine.run_mode ?? 'unknown'}`
-									: 'Engine offline'}
-							>
-								{engine.available ? 'Engine hot' : 'Engine offline'}
-							</Badge>
-						{/if}
-					</div>
-					<p class="mt-1 font-mono text-xs text-muted-foreground">{instance.net_id}</p>
+			<div class="flex items-center gap-2">
+				<!-- Tab switcher -->
+				<div class="flex rounded-md border border-border">
+					<button
+						class="px-2.5 py-1 text-xs font-medium transition-colors {activeTab === 'petri' ? 'bg-primary text-primary-foreground' : 'hover:bg-accent'}"
+						onclick={() => (activeTab = 'petri')}
+					>
+						<Layers class="inline-block size-3 mr-1" />
+						Petri Net
+					</button>
+					<button
+						class="px-2.5 py-1 text-xs font-medium transition-colors border-l border-border {activeTab === 'details' ? 'bg-primary text-primary-foreground' : 'hover:bg-accent'}"
+						onclick={() => (activeTab = 'details')}
+					>
+						<Info class="inline-block size-3 mr-1" />
+						Details
+					</button>
 				</div>
-				<div class="flex items-center gap-2">
-					<Button variant="outline" size="sm" onclick={refresh}>
-						<RefreshCw class="size-3.5" />
-						Refresh
+				{#if instance.status === 'running' || instance.status === 'created'}
+					<Button
+						variant="outline"
+						size="sm"
+						class="border-destructive/30 text-destructive hover:bg-destructive/10"
+						onclick={handleCancel}
+					>
+						Cancel
 					</Button>
-					{#if instance.status === 'running' || instance.status === 'created'}
-						<Button
-							variant="outline"
-							size="sm"
-							class="border-destructive/30 text-destructive hover:bg-destructive/10"
-							onclick={handleCancel}
-						>
-							Cancel
-						</Button>
-					{/if}
-				</div>
-			</div>
-
-			<div class="space-y-4">
-				<div class="rounded-lg border border-border bg-card">
-					<div class="border-b border-border px-4 py-2.5">
-						<span class="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-							Details
-						</span>
-					</div>
-					<dl class="divide-y divide-border">
-						<div class="flex justify-between px-4 py-2.5">
-							<dt class="text-xs text-muted-foreground">Instance ID</dt>
-							<dd class="font-mono text-xs text-foreground">{instance.id}</dd>
-						</div>
-						<div class="flex justify-between px-4 py-2.5">
-							<dt class="text-xs text-muted-foreground">Template</dt>
-							<dd class="text-xs text-foreground">
-								<a href="/templates/{instance.template_id}" class="text-primary underline">
-									v{instance.template_version}
-								</a>
-							</dd>
-						</div>
-						<div class="flex justify-between px-4 py-2.5">
-							<dt class="text-xs text-muted-foreground">Created</dt>
-							<dd class="text-xs text-foreground">{formatDate(instance.created_at)}</dd>
-						</div>
-						<div class="flex justify-between px-4 py-2.5">
-							<dt class="text-xs text-muted-foreground">Started</dt>
-							<dd class="text-xs text-foreground">{formatDate(instance.started_at)}</dd>
-						</div>
-						<div class="flex justify-between px-4 py-2.5">
-							<dt class="text-xs text-muted-foreground">Completed</dt>
-							<dd class="text-xs text-foreground">{formatDate(instance.completed_at)}</dd>
-						</div>
-						{#if instance.current_step}
-							<div class="flex justify-between px-4 py-2.5">
-								<dt class="text-xs text-muted-foreground">Current Step</dt>
-								<dd class="text-xs font-medium text-foreground">{instance.current_step}</dd>
-							</div>
-						{/if}
-					</dl>
-				</div>
-
-				{#if instance.status !== 'created'}
-					<!-- Marking -->
-					<div class="rounded-lg border border-border bg-card" data-testid="marking-section">
-						<div class="border-b border-border px-4 py-2.5">
-							<span class="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-								Marking
-							</span>
-							{#if instanceState?.event_count != null}
-								<span class="ml-2 text-[10px] text-muted-foreground">
-									{instanceState.event_count} events
-								</span>
-							{/if}
-						</div>
-
-						{#if !instanceState}
-							<div class="px-4 py-6 text-center">
-								<p class="text-xs text-muted-foreground">Loading state...</p>
-							</div>
-						{:else if hasTokens}
-							<div class="divide-y divide-border">
-								{#each Object.entries(markingTokens) as [placeId, tokens] (placeId)}
-									{#if tokens.length > 0}
-										<div>
-											<button
-												type="button"
-												class="flex w-full items-center gap-2 px-4 py-2.5 text-left transition-colors hover:bg-accent/50"
-												onclick={() => togglePlace(placeId)}
-											>
-												{#if expandedPlaces.has(placeId)}
-													<ChevronDown class="size-3 text-muted-foreground" />
-												{:else}
-													<ChevronRight class="size-3 text-muted-foreground" />
-												{/if}
-												<CircleDot class="size-3 text-blue-500" />
-												<span class="text-xs font-medium text-foreground">{placeId}</span>
-												<span class="ml-auto text-[10px] text-muted-foreground">
-													{tokens.length} token{tokens.length !== 1 ? 's' : ''}
-												</span>
-											</button>
-
-											{#if expandedPlaces.has(placeId)}
-												<div class="border-t border-border/50 bg-muted/30 px-4 py-2">
-													{#each tokens as token, i (token.id)}
-														<div class="flex items-start gap-2 py-1.5 {i > 0 ? 'border-t border-border/30' : ''}">
-															<span class="shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground" title={token.id}>
-																{token.id.slice(0, 8)}
-															</span>
-															{#if token.color.type === 'Unit'}
-																<Badge variant="secondary" class="bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400">
-																	Unit
-																</Badge>
-															{:else if token.color.type === 'Integer'}
-																<Badge variant="secondary" class="bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300">
-																	{token.color.value}
-																</Badge>
-															{:else if token.color.type === 'Data'}
-																<Badge variant="secondary" class="bg-violet-100 text-violet-700 dark:bg-violet-900 dark:text-violet-300">
-																	Data
-																</Badge>
-															{/if}
-														</div>
-														{#if token.color.type === 'Data'}
-															<pre class="mb-1 ml-6 mt-1 max-h-32 overflow-auto rounded bg-muted px-2 py-1.5 font-mono text-[10px] text-foreground">{JSON.stringify(token.color.value, null, 2)}</pre>
-														{/if}
-													{/each}
-												</div>
-											{/if}
-										</div>
-									{/if}
-								{/each}
-							</div>
-						{:else}
-							<div class="px-4 py-6 text-center">
-								<CircleDot class="mx-auto size-6 text-muted-foreground/30" />
-								<p class="mt-2 text-xs text-muted-foreground">
-									{(instanceState.event_count ?? 0) === 0
-										? 'No events — event log may have been purged'
-										: 'No tokens in any place'}
-								</p>
-							</div>
-						{/if}
-					</div>
-
-					<!-- Enabled Transitions (only when engine is hot) -->
-					{#if instanceState?.engine?.available && instanceState.enabled_transitions.length > 0}
-						<div class="rounded-lg border border-border bg-card">
-							<div class="border-b border-border px-4 py-2.5">
-								<span class="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-									Enabled Transitions
-								</span>
-							</div>
-							<div class="px-4 py-3">
-								{#each instanceState.enabled_transitions as transitionId (transitionId)}
-									<div class="mb-1 flex items-center gap-2">
-										<Activity class="size-3 text-amber-500" />
-										<span class="text-xs text-foreground">{transitionId}</span>
-									</div>
-								{/each}
-							</div>
-						</div>
-					{/if}
-
-					<!-- Event Log -->
-					{#if instanceState?.events?.length}
-						<div class="rounded-lg border border-border bg-card" data-testid="event-log-section">
-							<button
-								type="button"
-								class="flex w-full items-center gap-2 px-4 py-2.5 text-left transition-colors hover:bg-accent/50"
-								onclick={() => (showEventLog = !showEventLog)}
-							>
-								{#if showEventLog}
-									<ChevronDown class="size-3 text-muted-foreground" />
-								{:else}
-									<ChevronRight class="size-3 text-muted-foreground" />
-								{/if}
-								<span class="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-									Event Log
-								</span>
-								<span class="text-[10px] text-muted-foreground">
-									{instanceState.event_count} events
-								</span>
-							</button>
-
-							{#if showEventLog}
-								<div class="max-h-96 divide-y divide-border/50 overflow-y-auto border-t border-border">
-									{#each instanceState.events as event (event.sequence)}
-										<div>
-											<button
-												type="button"
-												class="flex w-full items-center gap-2 px-4 py-1.5 text-left transition-colors hover:bg-accent/30"
-												onclick={() => toggleEvent(event.sequence)}
-											>
-												<span class="shrink-0 w-6 text-right font-mono text-[10px] text-muted-foreground">
-													{event.sequence}
-												</span>
-												<Zap class="size-2.5 shrink-0 {eventTypeColors[event.event.type] ?? 'text-gray-500'}" />
-												<span class="text-[11px] font-medium {eventTypeColors[event.event.type] ?? 'text-gray-500'}">
-													{event.event.type}
-												</span>
-												<span class="truncate text-[10px] text-muted-foreground">
-													{eventSummary(event)}
-												</span>
-												<span class="ml-auto shrink-0 text-[9px] text-muted-foreground/60">
-													{new Date(event.timestamp).toLocaleTimeString()}
-												</span>
-											</button>
-											{#if expandedEvents.has(event.sequence)}
-												<pre class="mx-4 mb-2 max-h-48 overflow-auto rounded bg-muted px-3 py-2 font-mono text-[10px] text-foreground">{JSON.stringify(event.event, null, 2)}</pre>
-											{/if}
-										</div>
-									{/each}
-								</div>
-							{/if}
-						</div>
-					{/if}
 				{/if}
 			</div>
+		</div>
+
+		{#if activeTab === 'petri' && petriStore}
+			<!-- Petri net visualization (full height) -->
+			<div class="flex flex-1 min-h-0">
+				<!-- Canvas + timeline -->
+				<div class="flex flex-1 flex-col min-w-0">
+					<div class="flex-1 relative">
+						<LabCanvas
+							topology={petriStore.topology}
+							marking={petriStore.projectedMarking}
+							bridgedOutTokens={petriStore.bridgedOutTokens}
+							enabledTransitions={Object.entries(petriStore.transitionStatuses)
+								.filter(([_, s]) => s === 'enabled')
+								.map(([id]) => id)}
+							transitionStatuses={petriStore.transitionStatuses}
+							groups={petriStore.currentGroups}
+							selectedElementId={petriStore.selectedElement?.type === 'place' || petriStore.selectedElement?.type === 'transition'
+								? petriStore.selectedElement.id
+								: null}
+							spotlight={petriStore.eventSpotlight}
+							markingDiff={petriStore.markingDiff}
+							onFireTransition={(id) => petriStore?.fireTransition(id)}
+							onSelectPlace={(id) => petriStore?.selectPlace(id)}
+							onSelectTransition={(id) => petriStore?.selectTransition(id)}
+							onSelectToken={(placeId, tokenId) => petriStore?.selectToken(placeId, tokenId)}
+							onSelectGroup={(id) => petriStore?.selectGroup(id)}
+						/>
+					</div>
+					{#if petriStore.events.length > 0}
+						<Timeline
+							events={petriStore.events}
+							currentIndex={petriStore.replayIndex}
+							onIndexChange={(i) => petriStore?.setReplayIndex(i)}
+							evaluating={petriStore.evaluating}
+							runMode={petriStore.runMode}
+							onEvaluate={() => petriStore?.evaluate()}
+							onToggleRunMode={() => petriStore?.setRunMode(petriStore.runMode === 'running' ? 'stopped' : 'running')}
+							onHibernate={() => petriStore?.hibernate()}
+						/>
+					{/if}
+				</div>
+
+				<!-- Right panel: Event log + Inspector -->
+				<div class="w-[320px] shrink-0 border-l border-border flex flex-col bg-card">
+					<!-- Inspector (top half) -->
+					<div class="flex-1 overflow-y-auto border-b border-border min-h-0">
+						<Inspector
+							selectedElement={petriStore.selectedElement}
+							placeDetails={petriStore.getSelectedPlaceDetails()}
+							transitionDetails={petriStore.getSelectedTransitionDetails()}
+							tokenDetails={petriStore.getSelectedTokenDetails()}
+							eventDetails={petriStore.getSelectedEventDetails()}
+							groupDetails={petriStore.getSelectedGroupDetails()}
+							getTransitionName={(id) => petriStore?.getTransitionName(id) ?? id}
+							getPlaceName={(id) => petriStore?.getPlaceName(id) ?? id}
+							onInjectToken={async (placeId, data) => {
+								if (!petriStore) return { success: false, error: 'No store' };
+								return petriStore.injectToken(placeId, data);
+							}}
+							onSelectEvent={(seq) => petriStore?.selectEvent(seq)}
+							onSetReplayIndex={(i) => petriStore?.setReplayIndex(i)}
+							onOpenScript={() => (scriptSheetOpen = true)}
+							onViewToken={() => (tokenSheetOpen = true)}
+						/>
+					</div>
+					<!-- Event log (bottom half) -->
+					<div class="h-[300px] shrink-0 overflow-hidden">
+						<EventLog
+							events={petriStore.events}
+							currentIndex={petriStore.replayIndex}
+							onSelectEvent={(i) => petriStore?.setReplayIndex(i)}
+							onInspectEvent={(seq) => petriStore?.selectEvent(seq)}
+							getTransitionName={(id) => petriStore?.getTransitionName(id) ?? id}
+							getPlaceName={(id) => petriStore?.getPlaceName(id) ?? id}
+						/>
+					</div>
+				</div>
+			</div>
+
+			<!-- Sheets -->
+			{#if petriStore.selectedElement?.type === 'token'}
+				{@const details = petriStore.getSelectedTokenDetails()}
+				{#if details}
+					<TokenDetailSheet
+						token={details.token}
+						placeName={details.placeName}
+						open={tokenSheetOpen}
+						onClose={() => (tokenSheetOpen = false)}
+					/>
+				{/if}
+			{/if}
+
+			{#if petriStore.selectedElement?.type === 'transition'}
+				{@const details = petriStore.getSelectedTransitionDetails()}
+				{#if details}
+					<TransitionScriptSheet
+						transition={details.transition}
+						inputPorts={details.transition.input_ports ?? []}
+						outputPorts={details.transition.output_ports ?? []}
+						guard={details.transition.guard ?? null}
+						script={details.transition.script ?? ''}
+						status={petriStore.transitionStatuses[details.transition.id]}
+						effectHandlerId={details.transition.effect_handler_id}
+						open={scriptSheetOpen}
+						onClose={() => (scriptSheetOpen = false)}
+						onSaveScript={async (id, script, guard) => {
+							await petriStore?.saveTransitionScript(id, script, guard);
+						}}
+					/>
+				{/if}
+			{/if}
+
+		{:else if activeTab === 'petri' && !petriStore}
+			<div class="flex items-center justify-center py-16 text-sm text-muted-foreground">
+				{#if instance.status === 'created'}
+					Instance has not started yet. No Petri net is available.
+				{:else}
+					Loading Petri net...
+				{/if}
+			</div>
+
+		{:else}
+			<!-- Details tab (original content) -->
+			<div class="mx-auto max-w-3xl px-6 py-8 overflow-y-auto">
+				<div class="space-y-4">
+					<div class="rounded-lg border border-border bg-card">
+						<div class="border-b border-border px-4 py-2.5">
+							<span class="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+								Details
+							</span>
+						</div>
+						<dl class="divide-y divide-border">
+							<div class="flex justify-between px-4 py-2.5">
+								<dt class="text-xs text-muted-foreground">Instance ID</dt>
+								<dd class="font-mono text-xs text-foreground">{instance.id}</dd>
+							</div>
+							<div class="flex justify-between px-4 py-2.5">
+								<dt class="text-xs text-muted-foreground">Template</dt>
+								<dd class="text-xs text-foreground">
+									<a href="/templates/{instance.template_id}" class="text-primary underline">
+										v{instance.template_version}
+									</a>
+								</dd>
+							</div>
+							<div class="flex justify-between px-4 py-2.5">
+								<dt class="text-xs text-muted-foreground">Net ID</dt>
+								<dd class="font-mono text-xs text-foreground">{instance.net_id}</dd>
+							</div>
+							<div class="flex justify-between px-4 py-2.5">
+								<dt class="text-xs text-muted-foreground">Created</dt>
+								<dd class="text-xs text-foreground">{formatDate(instance.created_at)}</dd>
+							</div>
+							<div class="flex justify-between px-4 py-2.5">
+								<dt class="text-xs text-muted-foreground">Started</dt>
+								<dd class="text-xs text-foreground">{formatDate(instance.started_at)}</dd>
+							</div>
+							<div class="flex justify-between px-4 py-2.5">
+								<dt class="text-xs text-muted-foreground">Completed</dt>
+								<dd class="text-xs text-foreground">{formatDate(instance.completed_at)}</dd>
+							</div>
+							{#if instance.current_step}
+								<div class="flex justify-between px-4 py-2.5">
+									<dt class="text-xs text-muted-foreground">Current Step</dt>
+									<dd class="text-xs font-medium text-foreground">{instance.current_step}</dd>
+								</div>
+							{/if}
+						</dl>
+					</div>
+				</div>
+			</div>
 		{/if}
-	</div>
+	{/if}
 </div>

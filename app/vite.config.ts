@@ -6,6 +6,12 @@ export default defineConfig({
 	plugins: [tailwindcss(), sveltekit()],
 	server: {
 		proxy: {
+			// Petri-lab engine API (port 3030)
+			'/petri': {
+				target: 'http://localhost:3030',
+				changeOrigin: true,
+				rewrite: (path: string) => path.replace(/^\/petri/, '')
+			},
 			'/api/yjs': {
 				target: 'http://localhost:3100',
 				ws: true,
