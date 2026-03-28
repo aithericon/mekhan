@@ -240,23 +240,15 @@ pub async fn get_instance_state(
     // 4. Best-effort engine query for status + enabled transitions + run mode
     let (engine, enabled_transitions) = match state.petri.try_get_state(&instance.net_id).await {
         Some(engine_state) => {
-            let run_mode = engine_state
-                .get("run_mode")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
             let transitions: Vec<String> = engine_state
-                .get("enabled_transitions")
-                .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                        .collect()
-                })
-                .unwrap_or_default();
+                .enabled_transitions
+                .iter()
+                .map(|t| t.to_string())
+                .collect();
             (
                 EngineStatus {
                     available: true,
-                    run_mode,
+                    run_mode: Some(engine_state.run_mode),
                 },
                 transitions,
             )

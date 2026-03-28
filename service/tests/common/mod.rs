@@ -3,11 +3,10 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::Router;
-use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use tokio::net::TcpListener;
-use uuid::Uuid;
 
+use aithericon_test_infra::TestDb;
 use mekhan_service::config::{AppConfig, CleanupConfig, S3Config};
 use mekhan_service::nats::MekhanNats;
 use mekhan_service::petri::client::PetriClient;
@@ -16,58 +15,50 @@ use mekhan_service::yjs::manager::YjsManager;
 use mekhan_service::yjs::persistence::YjsPersistence;
 use mekhan_service::{build_router, AppState};
 
-/// Default test database URL. Uses the docker-compose postgres at localhost:5432
-/// with the `mekhan` user. Each test gets its own database for isolation.
-const BASE_DATABASE_URL: &str = "postgres://mekhan:mekhan@localhost:5432";
-
-/// Create an isolated test database with a unique name, run migrations, and return the pool.
+/// Create an isolated test database with migrations applied.
+/// Uses the shared test infrastructure at localhost:5599.
+///
+/// Returns a `PgPool` for backward compat with existing tests.
+/// The `TestDb` is leaked to prevent the destructor from dropping the database
+/// before the test completes. Since the infra is tmpfs-backed, leaked DBs
+/// disappear on `just down`.
 pub async fn create_test_db() -> PgPool {
-    let db_name = format!("mekhan_test_{}", Uuid::new_v4().simple());
-
-    // Connect to the default `mekhan` database to create the test database
-    let admin_pool = PgPoolOptions::new()
-        .max_connections(2)
-        .connect(&format!("{}/mekhan", BASE_DATABASE_URL))
-        .await
-        .expect("failed to connect to admin database — is docker-compose running?");
-
-    sqlx::query(&format!("CREATE DATABASE \"{}\"", db_name))
-        .execute(&admin_pool)
-        .await
-        .expect("failed to create test database");
-
-    admin_pool.close().await;
-
-    // Connect to the new test database and run migrations
-    let pool = PgPoolOptions::new()
-        .max_connections(5)
-        .connect(&format!("{}/{}", BASE_DATABASE_URL, db_name))
-        .await
-        .expect("failed to connect to test database");
-
-    sqlx::migrate!("./migrations")
-        .run(&pool)
-        .await
-        .expect("failed to run migrations");
-
+    let db = TestDb::create("./migrations").await;
+    let pool = db.pool.clone();
+    // Leak the TestDb to prevent Drop from deleting the database mid-test.
+    // The tmpfs-backed Postgres container handles cleanup on shutdown.
+    std::mem::forget(db);
     pool
 }
 
-/// Build a test AppConfig.
+/// Default S3 URL for test infrastructure.
+/// Override with `TEST_S3_ENDPOINT` env var.
+const DEFAULT_TEST_S3_ENDPOINT: &str = "http://localhost:9099";
+
+/// Build a test AppConfig pointing to the shared test infrastructure.
 pub fn test_config() -> AppConfig {
+    let s3_endpoint = std::env::var("TEST_S3_ENDPOINT")
+        .unwrap_or_else(|_| DEFAULT_TEST_S3_ENDPOINT.to_string());
+
     AppConfig {
         host: "127.0.0.1".to_string(),
         port: 0,
-        database_url: String::new(), // unused — pool is created directly
+        database_url: String::new(),
         petri_lab_url: "http://localhost:3030".to_string(),
-        nats_url: "nats://localhost:4222".to_string(),
+        nats_url: aithericon_test_infra::nats_url(),
         cleanup: CleanupConfig::default(),
-        s3: S3Config::default(),
+        s3: S3Config {
+            endpoint: s3_endpoint,
+            bucket: "mekhan-test".to_string(),
+            access_key: "testadmin".to_string(),
+            secret_key: "testadmin".to_string(),
+            region: "us-east-1".to_string(),
+        },
     }
 }
 
 /// Build the full Axum Router wired to a test database.
-/// Requires docker-compose postgres and NATS to be running.
+/// Requires `just -f aithericon-test-infra/justfile up` to be running.
 ///
 /// Returns `(Router, PgPool)` — callers can use the pool for direct DB assertions.
 pub async fn test_app() -> (Router, PgPool) {
@@ -76,10 +67,9 @@ pub async fn test_app() -> (Router, PgPool) {
 
     let petri = PetriClient::new(&config.petri_lab_url);
 
-    // Try to connect to NATS; if unavailable, tests that need NATS should be skipped.
     let nats = MekhanNats::connect(&config.nats_url)
         .await
-        .expect("failed to connect to NATS — is docker-compose running?");
+        .expect("failed to connect to NATS — run: just -f aithericon-test-infra/justfile up");
 
     let yjs_persistence = YjsPersistence::new(db.clone());
     let yjs_manager = Arc::new(YjsManager::new(yjs_persistence));

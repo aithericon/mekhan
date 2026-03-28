@@ -884,7 +884,7 @@ async fn asset_upload_roundtrip() {
 
     let resp = client
         .post(format!(
-            "{server}/api/templates/{template_id}/files/start"
+            "{server}/api/files/upload/{template_id}/start"
         ))
         .multipart(form)
         .send()
@@ -955,17 +955,17 @@ async fn asset_upload_roundtrip() {
     );
 
     // -----------------------------------------------------------------------
-    // 4. Reject non-image content types (does NOT depend on S3)
+    // 4. Reject disallowed content types (does NOT depend on S3)
     // -----------------------------------------------------------------------
     let part = reqwest::multipart::Part::bytes(vec![0x00, 0x01, 0x02])
         .file_name("malware.exe")
-        .mime_str("application/octet-stream")
+        .mime_str("application/x-executable")
         .unwrap();
     let form = reqwest::multipart::Form::new().part("file", part);
 
     let resp = client
         .post(format!(
-            "{server}/api/templates/{template_id}/files/start"
+            "{server}/api/files/upload/{template_id}/start"
         ))
         .multipart(form)
         .send()
@@ -975,6 +975,6 @@ async fn asset_upload_roundtrip() {
     assert_eq!(
         resp.status(),
         400,
-        "non-image upload should be rejected"
+        "disallowed content type should be rejected"
     );
 }

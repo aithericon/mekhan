@@ -58,6 +58,9 @@ petgraph = "0.6"
 # Petri-net domain types (events, marking, tokens)
 petri-domain = { path = "../../petri-lab/core-engine/crates/domain" }
 
+# Petri-net API types (shared request/response DTOs for engine communication)
+petri-api-types = { path = "../../petri-lab/core-engine/crates/api-types" }
+
 # Yjs CRDT for real-time collaborative editing
 yrs = "0.21"
 
@@ -82,3 +85,4 @@ aws-credential-types = "1"
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 tempfile = "3"
+aithericon-test-infra = { path = "../../aithericon-test-infra/crates/test-infra" }

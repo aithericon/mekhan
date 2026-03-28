@@ -105,5 +105,5 @@ pub struct InstanceStateResponse {
 #[derive(Debug, Serialize)]
 pub struct EngineStatus {
     pub available: bool,
-    pub run_mode: Option<String>,
+    pub run_mode: Option<petri_api_types::RunMode>,
 }

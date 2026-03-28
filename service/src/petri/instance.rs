@@ -83,7 +83,7 @@ pub async fn deploy_instance(
     client.deploy_scenario(net_id, air_json).await?;
 
     // Start execution
-    client.set_run_mode(net_id, "running").await?;
+    client.set_run_mode(net_id, petri_api_types::RunMode::Running).await?;
 
     Ok(())
 }

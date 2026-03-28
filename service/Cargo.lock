@@ -78,6 +78,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "aithericon-test-infra"
+version = "0.1.0"
+dependencies = [
+ "async-nats",
+ "sqlx",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "allocator-api2"
 version = "0.2.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2316,6 +2327,7 @@ name = "mekhan-service"
 version = "0.1.0"
 dependencies = [
  "aithericon-sdk",
+ "aithericon-test-infra",
  "anyhow",
  "async-nats",
  "aws-config",
@@ -2331,6 +2343,7 @@ dependencies = [
  "http-body-util",
  "indexmap",
  "petgraph",
+ "petri-api-types",
  "petri-domain",
  "reqwest",
  "schemars",
@@ -2714,6 +2727,18 @@ checksum = "b4c5cc86750666a3ed20bdaf5ca2a0344f9c67674cae0515bec2da16fbaa47db"
 dependencies = [
  "fixedbitset",
  "indexmap",
+]
+
+[[package]]
+name = "petri-api-types"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "petri-domain",
+ "serde",
+ "serde_json",
+ "utoipa",
+ "uuid",
 ]
 
 [[package]]

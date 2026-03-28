@@ -1,3 +1,4 @@
+use petri_api_types::{RunMode, SetRunModeRequest, StateResponse, TopologyResponse};
 use reqwest::Client;
 use serde_json::Value;
 
@@ -39,13 +40,17 @@ impl PetriClient {
         Ok(())
     }
 
-    /// Set the run mode of a net (e.g., "running", "paused").
-    pub async fn set_run_mode(&self, net_id: &str, mode: &str) -> Result<(), PetriError> {
+    /// Set the run mode of a net.
+    pub async fn set_run_mode(
+        &self,
+        net_id: &str,
+        mode: RunMode,
+    ) -> Result<(), PetriError> {
         let url = format!("{}/api/nets/{}/run-mode", self.base_url, net_id);
         let resp = self
             .client
             .put(&url)
-            .json(&serde_json::json!({"mode": mode}))
+            .json(&SetRunModeRequest { mode })
             .send()
             .await?;
         if !resp.status().is_success() {
@@ -57,7 +62,7 @@ impl PetriClient {
     }
 
     /// Get the current state (marking + enabled transitions) of a net.
-    pub async fn get_state(&self, net_id: &str) -> Result<Value, PetriError> {
+    pub async fn get_state(&self, net_id: &str) -> Result<StateResponse, PetriError> {
         let url = format!("{}/api/nets/{}/state", self.base_url, net_id);
         let resp = self.client.get(&url).send().await?;
         if !resp.status().is_success() {
@@ -69,7 +74,7 @@ impl PetriClient {
     }
 
     /// Get the topology of a net.
-    pub async fn get_topology(&self, net_id: &str) -> Result<Value, PetriError> {
+    pub async fn get_topology(&self, net_id: &str) -> Result<TopologyResponse, PetriError> {
         let url = format!("{}/api/nets/{}/topology", self.base_url, net_id);
         let resp = self.client.get(&url).send().await?;
         if !resp.status().is_success() {
@@ -93,32 +98,23 @@ impl PetriClient {
         Ok(())
     }
 
-    /// Terminate a running net: pause then delete.
-    /// Per Section 11.8: no direct terminate endpoint yet,
-    /// so we set run-mode to paused, then delete.
+    /// Terminate a running net: stop then delete.
     pub async fn terminate_net(&self, net_id: &str) -> Result<(), PetriError> {
-        // Best-effort pause; if the net is already completed/hibernated, this may 404
-        let _ = self.set_run_mode(net_id, "paused").await;
+        // Best-effort stop; if the net is already completed/hibernated, this may 404
+        let _ = self.set_run_mode(net_id, RunMode::Stopped).await;
         self.delete_net(net_id).await
     }
 
     /// Try to get engine state. Returns None if the engine doesn't have the net
     /// loaded (404, timeout, connection refused, etc.)
-    pub async fn try_get_state(&self, net_id: &str) -> Option<Value> {
+    pub async fn try_get_state(&self, net_id: &str) -> Option<StateResponse> {
         self.get_state(net_id).await.ok()
     }
 
     /// Try to get run mode. Returns None on any error.
-    pub async fn try_get_run_mode(&self, net_id: &str) -> Option<String> {
-        let url = format!("{}/api/nets/{}/run-mode", self.base_url, net_id);
-        let resp = self.client.get(&url).send().await.ok()?;
-        if !resp.status().is_success() {
-            return None;
-        }
-        let body: Value = resp.json().await.ok()?;
-        body.get("current_mode")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
+    pub async fn try_get_run_mode(&self, net_id: &str) -> Option<RunMode> {
+        let state = self.try_get_state(net_id).await?;
+        Some(state.run_mode)
     }
 
     /// Get the SSE event stream URL for a net (caller connects directly).
