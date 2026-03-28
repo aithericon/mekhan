@@ -17,10 +17,15 @@ import {
 	apiDelete,
 	petriGet,
 	petriPost,
+	hpiGet,
+	hpiPost,
 	servicesHealthy,
+	initHpiToken,
 	createAndPublish,
 	createInstance,
-	waitForInstanceStatus
+	waitForInstanceStatus,
+	waitForTokenAtPlace,
+	waitForHpiTask
 } from './helpers';
 
 // ---------------------------------------------------------------------------
@@ -30,6 +35,9 @@ import {
 test.beforeAll(async () => {
 	const healthy = await servicesHealthy();
 	test.skip(!healthy, 'Full stack is not running — skipping integration tests');
+
+	// Authenticate with HPI for human task tests
+	await initHpiToken();
 });
 
 // Track created resources for cleanup
@@ -344,8 +352,10 @@ test.describe('Test 4: Cancel a running instance', () => {
 // Test 5: Human task workflow (Start -> HumanTask -> End) with signal injection
 // ---------------------------------------------------------------------------
 
-test.describe('Test 5: Human task completion via signal injection', () => {
-	test('completes a HumanTask workflow by injecting signal token', async () => {
+test.describe('Test 5: Human task completion via HPI round-trip', () => {
+	test('completes a HumanTask workflow end-to-end through HPI', async () => {
+		test.setTimeout(60_000);
+
 		const graph = {
 			nodes: [
 				{
@@ -420,10 +430,11 @@ test.describe('Test 5: Human task completion via signal injection', () => {
 			]
 		};
 
+		// 1. Create template + publish (triggers compilation to AIR)
 		const template = await createAndPublish(`e2e-human-${Date.now()}`, graph);
 		createdTemplateIds.push(template.id);
 
-		// Verify the AIR has the signal place
+		// 2. Verify the AIR has the signal place
 		const airRes = await apiGet(`/api/templates/${template.id}/air`);
 		expect(airRes.status).toBe(200);
 		const air = await airRes.json();
@@ -432,118 +443,63 @@ test.describe('Test 5: Human task completion via signal injection', () => {
 		);
 		expect(signalPlace).toBeTruthy();
 
-		// Create instance
+		// 3. Create instance (deploys net to petri-lab, starts eval loop)
 		const instance = await createInstance(template.id);
 		createdInstanceIds.push(instance.id);
+		expect(instance.status).toBe('running');
+		expect(instance.net_id).toMatch(/^mekhan-/);
 
-		// The edge transition from Start to HumanTask uses parse_json() which
-		// is not available in petri-lab's Rhai runtime. We work around this by
-		// manually placing a token at p_ht1_input to drive the human task flow.
+		// 4. Wait for the human_task effect to fire.
 		//
-		// Step 1: Place a token at p_ht1_input to simulate the edge transition
-		const inputToken = {
-			place_id: 'p_ht1_input',
-			color: {
-				type: 'Data',
-				value: {
-					_instance_id: instance.id,
-					title: 'Review Task',
-					steps: []
-				}
-			}
-		};
-		const inputRes = await petriPost(
-			`/api/nets/${instance.net_id}/command/create-token`,
-			inputToken
+		// Full flow (automatic, no manual intervention):
+		//   start token → edge transition (Rhai enriches with title/steps)
+		//   → token at p_ht1_input → t_ht1_request effect fires
+		//   → HumanTaskHandler publishes HumanTaskRequest to NATS
+		//   → outputs token to p_ht1_active with task_id
+		const activeToken = await waitForTokenAtPlace(
+			instance.net_id,
+			'p_ht1_active',
+			30_000
 		);
-		expect(inputRes.status).toBe(200);
+		const taskId = String(activeToken.task_id);
+		expect(taskId).toBeTruthy();
 
-		// Step 2: Evaluate to fire the human_task effect (t_ht1_request)
-		const eval1Res = await petriPost(
-			`/api/nets/${instance.net_id}/command/evaluate`,
-			{}
+		// 5. Wait for HPI to pick up the task via NATS consumer.
+		//
+		// HPI's startRequestConsumer() listens on human.request.>,
+		// creates the task in its DB with a NATS sink pointing at
+		// petri.signal.{net_id}.p_ht1_signal.
+		const hpiTask = await waitForHpiTask(taskId, 15_000);
+		expect(hpiTask.task_id ?? hpiTask.id).toBe(taskId);
+
+		// 6. Complete the task via HPI API.
+		//
+		// This triggers: completeTask() → domain event → sink adapter
+		// → publishes ExternalSignal to petri.signal.{net_id}.p_ht1_signal
+		// → GlobalSignalListener injects token into p_ht1_signal place.
+		const completeRes = await hpiPost(
+			`/api/v1/tasks/${taskId}/complete`,
+			{ data: { approved: true } }
 		);
-		// The evaluate may return 200 or 400 depending on whether the effect
-		// handler produces a script error. Check the state instead.
-		await new Promise((r) => setTimeout(r, 2000));
+		expect(completeRes.status).toBe(200);
+		const completeBody = await completeRes.json();
+		expect(completeBody.status).toBe('completed');
 
-		// Check state: token should be at p_ht1_active after the effect fires
-		const stateRes = await petriGet(`/api/nets/${instance.net_id}/state`);
-		expect(stateRes.status).toBe(200);
-		const stateData = await stateRes.json();
-		const marking = stateData.marking?.tokens || {};
+		// 7. Wait for the instance to complete.
+		//
+		// The finalize transition correlates p_ht1_active[task_id] with
+		// p_ht1_signal[task_id], merges state + signal, outputs to p_ht1_output.
+		// Edge transition moves token to terminal place.
+		// petri-lab detects quiescence + terminal token → NetCompleted.
+		// Lifecycle listener in mekhan-service updates DB status.
+		await waitForInstanceStatus(instance.id, ['completed'], 30_000);
 
-		// Extract task_id from the active place token (set by the human_task effect)
-		let taskId = '';
-		const activeTokens = marking['p_ht1_active'];
-		if (Array.isArray(activeTokens) && activeTokens.length > 0) {
-			const tokenData = activeTokens[0]?.color?.value;
-			if (tokenData) {
-				taskId = String(tokenData.task_id || '');
-			}
-		}
-
-		if (!taskId) {
-			// The human_task effect may not have set a task_id, or the eval
-			// failed. Check if eval1 succeeded.
-			if (eval1Res.status !== 200) {
-				// Known issue: parse_json not available in Rhai runtime, or
-				// effect handler not configured. Skip remainder of test.
-				console.warn(
-					'Human task effect did not fire (eval returned ' +
-						eval1Res.status +
-						'). Skipping signal injection part.'
-				);
-				return;
-			}
-		}
-
-		// Step 3: Inject signal token to complete the human task
-		const signalToken = {
-			place_id: 'p_ht1_signal',
-			color: {
-				type: 'Data',
-				value: {
-					task_id: taskId,
-					approved: true
-				}
-			}
-		};
-		const injectRes = await petriPost(
-			`/api/nets/${instance.net_id}/command/create-token`,
-			signalToken
-		);
-		expect(injectRes.status).toBe(200);
-
-		// Step 4: Evaluate to fire the finalize transition and downstream
-		const eval2Res = await petriPost(
-			`/api/nets/${instance.net_id}/command/evaluate`,
-			{}
-		);
-		// The finalize guard checks signal.task_id == state.task_id.
-		// If task_id is empty on both sides, the guard passes.
-
-		if (eval2Res.status === 200) {
-			// Wait for completion
-			await waitForInstanceStatus(instance.id, ['completed'], 15_000);
-
-			const finalRes = await apiGet(`/api/instances/${instance.id}`);
-			const finalInstance = await finalRes.json();
-			expect(finalInstance.status).toBe('completed');
-			expect(finalInstance.completed_at).toBeTruthy();
-		} else {
-			// Evaluation failed — likely guard mismatch. Verify what we can.
-			const finalState = await petriGet(`/api/nets/${instance.net_id}/state`);
-			const finalData = await finalState.json();
-			// At minimum, verify the signal token was injected
-			const signalTokens = finalData.marking?.tokens?.['p_ht1_signal'];
-			expect(Array.isArray(signalTokens)).toBe(true);
-			console.warn(
-				'Human task finalize evaluation failed. ' +
-					'This may be due to task_id guard mismatch. ' +
-					'Signal was injected successfully.'
-			);
-		}
+		// 8. Verify final state in mekhan DB
+		const finalRes = await apiGet(`/api/instances/${instance.id}`);
+		expect(finalRes.status).toBe(200);
+		const finalInstance = await finalRes.json();
+		expect(finalInstance.status).toBe('completed');
+		expect(finalInstance.completed_at).toBeTruthy();
 	});
 });
 

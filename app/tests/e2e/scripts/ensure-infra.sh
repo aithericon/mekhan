@@ -27,8 +27,11 @@ MEKHAN_SERVICE_DIR="$MEKHAN_ROOT/service"
 PETRI_LAB_DIR="$(cd "$MEKHAN_ROOT/../petri-lab" && pwd)"
 EXECUTOR_REPO="$(cd "$MEKHAN_ROOT/../aithericon-executor" && pwd)"
 
+HPI_DIR="$(cd "$MEKHAN_ROOT/../aithericon-human-ui" && pwd)"
+
 BACKEND_URL="http://localhost:3100"
 PETRI_URL="http://localhost:3030"
+HPI_URL="http://localhost:5188"
 
 # PID files for background processes
 PID_DIR="/tmp/mekhan-e2e-pids"
@@ -82,6 +85,7 @@ kill_pid_file() {
 if [ "${1:-}" = "--stop" ]; then
     log "Stopping all services..."
     kill_pid_file "$PID_DIR/mekhan-service.pid" "mekhan-service"
+    kill_pid_file "$PID_DIR/hpi.pid" "HPI"
     kill_pid_file "$PID_DIR/executor.pid" "aithericon-executor"
     kill_pid_file "$PID_DIR/petri-lab.pid" "petri-lab"
     docker compose -f "$MEKHAN_ROOT/docker-compose.yml" down 2>/dev/null || true
@@ -198,7 +202,42 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 4. mekhan-service
+# 4. HPI (aithericon-human-ui)
+# ---------------------------------------------------------------------------
+
+log "Checking HPI..."
+
+if curl -sf "$HPI_URL" > /dev/null 2>&1; then
+    log "HPI already running"
+else
+    # Kill stale process on port 5188 if any
+    if is_port_open 5188; then
+        log "Killing stale process on port 5188..."
+        kill $(lsof -ti :5188) 2>/dev/null || true
+        sleep 1
+    fi
+    kill_pid_file "$PID_DIR/hpi.pid" "stale HPI"
+
+    log "Starting HPI..."
+    (
+        cd "$HPI_DIR"
+        HPI_NATS_SOURCES=true \
+        HPI_DEFAULT_ORG=default \
+        NATS_URL="nats://localhost:4222" \
+        DB_BACKEND=sqlite \
+        AUTH_DB_PATH="/tmp/hpi-e2e.db" \
+        ADMIN_EMAIL="system@hpi.dev" \
+        ADMIN_PASSWORD="test1234" \
+        ORIGIN="http://localhost:5188" \
+        deno task dev > /tmp/hpi-e2e.log 2>&1 &
+        echo $! > "$PID_DIR/hpi.pid"
+    )
+
+    wait_for_url "$HPI_URL" "HPI" 30
+fi
+
+# ---------------------------------------------------------------------------
+# 5. mekhan-service
 # ---------------------------------------------------------------------------
 
 log "Checking mekhan-service..."
@@ -239,6 +278,7 @@ all_healthy=true
 for check in \
     "NATS:http://localhost:8222/healthz" \
     "petri-lab:$PETRI_URL/api/nets" \
+    "HPI:$HPI_URL" \
     "mekhan-service:$BACKEND_URL/api/templates?page=1&per_page=1"; do
     label="${check%%:*}"
     url="${check#*:}"
