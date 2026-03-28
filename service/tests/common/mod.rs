@@ -88,6 +88,36 @@ pub async fn test_app() -> (Router, PgPool) {
     (router, db)
 }
 
+/// Build test app with a specific NATS URL.
+/// Used by E2E tests that need to share NATS with the petri-lab engine.
+pub async fn test_app_with_nats(nats_url: &str) -> (Router, PgPool) {
+    let db = create_test_db().await;
+    let mut config = test_config();
+    config.nats_url = nats_url.to_string();
+
+    let petri = PetriClient::new(&config.petri_lab_url);
+
+    let nats = MekhanNats::connect(nats_url)
+        .await
+        .unwrap_or_else(|e| panic!("failed to connect to NATS at {nats_url}: {e}"));
+
+    let yjs_persistence = YjsPersistence::new(db.clone());
+    let yjs_manager = Arc::new(YjsManager::new(yjs_persistence));
+    let artifact_store = Arc::new(ArtifactStore::new(&config.s3));
+
+    let state = AppState {
+        db: db.clone(),
+        petri,
+        nats,
+        config,
+        yjs: yjs_manager,
+        s3: artifact_store,
+    };
+
+    let router = build_router(state);
+    (router, db)
+}
+
 /// Start the full Axum server on a random port for WebSocket tests.
 /// Returns `(SocketAddr, PgPool)` — the address to connect to and the pool for assertions.
 pub async fn start_test_server() -> (SocketAddr, PgPool) {
