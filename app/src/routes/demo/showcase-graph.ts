@@ -114,8 +114,7 @@ export const showcaseGraph: WorkflowGraph = {
 				executionSpec: {
 					backendType: 'python',
 					config: {
-						code: 'result = {"vendor": input.get("vendor_name", ""), "amount": input.get("invoice_amount", 0), "extracted": True}',
-						timeout_seconds: 30
+						scriptContent: 'import json, sys\ndata = json.load(sys.stdin)\nresult = {"vendor": data.get("vendor_name", ""), "amount": data.get("invoice_amount", 0), "extracted": True}\nprint(json.dumps(result))',
 					}
 				}
 			}
@@ -210,8 +209,7 @@ export const showcaseGraph: WorkflowGraph = {
 				executionSpec: {
 					backendType: 'python',
 					config: {
-						code: 'result = {"compliant": True, "risk_score": 0.12, "checked_at": "2024-01-01"}',
-						timeout_seconds: 15
+						scriptContent: 'import json, sys\ndata = json.load(sys.stdin)\nresult = {"compliant": True, "risk_score": 0.12, "checked_at": "2024-01-01"}\nprint(json.dumps(result))',
 					}
 				}
 			}

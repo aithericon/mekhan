@@ -618,7 +618,7 @@ test.describe('Test 7: Demo showcase graph lifecycle', () => {
 					data: {
 						type: 'automated_step',
 						label: 'Extract Data',
-						executionSpec: { backendType: 'python', config: { code: 'result = {"extracted": True}', timeout_seconds: 30 } }
+						executionSpec: { backendType: 'python', config: { scriptContent: 'import json, sys\nprint(json.dumps({"extracted": True}))' } }
 					}
 				},
 				{
@@ -667,7 +667,7 @@ test.describe('Test 7: Demo showcase graph lifecycle', () => {
 					data: {
 						type: 'automated_step',
 						label: 'Compliance Check',
-						executionSpec: { backendType: 'python', config: { code: 'result = {"compliant": True}', timeout_seconds: 15 } }
+						executionSpec: { backendType: 'python', config: { scriptContent: 'import json, sys\nprint(json.dumps({"compliant": True}))' } }
 					}
 				},
 				{
