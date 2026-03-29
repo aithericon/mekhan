@@ -1,10 +1,12 @@
 <script lang="ts">
 	import './layout.css';
 	import { Button } from '$lib/components/ui/button';
+	import { TooltipProvider } from '$lib/components/ui/tooltip';
 
 	let { children } = $props();
 </script>
 
+<TooltipProvider>
 <div class="flex h-screen flex-col">
 	<header class="flex h-12 shrink-0 items-center border-b border-border bg-card px-4" data-testid="app-header">
 		<a href="/" class="text-sm font-semibold tracking-tight text-foreground" data-testid="nav-home">Mekhan</a>
@@ -18,3 +20,4 @@
 		{@render children()}
 	</main>
 </div>
+</TooltipProvider>
