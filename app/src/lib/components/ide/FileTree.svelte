@@ -79,7 +79,7 @@
 	onchange={handleFileSelected}
 />
 
-<div class="flex h-full flex-col overflow-y-auto border-r border-border bg-card">
+<div class="flex h-full flex-col overflow-y-auto border-r border-border bg-card" data-testid="file-tree">
 	<div class="border-b border-border px-3 py-2">
 		<span class="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Files</span>
 	</div>

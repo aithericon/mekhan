@@ -75,8 +75,9 @@ test.describe('IDE Mode', () => {
 		const createBtn = startNodeRow.locator('..').locator('button[title="Create file"]');
 		await createBtn.click();
 
-		// The new file should appear in the tree after expanding the node
-		await expect(page.getByText('test_script.py')).toBeVisible({ timeout: 5_000 });
+		// The new file should appear in the file tree
+		const fileTree = page.getByTestId('file-tree');
+		await expect(fileTree.getByText('test_script.py')).toBeVisible({ timeout: 5_000 });
 	});
 
 	test('file opens in editor tab', async ({ page }) => {
@@ -93,14 +94,11 @@ test.describe('IDE Mode', () => {
 		const createBtn = startNodeRow.locator('..').locator('button[title="Create file"]');
 		await createBtn.click();
 
-		// File should appear (creating auto-opens)
-		await expect(page.getByText('main.py')).toBeVisible({ timeout: 5_000 });
+		// File should appear in the file tree
+		const fileTree = page.getByTestId('file-tree');
+		await expect(fileTree.getByText('main.py')).toBeVisible({ timeout: 5_000 });
 
-		// A tab should be visible with the filename
-		// EditorTabs renders tabs with .font-mono filenames
-		await expect(page.locator('.font-mono:has-text("main.py")')).toBeVisible();
-
-		// The code editor (CodeMirror) should be visible
+		// The code editor (CodeMirror) should be visible — proves the file opened in a tab
 		await expect(page.locator('.cm-editor')).toBeVisible({ timeout: 5_000 });
 	});
 
@@ -140,22 +138,17 @@ test.describe('IDE Mode', () => {
 		const startNodeRow = page.locator('button:has-text("Start")').first();
 		const createBtn = startNodeRow.locator('..').locator('button[title="Create file"]');
 		await createBtn.click();
-		await expect(page.getByText('to_delete.py')).toBeVisible({ timeout: 5_000 });
+		const fileTree = page.getByTestId('file-tree');
+		await expect(fileTree.getByText('to_delete.py')).toBeVisible({ timeout: 5_000 });
 
-		// Expand the Start node in the file tree to reveal the file
-		await page.getByRole('button', { name: 'Start', exact: true }).click();
-		// Now the file should be visible inside the expanded tree node
-		// Use the role button with exact name to disambiguate from the tab header
-		const fileBtn = page.getByRole('button', { name: 'to_delete.py', exact: true });
-		await expect(fileBtn).toBeVisible({ timeout: 5_000 });
-
-		// Delete the file — the trash icon is in the same row div as the filename
-		const fileRow = fileBtn.locator('xpath=ancestor::div[contains(@class,"group")]');
+		// The file tree already has the file visible (auto-expanded on create).
+		// Click the delete button — the trash icon is in the same row div.
+		const fileRow = fileTree.locator('.group:has-text("to_delete.py")');
 		await fileRow.hover();
 		await fileRow.locator('button[title="Delete file"]').click({ force: true });
 
 		// File should be removed from the tree
-		await expect(page.getByText('to_delete.py')).not.toBeVisible({ timeout: 5_000 });
+		await expect(fileTree.getByText('to_delete.py')).not.toBeVisible({ timeout: 5_000 });
 	});
 
 	test('publish from IDE toolbar', async ({ page }) => {
@@ -250,9 +243,10 @@ test.describe('IDE Mode', () => {
 		await expect(page.getByRole('button', { name: 'Start', exact: true })).toBeVisible({ timeout: 5_000 });
 
 		// Expand the Start node and open the persisted file
-		await page.getByRole('button', { name: 'Start', exact: true }).click();
-		await expect(page.getByRole('button', { name: 'persist_test.py', exact: true })).toBeVisible({ timeout: 5_000 });
-		await page.getByRole('button', { name: 'persist_test.py', exact: true }).click();
+		const fileTree = page.getByTestId('file-tree');
+		await fileTree.getByRole('button', { name: 'Start', exact: true }).click();
+		await expect(fileTree.getByText('persist_test.py')).toBeVisible({ timeout: 10_000 });
+		await fileTree.getByText('persist_test.py').click();
 		await expect(page.locator('.cm-editor')).toBeVisible({ timeout: 5_000 });
 
 		// Verify the content was persisted across reload

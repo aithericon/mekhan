@@ -27,11 +27,13 @@ test.describe('Edge deletion', () => {
 		await page.goto(`/templates/${templateId}`);
 		await expect(page.getByText('Connected')).toBeVisible({ timeout: 10_000 });
 
-		// Create an edge: drag from Start source handle to End target handle
-		const startNode = page.getByTestId('node-start');
-		const endNode = page.getByTestId('node-end');
-		const sourceHandle = startNode.locator('.svelte-flow__handle.source').first();
-		const targetHandle = endNode.locator('.svelte-flow__handle.target').first();
+		// Create an edge: drag from Start source handle to End target handle.
+		// The Handle component is a sibling of the inner div (not a child),
+		// so we scope to the xyflow node wrapper which wraps both.
+		const startWrapper = page.locator('.svelte-flow__node:has([data-testid="node-start"])');
+		const endWrapper = page.locator('.svelte-flow__node:has([data-testid="node-end"])');
+		const sourceHandle = startWrapper.locator('.svelte-flow__handle.source').first();
+		const targetHandle = endWrapper.locator('.svelte-flow__handle.target').first();
 
 		await expect(sourceHandle).toBeVisible({ timeout: 5_000 });
 		await expect(targetHandle).toBeVisible({ timeout: 5_000 });
@@ -44,7 +46,7 @@ test.describe('Edge deletion', () => {
 		expect(countBefore).toBeGreaterThanOrEqual(1);
 
 		// Hover the delete zone at the edge midpoint to reveal the button
-		const deleteBtn = page.getByRole('button', { name: 'Delete connection', exact: true });
+		const deleteBtn = page.getByRole('button', { name: 'Delete connection', exact: true }).first();
 		// The button exists in DOM (isVisible EdgeToolbar) but is opacity:0.
 		// Hover its parent zone to reveal it, then click.
 		await deleteBtn.hover({ force: true });
@@ -70,10 +72,10 @@ test.describe('Edge deletion', () => {
 		await expect(pageB.getByText('Connected')).toBeVisible({ timeout: 10_000 });
 
 		// Create an edge in context A
-		const startNode = pageA.getByTestId('node-start');
-		const endNode = pageA.getByTestId('node-end');
-		const sourceHandle = startNode.locator('.svelte-flow__handle.source').first();
-		const targetHandle = endNode.locator('.svelte-flow__handle.target').first();
+		const startWrapper = pageA.locator('.svelte-flow__node:has([data-testid="node-start"])');
+		const endWrapper = pageA.locator('.svelte-flow__node:has([data-testid="node-end"])');
+		const sourceHandle = startWrapper.locator('.svelte-flow__handle.source').first();
+		const targetHandle = endWrapper.locator('.svelte-flow__handle.target').first();
 
 		await expect(sourceHandle).toBeVisible({ timeout: 5_000 });
 		await expect(targetHandle).toBeVisible({ timeout: 5_000 });
