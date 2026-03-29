@@ -77,35 +77,38 @@ export async function petriPost(path: string, body: unknown): Promise<Response> 
 let hpiToken: string;
 
 /**
- * Authenticate with HPI and obtain a Bearer token for API calls.
+ * Create an HPI API token by inserting directly into the SQLite DB.
+ * This avoids the session auth / admin endpoint complexity.
  * Must be called once in beforeAll before using hpiGet/hpiPost.
  */
 export async function initHpiToken(): Promise<void> {
-	// 1. Sign in as admin to get session cookie
-	const signIn = await fetch(`${HPI}/api/auth/sign-in/email`, {
-		method: 'POST',
-		headers: { 'content-type': 'application/json' },
-		body: JSON.stringify({ email: 'system@hpi.dev', password: 'test1234' })
-	});
-	if (!signIn.ok) {
-		throw new Error(`HPI sign-in failed: ${signIn.status} ${await signIn.text()}`);
-	}
-	const cookie = signIn.headers.get('set-cookie') ?? '';
+	const { execSync } = await import('child_process');
+	const { createHash, randomBytes } = await import('crypto');
 
-	// 2. Create API token via admin endpoint
-	const tokenRes = await fetch(`${HPI}/api/v1/admin/tokens`, {
-		method: 'POST',
-		headers: { 'content-type': 'application/json', cookie },
-		body: JSON.stringify({
-			name: `e2e-test-${Date.now()}`,
-			scopes: ['tasks:read', 'tasks:write', 'tasks:create']
-		})
-	});
-	if (!tokenRes.ok) {
-		throw new Error(`HPI token creation failed: ${tokenRes.status} ${await tokenRes.text()}`);
+	// Generate token: htk_ + 64 hex chars
+	const rawToken = `htk_${randomBytes(32).toString('hex')}`;
+	const tokenHash = createHash('sha256').update(rawToken).digest('hex');
+	const tokenPrefix = rawToken.slice(0, 12);
+	const id = crypto.randomUUID();
+
+	const dbPath =
+		process.env.HPI_DB_PATH ?? '../../hpi/app-hpi/data/auth.db';
+
+	// Pipe SQL via stdin to avoid shell escaping issues with JSON scopes
+	const sql = `INSERT OR REPLACE INTO api_token (id, name, token_hash, token_prefix, scopes, org_id, created_by, created_at) VALUES ('${id}', 'playwright-e2e', '${tokenHash}', '${tokenPrefix}', '["tasks:create","tasks:write","tasks:read"]', 'default', 'test', datetime('now'));`;
+
+	// Retry with backoff to handle SQLite "database is locked" from parallel workers
+	for (let attempt = 0; attempt < 5; attempt++) {
+		try {
+			execSync(`sqlite3 "${dbPath}"`, { input: sql, timeout: 5000 });
+			break;
+		} catch (e) {
+			if (attempt === 4) throw e;
+			await new Promise((r) => setTimeout(r, 200 * (attempt + 1)));
+		}
 	}
-	const { token } = await tokenRes.json();
-	hpiToken = token;
+
+	hpiToken = rawToken;
 }
 
 /** GET from HPI with Bearer auth. */

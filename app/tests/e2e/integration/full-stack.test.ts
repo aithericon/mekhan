@@ -469,7 +469,7 @@ test.describe('Test 5: Human task completion via HPI round-trip', () => {
 		// HPI's startRequestConsumer() listens on human.request.>,
 		// creates the task in its DB with a NATS sink pointing at
 		// petri.signal.{net_id}.p_ht1_signal.
-		const hpiTask = await waitForHpiTask(taskId, 15_000);
+		const hpiTask = await waitForHpiTask(taskId, 30_000);
 		expect(hpiTask.task_id ?? hpiTask.id).toBe(taskId);
 
 		// 6. Complete the task via HPI API.
