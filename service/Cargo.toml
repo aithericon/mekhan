@@ -61,6 +61,9 @@ petri-domain = { path = "../../petri-lab/core-engine/crates/domain" }
 # Petri-net API types (shared request/response DTOs for engine communication)
 petri-api-types = { path = "../../petri-lab/core-engine/crates/api-types" }
 
+# Executor backend config types (for compile-time validation of execution specs)
+aithericon-executor-backend-configs = { path = "../../aithericon-executor/crates/executor-backend-configs" }
+
 # Yjs CRDT for real-time collaborative editing
 yrs = "0.21"
 

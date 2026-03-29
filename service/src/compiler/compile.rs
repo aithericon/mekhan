@@ -511,18 +511,27 @@ fn expand_node(
             let p_error: PlaceHandle<DynamicToken> =
                 ctx.state(format!("p_{id}_error"), format!("{label} - Error"));
 
+            // Validate and transform editor config → executor format (before closure)
+            let backend_type = &execution_spec.backend_type;
+            let (validated_config, staged_inputs) =
+                crate::compiler::backend_configs::validate_and_transform(
+                    backend_type,
+                    &execution_spec.config,
+                )?;
+            let config_rhai = json_to_rhai_literal(&validated_config);
+            let inputs_rhai = json_to_rhai_literal(
+                &serde_json::to_value(&staged_inputs).unwrap_or_default(),
+            );
+
             // Scoped prefix: all lifecycle IDs become "{id}/submitted", "{id}/completed", etc.
             let handles = ctx.scoped_prefix(id, label, |ctx| {
                 let exec_inbox = ctx.state::<ExecutorSubmitInput>("inbox", "Inbox");
 
-                // Prepare: remap editor ExecutionSpecConfig → executor format
-                let config_rhai = json_to_rhai_literal(&execution_spec.config);
-                let backend_type = &execution_spec.backend_type;
                 ctx.transition("prepare", format!("{label} - Prepare"))
                     .auto_input("input", &p_input)
                     .auto_output("job", &exec_inbox)
                     .logic(format!(
-                        r#"let d = input; d.job_id = "{id}"; d.run = 0; d.retries = 0; d.max_retries = 3; d.spec = #{{ "type": "{backend_type}", "inputs": [], "outputs": [], "config": {config_rhai} }}; #{{ job: d }}"#
+                        r#"let d = input; d.job_id = "{id}"; d.run = 0; d.retries = 0; d.max_retries = 3; d.spec = #{{ "type": "{backend_type}", "inputs": {inputs_rhai}, "outputs": [], "config": {config_rhai} }}; #{{ job: d }}"#
                     ));
 
                 executor_lifecycle(ctx, ExecutorBridges {

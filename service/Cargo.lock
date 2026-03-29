@@ -32,6 +32,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "aithericon-executor-backend-configs"
+version = "0.1.0"
+dependencies = [
+ "aithericon-executor-domain",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "aithericon-executor-domain"
 version = "0.1.0"
 dependencies = [
@@ -2326,6 +2335,7 @@ dependencies = [
 name = "mekhan-service"
 version = "0.1.0"
 dependencies = [
+ "aithericon-executor-backend-configs",
  "aithericon-sdk",
  "aithericon-test-infra",
  "anyhow",
