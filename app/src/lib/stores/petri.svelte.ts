@@ -165,8 +165,10 @@ export function createPetriStore(netId: string, baseUrl: string = PETRI_BASE) {
 			const res = await fetch(`${apiBase}/topology`);
 			if (!res.ok) throw new Error(`${res.status}`);
 			const data = await res.json();
-			topology = data.net ?? data;
-			currentGroups = data.groups ?? [];
+			// Engine returns TopologyResponse: { topology: { places, transitions, arcs, groups } }
+			const net = data.topology ?? data.net ?? data;
+			topology = net;
+			currentGroups = net?.groups ?? data.groups ?? [];
 		} catch (e: any) {
 			error = `Failed to fetch topology: ${e.message}`;
 		}

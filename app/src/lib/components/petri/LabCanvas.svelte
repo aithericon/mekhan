@@ -517,7 +517,7 @@
 
 	// Convert topology to Svelte Flow nodes and edges
 	const { nodes, edges } = $derived.by((): { nodes: Node[]; edges: Edge[] } => {
-		if (!topology) return { nodes: [], edges: [] };
+		if (!topology || !topology.places) return { nodes: [], edges: [] };
 
 		// Create raw nodes without positions
 		const rawNodes: Node[] = [];
