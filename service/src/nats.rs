@@ -14,6 +14,7 @@ impl From<async_nats::Error> for NatsError {
 
 #[derive(Clone)]
 pub struct MekhanNats {
+    client: async_nats::Client,
     jetstream: jetstream::Context,
 }
 
@@ -22,8 +23,12 @@ impl MekhanNats {
         let client = async_nats::connect(nats_url)
             .await
             .map_err(|e| NatsError(e.to_string()))?;
-        let jetstream = jetstream::new(client);
-        Ok(Self { jetstream })
+        let jetstream = jetstream::new(client.clone());
+        Ok(Self { client, jetstream })
+    }
+
+    pub fn client(&self) -> &async_nats::Client {
+        &self.client
     }
 
     pub fn jetstream(&self) -> &jetstream::Context {

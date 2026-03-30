@@ -10,6 +10,9 @@ path = "src/bin/cli/main.rs"
 [dependencies]
 # Web framework
 axum = { version = "0.8", features = ["json", "query", "ws", "multipart"] }
+# SSE stream generation
+async-stream = "0.3"
+tokio-stream = "0.1"
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 tokio = { version = "1", features = ["full"] }
 

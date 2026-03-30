@@ -122,6 +122,56 @@ export async function cancelInstance(id: string): Promise<void> {
 	await request(`/instances/${id}`, { method: 'DELETE' });
 }
 
+// Task endpoints (proxied to HPI)
+export async function listTasks(params?: {
+	status?: string;
+	search?: string;
+	process_id?: string;
+	limit?: number;
+	offset?: number;
+}): Promise<{ tasks: import('$lib/types/tasks').HumanTask[]; total: number }> {
+	const qs = new URLSearchParams();
+	if (params?.status) qs.set('status', params.status);
+	if (params?.search) qs.set('search', params.search);
+	if (params?.process_id) qs.set('process_id', params.process_id);
+	if (params?.limit) qs.set('limit', String(params.limit));
+	if (params?.offset) qs.set('offset', String(params.offset));
+	const query = qs.toString();
+	return request(`/tasks${query ? `?${query}` : ''}`);
+}
+
+export async function getTask(taskId: string): Promise<import('$lib/types/tasks').HumanTask> {
+	return request(`/tasks/${taskId}`);
+}
+
+export async function completeTask(
+	taskId: string,
+	data: Record<string, unknown>
+): Promise<void> {
+	await request(`/tasks/${taskId}/complete`, {
+		method: 'POST',
+		body: JSON.stringify({ data })
+	});
+}
+
+export async function cancelTask(taskId: string, reason?: string): Promise<void> {
+	await request(`/tasks/${taskId}/cancel`, {
+		method: 'POST',
+		body: JSON.stringify({ reason })
+	});
+}
+
+// Process endpoints (from mekhan-service NATS projection)
+export async function listProcesses(): Promise<import('$lib/types/tasks').MekhanProcessState[]> {
+	return request('/processes');
+}
+
+export async function getProcess(
+	processId: string
+): Promise<import('$lib/types/tasks').MekhanProcessState> {
+	return request(`/processes/${processId}`);
+}
+
 // File upload
 export async function uploadFile(
 	templateId: string,

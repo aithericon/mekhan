@@ -253,12 +253,31 @@ else
     fi
     kill_pid_file "$PID_DIR/mekhan-service.pid" "stale mekhan-service"
 
+    # Create an HPI API token for mekhan-service to use as proxy auth.
+    # This inserts directly into HPI's SQLite DB (same pattern as test helpers).
+    HPI_DB="${HPI_DB_PATH:-/tmp/hpi-e2e.db}"
+    MEKHAN_HPI_TOKEN=""
+    if command -v sqlite3 &>/dev/null && [ -f "$HPI_DB" ]; then
+        RAW_TOKEN="htk_$(openssl rand -hex 32)"
+        TOKEN_HASH=$(echo -n "$RAW_TOKEN" | shasum -a 256 | cut -d' ' -f1)
+        TOKEN_PREFIX="${RAW_TOKEN:0:12}"
+        TOKEN_ID="$(uuidgen | tr '[:upper:]' '[:lower:]')"
+        sqlite3 "$HPI_DB" "INSERT OR REPLACE INTO api_token (id, name, token_hash, token_prefix, scopes, org_id, created_by, created_at) VALUES ('${TOKEN_ID}', 'mekhan-proxy', '${TOKEN_HASH}', '${TOKEN_PREFIX}', '[\"tasks:create\",\"tasks:write\",\"tasks:read\"]', 'default', 'system', datetime('now'));" 2>/dev/null && \
+        MEKHAN_HPI_TOKEN="$RAW_TOKEN" && \
+        log "Created HPI API token for mekhan proxy" || \
+        log "WARNING: Could not create HPI token (sqlite3 failed)"
+    else
+        log "WARNING: sqlite3 not available or HPI DB not found — HPI proxy will be disabled"
+    fi
+
     log "Starting mekhan-service..."
     (
         cd "$MEKHAN_SERVICE_DIR"
         MEKHAN_DATABASE_URL="postgres://mekhan:mekhan@localhost:5432/mekhan" \
         MEKHAN_PETRI_LAB_URL="http://localhost:3030" \
         MEKHAN_NATS_URL="nats://localhost:4222" \
+        MEKHAN_HPI__URL="http://localhost:5188" \
+        MEKHAN_HPI__API_TOKEN="$MEKHAN_HPI_TOKEN" \
         RUST_LOG=info \
         cargo run > /tmp/mekhan-service-e2e.log 2>&1 &
         echo $! > "$PID_DIR/mekhan-service.pid"

@@ -16,6 +16,16 @@ pub struct AppConfig {
     pub cleanup: CleanupConfig,
     #[serde(default)]
     pub s3: S3Config,
+    #[serde(default)]
+    pub hpi: HpiConfig,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct HpiConfig {
+    #[serde(default = "default_hpi_url")]
+    pub url: String,
+    #[serde(default)]
+    pub api_token: String,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -76,6 +86,19 @@ impl Default for CleanupConfig {
     }
 }
 
+impl Default for HpiConfig {
+    fn default() -> Self {
+        Self {
+            url: default_hpi_url(),
+            api_token: String::new(),
+        }
+    }
+}
+
+fn default_hpi_url() -> String {
+    "http://localhost:5173".to_string()
+}
+
 fn default_host() -> String {
     "0.0.0.0".to_string()
 }
@@ -114,7 +137,7 @@ impl AppConfig {
             .add_source(File::with_name("mekhan").required(false))
             .add_source(
                 Environment::with_prefix("MEKHAN")
-                    .separator("_")
+                    .separator("__")
                     .try_parsing(true),
             )
             .build()?;
