@@ -38,10 +38,6 @@ impl ProcessIndex {
 
     /// Apply a process update to the index.
     fn apply_update(&self, update: &ProcessUpdate) {
-        // Filter: only mekhan namespaces
-        if !update.namespace.starts_with("mekhan-") {
-            return;
-        }
 
         match &update.update_type {
             ProcessUpdateType::Started { metadata } => {
@@ -113,7 +109,7 @@ impl ProcessIndex {
             }
         };
 
-        let mut messages = match consumer.messages().await {
+        let mut messages = match consumer.stream().heartbeat(std::time::Duration::ZERO).messages().await {
             Ok(m) => m,
             Err(e) => {
                 tracing::error!("Failed to get process consumer messages: {e}");
@@ -123,20 +119,36 @@ impl ProcessIndex {
 
         tracing::info!("Process index consumer started");
 
-        while let Some(Ok(msg)) = messages.next().await {
-            match serde_json::from_slice::<ProcessUpdate>(&msg.payload) {
-                Ok(update) => {
-                    self.apply_update(&update);
+        let mut count = 0u64;
+        while let Some(result) = messages.next().await {
+            match result {
+                Ok(msg) => {
+                    count += 1;
+                    match serde_json::from_slice::<ProcessUpdate>(&msg.payload) {
+                        Ok(update) => {
+                            tracing::debug!(
+                                process_id = %update.process_id,
+                                update_type = ?std::mem::discriminant(&update.update_type),
+                                count,
+                                "Applied process update"
+                            );
+                            self.apply_update(&update);
+                        }
+                        Err(e) => {
+                            let preview = String::from_utf8_lossy(&msg.payload[..msg.payload.len().min(200)]);
+                            tracing::warn!(%e, %preview, "Failed to parse process update");
+                        }
+                    }
+                    if let Err(e) = msg.ack().await {
+                        tracing::warn!("Failed to ack process message: {e}");
+                    }
                 }
                 Err(e) => {
-                    tracing::warn!("Failed to parse process update: {e}");
+                    tracing::warn!("Process consumer message error: {e}");
                 }
-            }
-            if let Err(e) = msg.ack().await {
-                tracing::warn!("Failed to ack process message: {e}");
             }
         }
 
-        tracing::warn!("Process index consumer stream ended");
+        tracing::warn!(count, "Process index consumer stream ended");
     }
 }
