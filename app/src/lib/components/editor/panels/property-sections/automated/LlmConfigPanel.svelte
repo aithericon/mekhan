@@ -1,6 +1,6 @@
 <script lang="ts">
 	import CodeEditor from '../../shared/CodeEditor.svelte';
-	import { Select, SelectTrigger, SelectContent, SelectItem } from '$lib/components/ui/select';
+	import * as Select from '$lib/components/ui/select';
 
 	type Props = {
 		config: Record<string, unknown>;
@@ -29,14 +29,14 @@
 		onValueChange={(v) => { if (v) onchange({ ...config, provider: v }); }}
 		disabled={readonly}
 	>
-		<SelectTrigger disabled={readonly}>
+		<Select.Trigger disabled={readonly}>
 			{providerLabels[(config.provider as string) ?? 'openai'] ?? 'OpenAI'}
-		</SelectTrigger>
-		<SelectContent>
-			<SelectItem value="openai" label="OpenAI" />
-			<SelectItem value="anthropic" label="Anthropic" />
-			<SelectItem value="ollama" label="Ollama" />
-		</SelectContent>
+		</Select.Trigger>
+		<Select.Content>
+			<Select.Item value="openai" label="OpenAI" />
+			<Select.Item value="anthropic" label="Anthropic" />
+			<Select.Item value="ollama" label="Ollama" />
+		</Select.Content>
 	</Select.Root>
 </div>
 
@@ -179,13 +179,13 @@
 		}}
 		disabled={readonly}
 	>
-		<SelectTrigger disabled={readonly}>
+		<Select.Trigger disabled={readonly}>
 			{responseFormatType === 'json_schema' ? 'JSON Schema' : 'Text'}
-		</SelectTrigger>
-		<SelectContent>
-			<SelectItem value="text" label="Text" />
-			<SelectItem value="json_schema" label="JSON Schema" />
-		</SelectContent>
+		</Select.Trigger>
+		<Select.Content>
+			<Select.Item value="text" label="Text" />
+			<Select.Item value="json_schema" label="JSON Schema" />
+		</Select.Content>
 	</Select.Root>
 </div>
 

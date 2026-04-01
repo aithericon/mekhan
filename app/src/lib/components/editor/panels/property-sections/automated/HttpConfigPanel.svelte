@@ -1,7 +1,7 @@
 <script lang="ts">
 	import KeyValueEditor from '../../shared/KeyValueEditor.svelte';
 	import CodeEditor from '../../shared/CodeEditor.svelte';
-	import { Select, SelectTrigger, SelectContent, SelectItem } from '$lib/components/ui/select';
+	import * as Select from '$lib/components/ui/select';
 
 	type Props = {
 		config: Record<string, unknown>;
@@ -47,18 +47,18 @@
 		onValueChange={(v) => { if (v) onchange({ ...config, method: v }); }}
 		disabled={readonly}
 	>
-		<SelectTrigger disabled={readonly}>
+		<Select.Trigger disabled={readonly}>
 			{methodLabels[(config.method as string) ?? 'GET'] ?? 'GET'}
-		</SelectTrigger>
-		<SelectContent>
-			<SelectItem value="GET" label="GET" />
-			<SelectItem value="POST" label="POST" />
-			<SelectItem value="PUT" label="PUT" />
-			<SelectItem value="PATCH" label="PATCH" />
-			<SelectItem value="DELETE" label="DELETE" />
-			<SelectItem value="HEAD" label="HEAD" />
-			<SelectItem value="OPTIONS" label="OPTIONS" />
-		</SelectContent>
+		</Select.Trigger>
+		<Select.Content>
+			<Select.Item value="GET" label="GET" />
+			<Select.Item value="POST" label="POST" />
+			<Select.Item value="PUT" label="PUT" />
+			<Select.Item value="PATCH" label="PATCH" />
+			<Select.Item value="DELETE" label="DELETE" />
+			<Select.Item value="HEAD" label="HEAD" />
+			<Select.Item value="OPTIONS" label="OPTIONS" />
+		</Select.Content>
 	</Select.Root>
 </div>
 
@@ -132,15 +132,15 @@
 		}}
 		disabled={readonly}
 	>
-		<SelectTrigger disabled={readonly}>
+		<Select.Trigger disabled={readonly}>
 			{authLabels[authType] ?? 'None'}
-		</SelectTrigger>
-		<SelectContent>
-			<SelectItem value="none" label="None" />
-			<SelectItem value="bearer" label="Bearer Token" />
-			<SelectItem value="basic" label="Basic Auth" />
-			<SelectItem value="header" label="Custom Header" />
-		</SelectContent>
+		</Select.Trigger>
+		<Select.Content>
+			<Select.Item value="none" label="None" />
+			<Select.Item value="bearer" label="Bearer Token" />
+			<Select.Item value="basic" label="Basic Auth" />
+			<Select.Item value="header" label="Custom Header" />
+		</Select.Content>
 	</Select.Root>
 </div>
 
@@ -235,15 +235,15 @@
 		onValueChange={(v) => { if (v) onchange({ ...config, response_mode: v }); }}
 		disabled={readonly}
 	>
-		<SelectTrigger disabled={readonly}>
+		<Select.Trigger disabled={readonly}>
 			{responseModeLabels[(config.response_mode as string) ?? 'auto'] ?? 'Auto'}
-		</SelectTrigger>
-		<SelectContent>
-			<SelectItem value="auto" label="Auto" />
-			<SelectItem value="json" label="JSON" />
-			<SelectItem value="text" label="Text" />
-			<SelectItem value="discard" label="Discard" />
-		</SelectContent>
+		</Select.Trigger>
+		<Select.Content>
+			<Select.Item value="auto" label="Auto" />
+			<Select.Item value="json" label="JSON" />
+			<Select.Item value="text" label="Text" />
+			<Select.Item value="discard" label="Discard" />
+		</Select.Content>
 	</Select.Root>
 </div>
 

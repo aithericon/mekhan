@@ -49,6 +49,13 @@ pub async fn task_stream(
                 return;
             }
         };
+        let mut process_sub = match client.subscribe("human.process.>").await {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!("Failed to subscribe to human.process.>: {e}");
+                return;
+            }
+        };
 
         let mut ping_interval = tokio::time::interval(Duration::from_secs(10));
 
@@ -83,6 +90,14 @@ pub async fn task_stream(
                         if net_id.starts_with("mekhan-") {
                             let data = String::from_utf8_lossy(&msg.payload);
                             yield Ok(Event::default().event("task_cancelled").data(data.into_owned()));
+                        }
+                    }
+                }
+                Some(msg) = process_sub.next() => {
+                    if let Some(namespace) = extract_net_id(&msg.subject, "human.process.") {
+                        if namespace.starts_with("mekhan-") {
+                            let data = String::from_utf8_lossy(&msg.payload);
+                            yield Ok(Event::default().event("process_update").data(data.into_owned()));
                         }
                     }
                 }

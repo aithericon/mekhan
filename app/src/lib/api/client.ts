@@ -161,14 +161,27 @@ export async function cancelTask(taskId: string, reason?: string): Promise<void>
 	});
 }
 
-// Process endpoints (from mekhan-service NATS projection)
-export async function listProcesses(): Promise<import('$lib/types/tasks').MekhanProcessState[]> {
-	return request('/processes');
+// Process endpoints (proxied to HPI)
+export async function listProcesses(params?: {
+	status?: string;
+	namespace?: string;
+	search?: string;
+	limit?: number;
+	offset?: number;
+}): Promise<{ processes: import('$lib/types/tasks').ProcessState[]; total: number }> {
+	const qs = new URLSearchParams();
+	if (params?.status) qs.set('status', params.status);
+	if (params?.namespace) qs.set('namespace', params.namespace);
+	if (params?.search) qs.set('search', params.search);
+	if (params?.limit) qs.set('limit', String(params.limit));
+	if (params?.offset) qs.set('offset', String(params.offset));
+	const query = qs.toString();
+	return request(`/processes${query ? `?${query}` : ''}`);
 }
 
 export async function getProcess(
 	processId: string
-): Promise<import('$lib/types/tasks').MekhanProcessState> {
+): Promise<import('$lib/types/tasks').ProcessState> {
 	return request(`/processes/${processId}`);
 }
 

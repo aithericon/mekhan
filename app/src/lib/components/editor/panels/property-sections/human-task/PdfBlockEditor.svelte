@@ -2,7 +2,7 @@
 	import type { YjsGraphBinding } from '$lib/yjs/graph-binding.svelte';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import FileText from '@lucide/svelte/icons/file-text';
-	import { Select, SelectTrigger, SelectContent, SelectItem } from '$lib/components/ui/select';
+	import * as Select from '$lib/components/ui/select';
 	import { Input } from '$lib/components/ui/input';
 
 	type Props = {
@@ -58,7 +58,7 @@
 				onValueChange={(v) => { if (v) onchange(v, caption, height); }}
 				disabled={readonly}
 			>
-				<SelectTrigger disabled={readonly} class="h-9 px-2 text-sm">
+				<Select.Trigger disabled={readonly} class="h-9 px-2 text-sm">
 					{#if filename}
 						<span class="flex items-center gap-1.5">
 							<FileText class="size-3.5 shrink-0 text-muted-foreground" />
@@ -67,12 +67,12 @@
 					{:else}
 						<span class="text-muted-foreground">Select a PDF...</span>
 					{/if}
-				</SelectTrigger>
-				<SelectContent>
+				</Select.Trigger>
+				<Select.Content>
 					{#each pdfFiles as name (name)}
-						<SelectItem value={name} label={name} />
+						<Select.Item value={name} label={name} />
 					{/each}
-				</SelectContent>
+				</Select.Content>
 			</Select.Root>
 
 			{#if filename}

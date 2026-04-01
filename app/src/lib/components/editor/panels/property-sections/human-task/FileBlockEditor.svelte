@@ -3,7 +3,7 @@
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import FileIcon from '@lucide/svelte/icons/file';
 	import FileText from '@lucide/svelte/icons/file-text';
-	import { Select, SelectTrigger, SelectContent, SelectItem } from '$lib/components/ui/select';
+	import * as Select from '$lib/components/ui/select';
 
 	type Props = {
 		filename: string;
@@ -63,7 +63,7 @@
 				onValueChange={(v) => { if (v) onchange(v); }}
 				disabled={readonly}
 			>
-				<SelectTrigger disabled={readonly} class="h-9 px-2 text-sm">
+				<Select.Trigger disabled={readonly} class="h-9 px-2 text-sm">
 					{#if filename}
 						<span class="flex items-center gap-1.5">
 							<FileText class="size-3.5 shrink-0 text-muted-foreground" />
@@ -72,12 +72,12 @@
 					{:else}
 						<span class="text-muted-foreground">Select a file...</span>
 					{/if}
-				</SelectTrigger>
-				<SelectContent>
+				</Select.Trigger>
+				<Select.Content>
 					{#each allFiles as name (name)}
-						<SelectItem value={name} label={name} />
+						<Select.Item value={name} label={name} />
 					{/each}
-				</SelectContent>
+				</Select.Content>
 			</Select.Root>
 
 			{#if filename}

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import StringListEditor from '../../shared/StringListEditor.svelte';
-	import { Select, SelectTrigger, SelectContent, SelectItem } from '$lib/components/ui/select';
+	import * as Select from '$lib/components/ui/select';
 
 	type Props = {
 		config: Record<string, unknown>;
@@ -22,13 +22,13 @@
 		onValueChange={(v) => { if (v) onchange({ ...config, mode: v }); }}
 		disabled={readonly}
 	>
-		<SelectTrigger disabled={readonly}>
+		<Select.Trigger disabled={readonly}>
 			{(config.mode as string) === 'batch' ? 'Batch' : 'Single File'}
-		</SelectTrigger>
-		<SelectContent>
-			<SelectItem value="single" label="Single File" />
-			<SelectItem value="batch" label="Batch" />
-		</SelectContent>
+		</Select.Trigger>
+		<Select.Content>
+			<Select.Item value="single" label="Single File" />
+			<Select.Item value="batch" label="Batch" />
+		</Select.Content>
 	</Select.Root>
 </div>
 
@@ -100,13 +100,13 @@
 		}}
 		disabled={readonly}
 	>
-		<SelectTrigger disabled={readonly} class="h-6 px-1.5 py-0.5 text-[10px]">
+		<Select.Trigger disabled={readonly} class="h-6 px-1.5 py-0.5 text-[10px]">
 			{(ocr?.backend as string) === 'paddle-ocr' ? 'PaddleOCR' : 'Tesseract'}
-		</SelectTrigger>
-		<SelectContent>
-			<SelectItem value="tesseract" label="Tesseract" />
-			<SelectItem value="paddle-ocr" label="PaddleOCR" />
-		</SelectContent>
+		</Select.Trigger>
+		<Select.Content>
+			<Select.Item value="tesseract" label="Tesseract" />
+			<Select.Item value="paddle-ocr" label="PaddleOCR" />
+		</Select.Content>
 	</Select.Root>
 	<input
 		type="text"

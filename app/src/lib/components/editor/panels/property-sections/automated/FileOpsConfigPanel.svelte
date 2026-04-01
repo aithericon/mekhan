@@ -1,6 +1,6 @@
 <script lang="ts">
 	import KeyValueEditor from '../../shared/KeyValueEditor.svelte';
-	import { Select, SelectTrigger, SelectContent, SelectItem } from '$lib/components/ui/select';
+	import * as Select from '$lib/components/ui/select';
 
 	type Props = {
 		config: Record<string, unknown>;
@@ -76,18 +76,18 @@
 		}}
 		disabled={readonly}
 	>
-		<SelectTrigger disabled={readonly}>
+		<Select.Trigger disabled={readonly}>
 			{operationLabels[operation] ?? operation}
-		</SelectTrigger>
-		<SelectContent>
-			<SelectItem value="stat" label="Stat" />
-			<SelectItem value="probe" label="Probe" />
-			<SelectItem value="copy" label="Copy" />
-			<SelectItem value="move" label="Move" />
-			<SelectItem value="delete" label="Delete" />
-			<SelectItem value="list" label="List" />
-			<SelectItem value="annotate" label="Annotate" />
-		</SelectContent>
+		</Select.Trigger>
+		<Select.Content>
+			<Select.Item value="stat" label="Stat" />
+			<Select.Item value="probe" label="Probe" />
+			<Select.Item value="copy" label="Copy" />
+			<Select.Item value="move" label="Move" />
+			<Select.Item value="delete" label="Delete" />
+			<Select.Item value="list" label="List" />
+			<Select.Item value="annotate" label="Annotate" />
+		</Select.Content>
 	</Select.Root>
 </div>
 
@@ -226,15 +226,15 @@
 			onValueChange={(v) => { if (v) updateStorage({ backend: v }); }}
 			disabled={readonly}
 		>
-			<SelectTrigger disabled={readonly} class="h-6 px-1.5 py-0.5 text-[10px]">
+			<Select.Trigger disabled={readonly} class="h-6 px-1.5 py-0.5 text-[10px]">
 				{storageLabels[(storage.backend as string) ?? 'local'] ?? 'Local'}
-			</SelectTrigger>
-			<SelectContent>
-				<SelectItem value="local" label="Local" />
-				<SelectItem value="s3" label="S3" />
-				<SelectItem value="gcs" label="GCS" />
-				<SelectItem value="azblob" label="Azure Blob" />
-			</SelectContent>
+			</Select.Trigger>
+			<Select.Content>
+				<Select.Item value="local" label="Local" />
+				<Select.Item value="s3" label="S3" />
+				<Select.Item value="gcs" label="GCS" />
+				<Select.Item value="azblob" label="Azure Blob" />
+			</Select.Content>
 		</Select.Root>
 		<input
 			type="text"
@@ -264,15 +264,15 @@
 			onValueChange={(v) => { if (v) updateSrcStorage({ backend: v }); }}
 			disabled={readonly}
 		>
-			<SelectTrigger disabled={readonly} class="h-6 px-1.5 py-0.5 text-[10px]">
+			<Select.Trigger disabled={readonly} class="h-6 px-1.5 py-0.5 text-[10px]">
 				{storageLabels[(srcStorage.backend as string) ?? 'local'] ?? 'Local'}
-			</SelectTrigger>
-			<SelectContent>
-				<SelectItem value="local" label="Local" />
-				<SelectItem value="s3" label="S3" />
-				<SelectItem value="gcs" label="GCS" />
-				<SelectItem value="azblob" label="Azure Blob" />
-			</SelectContent>
+			</Select.Trigger>
+			<Select.Content>
+				<Select.Item value="local" label="Local" />
+				<Select.Item value="s3" label="S3" />
+				<Select.Item value="gcs" label="GCS" />
+				<Select.Item value="azblob" label="Azure Blob" />
+			</Select.Content>
 		</Select.Root>
 		<input
 			type="text"

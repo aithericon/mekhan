@@ -96,9 +96,10 @@ impl HpiClient {
         self.get(&path).await
     }
 
-    /// Get a single task by ID.
+    /// Get a single task by ID (includes full definition with steps/blocks).
     pub async fn get_task(&self, task_id: &str) -> Result<Value, HpiError> {
-        self.get(&format!("/tasks/{}", task_id)).await
+        self.get(&format!("/tasks/{}?include_definition=true", task_id))
+            .await
     }
 
     /// Complete a task with form data.
@@ -121,5 +122,20 @@ impl HpiClient {
             None => serde_json::json!({}),
         };
         self.post(&format!("/tasks/{}/cancel", task_id), body).await
+    }
+
+    /// List processes. Pass raw query string.
+    pub async fn list_processes(&self, query: &str) -> Result<Value, HpiError> {
+        let path = if query.is_empty() {
+            "/processes".to_string()
+        } else {
+            format!("/processes?{}", query)
+        };
+        self.get(&path).await
+    }
+
+    /// Get a single process by ID.
+    pub async fn get_process(&self, process_id: &str) -> Result<Value, HpiError> {
+        self.get(&format!("/processes/{}", process_id)).await
     }
 }

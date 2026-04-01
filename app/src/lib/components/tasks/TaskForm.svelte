@@ -1,10 +1,35 @@
 <script lang="ts">
 	import type { TaskStep, TaskField } from '@aithericon/hpi-ui/types';
 	import { BlockRenderer } from '@aithericon/hpi-ui';
-	import { Button } from '$lib/components/ui/button';
+	import * as Select from '$lib/components/ui/select';
 	import { Input } from '$lib/components/ui/input';
 	import { Textarea } from '$lib/components/ui/textarea';
+	import { Checkbox } from '$lib/components/ui/checkbox';
+	import * as FileDropZone from '$lib/components/ui/file-drop-zone';
+	import { Button } from '$lib/components/ui/button';
+	import { SignaturePad } from '$lib/components/ui/signature-pad';
 	import { Label } from '$lib/components/ui/label';
+	import * as RadioGroup from '$lib/components/ui/radio-group';
+	import * as RatingGroup from '$lib/components/ui/rating-group';
+	import { Calendar } from '$lib/components/ui/calendar';
+	import * as Popover from '$lib/components/ui/popover';
+	import ChevronDown from '@lucide/svelte/icons/chevron-down';
+	import { CalendarDate, getLocalTimeZone } from '@internationalized/date';
+	import { renderMdsvex } from '$lib/mdsvex';
+	import { MDSVEX_CLASS } from '$lib/mdsvex-styles';
+	import { toast } from 'svelte-sonner';
+	import {
+		getTextValue as _getTextValue,
+		getCheckboxValue as _getCheckboxValue,
+		getNumberValue as _getNumberValue,
+		parseCalendarDate,
+		parseTimePart,
+		buildDateString,
+		parseFileValue,
+		validateFields,
+		fieldsForStep,
+		type UploadedFile
+	} from './task-form-values.svelte.ts';
 
 	interface Props {
 		steps: TaskStep[];
@@ -16,48 +41,106 @@
 	let { steps, onsubmit, oncancel, submitting = false }: Props = $props();
 
 	let formData: Record<string, unknown> = $state({});
-	let validationErrors: Record<string, string> = $state({});
+	let errors: Record<string, string> = $state({});
+	let activeStep = $state(0);
+	let datePopoverOpen: Record<string, boolean> = $state({});
 
-	// Collect all input fields across steps
-	const inputFields = $derived(
-		steps.flatMap((step) =>
-			step.blocks
-				.filter((b): b is Extract<typeof b, { type: 'input' }> => b.type === 'input')
-				.map((b) => b.field)
-		)
-	);
-
-	function validate(): boolean {
-		const errors: Record<string, string> = {};
-		for (const field of inputFields) {
-			if (field.required) {
-				const val = formData[field.name];
-				if (val === undefined || val === null || val === '') {
-					errors[field.name] = `${field.label} is required`;
-				}
-			}
+	// Value accessors bound to formData
+	function getTextValue(name: string): string {
+		return _getTextValue(formData, name);
+	}
+	function getCheckboxValue(name: string): boolean {
+		return _getCheckboxValue(formData, name);
+	}
+	function getNumberValue(name: string): number {
+		return _getNumberValue(formData, name);
+	}
+	function setTextValue(name: string, value: string) {
+		formData = { ...formData, [name]: value };
+		if (errors[name]) {
+			const { [name]: _, ...rest } = errors;
+			errors = rest;
 		}
-		validationErrors = errors;
-		return Object.keys(errors).length === 0;
+	}
+	function setCheckboxValue(name: string, value: boolean) {
+		formData = { ...formData, [name]: value };
+		if (errors[name]) {
+			const { [name]: _, ...rest } = errors;
+			errors = rest;
+		}
+	}
+	function setNumberValue(name: string, value: number) {
+		formData = { ...formData, [name]: value };
+		if (errors[name]) {
+			const { [name]: _, ...rest } = errors;
+			errors = rest;
+		}
+	}
+	function setFieldError(name: string, message: string) {
+		errors = { ...errors, [name]: message };
 	}
 
+	const currentStep = $derived(steps[activeStep]);
+	const isLastStep = $derived(activeStep === steps.length - 1);
+	const allFields = $derived(steps.flatMap((s) => fieldsForStep(s)));
+
 	function handleSubmit() {
-		if (validate()) {
-			onsubmit(formData);
+		errors = {};
+		const firstInvalid = validateFields(
+			allFields,
+			formData,
+			(name, msg) => (errors = { ...errors, [name]: msg }),
+			(name) => {
+				const { [name]: _, ...rest } = errors;
+				errors = rest;
+			}
+		);
+		if (firstInvalid) {
+			// Jump to first step with an error
+			for (let i = 0; i < steps.length; i++) {
+				const stepFields = fieldsForStep(steps[i]);
+				if (stepFields.some((f) => errors[f.name])) {
+					activeStep = i;
+					break;
+				}
+			}
+			return;
 		}
+		onsubmit(formData);
 	}
 
 	function handleCancel() {
-		oncancel?.();
+		const reason = prompt('Reason for cancellation (optional):');
+		if (reason === null) return;
+		oncancel?.(reason || undefined);
 	}
 
-	function updateField(name: string, value: unknown) {
-		formData = { ...formData, [name]: value };
-		// Clear validation error on change
-		if (validationErrors[name]) {
-			const { [name]: _, ...rest } = validationErrors;
-			validationErrors = rest;
+	// File upload handler
+	async function handleUpload(field: TaskField, files: File[]) {
+		for (const file of files) {
+			const fd = new FormData();
+			fd.append('file', file);
+			fd.append('field_name', field.name);
+			try {
+				const res = await fetch('/api/files/upload', { method: 'POST', body: fd });
+				if (res.ok) {
+					const result = (await res.json()) as UploadedFile;
+					const current = parseFileValue(getTextValue(field.name));
+					current.push(result);
+					setTextValue(field.name, JSON.stringify(current));
+				} else {
+					const err = (await res.json().catch(() => ({}))) as { error?: string };
+					toast.error(err.error ?? 'Upload failed');
+				}
+			} catch {
+				toast.error('Network error — please try again');
+			}
 		}
+	}
+
+	function removeFile(fieldName: string, url: string) {
+		const current = parseFileValue(getTextValue(fieldName)).filter((f) => f.url !== url);
+		setTextValue(fieldName, current.length > 0 ? JSON.stringify(current) : '');
 	}
 </script>
 
@@ -68,162 +151,296 @@
 		handleSubmit();
 	}}
 >
-	{#each steps as step (step.id)}
-		<div class="space-y-4">
-			{#if steps.length > 1}
-				<h3 class="text-sm font-medium text-foreground">{step.title}</h3>
-			{/if}
-
-			{#if step.description_mdsvex}
-				<p class="text-xs text-muted-foreground">{step.description_mdsvex}</p>
-			{/if}
-
-			{#each step.blocks as block}
-				{#if block.type === 'input'}
-					{@const field = block.field}
-					<div class="space-y-1.5">
-						<Label for={field.name}>
-							{field.label}
-							{#if field.required}
-								<span class="text-destructive">*</span>
-							{/if}
-						</Label>
-
-						{#if field.description_mdsvex}
-							<p class="text-xs text-muted-foreground">{field.description_mdsvex}</p>
-						{/if}
-
-						{#if field.kind === 'text'}
-							<Input
-								id={field.name}
-								type="text"
-								placeholder={field.placeholder ?? ''}
-								value={formData[field.name] as string ?? ''}
-								oninput={(e: Event) => updateField(field.name, (e.target as HTMLInputElement).value)}
-							/>
-						{:else if field.kind === 'textarea'}
-							<Textarea
-								id={field.name}
-								placeholder={field.placeholder ?? ''}
-								value={formData[field.name] as string ?? ''}
-								oninput={(e: Event) => updateField(field.name, (e.target as HTMLTextAreaElement).value)}
-								rows={4}
-							/>
-						{:else if field.kind === 'number'}
-							<Input
-								id={field.name}
-								type="number"
-								placeholder={field.placeholder ?? ''}
-								min={field.min}
-								max={field.max}
-								step={field.step}
-								value={formData[field.name] as string ?? ''}
-								oninput={(e: Event) => {
-									const v = (e.target as HTMLInputElement).value;
-									updateField(field.name, v === '' ? undefined : Number(v));
-								}}
-							/>
-						{:else if field.kind === 'select'}
-							<select
-								id={field.name}
-								class="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-								value={formData[field.name] as string ?? ''}
-								onchange={(e: Event) => updateField(field.name, (e.target as HTMLSelectElement).value)}
-							>
-								<option value="" disabled>{field.placeholder ?? 'Select...'}</option>
-								{#if field.options}
-									{#each field.options as opt}
-										<option value={opt}>{opt}</option>
-									{/each}
-								{/if}
-							</select>
-						{:else if field.kind === 'checkbox'}
-							<label class="flex items-center gap-2 text-sm">
-								<input
-									type="checkbox"
-									id={field.name}
-									checked={!!formData[field.name]}
-									onchange={(e: Event) => updateField(field.name, (e.target as HTMLInputElement).checked)}
-									class="size-4 rounded border-input"
-								/>
-								<span class="text-muted-foreground">{field.placeholder ?? ''}</span>
-							</label>
-						{:else if field.kind === 'radio' && field.options}
-							<div class="flex flex-col gap-2">
-								{#each field.options as opt}
-									<label class="flex items-center gap-2 text-sm">
-										<input
-											type="radio"
-											name={field.name}
-											value={opt}
-											checked={formData[field.name] === opt}
-											onchange={() => updateField(field.name, opt)}
-											class="size-4 border-input"
-										/>
-										{opt}
-									</label>
-								{/each}
-							</div>
-						{:else if field.kind === 'date'}
-							<Input
-								id={field.name}
-								type={field.include_time ? 'datetime-local' : 'date'}
-								value={formData[field.name] as string ?? ''}
-								oninput={(e: Event) => updateField(field.name, (e.target as HTMLInputElement).value)}
-							/>
-						{:else if field.kind === 'range'}
-							<div class="flex items-center gap-3">
-								<input
-									type="range"
-									id={field.name}
-									min={field.min ?? 0}
-									max={field.max ?? 100}
-									step={field.step ?? 1}
-									value={formData[field.name] as number ?? field.min ?? 0}
-									oninput={(e: Event) => updateField(field.name, Number((e.target as HTMLInputElement).value))}
-									class="flex-1"
-								/>
-								<span class="text-sm tabular-nums text-muted-foreground w-12 text-right">
-									{formData[field.name] ?? field.min ?? 0}
-								</span>
-							</div>
-						{:else if field.kind === 'rating'}
-							<div class="flex gap-1">
-								{#each Array.from({ length: field.max_rating ?? 5 }) as _, i}
-									<button
-										type="button"
-										class="text-lg transition-colors {(formData[field.name] as number ?? 0) > i ? 'text-amber-400' : 'text-muted-foreground/30'}"
-										onclick={() => updateField(field.name, i + 1)}
-									>
-										&#9733;
-									</button>
-								{/each}
-							</div>
-						{:else if field.kind === 'file' || field.kind === 'signature'}
-							<div class="rounded-md border border-dashed border-border px-3 py-4 text-center text-xs text-muted-foreground">
-								{field.kind === 'file' ? 'File upload' : 'Signature'} not available in Mekhan
-							</div>
-						{/if}
-
-						{#if validationErrors[field.name]}
-							<p class="text-xs text-destructive">{validationErrors[field.name]}</p>
-						{/if}
-					</div>
-				{:else}
-					<BlockRenderer {block} />
-				{/if}
+	<!-- Multi-step indicator -->
+	{#if steps.length > 1}
+		<div class="flex gap-1">
+			{#each steps as step, i (step.id)}
+				<button
+					type="button"
+					class="flex-1 rounded-full py-1 text-xs font-medium transition-colors {i === activeStep
+						? 'bg-primary text-primary-foreground'
+						: i < activeStep
+							? 'bg-primary/20 text-primary'
+							: 'bg-muted text-muted-foreground'}"
+					onclick={() => (activeStep = i)}
+				>
+					{step.title}
+				</button>
 			{/each}
 		</div>
-	{/each}
+	{/if}
 
-	<!-- Action bar -->
+	<!-- Current step blocks -->
+	{#if currentStep}
+		{#if currentStep.description_mdsvex}
+			<div class={MDSVEX_CLASS}>
+				{@html renderMdsvex(currentStep.description_mdsvex)}
+			</div>
+		{/if}
+
+		{#each currentStep.blocks as block}
+			{#if block.type === 'input'}
+				{@const field = block.field}
+				{@const fieldId = `field-${field.name}`}
+				<div class="space-y-2 py-1" data-testid={`step-block-input-${field.name}`}>
+					<!-- Label -->
+					<Label for={fieldId} class="text-base font-semibold text-foreground">
+						{field.label}
+						{#if field.required}
+							<span class="text-primary">*</span>
+						{/if}
+					</Label>
+
+					<!-- Field input (ported from HPI FieldRenderer) -->
+					{#if field.kind === 'textarea'}
+						<Textarea
+							id={fieldId}
+							data-testid={`field-${field.name}`}
+							rows={4}
+							placeholder={field.placeholder}
+							class="min-h-[120px] rounded-xl bg-white/80"
+							value={getTextValue(field.name)}
+							oninput={(event) =>
+								setTextValue(field.name, (event.currentTarget as HTMLTextAreaElement).value)}
+						/>
+					{:else if field.kind === 'select'}
+						<Select.Root
+							type="single"
+							value={getTextValue(field.name)}
+							onValueChange={(value) => setTextValue(field.name, value)}
+						>
+							<Select.Trigger
+								id={fieldId}
+								data-testid={`field-${field.name}`}
+								class="w-full rounded-xl bg-white/80"
+							>
+								{#if getTextValue(field.name)}
+									{getTextValue(field.name)}
+								{:else}
+									<span class="text-muted-foreground">Select an option</span>
+								{/if}
+							</Select.Trigger>
+							<Select.Content>
+								{#each field.options ?? [] as option (option)}
+									<Select.Item value={option} label={option} />
+								{/each}
+							</Select.Content>
+						</Select.Root>
+					{:else if field.kind === 'checkbox'}
+						<div class="flex items-center gap-3 py-2">
+							<Checkbox
+								id={fieldId}
+								data-testid={`field-${field.name}`}
+								checked={getCheckboxValue(field.name)}
+								onCheckedChange={(value) => setCheckboxValue(field.name, value === true)}
+							/>
+							<Label for={fieldId} class="cursor-pointer text-base text-foreground">
+								Yes
+							</Label>
+						</div>
+					{:else if field.kind === 'file'}
+						<FileDropZone.Root
+							id={fieldId}
+							data-testid={`field-${field.name}-input`}
+							accept={field.accept}
+							maxFiles={field.max_files ?? 1}
+							maxFileSize={field.max_file_size}
+							fileCount={parseFileValue(getTextValue(field.name)).length}
+							onUpload={(files) => handleUpload(field, files)}
+							onFileRejected={({ reason }) => setFieldError(field.name, reason)}
+						>
+							<FileDropZone.Trigger data-testid={`field-${field.name}`} />
+						</FileDropZone.Root>
+						{@const uploadedFiles = parseFileValue(getTextValue(field.name))}
+						{#if uploadedFiles.length > 0}
+							<ul class="mt-2 space-y-1">
+								{#each uploadedFiles as uploaded (uploaded.url)}
+									<li class="flex items-center gap-2 text-sm text-muted-foreground">
+										<span>{uploaded.name}</span>
+										<Button
+											variant="ghost"
+											size="sm"
+											type="button"
+											class="h-auto px-1 py-0 text-xs text-destructive hover:text-destructive hover:underline"
+											onclick={() => removeFile(field.name, uploaded.url)}
+										>
+											remove
+										</Button>
+									</li>
+								{/each}
+							</ul>
+						{/if}
+					{:else if field.kind === 'signature'}
+						<SignaturePad
+							id={fieldId}
+							data-testid={`field-${field.name}`}
+							value={getTextValue(field.name)}
+							penColor={field.pen_color}
+							onchange={(val) => setTextValue(field.name, val)}
+						/>
+					{:else if field.kind === 'radio'}
+						<RadioGroup.Root
+							value={getTextValue(field.name)}
+							onValueChange={(value) => setTextValue(field.name, value)}
+							class="flex flex-col gap-2 py-1"
+							data-testid={`field-${field.name}`}
+						>
+							{#each field.options ?? [] as option, i (option)}
+								{@const optionId = `${field.name}-${i}`}
+								<div class="flex items-center space-x-2 rounded-lg px-2 py-1.5 transition-colors hover:bg-muted/50">
+									<RadioGroup.Item value={option} id={optionId} />
+									<Label for={optionId} class="cursor-pointer font-normal">{option}</Label>
+								</div>
+							{/each}
+						</RadioGroup.Root>
+					{:else if field.kind === 'date'}
+						{@const dateStr = getTextValue(field.name)}
+						{@const calDate = dateStr ? parseCalendarDate(dateStr) : undefined}
+						{@const timePart = field.include_time ? parseTimePart(dateStr) : ''}
+						<div class="flex gap-3" data-testid={`field-${field.name}`}>
+							<Popover.Root
+								open={datePopoverOpen[field.name] ?? false}
+								onOpenChange={(v) => (datePopoverOpen = { ...datePopoverOpen, [field.name]: v })}
+							>
+								<Popover.Trigger>
+									{#snippet child({ props: triggerProps })}
+										<Button
+											{...triggerProps}
+											variant="outline"
+											class="w-48 justify-between font-normal {!calDate ? 'text-muted-foreground' : ''}"
+										>
+											{calDate
+												? calDate.toDate(getLocalTimeZone()).toLocaleDateString()
+												: 'Select date'}
+											<ChevronDown class="size-4 opacity-50" />
+										</Button>
+									{/snippet}
+								</Popover.Trigger>
+								<Popover.Content class="w-auto overflow-hidden p-0" align="start">
+									<Calendar
+										type="single"
+										value={calDate}
+										captionLayout="dropdown"
+										onValueChange={(v) => {
+											const cd = v as CalendarDate | undefined;
+											setTextValue(
+												field.name,
+												buildDateString(cd, field.include_time ? timePart || '00:00' : '')
+											);
+											datePopoverOpen = { ...datePopoverOpen, [field.name]: false };
+										}}
+									/>
+								</Popover.Content>
+							</Popover.Root>
+							{#if field.include_time}
+								<Input
+									type="time"
+									step="60"
+									value={timePart || ''}
+									class="w-28 appearance-none bg-background [&::-webkit-calendar-picker-indicator]:hidden [&::-webkit-calendar-picker-indicator]:appearance-none"
+									oninput={(event) => {
+										const t = (event.currentTarget as HTMLInputElement).value;
+										setTextValue(field.name, buildDateString(calDate, t));
+									}}
+								/>
+							{/if}
+						</div>
+					{:else if field.kind === 'range'}
+						{@const rangeMin = field.min ?? 0}
+						{@const rangeMax = field.max ?? 100}
+						{@const rangeStep = field.step ?? 1}
+						<div class="flex max-w-sm items-center gap-3">
+							<span class="text-xs text-muted-foreground">{rangeMin}</span>
+							<input
+								id={fieldId}
+								data-testid={`field-${field.name}`}
+								type="range"
+								min={rangeMin}
+								max={rangeMax}
+								step={rangeStep}
+								class="flex-1 accent-primary"
+								value={getTextValue(field.name) || String(rangeMin)}
+								oninput={(event) =>
+									setTextValue(field.name, (event.currentTarget as HTMLInputElement).value)}
+							/>
+							<span class="text-xs text-muted-foreground">{rangeMax}</span>
+							<span class="min-w-[2.5rem] rounded-md bg-muted/50 px-2 py-1 text-center text-sm font-medium">
+								{getTextValue(field.name) || rangeMin}
+							</span>
+						</div>
+					{:else if field.kind === 'rating'}
+						{@const maxRating = field.max_rating ?? 5}
+						{@const currentRating = getNumberValue(field.name)}
+						<div class="flex items-center gap-1 py-1" data-testid={`field-${field.name}`}>
+							<RatingGroup.Root
+								value={currentRating}
+								max={maxRating}
+								onValueChange={(v) => setNumberValue(field.name, v)}
+								aria-label={field.label}
+							>
+								{#each Array(maxRating) as _, i (i)}
+									<RatingGroup.Item index={i} />
+								{/each}
+							</RatingGroup.Root>
+							{#if currentRating > 0}
+								<span class="ml-2 text-sm text-muted-foreground">{currentRating}/{maxRating}</span>
+							{/if}
+						</div>
+					{:else}
+						<!-- text / number -->
+						<Input
+							id={fieldId}
+							data-testid={`field-${field.name}`}
+							type={field.kind === 'number' ? 'number' : 'text'}
+							placeholder={field.placeholder}
+							class="rounded-xl bg-white/80"
+							value={getTextValue(field.name)}
+							oninput={(event) =>
+								setTextValue(field.name, (event.currentTarget as HTMLInputElement).value)}
+						/>
+					{/if}
+
+					<!-- Field description -->
+					{#if field.description_mdsvex}
+						<div class={MDSVEX_CLASS}>
+							{@html renderMdsvex(field.description_mdsvex)}
+						</div>
+					{/if}
+
+					<!-- Validation error -->
+					{#if errors[field.name]}
+						<p class="text-sm text-destructive" data-testid={`field-error-${field.name}`}>
+							{errors[field.name]}
+						</p>
+					{/if}
+				</div>
+			{:else}
+				<BlockRenderer {block} />
+			{/if}
+		{/each}
+	{/if}
+
+	<!-- Navigation / action bar -->
 	<div class="flex items-center gap-2 border-t border-border pt-4">
-		<Button type="submit" disabled={submitting}>
-			{submitting ? 'Submitting...' : 'Complete Task'}
-		</Button>
+		{#if steps.length > 1 && activeStep > 0}
+			<Button type="button" variant="outline" onclick={() => (activeStep -= 1)} disabled={submitting}>
+				Previous
+			</Button>
+		{/if}
+
+		{#if steps.length > 1 && !isLastStep}
+			<Button type="button" onclick={() => (activeStep += 1)} disabled={submitting}>
+				Next
+			</Button>
+		{:else}
+			<Button type="submit" disabled={submitting}>
+				{submitting ? 'Submitting...' : 'Complete Task'}
+			</Button>
+		{/if}
+
 		{#if oncancel}
 			<Button type="button" variant="outline" onclick={handleCancel} disabled={submitting}>
-				Cancel Task
+				Reject
 			</Button>
 		{/if}
 	</div>

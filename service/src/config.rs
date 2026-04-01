@@ -96,7 +96,7 @@ impl Default for HpiConfig {
 }
 
 fn default_hpi_url() -> String {
-    "http://localhost:5173".to_string()
+    "http://localhost:5188".to_string()
 }
 
 fn default_host() -> String {
@@ -112,7 +112,7 @@ fn default_petri_lab_url() -> String {
 }
 
 fn default_nats_url() -> String {
-    "nats://localhost:4222".to_string()
+    "nats://localhost:4333".to_string()
 }
 
 fn default_retention_hours() -> u64 {

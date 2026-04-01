@@ -1,7 +1,7 @@
 <script lang="ts">
 	import KeyValueEditor from '../../shared/KeyValueEditor.svelte';
 	import StringListEditor from '../../shared/StringListEditor.svelte';
-	import { Select, SelectTrigger, SelectContent, SelectItem } from '$lib/components/ui/select';
+	import * as Select from '$lib/components/ui/select';
 
 	type Props = {
 		config: Record<string, unknown>;
@@ -59,14 +59,14 @@
 		onValueChange={(v) => { if (v) onchange({ ...config, pull_policy: v }); }}
 		disabled={readonly}
 	>
-		<SelectTrigger disabled={readonly}>
+		<Select.Trigger disabled={readonly}>
 			{pullPolicyLabels[(config.pull_policy as string) ?? 'if_not_present'] ?? 'If Not Present'}
-		</SelectTrigger>
-		<SelectContent>
-			<SelectItem value="if_not_present" label="If Not Present" />
-			<SelectItem value="always" label="Always" />
-			<SelectItem value="never" label="Never" />
-		</SelectContent>
+		</Select.Trigger>
+		<Select.Content>
+			<Select.Item value="if_not_present" label="If Not Present" />
+			<Select.Item value="always" label="Always" />
+			<Select.Item value="never" label="Never" />
+		</Select.Content>
 	</Select.Root>
 </div>
 

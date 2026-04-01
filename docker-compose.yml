@@ -19,8 +19,8 @@ services:
     image: nats:2.10-alpine
     command: ["--jetstream", "--store_dir", "/data"]
     ports:
-      - "4222:4222"
-      - "8222:8222"
+      - "4333:4222"
+      - "8333:8222"
     volumes:
       - mekhan-natsdata:/data
     healthcheck:

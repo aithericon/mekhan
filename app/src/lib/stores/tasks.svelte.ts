@@ -26,6 +26,9 @@ export function createTaskStore() {
 	// Current filter
 	let currentStatus: string | undefined = undefined;
 
+	// Callback for process update events (used by process pages)
+	let processUpdateCallback: (() => void) | null = null;
+
 	async function fetchTasks(status?: string) {
 		try {
 			const result = await listTasks({ status, limit: 100 });
@@ -65,7 +68,8 @@ export function createTaskStore() {
 					const lines = buffer.split('\n');
 					buffer = lines.pop() ?? '';
 
-					let shouldRefetch = false;
+					let shouldRefetchTasks = false;
+					let shouldNotifyProcess = false;
 					for (const line of lines) {
 						if (
 							line.startsWith('event: task_created') ||
@@ -73,13 +77,18 @@ export function createTaskStore() {
 							line.startsWith('event: task_failed') ||
 							line.startsWith('event: task_cancelled')
 						) {
-							shouldRefetch = true;
+							shouldRefetchTasks = true;
+						}
+						if (line.startsWith('event: process_update')) {
+							shouldNotifyProcess = true;
 						}
 					}
 
-					if (shouldRefetch) {
-						// Debounce: wait a small bit for HPI to process, then re-fetch
+					if (shouldRefetchTasks) {
 						setTimeout(() => fetchTasks(currentStatus), 300);
+					}
+					if (shouldNotifyProcess && processUpdateCallback) {
+						setTimeout(() => processUpdateCallback?.(), 300);
 					}
 				}
 			} catch (e) {
@@ -128,6 +137,9 @@ export function createTaskStore() {
 		},
 		init,
 		refetch,
-		destroy
+		destroy,
+		onProcessUpdate(cb: () => void) {
+			processUpdateCallback = cb;
+		}
 	};
 }

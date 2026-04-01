@@ -8,7 +8,6 @@ use mekhan_service::lifecycle;
 use mekhan_service::nats::MekhanNats;
 use mekhan_service::petri::client::PetriClient;
 use mekhan_service::s3::ArtifactStore;
-use mekhan_service::tasks::process_index::ProcessIndex;
 use mekhan_service::yjs::manager::YjsManager;
 use mekhan_service::yjs::persistence::YjsPersistence;
 use mekhan_service::{build_router, AppState};
@@ -70,10 +69,6 @@ async fn main() -> anyhow::Result<()> {
         tracing::warn!("HPI API token not set — task endpoints will return 503");
     }
 
-    // Process index (projects process state from NATS HUMAN_PROCESS stream)
-    let process_index = ProcessIndex::new();
-    tokio::spawn(process_index.clone().start_consumer(mekhan_nats.clone()));
-
     let state = AppState {
         db,
         petri,
@@ -82,7 +77,6 @@ async fn main() -> anyhow::Result<()> {
         yjs: yjs_manager,
         s3: artifact_store,
         hpi,
-        process_index,
     };
 
     let app = build_router(state);

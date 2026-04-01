@@ -34,7 +34,7 @@
 		);
 	}
 
-	const inputFields = $derived(getInputFields(task.steps));
+	const inputFields = $derived(getInputFields(task.steps ?? []));
 </script>
 
 <div class="flex flex-col gap-3 p-3">
@@ -81,10 +81,10 @@
 	{/if}
 
 	<!-- Task content (display blocks) -->
-	{#each task.steps as step (step.id)}
+	{#each task.steps ?? [] as step (step.id)}
 		{#if step.blocks.length > 0}
 			<div class="space-y-2">
-				{#if task.steps.length > 1}
+				{#if (task.steps ?? []).length > 1}
 					<div class="text-xs font-medium text-muted-foreground uppercase tracking-wider">
 						{step.title}
 					</div>

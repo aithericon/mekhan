@@ -15,6 +15,7 @@
 			<Button variant="ghost" size="sm" href="/templates" data-testid="nav-templates">Templates</Button>
 			<Button variant="ghost" size="sm" href="/instances" data-testid="nav-instances">Instances</Button>
 			<Button variant="ghost" size="sm" href="/tasks" data-testid="nav-tasks">Tasks</Button>
+			<Button variant="ghost" size="sm" href="/processes" data-testid="nav-processes">Processes</Button>
 			<Button variant="ghost" size="sm" href="/nets" data-testid="nav-nets">Nets</Button>
 		</nav>
 	</header>

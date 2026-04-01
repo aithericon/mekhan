@@ -6,7 +6,7 @@
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
 	import StringListEditor from '../../shared/StringListEditor.svelte';
-	import { Select, SelectTrigger, SelectContent, SelectItem } from '$lib/components/ui/select';
+	import * as Select from '$lib/components/ui/select';
 
 	type Props = {
 		field: TaskFieldConfig;
@@ -75,18 +75,18 @@
 				}}
 				disabled={readonly}
 			>
-				<SelectTrigger disabled={readonly} class="h-9 px-2 text-sm">
+				<Select.Trigger disabled={readonly} class="h-9 px-2 text-sm">
 					{kindLabels[field.kind] ?? field.kind}
-				</SelectTrigger>
-				<SelectContent>
-					<SelectItem value="text" label="Text" />
-					<SelectItem value="textarea" label="Textarea" />
-					<SelectItem value="number" label="Number" />
-					<SelectItem value="select" label="Select" />
-					<SelectItem value="checkbox" label="Checkbox" />
-					<SelectItem value="file" label="File" />
-					<SelectItem value="signature" label="Signature" />
-				</SelectContent>
+				</Select.Trigger>
+				<Select.Content>
+					<Select.Item value="text" label="Text" />
+					<Select.Item value="textarea" label="Textarea" />
+					<Select.Item value="number" label="Number" />
+					<Select.Item value="select" label="Select" />
+					<Select.Item value="checkbox" label="Checkbox" />
+					<Select.Item value="file" label="File" />
+					<Select.Item value="signature" label="Signature" />
+				</Select.Content>
 			</Select.Root>
 		</div>
 		<label class="flex items-center gap-1.5">

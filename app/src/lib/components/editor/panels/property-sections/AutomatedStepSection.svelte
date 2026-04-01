@@ -1,6 +1,6 @@
 <script lang="ts">
 	import type { AutomatedStepNodeData, ExecutionBackendType } from '$lib/types/editor';
-	import { Select, SelectTrigger, SelectContent, SelectItem } from '$lib/components/ui/select';
+	import * as Select from '$lib/components/ui/select';
 	import PythonConfigPanel from './automated/PythonConfigPanel.svelte';
 	import DockerConfigPanel from './automated/DockerConfigPanel.svelte';
 	import ProcessConfigPanel from './automated/ProcessConfigPanel.svelte';
@@ -67,18 +67,18 @@
 		onValueChange={(v) => { if (v) handleBackendTypeChange(v as ExecutionBackendType); }}
 		disabled={readonly}
 	>
-		<SelectTrigger disabled={readonly}>
+		<Select.Trigger disabled={readonly}>
 			{backendLabels[data.executionSpec.backendType] ?? data.executionSpec.backendType}
-		</SelectTrigger>
-		<SelectContent>
-			<SelectItem value="python" label="Python" />
-			<SelectItem value="process" label="Process" />
-			<SelectItem value="docker" label="Docker" />
-			<SelectItem value="http" label="HTTP Request" />
-			<SelectItem value="llm" label="LLM (AI Model)" />
-			<SelectItem value="file_ops" label="File Operations" />
-			<SelectItem value="kreuzberg" label="Document Extraction" />
-		</SelectContent>
+		</Select.Trigger>
+		<Select.Content>
+			<Select.Item value="python" label="Python" />
+			<Select.Item value="process" label="Process" />
+			<Select.Item value="docker" label="Docker" />
+			<Select.Item value="http" label="HTTP Request" />
+			<Select.Item value="llm" label="LLM (AI Model)" />
+			<Select.Item value="file_ops" label="File Operations" />
+			<Select.Item value="kreuzberg" label="Document Extraction" />
+		</Select.Content>
 	</Select.Root>
 </div>
 

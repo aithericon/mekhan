@@ -10,7 +10,6 @@ pub mod models;
 pub mod nats;
 pub mod petri;
 pub mod s3;
-pub mod tasks;
 pub mod yjs;
 
 use std::sync::Arc;
@@ -29,7 +28,6 @@ use crate::hpi::HpiClient;
 use crate::nats::MekhanNats;
 use crate::petri::client::PetriClient;
 use crate::s3::ArtifactStore;
-use crate::tasks::process_index::ProcessIndex;
 use crate::yjs::manager::YjsManager;
 
 #[derive(Clone)]
@@ -41,7 +39,6 @@ pub struct AppState {
     pub yjs: Arc<YjsManager>,
     pub s3: Arc<ArtifactStore>,
     pub hpi: HpiClient,
-    pub process_index: ProcessIndex,
 }
 
 pub fn build_router(state: AppState) -> Router {
@@ -126,7 +123,7 @@ pub fn build_router(state: AppState) -> Router {
             "/api/tasks/{task_id}/cancel",
             post(handlers::tasks::cancel_task),
         )
-        // Process endpoints (from NATS projection)
+        // Process endpoints (proxied to HPI)
         .route("/api/processes", get(handlers::processes::list_processes))
         .route(
             "/api/processes/{process_id}",

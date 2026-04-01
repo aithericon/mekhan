@@ -2,7 +2,7 @@
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import { Input } from '$lib/components/ui/input';
 	import { Textarea } from '$lib/components/ui/textarea';
-	import { Select, SelectTrigger, SelectContent, SelectItem } from '$lib/components/ui/select';
+	import * as Select from '$lib/components/ui/select';
 
 	type Props = {
 		severity: 'info' | 'warning' | 'error' | 'success';
@@ -80,15 +80,15 @@
 			}}
 			disabled={readonly}
 		>
-			<SelectTrigger disabled={readonly} class="h-9 px-2 text-sm">
+			<Select.Trigger disabled={readonly} class="h-9 px-2 text-sm">
 				{severityLabels[severity] ?? severity}
-			</SelectTrigger>
-			<SelectContent>
-				<SelectItem value="info" label="Info" />
-				<SelectItem value="warning" label="Warning" />
-				<SelectItem value="error" label="Error" />
-				<SelectItem value="success" label="Success" />
-			</SelectContent>
+			</Select.Trigger>
+			<Select.Content>
+				<Select.Item value="info" label="Info" />
+				<Select.Item value="warning" label="Warning" />
+				<Select.Item value="error" label="Error" />
+				<Select.Item value="success" label="Success" />
+			</Select.Content>
 		</Select.Root>
 
 		<Input
