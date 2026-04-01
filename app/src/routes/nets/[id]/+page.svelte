@@ -9,14 +9,14 @@
 	import Pause from '@lucide/svelte/icons/pause';
 	import RotateCcw from '@lucide/svelte/icons/rotate-ccw';
 
-	const netId = $derived($page.params.id);
-	const petriStore = $derived(createPetriStore(`/petri/api/nets/${netId}`));
+	const netId = $derived($page.params.id as string);
+	const petriStore = $derived(createPetriStore(netId));
 
 	let activeTab = $state<'petri' | 'events'>('petri');
 
 	$effect(() => {
-		petriStore.start();
-		return () => petriStore.stop();
+		petriStore.init();
+		return () => petriStore.destroy();
 	});
 
 	async function toggleRunMode() {
@@ -27,7 +27,6 @@
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify({ mode: next })
 		});
-		petriStore.refresh();
 	}
 
 	async function evaluate() {
@@ -36,7 +35,6 @@
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify({})
 		});
-		petriStore.refresh();
 	}
 </script>
 
