@@ -4,6 +4,9 @@ import { defineConfig } from 'vite';
 
 export default defineConfig({
 	plugins: [tailwindcss(), sveltekit()],
+	resolve: {
+		dedupe: ['svelte', 'bits-ui']
+	},
 	server: {
 		proxy: {
 			// Petri-lab engine API (port 3030)

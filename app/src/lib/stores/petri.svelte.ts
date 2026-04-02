@@ -49,6 +49,10 @@ export function createPetriStore(netId: string, baseUrl: string = PETRI_BASE) {
 	let runMode: string = $state('stopped');
 	let evaluating: boolean = $state(false);
 
+	// ── Analysis & services ─────────────────────────────────────────────
+	let analysisReport: { is_valid: boolean; summary: { error_count: number; warning_count: number; info_count: number }; issues: Array<{ level: string; code: string; message: string; node_id: string; node_type: string }> } | null = $state(null);
+	let services: { handlers: string[]; categories: Record<string, string[]> } | null = $state(null);
+
 	// ── SSE ─────────────────────────────────────────────────────────────
 	let sseAbortController: AbortController | null = null;
 	let sseRetryCount = 0;
@@ -321,6 +325,44 @@ export function createPetriStore(netId: string, baseUrl: string = PETRI_BASE) {
 		}
 	}
 
+	async function fetchAnalysis() {
+		try {
+			const res = await fetch(`${apiBase}/analysis`);
+			if (!res.ok) return;
+			analysisReport = await res.json();
+		} catch {
+			// Non-critical
+		}
+	}
+
+	async function fetchServices() {
+		try {
+			const res = await fetch(`${apiBase}/services`);
+			if (!res.ok) return;
+			services = await res.json();
+		} catch {
+			// Non-critical
+		}
+	}
+
+	async function loadScenario(scenario: unknown): Promise<{ success: boolean; error?: string; places_count?: number; transitions_count?: number; tokens_count?: number }> {
+		try {
+			const res = await fetch(`${apiBase}/scenario`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify(scenario)
+			});
+			if (!res.ok) {
+				const body = await res.text();
+				return { success: false, error: body };
+			}
+			const data = await res.json();
+			return { success: true, places_count: data.places_count, transitions_count: data.transitions_count, tokens_count: data.tokens_count };
+		} catch (e: any) {
+			return { success: false, error: e.message };
+		}
+	}
+
 	async function saveTransitionScript(transitionId: string, script: string, guard: string | null) {
 		const res = await fetch(`${apiBase}/topology/transition/${transitionId}`, {
 			method: 'PATCH',
@@ -565,6 +607,7 @@ export function createPetriStore(netId: string, baseUrl: string = PETRI_BASE) {
 			await fetchTopology();
 			await fetchEvents();
 			await fetchRunMode();
+			await Promise.all([fetchAnalysis(), fetchServices()]);
 			startLiveUpdates();
 		} catch (e: any) {
 			error = `Initialization failed: ${e.message}`;
@@ -595,6 +638,8 @@ export function createPetriStore(netId: string, baseUrl: string = PETRI_BASE) {
 		get currentGroups() { return currentGroups; },
 		get runMode() { return runMode; },
 		get evaluating() { return evaluating; },
+		get analysisReport() { return analysisReport; },
+		get services() { return services; },
 		get apiBase() { return apiBase; },
 
 		// Name resolution
@@ -616,6 +661,9 @@ export function createPetriStore(netId: string, baseUrl: string = PETRI_BASE) {
 		setRunMode,
 		hibernate,
 		saveTransitionScript,
+		fetchAnalysis,
+		fetchServices,
+		loadScenario,
 
 		// Timeline & selection
 		setReplayIndex,

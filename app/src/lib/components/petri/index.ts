@@ -14,3 +14,7 @@ export { default as TokenBadge } from './TokenBadge.svelte';
 export { default as TokenDetailSheet } from './TokenDetailSheet.svelte';
 export { default as TransitionScriptSheet } from './TransitionScriptSheet.svelte';
 export { default as MonacoEditor } from './MonacoEditor.svelte';
+export { default as AnalysisPanel } from './AnalysisPanel.svelte';
+export { default as ServicesPanel } from './ServicesPanel.svelte';
+export { default as NetTreeSidebar } from './NetTreeSidebar.svelte';
+export { default as ScenarioEditor } from './ScenarioEditor.svelte';

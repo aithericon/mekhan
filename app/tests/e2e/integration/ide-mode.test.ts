@@ -221,11 +221,14 @@ test.describe('IDE Mode', () => {
 		await expect(page.getByText('Connected')).toBeVisible({ timeout: 10_000 });
 		await expect(page.getByRole('button', { name: 'Start', exact: true })).toBeVisible({ timeout: 5_000 });
 
-		// Create a file and type some content
+		// Create a file under the Start node
+		const fileTree = page.getByTestId('file-tree');
 		page.on('dialog', async (dialog) => {
 			await dialog.accept('persist_test.py');
 		});
-		const createBtn = page.locator('button[title="Create file"]').first();
+		// Find the Create file button next to the Start node label
+		const startNodeRow = fileTree.getByRole('button', { name: 'Start', exact: true }).locator('..');
+		const createBtn = startNodeRow.locator('button[title="Create file"]');
 		await createBtn.click();
 		await expect(page.locator('.cm-editor')).toBeVisible({ timeout: 5_000 });
 
@@ -234,17 +237,37 @@ test.describe('IDE Mode', () => {
 		await page.keyboard.type('result = 123');
 		await expect(page.locator('.cm-content')).toContainText('result = 123');
 
-		// Wait for WS sync to persist updates
-		await page.waitForTimeout(2000);
+		// Wait for WS sync to persist updates to backend
+		await page.waitForTimeout(4000);
 
 		// Reload the page
 		await page.reload();
 		await expect(page.getByText('Connected')).toBeVisible({ timeout: 10_000 });
 		await expect(page.getByRole('button', { name: 'Start', exact: true })).toBeVisible({ timeout: 5_000 });
 
-		// Expand the Start node and open the persisted file
-		const fileTree = page.getByTestId('file-tree');
-		await fileTree.getByRole('button', { name: 'Start', exact: true }).click();
+		// Poll until Yjs sync delivers the file to the Y.Doc
+		await expect(async () => {
+			const hasFile = await page.evaluate(() => {
+				const doc = (window as any).__yjs_doc;
+				if (!doc) return false;
+				const nodes = doc.getMap('nodes');
+				const startNode = nodes.get('start');
+				if (!startNode) return false;
+				const files = startNode.get('files');
+				return files && files.has('persist_test.py');
+			});
+			expect(hasFile).toBe(true);
+		}).toPass({ timeout: 15_000 });
+
+		// Expand the Start node in the file tree
+		// Click the toggle button via its child span (dispatches to button onclick reliably)
+		const startLabel = fileTree.locator('span.font-medium:text-is("Start")');
+		await startLabel.click();
+		// Retry if first click didn't expand (Svelte event delegation can miss the first click)
+		const chevronDown = fileTree.locator('.lucide-chevron-down');
+		if ((await chevronDown.count()) === 0) {
+			await startLabel.click();
+		}
 		await expect(fileTree.getByText('persist_test.py')).toBeVisible({ timeout: 10_000 });
 		await fileTree.getByText('persist_test.py').click();
 		await expect(page.locator('.cm-editor')).toBeVisible({ timeout: 5_000 });

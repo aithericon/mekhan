@@ -30,6 +30,11 @@ export function createYjsSession(templateId: string): YjsSession {
 	const provider = new MekhanWsProvider(wsUrl, templateId, doc);
 	const awareness = provider.awareness;
 
+	// Expose Y.Doc for E2E test assertions (dev only, tree-shaken in prod)
+	if (import.meta.env.DEV && typeof window !== 'undefined') {
+		(window as any).__yjs_doc = doc;
+	}
+
 	function destroy() {
 		provider.destroy();
 		doc.destroy();

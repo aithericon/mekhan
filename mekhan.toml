@@ -1,0 +1,8 @@
+database_url = "postgres://test:test@localhost:5599/mekhan"
+nats_url = "nats://localhost:4333"
+petri_lab_url = "http://localhost:3030"
+
+[s3]
+endpoint = "http://localhost:9000"
+access_key = "minioadmin"
+secret_key = "minioadmin"
