@@ -56,6 +56,7 @@ pub fn test_config() -> AppConfig {
             region: "us-east-1".to_string(),
         },
         hpi: HpiConfig::default(),
+        artifact_s3: None,
     }
 }
 
@@ -84,6 +85,7 @@ pub async fn test_app() -> (Router, PgPool) {
         config: config.clone(),
         yjs: yjs_manager,
         s3: artifact_store,
+        artifact_s3: None,
         hpi: HpiClient::new(&config.hpi.url, &config.hpi.api_token),
     };
 
@@ -115,6 +117,7 @@ pub async fn test_app_with_nats(nats_url: &str) -> (Router, PgPool) {
         config: config.clone(),
         yjs: yjs_manager,
         s3: artifact_store,
+        artifact_s3: None,
         hpi: HpiClient::new(&config.hpi.url, &config.hpi.api_token),
     };
 
@@ -148,6 +151,7 @@ pub async fn test_app_with_petri_url(nats_url: &str, petri_url: &str) -> (Router
         config: config.clone(),
         yjs: yjs_manager,
         s3: artifact_store,
+        artifact_s3: None,
         hpi: HpiClient::new(&config.hpi.url, &config.hpi.api_token),
     };
 

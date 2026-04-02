@@ -41,6 +41,7 @@ pub struct AppState {
     pub config: AppConfig,
     pub yjs: Arc<YjsManager>,
     pub s3: Arc<ArtifactStore>,
+    pub artifact_s3: Option<Arc<ArtifactStore>>,
     pub hpi: HpiClient,
 }
 
@@ -153,6 +154,10 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/catalogue/distinct/{column}",
             get(catalogue::handlers::distinct_values),
+        )
+        .route(
+            "/api/catalogue/download/{execution_id}/{id}",
+            get(catalogue::handlers::download_artifact),
         )
         .route(
             "/api/catalogue/{execution_id}/{id}",

@@ -19,11 +19,14 @@ export interface CatalogueEntry {
 	catalogued_at: string;
 }
 
-export interface CatalogueListResponse {
-	entries: CatalogueEntry[];
+export interface PaginatedCatalogueResponse {
+	items: CatalogueEntry[];
 	total: number;
-	limit: number;
-	offset: number;
+	page: number;
+	page_size: number;
+	total_pages: number;
+	has_next: boolean;
+	has_previous: boolean;
 }
 
 export interface CatalogueStats {

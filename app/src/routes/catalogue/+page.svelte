@@ -25,6 +25,8 @@
 	let searchName = $state('');
 	let sourceNetFilter = $state('');
 	let expandedIds = $state<Set<string>>(new Set());
+	let totalPages = $state(0);
+	let hasNext = $state(false);
 
 	// ── Category config ────────────────────────────────────────────────────────
 	const categoryColors: Record<string, string> = {
@@ -90,19 +92,24 @@
 			const [listResult, statsResult] = await Promise.all([
 				listCatalogueEntries({
 					category: category === 'all' ? undefined : category,
-					name: name.trim() || undefined,
+					search: name.trim() || undefined,
 					source_net: sourceNet.trim() || undefined,
-					limit: 100
+					page: 0,
+					page_size: 100
 				}),
 				getCatalogueStats()
 			]);
-			entries = listResult.entries;
+			entries = listResult.items;
 			total = listResult.total;
+			totalPages = listResult.total_pages;
+			hasNext = listResult.has_next;
 			stats = statsResult;
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load catalogue';
 			entries = [];
 			total = 0;
+			totalPages = 0;
+			hasNext = false;
 		} finally {
 			loading = false;
 		}
@@ -112,7 +119,6 @@
 	let debounceTimer: ReturnType<typeof setTimeout> | undefined;
 
 	$effect(() => {
-		// Reading these reactive values registers them as dependencies
 		const cat = activeCategory;
 		const name = searchName;
 		const net = sourceNetFilter;
@@ -324,7 +330,8 @@
 
 			{#if total > entries.length}
 				<p class="mt-4 text-center text-xs text-muted-foreground">
-					Showing {entries.length} of {total} entries
+					Showing {entries.length} of {total.toLocaleString()} entries
+					{#if hasNext}&nbsp;· {totalPages} page{totalPages !== 1 ? 's' : ''} total{/if}
 				</p>
 			{/if}
 		{/if}

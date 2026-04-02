@@ -15,6 +15,13 @@ region = "us-east-1"
 url = "http://localhost:5188"
 api_token = "htk_mekhan_dev_0000000000000000000000000000000000000000000000000000"
 
+[artifact_s3]
+endpoint = "http://localhost:9005"
+bucket = "bo-models"
+access_key = "rustfsadmin"
+secret_key = "rustfsadmin"
+region = "us-east-1"
+
 [cleanup]
 retention_hours = 72
 sweep_interval_minutes = 60

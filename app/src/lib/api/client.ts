@@ -12,7 +12,7 @@ import type {
 import type { WorkflowGraph } from '$lib/types/editor';
 import type {
 	CatalogueEntry,
-	CatalogueListResponse,
+	PaginatedCatalogueResponse,
 	CatalogueStats,
 	CatalogueNetStats
 } from '$lib/types/catalogue';
@@ -196,18 +196,20 @@ export async function listCatalogueEntries(params?: {
 	category?: string;
 	source_net?: string;
 	process_id?: string;
-	name?: string;
-	limit?: number;
-	offset?: number;
+	search?: string;
+	sort?: string;
+	page?: number;
+	page_size?: number;
 	metadata?: string;
-}): Promise<CatalogueListResponse> {
+}): Promise<PaginatedCatalogueResponse> {
 	const qs = new URLSearchParams();
-	if (params?.category) qs.set('category', params.category);
-	if (params?.source_net) qs.set('source_net', params.source_net);
-	if (params?.process_id) qs.set('process_id', params.process_id);
-	if (params?.name) qs.set('name', params.name);
-	if (params?.limit) qs.set('limit', String(params.limit));
-	if (params?.offset) qs.set('offset', String(params.offset));
+	if (params?.category) qs.set('filter[category][eq]', params.category);
+	if (params?.source_net) qs.set('filter[source_net][eq]', params.source_net);
+	if (params?.process_id) qs.set('filter[process_id][eq]', params.process_id);
+	if (params?.search) qs.set('search', params.search);
+	if (params?.sort) qs.set('sort', params.sort);
+	if (params?.page !== undefined) qs.set('page', String(params.page));
+	if (params?.page_size) qs.set('page_size', String(params.page_size));
 	if (params?.metadata) qs.set('metadata', params.metadata);
 	const query = qs.toString();
 	return request(`/catalogue${query ? `?${query}` : ''}`);

@@ -67,6 +67,10 @@ async fn main() -> anyhow::Result<()> {
         tracing::info!("S3 artifact store ready (bucket: {})", config.s3.bucket);
     }
 
+    let artifact_s3 = config.artifact_s3.as_ref().map(|cfg| {
+        Arc::new(ArtifactStore::new(cfg))
+    });
+
     // HPI client for task management proxy
     let hpi = HpiClient::new(&config.hpi.url, &config.hpi.api_token);
     if hpi.is_configured() {
@@ -82,6 +86,7 @@ async fn main() -> anyhow::Result<()> {
         config: config.clone(),
         yjs: yjs_manager,
         s3: artifact_store,
+        artifact_s3,
         hpi,
     };
 

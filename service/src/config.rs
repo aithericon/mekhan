@@ -18,6 +18,8 @@ pub struct AppConfig {
     pub s3: S3Config,
     #[serde(default)]
     pub hpi: HpiConfig,
+    #[serde(default)]
+    pub artifact_s3: Option<S3Config>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
