@@ -202,6 +202,7 @@ export async function listCatalogueEntries(params?: {
 	page?: number;
 	page_size?: number;
 	metadata?: string;
+	file_metadata?: string;
 }): Promise<PaginatedCatalogueResponse> {
 	const qs = new URLSearchParams();
 	if (params?.category) qs.set('filter[category][eq]', params.category);
@@ -212,6 +213,7 @@ export async function listCatalogueEntries(params?: {
 	if (params?.page !== undefined) qs.set('page', String(params.page));
 	if (params?.page_size) qs.set('page_size', String(params.page_size));
 	if (params?.metadata) qs.set('metadata', params.metadata);
+	if (params?.file_metadata) qs.set('file_metadata', params.file_metadata);
 	const query = qs.toString();
 	return request(`/catalogue${query ? `?${query}` : ''}`);
 }
@@ -234,6 +236,10 @@ export async function getCatalogueLineage(processId: string): Promise<LineageRes
 
 export async function getCatalogueDistinct(column: string): Promise<string[]> {
 	return request(`/catalogue/distinct/${column}`);
+}
+
+export async function getCatalogueDistinctJsonb(column: string, key: string): Promise<string[]> {
+	return request(`/catalogue/distinct-jsonb/${column}/${key}`);
 }
 
 export function catalogueDownloadUrl(storagePath: string): string {

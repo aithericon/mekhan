@@ -156,6 +156,10 @@ pub fn build_router(state: AppState) -> Router {
             get(catalogue::handlers::distinct_values),
         )
         .route(
+            "/api/catalogue/distinct-jsonb/{column}/{key}",
+            get(catalogue::handlers::distinct_jsonb_values),
+        )
+        .route(
             "/api/catalogue/download/{*path}",
             get(catalogue::handlers::download_artifact),
         )

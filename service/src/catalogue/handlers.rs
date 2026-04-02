@@ -110,6 +110,27 @@ pub async fn distinct_values(
     }
 }
 
+/// GET /api/catalogue/distinct-jsonb/:column/:key
+///
+/// Distinct values for a JSONB key within file_metadata or user_metadata.
+/// Example: GET /api/catalogue/distinct-jsonb/file_metadata/format → ["json", "csv"]
+pub async fn distinct_jsonb_values(
+    State(state): State<AppState>,
+    Path((column, key)): Path<(String, String)>,
+) -> impl IntoResponse {
+    match queries::distinct_jsonb_values(&state.db, &column, &key).await {
+        Ok(values) => Json(values).into_response(),
+        Err(e) => {
+            tracing::warn!("catalogue distinct-jsonb: {e}");
+            (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response()
+        }
+    }
+}
+
 /// GET /api/catalogue/download/{*path} — download artifact bytes by storage path.
 ///
 /// The path parameter is the S3 storage_path from the catalogue entry.

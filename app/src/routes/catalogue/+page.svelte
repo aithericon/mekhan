@@ -1,8 +1,10 @@
 <script lang="ts">
+	import { browser } from '$app/environment';
 	import {
 		listCatalogueEntries,
 		getCatalogueStats,
 		getCatalogueDistinct,
+		getCatalogueDistinctJsonb,
 		catalogueDownloadUrl
 	} from '$lib/api/client';
 	import type { CatalogueEntry, CatalogueStats } from '$lib/types/catalogue';
@@ -39,12 +41,18 @@
 	let activeCategory = $state<string>('all');
 	let searchQuery = $state('');
 	let sourceNetFilter = $state('');
+	let formatFilter = $state('');
 	let sortField = $state('-created_at');
-	let expandedIds = $state<Set<string>>(new Set());
+
+	// Inspected artifact — driven by ?inspect= query param
+	let inspectId = $state<string | null>(
+		browser ? new URLSearchParams(window.location.search).get('inspect') : null
+	);
 
 	// Dynamic dropdown values
 	let sourceNets = $state<string[]>([]);
 	let categories = $state<string[]>([]);
+	let formats = $state<string[]>([]);
 
 	// ── Category config ────────────────────────────────────────────────────────
 	const categoryColors: Record<string, string> = {
@@ -105,29 +113,46 @@
 		return categoryColors[cat.toLowerCase()] ?? categoryColors.other;
 	}
 
-	function toggleExpanded(id: string) {
-		const next = new Set(expandedIds);
-		next.has(id) ? next.delete(id) : next.add(id);
-		expandedIds = next;
+	function toggleInspect(id: string) {
+		if (inspectId === id) {
+			inspectId = null;
+		} else {
+			inspectId = id;
+		}
+		if (browser) {
+			const url = new URL(window.location.href);
+			if (inspectId) {
+				url.searchParams.set('inspect', inspectId);
+			} else {
+				url.searchParams.delete('inspect');
+			}
+			history.replaceState(null, '', url.toString());
+		}
 	}
 
 	function entryKey(e: CatalogueEntry): string {
 		return `${e.execution_id}/${e.id}`;
 	}
 
+	function lineageId(e: CatalogueEntry): string | null {
+		return e.process_id ?? e.job_id?.split(':')[0] ?? null;
+	}
+
 	// ── Data loading ───────────────────────────────────────────────────────────
 	async function load(
-		cat: string, search: string, net: string,
+		cat: string, search: string, net: string, fmt: string,
 		sort: string, pg: number, pgSize: number
 	) {
 		loading = true;
 		error = null;
 		try {
+			const fileMetaFilter = fmt ? JSON.stringify({ format: fmt }) : undefined;
 			const [listResult, statsResult] = await Promise.all([
 				listCatalogueEntries({
 					category: cat === 'all' ? undefined : cat,
 					search: search.trim() || undefined,
 					source_net: net.trim() || undefined,
+					file_metadata: fileMetaFilter,
 					sort,
 					page: pg,
 					page_size: pgSize
@@ -151,12 +176,14 @@
 
 	async function loadDropdowns() {
 		try {
-			const [nets, cats] = await Promise.all([
+			const [nets, cats, fmts] = await Promise.all([
 				getCatalogueDistinct('source_net'),
-				getCatalogueDistinct('category')
+				getCatalogueDistinct('category'),
+				getCatalogueDistinctJsonb('file_metadata', 'format')
 			]);
 			sourceNets = nets;
 			categories = cats;
+			formats = fmts;
 		} catch {
 			// Non-fatal — dropdowns just stay empty
 		}
@@ -172,13 +199,14 @@
 		const cat = activeCategory;
 		const search = searchQuery;
 		const net = sourceNetFilter;
+		const fmt = formatFilter;
 		const sort = sortField;
 		const pg = page;
 		const pgSize = pageSize;
 
 		clearTimeout(debounceTimer);
 		debounceTimer = setTimeout(() => {
-			load(cat, search, net, sort, pg, pgSize);
+			load(cat, search, net, fmt, sort, pg, pgSize);
 		}, 300);
 
 		return () => clearTimeout(debounceTimer);
@@ -302,6 +330,24 @@
 					/>
 				{/if}
 
+				{#if formats.length > 0}
+					<Select.Root
+						type="single"
+						value={formatFilter}
+						onValueChange={(v) => { formatFilter = v ?? ''; resetPage(); }}
+					>
+						<Select.Trigger class="h-8 w-28 text-sm">
+							{formatFilter || 'All formats'}
+						</Select.Trigger>
+						<Select.Content>
+							<Select.Item value="" label="All formats" />
+							{#each formats as fmt}
+								<Select.Item value={fmt} label={fmt} />
+							{/each}
+						</Select.Content>
+					</Select.Root>
+				{/if}
+
 				<Select.Root
 					type="single"
 					value={sortField}
@@ -349,12 +395,16 @@
 		{:else}
 			<div class="space-y-2">
 				{#each entries as entry (entryKey(entry))}
-					{@const isExpanded = expandedIds.has(entryKey(entry))}
+					{@const key = entryKey(entry)}
+					{@const isInspected = inspectId === key}
 					{@const hasMetadata =
 						Object.keys(entry.file_metadata).length > 0 ||
 						Object.keys(entry.user_metadata).length > 0}
 
-					<div class="rounded-lg border border-border bg-card transition-colors hover:bg-accent/30">
+					<div
+						class="rounded-lg border bg-card transition-colors {isInspected ? 'border-primary ring-1 ring-primary/30' : 'border-border hover:bg-accent/30'}"
+						id="entry-{key}"
+					>
 						<!-- Main row -->
 						<div class="flex items-start justify-between gap-4 p-4">
 							<div class="min-w-0 flex-1">
@@ -365,19 +415,23 @@
 									<Badge class={categoryColor(entry.category)} variant="secondary">
 										{entry.category}
 									</Badge>
+									{#if entry.file_metadata?.format}
+										<Badge variant="outline" class="text-[10px] font-mono">{entry.file_metadata.format}</Badge>
+									{:else if entry.mime_type}
+										<Badge variant="outline" class="text-[10px] font-mono">{entry.mime_type}</Badge>
+									{/if}
 									{#if entry.job_id}
 										<span class="text-[10px] font-mono text-muted-foreground">{entry.job_id}</span>
 									{/if}
 								</div>
 
-								<div class="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-0.5 text-xs text-muted-foreground">
+									<div class="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-0.5 text-xs text-muted-foreground">
 									{#if entry.source_net}
 										<span>Net: <span class="font-mono">{entry.source_net}</span></span>
 									{/if}
-									{#if entry.process_id}
-										<span>Process: <span class="font-mono">{entry.process_id}</span></span>
+									{#if lineageId(entry)}
 										<a
-											href="/catalogue/lineage/{entry.process_id}"
+											href="/catalogue/lineage/{lineageId(entry)}?artifact={encodeURIComponent(entry.id)}"
 											class="text-primary underline underline-offset-2 hover:text-primary/80"
 										>View lineage</a>
 									{/if}
@@ -420,23 +474,23 @@
 										<Tooltip.Trigger>
 											<button
 												class="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-												onclick={() => toggleExpanded(entryKey(entry))}
+												onclick={() => toggleInspect(key)}
 											>
-												{#if isExpanded}
+												{#if isInspected}
 													<ChevronDown class="size-4" />
 												{:else}
 													<ChevronRight class="size-4" />
 												{/if}
 											</button>
 										</Tooltip.Trigger>
-										<Tooltip.Content>{isExpanded ? 'Hide' : 'Show'} metadata</Tooltip.Content>
+										<Tooltip.Content>{isInspected ? 'Hide' : 'Show'} metadata</Tooltip.Content>
 									</Tooltip.Root>
 								{/if}
 							</div>
 						</div>
 
 						<!-- Expanded metadata -->
-						{#if isExpanded && hasMetadata}
+						{#if isInspected && hasMetadata}
 							{@const preview = getPreview(entry.file_metadata)}
 							<div class="border-t border-border px-4 pb-4 pt-3 space-y-3">
 

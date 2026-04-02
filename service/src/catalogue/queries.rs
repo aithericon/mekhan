@@ -200,14 +200,21 @@ pub async fn stats_by_net(pool: &PgPool) -> Result<Vec<NetStats>, sqlx::Error> {
 }
 
 /// All artifacts for a given process (campaign lineage).
+///
+/// Matches on `process_id = $1` OR `job_id LIKE '$1:%'` to support
+/// cases where process_id isn't set but job_id carries the campaign prefix.
 pub async fn lineage(
     pool: &PgPool,
     process_id: &str,
 ) -> Result<Vec<CatalogueEntry>, sqlx::Error> {
+    let job_prefix = format!("{process_id}:%");
     sqlx::query_as::<_, CatalogueEntry>(
-        "SELECT * FROM catalogue_entries WHERE process_id = $1 ORDER BY created_at ASC",
+        "SELECT * FROM catalogue_entries \
+         WHERE process_id = $1 OR job_id LIKE $2 \
+         ORDER BY created_at ASC",
     )
     .bind(process_id)
+    .bind(&job_prefix)
     .fetch_all(pool)
     .await
 }
@@ -271,5 +278,27 @@ pub async fn distinct_values(
         "SELECT DISTINCT {field} FROM catalogue_entries WHERE {field} IS NOT NULL ORDER BY {field}"
     );
     let rows: Vec<(String,)> = sqlx::query_as(&sql).fetch_all(pool).await?;
+    Ok(rows.into_iter().map(|(v,)| v).collect())
+}
+
+/// Distinct values for a JSONB key (e.g., file_metadata.format).
+///
+/// Only allows `file_metadata` and `user_metadata` columns.
+pub async fn distinct_jsonb_values(
+    pool: &PgPool,
+    column: &str,
+    key: &str,
+) -> Result<Vec<String>, QueryError> {
+    if column != "file_metadata" && column != "user_metadata" {
+        return Err(QueryError::InvalidField(
+            column.to_string(),
+            "file_metadata, user_metadata".to_string(),
+        ));
+    }
+    let sql = format!(
+        "SELECT DISTINCT {column}->>$1 AS val FROM catalogue_entries \
+         WHERE {column}->>$1 IS NOT NULL ORDER BY val"
+    );
+    let rows: Vec<(String,)> = sqlx::query_as(&sql).bind(key).fetch_all(pool).await?;
     Ok(rows.into_iter().map(|(v,)| v).collect())
 }
