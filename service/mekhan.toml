@@ -1,6 +1,6 @@
 host = "0.0.0.0"
 port = 3100
-database_url = "postgres://mekhan:mekhan@localhost:5432/mekhan"
+database_url = "postgres://mekhan:mekhan@localhost:5439/mekhan"
 nats_url = "nats://localhost:4333"
 petri_lab_url = "http://localhost:3030"
 

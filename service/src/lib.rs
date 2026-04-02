@@ -1,6 +1,8 @@
 #![allow(dead_code)]
 
+pub mod catalogue;
 pub mod compiler;
+
 pub mod config;
 pub mod db;
 pub mod handlers;
@@ -9,6 +11,7 @@ pub mod lifecycle;
 pub mod models;
 pub mod nats;
 pub mod petri;
+pub mod query;
 pub mod s3;
 pub mod yjs;
 
@@ -136,6 +139,25 @@ pub fn build_router(state: AppState) -> Router {
                 .layer(DefaultBodyLimit::max(50 * 1024 * 1024)),
         )
         .route("/api/files/{*key}", get(handlers::files::get_file))
+        // Catalogue endpoints
+        .route("/api/catalogue", get(catalogue::handlers::list_entries))
+        .route("/api/catalogue/stats", get(catalogue::handlers::stats))
+        .route(
+            "/api/catalogue/stats/by-net",
+            get(catalogue::handlers::stats_by_net),
+        )
+        .route(
+            "/api/catalogue/lineage/{process_id}",
+            get(catalogue::handlers::lineage),
+        )
+        .route(
+            "/api/catalogue/distinct/{column}",
+            get(catalogue::handlers::distinct_values),
+        )
+        .route(
+            "/api/catalogue/{execution_id}/{id}",
+            get(catalogue::handlers::get_entry),
+        )
         // Yjs WebSocket endpoint
         .route(
             "/api/yjs/{template_id}",

@@ -10,6 +10,12 @@ import type {
 	CompileResult
 } from '$lib/types/api';
 import type { WorkflowGraph } from '$lib/types/editor';
+import type {
+	CatalogueEntry,
+	CatalogueListResponse,
+	CatalogueStats,
+	CatalogueNetStats
+} from '$lib/types/catalogue';
 
 const API_BASE = '/api';
 
@@ -183,6 +189,44 @@ export async function getProcess(
 	processId: string
 ): Promise<import('$lib/types/tasks').ProcessState> {
 	return request(`/processes/${processId}`);
+}
+
+// Catalogue endpoints
+export async function listCatalogueEntries(params?: {
+	category?: string;
+	source_net?: string;
+	process_id?: string;
+	name?: string;
+	limit?: number;
+	offset?: number;
+	metadata?: string;
+}): Promise<CatalogueListResponse> {
+	const qs = new URLSearchParams();
+	if (params?.category) qs.set('category', params.category);
+	if (params?.source_net) qs.set('source_net', params.source_net);
+	if (params?.process_id) qs.set('process_id', params.process_id);
+	if (params?.name) qs.set('name', params.name);
+	if (params?.limit) qs.set('limit', String(params.limit));
+	if (params?.offset) qs.set('offset', String(params.offset));
+	if (params?.metadata) qs.set('metadata', params.metadata);
+	const query = qs.toString();
+	return request(`/catalogue${query ? `?${query}` : ''}`);
+}
+
+export async function getCatalogueEntry(executionId: string, id: string): Promise<CatalogueEntry> {
+	return request(`/catalogue/${executionId}/${id}`);
+}
+
+export async function getCatalogueStats(): Promise<CatalogueStats> {
+	return request('/catalogue/stats');
+}
+
+export async function getCatalogueStatsByNet(): Promise<CatalogueNetStats[]> {
+	return request('/catalogue/stats/by-net');
+}
+
+export async function getCatalogueLineage(processId: string): Promise<CatalogueEntry[]> {
+	return request(`/catalogue/lineage/${processId}`);
 }
 
 // File upload

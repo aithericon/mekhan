@@ -50,6 +50,12 @@ async fn main() -> anyhow::Result<()> {
         petri.clone(),
     ));
 
+    // Spawn catalogue ingest (NATS → Postgres)
+    tokio::spawn(mekhan_service::catalogue::ingest::start_catalogue_ingest(
+        mekhan_nats.clone(),
+        db.clone(),
+    ));
+
     let yjs_persistence = YjsPersistence::new(db.clone());
     let yjs_manager = Arc::new(YjsManager::new(yjs_persistence));
     tracing::info!("Yjs collaboration manager initialized");

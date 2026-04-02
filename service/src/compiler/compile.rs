@@ -540,6 +540,7 @@ fn expand_node(
                     failure_out: None,
                     process_id: None,
                     process_step: None,
+                    catalogue: true,
                 })
             });
 

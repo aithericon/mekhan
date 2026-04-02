@@ -17,6 +17,7 @@
 			<Button variant="ghost" size="sm" href="/tasks" data-testid="nav-tasks">Tasks</Button>
 			<Button variant="ghost" size="sm" href="/processes" data-testid="nav-processes">Processes</Button>
 			<Button variant="ghost" size="sm" href="/nets" data-testid="nav-nets">Nets</Button>
+			<Button variant="ghost" size="sm" href="/catalogue" data-testid="nav-catalogue">Catalogue</Button>
 		</nav>
 	</header>
 	<main class="flex-1 overflow-hidden">

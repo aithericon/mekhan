@@ -111,11 +111,11 @@ log "Checking Docker containers (NATS + Postgres)..."
 
 docker_healthy=true
 # Check NATS
-if ! curl -sf http://localhost:8222/healthz > /dev/null 2>&1; then
+if ! curl -sf http://localhost:8333/healthz > /dev/null 2>&1; then
     docker_healthy=false
 fi
 # Check Postgres
-if ! pg_isready -h localhost -p 5432 -U mekhan -d mekhan > /dev/null 2>&1; then
+if ! pg_isready -h localhost -p 5439 -U mekhan -d mekhan > /dev/null 2>&1; then
     docker_healthy=false
 fi
 
@@ -223,7 +223,7 @@ else
         cd "$HPI_DIR"
         HPI_NATS_SOURCES=true \
         HPI_DEFAULT_ORG=default \
-        NATS_URL="nats://localhost:4222" \
+        NATS_URL="nats://localhost:4333" \
         DB_BACKEND=sqlite \
         AUTH_DB_PATH="/tmp/hpi-e2e.db" \
         ADMIN_EMAIL="system@hpi.dev" \
@@ -273,9 +273,9 @@ else
     log "Starting mekhan-service..."
     (
         cd "$MEKHAN_SERVICE_DIR"
-        MEKHAN_DATABASE_URL="postgres://mekhan:mekhan@localhost:5432/mekhan" \
+        MEKHAN_DATABASE_URL="postgres://mekhan:mekhan@localhost:5439/mekhan" \
         MEKHAN_PETRI_LAB_URL="http://localhost:3030" \
-        MEKHAN_NATS_URL="nats://localhost:4222" \
+        MEKHAN_NATS_URL="nats://localhost:4333" \
         MEKHAN_HPI__URL="http://localhost:5188" \
         MEKHAN_HPI__API_TOKEN="$MEKHAN_HPI_TOKEN" \
         RUST_LOG=info \
@@ -295,7 +295,7 @@ log "=== Infrastructure Status ==="
 
 all_healthy=true
 for check in \
-    "NATS:http://localhost:8222/healthz" \
+    "NATS:http://localhost:8333/healthz" \
     "petri-lab:$PETRI_URL/api/nets" \
     "HPI:$HPI_URL" \
     "mekhan-service:$BACKEND_URL/api/templates?page=1&per_page=1"; do
