@@ -14,7 +14,8 @@ import type {
 	CatalogueEntry,
 	PaginatedCatalogueResponse,
 	CatalogueStats,
-	CatalogueNetStats
+	CatalogueNetStats,
+	LineageResponse
 } from '$lib/types/catalogue';
 
 const API_BASE = '/api';
@@ -227,7 +228,7 @@ export async function getCatalogueStatsByNet(): Promise<CatalogueNetStats[]> {
 	return request('/catalogue/stats/by-net');
 }
 
-export async function getCatalogueLineage(processId: string): Promise<CatalogueEntry[]> {
+export async function getCatalogueLineage(processId: string): Promise<LineageResponse> {
 	return request(`/catalogue/lineage/${processId}`);
 }
 

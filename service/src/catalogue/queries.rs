@@ -212,6 +212,53 @@ pub async fn lineage(
     .await
 }
 
+/// All artifacts for a given process, grouped by step (campaign lineage).
+pub async fn lineage_grouped(
+    pool: &PgPool,
+    process_id: &str,
+) -> Result<LineageResponse, sqlx::Error> {
+    let entries = lineage(pool, process_id).await?;
+    let total_artifacts = entries.len() as i64;
+
+    // Group entries by step extracted from job_id ("{process_id}:{step}") or process_step field.
+    let mut step_map: indexmap::IndexMap<String, Vec<CatalogueEntry>> =
+        indexmap::IndexMap::new();
+
+    for entry in entries {
+        let step_name = entry
+            .process_step
+            .clone()
+            .or_else(|| {
+                entry.job_id.as_ref().and_then(|jid| {
+                    jid.split_once(':').map(|(_, s)| s.to_string())
+                })
+            })
+            .unwrap_or_else(|| "unknown".to_string());
+        step_map.entry(step_name).or_default().push(entry);
+    }
+
+    let steps = step_map
+        .into_iter()
+        .map(|(step, artifacts)| {
+            // Parse iteration from trailing numeric suffix, e.g. "fit-5" → 5
+            let iteration = step
+                .rsplit_once('-')
+                .and_then(|(_, suffix)| suffix.parse::<i64>().ok());
+            LineageStep {
+                step,
+                iteration,
+                artifacts,
+            }
+        })
+        .collect();
+
+    Ok(LineageResponse {
+        process_id: process_id.to_string(),
+        steps,
+        total_artifacts,
+    })
+}
+
 /// Distinct values for a column (for populating filter dropdowns).
 pub async fn distinct_values(
     pool: &PgPool,

@@ -50,6 +50,21 @@ pub struct NetStats {
     pub latest_at: Option<DateTime<Utc>>,
 }
 
+/// Lineage response: artifacts grouped by iteration/step.
+#[derive(Debug, Serialize)]
+pub struct LineageResponse {
+    pub process_id: String,
+    pub steps: Vec<LineageStep>,
+    pub total_artifacts: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LineageStep {
+    pub step: String,
+    pub iteration: Option<i64>,
+    pub artifacts: Vec<CatalogueEntry>,
+}
+
 /// The register command published by the petri-lab effect handler.
 /// Mirrors `petri_domain::catalogue::CatalogueRegisterCommand`.
 #[derive(Debug, Deserialize)]

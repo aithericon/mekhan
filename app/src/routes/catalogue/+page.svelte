@@ -87,6 +87,20 @@
 		return path.length <= max ? path : '…' + path.slice(-(max - 1));
 	}
 
+	function truncateCell(val: unknown, max = 40): string {
+		if (val === null || val === undefined) return '—';
+		const s = typeof val === 'object' ? JSON.stringify(val) : String(val);
+		return s.length <= max ? s : s.slice(0, max - 1) + '…';
+	}
+
+	type Preview = { columns: string[]; rows: unknown[][]; preview_row_count: number; total_row_count?: number };
+
+	function getPreview(fm: Record<string, unknown>): Preview | null {
+		const p = fm.preview as Preview | undefined;
+		if (p && Array.isArray(p.columns) && Array.isArray(p.rows) && p.rows.length > 0) return p;
+		return null;
+	}
+
 	function categoryColor(cat: string): string {
 		return categoryColors[cat.toLowerCase()] ?? categoryColors.other;
 	}
@@ -362,6 +376,10 @@
 									{/if}
 									{#if entry.process_id}
 										<span>Process: <span class="font-mono">{entry.process_id}</span></span>
+										<a
+											href="/catalogue/lineage/{entry.process_id}"
+											class="text-primary underline underline-offset-2 hover:text-primary/80"
+										>View lineage</a>
 									{/if}
 									{#if entry.process_step}
 										<span>Step: {entry.process_step}</span>
@@ -419,18 +437,88 @@
 
 						<!-- Expanded metadata -->
 						{#if isExpanded && hasMetadata}
-							<div class="border-t border-border px-4 pb-4 pt-3">
-								{#if Object.keys(entry.file_metadata).length > 0}
-									<p class="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-										File metadata
-									</p>
-									<pre class="overflow-x-auto rounded-md bg-muted px-3 py-2 text-[11px] text-foreground">{JSON.stringify(entry.file_metadata, null, 2)}</pre>
+							{@const preview = getPreview(entry.file_metadata)}
+							<div class="border-t border-border px-4 pb-4 pt-3 space-y-3">
+
+								<!-- Data preview table -->
+								{#if preview}
+									<div>
+										<p class="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+											Data preview
+											{#if preview.total_row_count}
+												<span class="ml-1 font-normal normal-case">
+													({preview.preview_row_count} of {preview.total_row_count.toLocaleString()} rows)
+												</span>
+											{/if}
+										</p>
+										<div class="overflow-x-auto rounded-md border border-border">
+											<table class="w-full text-[11px]">
+												<thead>
+													<tr class="border-b border-border bg-muted/50">
+														{#each preview.columns as col}
+															<th class="px-2 py-1.5 text-left font-medium text-muted-foreground whitespace-nowrap">
+																{col}
+															</th>
+														{/each}
+													</tr>
+												</thead>
+												<tbody>
+													{#each preview.rows as row, i}
+														<tr class={i % 2 === 0 ? 'bg-card' : 'bg-muted/20'}>
+															{#each row as cell}
+																<td class="px-2 py-1 text-foreground whitespace-nowrap font-mono" title={typeof cell === 'object' ? JSON.stringify(cell) : String(cell ?? '')}>
+																	{truncateCell(cell)}
+																</td>
+															{/each}
+														</tr>
+													{/each}
+												</tbody>
+											</table>
+										</div>
+									</div>
 								{/if}
+
+								<!-- Schema (columns) -->
+								{#if Array.isArray(entry.file_metadata.columns) && entry.file_metadata.columns.length > 0}
+									<div>
+										<p class="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+											Schema ({entry.file_metadata.columns.length} columns)
+										</p>
+										<div class="flex flex-wrap gap-1">
+											{#each entry.file_metadata.columns as col}
+												<span class="inline-flex items-center gap-1 rounded border border-border bg-muted/50 px-1.5 py-0.5 text-[10px]">
+													<span class="font-medium text-foreground">{col.name}</span>
+													<span class="text-muted-foreground">{typeof col.data_type === 'string' ? col.data_type : JSON.stringify(col.data_type)}</span>
+												</span>
+											{/each}
+										</div>
+									</div>
+								{/if}
+
+								<!-- File info summary -->
+								{#if entry.file_metadata.format || entry.file_metadata.checksum}
+									<div class="flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-muted-foreground">
+										{#if entry.file_metadata.format}
+											<span>Format: <span class="font-mono text-foreground">{entry.file_metadata.format}</span></span>
+										{/if}
+										{#if entry.file_metadata.num_rows != null}
+											<span>Rows: <span class="font-mono text-foreground">{entry.file_metadata.num_rows}</span></span>
+										{/if}
+										{#if entry.file_metadata.checksum}
+											{@const ck = entry.file_metadata.checksum as Record<string, unknown> | undefined}
+											<span>SHA-256: <span class="font-mono text-foreground">{String(ck?.digest ?? '').slice(0, 12)}…</span></span>
+										{/if}
+									</div>
+								{/if}
+
+								<!-- User metadata -->
 								{#if Object.keys(entry.user_metadata).length > 0}
-									<p class="mb-1 mt-3 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-										User metadata
-									</p>
-									<pre class="overflow-x-auto rounded-md bg-muted px-3 py-2 text-[11px] text-foreground">{JSON.stringify(entry.user_metadata, null, 2)}</pre>
+									<div>
+										<p class="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+											User metadata
+										</p>
+										<pre class="overflow-x-auto rounded-md bg-muted px-3 py-2 text-[11px] text-foreground">{JSON.stringify(entry.user_metadata, null, 2)}</pre>
+									</div>
 								{/if}
 							</div>
 						{/if}

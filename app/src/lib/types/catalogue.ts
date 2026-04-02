@@ -36,6 +36,18 @@ export interface CatalogueStats {
 	latest_at: string | null;
 }
 
+export interface LineageStep {
+	step: string;
+	iteration: number | null;
+	artifacts: CatalogueEntry[];
+}
+
+export interface LineageResponse {
+	process_id: string;
+	steps: LineageStep[];
+	total_artifacts: number;
+}
+
 export interface CatalogueNetStats {
 	source_net: string | null;
 	total_artifacts: number;

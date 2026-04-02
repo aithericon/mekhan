@@ -465,9 +465,12 @@ async fn catalogue_lineage() {
         .unwrap();
 
     assert_eq!(resp.status(), StatusCode::OK);
-    let entries = body_json(resp.into_body()).await;
-    let entries = entries.as_array().unwrap();
-    assert_eq!(entries.len(), 2);
+    let body = body_json(resp.into_body()).await;
+    assert_eq!(body["process_id"], "campaign-42");
+    assert_eq!(body["total_artifacts"], 2);
+    // Both entries have no job_id with a colon, so they land in "unknown" step
+    let steps = body["steps"].as_array().unwrap();
+    assert!(!steps.is_empty());
 }
 
 // ---------------------------------------------------------------------------

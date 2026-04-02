@@ -73,13 +73,13 @@ pub async fn stats_by_net(State(state): State<AppState>) -> impl IntoResponse {
     }
 }
 
-/// GET /api/catalogue/lineage/:process_id — all artifacts for a campaign.
+/// GET /api/catalogue/lineage/:process_id — all artifacts for a campaign, grouped by step.
 pub async fn lineage(
     State(state): State<AppState>,
     Path(process_id): Path<String>,
 ) -> impl IntoResponse {
-    match queries::lineage(&state.db, &process_id).await {
-        Ok(entries) => Json(entries).into_response(),
+    match queries::lineage_grouped(&state.db, &process_id).await {
+        Ok(response) => Json(response).into_response(),
         Err(e) => {
             tracing::error!("catalogue lineage: {e}");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
