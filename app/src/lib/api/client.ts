@@ -231,6 +231,14 @@ export async function getCatalogueLineage(processId: string): Promise<CatalogueE
 	return request(`/catalogue/lineage/${processId}`);
 }
 
+export async function getCatalogueDistinct(column: string): Promise<string[]> {
+	return request(`/catalogue/distinct/${column}`);
+}
+
+export function catalogueDownloadUrl(storagePath: string): string {
+	return `${API_BASE}/catalogue/download/${storagePath}`;
+}
+
 // File upload
 export async function uploadFile(
 	templateId: string,

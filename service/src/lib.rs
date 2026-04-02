@@ -156,7 +156,7 @@ pub fn build_router(state: AppState) -> Router {
             get(catalogue::handlers::distinct_values),
         )
         .route(
-            "/api/catalogue/download/{execution_id}/{id}",
+            "/api/catalogue/download/{*path}",
             get(catalogue::handlers::download_artifact),
         )
         .route(

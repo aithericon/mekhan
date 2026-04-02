@@ -110,59 +110,43 @@ pub async fn distinct_values(
     }
 }
 
-/// GET /api/catalogue/download/:execution_id/:id — download artifact bytes.
+/// GET /api/catalogue/download/{*path} — download artifact bytes by storage path.
+///
+/// The path parameter is the S3 storage_path from the catalogue entry.
+/// Example: GET /api/catalogue/download/artifacts/exec-123/gp_model/gp_model.json
 pub async fn download_artifact(
     State(state): State<AppState>,
-    Path((execution_id, id)): Path<(String, String)>,
+    Path(storage_path): Path<String>,
 ) -> impl IntoResponse {
-    // 1. Look up catalogue entry
-    let entry = match queries::get_entry(&state.db, &execution_id, &id).await {
-        Ok(Some(entry)) => entry,
-        Ok(None) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({ "error": "catalogue entry not found" })),
-            )
-                .into_response()
-        }
-        Err(e) => {
-            tracing::error!("catalogue download lookup: {e}");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-    };
+    if storage_path.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "storage path required" })),
+        )
+            .into_response();
+    }
 
-    // 2. Get storage_path (404 if missing)
-    let storage_path = match &entry.storage_path {
-        Some(p) if !p.is_empty() => p.clone(),
-        _ => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({ "error": "no storage_path for this artifact" })),
-            )
-                .into_response()
-        }
-    };
-
-    // 3. Use artifact_s3 (or fallback to s3) to get_file
-    let store = state
-        .artifact_s3
-        .as_ref()
-        .unwrap_or(&state.s3);
+    let store = state.artifact_s3.as_ref().unwrap_or(&state.s3);
 
     let (bytes, content_type) = match store.get_file(&storage_path).await {
         Ok(result) => result,
         Err(e) => {
-            tracing::error!("catalogue download S3 fetch: {e}");
+            tracing::warn!(path = %storage_path, error = %e, "catalogue download failed");
             return (
-                StatusCode::BAD_GATEWAY,
-                Json(serde_json::json!({ "error": format!("failed to fetch artifact: {e}") })),
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": format!("artifact not found: {e}") })),
             )
                 .into_response();
         }
     };
 
-    // 4. Return with Content-Type and Content-Disposition headers
-    let disposition = format!("attachment; filename=\"{}\"", entry.filename);
+    // Extract filename from the path
+    let filename = storage_path
+        .rsplit('/')
+        .next()
+        .unwrap_or("artifact");
+
+    let disposition = format!("attachment; filename=\"{filename}\"");
     (
         StatusCode::OK,
         [

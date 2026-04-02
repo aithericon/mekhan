@@ -1,12 +1,17 @@
 <script lang="ts">
 	import {
 		listCatalogueEntries,
-		getCatalogueStats
+		getCatalogueStats,
+		getCatalogueDistinct,
+		catalogueDownloadUrl
 	} from '$lib/api/client';
 	import type { CatalogueEntry, CatalogueStats } from '$lib/types/catalogue';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import * as Select from '$lib/components/ui/select';
+	import { Separator } from '$lib/components/ui/separator';
+	import * as Tooltip from '$lib/components/ui/tooltip';
 	import Database from '@lucide/svelte/icons/database';
 	import HardDrive from '@lucide/svelte/icons/hard-drive';
 	import FileBox from '@lucide/svelte/icons/file-box';
@@ -14,6 +19,9 @@
 	import BarChart3 from '@lucide/svelte/icons/bar-chart-3';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
 	import ChevronRight from '@lucide/svelte/icons/chevron-right';
+	import Download from '@lucide/svelte/icons/download';
+	import ArrowUpDown from '@lucide/svelte/icons/arrow-up-down';
+	import ChevronLeft from '@lucide/svelte/icons/chevron-left';
 
 	// ── State ──────────────────────────────────────────────────────────────────
 	let entries = $state<CatalogueEntry[]>([]);
@@ -21,29 +29,43 @@
 	let total = $state(0);
 	let loading = $state(true);
 	let error = $state<string | null>(null);
-	let activeCategory = $state<string>('all');
-	let searchName = $state('');
-	let sourceNetFilter = $state('');
-	let expandedIds = $state<Set<string>>(new Set());
+	let page = $state(0);
+	let pageSize = $state(20);
 	let totalPages = $state(0);
 	let hasNext = $state(false);
+	let hasPrevious = $state(false);
+
+	// Filters
+	let activeCategory = $state<string>('all');
+	let searchQuery = $state('');
+	let sourceNetFilter = $state('');
+	let sortField = $state('-created_at');
+	let expandedIds = $state<Set<string>>(new Set());
+
+	// Dynamic dropdown values
+	let sourceNets = $state<string[]>([]);
+	let categories = $state<string[]>([]);
 
 	// ── Category config ────────────────────────────────────────────────────────
 	const categoryColors: Record<string, string> = {
-		model:
-			'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200',
-		dataset:
-			'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200',
-		plot:
-			'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200',
-		report:
-			'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200',
-		artifact:
-			'bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-200',
-		log: 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300'
+		model: 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200',
+		dataset: 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200',
+		plot: 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200',
+		log: 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300',
+		checkpoint: 'bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200',
+		config: 'bg-cyan-100 text-cyan-800 dark:bg-cyan-900 dark:text-cyan-200',
+		metric: 'bg-rose-100 text-rose-800 dark:bg-rose-900 dark:text-rose-200',
+		other: 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300'
 	};
 
-	const knownCategories = ['model', 'dataset', 'plot', 'report', 'artifact', 'log'];
+	const sortOptions = [
+		{ value: '-created_at', label: 'Newest first' },
+		{ value: 'created_at', label: 'Oldest first' },
+		{ value: '-size_bytes', label: 'Largest first' },
+		{ value: 'size_bytes', label: 'Smallest first' },
+		{ value: 'name', label: 'Name A-Z' },
+		{ value: '-name', label: 'Name Z-A' }
+	];
 
 	// ── Helpers ────────────────────────────────────────────────────────────────
 	function formatBytes(bytes: number | null): string {
@@ -51,51 +73,50 @@
 		if (bytes === 0) return '0 B';
 		const units = ['B', 'KB', 'MB', 'GB', 'TB'];
 		const i = Math.floor(Math.log(bytes) / Math.log(1024));
-		const value = bytes / Math.pow(1024, i);
-		return `${value.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
+		return `${(bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
 	}
 
 	const formatDate = (s: string) =>
 		new Intl.DateTimeFormat(undefined, {
-			year: 'numeric',
-			month: 'short',
-			day: 'numeric',
-			hour: '2-digit',
-			minute: '2-digit'
+			year: 'numeric', month: 'short', day: 'numeric',
+			hour: '2-digit', minute: '2-digit'
 		}).format(new Date(s));
 
 	function truncatePath(path: string | null, max = 48): string {
 		if (!path) return '—';
-		if (path.length <= max) return path;
-		return '…' + path.slice(-(max - 1));
+		return path.length <= max ? path : '…' + path.slice(-(max - 1));
 	}
 
 	function categoryColor(cat: string): string {
-		return categoryColors[cat.toLowerCase()] ?? 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300';
+		return categoryColors[cat.toLowerCase()] ?? categoryColors.other;
 	}
 
 	function toggleExpanded(id: string) {
 		const next = new Set(expandedIds);
-		if (next.has(id)) {
-			next.delete(id);
-		} else {
-			next.add(id);
-		}
+		next.has(id) ? next.delete(id) : next.add(id);
 		expandedIds = next;
 	}
 
+	function entryKey(e: CatalogueEntry): string {
+		return `${e.execution_id}/${e.id}`;
+	}
+
 	// ── Data loading ───────────────────────────────────────────────────────────
-	async function load(category: string, name: string, sourceNet: string) {
+	async function load(
+		cat: string, search: string, net: string,
+		sort: string, pg: number, pgSize: number
+	) {
 		loading = true;
 		error = null;
 		try {
 			const [listResult, statsResult] = await Promise.all([
 				listCatalogueEntries({
-					category: category === 'all' ? undefined : category,
-					search: name.trim() || undefined,
-					source_net: sourceNet.trim() || undefined,
-					page: 0,
-					page_size: 100
+					category: cat === 'all' ? undefined : cat,
+					search: search.trim() || undefined,
+					source_net: net.trim() || undefined,
+					sort,
+					page: pg,
+					page_size: pgSize
 				}),
 				getCatalogueStats()
 			]);
@@ -103,33 +124,54 @@
 			total = listResult.total;
 			totalPages = listResult.total_pages;
 			hasNext = listResult.has_next;
+			hasPrevious = listResult.has_previous;
 			stats = statsResult;
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load catalogue';
 			entries = [];
 			total = 0;
-			totalPages = 0;
-			hasNext = false;
 		} finally {
 			loading = false;
 		}
 	}
 
-	// Debounce handle kept outside the effect so cleanup can cancel it
+	async function loadDropdowns() {
+		try {
+			const [nets, cats] = await Promise.all([
+				getCatalogueDistinct('source_net'),
+				getCatalogueDistinct('category')
+			]);
+			sourceNets = nets;
+			categories = cats;
+		} catch {
+			// Non-fatal — dropdowns just stay empty
+		}
+	}
+
+	function resetPage() { page = 0; }
+
+	// Debounce for text inputs
 	let debounceTimer: ReturnType<typeof setTimeout> | undefined;
 
 	$effect(() => {
+		// Read all reactive deps
 		const cat = activeCategory;
-		const name = searchName;
+		const search = searchQuery;
 		const net = sourceNetFilter;
+		const sort = sortField;
+		const pg = page;
+		const pgSize = pageSize;
 
 		clearTimeout(debounceTimer);
 		debounceTimer = setTimeout(() => {
-			load(cat, name, net);
+			load(cat, search, net, sort, pg, pgSize);
 		}, 300);
 
 		return () => clearTimeout(debounceTimer);
 	});
+
+	// Load dropdown values once on mount
+	$effect(() => { loadDropdowns(); });
 </script>
 
 <div class="h-full overflow-y-auto">
@@ -172,52 +214,97 @@
 						<BarChart3 class="size-4" />
 						<span class="text-xs font-medium uppercase tracking-wide">Categories</span>
 					</div>
-					<p class="mt-1 text-2xl font-semibold tabular-nums text-foreground">
-						{stats.by_category.length}
-					</p>
+					<div class="mt-1 flex flex-wrap gap-1">
+						{#each stats.by_category as cat}
+							<span class="text-xs text-muted-foreground">
+								{cat.category}: <span class="font-semibold text-foreground">{cat.count}</span>
+							</span>
+						{/each}
+					</div>
 				</div>
 			</div>
 		{/if}
 
+		<Separator class="mb-4" />
+
 		<!-- Filters bar -->
-		<div class="mb-4 flex flex-wrap items-center gap-3">
-			<!-- Category buttons -->
+		<div class="mb-4 space-y-3">
+			<!-- Row 1: Category buttons -->
 			<div class="flex flex-wrap gap-1">
 				<Button
 					variant={activeCategory === 'all' ? 'default' : 'ghost'}
 					size="sm"
-					onclick={() => (activeCategory = 'all')}
+					onclick={() => { activeCategory = 'all'; resetPage(); }}
 				>
 					All
 				</Button>
-				{#each knownCategories as cat}
+				{#each categories.length > 0 ? categories : Object.keys(categoryColors) as cat}
 					<Button
 						variant={activeCategory === cat ? 'default' : 'ghost'}
 						size="sm"
-						onclick={() => (activeCategory = cat)}
+						onclick={() => { activeCategory = cat; resetPage(); }}
 					>
 						{cat.charAt(0).toUpperCase() + cat.slice(1)}
 					</Button>
 				{/each}
 			</div>
 
-			<!-- Search inputs -->
-			<div class="ml-auto flex items-center gap-2">
-				<div class="relative">
+			<!-- Row 2: Search, source net dropdown, sort -->
+			<div class="flex items-center gap-2">
+				<div class="relative flex-1">
 					<Search class="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
 					<Input
 						type="text"
-						placeholder="Search by name…"
-						class="h-8 w-48 pl-8 text-sm"
-						bind:value={searchName}
+						placeholder="Search artifacts…"
+						class="h-8 pl-8 text-sm"
+						bind:value={searchQuery}
+						oninput={resetPage}
 					/>
 				</div>
-				<Input
-					type="text"
-					placeholder="Source net…"
-					class="h-8 w-36 text-sm"
-					bind:value={sourceNetFilter}
-				/>
+
+				{#if sourceNets.length > 0}
+					<Select.Root
+						type="single"
+						value={sourceNetFilter}
+						onValueChange={(v) => { sourceNetFilter = v ?? ''; resetPage(); }}
+					>
+						<Select.Trigger class="h-8 w-44 text-sm">
+							{sourceNetFilter || 'All nets'}
+						</Select.Trigger>
+						<Select.Content>
+							<Select.Item value="" label="All nets" />
+							{#each sourceNets as net}
+								<Select.Item value={net} label={net} />
+							{/each}
+						</Select.Content>
+					</Select.Root>
+				{:else}
+					<Input
+						type="text"
+						placeholder="Source net…"
+						class="h-8 w-36 text-sm"
+						bind:value={sourceNetFilter}
+						oninput={resetPage}
+					/>
+				{/if}
+
+				<Select.Root
+					type="single"
+					value={sortField}
+					onValueChange={(v) => { if (v) { sortField = v; resetPage(); } }}
+				>
+					<Select.Trigger class="h-8 w-40 text-sm">
+						<div class="flex items-center gap-1.5">
+							<ArrowUpDown class="size-3.5 text-muted-foreground" />
+							{sortOptions.find((o) => o.value === sortField)?.label ?? 'Sort'}
+						</div>
+					</Select.Trigger>
+					<Select.Content>
+						{#each sortOptions as opt}
+							<Select.Item value={opt.value} label={opt.label} />
+						{/each}
+					</Select.Content>
+				</Select.Root>
 			</div>
 		</div>
 
@@ -247,8 +334,8 @@
 		<!-- Results -->
 		{:else}
 			<div class="space-y-2">
-				{#each entries as entry (entry.id)}
-					{@const isExpanded = expandedIds.has(entry.id)}
+				{#each entries as entry (entryKey(entry))}
+					{@const isExpanded = expandedIds.has(entryKey(entry))}
 					{@const hasMetadata =
 						Object.keys(entry.file_metadata).length > 0 ||
 						Object.keys(entry.user_metadata).length > 0}
@@ -264,6 +351,9 @@
 									<Badge class={categoryColor(entry.category)} variant="secondary">
 										{entry.category}
 									</Badge>
+									{#if entry.job_id}
+										<span class="text-[10px] font-mono text-muted-foreground">{entry.job_id}</span>
+									{/if}
 								</div>
 
 								<div class="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-0.5 text-xs text-muted-foreground">
@@ -271,7 +361,7 @@
 										<span>Net: <span class="font-mono">{entry.source_net}</span></span>
 									{/if}
 									{#if entry.process_id}
-										<span>Process: <span class="font-mono">{entry.process_id.slice(0, 8)}…</span></span>
+										<span>Process: <span class="font-mono">{entry.process_id}</span></span>
 									{/if}
 									{#if entry.process_step}
 										<span>Step: {entry.process_step}</span>
@@ -286,23 +376,43 @@
 								</div>
 							</div>
 
-							<div class="flex shrink-0 flex-col items-end gap-2">
+							<div class="flex shrink-0 items-center gap-3">
 								<span class="text-sm font-medium tabular-nums text-muted-foreground">
 									{formatBytes(entry.size_bytes)}
 								</span>
+
+								<!-- Download button -->
+								{#if entry.storage_path}
+									<Tooltip.Root>
+										<Tooltip.Trigger>
+											<a
+												href={catalogueDownloadUrl(entry.storage_path)}
+												class="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+												download
+											>
+												<Download class="size-4" />
+											</a>
+										</Tooltip.Trigger>
+										<Tooltip.Content>Download artifact</Tooltip.Content>
+									</Tooltip.Root>
+								{/if}
+
 								{#if hasMetadata}
-									<button
-										class="flex items-center gap-1 text-[10px] text-muted-foreground transition-colors hover:text-foreground"
-										onclick={() => toggleExpanded(entry.id)}
-									>
-										{#if isExpanded}
-											<ChevronDown class="size-3" />
-											Hide metadata
-										{:else}
-											<ChevronRight class="size-3" />
-											Show metadata
-										{/if}
-									</button>
+									<Tooltip.Root>
+										<Tooltip.Trigger>
+											<button
+												class="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+												onclick={() => toggleExpanded(entryKey(entry))}
+											>
+												{#if isExpanded}
+													<ChevronDown class="size-4" />
+												{:else}
+													<ChevronRight class="size-4" />
+												{/if}
+											</button>
+										</Tooltip.Trigger>
+										<Tooltip.Content>{isExpanded ? 'Hide' : 'Show'} metadata</Tooltip.Content>
+									</Tooltip.Root>
 								{/if}
 							</div>
 						</div>
@@ -328,10 +438,37 @@
 				{/each}
 			</div>
 
-			{#if total > entries.length}
+			<!-- Pagination controls -->
+			{#if totalPages > 1}
+				<div class="mt-4 flex items-center justify-between">
+					<p class="text-xs text-muted-foreground">
+						Showing {entries.length} of {total.toLocaleString()} entries
+					</p>
+					<div class="flex items-center gap-1">
+						<Button
+							variant="ghost"
+							size="icon-sm"
+							disabled={!hasPrevious}
+							onclick={() => (page = page - 1)}
+						>
+							<ChevronLeft class="size-4" />
+						</Button>
+						<span class="px-2 text-xs tabular-nums text-muted-foreground">
+							{page + 1} / {totalPages}
+						</span>
+						<Button
+							variant="ghost"
+							size="icon-sm"
+							disabled={!hasNext}
+							onclick={() => (page = page + 1)}
+						>
+							<ChevronRight class="size-4" />
+						</Button>
+					</div>
+				</div>
+			{:else if total > 0}
 				<p class="mt-4 text-center text-xs text-muted-foreground">
-					Showing {entries.length} of {total.toLocaleString()} entries
-					{#if hasNext}&nbsp;· {totalPages} page{totalPages !== 1 ? 's' : ''} total{/if}
+					{total.toLocaleString()} {total === 1 ? 'entry' : 'entries'}
 				</p>
 			{/if}
 		{/if}
