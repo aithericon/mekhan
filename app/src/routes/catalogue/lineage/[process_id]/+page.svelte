@@ -5,8 +5,8 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { Separator } from '$lib/components/ui/separator';
+	import { ArtifactCard } from '$lib/components/catalogue';
 	import ArrowLeft from '@lucide/svelte/icons/arrow-left';
-	import Download from '@lucide/svelte/icons/download';
 	import FileBox from '@lucide/svelte/icons/file-box';
 	import GitBranch from '@lucide/svelte/icons/git-branch';
 
@@ -17,6 +17,7 @@
 	let lineage = $state<LineageResponse | null>(null);
 	let loading = $state(true);
 	let error = $state<string | null>(null);
+	let expandedId = $state<string | null>(null);
 	const highlightArtifact = browser
 		? new URLSearchParams(window.location.search).get('artifact')
 		: null;
@@ -182,48 +183,15 @@
 								</div>
 
 								<!-- Artifact rows -->
-								<div class="divide-y divide-border">
+								<div class="space-y-0">
 									{#each step.artifacts as artifact}
-										<div
-										id="artifact-{artifact.id}"
-										class="flex items-center justify-between gap-4 px-4 py-2.5 transition-colors {highlightArtifact === artifact.id ? 'bg-primary/10 ring-1 ring-inset ring-primary/30' : ''}"
-									>
-											<div class="min-w-0 flex-1">
-												<div class="flex items-center gap-2">
-													<span class="truncate text-sm font-medium text-foreground">
-														{artifact.name}
-													</span>
-													<Badge class={categoryColor(artifact.category)} variant="secondary">
-														{artifact.category}
-													</Badge>
-													{#if artifact.file_metadata?.format}
-														<Badge variant="outline" class="text-[10px] font-mono">{artifact.file_metadata.format}</Badge>
-													{:else if artifact.mime_type}
-														<Badge variant="outline" class="text-[10px] font-mono">{artifact.mime_type}</Badge>
-													{/if}
-												</div>
-												{#if artifact.filename}
-													<p class="mt-0.5 truncate text-xs font-mono text-muted-foreground">
-														{artifact.filename}
-													</p>
-												{/if}
-											</div>
-
-											<div class="flex shrink-0 items-center gap-3">
-												<span class="text-xs tabular-nums text-muted-foreground">
-													{formatBytes(artifact.size_bytes)}
-												</span>
-												{#if artifact.storage_path}
-													<a
-														href={catalogueDownloadUrl(artifact.storage_path)}
-														class="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-														download
-														title="Download"
-													>
-														<Download class="size-3.5" />
-													</a>
-												{/if}
-											</div>
+										<div id="artifact-{artifact.id}">
+											<ArtifactCard
+												entry={artifact}
+												highlighted={highlightArtifact === artifact.id}
+												expanded={expandedId === artifact.id}
+												onToggle={() => { expandedId = expandedId === artifact.id ? null : artifact.id; }}
+											/>
 										</div>
 									{/each}
 								</div>

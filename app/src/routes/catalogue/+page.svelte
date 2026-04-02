@@ -8,6 +8,7 @@
 		catalogueDownloadUrl
 	} from '$lib/api/client';
 	import type { CatalogueEntry, CatalogueStats } from '$lib/types/catalogue';
+	import { ArtifactCard } from '$lib/components/catalogue';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -42,6 +43,7 @@
 	let searchQuery = $state('');
 	let sourceNetFilter = $state('');
 	let formatFilter = $state('');
+	let schemaFilter = $state('');
 	let sortField = $state('-created_at');
 
 	// Inspected artifact — driven by ?inspect= query param
@@ -140,13 +142,16 @@
 
 	// ── Data loading ───────────────────────────────────────────────────────────
 	async function load(
-		cat: string, search: string, net: string, fmt: string,
+		cat: string, search: string, net: string, fmt: string, schema: string,
 		sort: string, pg: number, pgSize: number
 	) {
 		loading = true;
 		error = null;
 		try {
-			const fileMetaFilter = fmt ? JSON.stringify({ format: fmt }) : undefined;
+			let fmObj: Record<string, unknown> = {};
+			if (fmt) fmObj.format = fmt;
+			if (schema) fmObj.schema_fingerprint = { digest: schema };
+			const fileMetaFilter = Object.keys(fmObj).length > 0 ? JSON.stringify(fmObj) : undefined;
 			const [listResult, statsResult] = await Promise.all([
 				listCatalogueEntries({
 					category: cat === 'all' ? undefined : cat,
@@ -200,13 +205,14 @@
 		const search = searchQuery;
 		const net = sourceNetFilter;
 		const fmt = formatFilter;
+		const schema = schemaFilter;
 		const sort = sortField;
 		const pg = page;
 		const pgSize = pageSize;
 
 		clearTimeout(debounceTimer);
 		debounceTimer = setTimeout(() => {
-			load(cat, search, net, fmt, sort, pg, pgSize);
+			load(cat, search, net, fmt, schema, sort, pg, pgSize);
 		}, 300);
 
 		return () => clearTimeout(debounceTimer);
@@ -393,190 +399,28 @@
 
 		<!-- Results -->
 		{:else}
+			<!-- Active schema filter badge -->
+			{#if schemaFilter}
+				<div class="mb-3 flex items-center gap-2">
+					<span class="text-xs text-muted-foreground">Schema filter:</span>
+					<Badge variant="secondary" class="font-mono text-xs gap-1">
+						{schemaFilter.slice(0, 12)}
+						<button class="ml-1 hover:text-foreground" onclick={() => { schemaFilter = ''; resetPage(); }}>&times;</button>
+					</Badge>
+				</div>
+			{/if}
+
 			<div class="space-y-2">
 				{#each entries as entry (entryKey(entry))}
 					{@const key = entryKey(entry)}
-					{@const isInspected = inspectId === key}
-					{@const hasMetadata =
-						Object.keys(entry.file_metadata).length > 0 ||
-						Object.keys(entry.user_metadata).length > 0}
-
-					<div
-						class="rounded-lg border bg-card transition-colors {isInspected ? 'border-primary ring-1 ring-primary/30' : 'border-border hover:bg-accent/30'}"
-						id="entry-{key}"
-					>
-						<!-- Main row -->
-						<div class="flex items-start justify-between gap-4 p-4">
-							<div class="min-w-0 flex-1">
-								<div class="flex flex-wrap items-center gap-2">
-									<span class="text-sm font-medium text-foreground truncate">
-										{entry.name}
-									</span>
-									<Badge class={categoryColor(entry.category)} variant="secondary">
-										{entry.category}
-									</Badge>
-									{#if entry.file_metadata?.format}
-										<Badge variant="outline" class="text-[10px] font-mono">{entry.file_metadata.format}</Badge>
-									{:else if entry.mime_type}
-										<Badge variant="outline" class="text-[10px] font-mono">{entry.mime_type}</Badge>
-									{/if}
-									{#if entry.job_id}
-										<span class="text-[10px] font-mono text-muted-foreground">{entry.job_id}</span>
-									{/if}
-								</div>
-
-									<div class="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-0.5 text-xs text-muted-foreground">
-									{#if entry.source_net}
-										<span>Net: <span class="font-mono">{entry.source_net}</span></span>
-									{/if}
-									{#if lineageId(entry)}
-										<a
-											href="/catalogue/lineage/{lineageId(entry)}?artifact={encodeURIComponent(entry.id)}"
-											class="text-primary underline underline-offset-2 hover:text-primary/80"
-										>View lineage</a>
-									{/if}
-									{#if entry.process_step}
-										<span>Step: {entry.process_step}</span>
-									{/if}
-								</div>
-
-								<div class="mt-1 flex flex-wrap items-center gap-x-4 gap-y-0.5 text-[10px] text-muted-foreground">
-									<span>{formatDate(entry.created_at)}</span>
-									<span class="font-mono" title={entry.storage_path ?? ''}>
-										{truncatePath(entry.storage_path)}
-									</span>
-								</div>
-							</div>
-
-							<div class="flex shrink-0 items-center gap-3">
-								<span class="text-sm font-medium tabular-nums text-muted-foreground">
-									{formatBytes(entry.size_bytes)}
-								</span>
-
-								<!-- Download button -->
-								{#if entry.storage_path}
-									<Tooltip.Root>
-										<Tooltip.Trigger>
-											<a
-												href={catalogueDownloadUrl(entry.storage_path)}
-												class="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-												download
-											>
-												<Download class="size-4" />
-											</a>
-										</Tooltip.Trigger>
-										<Tooltip.Content>Download artifact</Tooltip.Content>
-									</Tooltip.Root>
-								{/if}
-
-								{#if hasMetadata}
-									<Tooltip.Root>
-										<Tooltip.Trigger>
-											<button
-												class="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-												onclick={() => toggleInspect(key)}
-											>
-												{#if isInspected}
-													<ChevronDown class="size-4" />
-												{:else}
-													<ChevronRight class="size-4" />
-												{/if}
-											</button>
-										</Tooltip.Trigger>
-										<Tooltip.Content>{isInspected ? 'Hide' : 'Show'} metadata</Tooltip.Content>
-									</Tooltip.Root>
-								{/if}
-							</div>
-						</div>
-
-						<!-- Expanded metadata -->
-						{#if isInspected && hasMetadata}
-							{@const preview = getPreview(entry.file_metadata)}
-							<div class="border-t border-border px-4 pb-4 pt-3 space-y-3">
-
-								<!-- Data preview table -->
-								{#if preview}
-									<div>
-										<p class="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-											Data preview
-											{#if preview.total_row_count}
-												<span class="ml-1 font-normal normal-case">
-													({preview.preview_row_count} of {preview.total_row_count.toLocaleString()} rows)
-												</span>
-											{/if}
-										</p>
-										<div class="overflow-x-auto rounded-md border border-border">
-											<table class="w-full text-[11px]">
-												<thead>
-													<tr class="border-b border-border bg-muted/50">
-														{#each preview.columns as col}
-															<th class="px-2 py-1.5 text-left font-medium text-muted-foreground whitespace-nowrap">
-																{col}
-															</th>
-														{/each}
-													</tr>
-												</thead>
-												<tbody>
-													{#each preview.rows as row, i}
-														<tr class={i % 2 === 0 ? 'bg-card' : 'bg-muted/20'}>
-															{#each row as cell}
-																<td class="px-2 py-1 text-foreground whitespace-nowrap font-mono" title={typeof cell === 'object' ? JSON.stringify(cell) : String(cell ?? '')}>
-																	{truncateCell(cell)}
-																</td>
-															{/each}
-														</tr>
-													{/each}
-												</tbody>
-											</table>
-										</div>
-									</div>
-								{/if}
-
-								<!-- Schema (columns) -->
-								{#if Array.isArray(entry.file_metadata.columns) && entry.file_metadata.columns.length > 0}
-									<div>
-										<p class="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-											Schema ({entry.file_metadata.columns.length} columns)
-										</p>
-										<div class="flex flex-wrap gap-1">
-											{#each entry.file_metadata.columns as col}
-												<span class="inline-flex items-center gap-1 rounded border border-border bg-muted/50 px-1.5 py-0.5 text-[10px]">
-													<span class="font-medium text-foreground">{col.name}</span>
-													<span class="text-muted-foreground">{typeof col.data_type === 'string' ? col.data_type : JSON.stringify(col.data_type)}</span>
-												</span>
-											{/each}
-										</div>
-									</div>
-								{/if}
-
-								<!-- File info summary -->
-								{#if entry.file_metadata.format || entry.file_metadata.checksum}
-									<div class="flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-muted-foreground">
-										{#if entry.file_metadata.format}
-											<span>Format: <span class="font-mono text-foreground">{entry.file_metadata.format}</span></span>
-										{/if}
-										{#if entry.file_metadata.num_rows != null}
-											<span>Rows: <span class="font-mono text-foreground">{entry.file_metadata.num_rows}</span></span>
-										{/if}
-										{#if entry.file_metadata.checksum}
-											{@const ck = entry.file_metadata.checksum as Record<string, unknown> | undefined}
-											<span>SHA-256: <span class="font-mono text-foreground">{String(ck?.digest ?? '').slice(0, 12)}…</span></span>
-										{/if}
-									</div>
-								{/if}
-
-								<!-- User metadata -->
-								{#if Object.keys(entry.user_metadata).length > 0}
-									<div>
-										<p class="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-											User metadata
-										</p>
-										<pre class="overflow-x-auto rounded-md bg-muted px-3 py-2 text-[11px] text-foreground">{JSON.stringify(entry.user_metadata, null, 2)}</pre>
-									</div>
-								{/if}
-							</div>
-						{/if}
-					</div>
+					<ArtifactCard
+						{entry}
+						expanded={inspectId === key}
+						highlighted={inspectId === key}
+						onToggle={() => toggleInspect(key)}
+						onSchemaClick={(digest) => { schemaFilter = digest; resetPage(); }}
+						onNetClick={(net) => { sourceNetFilter = net; resetPage(); }}
+					/>
 				{/each}
 			</div>
 
