@@ -55,6 +55,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 thiserror = "2"
 anyhow = "1"
 
+# Async trait (for dyn-dispatchable async traits)
+async-trait = "0.1"
+
 # SDK for compiling workflow graphs to AIR
 aithericon-sdk = { path = "../../petri-lab/sdk" }
 schemars = "0.8"

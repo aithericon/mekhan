@@ -26,6 +26,7 @@ use sqlx::PgPool;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
+use crate::catalogue::repository::CatalogueRepository;
 use crate::config::AppConfig;
 use crate::nats::MekhanNats;
 use crate::petri::client::PetriClient;
@@ -41,6 +42,7 @@ pub struct AppState {
     pub yjs: Arc<YjsManager>,
     pub s3: Arc<ArtifactStore>,
     pub artifact_s3: Option<Arc<ArtifactStore>>,
+    pub catalogue_repo: Arc<dyn CatalogueRepository>,
 }
 
 pub fn build_router(state: AppState) -> Router {

@@ -7,7 +7,6 @@ use axum::{
 
 use crate::query::extractor::QueryParams;
 use crate::AppState;
-use super::queries;
 
 /// GET /api/catalogue
 ///
@@ -28,7 +27,7 @@ pub async fn list_entries(
     State(state): State<AppState>,
     params: QueryParams,
 ) -> impl IntoResponse {
-    match queries::list_entries(&state.db, &params).await {
+    match state.catalogue_repo.list_entries(&params).await {
         Ok(response) => Json(response).into_response(),
         Err(e) => {
             tracing::warn!("catalogue list: {e}");
@@ -49,7 +48,7 @@ pub async fn stats(
     State(state): State<AppState>,
     params: QueryParams,
 ) -> impl IntoResponse {
-    match queries::stats(&state.db, &params).await {
+    match state.catalogue_repo.stats(&params).await {
         Ok(stats) => Json(stats).into_response(),
         Err(e) => {
             tracing::warn!("catalogue stats: {e}");
@@ -64,7 +63,7 @@ pub async fn stats(
 
 /// GET /api/catalogue/stats/by-net — per-net breakdown.
 pub async fn stats_by_net(State(state): State<AppState>) -> impl IntoResponse {
-    match queries::stats_by_net(&state.db).await {
+    match state.catalogue_repo.stats_by_net().await {
         Ok(stats) => Json(stats).into_response(),
         Err(e) => {
             tracing::error!("catalogue stats_by_net: {e}");
@@ -78,7 +77,7 @@ pub async fn lineage(
     State(state): State<AppState>,
     Path(process_id): Path<String>,
 ) -> impl IntoResponse {
-    match queries::lineage_grouped(&state.db, &process_id).await {
+    match state.catalogue_repo.lineage_grouped(&process_id).await {
         Ok(response) => Json(response).into_response(),
         Err(e) => {
             tracing::error!("catalogue lineage: {e}");
@@ -97,7 +96,7 @@ pub async fn distinct_values(
     State(state): State<AppState>,
     Path(column): Path<String>,
 ) -> impl IntoResponse {
-    match queries::distinct_values(&state.db, &column).await {
+    match state.catalogue_repo.distinct_values(&column).await {
         Ok(values) => Json(values).into_response(),
         Err(e) => {
             tracing::warn!("catalogue distinct: {e}");
@@ -118,7 +117,7 @@ pub async fn distinct_jsonb_values(
     State(state): State<AppState>,
     Path((column, key)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    match queries::distinct_jsonb_values(&state.db, &column, &key).await {
+    match state.catalogue_repo.distinct_jsonb_values(&column, &key).await {
         Ok(values) => Json(values).into_response(),
         Err(e) => {
             tracing::warn!("catalogue distinct-jsonb: {e}");
@@ -184,7 +183,7 @@ pub async fn get_entry(
     State(state): State<AppState>,
     Path((execution_id, id)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    match queries::get_entry(&state.db, &execution_id, &id).await {
+    match state.catalogue_repo.get_entry(&execution_id, &id).await {
         Ok(Some(entry)) => Json(entry).into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
         Err(e) => {

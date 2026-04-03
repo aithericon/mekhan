@@ -1,14 +1,21 @@
+use std::sync::Arc;
+
 use futures::StreamExt;
 use sqlx::PgPool;
 
 use crate::nats::MekhanNats;
 use super::model::CatalogueRegisterCommand;
+use super::subscriptions::{SubscriptionManager, command_to_entry};
 
 /// Start the NATS catalogue ingest listener.
 ///
 /// Subscribes to `catalogue.commands.register` on the `CATALOGUE` JetStream
 /// stream and inserts each command into the `catalogue_entries` Postgres table.
-pub async fn start_catalogue_ingest(nats: MekhanNats, db: PgPool) {
+pub async fn start_catalogue_ingest(
+    nats: MekhanNats,
+    db: PgPool,
+    subscription_manager: Arc<SubscriptionManager>,
+) {
     // Ensure the CATALOGUE stream exists
     if let Err(e) = nats.ensure_catalogue_stream().await {
         tracing::error!("failed to create CATALOGUE stream: {e}");
@@ -127,6 +134,10 @@ pub async fn start_catalogue_ingest(nats: MekhanNats, db: PgPool) {
         }
 
         let _ = msg.ack().await;
+
+        // Evaluate the new artifact against active subscriptions
+        let entry = command_to_entry(&cmd);
+        subscription_manager.evaluate_new_artifact(&entry).await;
     }
 
     tracing::warn!("catalogue ingest stream ended");

@@ -1,9 +1,12 @@
+use std::sync::Arc;
+use std::time::Duration;
+
 use async_nats::jetstream::AckKind;
 use futures::StreamExt;
 use sqlx::PgPool;
-use std::time::Duration;
 use tracing;
 
+use crate::catalogue::subscriptions::SubscriptionManager;
 use crate::config::CleanupConfig;
 use crate::nats::MekhanNats;
 use crate::petri::client::PetriClient;
@@ -11,7 +14,11 @@ use crate::petri::client::PetriClient;
 /// Start the NATS lifecycle event listener.
 /// Subscribes to `petri.events.mekhan-*.net.>` and updates the DB
 /// when NetCompleted or NetCancelled events arrive.
-pub async fn start_lifecycle_listener(nats: MekhanNats, db: PgPool) {
+pub async fn start_lifecycle_listener(
+    nats: MekhanNats,
+    db: PgPool,
+    subscription_manager: Arc<SubscriptionManager>,
+) {
     let consumer = match nats.lifecycle_consumer().await {
         Ok(c) => c,
         Err(e) => {
@@ -75,6 +82,8 @@ pub async fn start_lifecycle_listener(nats: MekhanNats, db: PgPool) {
                     }
                     Ok(_) => {}
                 }
+
+                subscription_manager.cleanup_net_subscriptions(net_id).await;
             }
             "cancelled" => {
                 tracing::info!("net {net_id} cancelled");
@@ -98,6 +107,8 @@ pub async fn start_lifecycle_listener(nats: MekhanNats, db: PgPool) {
                     }
                     Ok(_) => {}
                 }
+
+                subscription_manager.cleanup_net_subscriptions(net_id).await;
             }
             _ => {
                 // Ignore created, initialized, etc.

@@ -9,6 +9,8 @@ use mekhan_service::petri::client::PetriClient;
 use mekhan_service::s3::ArtifactStore;
 use mekhan_service::yjs::manager::YjsManager;
 use mekhan_service::yjs::persistence::YjsPersistence;
+use mekhan_service::catalogue::repository::PgCatalogueRepository;
+use mekhan_service::catalogue::subscriptions::SubscriptionManager;
 use mekhan_service::{build_router, process, AppState};
 
 #[tokio::main]
@@ -35,10 +37,31 @@ async fn main() -> anyhow::Result<()> {
     let mekhan_nats = MekhanNats::connect(&config.nats_url).await?;
     tracing::info!("NATS connected at {}", config.nats_url);
 
+    // Create catalogue subscription manager (KV-backed, in-memory cached)
+    let sub_kv = mekhan_nats
+        .ensure_catalogue_subscriptions_kv()
+        .await
+        .expect("failed to create CATALOGUE_SUBSCRIPTIONS KV bucket");
+    let subscription_manager = Arc::new(SubscriptionManager::new(
+        sub_kv,
+        mekhan_nats.jetstream().clone(),
+    ));
+    subscription_manager
+        .hydrate()
+        .await
+        .expect("failed to hydrate catalogue subscriptions");
+    subscription_manager
+        .clone()
+        .start_watcher()
+        .await
+        .expect("failed to start catalogue subscription watcher");
+    tracing::info!("catalogue subscription manager ready");
+
     // Spawn lifecycle event listener (updates DB on NetCompleted/NetCancelled)
     tokio::spawn(lifecycle::start_lifecycle_listener(
         mekhan_nats.clone(),
         db.clone(),
+        subscription_manager.clone(),
     ));
 
     // Spawn background cleanup sweep
@@ -53,6 +76,7 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn(mekhan_service::catalogue::ingest::start_catalogue_ingest(
         mekhan_nats.clone(),
         db.clone(),
+        subscription_manager.clone(),
     ));
 
     let yjs_persistence = YjsPersistence::new(db.clone());
@@ -89,6 +113,15 @@ async fn main() -> anyhow::Result<()> {
         process::ingest::start_log_ingest(nats_log, db_log).await;
     });
 
+    let catalogue_repo = Arc::new(PgCatalogueRepository::new(db.clone()));
+
+    // Spawn catalogue NATS request-reply responder
+    tokio::spawn(mekhan_service::catalogue::responder::start_catalogue_responder(
+        mekhan_nats.clone(),
+        catalogue_repo.clone(),
+        subscription_manager.clone(),
+    ));
+
     let state = AppState {
         db,
         petri,
@@ -97,6 +130,7 @@ async fn main() -> anyhow::Result<()> {
         yjs: yjs_manager,
         s3: artifact_store,
         artifact_s3,
+        catalogue_repo,
     };
 
     let app = build_router(state);

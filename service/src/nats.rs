@@ -94,6 +94,21 @@ impl MekhanNats {
         Ok(())
     }
 
+    /// Ensure the CATALOGUE_SUBSCRIPTIONS KV bucket exists.
+    pub async fn ensure_catalogue_subscriptions_kv(
+        &self,
+    ) -> Result<async_nats::jetstream::kv::Store, async_nats::Error> {
+        let kv = self
+            .jetstream
+            .create_key_value(jetstream::kv::Config {
+                bucket: "CATALOGUE_SUBSCRIPTIONS".into(),
+                history: 1,
+                ..Default::default()
+            })
+            .await?;
+        Ok(kv)
+    }
+
     /// Ensure the CATALOGUE JetStream stream exists.
     pub async fn ensure_catalogue_stream(&self) -> Result<(), async_nats::Error> {
         self.jetstream
