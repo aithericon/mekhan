@@ -9,6 +9,7 @@
 
 	let task: HumanTask | null = $state(null);
 	let process: ProcessState | null = $state(null);
+	// Note: getProcess now returns ProcessDetail — cast for backward compat
 	let loading = $state(true);
 	let error: string | null = $state(null);
 	let submitting = $state(false);
@@ -22,7 +23,7 @@
 			task = await getTask(taskId);
 			if (task.process_id) {
 				try {
-					process = await getProcess(task.process_id);
+					process = await getProcess(task.process_id) as unknown as ProcessState;
 				} catch {
 					process = null;
 				}

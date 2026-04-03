@@ -17,6 +17,15 @@ import type {
 	CatalogueNetStats,
 	LineageResponse
 } from '$lib/types/catalogue';
+import type {
+	HpiProcess,
+	HpiTask,
+	HpiMetric,
+	HpiLog,
+	ProcessDetail,
+	ProcessStats,
+	PaginatedProcessResponse
+} from '$lib/types/process';
 
 const API_BASE = '/api';
 
@@ -168,28 +177,82 @@ export async function cancelTask(taskId: string, reason?: string): Promise<void>
 	});
 }
 
-// Process endpoints (proxied to HPI)
+// Process endpoints (Mekhan process tracking)
 export async function listProcesses(params?: {
 	status?: string;
-	namespace?: string;
+	kind?: string;
 	search?: string;
-	limit?: number;
-	offset?: number;
-}): Promise<{ processes: import('$lib/types/tasks').ProcessState[]; total: number }> {
+	sort?: string;
+	page?: number;
+	page_size?: number;
+}): Promise<PaginatedProcessResponse<HpiProcess>> {
 	const qs = new URLSearchParams();
 	if (params?.status) qs.set('status', params.status);
-	if (params?.namespace) qs.set('namespace', params.namespace);
+	if (params?.kind) qs.set('kind', params.kind);
 	if (params?.search) qs.set('search', params.search);
-	if (params?.limit) qs.set('limit', String(params.limit));
-	if (params?.offset) qs.set('offset', String(params.offset));
+	if (params?.sort) qs.set('sort', params.sort);
+	if (params?.page !== undefined) qs.set('page', String(params.page));
+	if (params?.page_size) qs.set('page_size', String(params.page_size));
 	const query = qs.toString();
 	return request(`/processes${query ? `?${query}` : ''}`);
 }
 
-export async function getProcess(
-	processId: string
-): Promise<import('$lib/types/tasks').ProcessState> {
-	return request(`/processes/${processId}`);
+export async function getProcessStats(): Promise<ProcessStats> {
+	return request('/processes/stats');
+}
+
+export async function getProcess(traceId: string): Promise<ProcessDetail> {
+	return request(`/processes/${traceId}`);
+}
+
+export async function updateProcess(
+	traceId: string,
+	data: { name?: string; kind?: string; status?: string; owner?: string }
+): Promise<HpiProcess> {
+	return request(`/processes/${traceId}`, {
+		method: 'PUT',
+		body: JSON.stringify(data)
+	});
+}
+
+export async function getProcessMetrics(
+	traceId: string,
+	params?: { key?: string; limit?: number }
+): Promise<HpiMetric[]> {
+	const qs = new URLSearchParams();
+	if (params?.key) qs.set('key', params.key);
+	if (params?.limit) qs.set('limit', String(params.limit));
+	const query = qs.toString();
+	return request(`/processes/${traceId}/metrics${query ? `?${query}` : ''}`);
+}
+
+export async function getProcessLogs(
+	traceId: string,
+	params?: { level?: string; source?: string; search?: string; page?: number; page_size?: number }
+): Promise<PaginatedProcessResponse<HpiLog>> {
+	const qs = new URLSearchParams();
+	if (params?.level) qs.set('level', params.level);
+	if (params?.source) qs.set('source', params.source);
+	if (params?.search) qs.set('search', params.search);
+	if (params?.page !== undefined) qs.set('page', String(params.page));
+	if (params?.page_size) qs.set('page_size', String(params.page_size));
+	const query = qs.toString();
+	return request(`/processes/${traceId}/logs${query ? `?${query}` : ''}`);
+}
+
+export async function getProcessTasks(traceId: string): Promise<HpiTask[]> {
+	return request(`/processes/${traceId}/tasks`);
+}
+
+export async function getProcessArtifacts(
+	traceId: string,
+	params?: { page?: number; page_size?: number }
+): Promise<PaginatedProcessResponse<CatalogueEntry>> {
+	const qs = new URLSearchParams();
+	if (params?.page !== undefined) qs.set('page', String(params.page));
+	if (params?.page_size) qs.set('page_size', String(params.page_size));
+	const query = qs.toString();
+	return request(`/processes/${traceId}/artifacts${query ? `?${query}` : ''}`);
 }
 
 // Catalogue endpoints

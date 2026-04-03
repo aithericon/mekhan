@@ -3,14 +3,13 @@ use std::sync::Arc;
 
 use mekhan_service::config::AppConfig;
 use mekhan_service::db;
-use mekhan_service::hpi::HpiClient;
 use mekhan_service::lifecycle;
 use mekhan_service::nats::MekhanNats;
 use mekhan_service::petri::client::PetriClient;
 use mekhan_service::s3::ArtifactStore;
 use mekhan_service::yjs::manager::YjsManager;
 use mekhan_service::yjs::persistence::YjsPersistence;
-use mekhan_service::{build_router, AppState};
+use mekhan_service::{build_router, process, AppState};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -71,13 +70,24 @@ async fn main() -> anyhow::Result<()> {
         Arc::new(ArtifactStore::new(cfg))
     });
 
-    // HPI client for task management proxy
-    let hpi = HpiClient::new(&config.hpi.url, &config.hpi.api_token);
-    if hpi.is_configured() {
-        tracing::info!("HPI client configured at {}", config.hpi.url);
-    } else {
-        tracing::warn!("HPI API token not set — task endpoints will return 503");
-    }
+    // Process tracking ingest (NATS → Postgres)
+    let nats_proc = mekhan_nats.clone();
+    let db_proc = db.clone();
+    tokio::spawn(async move {
+        process::ingest::start_process_event_ingest(nats_proc, db_proc).await;
+    });
+
+    let nats_metric = mekhan_nats.clone();
+    let db_metric = db.clone();
+    tokio::spawn(async move {
+        process::ingest::start_metric_ingest(nats_metric, db_metric).await;
+    });
+
+    let nats_log = mekhan_nats.clone();
+    let db_log = db.clone();
+    tokio::spawn(async move {
+        process::ingest::start_log_ingest(nats_log, db_log).await;
+    });
 
     let state = AppState {
         db,
@@ -87,7 +97,6 @@ async fn main() -> anyhow::Result<()> {
         yjs: yjs_manager,
         s3: artifact_store,
         artifact_s3,
-        hpi,
     };
 
     let app = build_router(state);

@@ -6,11 +6,11 @@ pub mod compiler;
 pub mod config;
 pub mod db;
 pub mod handlers;
-pub mod hpi;
 pub mod lifecycle;
 pub mod models;
 pub mod nats;
 pub mod petri;
+pub mod process;
 pub mod query;
 pub mod s3;
 pub mod yjs;
@@ -27,7 +27,6 @@ use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
 use crate::config::AppConfig;
-use crate::hpi::HpiClient;
 use crate::nats::MekhanNats;
 use crate::petri::client::PetriClient;
 use crate::s3::ArtifactStore;
@@ -42,7 +41,6 @@ pub struct AppState {
     pub yjs: Arc<YjsManager>,
     pub s3: Arc<ArtifactStore>,
     pub artifact_s3: Option<Arc<ArtifactStore>>,
-    pub hpi: HpiClient,
 }
 
 pub fn build_router(state: AppState) -> Router {
@@ -112,26 +110,43 @@ pub fn build_router(state: AppState) -> Router {
             "/api/instances/{id}",
             delete(handlers::instances::cancel_instance),
         )
-        // Task endpoints (proxied to HPI)
-        .route("/api/tasks", get(handlers::tasks::list_tasks))
+        // Process endpoints (native)
+        .route("/api/processes", get(process::handlers::list_processes))
+        .route("/api/processes/stats", get(process::handlers::process_stats))
+        .route(
+            "/api/processes/{trace_id}",
+            get(process::handlers::get_process).put(process::handlers::update_process),
+        )
+        .route(
+            "/api/processes/{trace_id}/metrics",
+            get(process::handlers::get_process_metrics),
+        )
+        .route(
+            "/api/processes/{trace_id}/logs",
+            get(process::handlers::get_process_logs),
+        )
+        .route(
+            "/api/processes/{trace_id}/tasks",
+            get(process::handlers::get_process_tasks),
+        )
+        .route(
+            "/api/processes/{trace_id}/artifacts",
+            get(process::handlers::get_process_artifacts),
+        )
+        // Task endpoints (native)
+        .route("/api/tasks", get(process::handlers::list_tasks))
         .route(
             "/api/tasks/stream",
             get(handlers::task_stream::task_stream),
         )
-        .route("/api/tasks/{task_id}", get(handlers::tasks::get_task))
+        .route("/api/tasks/{id}", get(process::handlers::get_task))
         .route(
-            "/api/tasks/{task_id}/complete",
-            post(handlers::tasks::complete_task),
+            "/api/tasks/{id}/complete",
+            post(process::handlers::complete_task),
         )
         .route(
-            "/api/tasks/{task_id}/cancel",
-            post(handlers::tasks::cancel_task),
-        )
-        // Process endpoints (proxied to HPI)
-        .route("/api/processes", get(handlers::processes::list_processes))
-        .route(
-            "/api/processes/{process_id}",
-            get(handlers::processes::get_process),
+            "/api/tasks/{id}/cancel",
+            post(process::handlers::cancel_task),
         )
         // File upload/download endpoints (50 MB limit)
         .route(

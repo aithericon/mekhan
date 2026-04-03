@@ -17,17 +17,7 @@ pub struct AppConfig {
     #[serde(default)]
     pub s3: S3Config,
     #[serde(default)]
-    pub hpi: HpiConfig,
-    #[serde(default)]
     pub artifact_s3: Option<S3Config>,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct HpiConfig {
-    #[serde(default = "default_hpi_url")]
-    pub url: String,
-    #[serde(default)]
-    pub api_token: String,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -86,19 +76,6 @@ impl Default for CleanupConfig {
             purge_events: default_purge_events(),
         }
     }
-}
-
-impl Default for HpiConfig {
-    fn default() -> Self {
-        Self {
-            url: default_hpi_url(),
-            api_token: String::new(),
-        }
-    }
-}
-
-fn default_hpi_url() -> String {
-    "http://localhost:5188".to_string()
 }
 
 fn default_host() -> String {

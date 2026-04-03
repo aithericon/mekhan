@@ -7,9 +7,8 @@ use sqlx::PgPool;
 use tokio::net::TcpListener;
 
 use aithericon_test_infra::TestDb;
-use mekhan_service::config::{AppConfig, CleanupConfig, HpiConfig, S3Config};
+use mekhan_service::config::{AppConfig, CleanupConfig, S3Config};
 use mekhan_service::nats::MekhanNats;
-use mekhan_service::hpi::HpiClient;
 use mekhan_service::petri::client::PetriClient;
 use mekhan_service::s3::ArtifactStore;
 use mekhan_service::yjs::manager::YjsManager;
@@ -55,7 +54,6 @@ pub fn test_config() -> AppConfig {
             secret_key: "testadmin".to_string(),
             region: "us-east-1".to_string(),
         },
-        hpi: HpiConfig::default(),
         artifact_s3: None,
     }
 }
@@ -86,7 +84,6 @@ pub async fn test_app() -> (Router, PgPool) {
         yjs: yjs_manager,
         s3: artifact_store,
         artifact_s3: None,
-        hpi: HpiClient::new(&config.hpi.url, &config.hpi.api_token),
     };
 
     let router = build_router(state);
@@ -118,7 +115,6 @@ pub async fn test_app_with_nats(nats_url: &str) -> (Router, PgPool) {
         yjs: yjs_manager,
         s3: artifact_store,
         artifact_s3: None,
-        hpi: HpiClient::new(&config.hpi.url, &config.hpi.api_token),
     };
 
     let router = build_router(state);
@@ -152,7 +148,6 @@ pub async fn test_app_with_petri_url(nats_url: &str, petri_url: &str) -> (Router
         yjs: yjs_manager,
         s3: artifact_store,
         artifact_s3: None,
-        hpi: HpiClient::new(&config.hpi.url, &config.hpi.api_token),
     };
 
     let router = build_router(state);
