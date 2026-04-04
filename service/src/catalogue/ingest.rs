@@ -74,7 +74,7 @@ pub async fn start_catalogue_ingest(
             INSERT INTO catalogue_entries (
                 id, execution_id, job_id, name, category, filename,
                 mime_type, size_bytes, storage_path,
-                source_net, source_place, correlation_id, process_id, process_step,
+                source_net, source_place, signal_key, process_id, process_step,
                 file_metadata, user_metadata, created_at, nats_msg_id
             ) VALUES (
                 $1, $2, $3, $4, $5, $6,
@@ -96,7 +96,7 @@ pub async fn start_catalogue_ingest(
         .bind(&cmd.storage_path)
         .bind(&cmd.source_net)
         .bind(&cmd.source_place)
-        .bind(&cmd.correlation_id)
+        .bind(&cmd.signal_key)
         .bind(&cmd.process_id)
         .bind(&cmd.process_step)
         .bind(&file_metadata)
@@ -138,7 +138,7 @@ pub async fn start_catalogue_ingest(
         // The causality consumer may not have processed the egress event yet,
         // so this is opportunistic — the lineage query also resolves at read time.
         if cmd.process_id.is_none() {
-            if let Some(ref cid) = cmd.correlation_id {
+            if let Some(ref cid) = cmd.signal_key {
                 match super::queries::resolve_process_id_from_causality(&db, cid).await {
                     Ok(Some(pid)) => {
                         let _ = sqlx::query(

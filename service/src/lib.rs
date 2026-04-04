@@ -142,7 +142,7 @@ pub fn build_router(state: AppState) -> Router {
             get(causality::routes::token_provenance),
         )
         .route(
-            "/api/provenance/link/{correlation_id}",
+            "/api/provenance/link/{signal_key}",
             get(causality::routes::cross_link),
         )
         // Task endpoints (native)

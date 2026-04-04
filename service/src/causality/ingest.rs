@@ -11,7 +11,7 @@ use crate::nats::MekhanNats;
 #[derive(Debug, Deserialize)]
 struct CrossNetTokenTransfer {
     source_net_id: String,
-    correlation_id: String,
+    signal_key: String,
 }
 
 /// Start the causality event ingest consumer.
@@ -99,17 +99,17 @@ async fn process_bridge_transfer(
     // Record ingress side of cross-link. The egress side was recorded when
     // TokenBridgedOut was processed.
     sqlx::query(
-        "INSERT INTO causality_cross_links (correlation_id, ingress_net, link_type) \
+        "INSERT INTO causality_cross_links (signal_key, ingress_net, link_type) \
          VALUES ($1, $2, 'bridge') \
-         ON CONFLICT (correlation_id) DO UPDATE SET ingress_net = $2",
+         ON CONFLICT (signal_key) DO UPDATE SET ingress_net = $2",
     )
-    .bind(&transfer.correlation_id)
+    .bind(&transfer.signal_key)
     .bind(target_net)
     .execute(db)
     .await?;
 
     tracing::debug!(
-        correlation_id = %transfer.correlation_id,
+        signal_key = %transfer.signal_key,
         source = %transfer.source_net_id,
         target = %target_net,
         "recorded bridge ingress cross-link",
@@ -217,9 +217,9 @@ async fn process_domain_event(
             // Check effect_result for signal_key → egress cross-link
             if let Some(signal_key) = effect_result.get("signal_key").and_then(|v| v.as_str()) {
                 sqlx::query(
-                    "INSERT INTO causality_cross_links (correlation_id, egress_net, egress_seq, link_type) \
+                    "INSERT INTO causality_cross_links (signal_key, egress_net, egress_seq, link_type) \
                      VALUES ($1, $2, $3, 'effect') \
-                     ON CONFLICT (correlation_id) DO UPDATE SET egress_net = $2, egress_seq = $3",
+                     ON CONFLICT (signal_key) DO UPDATE SET egress_net = $2, egress_seq = $3",
                 )
                 .bind(signal_key)
                 .bind(net_id)
@@ -291,7 +291,7 @@ async fn process_domain_event(
                 // The signal_key links back to the originating process via cross-links.
                 sqlx::query(
                     "UPDATE causality_cross_links SET ingress_net = $2, ingress_seq = $3 \
-                     WHERE correlation_id = $1",
+                     WHERE signal_key = $1",
                 )
                 .bind(sk)
                 .bind(net_id)
@@ -310,7 +310,7 @@ async fn process_domain_event(
                      JOIN causality_event_tokens et \
                          ON et.net_id = cl.egress_net AND et.event_seq = cl.egress_seq \
                      JOIN causality_process_tags pt ON pt.token_id = et.token_id \
-                     WHERE cl.correlation_id = $2 \
+                     WHERE cl.signal_key = $2 \
                      ON CONFLICT DO NOTHING",
                 )
                 .bind(&token_id_str)
@@ -355,21 +355,21 @@ async fn process_domain_event(
         DomainEvent::TokenBridgedOut {
             token,
             signal_key,
+            produced_by_event,
             ..
         } => {
             // Record egress side of cross-link.
             // Point egress_seq to the TransitionFired that produced this bridge-out
-            // (via token.created_by_event), NOT to this TokenBridgedOut event.
+            // (via produced_by_event), NOT to this TokenBridgedOut event.
             // The transition's consumed tokens carry the process tags we need for inheritance.
-            let egress_seq = token
-                .created_by_event
+            let egress_seq = produced_by_event
                 .map(|e| e as i64)
                 .unwrap_or(seq);
 
             sqlx::query(
-                "INSERT INTO causality_cross_links (correlation_id, egress_net, egress_seq, link_type) \
+                "INSERT INTO causality_cross_links (signal_key, egress_net, egress_seq, link_type) \
                  VALUES ($1, $2, $3, 'bridge') \
-                 ON CONFLICT (correlation_id) DO UPDATE SET egress_net = $2, egress_seq = $3",
+                 ON CONFLICT (signal_key) DO UPDATE SET egress_net = $2, egress_seq = $3",
             )
             .bind(signal_key)
             .bind(net_id)

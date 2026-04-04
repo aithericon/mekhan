@@ -62,17 +62,17 @@ async fn seed_event_token(
 
 async fn seed_cross_link(
     db: &sqlx::PgPool,
-    correlation_id: &str,
+    signal_key: &str,
     egress_net: Option<&str>,
     egress_seq: Option<i64>,
     ingress_net: Option<&str>,
     ingress_seq: Option<i64>,
 ) {
     sqlx::query(
-        "INSERT INTO causality_cross_links (correlation_id, egress_net, egress_seq, ingress_net, ingress_seq, link_type) \
+        "INSERT INTO causality_cross_links (signal_key, egress_net, egress_seq, ingress_net, ingress_seq, link_type) \
          VALUES ($1, $2, $3, $4, $5, 'bridge')",
     )
-    .bind(correlation_id)
+    .bind(signal_key)
     .bind(egress_net)
     .bind(egress_seq)
     .bind(ingress_net)
@@ -197,7 +197,7 @@ async fn cross_link_lookup() {
 
     assert_eq!(resp.status(), StatusCode::OK);
     let body = body_json(resp.into_body()).await;
-    assert_eq!(body["correlation_id"].as_str(), Some(corr_id.as_str()));
+    assert_eq!(body["signal_key"].as_str(), Some(corr_id.as_str()));
     assert_eq!(body["egress_net"].as_str(), Some("net-a"));
     assert_eq!(body["ingress_net"].as_str(), Some("net-b"));
     assert_eq!(body["egress_seq"], 5);

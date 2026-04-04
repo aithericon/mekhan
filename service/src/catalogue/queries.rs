@@ -18,7 +18,7 @@ const ALLOWED_FILTER_FIELDS: &[&str] = &[
     "storage_path",
     "source_net",
     "source_place",
-    "correlation_id",
+    "signal_key",
     "process_id",
     "process_step",
     "created_at",
@@ -204,7 +204,7 @@ pub async fn stats_by_net(pool: &PgPool) -> Result<Vec<NetStats>, sqlx::Error> {
 /// Resolves membership via three paths:
 /// 1. Explicit `process_id` on the catalogue entry
 /// 2. `job_id` prefix match (legacy: `{process_id}:{step}`)
-/// 3. Causality resolution: the entry's `correlation_id` maps to a
+/// 3. Causality resolution: the entry's `signal_key` maps to a
 ///    `causality_cross_links` egress event whose consumed tokens belong
 ///    to this process (via `causality_process_tags`)
 pub async fn lineage(
@@ -217,8 +217,8 @@ pub async fn lineage(
         SELECT * FROM catalogue_entries
         WHERE process_id = $1
            OR job_id LIKE $2
-           OR correlation_id IN (
-               SELECT cl.correlation_id
+           OR signal_key IN (
+               SELECT cl.signal_key
                FROM causality_cross_links cl
                JOIN causality_event_tokens et
                  ON et.net_id = cl.egress_net
@@ -284,14 +284,14 @@ pub async fn lineage_grouped(
 
 /// Resolve process_id for a catalogue entry via the causality system.
 ///
-/// Given a `correlation_id` (= signal_key from executor submit), finds the
+/// Given a `signal_key` (from executor submit or bridge-out), finds the
 /// process that triggered the executor job by walking:
 ///   cross_links → egress event → consumed tokens → process_tags
 ///
 /// Returns `None` if causality data hasn't been ingested yet.
 pub async fn resolve_process_id_from_causality(
     pool: &PgPool,
-    correlation_id: &str,
+    signal_key: &str,
 ) -> Result<Option<String>, sqlx::Error> {
     sqlx::query_scalar(
         r#"
@@ -302,11 +302,11 @@ pub async fn resolve_process_id_from_causality(
          AND et.event_seq = cl.egress_seq
          AND et.role = 'consumed'
         JOIN causality_process_tags pt ON pt.token_id = et.token_id
-        WHERE cl.correlation_id = $1
+        WHERE cl.signal_key = $1
         LIMIT 1
         "#,
     )
-    .bind(correlation_id)
+    .bind(signal_key)
     .fetch_optional(pool)
     .await
 }

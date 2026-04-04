@@ -477,7 +477,7 @@ pub fn command_to_entry(cmd: &CatalogueRegisterCommand) -> CatalogueEntry {
         storage_path: cmd.storage_path.clone(),
         source_net: cmd.source_net.clone(),
         source_place: cmd.source_place.clone(),
-        correlation_id: cmd.correlation_id.clone(),
+        signal_key: cmd.signal_key.clone(),
         process_id: cmd.process_id.clone(),
         process_step: cmd.process_step.clone(),
         source_event_sequence: None,

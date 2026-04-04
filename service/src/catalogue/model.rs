@@ -15,7 +15,7 @@ pub struct CatalogueEntry {
     pub storage_path: Option<String>,
     pub source_net: Option<String>,
     pub source_place: Option<String>,
-    pub correlation_id: Option<String>,
+    pub signal_key: Option<String>,
     pub process_id: Option<String>,
     pub process_step: Option<String>,
     pub source_event_sequence: Option<i64>,
@@ -90,8 +90,8 @@ pub struct CatalogueRegisterCommand {
     pub source_net: Option<String>,
     #[serde(default)]
     pub source_place: Option<String>,
-    #[serde(default)]
-    pub correlation_id: Option<String>,
+    #[serde(default, alias = "correlation_id")]
+    pub signal_key: Option<String>,
     #[serde(default, alias = "hpi_process_id")]
     pub process_id: Option<String>,
     #[serde(default, alias = "hpi_process_step")]

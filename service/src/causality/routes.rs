@@ -61,29 +61,46 @@ pub async fn token_provenance(
 
             UNION ALL
 
-            -- Recurse: for each producing event, find consumed tokens, then find
-            -- the events that produced THOSE tokens
+            -- Recurse: walk backwards via two paths combined into one SELECT.
+            -- Path 1 (same-net): consumed tokens → their producing events.
+            -- Path 2 (cross-net): TokenCreated at bridge ingress → egress event.
             SELECT
                 a.depth + 1,
-                et2.net_id,
-                et2.event_seq,
-                ce2.event_type,
-                et2.token_id,
-                et2.role,
-                et2.place_id,
-                ce2.timestamp
+                next.net_id,
+                next.event_seq,
+                next.event_type,
+                next.token_id,
+                next.role,
+                next.place_id,
+                next.timestamp
             FROM ancestry a
-            -- Find consumed tokens in the same event
-            JOIN causality_event_tokens consumed
-                ON consumed.net_id = a.net_id
-                AND consumed.event_seq = a.event_seq
-                AND consumed.role = 'consumed'
-            -- Find the event that produced each consumed token
-            JOIN causality_event_tokens et2
-                ON et2.token_id = consumed.token_id
-                AND et2.role = 'produced'
-            JOIN causality_events ce2
-                ON ce2.net_id = et2.net_id AND ce2.event_seq = et2.event_seq
+            JOIN LATERAL (
+                -- Path 1: same-net ancestry via consumed tokens
+                SELECT et2.net_id, et2.event_seq, ce2.event_type,
+                       et2.token_id, et2.role, et2.place_id, ce2.timestamp
+                FROM causality_event_tokens consumed
+                JOIN causality_event_tokens et2
+                    ON et2.token_id = consumed.token_id AND et2.role = 'produced'
+                JOIN causality_events ce2
+                    ON ce2.net_id = et2.net_id AND ce2.event_seq = et2.event_seq
+                WHERE consumed.net_id = a.net_id
+                  AND consumed.event_seq = a.event_seq
+                  AND consumed.role = 'consumed'
+
+                UNION ALL
+
+                -- Path 2: cross-net jump via bridge cross-link
+                SELECT et3.net_id, et3.event_seq, ce3.event_type,
+                       et3.token_id, et3.role, et3.place_id, ce3.timestamp
+                FROM causality_cross_links cl
+                JOIN causality_event_tokens et3
+                    ON et3.net_id = cl.egress_net AND et3.event_seq = cl.egress_seq
+                JOIN causality_events ce3
+                    ON ce3.net_id = et3.net_id AND ce3.event_seq = et3.event_seq
+                WHERE cl.ingress_net = a.net_id
+                  AND cl.ingress_seq = a.event_seq
+                  AND a.event_type = 'TokenCreated'
+            ) next ON true
             WHERE a.depth < $3
         )
         SELECT DISTINCT depth, net_id, event_seq, event_type, token_id, role, place_id, timestamp
@@ -108,7 +125,7 @@ pub async fn token_provenance(
 
 #[derive(Debug, Serialize, FromRow)]
 pub struct CrossLink {
-    pub correlation_id: String,
+    pub signal_key: String,
     pub egress_net: Option<String>,
     pub egress_seq: Option<i64>,
     pub ingress_net: Option<String>,
@@ -116,17 +133,17 @@ pub struct CrossLink {
     pub link_type: String,
 }
 
-/// GET /api/provenance/link/{correlation_id}
+/// GET /api/provenance/link/{signal_key}
 ///
-/// Look up a cross-net bridge link by correlation_id.
+/// Look up a cross-net bridge link by signal_key.
 pub async fn cross_link(
     State(state): State<AppState>,
-    Path(correlation_id): Path<String>,
+    Path(signal_key): Path<String>,
 ) -> impl IntoResponse {
     let result = sqlx::query_as::<_, CrossLink>(
-        "SELECT * FROM causality_cross_links WHERE correlation_id = $1",
+        "SELECT * FROM causality_cross_links WHERE signal_key = $1",
     )
-    .bind(&correlation_id)
+    .bind(&signal_key)
     .fetch_optional(&state.db)
     .await;
 

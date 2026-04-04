@@ -104,13 +104,13 @@ async fn wait_for_causality_event(
 }
 
 /// Wait for a causality_cross_links row to appear.
-async fn wait_for_cross_link(db: &sqlx::PgPool, correlation_id: &str, timeout: Duration) {
+async fn wait_for_cross_link(db: &sqlx::PgPool, signal_key: &str, timeout: Duration) {
     let start = std::time::Instant::now();
     loop {
         let exists: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM causality_cross_links WHERE correlation_id = $1)",
+            "SELECT EXISTS(SELECT 1 FROM causality_cross_links WHERE signal_key = $1)",
         )
-        .bind(correlation_id)
+        .bind(signal_key)
         .fetch_one(db)
         .await
         .unwrap_or(false);
@@ -120,7 +120,7 @@ async fn wait_for_cross_link(db: &sqlx::PgPool, correlation_id: &str, timeout: D
         }
         if start.elapsed() > timeout {
             panic!(
-                "causality_cross_links row ({correlation_id}) did not appear within {timeout:?}"
+                "causality_cross_links row ({signal_key}) did not appear within {timeout:?}"
             );
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -391,7 +391,7 @@ async fn effect_completed_creates_cross_link() {
 
     // Assert cross-link egress side
     let egress_net: String = sqlx::query_scalar(
-        "SELECT egress_net FROM causality_cross_links WHERE correlation_id = $1",
+        "SELECT egress_net FROM causality_cross_links WHERE signal_key = $1",
     )
     .bind(&signal_key)
     .fetch_one(&db)
@@ -465,7 +465,7 @@ async fn bridge_transfer_links_cross_net() {
 
     // Assert: cross-link has both sides
     let (egress, ingress): (Option<String>, Option<String>) = sqlx::query_as(
-        "SELECT egress_net, ingress_net FROM causality_cross_links WHERE correlation_id = $1",
+        "SELECT egress_net, ingress_net FROM causality_cross_links WHERE signal_key = $1",
     )
     .bind(&signal_key)
     .fetch_one(&db)
