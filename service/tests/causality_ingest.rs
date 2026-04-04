@@ -411,47 +411,56 @@ async fn bridge_transfer_links_cross_net() {
 
     let net_a = format!("test-a-{}", Uuid::new_v4().simple());
     let net_b = format!("test-b-{}", Uuid::new_v4().simple());
-    let token_src = Uuid::new_v4().to_string();
+    let token_seed = Uuid::new_v4().to_string();
+    let token_bridge = Uuid::new_v4().to_string();
     let token_dst = Uuid::new_v4().to_string();
-    let signal_key = format!("bridge-{}", Uuid::new_v4().simple());
-    let place_src = Uuid::new_v4().to_string();
+    let signal_key = Uuid::new_v4().to_string();
+    let place_start = Uuid::new_v4().to_string();
+    let place_out = "bridge_outbox";
     let place_dst = "inbox";
 
     // 1. Seed token on net-A (creates process)
-    let ev0 = persisted_event(1, token_created_event(&token_src, &place_src));
-    publish_event(nats.jetstream(), &net_a, "token.created", &ev0).await;
-    wait_for_process_tag(&db, &token_src, Duration::from_secs(5)).await;
+    let ev1 = persisted_event(1, token_created_event(&token_seed, &place_start));
+    publish_event(nats.jetstream(), &net_a, "token.created", &ev1).await;
+    wait_for_process_tag(&db, &token_seed, Duration::from_secs(5)).await;
 
-    // 2. TokenBridgedOut on net-A (records egress)
-    let ev1 = persisted_event(2, json!({
+    // 2. TransitionFired: consumes seed, produces bridge token (like the real engine)
+    let ev2 = persisted_event(2, transition_fired_event(
+        "send_to_other_net",
+        &[(&place_start, &token_seed)],
+        &[(&place_out, &token_bridge, json!({
+            "id": &token_bridge,
+            "color": { "type": "Unit" },
+            "created_at": "2026-04-04T12:00:00Z",
+            "created_by_event": 2
+        }))],
+    ));
+    publish_event(nats.jetstream(), &net_a, "transition.fired", &ev2).await;
+    wait_for_process_tag(&db, &token_bridge, Duration::from_secs(5)).await;
+
+    // 3. TokenBridgedOut: the bridge token leaves net-A.
+    //    created_by_event=2 points back to the transition at seq 2.
+    let ev3 = persisted_event(3, json!({
         "type": "TokenBridgedOut",
-        "token": token_json(&token_src),
-        "source_place_id": &place_src,
-        "source_place_name": "output",
+        "token": {
+            "id": &token_bridge,
+            "color": { "type": "Unit" },
+            "created_at": "2026-04-04T12:00:00Z",
+            "created_by_event": 2
+        },
+        "source_place_id": place_out,
+        "source_place_name": "Bridge Outbox",
         "target_net_id": &net_b,
         "target_place_name": place_dst,
         "transition_id": Uuid::new_v4().to_string(),
         "signal_key": &signal_key
     }));
-    publish_event(nats.jetstream(), &net_a, "token.bridged_out", &ev1).await;
+    publish_event(nats.jetstream(), &net_a, "token.bridged_out", &ev3).await;
     wait_for_cross_link(&db, &signal_key, Duration::from_secs(5)).await;
 
-    // 3. Bridge transfer message (records ingress net)
-    let transfer = json!({
-        "source_net_id": &net_a,
-        "source_place_name": "output",
-        "token_color": null,
-        "correlation_id": &signal_key,
-        "timestamp": "2026-04-04T12:00:00Z"
-    });
-    publish_bridge_transfer(nats.jetstream(), &net_b, place_dst, &transfer).await;
-
-    // Small delay for bridge message processing
-    tokio::time::sleep(Duration::from_millis(500)).await;
-
-    // 4. TokenCreated on net-B with signal_key (bridge arrival carries correlation_id)
-    let ev2 = persisted_event(1, token_created_with_signal_key(&token_dst, place_dst, &signal_key));
-    publish_event(nats.jetstream(), &net_b, "token.created", &ev2).await;
+    // 4. TokenCreated on net-B with signal_key (bridge arrival)
+    let ev4 = persisted_event(1, token_created_with_signal_key(&token_dst, place_dst, &signal_key));
+    publish_event(nats.jetstream(), &net_b, "token.created", &ev4).await;
     wait_for_process_tag(&db, &token_dst, Duration::from_secs(5)).await;
 
     // Assert: cross-link has both sides
@@ -475,7 +484,7 @@ async fn bridge_transfer_links_cross_net() {
     .expect("query process tags");
     assert_eq!(
         tag.as_deref(),
-        Some(token_src.as_str()),
+        Some(token_seed.as_str()),
         "bridged token should inherit source process"
     );
 }
