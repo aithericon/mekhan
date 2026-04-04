@@ -335,8 +335,11 @@ async fn process_domain_event(
                     correlation_id = %correlation_id,
                     "linked bridged token to process via cross-link",
                 );
-            } else {
-                // Seed token: self-tag as new process
+            } else if token.created_by_event.is_none() {
+                // True seed token (from scenario initialization, no parent event).
+                // Self-tag as a new process root and auto-create an HPI process.
+                // Tokens with created_by_event = Some(_) were produced by a transition
+                // and will inherit process tags when that transition is processed.
                 sqlx::query(
                     "INSERT INTO causality_process_tags (token_id, process_id) \
                      VALUES ($1, $1) \
@@ -357,6 +360,9 @@ async fn process_domain_event(
                 .execute(db)
                 .await?;
             }
+            // else: token was produced by a transition (created_by_event is set)
+            // or injected via signal — it will inherit process tags when the
+            // TransitionFired/EffectCompleted event that consumed it is processed.
         }
 
         DomainEvent::TokenBridgedOut {
