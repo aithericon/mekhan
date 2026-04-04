@@ -25,6 +25,7 @@ use tower::ServiceExt;
 use uuid::Uuid;
 
 use mekhan_service::catalogue::subscriptions::SubscriptionManager;
+use mekhan_service::catalogue::ingest::start_catalogue_ingest;
 use mekhan_service::causality::ingest::start_causality_ingest;
 use mekhan_service::lifecycle::start_lifecycle_listener;
 use mekhan_service::nats::MekhanNats;
@@ -258,9 +259,34 @@ async fn causality_full_pipeline() {
         .await
         .expect("connect to NATS");
 
-    let (app, _) = common::test_app_with_nats(&nats_url).await;
+    // Build router using the SAME db pool as our consumers
+    // (test_app_with_nats creates a separate DB which wouldn't see causality data)
+    let config = common::test_config();
+    let petri = mekhan_service::petri::client::PetriClient::new(&config.petri_lab_url);
+    let yjs_persistence = mekhan_service::yjs::persistence::YjsPersistence::new(db.clone());
+    let yjs_manager = Arc::new(mekhan_service::yjs::manager::YjsManager::new(yjs_persistence));
+    let artifact_store = Arc::new(mekhan_service::s3::ArtifactStore::new(&config.s3));
+    let catalogue_repo = Arc::new(mekhan_service::catalogue::repository::PgCatalogueRepository::new(db.clone()));
+    let app = mekhan_service::build_router(mekhan_service::AppState {
+        db: db.clone(),
+        petri,
+        nats: nats.clone(),
+        config,
+        yjs: yjs_manager,
+        s3: artifact_store,
+        artifact_s3: None,
+        catalogue_repo,
+    });
 
-    // ── 2. Spawn Mekhan consumers (clean slate) ──────────────────────────
+    // ── 2. Ensure required NATS streams exist ──────────────────────────
+    //
+    // The CATALOGUE stream must exist before the engine tries to publish
+    // catalogue_register commands, otherwise the effect fails with "no stream".
+    nats.ensure_catalogue_stream()
+        .await
+        .expect("create CATALOGUE stream");
+
+    // ── 3. Spawn Mekhan consumers (clean slate) ──────────────────────────
     //
     // Delete stale durable consumers and purge streams so our fresh consumers
     // don't replay messages from previous test runs.
@@ -270,6 +296,7 @@ async fn causality_full_pipeline() {
         ("PETRI_GLOBAL", "mekhan-lifecycle"),
         ("HUMAN_REQUESTS", "mekhan-human-task-ingest"),
         ("PROCESS", "mekhan-process-event-ingest"),
+        ("CATALOGUE", "mekhan-catalogue-ingest"),
     ] {
         if let Ok(stream) = nats.jetstream().get_stream(stream_name).await {
             let _ = stream.delete_consumer(consumer_name).await;
@@ -307,10 +334,17 @@ async fn causality_full_pipeline() {
     let _process =
         spawn_consumer(move || start_process_event_ingest(p_nats, p_db)).await;
 
+    // Catalogue ingest (so artifacts appear in our test DB)
+    let cat_nats = nats.clone();
+    let cat_db = db.clone();
+    let cat_sub = sub_mgr.clone();
+    let _catalogue =
+        spawn_consumer(move || start_catalogue_ingest(cat_nats, cat_db, cat_sub)).await;
+
     // ── 3. Compile & deploy scenario ─────────────────────────────────────
 
     let air_json = compile_sdk_example("causality_e2e_net");
-    let net_id = format!("e2e-{}", Uuid::new_v4().simple());
+    let net_id = format!("mekhan-{}", Uuid::new_v4().simple());
     let instance_id = Uuid::new_v4();
 
     // Insert DB row BEFORE deployment (lifecycle listener needs it)
@@ -368,7 +402,7 @@ async fn causality_full_pipeline() {
     //
     // After approval, the net dispatches to executor (Python backend).
     // The executor runs the script, emits artifact, completes.
-    // NetCompleted fires → lifecycle listener updates instance.
+    // NetCompleted fires → lifecycle listener updates instance status.
 
     wait_for_instance_status(
         &db,
@@ -434,16 +468,17 @@ async fn causality_full_pipeline() {
 
     // ── 8. Assert provenance API ─────────────────────────────────────────
 
-    // Find a produced token to query provenance for
+    // Find a produced token from a TransitionFired event (guaranteed to have ancestors)
     let some_token: String = sqlx::query_scalar(
-        "SELECT token_id FROM causality_event_tokens \
-         WHERE net_id = $1 AND role = 'produced' \
-         ORDER BY event_seq DESC LIMIT 1",
+        "SELECT et.token_id FROM causality_event_tokens et \
+         JOIN causality_events ce ON ce.net_id = et.net_id AND ce.event_seq = et.event_seq \
+         WHERE et.net_id = $1 AND et.role = 'produced' AND ce.event_type = 'TransitionFired' \
+         LIMIT 1",
     )
     .bind(&net_id)
     .fetch_one(&db)
     .await
-    .expect("should have at least one produced token");
+    .expect("should have at least one token produced by a transition");
 
     let resp = app
         .clone()
