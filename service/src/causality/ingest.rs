@@ -357,7 +357,15 @@ async fn process_domain_event(
             signal_key,
             ..
         } => {
-            // Record egress side of cross-link
+            // Record egress side of cross-link.
+            // Point egress_seq to the TransitionFired that produced this bridge-out
+            // (via token.created_by_event), NOT to this TokenBridgedOut event.
+            // The transition's consumed tokens carry the process tags we need for inheritance.
+            let egress_seq = token
+                .created_by_event
+                .map(|e| e as i64)
+                .unwrap_or(seq);
+
             sqlx::query(
                 "INSERT INTO causality_cross_links (correlation_id, egress_net, egress_seq, link_type) \
                  VALUES ($1, $2, $3, 'bridge') \
@@ -365,7 +373,7 @@ async fn process_domain_event(
             )
             .bind(signal_key)
             .bind(net_id)
-            .bind(seq)
+            .bind(egress_seq)
             .execute(db)
             .await?;
 
