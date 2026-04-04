@@ -174,8 +174,9 @@ async fn process_domain_event(
             }
 
             let consumed_ids: Vec<String> = consumed_tokens.iter().map(|(_, tid)| tid.0.to_string()).collect();
+            let read_ids: Vec<String> = read_tokens.iter().map(|(_, t)| t.id.0.to_string()).collect();
             let produced_ids: Vec<String> = produced_tokens.iter().map(|(_, t)| t.id.0.to_string()).collect();
-            propagate_process_tags(db, &consumed_ids, &produced_ids).await?;
+            propagate_process_tags(db, &consumed_ids, &read_ids, &produced_ids).await?;
         }
 
         DomainEvent::EffectCompleted {
@@ -211,8 +212,9 @@ async fn process_domain_event(
             }
 
             let consumed_ids: Vec<String> = consumed_tokens.iter().map(|(_, tid)| tid.0.to_string()).collect();
+            let read_ids: Vec<String> = read_tokens.iter().map(|(_, t)| t.id.0.to_string()).collect();
             let produced_ids: Vec<String> = produced_tokens.iter().map(|(_, t)| t.id.0.to_string()).collect();
-            propagate_process_tags(db, &consumed_ids, &produced_ids).await?;
+            propagate_process_tags(db, &consumed_ids, &read_ids, &produced_ids).await?;
 
             // Check effect_result for signal_key → egress cross-link
             if let Some(signal_key) = effect_result.get("signal_key").and_then(|v| v.as_str()) {
@@ -226,6 +228,14 @@ async fn process_domain_event(
                 .bind(seq)
                 .execute(db)
                 .await?;
+            }
+
+            // Enrich auto-discovered processes with process_start metadata.
+            // When a process_start effect fires, its consumed/read tokens carry
+            // process tags from seed tokens. We update those process rows with
+            // the name, description, and steps from the effect result.
+            if effect_handler_id == "process_start" {
+                enrich_processes_from_start_event(db, &consumed_ids, &read_ids, effect_result, ts).await?;
             }
         }
 
@@ -261,7 +271,7 @@ async fn process_domain_event(
 
                 let consumed_ids: Vec<String> = consumed_tokens.iter().map(|(_, tid)| tid.0.to_string()).collect();
                 let produced_ids: Vec<String> = produced_tokens.iter().map(|(_, t)| t.id.0.to_string()).collect();
-                propagate_process_tags(db, &consumed_ids, &produced_ids).await?;
+                propagate_process_tags(db, &consumed_ids, &[], &produced_ids).await?;
             }
         }
 
@@ -424,13 +434,96 @@ async fn insert_event_token(
     Ok(())
 }
 
-/// Propagate process tags from consumed tokens to produced tokens.
+/// Enrich auto-discovered processes with metadata from a process_start effect.
+///
+/// The process_start handler creates a named HPI process with steps. Instead of
+/// maintaining a separate process event ingest path, we extract that metadata here
+/// and update the causality-discovered process rows directly.
+async fn enrich_processes_from_start_event(
+    db: &PgPool,
+    consumed_ids: &[String],
+    read_ids: &[String],
+    effect_result: &serde_json::Value,
+    ts: chrono::DateTime<chrono::Utc>,
+) -> Result<(), sqlx::Error> {
+    let name = effect_result.get("name").and_then(|v| v.as_str());
+    let config = effect_result.get("config").cloned()
+        .or_else(|| {
+            // Build config from individual fields if not bundled
+            let mut cfg = serde_json::Map::new();
+            if let Some(desc) = effect_result.get("description") {
+                cfg.insert("description".to_string(), desc.clone());
+            }
+            if let Some(ns) = effect_result.get("namespace") {
+                cfg.insert("namespace".to_string(), ns.clone());
+            }
+            if let Some(steps) = effect_result.get("steps") {
+                cfg.insert("steps".to_string(), steps.clone());
+            }
+            if cfg.is_empty() { None } else { Some(serde_json::Value::Object(cfg)) }
+        });
+
+    // Find process_ids from consumed + read tokens
+    let mut source_ids = consumed_ids.to_vec();
+    source_ids.extend_from_slice(read_ids);
+
+    if source_ids.is_empty() {
+        return Ok(());
+    }
+
+    // Get distinct process_ids from these tokens
+    let process_ids: Vec<String> = sqlx::query_scalar(
+        "SELECT DISTINCT process_id FROM causality_process_tags WHERE token_id = ANY($1)",
+    )
+    .bind(&source_ids)
+    .fetch_all(db)
+    .await?;
+
+    for pid in &process_ids {
+        sqlx::query(
+            "UPDATE hpi_processes SET \
+               name = COALESCE($2, name), \
+               config = CASE WHEN $3::jsonb IS NOT NULL THEN $3::jsonb ELSE config END, \
+               updated_at = $4 \
+             WHERE process_id = $1",
+        )
+        .bind(pid)
+        .bind(name)
+        .bind(&config)
+        .bind(ts)
+        .execute(db)
+        .await?;
+
+        tracing::debug!(
+            process_id = %pid,
+            name = ?name,
+            "enriched auto-discovered process with process_start metadata",
+        );
+    }
+
+    Ok(())
+}
+
+/// Propagate process tags from source tokens (consumed + read) to produced tokens.
+///
+/// Both consumed and read-arc tokens contribute their process tags to produced tokens.
+/// Read arcs carry process context (e.g., campaign state), so excluding them would
+/// break tag propagation when a transition consumes an untagged trigger (e.g., a
+/// subscription signal) alongside a tagged read-arc context token.
 async fn propagate_process_tags(
     db: &PgPool,
     consumed_ids: &[String],
+    read_ids: &[String],
     produced_ids: &[String],
 ) -> Result<(), sqlx::Error> {
-    if consumed_ids.is_empty() || produced_ids.is_empty() {
+    if produced_ids.is_empty() {
+        return Ok(());
+    }
+
+    let mut source_ids: Vec<String> = consumed_ids.to_vec();
+    source_ids.extend_from_slice(read_ids);
+
+    if source_ids.is_empty() {
         return Ok(());
     }
 
@@ -443,7 +536,7 @@ async fn propagate_process_tags(
              ON CONFLICT DO NOTHING",
         )
         .bind(produced_id)
-        .bind(consumed_ids)
+        .bind(&source_ids)
         .execute(db)
         .await?;
     }
