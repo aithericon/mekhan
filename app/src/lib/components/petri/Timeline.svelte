@@ -41,6 +41,7 @@
 	}
 
 	const currentEvent = $derived(events[currentIndex]);
+	const isAtEnd = $derived(currentIndex >= events.length - 1);
 </script>
 
 <div class="timeline bg-card border-t border-border p-4">
@@ -91,6 +92,15 @@
 
 		<span class="text-sm font-medium text-foreground/80 tabular-nums min-w-24 text-right">
 			Event <span class="text-primary">{currentIndex + 1}</span> / {events.length}
+			{#if !isAtEnd}
+				<button
+					class="ml-1.5 text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-500 hover:bg-amber-500/25 transition-colors"
+					onclick={jumpToEnd}
+					title="Jump to latest event"
+				>
+					{events.length - 1 - currentIndex} new
+				</button>
+			{/if}
 		</span>
 
 		{#if onEvaluate && onToggleRunMode}

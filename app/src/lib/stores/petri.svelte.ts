@@ -85,6 +85,18 @@ export function createPetriStore(netId: string, baseUrl: string = PETRI_BASE) {
 		return placeNameMap.get(id) ?? id;
 	}
 
+	// Resolve UUIDs in error messages to human-readable names
+	function resolveErrorMessage(msg: string): string {
+		const uuidPattern = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+		return msg.replace(uuidPattern, (uuid) => {
+			const transitionName = transitionNameMap.get(uuid);
+			if (transitionName) return `"${transitionName}"`;
+			const placeName = placeNameMap.get(uuid);
+			if (placeName) return `"${placeName}"`;
+			return uuid;
+		});
+	}
+
 	// ── Projected marking ───────────────────────────────────────────────
 	const projectedMarking = $derived.by(() => {
 		const marking = new Map<string, Token[]>();
@@ -133,12 +145,12 @@ export function createPetriStore(netId: string, baseUrl: string = PETRI_BASE) {
 			domainEvent.type === 'EffectFailed'
 		) {
 			transitionId = domainEvent.transition_id;
-			if ('consumed_tokens' in domainEvent) {
+			if ('consumed_tokens' in domainEvent && domainEvent.consumed_tokens) {
 				for (const [placeId] of domainEvent.consumed_tokens) {
 					consumedPlaceIds.push(placeId);
 				}
 			}
-			if ('produced_tokens' in domainEvent) {
+			if ('produced_tokens' in domainEvent && domainEvent.produced_tokens) {
 				for (const [placeId] of domainEvent.produced_tokens) {
 					producedPlaceIds.push(placeId);
 				}
@@ -146,7 +158,8 @@ export function createPetriStore(netId: string, baseUrl: string = PETRI_BASE) {
 		} else if (domainEvent.type === 'TokenCreated') {
 			targetPlaceId = domainEvent.place_id;
 		} else if (domainEvent.type === 'TokenBridgedOut') {
-			targetPlaceId = domainEvent.source_place_id;
+			if (domainEvent.transition_id) transitionId = domainEvent.transition_id;
+			consumedPlaceIds.push(domainEvent.source_place_id);
 		}
 
 		const allNodeIds = [
@@ -185,7 +198,10 @@ export function createPetriStore(netId: string, baseUrl: string = PETRI_BASE) {
 			const data = await res.json();
 			events = data.events ?? [];
 			if (events.length > 0) {
-				replayIndex = events.length - 1;
+				// Only jump to end on initial load (replayIndex not yet set)
+				if (replayIndex < 0) {
+					replayIndex = events.length - 1;
+				}
 				lastFetchedSequence = events[events.length - 1].sequence;
 			}
 			await fetchState();
@@ -205,8 +221,12 @@ export function createPetriStore(netId: string, baseUrl: string = PETRI_BASE) {
 				const existingSeqs = new Set(events.map((e) => e.sequence));
 				const unique = newEvents.filter((e) => !existingSeqs.has(e.sequence));
 				if (unique.length > 0) {
+					// Only auto-advance if the user is following the live tail
+					const wasAtEnd = replayIndex >= events.length - 1;
 					events = [...events, ...unique];
-					replayIndex = events.length - 1;
+					if (wasAtEnd) {
+						replayIndex = events.length - 1;
+					}
 					lastFetchedSequence = events[events.length - 1].sequence;
 					await fetchState();
 				}
@@ -389,21 +409,29 @@ export function createPetriStore(netId: string, baseUrl: string = PETRI_BASE) {
 
 			if (
 				ev.type === 'TransitionFired' ||
-				ev.type === 'EffectCompleted'
+				ev.type === 'EffectCompleted' ||
+				ev.type === 'EffectFailed'
 			) {
 				firedTransition = ev.transition_id;
+				const consumed = ('consumed_tokens' in ev && ev.consumed_tokens) ? ev.consumed_tokens : [];
+				const produced = ('produced_tokens' in ev && ev.produced_tokens) ? ev.produced_tokens : [];
 				if (index > replayIndex) {
-					// Stepping forward
-					for (const [placeId] of ev.consumed_tokens) disappeared.push(placeId);
-					for (const [placeId] of ev.produced_tokens) appeared.push(placeId);
+					for (const [placeId] of consumed) disappeared.push(placeId);
+					for (const [placeId] of produced) appeared.push(placeId);
 				} else {
-					// Stepping backward
-					for (const [placeId] of ev.consumed_tokens) appeared.push(placeId);
-					for (const [placeId] of ev.produced_tokens) disappeared.push(placeId);
+					for (const [placeId] of consumed) appeared.push(placeId);
+					for (const [placeId] of produced) disappeared.push(placeId);
 				}
 			} else if (ev.type === 'TokenCreated') {
 				if (index > replayIndex) appeared.push(ev.place_id);
 				else disappeared.push(ev.place_id);
+			} else if (ev.type === 'TokenConsumed' || ev.type === 'TokenRemoved') {
+				if (index > replayIndex) disappeared.push(ev.place_id);
+				else appeared.push(ev.place_id);
+			} else if (ev.type === 'TokenBridgedOut') {
+				if (ev.transition_id) firedTransition = ev.transition_id;
+				if (index > replayIndex) disappeared.push(ev.source_place_id);
+				else appeared.push(ev.source_place_id);
 			}
 
 			markingDiff = { appeared, disappeared, firedTransition };
@@ -454,7 +482,12 @@ export function createPetriStore(netId: string, baseUrl: string = PETRI_BASE) {
 		const sel = selectedElement;
 		if (!sel || sel.type !== 'token') return null;
 		const tokens = projectedMarking.get(sel.placeId) ?? [];
-		const token = tokens.find((t) => t.id === sel.tokenId);
+		let token = tokens.find((t) => t.id === sel.tokenId);
+		// Also search bridged-out tokens (ghost tokens in outboxes)
+		if (!token) {
+			const bridged = bridgedOutTokens.get(sel.placeId) ?? [];
+			token = bridged.find((t) => t.id === sel.tokenId);
+		}
 		if (!token) return null;
 		const placeName = getPlaceName(sel.placeId);
 		const creationEvent = events.find(
@@ -466,7 +499,153 @@ export function createPetriStore(netId: string, baseUrl: string = PETRI_BASE) {
 	function getSelectedEventDetails() {
 		const sel = selectedElement;
 		if (!sel || sel.type !== 'event') return null;
-		return events.find((e) => e.sequence === sel.sequence) ?? null;
+		const event = events.find((e) => e.sequence === sel.sequence);
+		if (!event) return null;
+
+		const details: {
+			event: PersistedEvent;
+			eventTypeName: string;
+			transitionName?: string;
+			placeName?: string;
+			consumedTokens?: { placeId: string; placeName: string; tokenId: string }[];
+			producedTokens?: { placeId: string; placeName: string; token: Token }[];
+			readTokens?: { placeId: string; placeName: string; token: Token }[];
+			token?: Token;
+			errorMessage?: string;
+			targetNetId?: string;
+			targetPlaceName?: string;
+			correlationId?: string;
+			replyToPlaceName?: string;
+			replyChannels?: Record<string, string>;
+			signalKey?: string;
+			workflowId?: string;
+			effectHandlerId?: string;
+			effectResult?: unknown;
+			inputData?: Record<string, unknown>;
+			retryable?: boolean;
+		} = {
+			event,
+			eventTypeName: event.event.type
+		};
+
+		switch (event.event.type as string) {
+			case 'TransitionFired': {
+				const e = event.event as any;
+				details.transitionName = getTransitionName(e.transition_id);
+				details.consumedTokens = (e.consumed_tokens as [string, string][])?.map(
+					([placeId, tokenId]: [string, string]) => ({
+						placeId,
+						placeName: getPlaceName(placeId),
+						tokenId
+					})
+				);
+				details.producedTokens = (e.produced_tokens as [string, Token][])?.map(
+					([placeId, token]: [string, Token]) => ({
+						placeId,
+						placeName: getPlaceName(placeId),
+						token
+					})
+				);
+				if (e.read_tokens?.length) {
+					details.readTokens = (e.read_tokens as [string, Token][]).map(
+						([placeId, token]: [string, Token]) => ({
+							placeId,
+							placeName: getPlaceName(placeId),
+							token
+						})
+					);
+				}
+				break;
+			}
+			case 'TokenCreated': {
+				const e = event.event as any;
+				details.placeName = getPlaceName(e.place_id);
+				details.token = e.token;
+				if (e.signal_key) details.signalKey = e.signal_key;
+				if (e.workflow_id) details.workflowId = e.workflow_id;
+				break;
+			}
+			case 'TokenConsumed': {
+				const e = event.event as any;
+				details.placeName = getPlaceName(e.place_id);
+				break;
+			}
+			case 'NetInitialized': {
+				break;
+			}
+			case 'TokenBridgedOut': {
+				const e = event.event as any;
+				details.transitionName = e.transition_id ? getTransitionName(e.transition_id) : undefined;
+				details.placeName = getPlaceName(e.source_place_id);
+				details.token = e.token;
+				details.targetNetId = e.target_net_id;
+				details.targetPlaceName = e.target_place_name;
+				if (e.signal_key) details.signalKey = e.signal_key;
+				details.replyToPlaceName = e.reply_to_place_name ?? undefined;
+				if (e.reply_channels) details.replyChannels = e.reply_channels;
+				break;
+			}
+			case 'EffectCompleted': {
+				const e = event.event as any;
+				details.transitionName = getTransitionName(e.transition_id);
+				details.effectHandlerId = e.effect_handler_id;
+				details.effectResult = e.effect_result;
+				details.consumedTokens = (e.consumed_tokens as [string, string][])?.map(
+					([placeId, tokenId]: [string, string]) => ({
+						placeId,
+						placeName: getPlaceName(placeId),
+						tokenId
+					})
+				);
+				details.producedTokens = (e.produced_tokens as [string, Token][])?.map(
+					([placeId, token]: [string, Token]) => ({
+						placeId,
+						placeName: getPlaceName(placeId),
+						token
+					})
+				);
+				if (e.read_tokens?.length) {
+					details.readTokens = (e.read_tokens as [string, Token][]).map(
+						([placeId, token]: [string, Token]) => ({
+							placeId,
+							placeName: getPlaceName(placeId),
+							token
+						})
+					);
+				}
+				break;
+			}
+			case 'EffectFailed': {
+				const e = event.event as any;
+				details.transitionName = getTransitionName(e.transition_id);
+				details.effectHandlerId = e.effect_handler_id;
+				details.errorMessage = e.error_message ?? 'Effect failed';
+				details.retryable = e.retryable ?? true;
+				if (e.input_data) details.inputData = e.input_data;
+				details.consumedTokens = (e.consumed_tokens as [string, string][])?.map(
+					([placeId, tokenId]: [string, string]) => ({
+						placeId,
+						placeName: getPlaceName(placeId),
+						tokenId
+					})
+				);
+				details.producedTokens = (e.produced_tokens as [string, Token][])?.map(
+					([placeId, token]: [string, Token]) => ({
+						placeId,
+						placeName: getPlaceName(placeId),
+						token
+					})
+				);
+				break;
+			}
+			case 'ErrorOccurred': {
+				const e = event.event as any;
+				details.errorMessage = resolveErrorMessage(e.message ?? '');
+				break;
+			}
+		}
+
+		return details;
 	}
 
 	function getSelectedGroupDetails() {
@@ -542,8 +721,12 @@ export function createPetriStore(netId: string, baseUrl: string = PETRI_BASE) {
 				const existingSeqs = new Set(events.map((e) => e.sequence));
 				const unique = newEvents.filter((e) => !existingSeqs.has(e.sequence));
 				if (unique.length > 0) {
+					// Only auto-advance if the user is following the live tail
+					const wasAtEnd = replayIndex >= events.length - 1;
 					events = [...events, ...unique];
-					replayIndex = events.length - 1;
+					if (wasAtEnd) {
+						replayIndex = events.length - 1;
+					}
 					lastFetchedSequence = events[events.length - 1].sequence;
 					fetchState();
 				}

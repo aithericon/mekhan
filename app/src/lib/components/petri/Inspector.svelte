@@ -611,6 +611,24 @@
 						</div>
 					{/if}
 
+					{#if eventDetails.readTokens && eventDetails.readTokens.length > 0}
+						<div>
+							<h4 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1">Read ({eventDetails.readTokens.length})</h4>
+							<div class="space-y-0.5">
+								{#each eventDetails.readTokens as rt (rt.token.id)}
+									<div class="flex items-center gap-2 text-xs">
+										<span class="text-blue-400">&cir;</span>
+										<button class="text-primary hover:underline" onclick={() => onSelectPlace?.(rt.placeId)}>{rt.placeName}</button>
+										<button
+											class="text-muted-foreground font-mono hover:text-primary hover:underline"
+											onclick={() => { onSelectToken?.(rt.placeId, rt.token.id); onViewToken?.(); }}
+										>{rt.token.id.slice(0, 8)}</button>
+									</div>
+								{/each}
+							</div>
+						</div>
+					{/if}
+
 				{:else if eventDetails.eventTypeName === 'EffectCompleted'}
 					<div>
 						<h4 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1">Transition</h4>
@@ -668,6 +686,24 @@
 						</div>
 					{/if}
 
+					{#if eventDetails.readTokens && eventDetails.readTokens.length > 0}
+						<div>
+							<h4 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1">Read ({eventDetails.readTokens.length})</h4>
+							<div class="space-y-0.5">
+								{#each eventDetails.readTokens as rt (rt.token.id)}
+									<div class="flex items-center gap-2 text-xs">
+										<span class="text-blue-400">&cir;</span>
+										<button class="text-primary hover:underline" onclick={() => onSelectPlace?.(rt.placeId)}>{rt.placeName}</button>
+										<button
+											class="text-muted-foreground font-mono hover:text-primary hover:underline"
+											onclick={() => { onSelectToken?.(rt.placeId, rt.token.id); onViewToken?.(); }}
+										>{rt.token.id.slice(0, 8)}</button>
+									</div>
+								{/each}
+							</div>
+						</div>
+					{/if}
+
 				{:else if eventDetails.eventTypeName === 'EffectFailed'}
 					<div>
 						<h4 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1">Transition</h4>
@@ -692,6 +728,21 @@
 					<div class="bg-red-500/10 border border-red-500/30 rounded p-2 text-xs text-red-400">
 						{eventDetails.errorMessage}
 					</div>
+
+					<div class="flex items-center gap-2">
+						{#if eventDetails.retryable !== undefined}
+							<span class="px-1.5 py-0.5 text-[10px] rounded font-medium {eventDetails.retryable ? 'bg-amber-500/15 text-amber-500' : 'bg-red-500/15 text-red-500'}">
+								{eventDetails.retryable ? 'Retryable' : 'Non-retryable'}
+							</span>
+						{/if}
+					</div>
+
+					{#if eventDetails.inputData}
+						<div>
+							<h4 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1">Input Data</h4>
+							<pre class="text-[10px] font-mono bg-muted rounded p-2 overflow-x-auto max-h-32 text-foreground/70">{JSON.stringify(eventDetails.inputData, null, 2)}</pre>
+						</div>
+					{/if}
 
 					{#if eventDetails.consumedTokens && eventDetails.consumedTokens.length > 0}
 						<div>
@@ -753,6 +804,19 @@
 						</button>
 					</div>
 
+					{#if eventDetails.signalKey}
+						<div>
+							<h4 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1">Signal Key</h4>
+							<span class="text-xs font-mono text-foreground/80 break-all">{eventDetails.signalKey}</span>
+						</div>
+					{/if}
+					{#if eventDetails.workflowId}
+						<div>
+							<h4 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1">Workflow ID</h4>
+							<span class="text-xs font-mono text-foreground/80 break-all">{eventDetails.workflowId}</span>
+						</div>
+					{/if}
+
 				{:else if eventDetails.eventTypeName === 'TokenConsumed'}
 					<div>
 						<h4 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1">From Place</h4>
@@ -810,6 +874,33 @@
 							>
 								View Details
 							</button>
+						</div>
+					{/if}
+
+					{#if eventDetails.signalKey}
+						<div>
+							<h4 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1">Signal Key</h4>
+							<span class="text-xs font-mono text-foreground/80 break-all">{eventDetails.signalKey}</span>
+						</div>
+					{/if}
+					{#if eventDetails.replyToPlaceName}
+						<div>
+							<h4 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1">Reply To</h4>
+							<span class="text-xs font-medium text-foreground/80">{eventDetails.replyToPlaceName}</span>
+						</div>
+					{/if}
+					{#if eventDetails.replyChannels}
+						<div>
+							<h4 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1">Reply Channels</h4>
+							<div class="space-y-0.5">
+								{#each Object.entries(eventDetails.replyChannels) as [channel, place] (channel)}
+									<div class="text-xs">
+										<span class="font-mono text-rose-400">{channel}</span>
+										<span class="text-muted-foreground mx-1">&rarr;</span>
+										<span class="font-medium text-foreground/80">{place}</span>
+									</div>
+								{/each}
+							</div>
 						</div>
 					{/if}
 

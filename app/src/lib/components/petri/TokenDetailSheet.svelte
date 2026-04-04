@@ -2,19 +2,78 @@
 	import { X } from '@lucide/svelte';
 	import MonacoEditor from './MonacoEditor.svelte';
 	import { CopyButton } from '$lib/components/ui/copy-button';
-	import type { Token } from '$lib/types/petri';
+	import type { Token, PersistedEvent } from '$lib/types/petri';
 
 	interface Props {
 		token: Token | null;
 		placeName: string;
 		open: boolean;
 		onClose: () => void;
+		/** Full event log — used to resolve created_by_event provenance */
+		events?: PersistedEvent[];
+		/** Resolve place ID → human name */
+		getPlaceName?: (id: string) => string;
+		/** Resolve transition ID → human name */
+		getTransitionName?: (id: string) => string;
 	}
 
-	let { token, placeName, open, onClose }: Props = $props();
+	let { token, placeName, open, onClose, events = [], getPlaceName, getTransitionName }: Props = $props();
 
 	const colorType = $derived(token?.color.type ?? 'Unit');
 	const colorValue = $derived((token?.color as any)?.value);
+
+	// Resolve the event that created this token and extract provenance context
+	const provenance = $derived.by(() => {
+		if (!token?.created_by_event || !events.length) return null;
+		const ev = events.find(e => e.sequence === token.created_by_event);
+		if (!ev) return null;
+
+		const d = ev.event as any;
+		const result: {
+			eventType: string;
+			sequence: number;
+			timestamp: string;
+			signalKey?: string;
+			workflowId?: string;
+			transitionName?: string;
+			sourcePlaceName?: string;
+			sourceNetId?: string;
+			targetNetId?: string;
+			targetPlaceName?: string;
+			effectHandlerId?: string;
+		} = {
+			eventType: d.type,
+			sequence: ev.sequence,
+			timestamp: ev.timestamp,
+		};
+
+		if (d.type === 'TokenCreated') {
+			result.sourcePlaceName = getPlaceName ? getPlaceName(d.place_id) : d.place_name ?? d.place_id;
+			if (d.signal_key) result.signalKey = d.signal_key;
+			if (d.workflow_id) result.workflowId = d.workflow_id;
+		} else if (d.type === 'TransitionFired' || d.type === 'EffectCompleted') {
+			result.transitionName = getTransitionName ? getTransitionName(d.transition_id) : d.transition_name ?? d.transition_id;
+			if (d.effect_handler_id) result.effectHandlerId = d.effect_handler_id;
+			// Find which place this token was produced into
+			const produced = d.produced_tokens as [string, Token][] | undefined;
+			if (produced) {
+				const entry = produced.find(([, t]) => t.id === token.id);
+				if (entry) {
+					result.sourcePlaceName = getPlaceName ? getPlaceName(entry[0]) : entry[0];
+				}
+			}
+		} else if (d.type === 'EffectFailed') {
+			result.transitionName = getTransitionName ? getTransitionName(d.transition_id) : d.transition_name ?? d.transition_id;
+			if (d.effect_handler_id) result.effectHandlerId = d.effect_handler_id;
+		} else if (d.type === 'TokenBridgedOut') {
+			// This token was produced by a bridge-in on another net — rare to see here
+			// but for completeness
+			result.sourceNetId = d.target_net_id;
+			result.targetPlaceName = d.target_place_name;
+		}
+
+		return result;
+	});
 
 	const typeBadgeClass = $derived.by(() => {
 		switch (colorType) {
@@ -108,7 +167,107 @@
 						{new Date(token.created_at).toLocaleString()}
 					</span>
 				</div>
+				{#if token.created_by_event != null}
+					<div>
+						<h3 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1">Created by Event</h3>
+						<span class="text-xs font-mono text-foreground/80">#{token.created_by_event}</span>
+					</div>
+				{/if}
 			</div>
+
+			{#if provenance}
+				<div class="shrink-0 border border-blue-500/20 rounded-lg p-3 bg-blue-500/5">
+					<h3 class="text-xs font-semibold uppercase tracking-wider text-blue-500 mb-2">Provenance</h3>
+					<div class="grid grid-cols-2 gap-3">
+						<div>
+							<span class="text-[10px] uppercase tracking-wider text-muted-foreground">Origin</span>
+							<div class="text-xs text-foreground/80">
+								<span class="px-1.5 py-0.5 rounded text-[10px] font-medium
+									{provenance.eventType === 'TokenCreated' ? 'bg-green-500/15 text-green-500'
+									: provenance.eventType === 'EffectCompleted' ? 'bg-emerald-500/15 text-emerald-500'
+									: provenance.eventType === 'TransitionFired' ? 'bg-amber-500/15 text-amber-500'
+									: provenance.eventType === 'EffectFailed' ? 'bg-red-500/15 text-red-500'
+									: 'bg-muted text-foreground'}">
+									{provenance.eventType}
+								</span>
+								<span class="ml-1 font-mono text-muted-foreground">#{provenance.sequence}</span>
+							</div>
+						</div>
+						<div>
+							<span class="text-[10px] uppercase tracking-wider text-muted-foreground">When</span>
+							<div class="text-xs text-foreground/80">{new Date(provenance.timestamp).toLocaleString()}</div>
+						</div>
+						{#if provenance.transitionName}
+							<div>
+								<span class="text-[10px] uppercase tracking-wider text-muted-foreground">Transition</span>
+								<div class="text-xs font-medium text-foreground/80">{provenance.transitionName}</div>
+							</div>
+						{/if}
+						{#if provenance.effectHandlerId}
+							<div>
+								<span class="text-[10px] uppercase tracking-wider text-muted-foreground">Effect Handler</span>
+								<div class="text-xs font-mono text-foreground/80">{provenance.effectHandlerId}</div>
+							</div>
+						{/if}
+						{#if provenance.sourcePlaceName}
+							<div>
+								<span class="text-[10px] uppercase tracking-wider text-muted-foreground">Place</span>
+								<div class="text-xs font-medium text-foreground/80">{provenance.sourcePlaceName}</div>
+							</div>
+						{/if}
+						{#if provenance.signalKey}
+							<div>
+								<span class="text-[10px] uppercase tracking-wider text-muted-foreground">Signal Key</span>
+								<div class="flex items-center gap-1">
+									<span class="text-xs font-mono text-foreground/80 break-all">{provenance.signalKey}</span>
+									<CopyButton text={provenance.signalKey} />
+								</div>
+							</div>
+						{/if}
+						{#if provenance.workflowId}
+							<div>
+								<span class="text-[10px] uppercase tracking-wider text-muted-foreground">Workflow ID</span>
+								<div class="flex items-center gap-1">
+									<span class="text-xs font-mono text-foreground/80 break-all">{provenance.workflowId}</span>
+									<CopyButton text={provenance.workflowId} />
+								</div>
+							</div>
+						{/if}
+					</div>
+				</div>
+			{/if}
+
+			{#if token.reply_routing}
+				<div class="shrink-0 border border-rose-500/20 rounded-lg p-3 bg-rose-500/5">
+					<h3 class="text-xs font-semibold uppercase tracking-wider text-rose-500 mb-2">Reply Routing</h3>
+					<div class="grid grid-cols-2 gap-3">
+						{#if token.reply_routing.reply_to}
+							<div class="col-span-2">
+								<span class="text-[10px] uppercase tracking-wider text-muted-foreground">Reply To (default channel)</span>
+								<div class="flex items-center gap-1">
+									<span class="text-xs font-mono text-foreground/80">
+										{token.reply_routing.reply_to.net_id} / {token.reply_routing.reply_to.place_name}
+									</span>
+									<CopyButton text="{token.reply_routing.reply_to.net_id}/{token.reply_routing.reply_to.place_name}" />
+								</div>
+							</div>
+						{/if}
+						{#if token.reply_routing.reply_channels}
+							{#each Object.entries(token.reply_routing.reply_channels) as [channel, addr] (channel)}
+								<div>
+									<span class="text-[10px] uppercase tracking-wider text-muted-foreground">Channel: {channel}</span>
+									<div class="flex items-center gap-1">
+										<span class="text-xs font-mono text-foreground/80">
+											{addr.net_id} / {addr.place_name}
+										</span>
+										<CopyButton text="{addr.net_id}/{addr.place_name}" />
+									</div>
+								</div>
+							{/each}
+						{/if}
+					</div>
+				</div>
+			{/if}
 
 			<!-- Token Data -->
 			<div class="flex-1 flex flex-col min-h-0">

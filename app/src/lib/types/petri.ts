@@ -11,17 +11,25 @@ export type TokenColor =
 	| { type: 'Integer'; value: number }
 	| { type: 'Data'; value: unknown };
 
+/** Full address for routing a reply token back to the requester net */
+export type BridgeReplyAddress = {
+	net_id: string;
+	place_name: string;
+};
+
+/** Reply routing context attached to tokens in request-reply bridge patterns */
+export type ReplyRouting = {
+	reply_to?: BridgeReplyAddress;
+	reply_channels?: Record<string, BridgeReplyAddress>;
+};
+
 /** A single token in a Petri net place */
 export type Token = {
 	id: string;
 	color: TokenColor;
 	created_at: string;
 	created_by_event?: number;
-	bridge_meta?: {
-		correlation_id: string;
-		source_net_id: string;
-		reply_to?: { net_id: string; place_name: string };
-	};
+	reply_routing?: ReplyRouting;
 };
 
 /**
@@ -68,16 +76,24 @@ export type PersistedEvent = {
 	previous_hash: string | null;
 };
 
-/** Domain event discriminated union */
+/** Domain event discriminated union — matches petri-domain's DomainEvent enum */
 export type DomainEvent =
 	| { type: 'NetInitialized'; net: unknown }
-	| { type: 'TokenCreated'; token: Token; place_id: string; place_name?: string }
+	| {
+			type: 'TokenCreated';
+			token: Token;
+			place_id: string;
+			place_name?: string;
+			workflow_id?: string;
+			signal_key?: string;
+		}
 	| {
 			type: 'TransitionFired';
 			transition_id: string;
 			transition_name?: string;
 			consumed_tokens: [string, string][];
 			produced_tokens: [string, Token][];
+			read_tokens?: [string, Token][];
 		}
 	| {
 			type: 'EffectCompleted';
@@ -87,27 +103,73 @@ export type DomainEvent =
 			produced_tokens: [string, Token][];
 			effect_handler_id: string;
 			effect_result: unknown;
+			read_tokens?: [string, Token][];
 		}
 	| {
 			type: 'EffectFailed';
 			transition_id: string;
 			transition_name?: string;
+			consumed_tokens: [string, string][];
+			produced_tokens: [string, Token][];
+			effect_handler_id: string;
 			error_message: string;
 			tokens_consumed: boolean;
+			input_data?: Record<string, unknown>;
+			retryable?: boolean;
 		}
 	| { type: 'TokenConsumed'; token_id: string; place_id: string }
-	| { type: 'TokenRemoved'; token_id: string; place_id: string; reason?: string }
-	| { type: 'TokenUpdated'; token_id: string; place_id: string; new_color: TokenColor }
+	| {
+			type: 'TokenRemoved';
+			token_id: string;
+			place_id: string;
+			reason?: string;
+			correlation_id?: string;
+		}
+	| {
+			type: 'TokenUpdated';
+			token_id: string;
+			place_id: string;
+			new_color: TokenColor;
+			correlation_id?: string;
+		}
 	| {
 			type: 'TokenBridgedOut';
 			token: Token;
 			source_place_id: string;
+			source_place_name: string;
 			target_net_id: string;
 			target_place_name: string;
+			transition_id: string;
+			signal_key: string;
+			reply_to_place_name?: string;
+			reply_channels?: Record<string, string>;
 		}
-	| { type: 'NetCreated'; net_id: string }
-	| { type: 'NetCompleted'; net_id: string; terminal_place_id: string }
-	| { type: 'NetCancelled'; net_id: string; reason?: string }
+	| {
+			type: 'TransitionScriptUpdated';
+			transition_id: string;
+			script: string;
+			guard?: string;
+		}
+	| {
+			type: 'NetCreated';
+			net_id: string;
+			template_id?: string;
+			parameters?: unknown;
+			created_by?: string;
+			label?: string;
+		}
+	| {
+			type: 'NetCompleted';
+			net_id: string;
+			terminal_place_id: string;
+			exit_code?: unknown;
+		}
+	| {
+			type: 'NetCancelled';
+			net_id: string;
+			reason?: string;
+			cancelled_by?: string;
+		}
 	| { type: 'ErrorOccurred'; message: string };
 
 // ---------------------------------------------------------------------------

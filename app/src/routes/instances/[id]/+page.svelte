@@ -212,6 +212,9 @@
 						placeName={details.placeName}
 						open={tokenSheetOpen}
 						onClose={() => (tokenSheetOpen = false)}
+						events={petriStore.events}
+						getPlaceName={(id) => petriStore?.getPlaceName(id) ?? id}
+						getTransitionName={(id) => petriStore?.getTransitionName(id) ?? id}
 					/>
 				{/if}
 			{/if}
