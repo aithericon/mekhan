@@ -92,9 +92,9 @@ pub struct CatalogueRegisterCommand {
     pub source_place: Option<String>,
     #[serde(default)]
     pub correlation_id: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "hpi_process_id")]
     pub process_id: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "hpi_process_step")]
     pub process_step: Option<String>,
     pub created_at: DateTime<Utc>,
 }

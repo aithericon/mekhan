@@ -13,6 +13,7 @@ export interface CatalogueEntry {
 	correlation_id: string | null;
 	process_id: string | null;
 	process_step: string | null;
+	source_event_sequence: number | null;
 	file_metadata: Record<string, unknown>;
 	user_metadata: Record<string, unknown>;
 	created_at: string;

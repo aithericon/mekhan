@@ -219,27 +219,21 @@ pub async fn start_process_event_ingest(nats: MekhanNats, db: PgPool) {
             }
         };
 
-        // Resolve process_id: use trace_id from command, or from metadata for Started events.
-        // Under the new model, trace_id maps directly to process_id.
-        let process_id = cmd.trace_id.clone().or_else(|| {
-            if let ProcessUpdateType::Started { ref metadata } = cmd.update_type {
-                metadata.trace_id.clone()
-            } else {
-                None
-            }
-        });
-
-        let process_id = match process_id {
-            Some(t) => t,
-            None => {
-                tracing::warn!(
-                    hpi_process_id = %cmd.hpi_process_id,
-                    "process event has no trace_id/process_id, skipping",
-                );
-                let _ = msg.ack().await;
-                continue;
-            }
-        };
+        // Resolve process_id from available identifiers (in priority order):
+        // 1. Explicit trace_id on the command
+        // 2. trace_id from Started metadata
+        // 3. hpi_process_id (fallback — always present)
+        let process_id = cmd
+            .trace_id
+            .clone()
+            .or_else(|| {
+                if let ProcessUpdateType::Started { ref metadata } = cmd.update_type {
+                    metadata.trace_id.clone()
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| cmd.hpi_process_id.clone());
 
         // Extract name and status from the update type
         let (status, name, config) = match &cmd.update_type {
