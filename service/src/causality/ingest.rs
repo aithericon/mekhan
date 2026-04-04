@@ -299,14 +299,16 @@ async fn process_domain_event(
                 .execute(db)
                 .await?;
 
-                // Inherit process tags from the egress side (consumed tokens at
-                // the event that produced this signal_key).
+                // Inherit process tags from the egress side.
+                // For EffectCompleted (executor_submit): consumed tokens carry the process.
+                // For TokenBridgedOut (bridge): the produced token carries the process.
+                // We check both roles to handle both cases.
                 let copied = sqlx::query(
                     "INSERT INTO causality_process_tags (token_id, process_id) \
                      SELECT $1, pt.process_id \
                      FROM causality_cross_links cl \
                      JOIN causality_event_tokens et \
-                         ON et.net_id = cl.egress_net AND et.event_seq = cl.egress_seq AND et.role = 'consumed' \
+                         ON et.net_id = cl.egress_net AND et.event_seq = cl.egress_seq \
                      JOIN causality_process_tags pt ON pt.token_id = et.token_id \
                      WHERE cl.correlation_id = $2 \
                      ON CONFLICT DO NOTHING",

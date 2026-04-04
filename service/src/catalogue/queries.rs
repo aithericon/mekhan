@@ -223,7 +223,6 @@ pub async fn lineage(
                JOIN causality_event_tokens et
                  ON et.net_id = cl.egress_net
                 AND et.event_seq = cl.egress_seq
-                AND et.role = 'consumed'
                JOIN causality_process_tags pt ON pt.token_id = et.token_id
                WHERE pt.process_id = $1
            )

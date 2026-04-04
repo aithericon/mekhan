@@ -201,6 +201,16 @@ fn token_created_event(token_id: &str, place_id: &str) -> serde_json::Value {
     })
 }
 
+fn token_created_with_signal_key(token_id: &str, place_id: &str, signal_key: &str) -> serde_json::Value {
+    json!({
+        "type": "TokenCreated",
+        "token": token_json(token_id),
+        "place_id": place_id,
+        "place_name": "test_place",
+        "signal_key": signal_key
+    })
+}
+
 fn transition_fired_event(
     transition_name: &str,
     consumed: &[(&str, &str)],  // (place_id, token_id)
@@ -439,8 +449,8 @@ async fn bridge_transfer_links_cross_net() {
     // Small delay for bridge message processing
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    // 4. TokenCreated on net-B (should link via cross-link and inherit tags)
-    let ev2 = persisted_event(1, token_created_event(&token_dst, place_dst));
+    // 4. TokenCreated on net-B with signal_key (bridge arrival carries correlation_id)
+    let ev2 = persisted_event(1, token_created_with_signal_key(&token_dst, place_dst, &signal_key));
     publish_event(nats.jetstream(), &net_b, "token.created", &ev2).await;
     wait_for_process_tag(&db, &token_dst, Duration::from_secs(5)).await;
 
@@ -502,4 +512,118 @@ async fn duplicate_events_are_idempotent() {
     .await
     .unwrap();
     assert_eq!(count, 1, "duplicate event should not create second row");
+}
+
+/// Signal-injected tokens (with signal_key) should inherit process tags
+/// from the egress event that produced the signal_key, NOT create new processes.
+#[tokio::test]
+async fn signal_key_inherits_process_tags() {
+    let db = common::create_test_db().await;
+    let nats = MekhanNats::connect(&aithericon_test_infra::nats_url())
+        .await
+        .expect("connect NATS");
+    ensure_petri_global_stream(nats.jetstream()).await;
+    let _handle = spawn_causality_ingest(&nats, &db).await;
+
+    let net_id = format!("test-{}", Uuid::new_v4().simple());
+    let token_seed = Uuid::new_v4().to_string();
+    let token_submitted = Uuid::new_v4().to_string();
+    let token_signal = Uuid::new_v4().to_string();
+    let signal_key = format!("job-{}:0", Uuid::new_v4().simple());
+    let place_start = Uuid::new_v4().to_string();
+    let place_submitted = Uuid::new_v4().to_string();
+
+    // 1. Seed token → creates process
+    let ev1 = persisted_event(1, token_created_event(&token_seed, &place_start));
+    publish_event(nats.jetstream(), &net_id, "token.created", &ev1).await;
+    wait_for_process_tag(&db, &token_seed, Duration::from_secs(5)).await;
+
+    // 2. EffectCompleted (executor_submit) → consumes seed, produces submitted, records signal_key
+    let ev2 = persisted_event(2, json!({
+        "type": "EffectCompleted",
+        "transition_id": Uuid::new_v4().to_string(),
+        "transition_name": "submit",
+        "consumed_tokens": [[&place_start, &token_seed]],
+        "produced_tokens": [[&place_submitted, token_json(&token_submitted)]],
+        "effect_handler_id": "executor_submit",
+        "effect_result": { "signal_key": &signal_key }
+    }));
+    publish_event(nats.jetstream(), &net_id, "effect.completed", &ev2).await;
+    wait_for_cross_link(&db, &signal_key, Duration::from_secs(5)).await;
+
+    // 3. Signal injection with signal_key → should inherit seed's process, NOT create new one
+    let ev3 = persisted_event(3, token_created_with_signal_key(
+        &token_signal, "sig_completed", &signal_key
+    ));
+    publish_event(nats.jetstream(), &net_id, "token.created", &ev3).await;
+    wait_for_process_tag(&db, &token_signal, Duration::from_secs(5)).await;
+
+    // Assert: signal token inherited process_id from seed token
+    let signal_process: String = sqlx::query_scalar(
+        "SELECT process_id FROM causality_process_tags WHERE token_id = $1",
+    )
+    .bind(&token_signal)
+    .fetch_one(&db)
+    .await
+    .expect("signal token should have process tag");
+
+    assert_eq!(
+        signal_process, token_seed,
+        "signal-injected token should inherit seed token's process"
+    );
+
+    // Assert: no extra processes were created (only 1 — the seed)
+    let process_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(DISTINCT process_id)::bigint FROM causality_process_tags \
+         WHERE token_id IN (SELECT token_id FROM causality_event_tokens WHERE net_id = $1)",
+    )
+    .bind(&net_id)
+    .fetch_one(&db)
+    .await
+    .unwrap();
+
+    assert_eq!(process_count, 1, "should have exactly 1 process, not more");
+}
+
+/// Tokens with created_by_event but no signal_key should NOT create processes
+/// (they're produced by transitions and inherit via propagation).
+#[tokio::test]
+async fn non_seed_token_without_signal_key_does_not_create_process() {
+    let db = common::create_test_db().await;
+    let nats = MekhanNats::connect(&aithericon_test_infra::nats_url())
+        .await
+        .expect("connect NATS");
+    ensure_petri_global_stream(nats.jetstream()).await;
+    let _handle = spawn_causality_ingest(&nats, &db).await;
+
+    let net_id = format!("test-{}", Uuid::new_v4().simple());
+    let token_id = Uuid::new_v4().to_string();
+
+    // Token with created_by_event set (produced by a transition) but no signal_key
+    let event = persisted_event(1, json!({
+        "type": "TokenCreated",
+        "token": {
+            "id": &token_id,
+            "color": { "type": "Unit" },
+            "created_at": "2026-04-04T12:00:00Z",
+            "created_by_event": 5
+        },
+        "place_id": "some_place",
+        "place_name": "Some Place"
+    }));
+    publish_event(nats.jetstream(), &net_id, "token.created", &event).await;
+    wait_for_causality_event(&db, &net_id, 1, Duration::from_secs(5)).await;
+    // Small extra wait
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // Should NOT have a process tag
+    let has_tag: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM causality_process_tags WHERE token_id = $1)",
+    )
+    .bind(&token_id)
+    .fetch_one(&db)
+    .await
+    .unwrap_or(false);
+
+    assert!(!has_tag, "token with created_by_event should NOT self-tag as process");
 }

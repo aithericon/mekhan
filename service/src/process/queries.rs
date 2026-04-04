@@ -188,7 +188,7 @@ pub async fn get_process_detail(
             OR correlation_id IN (\
                SELECT cl.correlation_id FROM causality_cross_links cl \
                JOIN causality_event_tokens et ON et.net_id = cl.egress_net \
-                 AND et.event_seq = cl.egress_seq AND et.role = 'consumed' \
+                 AND et.event_seq = cl.egress_seq \
                JOIN causality_process_tags pt ON pt.token_id = et.token_id \
                WHERE pt.process_id = $1)",
     )
@@ -495,7 +495,7 @@ pub async fn list_process_artifacts(
         qb.push(" OR correlation_id IN (\
             SELECT cl.correlation_id FROM causality_cross_links cl \
             JOIN causality_event_tokens et ON et.net_id = cl.egress_net \
-              AND et.event_seq = cl.egress_seq AND et.role = 'consumed' \
+              AND et.event_seq = cl.egress_seq \
             JOIN causality_process_tags pt ON pt.token_id = et.token_id \
             WHERE pt.process_id = ");
         qb.push_bind(process_id.to_string());
@@ -519,7 +519,7 @@ pub async fn list_process_artifacts(
         qb.push(" OR correlation_id IN (\
             SELECT cl.correlation_id FROM causality_cross_links cl \
             JOIN causality_event_tokens et ON et.net_id = cl.egress_net \
-              AND et.event_seq = cl.egress_seq AND et.role = 'consumed' \
+              AND et.event_seq = cl.egress_seq \
             JOIN causality_process_tags pt ON pt.token_id = et.token_id \
             WHERE pt.process_id = ");
         qb.push_bind(process_id.to_string());
