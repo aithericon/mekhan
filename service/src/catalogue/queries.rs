@@ -201,17 +201,34 @@ pub async fn stats_by_net(pool: &PgPool) -> Result<Vec<NetStats>, sqlx::Error> {
 
 /// All artifacts for a given process (campaign lineage).
 ///
-/// Matches on `process_id = $1` OR `job_id LIKE '$1:%'` to support
-/// cases where process_id isn't set but job_id carries the campaign prefix.
+/// Resolves membership via three paths:
+/// 1. Explicit `process_id` on the catalogue entry
+/// 2. `job_id` prefix match (legacy: `{process_id}:{step}`)
+/// 3. Causality resolution: the entry's `correlation_id` maps to a
+///    `causality_cross_links` egress event whose consumed tokens belong
+///    to this process (via `causality_process_tags`)
 pub async fn lineage(
     pool: &PgPool,
     process_id: &str,
 ) -> Result<Vec<CatalogueEntry>, sqlx::Error> {
     let job_prefix = format!("{process_id}:%");
     sqlx::query_as::<_, CatalogueEntry>(
-        "SELECT * FROM catalogue_entries \
-         WHERE process_id = $1 OR job_id LIKE $2 \
-         ORDER BY created_at ASC",
+        r#"
+        SELECT * FROM catalogue_entries
+        WHERE process_id = $1
+           OR job_id LIKE $2
+           OR correlation_id IN (
+               SELECT cl.correlation_id
+               FROM causality_cross_links cl
+               JOIN causality_event_tokens et
+                 ON et.net_id = cl.egress_net
+                AND et.event_seq = cl.egress_seq
+                AND et.role = 'consumed'
+               JOIN causality_process_tags pt ON pt.token_id = et.token_id
+               WHERE pt.process_id = $1
+           )
+        ORDER BY created_at ASC
+        "#,
     )
     .bind(process_id)
     .bind(&job_prefix)
@@ -264,6 +281,35 @@ pub async fn lineage_grouped(
         steps,
         total_artifacts,
     })
+}
+
+/// Resolve process_id for a catalogue entry via the causality system.
+///
+/// Given a `correlation_id` (= signal_key from executor submit), finds the
+/// process that triggered the executor job by walking:
+///   cross_links → egress event → consumed tokens → process_tags
+///
+/// Returns `None` if causality data hasn't been ingested yet.
+pub async fn resolve_process_id_from_causality(
+    pool: &PgPool,
+    correlation_id: &str,
+) -> Result<Option<String>, sqlx::Error> {
+    sqlx::query_scalar(
+        r#"
+        SELECT pt.process_id
+        FROM causality_cross_links cl
+        JOIN causality_event_tokens et
+          ON et.net_id = cl.egress_net
+         AND et.event_seq = cl.egress_seq
+         AND et.role = 'consumed'
+        JOIN causality_process_tags pt ON pt.token_id = et.token_id
+        WHERE cl.correlation_id = $1
+        LIMIT 1
+        "#,
+    )
+    .bind(correlation_id)
+    .fetch_optional(pool)
+    .await
 }
 
 /// Distinct values for a column (for populating filter dropdowns).

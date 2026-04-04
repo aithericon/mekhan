@@ -134,6 +134,39 @@ pub async fn start_catalogue_ingest(
 
         let _ = msg.ack().await;
 
+        // Best-effort: resolve process_id from causality if not explicitly set.
+        // The causality consumer may not have processed the egress event yet,
+        // so this is opportunistic — the lineage query also resolves at read time.
+        if cmd.process_id.is_none() {
+            if let Some(ref cid) = cmd.correlation_id {
+                match super::queries::resolve_process_id_from_causality(&db, cid).await {
+                    Ok(Some(pid)) => {
+                        let _ = sqlx::query(
+                            "UPDATE catalogue_entries SET process_id = $1 WHERE id = $2",
+                        )
+                        .bind(&pid)
+                        .bind(&cmd.artifact_id)
+                        .execute(&db)
+                        .await;
+                        tracing::debug!(
+                            artifact_id = %cmd.artifact_id,
+                            process_id = %pid,
+                            "resolved process_id from causality",
+                        );
+                    }
+                    Ok(None) => {
+                        // Causality hasn't caught up yet — lineage query handles it
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            artifact_id = %cmd.artifact_id,
+                            "causality process_id resolution failed: {e}",
+                        );
+                    }
+                }
+            }
+        }
+
         // Evaluate the new artifact against active subscriptions
         let entry = command_to_entry(&cmd);
         subscription_manager.evaluate_new_artifact(&entry).await;

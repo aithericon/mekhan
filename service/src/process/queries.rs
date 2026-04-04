@@ -183,7 +183,14 @@ pub async fn get_process_detail(
     .await?;
 
     let artifact_count: (i64,) = sqlx::query_as(
-        "SELECT COALESCE(COUNT(*), 0)::bigint FROM catalogue_entries WHERE process_id = $1",
+        "SELECT COALESCE(COUNT(*), 0)::bigint FROM catalogue_entries \
+         WHERE process_id = $1 \
+            OR correlation_id IN (\
+               SELECT cl.correlation_id FROM causality_cross_links cl \
+               JOIN causality_event_tokens et ON et.net_id = cl.egress_net \
+                 AND et.event_seq = cl.egress_seq AND et.role = 'consumed' \
+               JOIN causality_process_tags pt ON pt.token_id = et.token_id \
+               WHERE pt.process_id = $1)",
     )
     .bind(process_id)
     .fetch_one(pool)
@@ -482,9 +489,17 @@ pub async fn list_process_artifacts(
     // -- COUNT query --
     let count = {
         let mut qb = QueryBuilder::<Postgres>::new(
-            "SELECT COUNT(*)::bigint FROM catalogue_entries WHERE process_id = ",
+            "SELECT COUNT(*)::bigint FROM catalogue_entries WHERE (process_id = ",
         );
         qb.push_bind(process_id.to_string());
+        qb.push(" OR correlation_id IN (\
+            SELECT cl.correlation_id FROM causality_cross_links cl \
+            JOIN causality_event_tokens et ON et.net_id = cl.egress_net \
+              AND et.event_seq = cl.egress_seq AND et.role = 'consumed' \
+            JOIN causality_process_tags pt ON pt.token_id = et.token_id \
+            WHERE pt.process_id = ");
+        qb.push_bind(process_id.to_string());
+        qb.push("))");
         if let Some(ref filter) = params.filter {
             if !filter.is_empty() {
                 qb.push(" AND ");
@@ -498,9 +513,17 @@ pub async fn list_process_artifacts(
     // -- SELECT query --
     let entries = {
         let mut qb = QueryBuilder::<Postgres>::new(
-            "SELECT * FROM catalogue_entries WHERE process_id = ",
+            "SELECT * FROM catalogue_entries WHERE (process_id = ",
         );
         qb.push_bind(process_id.to_string());
+        qb.push(" OR correlation_id IN (\
+            SELECT cl.correlation_id FROM causality_cross_links cl \
+            JOIN causality_event_tokens et ON et.net_id = cl.egress_net \
+              AND et.event_seq = cl.egress_seq AND et.role = 'consumed' \
+            JOIN causality_process_tags pt ON pt.token_id = et.token_id \
+            WHERE pt.process_id = ");
+        qb.push_bind(process_id.to_string());
+        qb.push("))");
         if let Some(ref filter) = params.filter {
             if !filter.is_empty() {
                 qb.push(" AND ");
