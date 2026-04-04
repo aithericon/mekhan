@@ -231,9 +231,10 @@ async fn process_domain_event(
             }
 
             // Enrich auto-discovered processes with process_start metadata.
-            // When a process_start effect fires, its consumed/read tokens carry
-            // process tags from seed tokens. We update those process rows with
-            // the name, description, and steps from the effect result.
+            // The process_start effect can fire at any point in the process lifecycle,
+            // not just at the start. Its consumed/read tokens carry process tags
+            // from seed tokens. We update those process rows with the name,
+            // description, and steps from the effect result.
             if effect_handler_id == "process_start" {
                 enrich_processes_from_start_event(db, &consumed_ids, &read_ids, effect_result, ts).await?;
             }
