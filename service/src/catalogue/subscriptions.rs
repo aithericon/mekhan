@@ -275,7 +275,7 @@ impl SubscriptionManager {
         });
 
         let subject = format!("petri.signal.{}.{}", sub.net_id, sub.signal_place);
-        let msg_id = format!("cat-sig-{}-{}", sub.subscription_id, entry.id);
+        let msg_id = format!("cat-sig-{}-{}-{}", sub.subscription_id, entry.execution_id, entry.id);
 
         let mut headers = async_nats::HeaderMap::new();
         headers.insert("Nats-Msg-Id", msg_id.as_str());
