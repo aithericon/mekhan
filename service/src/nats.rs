@@ -199,6 +199,61 @@ impl MekhanNats {
         Ok(consumer)
     }
 
+    /// Ensure the HUMAN_REQUESTS JetStream stream exists.
+    pub async fn ensure_human_stream(&self) -> Result<(), async_nats::Error> {
+        self.jetstream
+            .get_or_create_stream(jetstream::stream::Config {
+                name: "HUMAN_REQUESTS".into(),
+                subjects: vec!["human.request.>".into()],
+                retention: jetstream::stream::RetentionPolicy::Limits,
+                max_age: std::time::Duration::from_secs(7 * 24 * 60 * 60), // 7 days
+                ..Default::default()
+            })
+            .await?;
+        Ok(())
+    }
+
+    /// Create or get the durable consumer for human task request ingestion.
+    pub async fn human_task_consumer(&self) -> Result<PullConsumer, async_nats::Error> {
+        let stream = self.jetstream.get_stream("HUMAN_REQUESTS").await?;
+        let consumer = stream
+            .get_or_create_consumer(
+                "mekhan-human-task-ingest",
+                jetstream::consumer::pull::Config {
+                    durable_name: Some("mekhan-human-task-ingest".into()),
+                    filter_subject: "human.request.>".into(),
+                    ack_policy: jetstream::consumer::AckPolicy::Explicit,
+                    deliver_policy: jetstream::consumer::DeliverPolicy::All,
+                    ..Default::default()
+                },
+            )
+            .await?;
+        Ok(consumer)
+    }
+
+    /// Create or get the durable consumer for causality event ingestion.
+    /// Consumes petri domain events and bridge transfers from PETRI_GLOBAL
+    /// for causality projection and cross-net link tracking.
+    pub async fn causality_consumer(&self) -> Result<PullConsumer, async_nats::Error> {
+        let stream = self.jetstream.get_stream("PETRI_GLOBAL").await?;
+        let consumer = stream
+            .get_or_create_consumer(
+                "mekhan-causality-ingest",
+                jetstream::consumer::pull::Config {
+                    durable_name: Some("mekhan-causality-ingest".into()),
+                    filter_subjects: vec![
+                        "petri.events.>".into(),
+                        "petri.bridge.>".into(),
+                    ],
+                    ack_policy: jetstream::consumer::AckPolicy::Explicit,
+                    deliver_policy: jetstream::consumer::DeliverPolicy::All,
+                    ..Default::default()
+                },
+            )
+            .await?;
+        Ok(consumer)
+    }
+
     /// Create or get the durable consumer for catalogue command ingestion.
     pub async fn catalogue_consumer(&self) -> Result<PullConsumer, async_nats::Error> {
         let stream = self.jetstream.get_stream("CATALOGUE").await?;

@@ -40,12 +40,12 @@ pub async fn process_stats(State(state): State<AppState>) -> impl IntoResponse {
     }
 }
 
-/// GET /api/processes/:trace_id — get process detail (with tasks, metrics, logs, artifact count).
+/// GET /api/processes/:process_id — get process detail (with tasks, metrics, logs, artifact count).
 pub async fn get_process(
     State(state): State<AppState>,
-    Path(trace_id): Path<String>,
+    Path(process_id): Path<String>,
 ) -> impl IntoResponse {
-    match queries::get_process_detail(&state.db, &trace_id).await {
+    match queries::get_process_detail(&state.db, &process_id).await {
         Ok(Some(detail)) => Json(detail).into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
         Err(e) => {
@@ -55,13 +55,13 @@ pub async fn get_process(
     }
 }
 
-/// PUT /api/processes/:trace_id — partial update of a process.
+/// PUT /api/processes/:process_id — partial update of a process.
 pub async fn update_process(
     State(state): State<AppState>,
-    Path(trace_id): Path<String>,
+    Path(process_id): Path<String>,
     Json(body): Json<ProcessUpdateRequest>,
 ) -> impl IntoResponse {
-    match queries::update_process(&state.db, &trace_id, &body).await {
+    match queries::update_process(&state.db, &process_id, &body).await {
         Ok(Some(process)) => Json(process).into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
         Err(e) => {
@@ -77,14 +77,14 @@ pub struct MetricQueryParams {
     pub limit: Option<i64>,
 }
 
-/// GET /api/processes/:trace_id/metrics — list metrics for a process.
+/// GET /api/processes/:process_id/metrics — list metrics for a process.
 pub async fn get_process_metrics(
     State(state): State<AppState>,
-    Path(trace_id): Path<String>,
+    Path(process_id): Path<String>,
     Query(params): Query<MetricQueryParams>,
 ) -> impl IntoResponse {
     let limit = params.limit.unwrap_or(500);
-    match queries::list_metrics(&state.db, &trace_id, params.key.as_deref(), limit).await {
+    match queries::list_metrics(&state.db, &process_id, params.key.as_deref(), limit).await {
         Ok(metrics) => Json(metrics).into_response(),
         Err(e) => {
             tracing::error!("process metrics: {e}");
@@ -93,13 +93,13 @@ pub async fn get_process_metrics(
     }
 }
 
-/// GET /api/processes/:trace_id/logs — list logs for a process with filter/pagination.
+/// GET /api/processes/:process_id/logs — list logs for a process with filter/pagination.
 pub async fn get_process_logs(
     State(state): State<AppState>,
-    Path(trace_id): Path<String>,
+    Path(process_id): Path<String>,
     params: QueryParams,
 ) -> impl IntoResponse {
-    match queries::list_logs(&state.db, &trace_id, &params).await {
+    match queries::list_logs(&state.db, &process_id, &params).await {
         Ok(response) => Json(response).into_response(),
         Err(e) => {
             tracing::warn!("process logs: {e}");
@@ -112,12 +112,12 @@ pub async fn get_process_logs(
     }
 }
 
-/// GET /api/processes/:trace_id/tasks — list tasks for a process.
+/// GET /api/processes/:process_id/tasks — list tasks for a process.
 pub async fn get_process_tasks(
     State(state): State<AppState>,
-    Path(trace_id): Path<String>,
+    Path(process_id): Path<String>,
 ) -> impl IntoResponse {
-    match queries::list_process_tasks(&state.db, &trace_id).await {
+    match queries::list_process_tasks(&state.db, &process_id).await {
         Ok(tasks) => Json(tasks).into_response(),
         Err(e) => {
             tracing::error!("process tasks: {e}");
@@ -126,13 +126,13 @@ pub async fn get_process_tasks(
     }
 }
 
-/// GET /api/processes/:trace_id/artifacts — list catalogue entries for a process.
+/// GET /api/processes/:process_id/artifacts — list catalogue entries for a process.
 pub async fn get_process_artifacts(
     State(state): State<AppState>,
-    Path(trace_id): Path<String>,
+    Path(process_id): Path<String>,
     params: QueryParams,
 ) -> impl IntoResponse {
-    match queries::list_process_artifacts(&state.db, &trace_id, &params).await {
+    match queries::list_process_artifacts(&state.db, &process_id, &params).await {
         Ok(response) => Json(response).into_response(),
         Err(e) => {
             tracing::warn!("process artifacts: {e}");

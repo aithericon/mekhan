@@ -14,8 +14,20 @@ use uuid::Uuid;
 use async_nats::jetstream;
 use async_nats::jetstream::stream::Config as StreamConfig;
 
+use std::sync::Arc;
+
+use mekhan_service::catalogue::subscriptions::SubscriptionManager;
 use mekhan_service::lifecycle::start_lifecycle_listener;
 use mekhan_service::nats::MekhanNats;
+
+/// Create a SubscriptionManager for tests (required by start_lifecycle_listener).
+async fn test_subscription_manager(nats: &MekhanNats) -> Arc<SubscriptionManager> {
+    let kv = nats
+        .ensure_catalogue_subscriptions_kv()
+        .await
+        .expect("create test KV bucket");
+    Arc::new(SubscriptionManager::new(kv, nats.jetstream().clone()))
+}
 
 /// Ensure PETRI_GLOBAL stream exists on the test NATS instance.
 /// The lifecycle consumer requires this stream.
@@ -129,10 +141,11 @@ async fn net_completed_updates_instance_status() {
     ensure_petri_global_stream(nats.jetstream()).await;
 
     // Start lifecycle listener in background
+    let sub_mgr = test_subscription_manager(&nats).await;
     let listener_nats = nats.clone();
     let listener_db = db.clone();
     tokio::spawn(async move {
-        start_lifecycle_listener(listener_nats, listener_db).await;
+        start_lifecycle_listener(listener_nats, listener_db, sub_mgr).await;
     });
 
     // Give the listener a moment to subscribe
@@ -169,10 +182,11 @@ async fn net_cancelled_updates_instance_status() {
 
     ensure_petri_global_stream(nats.jetstream()).await;
 
+    let sub_mgr = test_subscription_manager(&nats).await;
     let listener_nats = nats.clone();
     let listener_db = db.clone();
     tokio::spawn(async move {
-        start_lifecycle_listener(listener_nats, listener_db).await;
+        start_lifecycle_listener(listener_nats, listener_db, sub_mgr).await;
     });
 
     tokio::time::sleep(Duration::from_millis(200)).await;
@@ -196,10 +210,11 @@ async fn completed_event_is_idempotent() {
 
     ensure_petri_global_stream(nats.jetstream()).await;
 
+    let sub_mgr = test_subscription_manager(&nats).await;
     let listener_nats = nats.clone();
     let listener_db = db.clone();
     tokio::spawn(async move {
-        start_lifecycle_listener(listener_nats, listener_db).await;
+        start_lifecycle_listener(listener_nats, listener_db, sub_mgr).await;
     });
 
     tokio::time::sleep(Duration::from_millis(200)).await;
@@ -230,10 +245,11 @@ async fn already_completed_instance_ignores_cancel() {
 
     ensure_petri_global_stream(nats.jetstream()).await;
 
+    let sub_mgr = test_subscription_manager(&nats).await;
     let listener_nats = nats.clone();
     let listener_db = db.clone();
     tokio::spawn(async move {
-        start_lifecycle_listener(listener_nats, listener_db).await;
+        start_lifecycle_listener(listener_nats, listener_db, sub_mgr).await;
     });
 
     tokio::time::sleep(Duration::from_millis(200)).await;

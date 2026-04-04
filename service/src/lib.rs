@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 pub mod catalogue;
+pub mod causality;
 pub mod compiler;
 
 pub mod config;
@@ -116,24 +117,33 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/processes", get(process::handlers::list_processes))
         .route("/api/processes/stats", get(process::handlers::process_stats))
         .route(
-            "/api/processes/{trace_id}",
+            "/api/processes/{process_id}",
             get(process::handlers::get_process).put(process::handlers::update_process),
         )
         .route(
-            "/api/processes/{trace_id}/metrics",
+            "/api/processes/{process_id}/metrics",
             get(process::handlers::get_process_metrics),
         )
         .route(
-            "/api/processes/{trace_id}/logs",
+            "/api/processes/{process_id}/logs",
             get(process::handlers::get_process_logs),
         )
         .route(
-            "/api/processes/{trace_id}/tasks",
+            "/api/processes/{process_id}/tasks",
             get(process::handlers::get_process_tasks),
         )
         .route(
-            "/api/processes/{trace_id}/artifacts",
+            "/api/processes/{process_id}/artifacts",
             get(process::handlers::get_process_artifacts),
+        )
+        // Provenance endpoints (causality)
+        .route(
+            "/api/provenance/{net_id}/{token_id}",
+            get(causality::routes::token_provenance),
+        )
+        .route(
+            "/api/provenance/link/{correlation_id}",
+            get(causality::routes::cross_link),
         )
         // Task endpoints (native)
         .route("/api/tasks", get(process::handlers::list_tasks))

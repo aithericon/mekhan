@@ -18,7 +18,7 @@ pub struct CatalogueEntry {
     pub correlation_id: Option<String>,
     pub process_id: Option<String>,
     pub process_step: Option<String>,
-    pub trace_id: Option<String>,
+    pub source_event_sequence: Option<i64>,
     pub file_metadata: serde_json::Value,
     pub user_metadata: serde_json::Value,
     pub created_at: DateTime<Utc>,
@@ -96,7 +96,5 @@ pub struct CatalogueRegisterCommand {
     pub process_id: Option<String>,
     #[serde(default)]
     pub process_step: Option<String>,
-    #[serde(default)]
-    pub trace_id: Option<String>,
     pub created_at: DateTime<Utc>,
 }

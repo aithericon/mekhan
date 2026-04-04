@@ -75,7 +75,7 @@
 	let tasks = $state<HpiTask[]>([]);
 	let tasksLoading = $state(false);
 
-	const traceId = $derived(($page.params as Record<string, string>).trace_id);
+	const processId = $derived(($page.params as Record<string, string>).process_id);
 
 	// ── Status / kind colours ──────────────────────────────────────────────────
 	const statusColors: Record<string, string> = {
@@ -175,7 +175,7 @@
 		loading = true;
 		error = null;
 		try {
-			detail = await getProcess(traceId);
+			detail = await getProcess(processId);
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load process';
 		} finally {
@@ -186,7 +186,7 @@
 	async function loadArtifacts() {
 		artifactsLoading = true;
 		try {
-			const res = await getProcessArtifacts(traceId, { page: artifactsPage, page_size: 20 });
+			const res = await getProcessArtifacts(processId, { page: artifactsPage, page_size: 20 });
 			artifacts = res.items;
 			artifactsTotal = res.total;
 			artifactsTotalPages = res.total_pages;
@@ -201,7 +201,7 @@
 	async function loadMetrics() {
 		metricsLoading = true;
 		try {
-			metrics = await getProcessMetrics(traceId, { limit: 500 });
+			metrics = await getProcessMetrics(processId, { limit: 500 });
 		} catch {
 			metrics = [];
 		} finally {
@@ -212,7 +212,7 @@
 	async function loadLogs() {
 		logsLoading = true;
 		try {
-			const res = await getProcessLogs(traceId, {
+			const res = await getProcessLogs(processId, {
 				level: logsLevelFilter === 'all' ? undefined : logsLevelFilter,
 				page: logsPage,
 				page_size: 50
@@ -231,7 +231,7 @@
 	async function loadTasks() {
 		tasksLoading = true;
 		try {
-			tasks = await getProcessTasks(traceId);
+			tasks = await getProcessTasks(processId);
 		} catch {
 			tasks = [];
 		} finally {
@@ -243,7 +243,7 @@
 	async function saveName() {
 		if (!detail) return;
 		try {
-			await updateProcess(traceId, { name: editNameValue });
+			await updateProcess(processId, { name: editNameValue });
 			detail.name = editNameValue;
 			editingName = false;
 		} catch {
@@ -271,14 +271,14 @@
 
 	// ── Effects ────────────────────────────────────────────────────────────────
 	$effect(() => {
-		traceId; // subscribe
+		processId; // subscribe
 		loadDetail();
 	});
 
 	// Load tab data when switching tabs
 	$effect(() => {
 		const tab = activeTab;
-		const _tid = traceId;
+		const _tid = processId;
 		if (tab === 'artifacts') loadArtifacts();
 		else if (tab === 'metrics') loadMetrics();
 		else if (tab === 'logs') loadLogs();
@@ -378,7 +378,7 @@
 					{/if}
 				</div>
 
-				<p class="font-mono text-xs text-muted-foreground mb-1">{detail.trace_id}</p>
+				<p class="font-mono text-xs text-muted-foreground mb-1">{detail.process_id}</p>
 				<div class="flex items-center gap-4 text-xs text-muted-foreground">
 					<span>Created {formatDate(detail.created_at)}</span>
 					<span>Updated {relativeTime(detail.updated_at)}</span>

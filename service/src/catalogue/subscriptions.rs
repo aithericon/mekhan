@@ -398,7 +398,6 @@ fn matches_filters(sub: &CatalogueSubscription, entry: &CatalogueEntry) -> bool 
                 "source_place" => entry.source_place.as_deref(),
                 "process_id" => entry.process_id.as_deref(),
                 "process_step" => entry.process_step.as_deref(),
-                "trace_id" => entry.trace_id.as_deref(),
                 unknown => {
                     tracing::debug!(
                         subscription_id = %sub.subscription_id,
@@ -481,7 +480,7 @@ pub fn command_to_entry(cmd: &CatalogueRegisterCommand) -> CatalogueEntry {
         correlation_id: cmd.correlation_id.clone(),
         process_id: cmd.process_id.clone(),
         process_step: cmd.process_step.clone(),
-        trace_id: cmd.trace_id.clone(),
+        source_event_sequence: None,
         file_metadata: cmd.file_metadata.clone().unwrap_or_default(),
         user_metadata: serde_json::to_value(&cmd.user_metadata).unwrap_or_default(),
         created_at: cmd.created_at,

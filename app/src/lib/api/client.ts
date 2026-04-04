@@ -201,33 +201,33 @@ export async function getProcessStats(): Promise<ProcessStats> {
 	return request('/processes/stats');
 }
 
-export async function getProcess(traceId: string): Promise<ProcessDetail> {
-	return request(`/processes/${traceId}`);
+export async function getProcess(processId: string): Promise<ProcessDetail> {
+	return request(`/processes/${processId}`);
 }
 
 export async function updateProcess(
-	traceId: string,
+	processId: string,
 	data: { name?: string; kind?: string; status?: string; owner?: string }
 ): Promise<HpiProcess> {
-	return request(`/processes/${traceId}`, {
+	return request(`/processes/${processId}`, {
 		method: 'PUT',
 		body: JSON.stringify(data)
 	});
 }
 
 export async function getProcessMetrics(
-	traceId: string,
+	processId: string,
 	params?: { key?: string; limit?: number }
 ): Promise<HpiMetric[]> {
 	const qs = new URLSearchParams();
 	if (params?.key) qs.set('key', params.key);
 	if (params?.limit) qs.set('limit', String(params.limit));
 	const query = qs.toString();
-	return request(`/processes/${traceId}/metrics${query ? `?${query}` : ''}`);
+	return request(`/processes/${processId}/metrics${query ? `?${query}` : ''}`);
 }
 
 export async function getProcessLogs(
-	traceId: string,
+	processId: string,
 	params?: { level?: string; source?: string; search?: string; page?: number; page_size?: number }
 ): Promise<PaginatedProcessResponse<HpiLog>> {
 	const qs = new URLSearchParams();
@@ -237,22 +237,22 @@ export async function getProcessLogs(
 	if (params?.page !== undefined) qs.set('page', String(params.page));
 	if (params?.page_size) qs.set('page_size', String(params.page_size));
 	const query = qs.toString();
-	return request(`/processes/${traceId}/logs${query ? `?${query}` : ''}`);
+	return request(`/processes/${processId}/logs${query ? `?${query}` : ''}`);
 }
 
-export async function getProcessTasks(traceId: string): Promise<HpiTask[]> {
-	return request(`/processes/${traceId}/tasks`);
+export async function getProcessTasks(processId: string): Promise<HpiTask[]> {
+	return request(`/processes/${processId}/tasks`);
 }
 
 export async function getProcessArtifacts(
-	traceId: string,
+	processId: string,
 	params?: { page?: number; page_size?: number }
 ): Promise<PaginatedProcessResponse<CatalogueEntry>> {
 	const qs = new URLSearchParams();
 	if (params?.page !== undefined) qs.set('page', String(params.page));
 	if (params?.page_size) qs.set('page_size', String(params.page_size));
 	const query = qs.toString();
-	return request(`/processes/${traceId}/artifacts${query ? `?${query}` : ''}`);
+	return request(`/processes/${processId}/artifacts${query ? `?${query}` : ''}`);
 }
 
 // Catalogue endpoints

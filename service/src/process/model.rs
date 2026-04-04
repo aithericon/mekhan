@@ -3,12 +3,11 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct HpiProcess {
-    pub trace_id: String,
+    pub process_id: String,
     pub name: Option<String>,
     pub kind: Option<String>,
     pub status: String,
     pub owner: Option<String>,
-    pub hpi_process_id: Option<String>,
     pub config: serde_json::Value,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -17,8 +16,7 @@ pub struct HpiProcess {
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct HpiTask {
     pub id: String,
-    pub trace_id: String,
-    pub span_id: Option<String>,
+    pub process_id: String,
     pub title: String,
     pub status: String,
     pub assignee: Option<String>,
@@ -29,8 +27,7 @@ pub struct HpiTask {
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct HpiMetric {
-    pub trace_id: String,
-    pub span_id: Option<String>,
+    pub process_id: String,
     pub key: String,
     pub value: f64,
     pub timestamp: DateTime<Utc>,
@@ -39,8 +36,7 @@ pub struct HpiMetric {
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct HpiLog {
     pub id: i64,
-    pub trace_id: String,
-    pub span_id: Option<String>,
+    pub process_id: String,
     pub level: String,
     pub source: Option<String>,
     pub message: String,
@@ -148,8 +144,8 @@ pub struct ProcessStartedMetadata {
 
 #[derive(Debug, Deserialize)]
 pub struct MetricCommand {
-    pub trace_id: String,
-    pub span_id: Option<String>,
+    #[serde(alias = "trace_id")]
+    pub process_id: String,
     pub key: String,
     pub value: f64,
     pub timestamp: Option<String>,
@@ -157,8 +153,8 @@ pub struct MetricCommand {
 
 #[derive(Debug, Deserialize)]
 pub struct LogCommand {
-    pub trace_id: String,
-    pub span_id: Option<String>,
+    #[serde(alias = "trace_id")]
+    pub process_id: String,
     pub level: Option<String>,
     pub source: Option<String>,
     pub message: String,

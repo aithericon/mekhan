@@ -19,6 +19,7 @@ use tower::ServiceExt;
 use uuid::Uuid;
 
 use mekhan_service::compiler::compile_to_air;
+use mekhan_service::catalogue::subscriptions::SubscriptionManager;
 use mekhan_service::lifecycle::start_lifecycle_listener;
 use mekhan_service::models::template::{
     Position, WorkflowEdge, WorkflowGraph, WorkflowNode, WorkflowNodeData,
@@ -235,10 +236,12 @@ async fn lifecycle_listener_retries_then_succeeds() {
     ensure_petri_global_stream(nats.jetstream()).await;
 
     // Start lifecycle listener
+    let kv = nats.ensure_catalogue_subscriptions_kv().await.expect("create KV");
+    let sub_mgr = std::sync::Arc::new(SubscriptionManager::new(kv, nats.jetstream().clone()));
     let listener_nats = nats.clone();
     let listener_db = db.clone();
     tokio::spawn(async move {
-        start_lifecycle_listener(listener_nats, listener_db).await;
+        start_lifecycle_listener(listener_nats, listener_db, sub_mgr).await;
     });
     tokio::time::sleep(Duration::from_millis(200)).await;
 

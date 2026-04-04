@@ -1,10 +1,9 @@
 export interface HpiProcess {
-	trace_id: string;
+	process_id: string;
 	name: string | null;
 	kind: string | null;
 	status: string;
 	owner: string | null;
-	hpi_process_id: string | null;
 	config: Record<string, unknown>;
 	created_at: string;
 	updated_at: string;
@@ -12,8 +11,7 @@ export interface HpiProcess {
 
 export interface HpiTask {
 	id: string;
-	trace_id: string;
-	span_id: string | null;
+	process_id: string;
 	title: string;
 	status: string;
 	assignee: string | null;
@@ -23,8 +21,7 @@ export interface HpiTask {
 }
 
 export interface HpiMetric {
-	trace_id: string;
-	span_id: string | null;
+	process_id: string;
 	key: string;
 	value: number;
 	timestamp: string;
@@ -32,8 +29,7 @@ export interface HpiMetric {
 
 export interface HpiLog {
 	id: number;
-	trace_id: string;
-	span_id: string | null;
+	process_id: string;
 	level: string;
 	source: string | null;
 	message: string;

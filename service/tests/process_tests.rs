@@ -21,18 +21,18 @@ async fn body_json(body: Body) -> Value {
 /// Seed a process directly into the database.
 async fn seed_process(
     db: &sqlx::PgPool,
-    trace_id: &str,
+    process_id: &str,
     name: Option<&str>,
     kind: Option<&str>,
     status: &str,
 ) {
     sqlx::query(
         r#"
-        INSERT INTO hpi_processes (trace_id, name, kind, status, config)
+        INSERT INTO hpi_processes (process_id, name, kind, status, config)
         VALUES ($1, $2, $3, $4, '{}')
         "#,
     )
-    .bind(trace_id)
+    .bind(process_id)
     .bind(name)
     .bind(kind)
     .bind(status)
@@ -45,18 +45,18 @@ async fn seed_process(
 async fn seed_task(
     db: &sqlx::PgPool,
     id: &str,
-    trace_id: &str,
+    process_id: &str,
     title: &str,
     status: &str,
 ) {
     sqlx::query(
         r#"
-        INSERT INTO hpi_tasks (id, trace_id, title, status, detail)
+        INSERT INTO hpi_tasks (id, process_id, title, status, detail)
         VALUES ($1, $2, $3, $4, '{}')
         "#,
     )
     .bind(id)
-    .bind(trace_id)
+    .bind(process_id)
     .bind(title)
     .bind(status)
     .execute(db)
@@ -67,14 +67,14 @@ async fn seed_task(
 /// Seed a metric data point.
 async fn seed_metric(
     db: &sqlx::PgPool,
-    trace_id: &str,
+    process_id: &str,
     key: &str,
     value: f64,
 ) {
     sqlx::query(
-        "INSERT INTO hpi_metrics (trace_id, key, value) VALUES ($1, $2, $3)",
+        "INSERT INTO hpi_metrics (process_id, key, value) VALUES ($1, $2, $3)",
     )
-    .bind(trace_id)
+    .bind(process_id)
     .bind(key)
     .bind(value)
     .execute(db)
@@ -85,15 +85,15 @@ async fn seed_metric(
 /// Seed a log entry.
 async fn seed_log(
     db: &sqlx::PgPool,
-    trace_id: &str,
+    process_id: &str,
     level: &str,
     source: &str,
     message: &str,
 ) {
     sqlx::query(
-        "INSERT INTO hpi_logs (trace_id, level, source, message, detail) VALUES ($1, $2, $3, $4, '{}')",
+        "INSERT INTO hpi_logs (process_id, level, source, message, detail) VALUES ($1, $2, $3, $4, '{}')",
     )
-    .bind(trace_id)
+    .bind(process_id)
     .bind(level)
     .bind(source)
     .bind(message)
@@ -102,18 +102,18 @@ async fn seed_log(
     .expect("seed log");
 }
 
-/// Seed a catalogue entry with trace_id for joining.
+/// Seed a catalogue entry with process_id for joining.
 async fn seed_artifact(
     db: &sqlx::PgPool,
     id: &str,
     execution_id: &str,
     name: &str,
-    trace_id: &str,
+    process_id: &str,
 ) {
     sqlx::query(
         r#"
         INSERT INTO catalogue_entries
-            (id, execution_id, job_id, name, category, filename, trace_id, file_metadata, user_metadata)
+            (id, execution_id, job_id, name, category, filename, process_id, file_metadata, user_metadata)
         VALUES ($1, $2, $3, $4, 'model', $5, $6, '{}', '{}')
         "#,
     )
@@ -122,10 +122,10 @@ async fn seed_artifact(
     .bind(format!("{execution_id}:job"))
     .bind(name)
     .bind(format!("{name}.json"))
-    .bind(trace_id)
+    .bind(process_id)
     .execute(db)
     .await
-    .expect("seed catalogue entry with trace_id");
+    .expect("seed catalogue entry with process_id");
 }
 
 // ---------------------------------------------------------------------------
@@ -264,7 +264,7 @@ async fn process_search() {
 }
 
 // ---------------------------------------------------------------------------
-// GET /api/processes/{trace_id} -> 404
+// GET /api/processes/{process_id} -> 404
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -285,7 +285,7 @@ async fn process_get_not_found() {
 }
 
 // ---------------------------------------------------------------------------
-// GET /api/processes/{trace_id} -> detail with tasks, metrics, logs
+// GET /api/processes/{process_id} -> detail with tasks, metrics, logs
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -312,7 +312,7 @@ async fn process_get_detail() {
 
     assert_eq!(resp.status(), StatusCode::OK);
     let body = body_json(resp.into_body()).await;
-    assert_eq!(body["trace_id"], tid);
+    assert_eq!(body["process_id"], tid);
     assert_eq!(body["name"], "Detail Test");
     assert_eq!(body["tasks"].as_array().unwrap().len(), 1);
     assert_eq!(body["recent_metrics"].as_array().unwrap().len(), 2);
@@ -321,7 +321,7 @@ async fn process_get_detail() {
 }
 
 // ---------------------------------------------------------------------------
-// PUT /api/processes/{trace_id} -> update name
+// PUT /api/processes/{process_id} -> update name
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -387,7 +387,7 @@ async fn process_stats() {
 }
 
 // ---------------------------------------------------------------------------
-// GET /api/processes/{trace_id}/metrics
+// GET /api/processes/{process_id}/metrics
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -434,7 +434,7 @@ async fn process_metrics() {
 }
 
 // ---------------------------------------------------------------------------
-// GET /api/processes/{trace_id}/logs
+// GET /api/processes/{process_id}/logs
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -482,7 +482,7 @@ async fn process_logs() {
 }
 
 // ---------------------------------------------------------------------------
-// GET /api/processes/{trace_id}/tasks
+// GET /api/processes/{process_id}/tasks
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -510,7 +510,7 @@ async fn process_tasks() {
 }
 
 // ---------------------------------------------------------------------------
-// GET /api/processes/{trace_id}/artifacts
+// GET /api/processes/{process_id}/artifacts
 // ---------------------------------------------------------------------------
 
 #[tokio::test]

@@ -13,8 +13,7 @@ const PROCESS_FILTER_FIELDS: &[&str] = &[
     "kind",
     "owner",
     "name",
-    "trace_id",
-    "hpi_process_id",
+    "process_id",
     "created_at",
     "updated_at",
 ];
@@ -29,7 +28,7 @@ const PROCESS_SORT_FIELDS: &[&str] = &[
 
 /// Allowed filter fields for hpi_tasks (whitelist).
 const TASK_FILTER_FIELDS: &[&str] = &[
-    "trace_id",
+    "process_id",
     "status",
     "assignee",
     "title",
@@ -48,7 +47,7 @@ const TASK_SORT_FIELDS: &[&str] = &[
 
 /// Allowed filter fields for hpi_logs (whitelist).
 const LOG_FILTER_FIELDS: &[&str] = &[
-    "trace_id",
+    "process_id",
     "level",
     "source",
     "timestamp",
@@ -131,7 +130,7 @@ fn append_process_where(
         qb.push_bind(pattern.clone());
         qb.push(" OR kind ILIKE ");
         qb.push_bind(pattern.clone());
-        qb.push(" OR trace_id ILIKE ");
+        qb.push(" OR process_id ILIKE ");
         qb.push_bind(pattern);
         qb.push(")");
     }
@@ -139,15 +138,15 @@ fn append_process_where(
     Ok(())
 }
 
-/// Get a single process by trace_id.
+/// Get a single process by process_id.
 pub async fn get_process(
     pool: &PgPool,
-    trace_id: &str,
+    process_id: &str,
 ) -> Result<Option<HpiProcess>, sqlx::Error> {
     sqlx::query_as::<_, HpiProcess>(
-        "SELECT * FROM hpi_processes WHERE trace_id = $1",
+        "SELECT * FROM hpi_processes WHERE process_id = $1",
     )
-    .bind(trace_id)
+    .bind(process_id)
     .fetch_optional(pool)
     .await
 }
@@ -155,38 +154,38 @@ pub async fn get_process(
 /// Get full process detail: process + tasks + recent metrics + recent logs + artifact count.
 pub async fn get_process_detail(
     pool: &PgPool,
-    trace_id: &str,
+    process_id: &str,
 ) -> Result<Option<ProcessDetail>, sqlx::Error> {
-    let process = match get_process(pool, trace_id).await? {
+    let process = match get_process(pool, process_id).await? {
         Some(p) => p,
         None => return Ok(None),
     };
 
     let tasks = sqlx::query_as::<_, HpiTask>(
-        "SELECT * FROM hpi_tasks WHERE trace_id = $1 ORDER BY created_at DESC",
+        "SELECT * FROM hpi_tasks WHERE process_id = $1 ORDER BY created_at DESC",
     )
-    .bind(trace_id)
+    .bind(process_id)
     .fetch_all(pool)
     .await?;
 
     let recent_metrics = sqlx::query_as::<_, HpiMetric>(
-        "SELECT * FROM hpi_metrics WHERE trace_id = $1 ORDER BY timestamp DESC LIMIT 100",
+        "SELECT * FROM hpi_metrics WHERE process_id = $1 ORDER BY timestamp DESC LIMIT 100",
     )
-    .bind(trace_id)
+    .bind(process_id)
     .fetch_all(pool)
     .await?;
 
     let recent_logs = sqlx::query_as::<_, HpiLog>(
-        "SELECT * FROM hpi_logs WHERE trace_id = $1 ORDER BY timestamp DESC LIMIT 50",
+        "SELECT * FROM hpi_logs WHERE process_id = $1 ORDER BY timestamp DESC LIMIT 50",
     )
-    .bind(trace_id)
+    .bind(process_id)
     .fetch_all(pool)
     .await?;
 
     let artifact_count: (i64,) = sqlx::query_as(
-        "SELECT COALESCE(COUNT(*), 0)::bigint FROM catalogue_entries WHERE trace_id = $1",
+        "SELECT COALESCE(COUNT(*), 0)::bigint FROM catalogue_entries WHERE process_id = $1",
     )
-    .bind(trace_id)
+    .bind(process_id)
     .fetch_one(pool)
     .await?;
 
@@ -328,26 +327,26 @@ pub async fn update_task_status(
 /// List metrics for a process, optionally filtered by key, time-ordered.
 pub async fn list_metrics(
     pool: &PgPool,
-    trace_id: &str,
+    process_id: &str,
     key_filter: Option<&str>,
     limit: i64,
 ) -> Result<Vec<HpiMetric>, sqlx::Error> {
     if let Some(key) = key_filter {
         sqlx::query_as::<_, HpiMetric>(
-            "SELECT * FROM hpi_metrics WHERE trace_id = $1 AND key = $2 \
+            "SELECT * FROM hpi_metrics WHERE process_id = $1 AND key = $2 \
              ORDER BY timestamp ASC LIMIT $3",
         )
-        .bind(trace_id)
+        .bind(process_id)
         .bind(key)
         .bind(limit)
         .fetch_all(pool)
         .await
     } else {
         sqlx::query_as::<_, HpiMetric>(
-            "SELECT * FROM hpi_metrics WHERE trace_id = $1 \
+            "SELECT * FROM hpi_metrics WHERE process_id = $1 \
              ORDER BY timestamp ASC LIMIT $2",
         )
-        .bind(trace_id)
+        .bind(process_id)
         .bind(limit)
         .fetch_all(pool)
         .await
@@ -357,13 +356,13 @@ pub async fn list_metrics(
 /// List logs for a process with full filter/sort/pagination support.
 pub async fn list_logs(
     pool: &PgPool,
-    trace_id: &str,
+    process_id: &str,
     params: &QueryParams,
 ) -> Result<Paginated<HpiLog>, QueryError> {
     // -- COUNT query --
     let count = {
-        let mut qb = QueryBuilder::<Postgres>::new("SELECT COUNT(*)::bigint FROM hpi_logs WHERE trace_id = ");
-        qb.push_bind(trace_id.to_string());
+        let mut qb = QueryBuilder::<Postgres>::new("SELECT COUNT(*)::bigint FROM hpi_logs WHERE process_id = ");
+        qb.push_bind(process_id.to_string());
         append_log_where(&mut qb, params)?;
         let row: (i64,) = qb.build_query_as().fetch_one(pool).await?;
         row.0
@@ -371,8 +370,8 @@ pub async fn list_logs(
 
     // -- SELECT query --
     let entries = {
-        let mut qb = QueryBuilder::<Postgres>::new("SELECT * FROM hpi_logs WHERE trace_id = ");
-        qb.push_bind(trace_id.to_string());
+        let mut qb = QueryBuilder::<Postgres>::new("SELECT * FROM hpi_logs WHERE process_id = ");
+        qb.push_bind(process_id.to_string());
         append_log_where(&mut qb, params)?;
 
         if let Some(ref sort) = params.sort {
@@ -391,7 +390,7 @@ pub async fn list_logs(
     Ok(Paginated::new(entries, count, &params.page))
 }
 
-/// Append additional WHERE conditions for log queries (trace_id is already bound).
+/// Append additional WHERE conditions for log queries (process_id is already bound).
 fn append_log_where(
     qb: &mut QueryBuilder<'_, Postgres>,
     params: &QueryParams,
@@ -445,7 +444,7 @@ pub async fn process_stats(pool: &PgPool) -> Result<ProcessStats, sqlx::Error> {
 /// Partial update of a process.
 pub async fn update_process(
     pool: &PgPool,
-    trace_id: &str,
+    process_id: &str,
     update: &ProcessUpdateRequest,
 ) -> Result<Option<HpiProcess>, sqlx::Error> {
     sqlx::query_as::<_, HpiProcess>(
@@ -455,9 +454,9 @@ pub async fn update_process(
          status = COALESCE($4, status), \
          owner = COALESCE($5, owner), \
          updated_at = NOW() \
-         WHERE trace_id = $1 RETURNING *",
+         WHERE process_id = $1 RETURNING *",
     )
-    .bind(trace_id)
+    .bind(process_id)
     .bind(&update.name)
     .bind(&update.kind)
     .bind(&update.status)
@@ -469,7 +468,7 @@ pub async fn update_process(
 /// List catalogue entries (artifacts) for a process.
 pub async fn list_process_artifacts(
     pool: &PgPool,
-    trace_id: &str,
+    process_id: &str,
     params: &QueryParams,
 ) -> Result<Paginated<CatalogueEntry>, QueryError> {
     // Reuse catalogue's allowed fields for filter/sort
@@ -483,9 +482,9 @@ pub async fn list_process_artifacts(
     // -- COUNT query --
     let count = {
         let mut qb = QueryBuilder::<Postgres>::new(
-            "SELECT COUNT(*)::bigint FROM catalogue_entries WHERE trace_id = ",
+            "SELECT COUNT(*)::bigint FROM catalogue_entries WHERE process_id = ",
         );
-        qb.push_bind(trace_id.to_string());
+        qb.push_bind(process_id.to_string());
         if let Some(ref filter) = params.filter {
             if !filter.is_empty() {
                 qb.push(" AND ");
@@ -499,9 +498,9 @@ pub async fn list_process_artifacts(
     // -- SELECT query --
     let entries = {
         let mut qb = QueryBuilder::<Postgres>::new(
-            "SELECT * FROM catalogue_entries WHERE trace_id = ",
+            "SELECT * FROM catalogue_entries WHERE process_id = ",
         );
-        qb.push_bind(trace_id.to_string());
+        qb.push_bind(process_id.to_string());
         if let Some(ref filter) = params.filter {
             if !filter.is_empty() {
                 qb.push(" AND ");
@@ -525,15 +524,15 @@ pub async fn list_process_artifacts(
     Ok(Paginated::new(entries, count, &params.page))
 }
 
-/// List tasks for a specific process (by trace_id).
+/// List tasks for a specific process (by process_id).
 pub async fn list_process_tasks(
     pool: &PgPool,
-    trace_id: &str,
+    process_id: &str,
 ) -> Result<Vec<HpiTask>, sqlx::Error> {
     sqlx::query_as::<_, HpiTask>(
-        "SELECT * FROM hpi_tasks WHERE trace_id = $1 ORDER BY created_at DESC",
+        "SELECT * FROM hpi_tasks WHERE process_id = $1 ORDER BY created_at DESC",
     )
-    .bind(trace_id)
+    .bind(process_id)
     .fetch_all(pool)
     .await
 }

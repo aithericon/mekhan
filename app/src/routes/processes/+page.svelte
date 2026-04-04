@@ -75,7 +75,7 @@
 
 	function displayName(p: HpiProcess): string {
 		if (p.name) return p.name;
-		return p.trace_id.length > 16 ? p.trace_id.slice(0, 16) + '...' : p.trace_id;
+		return p.process_id.length > 16 ? p.process_id.slice(0, 16) + '...' : p.process_id;
 	}
 
 	function resetPage() { page = 0; }
@@ -261,9 +261,9 @@
 		<!-- Results -->
 		{:else}
 			<div class="space-y-2">
-				{#each processes as process (process.trace_id)}
+				{#each processes as process (process.process_id)}
 					<a
-						href="/processes/{process.trace_id}"
+						href="/processes/{process.process_id}"
 						class="block rounded-lg border border-border bg-card p-4 transition-colors hover:bg-accent/30"
 					>
 						<div class="flex items-start justify-between gap-4">
@@ -283,7 +283,7 @@
 								</div>
 
 								<div class="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
-									<span class="font-mono">{process.trace_id.slice(0, 12)}...</span>
+									<span class="font-mono">{process.process_id.slice(0, 12)}...</span>
 									{#if process.owner}
 										<span>Owner: {process.owner}</span>
 									{/if}

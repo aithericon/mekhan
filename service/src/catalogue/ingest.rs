@@ -75,12 +75,12 @@ pub async fn start_catalogue_ingest(
                 id, execution_id, job_id, name, category, filename,
                 mime_type, size_bytes, storage_path,
                 source_net, source_place, correlation_id, process_id, process_step,
-                trace_id, file_metadata, user_metadata, created_at, nats_msg_id
+                file_metadata, user_metadata, created_at, nats_msg_id
             ) VALUES (
                 $1, $2, $3, $4, $5, $6,
                 $7, $8, $9,
                 $10, $11, $12, $13, $14,
-                $15, $16, $17, $18, $19
+                $15, $16, $17, $18
             )
             ON CONFLICT (nats_msg_id) DO NOTHING
             "#,
@@ -99,7 +99,6 @@ pub async fn start_catalogue_ingest(
         .bind(&cmd.correlation_id)
         .bind(&cmd.process_id)
         .bind(&cmd.process_step)
-        .bind(&cmd.trace_id)
         .bind(&file_metadata)
         .bind(&user_metadata)
         .bind(cmd.created_at)

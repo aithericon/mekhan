@@ -113,6 +113,19 @@ async fn main() -> anyhow::Result<()> {
         process::ingest::start_log_ingest(nats_log, db_log).await;
     });
 
+    // Human task ingest (NATS HUMAN_REQUESTS → hpi_tasks)
+    let nats_task = mekhan_nats.clone();
+    let db_task = db.clone();
+    tokio::spawn(async move {
+        process::ingest::start_task_ingest(nats_task, db_task).await;
+    });
+
+    // Causality ingest (PETRI_GLOBAL domain events → causality tables)
+    tokio::spawn(mekhan_service::causality::ingest::start_causality_ingest(
+        mekhan_nats.clone(),
+        db.clone(),
+    ));
+
     let catalogue_repo = Arc::new(PgCatalogueRepository::new(db.clone()));
 
     // Spawn catalogue NATS request-reply responder

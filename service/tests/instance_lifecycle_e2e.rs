@@ -21,6 +21,7 @@ use serde_json::{json, Value};
 use tower::ServiceExt;
 use uuid::Uuid;
 
+use mekhan_service::catalogue::subscriptions::SubscriptionManager;
 use mekhan_service::lifecycle::start_lifecycle_listener;
 use mekhan_service::models::template::{
     Position, WorkflowEdge, WorkflowGraph, WorkflowNode, WorkflowNodeData,
@@ -127,9 +128,11 @@ async fn full_instance_lifecycle() {
 
     // Start lifecycle listener on the engine's NATS
     let listener_nats = MekhanNats::connect(&engine_nats_url).await.expect("nats");
+    let kv = listener_nats.ensure_catalogue_subscriptions_kv().await.expect("create KV");
+    let sub_mgr = std::sync::Arc::new(SubscriptionManager::new(kv, listener_nats.jetstream().clone()));
     let listener_db = db.clone();
     tokio::spawn(async move {
-        start_lifecycle_listener(listener_nats, listener_db).await;
+        start_lifecycle_listener(listener_nats, listener_db, sub_mgr).await;
     });
 
     // 1. Create template
