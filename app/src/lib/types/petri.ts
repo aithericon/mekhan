@@ -220,14 +220,24 @@ export type MarkingDiff = {
 export type IssueLevel = 'error' | 'warning' | 'info';
 
 export type ValidationIssue = {
+	node_id: string;
+	node_type: string;
 	level: IssueLevel;
+	code: string;
 	message: string;
-	node_id?: string;
-	node_type?: 'place' | 'transition';
+	remote_net_id?: string;
+};
+
+export type AnalysisSummary = {
+	error_count: number;
+	warning_count: number;
+	info_count: number;
 };
 
 export type AnalysisReport = {
+	is_valid: boolean;
 	issues: ValidationIssue[];
+	summary: AnalysisSummary;
 };
 
 // ---------------------------------------------------------------------------
