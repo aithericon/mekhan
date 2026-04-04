@@ -269,6 +269,7 @@ async fn process_domain_event(
             token,
             place_id,
             place_name,
+            signal_key,
             ..
         } => {
             sqlx::query(
@@ -285,61 +286,46 @@ async fn process_domain_event(
             let token_id_str = token.id.0.to_string();
             insert_event_token(db, net_id, seq, &token_id_str, "produced", &place_id.0, place_name.as_deref()).await?;
 
-            // Check if this token arrived via cross-net bridge by looking for
-            // a pending cross-link with this net as ingress. If found, copy
-            // process tags from the egress side; otherwise, self-tag as new process.
-            //
-            // We try to match via the most recent unlinked cross-link for this net.
-            // The bridge transfer message (petri.bridge.>) records the ingress_net
-            // before the TokenCreated event, so the cross-link should exist.
-            let linked = sqlx::query_scalar::<_, String>(
-                "SELECT cl.correlation_id \
-                 FROM causality_cross_links cl \
-                 WHERE cl.ingress_net = $1 AND cl.ingress_seq IS NULL \
-                 ORDER BY cl.correlation_id \
-                 LIMIT 1",
-            )
-            .bind(net_id)
-            .fetch_optional(db)
-            .await?;
-
-            if let Some(correlation_id) = linked {
-                // Cross-net arrival: update the cross-link with the ingress event seq
+            if let Some(ref sk) = signal_key {
+                // Token arrived via signal injection or bridge transfer.
+                // The signal_key links back to the originating process via cross-links.
                 sqlx::query(
-                    "UPDATE causality_cross_links SET ingress_seq = $2 \
+                    "UPDATE causality_cross_links SET ingress_net = $2, ingress_seq = $3 \
                      WHERE correlation_id = $1",
                 )
-                .bind(&correlation_id)
+                .bind(sk)
+                .bind(net_id)
                 .bind(seq)
                 .execute(db)
                 .await?;
 
-                // Copy process tags from egress tokens
-                sqlx::query(
+                // Inherit process tags from the egress side (consumed tokens at
+                // the event that produced this signal_key).
+                let copied = sqlx::query(
                     "INSERT INTO causality_process_tags (token_id, process_id) \
                      SELECT $1, pt.process_id \
                      FROM causality_cross_links cl \
                      JOIN causality_event_tokens et \
-                         ON et.net_id = cl.egress_net AND et.event_seq = cl.egress_seq AND et.role = 'produced' \
+                         ON et.net_id = cl.egress_net AND et.event_seq = cl.egress_seq AND et.role = 'consumed' \
                      JOIN causality_process_tags pt ON pt.token_id = et.token_id \
                      WHERE cl.correlation_id = $2 \
                      ON CONFLICT DO NOTHING",
                 )
                 .bind(&token_id_str)
-                .bind(&correlation_id)
+                .bind(sk)
                 .execute(db)
                 .await?;
 
-                tracing::debug!(
-                    token_id = %token_id_str,
-                    correlation_id = %correlation_id,
-                    "linked bridged token to process via cross-link",
-                );
+                if copied.rows_affected() > 0 {
+                    tracing::debug!(
+                        token_id = %token_id_str,
+                        signal_key = %sk,
+                        "inherited process tags via signal_key",
+                    );
+                }
             } else if token.created_by_event.is_none() {
-                // True seed token (from scenario initialization, no parent event).
-                // Self-tag as a new process root and auto-create an HPI process.
-                // Tokens with created_by_event = Some(_) were produced by a transition
-                // and will inherit process tags when that transition is processed.
+                // True seed token (scenario initialization — no signal, no parent event).
+                // Self-tag as process root and auto-create HPI process.
                 sqlx::query(
                     "INSERT INTO causality_process_tags (token_id, process_id) \
                      VALUES ($1, $1) \
@@ -349,7 +335,6 @@ async fn process_domain_event(
                 .execute(db)
                 .await?;
 
-                // Auto-create HPI process
                 sqlx::query(
                     "INSERT INTO hpi_processes (process_id, status, created_at, updated_at) \
                      VALUES ($1, 'active', $2, $2) \
@@ -360,9 +345,9 @@ async fn process_domain_event(
                 .execute(db)
                 .await?;
             }
-            // else: token was produced by a transition (created_by_event is set)
-            // or injected via signal — it will inherit process tags when the
-            // TransitionFired/EffectCompleted event that consumed it is processed.
+            // else: token produced by a transition (created_by_event is set) —
+            // inherits process tags via propagate_process_tags() when the
+            // TransitionFired/EffectCompleted event is processed.
         }
 
         DomainEvent::TokenBridgedOut {
