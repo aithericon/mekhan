@@ -268,6 +268,11 @@ async fn process_domain_event(
                 record_log_event(db, &consumed_ids, &read_ids, effect_result, ts).await?;
             }
 
+            // Breadcrumb: human task effect → write to hpi_tasks
+            if effect_handler_id == "human_task" {
+                record_task_event(db, &consumed_ids, &read_ids, effect_result, ts).await?;
+            }
+
             // Step breadcrumb (same as TransitionFired)
             if process_step_started.is_some() || process_step_completed.is_some() {
                 record_step_event(
@@ -378,6 +383,21 @@ async fn process_domain_event(
                         "inherited process tags via signal_key",
                     );
                 }
+
+                // If this signal_key matches a pending task, mark it completed.
+                // The signal_key for human task completion/cancellation is the
+                // task_id, set by the global_human_result_listener when it
+                // injects the result token.
+                let status = extract_task_status_from_token(&token.color);
+                sqlx::query(
+                    "UPDATE hpi_tasks SET status = $2, completed_at = $3 \
+                     WHERE id = $1 AND status = 'pending'",
+                )
+                .bind(sk)
+                .bind(&status)
+                .bind(ts)
+                .execute(db)
+                .await?;
             } else if token.created_by_event.is_none() {
                 // True seed token (scenario initialization — no signal, no parent event).
                 // Self-tag as process root and auto-create HPI process.
@@ -717,4 +737,73 @@ async fn record_log_event(
         .await?;
     }
     Ok(())
+}
+
+/// Project a human task breadcrumb into hpi_tasks.
+///
+/// Extracts task_id, title, and routing info from a `human_task`
+/// EffectCompleted event's effect_result. The task_id is used as the
+/// row PK (not the auto-generated UUID) so completion events can update
+/// it by task_id = signal_key.
+async fn record_task_event(
+    db: &PgPool,
+    consumed_ids: &[String],
+    read_ids: &[String],
+    effect_result: &serde_json::Value,
+    ts: chrono::DateTime<chrono::Utc>,
+) -> Result<(), sqlx::Error> {
+    let task_id = match effect_result.get("task_id").and_then(|v| v.as_str()) {
+        Some(t) => t,
+        None => return Ok(()),
+    };
+    let title = effect_result
+        .get("title")
+        .and_then(|v| v.as_str())
+        .unwrap_or("Untitled Task")
+        .to_string();
+
+    let process_ids = resolve_process_ids(db, consumed_ids, read_ids).await?;
+    // Attach to the first resolved process (tasks belong to exactly one process)
+    let process_id = match process_ids.first() {
+        Some(pid) => pid.clone(),
+        None => {
+            tracing::debug!(task_id = %task_id, "no process tag found for task; skipping");
+            return Ok(());
+        }
+    };
+
+    // Build detail from the whole effect_result (net_id, place, response_subject, etc.)
+    let detail = effect_result.clone();
+
+    sqlx::query(
+        "INSERT INTO hpi_tasks (id, process_id, title, status, detail, created_at) \
+         VALUES ($1, $2, $3, 'pending', $4, $5) \
+         ON CONFLICT (id) DO NOTHING",
+    )
+    .bind(task_id)
+    .bind(&process_id)
+    .bind(&title)
+    .bind(&detail)
+    .bind(ts)
+    .execute(db)
+    .await?;
+
+    tracing::debug!(
+        task_id = %task_id,
+        process_id = %process_id,
+        "projected task from human_task EffectCompleted",
+    );
+    Ok(())
+}
+
+/// Extract a completion status from a task result token.
+/// The token's `status` field ("completed", "cancelled", "failed") is set
+/// by the global_human_result_listener when injecting the result.
+fn extract_task_status_from_token(color: &petri_domain::TokenColor) -> String {
+    if let petri_domain::TokenColor::Data(v) = color {
+        if let Some(s) = v.get("status").and_then(|x| x.as_str()) {
+            return s.to_string();
+        }
+    }
+    "completed".to_string()
 }

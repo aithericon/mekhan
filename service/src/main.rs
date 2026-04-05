@@ -11,7 +11,7 @@ use mekhan_service::yjs::manager::YjsManager;
 use mekhan_service::yjs::persistence::YjsPersistence;
 use mekhan_service::catalogue::repository::PgCatalogueRepository;
 use mekhan_service::catalogue::subscriptions::SubscriptionManager;
-use mekhan_service::{build_router, process, AppState};
+use mekhan_service::{build_router, AppState};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -94,14 +94,11 @@ async fn main() -> anyhow::Result<()> {
         Arc::new(ArtifactStore::new(cfg))
     });
 
-    // Human task ingest (NATS HUMAN_REQUESTS → hpi_tasks)
-    let nats_task = mekhan_nats.clone();
-    let db_task = db.clone();
-    tokio::spawn(async move {
-        process::ingest::start_task_ingest(nats_task, db_task).await;
-    });
-
     // Causality ingest (PETRI_GLOBAL domain events → causality tables)
+    // This is the single projection path for processes, tasks, metrics, and logs.
+    // The old per-stream consumers (process.events, process.metrics, process.logs,
+    // human.request) have been removed — breadcrumbs are picked up from the
+    // event stream as EffectCompleted events.
     tokio::spawn(mekhan_service::causality::ingest::start_causality_ingest(
         mekhan_nats.clone(),
         db.clone(),
