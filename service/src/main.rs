@@ -94,25 +94,6 @@ async fn main() -> anyhow::Result<()> {
         Arc::new(ArtifactStore::new(cfg))
     });
 
-    // Process tracking ingest (NATS → Postgres)
-    let nats_proc = mekhan_nats.clone();
-    let db_proc = db.clone();
-    tokio::spawn(async move {
-        process::ingest::start_process_event_ingest(nats_proc, db_proc).await;
-    });
-
-    let nats_metric = mekhan_nats.clone();
-    let db_metric = db.clone();
-    tokio::spawn(async move {
-        process::ingest::start_metric_ingest(nats_metric, db_metric).await;
-    });
-
-    let nats_log = mekhan_nats.clone();
-    let db_log = db.clone();
-    tokio::spawn(async move {
-        process::ingest::start_log_ingest(nats_log, db_log).await;
-    });
-
     // Human task ingest (NATS HUMAN_REQUESTS → hpi_tasks)
     let nats_task = mekhan_nats.clone();
     let db_task = db.clone();
