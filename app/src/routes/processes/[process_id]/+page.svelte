@@ -35,6 +35,7 @@
 	import X from '@lucide/svelte/icons/x';
 	import ChevronLeft from '@lucide/svelte/icons/chevron-left';
 	import ChevronRight from '@lucide/svelte/icons/chevron-right';
+	import ExternalLink from '@lucide/svelte/icons/external-link';
 
 	// ── State ──────────────────────────────────────────────────────────────────
 	let detail = $state<ProcessDetail | null>(null);
@@ -648,6 +649,9 @@
 				{:else}
 					<div class="space-y-2">
 						{#each tasks as task (task.id)}
+							{@const anyTask = task as unknown as { task_id?: string; id: string; steps?: unknown[] }}
+							{@const taskId = anyTask.task_id ?? anyTask.id}
+							{@const hasSteps = Array.isArray(anyTask.steps) && anyTask.steps.length > 0}
 							<div class="rounded-lg border border-border bg-card p-4">
 								<div class="flex items-start justify-between gap-4">
 									<div class="min-w-0 flex-1">
@@ -668,13 +672,23 @@
 										</div>
 									</div>
 
-									{#if task.status === 'pending'}
-										<div class="flex shrink-0 items-center gap-1">
+									<div class="flex shrink-0 items-center gap-1">
+										<Button
+											variant="ghost"
+											size="sm"
+											href="/tasks/{taskId}"
+											class="text-muted-foreground hover:text-foreground"
+										>
+											<ExternalLink class="size-3.5 mr-1" />
+											Open
+										</Button>
+										{#if task.status === 'pending' && !hasSteps}
+											<!-- Simple task with no form — allow inline complete/cancel -->
 											<Button
 												variant="ghost"
 												size="sm"
 												class="text-green-700 hover:text-green-800 hover:bg-green-100 dark:text-green-400 dark:hover:bg-green-900"
-												onclick={() => handleCompleteTask(task.id)}
+												onclick={() => handleCompleteTask(taskId)}
 											>
 												<Check class="size-3.5 mr-1" />
 												Complete
@@ -683,13 +697,13 @@
 												variant="ghost"
 												size="sm"
 												class="text-red-700 hover:text-red-800 hover:bg-red-100 dark:text-red-400 dark:hover:bg-red-900"
-												onclick={() => handleCancelTask(task.id)}
+												onclick={() => handleCancelTask(taskId)}
 											>
 												<X class="size-3.5 mr-1" />
 												Cancel
 											</Button>
-										</div>
-									{/if}
+										{/if}
+									</div>
 								</div>
 							</div>
 						{/each}
