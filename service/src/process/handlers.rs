@@ -5,11 +5,65 @@ use axum::{
     Json,
 };
 use serde::Deserialize;
+use serde_json::{json, Value as JsonValue};
 
 use crate::query::extractor::QueryParams;
 use crate::AppState;
-use super::model::ProcessUpdateRequest;
+use super::model::{HpiTask, ProcessUpdateRequest};
 use super::queries;
+
+/// Convert a DB `HpiTask` row into the `HumanTask`-shaped JSON expected by the
+/// Mekhan frontend (`@aithericon/hpi-ui` types). Merges fields projected into
+/// `detail` by the causality consumer (steps, instructions_mdsvex, net_id,
+/// place, response_subject, org_id, payload, hpi_process_id, hpi_process_step,
+/// ...) with the top-level columns (`id` -> `task_id`, `status`, `title`,
+/// timestamps).
+///
+/// The frontend keys list items on `task_id` and decides whether to render the
+/// rich form by checking `steps?.length`, so these two fields must be present.
+fn to_human_task_json(task: &HpiTask) -> JsonValue {
+    // Start from detail so we inherit any extra fields the engine projected
+    // (payload, sinks, metadata, ...). Column values override detail on conflict.
+    let mut obj = match task.detail.clone() {
+        JsonValue::Object(m) => m,
+        _ => serde_json::Map::new(),
+    };
+
+    // Top-level column values (authoritative).
+    obj.insert("task_id".to_string(), JsonValue::String(task.id.clone()));
+    // Keep `id` too for backward compatibility with any callers that used it.
+    obj.insert("id".to_string(), JsonValue::String(task.id.clone()));
+    obj.insert(
+        "process_id".to_string(),
+        JsonValue::String(task.process_id.clone()),
+    );
+    obj.insert("title".to_string(), JsonValue::String(task.title.clone()));
+    obj.insert("status".to_string(), JsonValue::String(task.status.clone()));
+    obj.insert(
+        "created_at".to_string(),
+        JsonValue::String(task.created_at.to_rfc3339()),
+    );
+    if let Some(completed_at) = task.completed_at {
+        obj.insert(
+            "completed_at".to_string(),
+            JsonValue::String(completed_at.to_rfc3339()),
+        );
+    }
+    if let Some(ref assignee) = task.assignee {
+        obj.insert(
+            "assignee_id".to_string(),
+            JsonValue::String(assignee.clone()),
+        );
+    }
+
+    // Ensure the frontend's required fields exist with sensible defaults.
+    obj.entry("steps".to_string())
+        .or_insert_with(|| JsonValue::Array(vec![]));
+    obj.entry("org_id".to_string())
+        .or_insert(JsonValue::String(String::new()));
+
+    JsonValue::Object(obj)
+}
 
 /// GET /api/processes — list processes with filter/sort/pagination.
 pub async fn list_processes(
@@ -118,7 +172,10 @@ pub async fn get_process_tasks(
     Path(process_id): Path<String>,
 ) -> impl IntoResponse {
     match queries::list_process_tasks(&state.db, &process_id).await {
-        Ok(tasks) => Json(tasks).into_response(),
+        Ok(tasks) => {
+            let shaped: Vec<JsonValue> = tasks.iter().map(to_human_task_json).collect();
+            Json(shaped).into_response()
+        }
         Err(e) => {
             tracing::error!("process tasks: {e}");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
@@ -146,17 +203,35 @@ pub async fn get_process_artifacts(
 }
 
 /// GET /api/tasks — list all tasks with filter/sort/pagination.
+///
+/// Returns `{ tasks, total, page, page_size, total_pages, has_next, has_previous }`
+/// where each task is a `HumanTask`-shaped JSON object (see `to_human_task_json`).
+/// The `tasks` key is what the Mekhan frontend's task store expects; the rest
+/// of the pagination envelope is preserved for richer clients.
 pub async fn list_tasks(
     State(state): State<AppState>,
     params: QueryParams,
 ) -> impl IntoResponse {
     match queries::list_tasks(&state.db, &params).await {
-        Ok(response) => Json(response).into_response(),
+        Ok(response) => {
+            let tasks: Vec<JsonValue> =
+                response.items.iter().map(to_human_task_json).collect();
+            Json(json!({
+                "tasks": tasks,
+                "total": response.total,
+                "page": response.page,
+                "page_size": response.page_size,
+                "total_pages": response.total_pages,
+                "has_next": response.has_next,
+                "has_previous": response.has_previous,
+            }))
+            .into_response()
+        }
         Err(e) => {
             tracing::warn!("task list: {e}");
             (
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": e.to_string() })),
+                Json(json!({ "error": e.to_string() })),
             )
                 .into_response()
         }
@@ -164,12 +239,17 @@ pub async fn list_tasks(
 }
 
 /// GET /api/tasks/:id — get a single task.
+///
+/// Returns a `HumanTask`-shaped JSON object built from the DB row + `detail`
+/// JSONB projected by the causality consumer. This includes `task_id`, `steps`,
+/// `instructions_mdsvex`, `net_id`, `place`, etc. — everything the frontend
+/// task form needs to render.
 pub async fn get_task(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
     match queries::get_task(&state.db, &id).await {
-        Ok(Some(task)) => Json(task).into_response(),
+        Ok(Some(task)) => Json(to_human_task_json(&task)).into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
         Err(e) => {
             tracing::error!("task get: {e}");
@@ -212,7 +292,6 @@ pub async fn complete_task(
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
-
     // Publish NATS signal: human.completed.{net_id}.{place}
     let net_id = task.detail.get("net_id").and_then(|v| v.as_str());
     let place = task.detail.get("place").and_then(|v| v.as_str());
@@ -227,7 +306,7 @@ pub async fn complete_task(
         }
     }
 
-    Json(updated).into_response()
+    Json(to_human_task_json(&updated)).into_response()
 }
 
 /// POST /api/tasks/:id/cancel — cancel a task and publish NATS signal.
@@ -264,7 +343,6 @@ pub async fn cancel_task(
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
-
     // Publish NATS signal: human.cancelled.{net_id}.{place}
     let net_id = task.detail.get("net_id").and_then(|v| v.as_str());
     let place = task.detail.get("place").and_then(|v| v.as_str());
@@ -279,5 +357,5 @@ pub async fn cancel_task(
         }
     }
 
-    Json(updated).into_response()
+    Json(to_human_task_json(&updated)).into_response()
 }
