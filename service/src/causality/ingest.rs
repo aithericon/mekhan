@@ -258,6 +258,11 @@ async fn process_domain_event(
                 enrich_processes_from_start_event(db, &consumed_ids, &read_ids, effect_result, ts).await?;
             }
 
+            // Mark process as completed when process_complete effect fires.
+            if effect_handler_id == "process_complete" {
+                complete_processes(db, &consumed_ids, &read_ids, ts).await?;
+            }
+
             // Breadcrumb: log metric effect → write to hpi_metrics
             if effect_handler_id == "process_log_metric" {
                 record_metric_event(db, &consumed_ids, &read_ids, effect_result, ts).await?;
@@ -564,6 +569,34 @@ async fn enrich_processes_from_start_event(
         );
     }
 
+    Ok(())
+}
+
+/// Mark processes as completed when the process_complete effect fires.
+///
+/// Resolves process IDs from the consumed/read tokens and sets their status
+/// to "completed" with the completion timestamp.
+async fn complete_processes(
+    db: &PgPool,
+    consumed_ids: &[String],
+    read_ids: &[String],
+    ts: chrono::DateTime<chrono::Utc>,
+) -> Result<(), sqlx::Error> {
+    let process_ids = resolve_process_ids(db, consumed_ids, read_ids).await?;
+    for pid in &process_ids {
+        sqlx::query(
+            "UPDATE hpi_processes SET status = 'completed', updated_at = $2 WHERE process_id = $1",
+        )
+        .bind(pid)
+        .bind(ts)
+        .execute(db)
+        .await?;
+
+        tracing::info!(
+            process_id = %pid,
+            "marked process as completed",
+        );
+    }
     Ok(())
 }
 

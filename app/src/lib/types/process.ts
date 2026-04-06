@@ -27,6 +27,16 @@ export interface HpiMetric {
 	timestamp: string;
 }
 
+export interface HpiMetricSummary {
+	key: string;
+	count: number;
+	min_value: number;
+	max_value: number;
+	avg_value: number;
+	last_value: number;
+	last_timestamp: string;
+}
+
 export interface HpiLog {
 	id: number;
 	process_id: string;

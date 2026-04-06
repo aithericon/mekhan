@@ -21,6 +21,7 @@ import type {
 	HpiProcess,
 	HpiTask,
 	HpiMetric,
+	HpiMetricSummary,
 	HpiLog,
 	ProcessDetail,
 	ProcessStats,
@@ -224,6 +225,12 @@ export async function getProcessMetrics(
 	if (params?.limit) qs.set('limit', String(params.limit));
 	const query = qs.toString();
 	return request(`/processes/${processId}/metrics${query ? `?${query}` : ''}`);
+}
+
+export async function getProcessMetricsSummary(
+	processId: string
+): Promise<HpiMetricSummary[]> {
+	return request(`/processes/${processId}/metrics/summary`);
 }
 
 export async function getProcessLogs(

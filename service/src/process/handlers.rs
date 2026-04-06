@@ -132,6 +132,20 @@ pub struct MetricQueryParams {
     pub limit: Option<i64>,
 }
 
+/// GET /api/processes/:process_id/metrics/summary — aggregated metric stats per key.
+pub async fn get_process_metrics_summary(
+    State(state): State<AppState>,
+    Path(process_id): Path<String>,
+) -> impl IntoResponse {
+    match queries::summarize_metrics(&state.db, &process_id).await {
+        Ok(summary) => Json(summary).into_response(),
+        Err(e) => {
+            tracing::error!("process metrics summary: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
 /// GET /api/processes/:process_id/metrics — list metrics for a process.
 pub async fn get_process_metrics(
     State(state): State<AppState>,

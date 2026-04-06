@@ -3,7 +3,7 @@
 	import {
 		getProcess,
 		updateProcess,
-		getProcessMetrics,
+		getProcessMetricsSummary,
 		getProcessLogs,
 		getProcessTasks,
 		getProcessArtifacts,
@@ -13,7 +13,7 @@
 	import type {
 		ProcessDetail,
 		HpiTask,
-		HpiMetric,
+		HpiMetricSummary,
 		HpiLog,
 		PaginatedProcessResponse
 	} from '$lib/types/process';
@@ -60,7 +60,7 @@
 	let expandedArtifact = $state<string | null>(null);
 
 	// Metrics tab
-	let metrics = $state<HpiMetric[]>([]);
+	let metricsSummary = $state<HpiMetricSummary[]>([]);
 	let metricsLoading = $state(false);
 
 	// Logs tab
@@ -141,36 +141,6 @@
 		}).format(new Date(s));
 	}
 
-	// ── Metric aggregation ─────────────────────────────────────────────────────
-	interface MetricSummary {
-		key: string;
-		latest: number;
-		min: number;
-		max: number;
-		count: number;
-	}
-
-	function summarizeMetrics(all: HpiMetric[]): MetricSummary[] {
-		const byKey = new Map<string, HpiMetric[]>();
-		for (const m of all) {
-			const arr = byKey.get(m.key) ?? [];
-			arr.push(m);
-			byKey.set(m.key, arr);
-		}
-		const summaries: MetricSummary[] = [];
-		for (const [key, vals] of byKey) {
-			const numbers = vals.map((v) => v.value);
-			summaries.push({
-				key,
-				latest: numbers[0],
-				min: Math.min(...numbers),
-				max: Math.max(...numbers),
-				count: numbers.length
-			});
-		}
-		return summaries;
-	}
-
 	// ── Data loading ───────────────────────────────────────────────────────────
 	async function loadDetail() {
 		loading = true;
@@ -202,9 +172,9 @@
 	async function loadMetrics() {
 		metricsLoading = true;
 		try {
-			metrics = await getProcessMetrics(processId, { limit: 500 });
+			metricsSummary = await getProcessMetricsSummary(processId);
 		} catch {
-			metrics = [];
+			metricsSummary = [];
 		} finally {
 			metricsLoading = false;
 		}
@@ -528,13 +498,12 @@
 					<div class="flex items-center justify-center py-12 text-sm text-muted-foreground">
 						Loading metrics...
 					</div>
-				{:else if metrics.length === 0}
+				{:else if metricsSummary.length === 0}
 					<div class="flex flex-col items-center justify-center rounded-xl border border-dashed border-border py-12">
 						<BarChart3 class="size-8 text-muted-foreground/40" />
 						<p class="mt-2 text-sm text-muted-foreground">No metrics recorded</p>
 					</div>
 				{:else}
-					{@const summaries = summarizeMetrics(metrics)}
 					<div class="rounded-lg border border-border bg-card overflow-hidden">
 						<table class="w-full text-sm">
 							<thead>
@@ -543,16 +512,18 @@
 									<th class="px-4 py-2 text-right text-xs font-medium uppercase tracking-wide text-muted-foreground">Latest</th>
 									<th class="px-4 py-2 text-right text-xs font-medium uppercase tracking-wide text-muted-foreground">Min</th>
 									<th class="px-4 py-2 text-right text-xs font-medium uppercase tracking-wide text-muted-foreground">Max</th>
+									<th class="px-4 py-2 text-right text-xs font-medium uppercase tracking-wide text-muted-foreground">Avg</th>
 									<th class="px-4 py-2 text-right text-xs font-medium uppercase tracking-wide text-muted-foreground">Count</th>
 								</tr>
 							</thead>
 							<tbody>
-								{#each summaries as s (s.key)}
+								{#each metricsSummary as s (s.key)}
 									<tr class="border-b border-border last:border-0">
 										<td class="px-4 py-2 font-mono text-foreground">{s.key}</td>
-										<td class="px-4 py-2 text-right tabular-nums text-foreground font-medium">{s.latest.toPrecision(4)}</td>
-										<td class="px-4 py-2 text-right tabular-nums text-muted-foreground">{s.min.toPrecision(4)}</td>
-										<td class="px-4 py-2 text-right tabular-nums text-muted-foreground">{s.max.toPrecision(4)}</td>
+										<td class="px-4 py-2 text-right tabular-nums text-foreground font-medium">{s.last_value.toPrecision(4)}</td>
+										<td class="px-4 py-2 text-right tabular-nums text-muted-foreground">{s.min_value.toPrecision(4)}</td>
+										<td class="px-4 py-2 text-right tabular-nums text-muted-foreground">{s.max_value.toPrecision(4)}</td>
+										<td class="px-4 py-2 text-right tabular-nums text-muted-foreground">{s.avg_value.toPrecision(4)}</td>
 										<td class="px-4 py-2 text-right tabular-nums text-muted-foreground">{s.count}</td>
 									</tr>
 								{/each}

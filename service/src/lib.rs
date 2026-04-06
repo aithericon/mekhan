@@ -125,6 +125,10 @@ pub fn build_router(state: AppState) -> Router {
             get(process::handlers::get_process_metrics),
         )
         .route(
+            "/api/processes/{process_id}/metrics/summary",
+            get(process::handlers::get_process_metrics_summary),
+        )
+        .route(
             "/api/processes/{process_id}/logs",
             get(process::handlers::get_process_logs),
         )

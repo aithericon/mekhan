@@ -331,6 +331,31 @@ pub async fn update_task_status(
     }
 }
 
+/// Summarize metrics for a process: count, min, max, avg, last value per key.
+pub async fn summarize_metrics(
+    pool: &PgPool,
+    process_id: &str,
+) -> Result<Vec<HpiMetricSummary>, sqlx::Error> {
+    sqlx::query_as::<_, HpiMetricSummary>(
+        "SELECT key, \
+               COUNT(*)::bigint as count, \
+               MIN(value) as min_value, \
+               MAX(value) as max_value, \
+               AVG(value) as avg_value, \
+               (SELECT m2.value FROM hpi_metrics m2 \
+                WHERE m2.process_id = $1 AND m2.key = m.key \
+                ORDER BY m2.timestamp DESC LIMIT 1) as last_value, \
+               MAX(timestamp) as last_timestamp \
+         FROM hpi_metrics m \
+         WHERE process_id = $1 \
+         GROUP BY key \
+         ORDER BY key",
+    )
+    .bind(process_id)
+    .fetch_all(pool)
+    .await
+}
+
 /// List metrics for a process, optionally filtered by key, time-ordered.
 pub async fn list_metrics(
     pool: &PgPool,

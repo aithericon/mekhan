@@ -33,6 +33,17 @@ pub struct HpiMetric {
     pub timestamp: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct HpiMetricSummary {
+    pub key: String,
+    pub count: i64,
+    pub min_value: f64,
+    pub max_value: f64,
+    pub avg_value: f64,
+    pub last_value: f64,
+    pub last_timestamp: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct HpiLog {
     pub id: i64,
