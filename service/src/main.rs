@@ -95,10 +95,7 @@ async fn main() -> anyhow::Result<()> {
     });
 
     // Causality ingest (PETRI_GLOBAL domain events → causality tables)
-    // This is the single projection path for processes, tasks, metrics, and logs.
-    // The old per-stream consumers (process.events, process.metrics, process.logs,
-    // human.request) have been removed — breadcrumbs are picked up from the
-    // event stream as EffectCompleted events.
+    // Single projection path for processes, tasks, metrics, and logs.
     tokio::spawn(mekhan_service::causality::ingest::start_causality_ingest(
         mekhan_nats.clone(),
         db.clone(),

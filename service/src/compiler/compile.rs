@@ -538,8 +538,8 @@ fn expand_node(
                     inbox: exec_inbox,
                     result_out: None,
                     failure_out: None,
-                    hpi_process_id: None,
-                    hpi_process_step: None,
+                    process_id: None,
+                    process_step: None,
                     catalogue: true,
                     process: false,
                 })

@@ -16,7 +16,7 @@ use super::queries;
 /// Convert a DB `HpiTask` row into the `HumanTask`-shaped JSON expected by the
 /// Mekhan frontend (`@aithericon/hpi-ui` types). Merges fields projected into
 /// `detail` by the causality consumer (steps, instructions_mdsvex, net_id,
-/// place, response_subject, org_id, payload, hpi_process_id, hpi_process_step,
+/// place, response_subject, org_id, payload, process_id, process_step,
 /// ...) with the top-level columns (`id` -> `task_id`, `status`, `title`,
 /// timestamps).
 ///
