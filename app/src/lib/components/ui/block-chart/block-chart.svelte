@@ -43,6 +43,13 @@
 		xAxis: x_label ? { label: x_label } : undefined,
 		yAxis: y_label ? { label: y_label } : undefined
 	});
+
+	const chartPadding = $derived({
+		top: 4,
+		right: 4,
+		bottom: x_label ? 36 : 20,
+		left: y_label ? 40 : 20
+	});
 </script>
 
 <figure
@@ -79,6 +86,7 @@
 						x={x ?? 'x'}
 						xScale={scaleBand()}
 						axis={true}
+						padding={chartPadding}
 						series={resolvedSeries}
 						props={axisProps}
 					>
@@ -92,6 +100,7 @@
 						x={x ?? 'x'}
 						xScale={scaleBand().padding(0.25)}
 						axis={true}
+						padding={chartPadding}
 						seriesLayout="group"
 						series={resolvedSeries}
 						props={axisProps}
@@ -106,6 +115,7 @@
 						x={x ?? 'x'}
 						xScale={scaleBand()}
 						axis={true}
+						padding={chartPadding}
 						series={resolvedSeries}
 						props={axisProps}
 					>

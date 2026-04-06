@@ -4,6 +4,7 @@ use axum::{
     response::IntoResponse,
     Json,
 };
+use chrono::Utc;
 use serde::Deserialize;
 use serde_json::{json, Value as JsonValue};
 
@@ -293,12 +294,19 @@ pub async fn complete_task(
         }
     };
     // Publish NATS signal: human.completed.{net_id}.{place}
+    // The engine's GlobalHumanResultListener expects HumanTaskCompletion shape:
+    // { task_id, data, completed_at, corr_id? }
     let net_id = task.detail.get("net_id").and_then(|v| v.as_str());
     let place = task.detail.get("place").and_then(|v| v.as_str());
 
     if let (Some(net_id), Some(place)) = (net_id, place) {
         let subject = format!("human.completed.{net_id}.{place}");
-        let payload = serde_json::to_vec(&body).unwrap_or_default();
+        let completion = serde_json::json!({
+            "task_id": id,
+            "data": body.get("data").cloned().unwrap_or(body.clone()),
+            "completed_at": Utc::now().to_rfc3339(),
+        });
+        let payload = serde_json::to_vec(&completion).unwrap_or_default();
         if let Err(e) = state.nats.client().publish(subject.clone(), payload.into()).await {
             tracing::error!(subject = %subject, "failed to publish task completion: {e}");
         } else {
@@ -344,12 +352,19 @@ pub async fn cancel_task(
         }
     };
     // Publish NATS signal: human.cancelled.{net_id}.{place}
+    // The engine's GlobalHumanResultListener expects HumanTaskCancellation shape:
+    // { task_id, reason?, cancelled_at }
     let net_id = task.detail.get("net_id").and_then(|v| v.as_str());
     let place = task.detail.get("place").and_then(|v| v.as_str());
 
     if let (Some(net_id), Some(place)) = (net_id, place) {
         let subject = format!("human.cancelled.{net_id}.{place}");
-        let payload = serde_json::to_vec(&body).unwrap_or_default();
+        let cancellation = serde_json::json!({
+            "task_id": id,
+            "reason": body.get("reason").and_then(|v| v.as_str()),
+            "cancelled_at": Utc::now().to_rfc3339(),
+        });
+        let payload = serde_json::to_vec(&cancellation).unwrap_or_default();
         if let Err(e) = state.nats.client().publish(subject.clone(), payload.into()).await {
             tracing::error!(subject = %subject, "failed to publish task cancellation: {e}");
         } else {
