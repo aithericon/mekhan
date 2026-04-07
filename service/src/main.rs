@@ -72,13 +72,6 @@ async fn main() -> anyhow::Result<()> {
         petri.clone(),
     ));
 
-    // Spawn catalogue ingest (NATS → Postgres)
-    tokio::spawn(mekhan_service::catalogue::ingest::start_catalogue_ingest(
-        mekhan_nats.clone(),
-        db.clone(),
-        subscription_manager.clone(),
-    ));
-
     let yjs_persistence = YjsPersistence::new(db.clone());
     let yjs_manager = Arc::new(YjsManager::new(yjs_persistence));
     tracing::info!("Yjs collaboration manager initialized");
@@ -95,10 +88,11 @@ async fn main() -> anyhow::Result<()> {
     });
 
     // Causality ingest (PETRI_GLOBAL domain events → causality tables)
-    // Single projection path for processes, tasks, metrics, and logs.
+    // Single projection path for processes, tasks, metrics, logs, and catalogue.
     tokio::spawn(mekhan_service::causality::ingest::start_causality_ingest(
         mekhan_nats.clone(),
         db.clone(),
+        subscription_manager.clone(),
     ));
 
     let catalogue_repo = Arc::new(PgCatalogueRepository::new(db.clone()));

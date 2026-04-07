@@ -109,22 +109,6 @@ impl MekhanNats {
         Ok(kv)
     }
 
-    /// Ensure the CATALOGUE JetStream stream exists.
-    pub async fn ensure_catalogue_stream(&self) -> Result<(), async_nats::Error> {
-        self.jetstream
-            .get_or_create_stream(jetstream::stream::Config {
-                name: "CATALOGUE".into(),
-                subjects: vec!["catalogue.commands.>".into()],
-                retention: jetstream::stream::RetentionPolicy::Limits,
-                max_messages: 10_000_000,
-                max_age: std::time::Duration::from_secs(30 * 24 * 3600), // 30 days
-                duplicate_window: std::time::Duration::from_secs(120),
-                ..Default::default()
-            })
-            .await?;
-        Ok(())
-    }
-
     /// Ensure the HUMAN_REQUESTS JetStream stream exists.
     pub async fn ensure_human_stream(&self) -> Result<(), async_nats::Error> {
         self.jetstream
@@ -180,21 +164,4 @@ impl MekhanNats {
         Ok(consumer)
     }
 
-    /// Create or get the durable consumer for catalogue command ingestion.
-    pub async fn catalogue_consumer(&self) -> Result<PullConsumer, async_nats::Error> {
-        let stream = self.jetstream.get_stream("CATALOGUE").await?;
-        let consumer = stream
-            .get_or_create_consumer(
-                "mekhan-catalogue-ingest",
-                jetstream::consumer::pull::Config {
-                    durable_name: Some("mekhan-catalogue-ingest".into()),
-                    filter_subject: "catalogue.commands.register".into(),
-                    ack_policy: jetstream::consumer::AckPolicy::Explicit,
-                    deliver_policy: jetstream::consumer::DeliverPolicy::All,
-                    ..Default::default()
-                },
-            )
-            .await?;
-        Ok(consumer)
-    }
 }

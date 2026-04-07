@@ -1,9 +1,14 @@
+use std::sync::Arc;
+
+use chrono::Utc;
 use futures::StreamExt;
 use serde::Deserialize;
 use sqlx::PgPool;
 
 use petri_domain::{DomainEvent, PersistedEvent};
 
+use crate::catalogue::model::CatalogueRegisterCommand;
+use crate::catalogue::subscriptions::SubscriptionManager;
 use crate::nats::MekhanNats;
 
 /// Slim serde type for CrossNetTokenTransfer messages on `petri.bridge.>`.
@@ -18,7 +23,11 @@ struct CrossNetTokenTransfer {
 ///
 /// Subscribes to `petri.events.>` and `petri.bridge.>` on the `PETRI_GLOBAL`
 /// JetStream stream and projects each domain event into the causality tables.
-pub async fn start_causality_ingest(nats: MekhanNats, db: PgPool) {
+pub async fn start_causality_ingest(
+    nats: MekhanNats,
+    db: PgPool,
+    subscription_manager: Arc<SubscriptionManager>,
+) {
     let consumer = match nats.causality_consumer().await {
         Ok(c) => c,
         Err(e) => {
@@ -53,7 +62,7 @@ pub async fn start_causality_ingest(nats: MekhanNats, db: PgPool) {
             process_bridge_transfer(&db, subject, &msg.payload).await
         } else if subject.starts_with("petri.events.") {
             // Domain event: petri.events.{net_id}.{event_type...}
-            process_domain_event(&db, subject, &msg.payload).await
+            process_domain_event(&db, subject, &msg.payload, &subscription_manager).await
         } else {
             tracing::warn!("causality ingest: unexpected subject: {subject}");
             Ok(())
@@ -122,6 +131,7 @@ async fn process_domain_event(
     db: &PgPool,
     subject: &str,
     payload: &[u8],
+    subscription_manager: &SubscriptionManager,
 ) -> Result<(), sqlx::Error> {
     // Extract net_id from subject: petri.events.{net_id}.{event_type...}
     let net_id = match subject.split('.').nth(2) {
@@ -276,6 +286,23 @@ async fn process_domain_event(
             // Breadcrumb: human task effect → write to hpi_tasks
             if effect_handler_id == "human_task" {
                 record_task_event(db, &consumed_ids, &read_ids, effect_result, ts).await?;
+            }
+
+            // Catalogue registration: the effect_result IS the full
+            // CatalogueRegisterCommand. Resolve provenance from our
+            // causality context and insert directly.
+            if effect_handler_id == "catalogue_register" {
+                register_catalogue_entry(
+                    db,
+                    net_id,
+                    &consumed_ids,
+                    &read_ids,
+                    effect_result,
+                    process_step_completed.as_deref()
+                        .or(process_step_started.as_deref()),
+                    ts,
+                    subscription_manager,
+                ).await?;
             }
 
             // Step breadcrumb (same as TransitionFired)
@@ -839,4 +866,146 @@ fn extract_task_status_from_token(color: &petri_domain::TokenColor) -> String {
         }
     }
     "completed".to_string()
+}
+
+/// Register a catalogue entry directly from the causality projector.
+///
+/// The `catalogue_register` effect handler returns the full
+/// `CatalogueRegisterCommand` as its effect_result. We deserialize it,
+/// resolve provenance fields from the causality context (source_net from
+/// the event's net_id, source_place from consumed token place, process_id
+/// from process tags), and insert into `catalogue_entries`.
+async fn register_catalogue_entry(
+    db: &PgPool,
+    net_id: &str,
+    consumed_ids: &[String],
+    read_ids: &[String],
+    effect_result: &serde_json::Value,
+    process_step: Option<&str>,
+    _ts: chrono::DateTime<chrono::Utc>,
+    subscription_manager: &SubscriptionManager,
+) -> Result<(), sqlx::Error> {
+    let cmd: CatalogueRegisterCommand = match serde_json::from_value(effect_result.clone()) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!("catalogue_register: failed to deserialize effect_result: {e}");
+            return Ok(());
+        }
+    };
+
+    // Resolve provenance from causality context
+    let process_ids = resolve_process_ids(db, consumed_ids, read_ids).await?;
+    let process_id = process_ids.into_iter().next();
+
+    // source_place: look up the consumed token's place from causality_event_tokens.
+    // The consumed token's place in the EffectCompleted is the place feeding the
+    // catalogue_register transition — which is the executor lifecycle's catalogue_pending place.
+    let source_place: Option<String> = if !consumed_ids.is_empty() {
+        sqlx::query_scalar::<_, Option<String>>(
+            "SELECT place_name FROM causality_event_tokens \
+             WHERE token_id = $1 AND role = 'produced' \
+             ORDER BY event_seq DESC LIMIT 1",
+        )
+        .bind(&consumed_ids[0])
+        .fetch_optional(db)
+        .await?
+        .flatten()
+    } else {
+        None
+    };
+
+    // Use process_step from EffectCompleted annotation, falling back to command
+    let step = process_step
+        .map(|s| s.to_string())
+        .or(cmd.process_step.clone());
+
+    let user_metadata = serde_json::to_value(&cmd.user_metadata).unwrap_or_default();
+    let file_metadata = cmd.file_metadata.clone().unwrap_or_default();
+    let size_bytes = cmd.size_bytes.map(|s| s as i64);
+
+    // Deterministic nats_msg_id for dedup (matches the engine's msg ID pattern)
+    let nats_msg_id = format!("cat-{}-{}", cmd.execution_id, cmd.artifact_id);
+
+    let result = sqlx::query(
+        r#"
+        INSERT INTO catalogue_entries (
+            id, execution_id, job_id, name, category, filename,
+            mime_type, size_bytes, storage_path,
+            source_net, source_place, signal_key, process_id, process_step,
+            file_metadata, user_metadata, created_at, nats_msg_id
+        ) VALUES (
+            $1, $2, $3, $4, $5, $6,
+            $7, $8, $9,
+            $10, $11, $12, $13, $14,
+            $15, $16, $17, $18
+        )
+        ON CONFLICT (nats_msg_id) DO NOTHING
+        "#,
+    )
+    .bind(&cmd.artifact_id)
+    .bind(&cmd.execution_id)
+    .bind(&cmd.job_id)
+    .bind(&cmd.name)
+    .bind(&cmd.category)
+    .bind(&cmd.filename)
+    .bind(&cmd.mime_type)
+    .bind(size_bytes)
+    .bind(&cmd.storage_path)
+    .bind(net_id)                   // source_net: from the event's net_id
+    .bind(&source_place)            // source_place: from token provenance
+    .bind(&cmd.signal_key)
+    .bind(&process_id)              // process_id: from causality process tags
+    .bind(&step)                    // process_step: from effect annotation or command
+    .bind(&file_metadata)
+    .bind(&user_metadata)
+    .bind(cmd.created_at)
+    .bind(&nats_msg_id)
+    .execute(db)
+    .await;
+
+    match result {
+        Ok(r) => {
+            if r.rows_affected() > 0 {
+                tracing::debug!(
+                    artifact_id = %cmd.artifact_id,
+                    source_net = %net_id,
+                    process_id = ?process_id,
+                    "catalogued artifact from causality projector",
+                );
+
+                // Evaluate subscriptions with full provenance
+                let entry = crate::catalogue::model::CatalogueEntry {
+                    id: cmd.artifact_id.clone(),
+                    execution_id: cmd.execution_id.clone(),
+                    job_id: Some(cmd.job_id.clone()),
+                    name: cmd.name.clone(),
+                    category: cmd.category.clone(),
+                    filename: cmd.filename.clone(),
+                    mime_type: cmd.mime_type.clone(),
+                    size_bytes,
+                    storage_path: cmd.storage_path.clone(),
+                    source_net: Some(net_id.to_string()),
+                    source_place: source_place.clone(),
+                    signal_key: cmd.signal_key.clone(),
+                    process_id: process_id.clone(),
+                    process_step: step.clone(),
+                    source_event_sequence: None,
+                    file_metadata,
+                    user_metadata,
+                    created_at: cmd.created_at,
+                    catalogued_at: Utc::now(),
+                };
+                subscription_manager.evaluate_new_artifact(&entry).await;
+            }
+        }
+        Err(e) => {
+            tracing::error!(
+                artifact_id = %cmd.artifact_id,
+                "catalogue insert from causality projector failed: {e}",
+            );
+            return Err(e);
+        }
+    }
+
+    Ok(())
 }

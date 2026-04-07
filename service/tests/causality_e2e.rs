@@ -25,7 +25,6 @@ use tower::ServiceExt;
 use uuid::Uuid;
 
 use mekhan_service::catalogue::subscriptions::SubscriptionManager;
-use mekhan_service::catalogue::ingest::start_catalogue_ingest;
 use mekhan_service::causality::ingest::start_causality_ingest;
 use mekhan_service::lifecycle::start_lifecycle_listener;
 use mekhan_service::nats::MekhanNats;
@@ -278,15 +277,7 @@ async fn causality_full_pipeline() {
         catalogue_repo,
     });
 
-    // ── 2. Ensure required NATS streams exist ──────────────────────────
-    //
-    // The CATALOGUE stream must exist before the engine tries to publish
-    // catalogue_register commands, otherwise the effect fails with "no stream".
-    nats.ensure_catalogue_stream()
-        .await
-        .expect("create CATALOGUE stream");
-
-    // ── 3. Spawn Mekhan consumers (clean slate) ──────────────────────────
+    // ── 2. Spawn Mekhan consumers (clean slate) ──────────────────────────
     //
     // Delete stale durable consumers and purge streams so our fresh consumers
     // don't replay messages from previous test runs.
@@ -296,7 +287,6 @@ async fn causality_full_pipeline() {
         ("PETRI_GLOBAL", "mekhan-lifecycle"),
         ("HUMAN_REQUESTS", "mekhan-human-task-ingest"),
         ("PROCESS", "mekhan-process-event-ingest"),
-        ("CATALOGUE", "mekhan-catalogue-ingest"),
     ] {
         if let Ok(stream) = nats.jetstream().get_stream(stream_name).await {
             let _ = stream.delete_consumer(consumer_name).await;
@@ -305,15 +295,7 @@ async fn causality_full_pipeline() {
     // Brief settle for deletions
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    let c_nats = nats.clone();
-    let c_db = db.clone();
-    let _causality = spawn_consumer(move || start_causality_ingest(c_nats, c_db)).await;
-
-    let t_nats = nats.clone();
-    let t_db = db.clone();
-    let _tasks = spawn_consumer(move || start_task_ingest(t_nats, t_db)).await;
-
-    // Lifecycle listener
+    // Subscription manager (needed by both causality ingest and lifecycle listener)
     let kv = nats
         .ensure_catalogue_subscriptions_kv()
         .await
@@ -322,6 +304,18 @@ async fn causality_full_pipeline() {
         kv,
         nats.jetstream().clone(),
     ));
+
+    // Causality ingest now handles catalogue registration directly
+    let c_nats = nats.clone();
+    let c_db = db.clone();
+    let c_sub = sub_mgr.clone();
+    let _causality = spawn_consumer(move || start_causality_ingest(c_nats, c_db, c_sub)).await;
+
+    let t_nats = nats.clone();
+    let t_db = db.clone();
+    let _tasks = spawn_consumer(move || start_task_ingest(t_nats, t_db)).await;
+
+    // Lifecycle listener
     let l_nats = nats.clone();
     let l_db = db.clone();
     let l_sub = sub_mgr.clone();
@@ -333,13 +327,6 @@ async fn causality_full_pipeline() {
     let p_db = db.clone();
     let _process =
         spawn_consumer(move || start_process_event_ingest(p_nats, p_db)).await;
-
-    // Catalogue ingest (so artifacts appear in our test DB)
-    let cat_nats = nats.clone();
-    let cat_db = db.clone();
-    let cat_sub = sub_mgr.clone();
-    let _catalogue =
-        spawn_consumer(move || start_catalogue_ingest(cat_nats, cat_db, cat_sub)).await;
 
     // ── 3. Compile & deploy scenario ─────────────────────────────────────
 

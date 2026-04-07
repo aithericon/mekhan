@@ -7,6 +7,7 @@
 
 mod common;
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_nats::jetstream;
@@ -14,6 +15,7 @@ use async_nats::jetstream::stream::Config as StreamConfig;
 use serde_json::json;
 use uuid::Uuid;
 
+use mekhan_service::catalogue::subscriptions::SubscriptionManager;
 use mekhan_service::causality::ingest::start_causality_ingest;
 use mekhan_service::nats::MekhanNats;
 
@@ -174,8 +176,10 @@ async fn spawn_causality_ingest(nats: &MekhanNats, db: &sqlx::PgPool) -> IngestH
 
     let nats = nats.clone();
     let db = db.clone();
+    let kv = nats.ensure_catalogue_subscriptions_kv().await.expect("create KV");
+    let sub_mgr = Arc::new(SubscriptionManager::new(kv, nats.jetstream().clone()));
     let handle = tokio::spawn(async move {
-        start_causality_ingest(nats, db).await;
+        start_causality_ingest(nats, db, sub_mgr).await;
     });
     // Give consumer time to subscribe
     tokio::time::sleep(Duration::from_millis(300)).await;
