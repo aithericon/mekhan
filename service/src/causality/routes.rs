@@ -36,6 +36,24 @@ pub struct AncestryNode {
     pub timestamp: chrono::DateTime<chrono::Utc>,
 }
 
+/// Explicit cross-net edge resolved from causality_cross_links.
+#[derive(Debug, Serialize, FromRow)]
+pub struct CrossNetEdge {
+    pub signal_key: String,
+    pub egress_net: String,
+    pub egress_seq: i64,
+    pub ingress_net: String,
+    pub ingress_seq: i64,
+    pub link_type: String,
+}
+
+/// Full provenance response: ancestry nodes + explicit cross-net edges.
+#[derive(Debug, Serialize)]
+pub struct ProvenanceResponse {
+    pub nodes: Vec<AncestryNode>,
+    pub cross_net_edges: Vec<CrossNetEdge>,
+}
+
 /// GET /api/provenance/{net_id}/{token_id}?depth=10
 ///
 /// Recursive CTE walking token ancestry: for a given token, find which events
@@ -48,7 +66,7 @@ pub async fn token_provenance(
     let depth = params.depth.min(50).max(1);
 
     match run_provenance_cte(&state.db, &net_id, &token_id, depth).await {
-        Ok(nodes) => Json(nodes).into_response(),
+        Ok(resp) => Json(resp).into_response(),
         Err(e) => {
             tracing::error!("provenance query failed: {e}");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
@@ -156,15 +174,18 @@ pub async fn provenance_from_artifact(
     let (net_id, token_id) = match resolved {
         Some(r) => r,
         None => {
-            // No causality data yet — return empty chain
-            return Json(Vec::<AncestryNode>::new()).into_response();
+            // No causality data yet — return empty response
+            return Json(ProvenanceResponse {
+                nodes: vec![],
+                cross_net_edges: vec![],
+            }).into_response();
         }
     };
 
     // Run the standard provenance CTE
     let result = run_provenance_cte(&state.db, &net_id, &token_id, depth).await;
     match result {
-        Ok(nodes) => Json(nodes).into_response(),
+        Ok(resp) => Json(resp).into_response(),
         Err(e) => {
             tracing::error!("provenance from artifact failed: {e}");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
@@ -184,7 +205,7 @@ async fn run_provenance_cte(
     net_id: &str,
     token_id: &str,
     depth: i32,
-) -> Result<Vec<AncestryNode>, sqlx::Error> {
+) -> Result<ProvenanceResponse, sqlx::Error> {
     // Phase 1: run the recursive CTE to discover all events in the ancestry
     let mut nodes = phase1_cte(db, net_id, token_id, depth).await?;
 
@@ -195,6 +216,8 @@ async fn run_provenance_cte(
         .collect::<std::collections::HashSet<_>>()
         .into_iter()
         .collect();
+
+    let mut cross_net_edges = vec![];
 
     if !event_keys.is_empty() {
         let net_ids: Vec<String> = event_keys.iter().map(|(n, _)| n.clone()).collect();
@@ -220,9 +243,32 @@ async fn run_provenance_cte(
         .await?;
 
         nodes.extend(consumed);
+
+        // Phase 3: fetch cross-net edges from causality_cross_links
+        // where both egress and ingress events are in our ancestry
+        cross_net_edges = sqlx::query_as::<_, CrossNetEdge>(
+            r#"
+            SELECT cl.signal_key, cl.egress_net, cl.egress_seq,
+                   cl.ingress_net, cl.ingress_seq, cl.link_type
+            FROM causality_cross_links cl
+            WHERE (cl.egress_net, cl.egress_seq) IN (
+                SELECT UNNEST($1::text[]), UNNEST($2::bigint[])
+            )
+            AND (cl.ingress_net, cl.ingress_seq) IN (
+                SELECT UNNEST($1::text[]), UNNEST($2::bigint[])
+            )
+            "#,
+        )
+        .bind(&net_ids)
+        .bind(&seqs)
+        .fetch_all(db)
+        .await?;
     }
 
-    Ok(nodes)
+    Ok(ProvenanceResponse {
+        nodes,
+        cross_net_edges,
+    })
 }
 
 async fn phase1_cte(

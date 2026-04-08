@@ -5,7 +5,12 @@
 
 import dagre from '@dagrejs/dagre';
 import type { Node, Edge } from '@xyflow/svelte';
-import type { AncestryNode, ProvenanceGraphNode, ProvenanceGraphEdge } from '$lib/types/provenance';
+import type {
+	AncestryNode,
+	CrossNetEdge,
+	ProvenanceGraphNode,
+	ProvenanceGraphEdge
+} from '$lib/types/provenance';
 
 /** Node data stored in the XYFlow node. */
 export type ProvenanceNodeData = ProvenanceGraphNode;
@@ -105,7 +110,8 @@ export function filterBreadcrumbs(ancestry: AncestryNode[]): AncestryNode[] {
 
 export function buildProvenanceGraph(
 	ancestry: AncestryNode[],
-	includeBreadcrumbs = false
+	includeBreadcrumbs = false,
+	crossNetEdges: CrossNetEdge[] = []
 ): {
 	nodes: ProvenanceGraphNode[];
 	edges: ProvenanceGraphEdge[];
@@ -174,40 +180,24 @@ export function buildProvenanceGraph(
 		}
 	}
 
-	// Cross-net edges via depth adjacency: when the CTE jumps across nets
-	// (bridge or signal), consecutive depth levels have different net_ids.
-	// Group ancestry by depth, find cross-net jumps, and add edges.
-	const byDepth = new Map<number, AncestryNode[]>();
-	for (const n of filtered) {
-		if (!byDepth.has(n.depth)) byDepth.set(n.depth, []);
-		byDepth.get(n.depth)!.push(n);
-	}
+	// Cross-net edges from explicit backend data (causality_cross_links).
+	// Each edge connects an egress event (source net) to an ingress event (target net).
+	for (const cne of crossNetEdges) {
+		const sourceId = `${cne.egress_net}:${cne.egress_seq}`;
+		const targetId = `${cne.ingress_net}:${cne.ingress_seq}`;
 
-	for (const [depth, nodesAtDepth] of byDepth) {
-		const prevNodes = byDepth.get(depth - 1);
-		if (!prevNodes) continue;
+		// Only add if both events are in our filtered graph
+		if (!eventMap.has(sourceId) || !eventMap.has(targetId)) continue;
 
-		for (const curr of nodesAtDepth) {
-			const currEventId = `${curr.net_id}:${curr.event_seq}`;
-			if (!eventMap.has(currEventId)) continue;
-
-			for (const prev of prevNodes) {
-				if (prev.net_id === curr.net_id) continue; // same net — already handled by token matching
-				const prevEventId = `${prev.net_id}:${prev.event_seq}`;
-				if (!eventMap.has(prevEventId)) continue;
-
-				// Cross-net jump detected — edge from cause (deeper/current) to effect (shallower/prev)
-				const edgeId = `cross:${currEventId}->${prevEventId}`;
-				if (!edgeSet.has(edgeId)) {
-					edgeSet.add(edgeId);
-					edges.push({
-						id: edgeId,
-						source: currEventId,
-						target: prevEventId,
-						cross_net: true
-					});
-				}
-			}
+		const edgeId = `cross:${sourceId}->${targetId}`;
+		if (!edgeSet.has(edgeId)) {
+			edgeSet.add(edgeId);
+			edges.push({
+				id: edgeId,
+				source: sourceId,
+				target: targetId,
+				cross_net: true
+			});
 		}
 	}
 

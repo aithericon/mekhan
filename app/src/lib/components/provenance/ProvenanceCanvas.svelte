@@ -8,16 +8,17 @@
 		type Edge
 	} from '@xyflow/svelte';
 	import '@xyflow/svelte/dist/style.css';
-	import type { AncestryNode, ProvenanceGraphNode } from '$lib/types/provenance';
+	import type { AncestryNode, CrossNetEdge, ProvenanceGraphNode } from '$lib/types/provenance';
 	import { buildProvenanceGraph, layoutProvenanceGraph } from '$lib/utils/provenance-graph';
 	import CausalityNode from './CausalityNode.svelte';
 	import EventDetailSheet from './EventDetailSheet.svelte';
 
 	interface Props {
 		ancestry: AncestryNode[];
+		crossNetEdges?: CrossNetEdge[];
 	}
 
-	let { ancestry }: Props = $props();
+	let { ancestry, crossNetEdges = [] }: Props = $props();
 
 	let nodes = $state<Node[]>([]);
 	let edges = $state<Edge[]>([]);
@@ -35,7 +36,7 @@
 			return;
 		}
 
-		const graph = buildProvenanceGraph(ancestry);
+		const graph = buildProvenanceGraph(ancestry, false, crossNetEdges);
 		const layout = layoutProvenanceGraph(graph.nodes, graph.edges);
 
 		// Inject the onSelect callback into each node's data

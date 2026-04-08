@@ -76,6 +76,22 @@ export interface CrossLink {
 	link_type: string;
 }
 
+/** Explicit cross-net edge from the backend. */
+export interface CrossNetEdge {
+	signal_key: string;
+	egress_net: string;
+	egress_seq: number;
+	ingress_net: string;
+	ingress_seq: number;
+	link_type: string;
+}
+
+/** Full provenance response from the API. */
+export interface ProvenanceResponse {
+	nodes: AncestryNode[];
+	cross_net_edges: CrossNetEdge[];
+}
+
 /** A node in the provenance DAG (deduplicated by event). */
 export interface ProvenanceGraphNode {
 	id: string; // "{net_id}:{event_seq}"

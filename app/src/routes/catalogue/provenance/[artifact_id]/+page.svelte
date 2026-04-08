@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/stores';
 	import { getProvenanceFromArtifact, getCatalogueEntry } from '$lib/api/client';
-	import type { AncestryNode } from '$lib/types/provenance';
+	import type { AncestryNode, CrossNetEdge } from '$lib/types/provenance';
 	import type { CatalogueEntry } from '$lib/types/catalogue';
 	import { ProvenanceCanvas } from '$lib/components/provenance';
 	import { Badge } from '$lib/components/ui/badge';
@@ -10,6 +10,7 @@
 	import GitBranch from '@lucide/svelte/icons/git-branch';
 
 	let ancestry = $state<AncestryNode[]>([]);
+	let crossNetEdges = $state<CrossNetEdge[]>([]);
 	let artifact = $state<CatalogueEntry | null>(null);
 	let loading = $state(true);
 	let error = $state<string | null>(null);
@@ -26,7 +27,9 @@
 		loading = true;
 		error = null;
 		try {
-			ancestry = await getProvenanceFromArtifact(id, 30);
+			const resp = await getProvenanceFromArtifact(id, 30);
+			ancestry = resp.nodes;
+			crossNetEdges = resp.cross_net_edges;
 
 			// Also load the artifact metadata for the header
 			try {
@@ -99,7 +102,7 @@
 				</div>
 			</div>
 		{:else}
-			<ProvenanceCanvas {ancestry} />
+			<ProvenanceCanvas {ancestry} {crossNetEdges} />
 		{/if}
 	</div>
 </div>

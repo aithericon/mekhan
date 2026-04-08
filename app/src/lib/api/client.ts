@@ -27,7 +27,7 @@ import type {
 	ProcessStats,
 	PaginatedProcessResponse
 } from '$lib/types/process';
-import type { AncestryNode, EventDetail, CrossLink } from '$lib/types/provenance';
+import type { ProvenanceResponse, EventDetail, CrossLink } from '$lib/types/provenance';
 
 const API_BASE = '/api';
 
@@ -344,7 +344,7 @@ export async function uploadFile(
 export async function getProvenanceFromArtifact(
 	artifactId: string,
 	depth = 20
-): Promise<AncestryNode[]> {
+): Promise<ProvenanceResponse> {
 	return request(`/provenance/from-artifact/${artifactId}?depth=${depth}`);
 }
 
@@ -352,7 +352,7 @@ export async function getTokenProvenance(
 	netId: string,
 	tokenId: string,
 	depth = 20
-): Promise<AncestryNode[]> {
+): Promise<ProvenanceResponse> {
 	return request(`/provenance/${netId}/${tokenId}?depth=${depth}`);
 }
 
