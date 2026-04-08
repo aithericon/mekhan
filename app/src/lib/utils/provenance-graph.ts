@@ -174,6 +174,43 @@ export function buildProvenanceGraph(
 		}
 	}
 
+	// Cross-net edges via depth adjacency: when the CTE jumps across nets
+	// (bridge or signal), consecutive depth levels have different net_ids.
+	// Group ancestry by depth, find cross-net jumps, and add edges.
+	const byDepth = new Map<number, AncestryNode[]>();
+	for (const n of filtered) {
+		if (!byDepth.has(n.depth)) byDepth.set(n.depth, []);
+		byDepth.get(n.depth)!.push(n);
+	}
+
+	for (const [depth, nodesAtDepth] of byDepth) {
+		const prevNodes = byDepth.get(depth - 1);
+		if (!prevNodes) continue;
+
+		for (const curr of nodesAtDepth) {
+			const currEventId = `${curr.net_id}:${curr.event_seq}`;
+			if (!eventMap.has(currEventId)) continue;
+
+			for (const prev of prevNodes) {
+				if (prev.net_id === curr.net_id) continue; // same net — already handled by token matching
+				const prevEventId = `${prev.net_id}:${prev.event_seq}`;
+				if (!eventMap.has(prevEventId)) continue;
+
+				// Cross-net jump detected — edge from cause (deeper/current) to effect (shallower/prev)
+				const edgeId = `cross:${currEventId}->${prevEventId}`;
+				if (!edgeSet.has(edgeId)) {
+					edgeSet.add(edgeId);
+					edges.push({
+						id: edgeId,
+						source: currEventId,
+						target: prevEventId,
+						cross_net: true
+					});
+				}
+			}
+		}
+	}
+
 	return { nodes, edges };
 }
 
