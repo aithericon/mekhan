@@ -63,14 +63,59 @@ export function getNodeLabel(node: ProvenanceGraphNode): string {
  * times for different tokens. We group by event to create one graph node
  * per event, then derive edges from consumed→produced token relationships.
  */
-export function buildProvenanceGraph(ancestry: AncestryNode[]): {
+/** Signal places that are breadcrumb noise (metrics, logs, artifacts, progress). */
+const BREADCRUMB_PLACES = new Set([
+	'sig_metric',
+	'sig_log',
+	'sig_artifact',
+	'sig_progress',
+	'sig_output',
+	'sig_phase',
+	'metric_log',
+	'message_log',
+	'artifact_log',
+	'progress_log'
+]);
+
+/** Effect handlers that are breadcrumb projections, not structural transitions. */
+const BREADCRUMB_HANDLERS = new Set([
+	'process_log_metric',
+	'process_log_message',
+	'catalogue_register'
+]);
+
+/**
+ * Filter ancestry to remove breadcrumb noise (signal injections for
+ * metrics/logs/artifacts and their consuming transitions). These are
+ * leaf branches that don't contribute to the core causal chain.
+ */
+export function filterBreadcrumbs(ancestry: AncestryNode[]): AncestryNode[] {
+	return ancestry.filter((n) => {
+		// Remove TokenCreated on signal/breadcrumb places
+		if (n.event_type === 'TokenCreated' && BREADCRUMB_PLACES.has(n.place_id)) {
+			return false;
+		}
+		// Remove breadcrumb effect handlers
+		if (n.effect_handler && BREADCRUMB_HANDLERS.has(n.effect_handler)) {
+			return false;
+		}
+		return true;
+	});
+}
+
+export function buildProvenanceGraph(
+	ancestry: AncestryNode[],
+	includeBreadcrumbs = false
+): {
 	nodes: ProvenanceGraphNode[];
 	edges: ProvenanceGraphEdge[];
 } {
+	const filtered = includeBreadcrumbs ? ancestry : filterBreadcrumbs(ancestry);
+
 	// Group by event (net_id:event_seq)
 	const eventMap = new Map<string, ProvenanceGraphNode>();
 
-	for (const node of ancestry) {
+	for (const node of filtered) {
 		const id = `${node.net_id}:${node.event_seq}`;
 		if (!eventMap.has(id)) {
 			eventMap.set(id, {
@@ -142,7 +187,7 @@ export function layoutProvenanceGraph(
 ): { nodes: Node[]; edges: Edge[] } {
 	const g = new dagre.graphlib.Graph();
 	g.setDefaultEdgeLabel(() => ({}));
-	g.setGraph({ rankdir: 'BT', nodesep: 40, ranksep: 60 });
+	g.setGraph({ rankdir: 'TB', nodesep: 30, ranksep: 50 });
 
 	for (const node of graphNodes) {
 		g.setNode(node.id, { width: NODE_WIDTH, height: NODE_HEIGHT });
@@ -167,9 +212,8 @@ export function layoutProvenanceGraph(
 		id: ge.id,
 		source: ge.source,
 		target: ge.target,
-		type: ge.cross_net ? 'smoothstep' : 'default',
-		animated: ge.cross_net,
-		style: ge.cross_net ? 'stroke-dasharray: 5 5; stroke: #f97316;' : undefined
+		type: 'smoothstep',
+		animated: ge.cross_net
 	}));
 
 	return { nodes, edges };
