@@ -174,7 +174,58 @@ pub async fn provenance_from_artifact(
 
 /// Shared provenance CTE query used by both `token_provenance` and
 /// `provenance_from_artifact`.
+///
+/// Returns ancestry nodes enriched with consumed tokens. The CTE naturally
+/// returns only `produced` role tokens (since it walks backwards from producer
+/// to producer). We supplement with a second pass that adds consumed tokens
+/// for every event in the ancestry, enabling the frontend to derive edges.
 async fn run_provenance_cte(
+    db: &sqlx::PgPool,
+    net_id: &str,
+    token_id: &str,
+    depth: i32,
+) -> Result<Vec<AncestryNode>, sqlx::Error> {
+    // Phase 1: run the recursive CTE to discover all events in the ancestry
+    let mut nodes = phase1_cte(db, net_id, token_id, depth).await?;
+
+    // Phase 2: fetch consumed tokens for all discovered events
+    let event_keys: Vec<(String, i64)> = nodes
+        .iter()
+        .map(|n| (n.net_id.clone(), n.event_seq))
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+
+    if !event_keys.is_empty() {
+        let net_ids: Vec<String> = event_keys.iter().map(|(n, _)| n.clone()).collect();
+        let seqs: Vec<i64> = event_keys.iter().map(|(_, s)| *s).collect();
+
+        let consumed: Vec<AncestryNode> = sqlx::query_as(
+            r#"
+            SELECT
+                -1 AS depth, et.net_id, et.event_seq, ce.event_type,
+                et.token_id, et.role, et.place_id, et.place_name,
+                ce.transition_name, ce.effect_handler, ce.timestamp
+            FROM causality_event_tokens et
+            JOIN causality_events ce ON ce.net_id = et.net_id AND ce.event_seq = et.event_seq
+            WHERE et.role = 'consumed'
+              AND (et.net_id, et.event_seq) IN (
+                  SELECT UNNEST($1::text[]), UNNEST($2::bigint[])
+              )
+            "#,
+        )
+        .bind(&net_ids)
+        .bind(&seqs)
+        .fetch_all(db)
+        .await?;
+
+        nodes.extend(consumed);
+    }
+
+    Ok(nodes)
+}
+
+async fn phase1_cte(
     db: &sqlx::PgPool,
     net_id: &str,
     token_id: &str,
