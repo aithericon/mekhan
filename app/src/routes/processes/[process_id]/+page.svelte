@@ -12,11 +12,13 @@
 	} from '$lib/api/client';
 	import type {
 		ProcessDetail,
+		ProcessTimelineEntry,
 		HpiTask,
 		HpiMetricSummary,
 		HpiLog,
 		PaginatedProcessResponse
 	} from '$lib/types/process';
+	import { ProcessTimeline } from '$lib/components/process-timeline';
 	import type { CatalogueEntry } from '$lib/types/catalogue';
 	import { ArtifactCard } from '$lib/components/catalogue';
 	import { Badge } from '$lib/components/ui/badge';
@@ -140,6 +142,59 @@
 			hour: '2-digit', minute: '2-digit', second: '2-digit'
 		}).format(new Date(s));
 	}
+
+	// ── Timeline ──────────────────────────────────────────────────────────────
+	function buildTimeline(d: ProcessDetail): ProcessTimelineEntry[] {
+		const cfg = d.config as Record<string, unknown> | undefined;
+		const steps = (cfg?.steps ?? d.steps) as import('$lib/types/process').StepDefinition[] | undefined;
+		const events = (cfg?.step_events ?? d.step_events ?? []) as import('$lib/types/process').StepEvent[];
+		if (!steps?.length) return [];
+		return steps.map((step) => {
+			let firstStarted: string | undefined;
+			let lastStarted: string | undefined;
+			let lastCompleted: string | undefined;
+			let startCount = 0;
+			let completeCount = 0;
+			for (const ev of events) {
+				if (ev.started === step.key) {
+					if (!firstStarted) firstStarted = ev.timestamp;
+					lastStarted = ev.timestamp;
+					startCount++;
+				}
+				if (ev.completed === step.key) {
+					lastCompleted = ev.timestamp;
+					completeCount++;
+				}
+			}
+
+			let status: ProcessTimelineEntry['status'] = 'pending';
+			if (lastCompleted && completeCount >= startCount) {
+				status = 'completed';
+			} else if (lastStarted) {
+				status = 'running';
+			}
+
+			// Total wall-clock duration from first start to last completion
+			let duration_ms: number | undefined;
+			if (firstStarted && lastCompleted) {
+				duration_ms = new Date(lastCompleted).getTime() - new Date(firstStarted).getTime();
+			}
+
+			return {
+				step: step.key,
+				label: step.label,
+				status,
+				human: step.human,
+				started_at: firstStarted,
+				completed_at: lastCompleted,
+				duration_ms,
+				iterations: startCount > 1 ? startCount : undefined,
+				completed_iterations: startCount > 1 ? completeCount : undefined
+			};
+		});
+	}
+
+	let timelineEntries = $derived(detail ? buildTimeline(detail) : []);
 
 	// ── Data loading ───────────────────────────────────────────────────────────
 	async function loadDetail() {
@@ -376,6 +431,14 @@
 			<!-- ── Overview Tab ───────────────────────────────────────── -->
 			{#if activeTab === 'overview'}
 				<div class="space-y-4">
+					<!-- Process Timeline -->
+					{#if timelineEntries.length > 0}
+						<div class="rounded-lg border border-border bg-card p-4">
+							<h3 class="mb-3 text-sm font-medium text-foreground">Timeline</h3>
+							<ProcessTimeline entries={timelineEntries} />
+						</div>
+					{/if}
+
 					<!-- Quick stats -->
 					<div class="grid grid-cols-3 gap-3">
 						<div class="rounded-lg border border-border bg-card px-4 py-3">

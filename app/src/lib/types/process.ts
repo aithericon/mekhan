@@ -47,11 +47,37 @@ export interface HpiLog {
 	timestamp: string;
 }
 
+export interface StepDefinition {
+	key: string;
+	label: string;
+	human: boolean;
+}
+
+export interface StepEvent {
+	started: string | null;
+	completed: string | null;
+	timestamp: string;
+}
+
+export interface ProcessTimelineEntry {
+	step: string;
+	label: string;
+	status: 'pending' | 'running' | 'completed' | 'failed';
+	human: boolean;
+	started_at?: string;
+	completed_at?: string;
+	duration_ms?: number;
+	iterations?: number;
+	completed_iterations?: number;
+}
+
 export interface ProcessDetail extends HpiProcess {
 	tasks: HpiTask[];
 	recent_metrics: HpiMetric[];
 	recent_logs: HpiLog[];
 	artifact_count: number;
+	steps?: StepDefinition[];
+	step_events?: StepEvent[];
 }
 
 export interface ProcessStats {
