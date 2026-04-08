@@ -1,0 +1,105 @@
+<script lang="ts">
+	import { page } from '$app/stores';
+	import { getProvenanceFromArtifact, getCatalogueEntry } from '$lib/api/client';
+	import type { AncestryNode } from '$lib/types/provenance';
+	import type { CatalogueEntry } from '$lib/types/catalogue';
+	import { ProvenanceCanvas } from '$lib/components/provenance';
+	import { Badge } from '$lib/components/ui/badge';
+	import { Button } from '$lib/components/ui/button';
+	import ArrowLeft from '@lucide/svelte/icons/arrow-left';
+	import GitBranch from '@lucide/svelte/icons/git-branch';
+
+	let ancestry = $state<AncestryNode[]>([]);
+	let artifact = $state<CatalogueEntry | null>(null);
+	let loading = $state(true);
+	let error = $state<string | null>(null);
+
+	const artifactId = $derived($page.params.artifact_id);
+
+	$effect(() => {
+		if (artifactId) {
+			loadProvenance(artifactId);
+		}
+	});
+
+	async function loadProvenance(id: string) {
+		loading = true;
+		error = null;
+		try {
+			ancestry = await getProvenanceFromArtifact(id, 30);
+
+			// Also load the artifact metadata for the header
+			try {
+				// Try to find the artifact via catalogue listing
+				const res = await fetch(`/api/catalogue?filter[id][eq]=${id}&page_size=1`);
+				if (res.ok) {
+					const data = await res.json();
+					if (data.items?.length > 0) {
+						artifact = data.items[0];
+					}
+				}
+			} catch {
+				// Non-critical — header just won't show artifact details
+			}
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Failed to load provenance';
+		} finally {
+			loading = false;
+		}
+	}
+</script>
+
+<svelte:head>
+	<title>{artifact?.name ?? 'Provenance'} - Mekhan</title>
+</svelte:head>
+
+<div class="flex h-screen flex-col">
+	<!-- Header -->
+	<div class="flex items-center gap-3 border-b px-4 py-3">
+		<Button variant="ghost" size="icon" href="/catalogue">
+			<ArrowLeft class="h-4 w-4" />
+		</Button>
+
+		<GitBranch class="h-5 w-5 text-zinc-400" />
+
+		<div class="min-w-0 flex-1">
+			<h1 class="text-lg font-semibold truncate">
+				{#if artifact}
+					{artifact.name}
+				{:else}
+					Provenance
+				{/if}
+			</h1>
+			{#if artifact}
+				<div class="flex items-center gap-2 text-sm text-zinc-500">
+					<Badge variant="outline">{artifact.category}</Badge>
+					<span>{artifact.filename}</span>
+					{#if artifact.source_net}
+						<span>&middot; {artifact.source_net}</span>
+					{/if}
+				</div>
+			{/if}
+		</div>
+
+		{#if ancestry.length > 0}
+			<Badge variant="secondary">{ancestry.length} events</Badge>
+		{/if}
+	</div>
+
+	<!-- Canvas -->
+	<div class="flex-1">
+		{#if loading}
+			<div class="flex h-full items-center justify-center text-zinc-400">
+				Loading provenance chain...
+			</div>
+		{:else if error}
+			<div class="flex h-full items-center justify-center">
+				<div class="rounded-md bg-red-50 p-4 text-sm text-red-700 dark:bg-red-900/20 dark:text-red-300">
+					{error}
+				</div>
+			</div>
+		{:else}
+			<ProvenanceCanvas {ancestry} />
+		{/if}
+	</div>
+</div>

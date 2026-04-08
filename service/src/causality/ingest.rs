@@ -295,6 +295,7 @@ async fn process_domain_event(
                 register_catalogue_entry(
                     db,
                     net_id,
+                    seq,
                     &consumed_ids,
                     &read_ids,
                     effect_result,
@@ -878,6 +879,7 @@ fn extract_task_status_from_token(color: &petri_domain::TokenColor) -> String {
 async fn register_catalogue_entry(
     db: &PgPool,
     net_id: &str,
+    event_seq: i64,
     consumed_ids: &[String],
     read_ids: &[String],
     effect_result: &serde_json::Value,
@@ -932,12 +934,14 @@ async fn register_catalogue_entry(
             id, execution_id, job_id, name, category, filename,
             mime_type, size_bytes, storage_path,
             source_net, source_place, signal_key, process_id, process_step,
+            source_event_sequence,
             file_metadata, user_metadata, created_at, nats_msg_id
         ) VALUES (
             $1, $2, $3, $4, $5, $6,
             $7, $8, $9,
             $10, $11, $12, $13, $14,
-            $15, $16, $17, $18
+            $15,
+            $16, $17, $18, $19
         )
         ON CONFLICT (nats_msg_id) DO NOTHING
         "#,
@@ -956,6 +960,7 @@ async fn register_catalogue_entry(
     .bind(&cmd.signal_key)
     .bind(&process_id)              // process_id: from causality process tags
     .bind(&step)                    // process_step: from effect annotation or command
+    .bind(event_seq)                // source_event_sequence: direct causality pointer
     .bind(&file_metadata)
     .bind(&user_metadata)
     .bind(cmd.created_at)
@@ -989,7 +994,7 @@ async fn register_catalogue_entry(
                     signal_key: cmd.signal_key.clone(),
                     process_id: process_id.clone(),
                     process_step: step.clone(),
-                    source_event_sequence: None,
+                    source_event_sequence: Some(event_seq),
                     file_metadata,
                     user_metadata,
                     created_at: cmd.created_at,

@@ -149,6 +149,14 @@ pub fn build_router(state: AppState) -> Router {
             "/api/provenance/link/{signal_key}",
             get(causality::routes::cross_link),
         )
+        .route(
+            "/api/provenance/from-artifact/{artifact_id}",
+            get(causality::routes::provenance_from_artifact),
+        )
+        .route(
+            "/api/provenance/{net_id}/{event_seq}/detail",
+            get(causality::routes::event_detail),
+        )
         // Task endpoints (native)
         .route("/api/tasks", get(process::handlers::list_tasks))
         .route(

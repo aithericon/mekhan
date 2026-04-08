@@ -5,6 +5,7 @@
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import Download from '@lucide/svelte/icons/download';
 	import GitBranch from '@lucide/svelte/icons/git-branch';
+	import Workflow from '@lucide/svelte/icons/workflow';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
 	import ChevronRight from '@lucide/svelte/icons/chevron-right';
 
@@ -117,6 +118,18 @@
 					<Tooltip.Content>View lineage</Tooltip.Content>
 				</Tooltip.Root>
 			{/if}
+
+			<Tooltip.Root>
+				<Tooltip.Trigger>
+					<a
+						href="/catalogue/provenance/{encodeURIComponent(entry.id)}"
+						class="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+					>
+						<Workflow class="size-4" />
+					</a>
+				</Tooltip.Trigger>
+				<Tooltip.Content>Trace provenance</Tooltip.Content>
+			</Tooltip.Root>
 
 			{#if entry.storage_path}
 				<Tooltip.Root>
