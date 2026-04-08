@@ -213,6 +213,7 @@ async fn run_provenance_cte(
 
                 UNION ALL
 
+                -- Path 2: cross-net jump via bridge cross-link
                 SELECT et3.net_id, et3.event_seq, ce3.event_type,
                        et3.token_id, et3.role, et3.place_id, et3.place_name,
                        ce3.transition_name, ce3.effect_handler, ce3.timestamp
@@ -224,6 +225,39 @@ async fn run_provenance_cte(
                 WHERE cl.ingress_net = a.net_id
                   AND cl.ingress_seq = a.event_seq
                   AND a.event_type = 'TokenCreated'
+
+                UNION ALL
+
+                -- Path 3: signal-injected tokens (from executor/external systems)
+                -- that have no cross-link — trace back via shared process tags
+                -- to the most recent prior event in the same net.
+                SELECT sub.net_id, sub.event_seq, sub.event_type,
+                       sub.token_id, sub.role, sub.place_id, sub.place_name,
+                       sub.transition_name, sub.effect_handler, sub.timestamp
+                FROM (
+                    SELECT et4.net_id, et4.event_seq, ce4.event_type,
+                           et4.token_id, et4.role, et4.place_id, et4.place_name,
+                           ce4.transition_name, ce4.effect_handler, ce4.timestamp,
+                           ROW_NUMBER() OVER (ORDER BY ce4.event_seq DESC) AS rn
+                    FROM causality_process_tags pt1
+                    JOIN causality_process_tags pt2 ON pt2.process_id = pt1.process_id
+                    JOIN causality_event_tokens et4
+                        ON et4.token_id = pt2.token_id AND et4.role = 'produced'
+                    JOIN causality_events ce4
+                        ON ce4.net_id = et4.net_id AND ce4.event_seq = et4.event_seq
+                    WHERE pt1.token_id = (
+                        SELECT et_sig.token_id FROM causality_event_tokens et_sig
+                        WHERE et_sig.net_id = a.net_id AND et_sig.event_seq = a.event_seq
+                          AND et_sig.role = 'produced' LIMIT 1
+                    )
+                      AND a.event_type = 'TokenCreated'
+                      AND et4.net_id = a.net_id
+                      AND ce4.event_seq < a.event_seq
+                      AND NOT EXISTS (
+                        SELECT 1 FROM causality_cross_links cl2
+                        WHERE cl2.ingress_net = a.net_id AND cl2.ingress_seq = a.event_seq
+                      )
+                ) sub WHERE sub.rn = 1
             ) next ON true
             WHERE a.depth < $3
         )
