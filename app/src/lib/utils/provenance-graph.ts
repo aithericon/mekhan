@@ -113,18 +113,39 @@ const BREADCRUMB_HANDLERS = new Set([
 ]);
 
 /**
- * Filter ancestry to remove breadcrumb noise (signal injections for
- * metrics/logs/artifacts and their consuming transitions). These are
- * leaf branches that don't contribute to the core causal chain.
+ * Filter ancestry to remove noise nodes:
+ * 1. Breadcrumb signal injections (metrics, logs, artifacts, progress)
+ * 2. Breadcrumb effect handlers (process_log_*, catalogue_register)
+ * 3. Signal TokenCreated events whose token is consumed by a transition
+ *    already in the graph — the transition shows the signal place in its
+ *    consumed list, so the standalone signal node is redundant.
  */
 export function filterBreadcrumbs(ancestry: AncestryNode[]): AncestryNode[] {
+	// First pass: identify tokens consumed by transitions
+	const consumedTokenIds = new Set<string>();
+	for (const n of ancestry) {
+		if (n.role === 'consumed' && n.event_type !== 'TokenCreated') {
+			consumedTokenIds.add(n.token_id);
+		}
+	}
+
 	return ancestry.filter((n) => {
-		// Remove TokenCreated on signal/breadcrumb places
+		// Remove TokenCreated on breadcrumb places
 		if (n.event_type === 'TokenCreated' && BREADCRUMB_PLACES.has(n.place_id)) {
 			return false;
 		}
 		// Remove breadcrumb effect handlers
 		if (n.effect_handler && BREADCRUMB_HANDLERS.has(n.effect_handler)) {
+			return false;
+		}
+		// Remove signal TokenCreated whose produced token is consumed by
+		// a transition — the transition node already shows it
+		if (
+			n.event_type === 'TokenCreated' &&
+			n.role === 'produced' &&
+			n.place_id.startsWith('sig_') &&
+			consumedTokenIds.has(n.token_id)
+		) {
 			return false;
 		}
 		return true;
