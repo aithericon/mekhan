@@ -20,8 +20,12 @@
 			: null
 	);
 
+	const isSignal = $derived(
+		data.event_type === 'TokenCreated' &&
+			data.tokens.some((t) => t.role === 'produced' && t.place_id.startsWith('sig_'))
+	);
 	const isSeed = $derived(
-		data.event_type === 'TokenCreated' && data.tokens.every((t) => t.role === 'produced')
+		data.event_type === 'TokenCreated' && !isSignal
 	);
 	const isBridge = $derived(data.event_type === 'TokenBridgedOut');
 
@@ -56,7 +60,9 @@
 	onclick={handleClick}
 >
 	<div class="flex items-center gap-2">
-		{#if isSeed}
+		{#if isSignal}
+			<span class="inline-block h-2.5 w-2.5 rounded-full bg-orange-400"></span>
+		{:else if isSeed}
 			<span class="inline-block h-2.5 w-2.5 rounded-full bg-emerald-500"></span>
 		{:else if isBridge}
 			<span class="inline-block h-2.5 w-2.5 rounded-full border-2 border-orange-500"></span>

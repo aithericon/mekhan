@@ -34,7 +34,7 @@ export const eventTypeColors: Record<string, string> = {
 	TransitionFired: '#3b82f6', // blue
 	EffectCompleted: '#f59e0b', // amber
 	EffectFailed: '#ef4444', // red
-	TokenCreated: '#10b981', // green
+	TokenCreated: '#6b7280', // gray (seeds/signals — differentiated by label)
 	TokenBridgedOut: '#f97316' // orange
 };
 
@@ -51,9 +51,32 @@ export function getNodeLabel(node: ProvenanceGraphNode): string {
 		return node.transition_name;
 	}
 	if (node.event_type === 'TokenCreated') {
-		// Seed token vs signal-injected
-		const hasCrossNet = node.tokens.some((t) => t.role === 'produced');
-		return hasCrossNet ? node.place_name ?? 'Token Created' : 'Process Root';
+		const place =
+			node.tokens.find((t) => t.role === 'produced')?.place_id ?? node.place_name;
+		if (!place) return 'Token Created';
+
+		// Signal injection — format the place name nicely
+		if (place.startsWith('sig_')) {
+			const signal = place
+				.replace(/^sig_/, '')
+				.replace(/_/g, ' ')
+				.replace(/\b\w/g, (c) => c.toUpperCase());
+			return `Signal: ${signal}`;
+		}
+
+		// Bridge ingress — token arrived from another net
+		if (place.endsWith('_inbox') || place === 'exec_queue' || place === 'job_queue') {
+			const name = place
+				.replace(/_/g, ' ')
+				.replace(/\b\w/g, (c) => c.toUpperCase());
+			return `Received: ${name}`;
+		}
+
+		// Seed / initial token
+		const name = place
+			.replace(/_/g, ' ')
+			.replace(/\b\w/g, (c) => c.toUpperCase());
+		return `Init: ${name}`;
 	}
 	if (node.event_type === 'TokenBridgedOut') {
 		return `Bridge → ${node.place_name ?? '?'}`;
