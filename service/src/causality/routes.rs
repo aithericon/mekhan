@@ -351,6 +351,8 @@ async fn phase1_cte(
                       AND a.event_type = 'TokenCreated'
                       AND et4.net_id = a.net_id
                       AND ce4.event_seq < a.event_seq
+                      -- Skip other signal TokenCreated events to reach structural transitions
+                      AND NOT (ce4.event_type = 'TokenCreated' AND et4.place_id LIKE 'sig_%')
                       AND NOT EXISTS (
                         SELECT 1 FROM causality_cross_links cl2
                         WHERE cl2.ingress_net = a.net_id AND cl2.ingress_seq = a.event_seq

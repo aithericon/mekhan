@@ -95,22 +95,24 @@ export function getNodeLabel(node: ProvenanceGraphNode): string {
 const BREADCRUMB_PLACES = new Set([
 	'sig_metric',
 	'sig_log',
-	'sig_artifact',
 	'sig_progress',
 	'sig_output',
 	'sig_phase',
 	'metric_log',
 	'message_log',
-	'artifact_log',
 	'progress_log'
 ]);
 
-/** Effect handlers that are breadcrumb projections, not structural transitions. */
+/** Effect handlers that are breadcrumb projections, not structural transitions.
+ *  Note: catalogue_register is NOT a breadcrumb in provenance view — it's the
+ *  root of the chain when tracing from an artifact. */
 const BREADCRUMB_HANDLERS = new Set([
 	'process_log_metric',
-	'process_log_message',
-	'catalogue_register'
+	'process_log_message'
 ]);
+
+/** Signal places that should NOT be collapsed (they're structural for provenance). */
+const KEEP_SIGNAL_PLACES = new Set(['sig_artifact', 'sig_completed']);
 
 /**
  * Filter ancestry to remove noise nodes:
@@ -130,20 +132,26 @@ export function filterBreadcrumbs(ancestry: AncestryNode[]): AncestryNode[] {
 	}
 
 	return ancestry.filter((n) => {
+		// Never filter the root event (depth 0) — it's the target artifact
+		if (n.depth === 0) return true;
+
 		// Remove TokenCreated on breadcrumb places
 		if (n.event_type === 'TokenCreated' && BREADCRUMB_PLACES.has(n.place_id)) {
 			return false;
 		}
-		// Remove breadcrumb effect handlers
+		// Remove breadcrumb effect handlers (but keep depth 0)
 		if (n.effect_handler && BREADCRUMB_HANDLERS.has(n.effect_handler)) {
 			return false;
 		}
 		// Remove signal TokenCreated whose produced token is consumed by
-		// a transition — the transition node already shows it
+		// a transition — the transition node already shows it.
+		// Keep sig_artifact — it's structural for provenance (links the
+		// catalogue_register root to the executor chain).
 		if (
 			n.event_type === 'TokenCreated' &&
 			n.role === 'produced' &&
 			n.place_id.startsWith('sig_') &&
+			!KEEP_SIGNAL_PLACES.has(n.place_id) &&
 			consumedTokenIds.has(n.token_id)
 		) {
 			return false;
@@ -243,6 +251,50 @@ export function buildProvenanceGraph(
 				target: targetId,
 				cross_net: true
 			});
+		}
+	}
+
+	// Final pass: connect disconnected components within the same net.
+	// Signal-injected tokens (from executor watcher) have no process tags
+	// and no cross-links, so they form isolated sub-graphs. Connect them
+	// to the nearest earlier event in the same net by timestamp.
+	const connected = new Set<string>();
+	for (const e of edges) {
+		connected.add(e.source);
+		connected.add(e.target);
+	}
+
+	const disconnected = nodes.filter((n) => !connected.has(n.id));
+	if (disconnected.length > 0) {
+		const byNet = new Map<string, ProvenanceGraphNode[]>();
+		for (const n of nodes) {
+			if (!byNet.has(n.net_id)) byNet.set(n.net_id, []);
+			byNet.get(n.net_id)!.push(n);
+		}
+		for (const arr of byNet.values()) {
+			arr.sort((a, b) => a.event_seq - b.event_seq);
+		}
+
+		for (const orphan of disconnected) {
+			const sameNet = byNet.get(orphan.net_id);
+			if (!sameNet) continue;
+
+			// Find the nearest earlier connected node in the same net
+			let best: ProvenanceGraphNode | null = null;
+			for (const c of sameNet) {
+				if (c.id === orphan.id || c.event_seq >= orphan.event_seq) continue;
+				if (!connected.has(c.id)) continue;
+				if (!best || c.event_seq > best.event_seq) best = c;
+			}
+
+			if (best) {
+				const edgeId = `temporal:${best.id}->${orphan.id}`;
+				if (!edgeSet.has(edgeId)) {
+					edgeSet.add(edgeId);
+					edges.push({ id: edgeId, source: best.id, target: orphan.id, cross_net: false });
+					connected.add(orphan.id);
+				}
+			}
 		}
 	}
 
