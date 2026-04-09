@@ -150,7 +150,7 @@ pub fn build_router(state: AppState) -> Router {
             get(causality::routes::cross_link),
         )
         .route(
-            "/api/provenance/from-artifact/{artifact_id}",
+            "/api/provenance/from-artifact/{execution_id}/{artifact_id}",
             get(causality::routes::provenance_from_artifact),
         )
         .route(

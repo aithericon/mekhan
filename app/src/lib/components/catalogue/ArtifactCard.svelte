@@ -122,7 +122,7 @@
 			<Tooltip.Root>
 				<Tooltip.Trigger>
 					<a
-						href="/catalogue/provenance/{encodeURIComponent(entry.id)}"
+						href="/catalogue/provenance/{encodeURIComponent(entry.execution_id)}/{encodeURIComponent(entry.id)}"
 						class="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
 					>
 						<Workflow class="size-4" />

@@ -15,31 +15,28 @@
 	let loading = $state(true);
 	let error = $state<string | null>(null);
 
+	const executionId = $derived($page.params.execution_id);
 	const artifactId = $derived($page.params.artifact_id);
 
 	$effect(() => {
-		if (artifactId) {
-			loadProvenance(artifactId);
+		if (executionId && artifactId) {
+			loadProvenance(executionId, artifactId);
 		}
 	});
 
-	async function loadProvenance(id: string) {
+	async function loadProvenance(execId: string, artId: string) {
 		loading = true;
 		error = null;
 		try {
-			const resp = await getProvenanceFromArtifact(id, 30);
+			const resp = await getProvenanceFromArtifact(execId, artId, 30);
 			ancestry = resp.nodes;
 			crossNetEdges = resp.cross_net_edges;
 
 			// Also load the artifact metadata for the header
 			try {
-				// Try to find the artifact via catalogue listing
-				const res = await fetch(`/api/catalogue?filter[id][eq]=${id}&page_size=1`);
+				const res = await fetch(`/api/catalogue/${encodeURIComponent(execId)}/${encodeURIComponent(artId)}`);
 				if (res.ok) {
-					const data = await res.json();
-					if (data.items?.length > 0) {
-						artifact = data.items[0];
-					}
+					artifact = await res.json();
 				}
 			} catch {
 				// Non-critical — header just won't show artifact details

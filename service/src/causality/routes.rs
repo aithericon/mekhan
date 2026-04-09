@@ -110,23 +110,24 @@ pub async fn cross_link(
 
 // ── Provenance from artifact ──────────────────────────────────────────────
 
-/// GET /api/provenance/from-artifact/{artifact_id}?depth=10
+/// GET /api/provenance/from-artifact/{execution_id}/{artifact_id}?depth=10
 ///
 /// Resolves a catalogue entry to its producing token and returns the full
 /// ancestry chain. Uses `source_event_sequence` for direct lookup when
 /// available, falling back to signal_key → cross-link resolution.
 pub async fn provenance_from_artifact(
     State(state): State<AppState>,
-    Path(artifact_id): Path<String>,
+    Path((execution_id, artifact_id)): Path<(String, String)>,
     Query(params): Query<ProvenanceParams>,
 ) -> impl IntoResponse {
     let depth = params.depth.min(50).max(1);
 
-    // Look up the catalogue entry
+    // Look up the catalogue entry by (execution_id, id) — unique key
     let entry: Option<(Option<String>, Option<String>, Option<i64>)> = sqlx::query_as(
         "SELECT source_net, signal_key, source_event_sequence \
-         FROM catalogue_entries WHERE id = $1",
+         FROM catalogue_entries WHERE execution_id = $1 AND id = $2",
     )
+    .bind(&execution_id)
     .bind(&artifact_id)
     .fetch_optional(&state.db)
     .await

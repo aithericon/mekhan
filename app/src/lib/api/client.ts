@@ -342,10 +342,11 @@ export async function uploadFile(
 // ── Provenance ────────────────────────────────────────────────────────────
 
 export async function getProvenanceFromArtifact(
+	executionId: string,
 	artifactId: string,
 	depth = 20
 ): Promise<ProvenanceResponse> {
-	return request(`/provenance/from-artifact/${artifactId}?depth=${depth}`);
+	return request(`/provenance/from-artifact/${encodeURIComponent(executionId)}/${encodeURIComponent(artifactId)}?depth=${depth}`);
 }
 
 export async function getTokenProvenance(
