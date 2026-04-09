@@ -25,6 +25,13 @@
 	);
 	const isBridge = $derived(data.event_type === 'TokenBridgedOut');
 
+	const consumedPlaces = $derived(
+		[...new Set(data.tokens.filter((t) => t.role === 'consumed').map((t) => t.place_name || t.place_id))]
+	);
+	const producedPlaces = $derived(
+		[...new Set(data.tokens.filter((t) => t.role === 'produced').map((t) => t.place_name || t.place_id))]
+	);
+
 	function formatTime(ts: string): string {
 		return new Intl.DateTimeFormat(undefined, {
 			hour: '2-digit',
@@ -78,6 +85,20 @@
 
 		<span class="ml-auto tabular-nums">{formatTime(data.timestamp)}</span>
 	</div>
+
+	{#if consumedPlaces.length > 0 || producedPlaces.length > 0}
+		<div class="mt-1 flex items-center gap-1 text-[10px] text-zinc-500 dark:text-zinc-400">
+			{#if consumedPlaces.length > 0}
+				<span class="text-red-400">{consumedPlaces.join(', ')}</span>
+			{/if}
+			{#if consumedPlaces.length > 0 && producedPlaces.length > 0}
+				<span class="text-zinc-300">&rarr;</span>
+			{/if}
+			{#if producedPlaces.length > 0}
+				<span class="text-emerald-500">{producedPlaces.join(', ')}</span>
+			{/if}
+		</div>
+	{/if}
 
 	{#if data.net_id}
 		<div class="mt-0.5 text-[10px] text-zinc-400 dark:text-zinc-500 truncate">

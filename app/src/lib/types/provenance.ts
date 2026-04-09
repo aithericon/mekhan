@@ -102,7 +102,7 @@ export interface ProvenanceGraphNode {
 	event_seq: number;
 	timestamp: string;
 	place_name: string | null;
-	tokens: { token_id: string; role: string; place_name: string | null }[];
+	tokens: { token_id: string; role: string; place_id: string; place_name: string | null }[];
 }
 
 /** An edge in the provenance DAG. */

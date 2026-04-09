@@ -15,8 +15,8 @@ import type {
 /** Node data stored in the XYFlow node. */
 export type ProvenanceNodeData = ProvenanceGraphNode;
 
-const NODE_WIDTH = 260;
-const NODE_HEIGHT = 80;
+const NODE_WIDTH = 280;
+const NODE_HEIGHT = 96;
 
 /** Color mapping for effect handlers. */
 export const effectColors: Record<string, string> = {
@@ -139,6 +139,7 @@ export function buildProvenanceGraph(
 		eventMap.get(id)!.tokens.push({
 			token_id: node.token_id,
 			role: node.role,
+			place_id: node.place_id,
 			place_name: node.place_name
 		});
 	}
