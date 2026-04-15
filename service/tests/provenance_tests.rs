@@ -117,7 +117,7 @@ async fn token_provenance_returns_ancestry() {
 
     assert_eq!(resp.status(), StatusCode::OK);
     let body = body_json(resp.into_body()).await;
-    let nodes = body.as_array().expect("response should be array");
+    let nodes = body["nodes"].as_array().expect("response should have nodes array");
 
     // Should have at least depth 0 (event 2 producing B) and depth 1 (event 1 producing A)
     assert!(nodes.len() >= 2, "expected at least 2 ancestry nodes, got {}", nodes.len());
@@ -172,7 +172,7 @@ async fn provenance_respects_depth_limit() {
 
     assert_eq!(resp.status(), StatusCode::OK);
     let body = body_json(resp.into_body()).await;
-    let nodes = body.as_array().unwrap();
+    let nodes = body["nodes"].as_array().unwrap();
 
     let max_depth = nodes.iter().map(|n| n["depth"].as_i64().unwrap_or(0)).max().unwrap_or(0);
     assert!(max_depth <= 2, "max depth should be ≤ 2, got {max_depth}");

@@ -245,8 +245,10 @@ async fn run_provenance_cte(
 
         nodes.extend(consumed);
 
-        // Phase 3: fetch cross-net edges from causality_cross_links
-        // where both egress and ingress events are in our ancestry
+        // Phase 3: fetch cross-net edges from causality_cross_links AND
+        // signal-injection lineage where both endpoints are in our ancestry.
+        // Lineage rows are exposed under the synthetic link_type 'signal'
+        // so the frontend can render them alongside cross-net edges.
         cross_net_edges = sqlx::query_as::<_, CrossNetEdge>(
             r#"
             SELECT cl.signal_key, cl.egress_net, cl.egress_seq,
@@ -256,6 +258,16 @@ async fn run_provenance_cte(
                 SELECT UNNEST($1::text[]), UNNEST($2::bigint[])
             )
             AND (cl.ingress_net, cl.ingress_seq) IN (
+                SELECT UNNEST($1::text[]), UNNEST($2::bigint[])
+            )
+            UNION ALL
+            SELECT sl.signal_key, sl.dispatch_net AS egress_net, sl.dispatch_seq AS egress_seq,
+                   sl.ingress_net, sl.ingress_seq, 'signal' AS link_type
+            FROM causality_signal_lineage sl
+            WHERE (sl.dispatch_net, sl.dispatch_seq) IN (
+                SELECT UNNEST($1::text[]), UNNEST($2::bigint[])
+            )
+            AND (sl.ingress_net, sl.ingress_seq) IN (
                 SELECT UNNEST($1::text[]), UNNEST($2::bigint[])
             )
             "#,
@@ -326,6 +338,23 @@ async fn phase1_cte(
 
                 UNION ALL
 
+                -- Path 4: signal-injected tokens with a known dispatch in
+                -- causality_signal_lineage. Used for the executor lifecycle
+                -- where one executor_submit emits many sig_* TokenCreated events.
+                SELECT et5.net_id, et5.event_seq, ce5.event_type,
+                       et5.token_id, et5.role, et5.place_id, et5.place_name,
+                       ce5.transition_name, ce5.effect_handler, ce5.timestamp
+                FROM causality_signal_lineage sl
+                JOIN causality_event_tokens et5
+                    ON et5.net_id = sl.dispatch_net AND et5.event_seq = sl.dispatch_seq
+                JOIN causality_events ce5
+                    ON ce5.net_id = et5.net_id AND ce5.event_seq = et5.event_seq
+                WHERE sl.ingress_net = a.net_id
+                  AND sl.ingress_seq = a.event_seq
+                  AND a.event_type = 'TokenCreated'
+
+                UNION ALL
+
                 -- Path 3: signal-injected tokens (from executor/external systems)
                 -- that have no cross-link — trace back via shared process tags
                 -- to the most recent prior event in the same net.
@@ -356,6 +385,10 @@ async fn phase1_cte(
                       AND NOT EXISTS (
                         SELECT 1 FROM causality_cross_links cl2
                         WHERE cl2.ingress_net = a.net_id AND cl2.ingress_seq = a.event_seq
+                      )
+                      AND NOT EXISTS (
+                        SELECT 1 FROM causality_signal_lineage sl2
+                        WHERE sl2.ingress_net = a.net_id AND sl2.ingress_seq = a.event_seq
                       )
                 ) sub WHERE sub.rn = 1
             ) next ON true

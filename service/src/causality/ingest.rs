@@ -257,6 +257,24 @@ async fn process_domain_event(
                 .bind(seq)
                 .execute(db)
                 .await?;
+
+                // Record dispatch lineage: the FIRST EffectCompleted that emitted this
+                // signal_key wins. cross_links above gets overwritten by later effects
+                // that reuse the same key (e.g. executor_submit emits key K, then
+                // catalogue_register at the end of the lifecycle reuses K). The
+                // dispatches table preserves the original dispatcher so signal-injected
+                // TokenCreated events can trace back to where the work began.
+                sqlx::query(
+                    "INSERT INTO causality_signal_dispatches \
+                         (signal_key, dispatch_net, dispatch_seq) \
+                     VALUES ($1, $2, $3) \
+                     ON CONFLICT (signal_key) DO NOTHING",
+                )
+                .bind(signal_key)
+                .bind(net_id)
+                .bind(seq)
+                .execute(db)
+                .await?;
             }
 
             // Enrich auto-discovered processes with process_start metadata.
@@ -380,7 +398,7 @@ async fn process_domain_event(
             if let Some(ref sk) = signal_key {
                 // Token arrived via signal injection or bridge transfer.
                 // The signal_key links back to the originating process via cross-links.
-                sqlx::query(
+                let updated = sqlx::query(
                     "UPDATE causality_cross_links SET ingress_net = $2, ingress_seq = $3 \
                      WHERE signal_key = $1",
                 )
@@ -389,6 +407,61 @@ async fn process_domain_event(
                 .bind(seq)
                 .execute(db)
                 .await?;
+
+                // Record signal lineage: every signal-injected TokenCreated whose
+                // signal_key matches a known dispatch (recorded in
+                // causality_signal_dispatches) gets a row in causality_signal_lineage
+                // pointing back to the dispatch event. This handles the N:1 case
+                // where one executor_submit produces many status/event signals.
+                // PK is (ingress_net, ingress_seq) so each signal arrival is unique.
+                sqlx::query(
+                    "INSERT INTO causality_signal_lineage \
+                         (ingress_net, ingress_seq, dispatch_net, dispatch_seq, signal_key) \
+                     SELECT $1, $2, sd.dispatch_net, sd.dispatch_seq, sd.signal_key \
+                     FROM causality_signal_dispatches sd \
+                     WHERE sd.signal_key = $3 \
+                       AND NOT (sd.dispatch_net = $1 AND sd.dispatch_seq = $2) \
+                     ON CONFLICT (ingress_net, ingress_seq) DO NOTHING",
+                )
+                .bind(net_id)
+                .bind(seq)
+                .bind(sk)
+                .execute(db)
+                .await?;
+
+                // Backfill fallback: catalogue subscription signals published by
+                // `run_backfill` (at subscription-creation time) run outside the
+                // ingest consumer, so no egress-side row exists. Detect this by
+                // checking if the UPDATE affected 0 rows and the signal_key
+                // matches the `cat-sub:` convention, then resolve the source
+                // artifact from `catalogue_entries` and INSERT the full row.
+                if updated.rows_affected() == 0 && sk.starts_with("cat-sub:") {
+                    let parts: Vec<&str> = sk.splitn(4, ':').collect();
+                    if parts.len() == 4 {
+                        let exec_id = parts[2];
+                        let art_id = parts[3];
+                        sqlx::query(
+                            "INSERT INTO causality_cross_links \
+                                 (signal_key, egress_net, egress_seq, \
+                                  ingress_net, ingress_seq, link_type) \
+                             SELECT $1, ce.source_net, ce.source_event_sequence, \
+                                    $2, $3, 'catalogue_subscription' \
+                             FROM catalogue_entries ce \
+                             WHERE ce.execution_id = $4 AND ce.id = $5 \
+                               AND ce.source_net IS NOT NULL \
+                               AND ce.source_event_sequence IS NOT NULL \
+                             ON CONFLICT (signal_key) DO UPDATE \
+                             SET ingress_net = $2, ingress_seq = $3",
+                        )
+                        .bind(sk)
+                        .bind(net_id)
+                        .bind(seq)
+                        .bind(exec_id)
+                        .bind(art_id)
+                        .execute(db)
+                        .await?;
+                    }
+                }
 
                 // Inherit process tags from the egress side.
                 // For EffectCompleted (executor_submit): consumed tokens carry the process.
@@ -1000,7 +1073,35 @@ async fn register_catalogue_entry(
                     created_at: cmd.created_at,
                     catalogued_at: Utc::now(),
                 };
-                subscription_manager.evaluate_new_artifact(&entry).await;
+                let matched = subscription_manager.evaluate_new_artifact(&entry).await;
+
+                // Record egress-side cross-links for every matched subscription.
+                // The ingress side is filled in later by the TokenCreated handler
+                // when the signal arrives in the subscriber net. Because the
+                // causality ingest consumer is single-threaded, the egress row
+                // is guaranteed to exist before any TokenCreated from the same
+                // signal is processed.
+                for m in &matched {
+                    if let Err(e) = sqlx::query(
+                        "INSERT INTO causality_cross_links \
+                             (signal_key, egress_net, egress_seq, link_type) \
+                         VALUES ($1, $2, $3, 'catalogue_subscription') \
+                         ON CONFLICT (signal_key) DO UPDATE \
+                         SET egress_net = $2, egress_seq = $3",
+                    )
+                    .bind(&m.signal_key)
+                    .bind(net_id)
+                    .bind(event_seq)
+                    .execute(db)
+                    .await
+                    {
+                        tracing::warn!(
+                            signal_key = %m.signal_key,
+                            target_net = %m.target_net_id,
+                            "failed to record catalogue subscription cross-link: {e}"
+                        );
+                    }
+                }
             }
         }
         Err(e) => {

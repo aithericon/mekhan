@@ -33,6 +33,18 @@ pub struct CatalogueSubscription {
     pub created_at: DateTime<Utc>,
 }
 
+/// Information about a subscription that matched a newly ingested artifact.
+/// Returned from `evaluate_new_artifact` so the caller can record the
+/// egress-side cross-link for provenance tracking.
+#[derive(Debug, Clone)]
+pub struct MatchedSubscription {
+    pub subscription_id: String,
+    pub target_net_id: String,
+    /// The `signal_key` embedded in the published signal payload. Used as
+    /// the primary key when inserting into `causality_cross_links`.
+    pub signal_key: String,
+}
+
 /// Manages catalogue subscriptions with an in-memory cache backed by NATS KV.
 pub struct SubscriptionManager {
     cache: DashMap<String, CatalogueSubscription>,
@@ -221,13 +233,35 @@ impl SubscriptionManager {
 
     /// Evaluate a newly ingested artifact against all cached subscriptions.
     /// On match, publish an `ExternalSignal` to the subscribing net.
-    pub async fn evaluate_new_artifact(&self, entry: &CatalogueEntry) {
+    ///
+    /// Returns the list of matched subscriptions so the caller can record
+    /// egress-side cross-links in `causality_cross_links` for provenance
+    /// tracking. Each entry contains the `signal_key` that was embedded in
+    /// the published signal — the caller must use this same key when
+    /// inserting the cross-link row so that the ingress-side UPDATE (in the
+    /// TokenCreated handler) can find it.
+    pub async fn evaluate_new_artifact(
+        &self,
+        entry: &CatalogueEntry,
+    ) -> Vec<MatchedSubscription> {
+        let mut matched = Vec::new();
         for sub_ref in self.cache.iter() {
             let sub = sub_ref.value();
             if matches_filters(sub, entry) {
-                self.publish_signal(sub, entry).await;
+                let signal_key = build_subscription_signal_key(
+                    &sub.subscription_id,
+                    &entry.execution_id,
+                    &entry.id,
+                );
+                self.publish_signal(sub, entry, &signal_key).await;
+                matched.push(MatchedSubscription {
+                    subscription_id: sub.subscription_id.clone(),
+                    target_net_id: sub.net_id.clone(),
+                    signal_key,
+                });
             }
         }
+        matched
     }
 
     /// Delete all subscriptions belonging to a given net_id.
@@ -261,10 +295,20 @@ impl SubscriptionManager {
     }
 
     /// Publish a signal to the PETRI_GLOBAL stream for a matching subscription.
-    async fn publish_signal(&self, sub: &CatalogueSubscription, entry: &CatalogueEntry) {
+    ///
+    /// `signal_key` must be unique per (subscription, artifact) pair — use
+    /// `build_subscription_signal_key` to construct it. It is embedded in
+    /// the signal payload and becomes the PK of the corresponding
+    /// `causality_cross_links` row when the TokenCreated handler fires.
+    async fn publish_signal(
+        &self,
+        sub: &CatalogueSubscription,
+        entry: &CatalogueEntry,
+        signal_key: &str,
+    ) {
         let payload = serde_json::json!({
             "source": "catalogue",
-            "signal_key": format!("catalogue-{}", entry.id),
+            "signal_key": signal_key,
             "payload": {
                 "source": "catalogue",
                 "subscription_id": sub.subscription_id,
@@ -346,7 +390,12 @@ impl SubscriptionManager {
 
                 for entry in &paginated.items {
                     if matches_filters(sub, entry) {
-                        self.publish_signal(sub, entry).await;
+                        let signal_key = build_subscription_signal_key(
+                            &sub.subscription_id,
+                            &entry.execution_id,
+                            &entry.id,
+                        );
+                        self.publish_signal(sub, entry, &signal_key).await;
                     }
                 }
 
@@ -370,6 +419,21 @@ impl SubscriptionManager {
             }
         }
     }
+}
+
+/// Build the unique `signal_key` for a subscription-triggered signal.
+///
+/// The format is `cat-sub:{subscription_id}:{execution_id}:{artifact_id}`,
+/// which is unique per (subscription, artifact) pair and enables the
+/// causality ingest to record per-subscription cross-links. The backfill
+/// fallback in the TokenCreated handler parses this format to resolve the
+/// source artifact when no egress-side row exists yet.
+pub fn build_subscription_signal_key(
+    subscription_id: &str,
+    execution_id: &str,
+    artifact_id: &str,
+) -> String {
+    format!("cat-sub:{subscription_id}:{execution_id}:{artifact_id}")
 }
 
 /// Evaluate whether a catalogue entry matches a subscription's filters.
