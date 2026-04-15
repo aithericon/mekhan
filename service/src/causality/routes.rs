@@ -415,6 +415,22 @@ pub struct TokenInfo {
     pub role: String,
     pub place_id: String,
     pub place_name: Option<String>,
+    /// Full token payload (color). Null for `consumed` role when the
+    /// producer's row isn't available for join-back.
+    pub data: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BridgeTarget {
+    pub target_net: String,
+    pub target_place: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SignalDispatch {
+    pub dispatch_net: String,
+    pub dispatch_seq: i64,
+    pub signal_key: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -430,6 +446,15 @@ pub struct EventDetail {
     pub artifact: Option<CatalogueEntry>,
     pub metrics: Vec<HpiMetric>,
     pub logs: Vec<HpiLog>,
+    /// Raw JSON returned by the effect handler (EffectCompleted) or a
+    /// failure envelope (EffectFailed). Null for other event types.
+    pub effect_result: Option<serde_json::Value>,
+    /// Present only for `TokenBridgedOut`.
+    pub bridge: Option<BridgeTarget>,
+    /// Present when this event is a signal-injected `TokenCreated` whose
+    /// signal_key matches a row in `causality_signal_dispatches` — i.e.
+    /// we know which effect originally dispatched this signal.
+    pub signal_dispatch: Option<SignalDispatch>,
 }
 
 /// GET /api/provenance/{net_id}/{event_seq}/detail
@@ -443,28 +468,62 @@ pub async fn event_detail(
 ) -> impl IntoResponse {
     let db = &state.db;
 
-    // Fetch the event
-    let event: Option<(String, Option<String>, Option<String>, chrono::DateTime<chrono::Utc>)> =
-        sqlx::query_as(
-            "SELECT event_type, transition_name, effect_handler, timestamp \
-             FROM causality_events WHERE net_id = $1 AND event_seq = $2",
-        )
-        .bind(&net_id)
-        .bind(event_seq)
-        .fetch_optional(db)
-        .await
-        .unwrap_or(None);
+    // Fetch the event + new payload columns in one go.
+    type EventRow = (
+        String,                                // event_type
+        Option<String>,                        // transition_name
+        Option<String>,                        // effect_handler
+        chrono::DateTime<chrono::Utc>,         // timestamp
+        Option<serde_json::Value>,             // effect_result
+        Option<String>,                        // bridge_target_net
+        Option<String>,                        // bridge_target_place
+    );
+    let event: Option<EventRow> = sqlx::query_as(
+        "SELECT event_type, transition_name, effect_handler, timestamp, \
+                effect_result, bridge_target_net, bridge_target_place \
+         FROM causality_events WHERE net_id = $1 AND event_seq = $2",
+    )
+    .bind(&net_id)
+    .bind(event_seq)
+    .fetch_optional(db)
+    .await
+    .unwrap_or(None);
 
-    let (event_type, transition_name, effect_handler, timestamp) = match event {
+    let (
+        event_type,
+        transition_name,
+        effect_handler,
+        timestamp,
+        effect_result,
+        bridge_target_net,
+        bridge_target_place,
+    ) = match event {
         Some(e) => e,
         None => return StatusCode::NOT_FOUND.into_response(),
     };
 
-    // Fetch all tokens involved in this event
+    let bridge = match (bridge_target_net, bridge_target_place) {
+        (Some(n), Some(p)) => Some(BridgeTarget {
+            target_net: n,
+            target_place: p,
+        }),
+        _ => None,
+    };
+
+    // Fetch all tokens involved in this event. For consumed-role rows we
+    // fall back to the producer's token_data (same token_id, role='produced')
+    // so the UI can display payload for tokens that entered as inputs.
     let tokens: Vec<TokenInfo> = sqlx::query_as(
-        "SELECT token_id, role, place_id, place_name \
-         FROM causality_event_tokens WHERE net_id = $1 AND event_seq = $2 \
-         ORDER BY role, place_id",
+        "SELECT t.token_id, t.role, t.place_id, t.place_name, \
+                COALESCE( \
+                    t.token_data, \
+                    (SELECT p.token_data FROM causality_event_tokens p \
+                     WHERE p.token_id = t.token_id AND p.role = 'produced' \
+                       AND p.token_data IS NOT NULL LIMIT 1) \
+                ) AS data \
+         FROM causality_event_tokens t \
+         WHERE t.net_id = $1 AND t.event_seq = $2 \
+         ORDER BY t.role, t.place_id",
     )
     .bind(&net_id)
     .bind(event_seq)
@@ -472,8 +531,13 @@ pub async fn event_detail(
     .await
     .unwrap_or_default();
 
-    // Resolve signal_key for this event (from cross-links where this is the egress)
-    let signal_key: Option<String> = sqlx::query_scalar(
+    // Resolve the signal_key that identifies this event's downstream work.
+    // Tried in order: (1) cross_links where this is the egress — works for
+    // most handlers; (2) causality_signal_dispatches — works for
+    // executor_submit, whose cross_links entry is overwritten by a later
+    // catalogue_register re-use of the same key; (3) the event's own
+    // effect_result — final fallback.
+    let signal_key: Option<String> = match sqlx::query_scalar::<_, String>(
         "SELECT signal_key FROM causality_cross_links \
          WHERE egress_net = $1 AND egress_seq = $2 LIMIT 1",
     )
@@ -481,7 +545,50 @@ pub async fn event_detail(
     .bind(event_seq)
     .fetch_optional(db)
     .await
-    .unwrap_or(None);
+    {
+        Ok(Some(sk)) => Some(sk),
+        _ => {
+            let from_dispatch: Option<String> = sqlx::query_scalar(
+                "SELECT signal_key FROM causality_signal_dispatches \
+                 WHERE dispatch_net = $1 AND dispatch_seq = $2 LIMIT 1",
+            )
+            .bind(&net_id)
+            .bind(event_seq)
+            .fetch_optional(db)
+            .await
+            .unwrap_or(None);
+            from_dispatch.or_else(|| {
+                effect_result
+                    .as_ref()
+                    .and_then(|r| r.get("signal_key"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            })
+        }
+    };
+
+    // For signal-injected TokenCreated events, look up the dispatch event
+    // so the UI can show "Emitted by {effect} at {net}#{seq}".
+    let signal_dispatch: Option<SignalDispatch> = if event_type == "TokenCreated" {
+        sqlx::query_as::<_, (String, i64, String)>(
+            "SELECT sl.dispatch_net, sl.dispatch_seq, sl.signal_key \
+             FROM causality_signal_lineage sl \
+             WHERE sl.ingress_net = $1 AND sl.ingress_seq = $2 LIMIT 1",
+        )
+        .bind(&net_id)
+        .bind(event_seq)
+        .fetch_optional(db)
+        .await
+        .ok()
+        .flatten()
+        .map(|(dn, ds, sk)| SignalDispatch {
+            dispatch_net: dn,
+            dispatch_seq: ds,
+            signal_key: sk,
+        })
+    } else {
+        None
+    };
 
     // Resolve process_id from tokens
     let token_ids: Vec<String> = tokens
@@ -532,28 +639,30 @@ pub async fn event_detail(
             .unwrap_or(None);
         }
         Some("executor_submit") => {
-            // Show artifacts, metrics, and logs for the execution
-            if let Some(ref pid) = process_id {
+            // Filter metrics and logs to exactly this execution by signal_key.
+            // In a BO campaign every iteration shares one process_id, so
+            // falling back to `WHERE process_id = ...` would leak metrics
+            // from every other iteration into this view.
+            if let Some(ref sk) = signal_key {
                 metrics = sqlx::query_as(
-                    "SELECT * FROM hpi_metrics WHERE process_id = $1 \
-                     ORDER BY timestamp LIMIT 100",
+                    "SELECT * FROM hpi_metrics WHERE signal_key = $1 \
+                     ORDER BY timestamp LIMIT 200",
                 )
-                .bind(pid)
+                .bind(sk)
                 .fetch_all(db)
                 .await
                 .unwrap_or_default();
 
                 logs = sqlx::query_as(
-                    "SELECT * FROM hpi_logs WHERE process_id = $1 \
-                     ORDER BY timestamp LIMIT 50",
+                    "SELECT * FROM hpi_logs WHERE signal_key = $1 \
+                     ORDER BY timestamp LIMIT 200",
                 )
-                .bind(pid)
+                .bind(sk)
                 .fetch_all(db)
                 .await
                 .unwrap_or_default();
-            }
-            // Also fetch catalogue artifacts produced downstream
-            if let Some(ref sk) = signal_key {
+
+                // Also fetch the catalogue artifact this execution produced.
                 artifact = sqlx::query_as(
                     "SELECT * FROM catalogue_entries WHERE signal_key = $1 LIMIT 1",
                 )
@@ -606,6 +715,9 @@ pub async fn event_detail(
         artifact,
         metrics,
         logs,
+        effect_result,
+        bridge,
+        signal_dispatch,
     })
     .into_response()
 }

@@ -21,6 +21,22 @@ export interface TokenInfo {
 	role: string;
 	place_id: string;
 	place_name: string | null;
+	/** Full token payload. Populated for produced/read roles; falls back to
+	 *  the producer's payload for consumed tokens when available. */
+	data: unknown | null;
+}
+
+/** Target coordinates for a `TokenBridgedOut` event. */
+export interface BridgeTarget {
+	target_net: string;
+	target_place: string;
+}
+
+/** Dispatch event that originated a signal-injected TokenCreated. */
+export interface SignalDispatch {
+	dispatch_net: string;
+	dispatch_seq: number;
+	signal_key: string;
 }
 
 /** Rich detail for a single causality event, joining domain tables. */
@@ -36,6 +52,12 @@ export interface EventDetail {
 	artifact: CatalogueEntry | null;
 	metrics: HpiMetricEntry[];
 	logs: HpiLogEntry[];
+	/** Raw JSON returned by the handler (EffectCompleted) or a failure envelope (EffectFailed). */
+	effect_result: unknown | null;
+	/** Present only for `TokenBridgedOut`. */
+	bridge: BridgeTarget | null;
+	/** Present when this event is a signal-injected TokenCreated with a known dispatcher. */
+	signal_dispatch: SignalDispatch | null;
 }
 
 export interface HpiTaskSummary {

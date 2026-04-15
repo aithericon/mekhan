@@ -176,13 +176,15 @@ async fn process_domain_event(
             .await?;
 
             for (place_id, token_id) in consumed_tokens {
-                insert_event_token(db, net_id, seq, &token_id.0.to_string(), "consumed", &place_id.0, None).await?;
+                insert_event_token(db, net_id, seq, &token_id.0.to_string(), "consumed", &place_id.0, None, None).await?;
             }
             for (place_id, token) in produced_tokens {
-                insert_event_token(db, net_id, seq, &token.id.0.to_string(), "produced", &place_id.0, None).await?;
+                let data = token_color_to_json(&token.color);
+                insert_event_token(db, net_id, seq, &token.id.0.to_string(), "produced", &place_id.0, None, Some(&data)).await?;
             }
             for (place_id, token) in read_tokens {
-                insert_event_token(db, net_id, seq, &token.id.0.to_string(), "read", &place_id.0, None).await?;
+                let data = token_color_to_json(&token.color);
+                insert_event_token(db, net_id, seq, &token.id.0.to_string(), "read", &place_id.0, None, Some(&data)).await?;
             }
 
             let consumed_ids: Vec<String> = consumed_tokens.iter().map(|(_, tid)| tid.0.to_string()).collect();
@@ -218,26 +220,29 @@ async fn process_domain_event(
             process_step_completed,
         } => {
             sqlx::query(
-                "INSERT INTO causality_events (net_id, event_seq, event_type, transition_name, effect_handler, timestamp) \
-                 VALUES ($1, $2, 'EffectCompleted', $3, $4, $5) \
+                "INSERT INTO causality_events (net_id, event_seq, event_type, transition_name, effect_handler, effect_result, timestamp) \
+                 VALUES ($1, $2, 'EffectCompleted', $3, $4, $5, $6) \
                  ON CONFLICT (net_id, event_seq) DO NOTHING",
             )
             .bind(net_id)
             .bind(seq)
             .bind(transition_name.as_deref().unwrap_or(&transition_id.0))
             .bind(effect_handler_id)
+            .bind(effect_result)
             .bind(ts)
             .execute(db)
             .await?;
 
             for (place_id, token_id) in consumed_tokens {
-                insert_event_token(db, net_id, seq, &token_id.0.to_string(), "consumed", &place_id.0, None).await?;
+                insert_event_token(db, net_id, seq, &token_id.0.to_string(), "consumed", &place_id.0, None, None).await?;
             }
             for (place_id, token) in produced_tokens {
-                insert_event_token(db, net_id, seq, &token.id.0.to_string(), "produced", &place_id.0, None).await?;
+                let data = token_color_to_json(&token.color);
+                insert_event_token(db, net_id, seq, &token.id.0.to_string(), "produced", &place_id.0, None, Some(&data)).await?;
             }
             for (place_id, token) in read_tokens {
-                insert_event_token(db, net_id, seq, &token.id.0.to_string(), "read", &place_id.0, None).await?;
+                let data = token_color_to_json(&token.color);
+                insert_event_token(db, net_id, seq, &token.id.0.to_string(), "read", &place_id.0, None, Some(&data)).await?;
             }
 
             let consumed_ids: Vec<String> = consumed_tokens.iter().map(|(_, tid)| tid.0.to_string()).collect();
@@ -344,28 +349,40 @@ async fn process_domain_event(
             consumed_tokens,
             produced_tokens,
             effect_handler_id,
+            error_message,
             tokens_consumed,
+            input_data,
+            retryable,
             ..
         } => {
+            // Capture the failure as effect_result so the UI can show why it failed.
+            let failure_result = serde_json::json!({
+                "error_message": error_message,
+                "retryable": retryable,
+                "input_data": input_data,
+                "tokens_consumed": tokens_consumed,
+            });
             sqlx::query(
-                "INSERT INTO causality_events (net_id, event_seq, event_type, transition_name, effect_handler, timestamp) \
-                 VALUES ($1, $2, 'EffectFailed', $3, $4, $5) \
+                "INSERT INTO causality_events (net_id, event_seq, event_type, transition_name, effect_handler, effect_result, timestamp) \
+                 VALUES ($1, $2, 'EffectFailed', $3, $4, $5, $6) \
                  ON CONFLICT (net_id, event_seq) DO NOTHING",
             )
             .bind(net_id)
             .bind(seq)
             .bind(transition_name.as_deref().unwrap_or(&transition_id.0))
             .bind(effect_handler_id)
+            .bind(&failure_result)
             .bind(ts)
             .execute(db)
             .await?;
 
             if *tokens_consumed {
                 for (place_id, token_id) in consumed_tokens {
-                    insert_event_token(db, net_id, seq, &token_id.0.to_string(), "consumed", &place_id.0, None).await?;
+                    insert_event_token(db, net_id, seq, &token_id.0.to_string(), "consumed", &place_id.0, None, None).await?;
                 }
                 for (place_id, token) in produced_tokens {
-                    insert_event_token(db, net_id, seq, &token.id.0.to_string(), "produced", &place_id.0, None).await?;
+                    let data = token_color_to_json(&token.color);
+                    insert_event_token(db, net_id, seq, &token.id.0.to_string(), "produced", &place_id.0, None, Some(&data)).await?;
                 }
 
                 let consumed_ids: Vec<String> = consumed_tokens.iter().map(|(_, tid)| tid.0.to_string()).collect();
@@ -393,7 +410,8 @@ async fn process_domain_event(
             .await?;
 
             let token_id_str = token.id.0.to_string();
-            insert_event_token(db, net_id, seq, &token_id_str, "produced", &place_id.0, place_name.as_deref()).await?;
+            let token_data = token_color_to_json(&token.color);
+            insert_event_token(db, net_id, seq, &token_id_str, "produced", &place_id.0, place_name.as_deref(), Some(&token_data)).await?;
 
             if let Some(ref sk) = signal_key {
                 // Token arrived via signal injection or bridge transfer.
@@ -535,6 +553,8 @@ async fn process_domain_event(
             token,
             signal_key,
             produced_by_event,
+            target_net_id,
+            target_place_name,
             ..
         } => {
             // Record egress side of cross-link.
@@ -556,19 +576,24 @@ async fn process_domain_event(
             .execute(db)
             .await?;
 
-            // Record as causality event
+            // Record as causality event, including bridge target so the UI
+            // can render "Bridge → {target_net} / {target_place}" in the
+            // event detail sheet without re-parsing the domain event.
             sqlx::query(
-                "INSERT INTO causality_events (net_id, event_seq, event_type, timestamp) \
-                 VALUES ($1, $2, 'TokenBridgedOut', $3) \
+                "INSERT INTO causality_events (net_id, event_seq, event_type, bridge_target_net, bridge_target_place, timestamp) \
+                 VALUES ($1, $2, 'TokenBridgedOut', $3, $4, $5) \
                  ON CONFLICT (net_id, event_seq) DO NOTHING",
             )
             .bind(net_id)
             .bind(seq)
+            .bind(target_net_id)
+            .bind(target_place_name)
             .bind(ts)
             .execute(db)
             .await?;
 
-            insert_event_token(db, net_id, seq, &token.id.0.to_string(), "produced", "", None).await?;
+            let bridge_data = token_color_to_json(&token.color);
+            insert_event_token(db, net_id, seq, &token.id.0.to_string(), "produced", "", None, Some(&bridge_data)).await?;
         }
 
         // Other event types are not relevant for token causality
@@ -576,6 +601,18 @@ async fn process_domain_event(
     }
 
     Ok(())
+}
+
+/// Convert a TokenColor into the most useful JSON representation for UI
+/// display: `Data(v)` → `v`, `Integer(n)` → number, `Unit` → null.
+/// The type tag is elided — consumers of the provenance detail endpoint
+/// care about the payload, not whether it was a Unit/Integer/Data marker.
+fn token_color_to_json(color: &petri_domain::TokenColor) -> serde_json::Value {
+    match color {
+        petri_domain::TokenColor::Unit => serde_json::Value::Null,
+        petri_domain::TokenColor::Integer(n) => serde_json::Value::from(*n),
+        petri_domain::TokenColor::Data(v) => v.clone(),
+    }
 }
 
 async fn insert_event_token(
@@ -586,10 +623,11 @@ async fn insert_event_token(
     role: &str,
     place_id: &str,
     place_name: Option<&str>,
+    token_data: Option<&serde_json::Value>,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "INSERT INTO causality_event_tokens (net_id, event_seq, token_id, role, place_id, place_name) \
-         VALUES ($1, $2, $3, $4, $5, $6) \
+        "INSERT INTO causality_event_tokens (net_id, event_seq, token_id, role, place_id, place_name, token_data) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7) \
          ON CONFLICT DO NOTHING",
     )
     .bind(net_id)
@@ -598,6 +636,7 @@ async fn insert_event_token(
     .bind(role)
     .bind(place_id)
     .bind(place_name)
+    .bind(token_data)
     .execute(db)
     .await?;
     Ok(())
@@ -809,6 +848,37 @@ async fn record_step_event(
 ///
 /// Extracts key/value from the effect_result of a `process_log_metric`
 /// EffectCompleted event and writes a row per matching process.
+/// Resolve the signal_key that caused a metric/log/task-style effect to fire.
+///
+/// A `process_log_metric` or `process_log_message` effect fires when a
+/// `sig_metric` or `sig_log` token is consumed. Those tokens were created
+/// by an `ExternalSignal` injection — we stored that link in
+/// `causality_signal_lineage` (ingress_net+ingress_seq → dispatch info,
+/// keyed by signal_key). Walk back: consumed token → producer event
+/// (TokenCreated) → signal_lineage.signal_key.
+///
+/// Returns `None` for metrics/logs whose upstream chain has no signal (e.g.
+/// internally-generated seeds, scenario bootstraps).
+async fn resolve_signal_key_from_consumed(
+    db: &PgPool,
+    consumed_ids: &[String],
+) -> Result<Option<String>, sqlx::Error> {
+    if consumed_ids.is_empty() {
+        return Ok(None);
+    }
+    sqlx::query_scalar::<_, String>(
+        "SELECT sl.signal_key \
+         FROM causality_event_tokens et \
+         JOIN causality_signal_lineage sl \
+             ON sl.ingress_net = et.net_id AND sl.ingress_seq = et.event_seq \
+         WHERE et.token_id = ANY($1) AND et.role = 'produced' \
+         LIMIT 1",
+    )
+    .bind(consumed_ids)
+    .fetch_optional(db)
+    .await
+}
+
 async fn record_metric_event(
     db: &PgPool,
     consumed_ids: &[String],
@@ -823,15 +893,17 @@ async fn record_metric_event(
     }
 
     let process_ids = resolve_process_ids(db, consumed_ids, read_ids).await?;
+    let signal_key = resolve_signal_key_from_consumed(db, consumed_ids).await?;
     for pid in &process_ids {
         sqlx::query(
-            "INSERT INTO hpi_metrics (process_id, key, value, timestamp) \
-             VALUES ($1, $2, $3, $4)",
+            "INSERT INTO hpi_metrics (process_id, key, value, timestamp, signal_key) \
+             VALUES ($1, $2, $3, $4, $5)",
         )
         .bind(pid)
         .bind(key)
         .bind(value)
         .bind(ts)
+        .bind(&signal_key)
         .execute(db)
         .await?;
     }
@@ -856,10 +928,11 @@ async fn record_log_event(
     let detail = effect_result.get("detail").cloned().unwrap_or(serde_json::json!({}));
 
     let process_ids = resolve_process_ids(db, consumed_ids, read_ids).await?;
+    let signal_key = resolve_signal_key_from_consumed(db, consumed_ids).await?;
     for pid in &process_ids {
         sqlx::query(
-            "INSERT INTO hpi_logs (process_id, level, source, message, detail, timestamp) \
-             VALUES ($1, $2, $3, $4, $5, $6)",
+            "INSERT INTO hpi_logs (process_id, level, source, message, detail, timestamp, signal_key) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7)",
         )
         .bind(pid)
         .bind(level)
@@ -867,6 +940,7 @@ async fn record_log_event(
         .bind(message)
         .bind(&detail)
         .bind(ts)
+        .bind(&signal_key)
         .execute(db)
         .await?;
     }
