@@ -14,6 +14,7 @@ use mekhan_service::s3::ArtifactStore;
 use mekhan_service::yjs::manager::YjsManager;
 use mekhan_service::yjs::persistence::YjsPersistence;
 use mekhan_service::catalogue::repository::PgCatalogueRepository;
+use mekhan_service::causality::live::LiveBroadcasts;
 use mekhan_service::{build_router, AppState};
 
 /// Create an isolated test database with migrations applied.
@@ -86,6 +87,7 @@ pub async fn test_app() -> (Router, PgPool) {
         s3: artifact_store,
         artifact_s3: None,
         catalogue_repo: Arc::new(PgCatalogueRepository::new(db.clone())),
+        live: LiveBroadcasts::new(),
     };
 
     let router = build_router(state);
@@ -118,6 +120,7 @@ pub async fn test_app_with_nats(nats_url: &str) -> (Router, PgPool) {
         s3: artifact_store,
         artifact_s3: None,
         catalogue_repo: Arc::new(PgCatalogueRepository::new(db.clone())),
+        live: LiveBroadcasts::new(),
     };
 
     let router = build_router(state);
@@ -152,6 +155,7 @@ pub async fn test_app_with_petri_url(nats_url: &str, petri_url: &str) -> (Router
         s3: artifact_store,
         artifact_s3: None,
         catalogue_repo: Arc::new(PgCatalogueRepository::new(db.clone())),
+        live: LiveBroadcasts::new(),
     };
 
     let router = build_router(state);

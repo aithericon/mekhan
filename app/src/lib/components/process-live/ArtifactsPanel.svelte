@@ -1,0 +1,216 @@
+<script lang="ts">
+	import { Button } from '$lib/components/ui/button';
+	import { Badge } from '$lib/components/ui/badge';
+	import FileBox from '@lucide/svelte/icons/file-box';
+	import ChevronLeft from '@lucide/svelte/icons/chevron-left';
+	import ChevronRight from '@lucide/svelte/icons/chevron-right';
+	import SkipBack from '@lucide/svelte/icons/skip-back';
+	import SkipForward from '@lucide/svelte/icons/skip-forward';
+	import type { LiveArtifactEntry } from '$lib/api/client';
+	import type { createProcessLiveStore } from '$lib/stores/process-live.svelte';
+	import { pickRenderer, groupKey, groupLabel, stepNumber } from './renderers/registry';
+
+	type Store = ReturnType<typeof createProcessLiveStore>;
+	interface Props {
+		store: Store;
+	}
+	let { store }: Props = $props();
+
+	/**
+	 * Per group (by render_hint / MIME / category):
+	 *   - sort entries by step → created_at
+	 *   - track selected index (default: latest)
+	 *   - show a "new iteration available" pill when live events land while
+	 *     the user is parked on an older index
+	 */
+	interface Group {
+		key: string;
+		label: string;
+		entries: LiveArtifactEntry[];
+	}
+
+	const groups = $derived.by<Group[]>(() => {
+		const m = new Map<string, LiveArtifactEntry[]>();
+		for (const e of store.artifacts) {
+			const k = groupKey(e);
+			const arr = m.get(k) ?? [];
+			arr.push(e);
+			m.set(k, arr);
+		}
+		const out: Group[] = [];
+		for (const [k, arr] of m) {
+			arr.sort((a, b) => {
+				const sa = stepNumber(a);
+				const sb = stepNumber(b);
+				if (sa !== sb) return sa - sb;
+				return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+			});
+			out.push({ key: k, label: groupLabel(k), entries: arr });
+		}
+		// Stable ordering: named render_hints first, then MIME, then category
+		out.sort((a, b) => {
+			const rank = (k: string) =>
+				k.startsWith('hint:') ? 0 : k.startsWith('mime:') ? 1 : 2;
+			const ra = rank(a.key);
+			const rb = rank(b.key);
+			if (ra !== rb) return ra - rb;
+			return a.label.localeCompare(b.label);
+		});
+		return out;
+	});
+
+	// Selected index per group (keyed by group.key). Defaults to latest on
+	// first load; sticky when user scrubs but doesn't auto-advance.
+	let selectedByGroup = $state<Record<string, number>>({});
+	let stickyUserSelection = $state<Record<string, boolean>>({});
+
+	function indexFor(g: Group): number {
+		const sel = selectedByGroup[g.key];
+		if (sel === undefined || !stickyUserSelection[g.key]) {
+			return g.entries.length - 1;
+		}
+		return Math.min(sel, g.entries.length - 1);
+	}
+
+	function setIndex(g: Group, i: number) {
+		selectedByGroup[g.key] = i;
+		// Only mark sticky if the user picked something other than the latest;
+		// otherwise keep auto-advance behavior.
+		stickyUserSelection[g.key] = i !== g.entries.length - 1;
+	}
+
+	function jumpLatest(g: Group) {
+		selectedByGroup[g.key] = g.entries.length - 1;
+		stickyUserSelection[g.key] = false;
+	}
+
+	const statusDotClass = $derived(
+		store.artifactStatus === 'streaming'
+			? 'bg-green-500'
+			: store.artifactStatus === 'error'
+				? 'bg-red-500'
+				: 'bg-amber-500'
+	);
+	const statusLabel = $derived(
+		store.artifactStatus === 'streaming'
+			? 'live'
+			: store.artifactStatus === 'reconnecting'
+				? 'reconnecting…'
+				: store.artifactStatus === 'loading'
+					? 'loading…'
+					: store.artifactStatus
+	);
+</script>
+
+<section class="mb-6 flex flex-col gap-4">
+	<div class="flex items-center justify-between">
+		<div class="flex items-center gap-2">
+			<FileBox class="size-4 text-muted-foreground" />
+			<h3 class="text-sm font-medium">Live artifact viewer</h3>
+			<span class="inline-block size-2 rounded-full {statusDotClass}"></span>
+			<span class="text-xs text-muted-foreground">{statusLabel}</span>
+		</div>
+		<p class="text-xs text-muted-foreground">
+			{store.artifacts.length} artifact{store.artifacts.length === 1 ? '' : 's'}
+		</p>
+	</div>
+
+	{#if groups.length === 0}
+		<div
+			class="flex flex-col items-center justify-center rounded-xl border border-dashed border-border py-8"
+		>
+			<p class="text-sm text-muted-foreground">
+				No artifacts yet — they'll appear here as the process produces them.
+			</p>
+		</div>
+	{:else}
+		{#each groups as g (g.key)}
+			{@const idx = indexFor(g)}
+			{@const entry = g.entries[idx]}
+			{@const Renderer = pickRenderer(entry)}
+			{@const isLatest = idx === g.entries.length - 1}
+			<div class="flex flex-col gap-2 rounded-xl border border-border bg-background p-3">
+				<div class="flex flex-wrap items-center justify-between gap-2">
+					<div class="flex items-center gap-2">
+						<Badge variant="secondary" class="font-mono text-xs">{g.label}</Badge>
+						<span class="text-xs text-muted-foreground">{entry.name}</span>
+						{#if entry.process_step}
+							<Badge variant="outline" class="text-xs">step {entry.process_step}</Badge>
+						{/if}
+					</div>
+
+					{#if g.entries.length > 1}
+						<div class="flex items-center gap-1">
+							{#if !isLatest && stickyUserSelection[g.key]}
+								<Button size="sm" variant="ghost" onclick={() => jumpLatest(g)}>
+									Jump to latest ({g.entries.length})
+								</Button>
+							{/if}
+							<Button
+								variant="ghost"
+								size="icon-sm"
+								disabled={idx === 0}
+								title="First"
+								onclick={() => setIndex(g, 0)}
+							>
+								<SkipBack class="size-4" />
+							</Button>
+							<Button
+								variant="ghost"
+								size="icon-sm"
+								disabled={idx === 0}
+								title="Previous"
+								onclick={() => setIndex(g, idx - 1)}
+							>
+								<ChevronLeft class="size-4" />
+							</Button>
+							<input
+								type="range"
+								min="0"
+								max={g.entries.length - 1}
+								step="1"
+								value={idx}
+								oninput={(e) => setIndex(g, parseInt(e.currentTarget.value, 10))}
+								class="w-56 accent-primary"
+							/>
+							<Button
+								variant="ghost"
+								size="icon-sm"
+								disabled={idx === g.entries.length - 1}
+								title="Next"
+								onclick={() => setIndex(g, idx + 1)}
+							>
+								<ChevronRight class="size-4" />
+							</Button>
+							<Button
+								variant="ghost"
+								size="icon-sm"
+								disabled={idx === g.entries.length - 1}
+								title="Latest"
+								onclick={() => setIndex(g, g.entries.length - 1)}
+							>
+								<SkipForward class="size-4" />
+							</Button>
+							<span class="ml-1 text-xs tabular-nums text-muted-foreground">
+								{idx + 1} / {g.entries.length}
+							</span>
+						</div>
+					{/if}
+				</div>
+
+				{#if Renderer}
+					<Renderer {entry} />
+				{:else}
+					<p class="text-sm text-muted-foreground">
+						No live renderer for <code>{entry.mime_type ?? entry.category}</code> — see the
+						history grid below.
+					</p>
+				{/if}
+			</div>
+		{/each}
+	{/if}
+
+	{#if store.error}
+		<p class="text-xs text-red-500">{store.error}</p>
+	{/if}
+</section>

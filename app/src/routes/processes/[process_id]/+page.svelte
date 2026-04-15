@@ -21,6 +21,9 @@
 	import { ProcessTimeline } from '$lib/components/process-timeline';
 	import type { CatalogueEntry } from '$lib/types/catalogue';
 	import { ArtifactCard } from '$lib/components/catalogue';
+	import { MetricsPanel, LogsPanel, ArtifactsPanel } from '$lib/components/process-live';
+	import { createProcessLiveStore } from '$lib/stores/process-live.svelte';
+	import { onDestroy, untrack } from 'svelte';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -77,6 +80,10 @@
 	// Tasks tab
 	let tasks = $state<HpiTask[]>([]);
 	let tasksLoading = $state(false);
+
+	// Live store for Metrics + Logs tabs — lazily created on first visit,
+	// torn down when the process changes or the page unmounts.
+	let liveStore = $state<ReturnType<typeof createProcessLiveStore> | null>(null);
 
 	const processId = $derived(($page.params as Record<string, string>).process_id);
 
@@ -301,14 +308,35 @@
 		loadDetail();
 	});
 
-	// Load tab data when switching tabs
+	// One effect, tracking only tab + processId. Everything that reads/writes
+	// liveStore is untracked so it can't retrigger this effect.
+	let prevProcessId: string | null = null;
 	$effect(() => {
 		const tab = activeTab;
-		const _tid = processId;
-		if (tab === 'artifacts') loadArtifacts();
-		else if (tab === 'metrics') loadMetrics();
-		else if (tab === 'logs') loadLogs();
-		else if (tab === 'tasks') loadTasks();
+		const tid = processId;
+		untrack(() => {
+			if (prevProcessId !== null && prevProcessId !== tid && liveStore) {
+				liveStore.destroy();
+				liveStore = null;
+			}
+			prevProcessId = tid;
+
+			if (tab === 'tasks') loadTasks();
+			else if (tab === 'artifacts' || tab === 'metrics' || tab === 'logs') {
+				if (!liveStore) {
+					const store = createProcessLiveStore(tid);
+					liveStore = store;
+					store.init();
+				}
+				// Artifacts tab still uses its paginated REST grid for full history.
+				if (tab === 'artifacts') loadArtifacts();
+			}
+		});
+	});
+
+	onDestroy(() => {
+		liveStore?.destroy();
+		liveStore = null;
 	});
 
 	// Reload logs when level filter changes
@@ -338,7 +366,7 @@
 </script>
 
 <div class="h-full overflow-y-auto">
-	<div class="mx-auto max-w-5xl px-6 py-8 animate-rise">
+	<div class="mx-auto w-full px-6 py-8 animate-rise">
 
 		<!-- Back link -->
 		<a
@@ -504,6 +532,9 @@
 
 			<!-- ── Artifacts Tab ──────────────────────────────────────── -->
 			{:else if activeTab === 'artifacts'}
+				{#if liveStore}
+					<ArtifactsPanel store={liveStore} />
+				{/if}
 				{#if artifactsLoading}
 					<div class="flex items-center justify-center py-12 text-sm text-muted-foreground">
 						Loading artifacts...
@@ -557,116 +588,22 @@
 
 			<!-- ── Metrics Tab ───────────────────────────────────────── -->
 			{:else if activeTab === 'metrics'}
-				{#if metricsLoading}
-					<div class="flex items-center justify-center py-12 text-sm text-muted-foreground">
-						Loading metrics...
-					</div>
-				{:else if metricsSummary.length === 0}
-					<div class="flex flex-col items-center justify-center rounded-xl border border-dashed border-border py-12">
-						<BarChart3 class="size-8 text-muted-foreground/40" />
-						<p class="mt-2 text-sm text-muted-foreground">No metrics recorded</p>
-					</div>
+				{#if liveStore}
+					<MetricsPanel {processId} store={liveStore} />
 				{:else}
-					<div class="rounded-lg border border-border bg-card overflow-hidden">
-						<table class="w-full text-sm">
-							<thead>
-								<tr class="border-b border-border bg-muted/50">
-									<th class="px-4 py-2 text-left text-xs font-medium uppercase tracking-wide text-muted-foreground">Key</th>
-									<th class="px-4 py-2 text-right text-xs font-medium uppercase tracking-wide text-muted-foreground">Latest</th>
-									<th class="px-4 py-2 text-right text-xs font-medium uppercase tracking-wide text-muted-foreground">Min</th>
-									<th class="px-4 py-2 text-right text-xs font-medium uppercase tracking-wide text-muted-foreground">Max</th>
-									<th class="px-4 py-2 text-right text-xs font-medium uppercase tracking-wide text-muted-foreground">Avg</th>
-									<th class="px-4 py-2 text-right text-xs font-medium uppercase tracking-wide text-muted-foreground">Count</th>
-								</tr>
-							</thead>
-							<tbody>
-								{#each metricsSummary as s (s.key)}
-									<tr class="border-b border-border last:border-0">
-										<td class="px-4 py-2 font-mono text-foreground">{s.key}</td>
-										<td class="px-4 py-2 text-right tabular-nums text-foreground font-medium">{s.last_value.toPrecision(4)}</td>
-										<td class="px-4 py-2 text-right tabular-nums text-muted-foreground">{s.min_value.toPrecision(4)}</td>
-										<td class="px-4 py-2 text-right tabular-nums text-muted-foreground">{s.max_value.toPrecision(4)}</td>
-										<td class="px-4 py-2 text-right tabular-nums text-muted-foreground">{s.avg_value.toPrecision(4)}</td>
-										<td class="px-4 py-2 text-right tabular-nums text-muted-foreground">{s.count}</td>
-									</tr>
-								{/each}
-							</tbody>
-						</table>
+					<div class="flex items-center justify-center py-12 text-sm text-muted-foreground">
+						Loading metrics…
 					</div>
 				{/if}
 
 			<!-- ── Logs Tab ──────────────────────────────────────────── -->
 			{:else if activeTab === 'logs'}
-				<!-- Level filter -->
-				<div class="mb-3 flex gap-1">
-					{#each ['all', 'info', 'warn', 'error'] as level}
-						<Button
-							variant={logsLevelFilter === level ? 'default' : 'ghost'}
-							size="sm"
-							onclick={() => { logsLevelFilter = level; logsPage = 0; }}
-						>
-							{level.charAt(0).toUpperCase() + level.slice(1)}
-						</Button>
-					{/each}
-				</div>
-
-				{#if logsLoading}
-					<div class="flex items-center justify-center py-12 text-sm text-muted-foreground">
-						Loading logs...
-					</div>
-				{:else if logs.length === 0}
-					<div class="flex flex-col items-center justify-center rounded-xl border border-dashed border-border py-12">
-						<ScrollText class="size-8 text-muted-foreground/40" />
-						<p class="mt-2 text-sm text-muted-foreground">No logs found</p>
-					</div>
+				{#if liveStore}
+					<LogsPanel store={liveStore} />
 				{:else}
-					<div class="rounded-lg border border-border bg-card overflow-hidden">
-						<div class="divide-y divide-border">
-							{#each logs as log (log.id)}
-								<div class="flex items-start gap-2 px-4 py-2 text-xs hover:bg-accent/30">
-									<span class="shrink-0 tabular-nums text-muted-foreground pt-0.5">
-										{formatTimestamp(log.timestamp)}
-									</span>
-									<Badge class={logLevelColor(log.level)} variant="secondary">
-										{log.level}
-									</Badge>
-									{#if log.source}
-										<span class="shrink-0 font-mono text-muted-foreground pt-0.5">{log.source}</span>
-									{/if}
-									<span class="text-foreground pt-0.5 break-all">{log.message}</span>
-								</div>
-							{/each}
-						</div>
+					<div class="flex items-center justify-center py-12 text-sm text-muted-foreground">
+						Loading logs…
 					</div>
-
-					{#if logsTotalPages > 1}
-						<div class="mt-4 flex items-center justify-between">
-							<p class="text-xs text-muted-foreground">
-								{logsTotal} log{logsTotal === 1 ? '' : 's'}
-							</p>
-							<div class="flex items-center gap-1">
-								<Button
-									variant="ghost"
-									size="icon-sm"
-									disabled={logsPage === 0}
-									onclick={() => (logsPage = logsPage - 1)}
-								>
-									<ChevronLeft class="size-4" />
-								</Button>
-								<span class="px-2 text-xs tabular-nums text-muted-foreground">
-									{logsPage + 1} / {logsTotalPages}
-								</span>
-								<Button
-									variant="ghost"
-									size="icon-sm"
-									disabled={!logsHasNext}
-									onclick={() => (logsPage = logsPage + 1)}
-								>
-									<ChevronRight class="size-4" />
-								</Button>
-							</div>
-						</div>
-					{/if}
 				{/if}
 
 			<!-- ── Tasks Tab ─────────────────────────────────────────── -->

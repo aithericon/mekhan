@@ -9,6 +9,7 @@ use petri_domain::{DomainEvent, PersistedEvent};
 
 use crate::catalogue::model::CatalogueRegisterCommand;
 use crate::catalogue::subscriptions::SubscriptionManager;
+use crate::causality::live::LiveBroadcasts;
 use crate::nats::MekhanNats;
 
 /// Slim serde type for CrossNetTokenTransfer messages on `petri.bridge.>`.
@@ -27,6 +28,7 @@ pub async fn start_causality_ingest(
     nats: MekhanNats,
     db: PgPool,
     subscription_manager: Arc<SubscriptionManager>,
+    live: Arc<LiveBroadcasts>,
 ) {
     let consumer = match nats.causality_consumer().await {
         Ok(c) => c,
@@ -62,7 +64,7 @@ pub async fn start_causality_ingest(
             process_bridge_transfer(&db, subject, &msg.payload).await
         } else if subject.starts_with("petri.events.") {
             // Domain event: petri.events.{net_id}.{event_type...}
-            process_domain_event(&db, subject, &msg.payload, &subscription_manager).await
+            process_domain_event(&db, subject, &msg.payload, &subscription_manager, &live).await
         } else {
             tracing::warn!("causality ingest: unexpected subject: {subject}");
             Ok(())
@@ -132,6 +134,7 @@ async fn process_domain_event(
     subject: &str,
     payload: &[u8],
     subscription_manager: &SubscriptionManager,
+    live: &LiveBroadcasts,
 ) -> Result<(), sqlx::Error> {
     // Extract net_id from subject: petri.events.{net_id}.{event_type...}
     let net_id = match subject.split('.').nth(2) {
@@ -298,12 +301,12 @@ async fn process_domain_event(
 
             // Breadcrumb: log metric effect → write to hpi_metrics
             if effect_handler_id == "process_log_metric" {
-                record_metric_event(db, &consumed_ids, &read_ids, effect_result, ts).await?;
+                record_metric_event(db, &consumed_ids, &read_ids, effect_result, ts, live).await?;
             }
 
             // Breadcrumb: log message effect → write to hpi_logs
             if effect_handler_id == "process_log_message" {
-                record_log_event(db, &consumed_ids, &read_ids, effect_result, ts).await?;
+                record_log_event(db, &consumed_ids, &read_ids, effect_result, ts, live).await?;
             }
 
             // Breadcrumb: human task effect → write to hpi_tasks
@@ -326,6 +329,7 @@ async fn process_domain_event(
                         .or(process_step_started.as_deref()),
                     ts,
                     subscription_manager,
+                    live,
                 ).await?;
             }
 
@@ -885,6 +889,7 @@ async fn record_metric_event(
     read_ids: &[String],
     effect_result: &serde_json::Value,
     ts: chrono::DateTime<chrono::Utc>,
+    live: &LiveBroadcasts,
 ) -> Result<(), sqlx::Error> {
     let key = effect_result.get("key").and_then(|v| v.as_str()).unwrap_or("");
     let value = effect_result.get("value").and_then(|v| v.as_f64()).unwrap_or(0.0);
@@ -906,6 +911,14 @@ async fn record_metric_event(
         .bind(&signal_key)
         .execute(db)
         .await?;
+
+        live.emit_metric(
+            pid.clone(),
+            signal_key.clone(),
+            key.to_string(),
+            value,
+            ts,
+        );
     }
     Ok(())
 }
@@ -921,6 +934,7 @@ async fn record_log_event(
     read_ids: &[String],
     effect_result: &serde_json::Value,
     ts: chrono::DateTime<chrono::Utc>,
+    live: &LiveBroadcasts,
 ) -> Result<(), sqlx::Error> {
     let level = effect_result.get("level").and_then(|v| v.as_str()).unwrap_or("info");
     let source = effect_result.get("source").and_then(|v| v.as_str());
@@ -943,6 +957,16 @@ async fn record_log_event(
         .bind(&signal_key)
         .execute(db)
         .await?;
+
+        live.emit_log(
+            pid.clone(),
+            signal_key.clone(),
+            level.to_string(),
+            source.map(|s| s.to_string()),
+            message.to_string(),
+            detail.clone(),
+            ts,
+        );
     }
     Ok(())
 }
@@ -1033,6 +1057,7 @@ async fn register_catalogue_entry(
     process_step: Option<&str>,
     _ts: chrono::DateTime<chrono::Utc>,
     subscription_manager: &SubscriptionManager,
+    live: &LiveBroadcasts,
 ) -> Result<(), sqlx::Error> {
     let cmd: CatalogueRegisterCommand = match serde_json::from_value(effect_result.clone()) {
         Ok(c) => c,
@@ -1124,6 +1149,25 @@ async fn register_catalogue_entry(
                     process_id = ?process_id,
                     "catalogued artifact from causality projector",
                 );
+
+                // Fan out to live SSE subscribers once the row is committed.
+                if let Some(pid) = process_id.as_ref() {
+                    live.emit_artifact(
+                        pid.clone(),
+                        cmd.artifact_id.clone(),
+                        cmd.execution_id.clone(),
+                        cmd.name.clone(),
+                        cmd.category.clone(),
+                        cmd.filename.clone(),
+                        cmd.mime_type.clone(),
+                        cmd.storage_path.clone(),
+                        size_bytes,
+                        step.clone(),
+                        cmd.signal_key.clone(),
+                        user_metadata.clone(),
+                        cmd.created_at,
+                    );
+                }
 
                 // Evaluate subscriptions with full provenance
                 let entry = crate::catalogue::model::CatalogueEntry {

@@ -87,12 +87,16 @@ async fn main() -> anyhow::Result<()> {
         Arc::new(ArtifactStore::new(cfg))
     });
 
+    // Live broadcasts for SSE fan-out of metric/log events.
+    let live = mekhan_service::causality::live::LiveBroadcasts::new();
+
     // Causality ingest (PETRI_GLOBAL domain events → causality tables)
     // Single projection path for processes, tasks, metrics, logs, and catalogue.
     tokio::spawn(mekhan_service::causality::ingest::start_causality_ingest(
         mekhan_nats.clone(),
         db.clone(),
         subscription_manager.clone(),
+        live.clone(),
     ));
 
     let catalogue_repo = Arc::new(PgCatalogueRepository::new(db.clone()));
@@ -113,6 +117,7 @@ async fn main() -> anyhow::Result<()> {
         s3: artifact_store,
         artifact_s3,
         catalogue_repo,
+        live,
     };
 
     let app = build_router(state);

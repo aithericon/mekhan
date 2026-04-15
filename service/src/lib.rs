@@ -28,6 +28,7 @@ use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
 use crate::catalogue::repository::CatalogueRepository;
+use crate::causality::live::LiveBroadcasts;
 use crate::config::AppConfig;
 use crate::nats::MekhanNats;
 use crate::petri::client::PetriClient;
@@ -44,6 +45,7 @@ pub struct AppState {
     pub s3: Arc<ArtifactStore>,
     pub artifact_s3: Option<Arc<ArtifactStore>>,
     pub catalogue_repo: Arc<dyn CatalogueRepository>,
+    pub live: Arc<LiveBroadcasts>,
 }
 
 pub fn build_router(state: AppState) -> Router {
@@ -135,6 +137,30 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/processes/{process_id}/tasks",
             get(process::handlers::get_process_tasks),
+        )
+        .route(
+            "/api/processes/{process_id}/metrics/series",
+            get(handlers::process_live::metrics_series),
+        )
+        .route(
+            "/api/processes/{process_id}/metrics/stream",
+            get(handlers::process_live::metrics_stream),
+        )
+        .route(
+            "/api/processes/{process_id}/logs/tail",
+            get(handlers::process_live::logs_tail),
+        )
+        .route(
+            "/api/processes/{process_id}/logs/stream",
+            get(handlers::process_live::logs_stream),
+        )
+        .route(
+            "/api/processes/{process_id}/artifacts/list",
+            get(handlers::process_live::artifacts_list),
+        )
+        .route(
+            "/api/processes/{process_id}/artifacts/stream",
+            get(handlers::process_live::artifacts_stream),
         )
         .route(
             "/api/processes/{process_id}/artifacts",

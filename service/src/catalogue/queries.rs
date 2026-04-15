@@ -235,6 +235,63 @@ pub async fn lineage(
     .await
 }
 
+/// Lineage with optional category / render_hint / time-range / limit filters.
+/// Used by the live-artifact backfill endpoint. Empty slices = no filter.
+pub async fn lineage_filtered(
+    pool: &PgPool,
+    process_id: &str,
+    categories: &[String],
+    render_hints: &[String],
+    since: Option<chrono::DateTime<chrono::Utc>>,
+    until: Option<chrono::DateTime<chrono::Utc>>,
+    limit: i64,
+) -> Result<Vec<CatalogueEntry>, sqlx::Error> {
+    let job_prefix = format!("{process_id}:%");
+    let categories_opt: Option<Vec<String>> = if categories.is_empty() {
+        None
+    } else {
+        Some(categories.to_vec())
+    };
+    let hints_opt: Option<Vec<String>> = if render_hints.is_empty() {
+        None
+    } else {
+        Some(render_hints.to_vec())
+    };
+    sqlx::query_as::<_, CatalogueEntry>(
+        r#"
+        SELECT * FROM catalogue_entries
+        WHERE (
+            process_id = $1
+            OR job_id LIKE $2
+            OR signal_key IN (
+                SELECT cl.signal_key
+                FROM causality_cross_links cl
+                JOIN causality_event_tokens et
+                  ON et.net_id = cl.egress_net
+                 AND et.event_seq = cl.egress_seq
+                JOIN causality_process_tags pt ON pt.token_id = et.token_id
+                WHERE pt.process_id = $1
+            )
+        )
+        AND ($3::text[] IS NULL OR category = ANY($3))
+        AND ($4::text[] IS NULL OR (user_metadata->>'render_hint') = ANY($4))
+        AND ($5::timestamptz IS NULL OR created_at >= $5)
+        AND ($6::timestamptz IS NULL OR created_at < $6)
+        ORDER BY created_at ASC
+        LIMIT $7
+        "#,
+    )
+    .bind(process_id)
+    .bind(&job_prefix)
+    .bind(categories_opt)
+    .bind(hints_opt)
+    .bind(since)
+    .bind(until)
+    .bind(limit.clamp(1, 5000))
+    .fetch_all(pool)
+    .await
+}
+
 /// All artifacts for a given process, grouped by step (campaign lineage).
 pub async fn lineage_grouped(
     pool: &PgPool,

@@ -26,6 +26,7 @@ use uuid::Uuid;
 
 use mekhan_service::catalogue::subscriptions::SubscriptionManager;
 use mekhan_service::causality::ingest::start_causality_ingest;
+use mekhan_service::causality::live::LiveBroadcasts;
 use mekhan_service::lifecycle::start_lifecycle_listener;
 use mekhan_service::nats::MekhanNats;
 use mekhan_service::process::ingest::{start_process_event_ingest, start_task_ingest};
@@ -275,6 +276,7 @@ async fn causality_full_pipeline() {
         s3: artifact_store,
         artifact_s3: None,
         catalogue_repo,
+        live: LiveBroadcasts::new(),
     });
 
     // ── 2. Spawn Mekhan consumers (clean slate) ──────────────────────────
@@ -309,7 +311,8 @@ async fn causality_full_pipeline() {
     let c_nats = nats.clone();
     let c_db = db.clone();
     let c_sub = sub_mgr.clone();
-    let _causality = spawn_consumer(move || start_causality_ingest(c_nats, c_db, c_sub)).await;
+    let c_live = LiveBroadcasts::new();
+    let _causality = spawn_consumer(move || start_causality_ingest(c_nats, c_db, c_sub, c_live)).await;
 
     let t_nats = nats.clone();
     let t_db = db.clone();

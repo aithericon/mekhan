@@ -252,6 +252,178 @@ export async function getProcessTasks(processId: string): Promise<HpiTask[]> {
 	return request(`/processes/${processId}/tasks`);
 }
 
+// ── Live metrics / logs (SSE + DB backfill) ─────────────────────────────────
+
+export interface MetricPoint {
+	t: string;
+	v: number;
+}
+
+export interface MetricsSeriesResponse {
+	bucket_seconds: number;
+	series: Record<string, MetricPoint[]>;
+}
+
+export interface LiveMetricEvent {
+	seq: number;
+	process_id: string;
+	signal_key: string | null;
+	key: string;
+	value: number;
+	timestamp: string;
+}
+
+export interface LiveLogEvent {
+	seq: number;
+	process_id: string;
+	signal_key: string | null;
+	level: string;
+	source: string | null;
+	message: string;
+	detail: unknown;
+	timestamp: string;
+}
+
+export interface LogTailRow {
+	id: number;
+	process_id: string;
+	level: string;
+	source: string | null;
+	message: string;
+	detail: unknown;
+	timestamp: string;
+	signal_key: string | null;
+}
+
+export async function getProcessMetricsSeries(
+	processId: string,
+	params: {
+		keys?: string[];
+		since?: Date | string;
+		until?: Date | string;
+		signal_key?: string;
+		max_points?: number;
+	}
+): Promise<MetricsSeriesResponse> {
+	const qs = new URLSearchParams();
+	if (params.keys && params.keys.length > 0) qs.set('keys', params.keys.join(','));
+	if (params.since) qs.set('since', toIso(params.since));
+	if (params.until) qs.set('until', toIso(params.until));
+	if (params.signal_key) qs.set('signal_key', params.signal_key);
+	if (params.max_points) qs.set('max_points', String(params.max_points));
+	const query = qs.toString();
+	return request(`/processes/${processId}/metrics/series${query ? `?${query}` : ''}`);
+}
+
+export async function getProcessLogsTail(
+	processId: string,
+	params?: {
+		since?: Date | string;
+		until?: Date | string;
+		level?: string;
+		signal_key?: string;
+		q?: string;
+		limit?: number;
+	}
+): Promise<{ logs: LogTailRow[] }> {
+	const qs = new URLSearchParams();
+	if (params?.since) qs.set('since', toIso(params.since));
+	if (params?.until) qs.set('until', toIso(params.until));
+	if (params?.level) qs.set('level', params.level);
+	if (params?.signal_key) qs.set('signal_key', params.signal_key);
+	if (params?.q) qs.set('q', params.q);
+	if (params?.limit) qs.set('limit', String(params.limit));
+	const query = qs.toString();
+	return request(`/processes/${processId}/logs/tail${query ? `?${query}` : ''}`);
+}
+
+export function processMetricsStreamUrl(
+	processId: string,
+	params: { since_seq?: number; signal_key?: string; keys?: string[] } = {}
+): string {
+	const qs = new URLSearchParams();
+	if (params.since_seq !== undefined) qs.set('since_seq', String(params.since_seq));
+	if (params.signal_key) qs.set('signal_key', params.signal_key);
+	if (params.keys && params.keys.length > 0) qs.set('keys', params.keys.join(','));
+	const query = qs.toString();
+	return `${API_BASE}/processes/${processId}/metrics/stream${query ? `?${query}` : ''}`;
+}
+
+export function processLogsStreamUrl(
+	processId: string,
+	params: { since_seq?: number; signal_key?: string; level?: string; q?: string } = {}
+): string {
+	const qs = new URLSearchParams();
+	if (params.since_seq !== undefined) qs.set('since_seq', String(params.since_seq));
+	if (params.signal_key) qs.set('signal_key', params.signal_key);
+	if (params.level) qs.set('level', params.level);
+	if (params.q) qs.set('q', params.q);
+	const query = qs.toString();
+	return `${API_BASE}/processes/${processId}/logs/stream${query ? `?${query}` : ''}`;
+}
+
+// ── Artifacts (live) ────────────────────────────────────────────────────────
+
+export interface LiveArtifactEntry {
+	seq?: number; // present on live events, absent on DB-backfill rows
+	process_id?: string;
+	artifact_id?: string;
+	id?: string; // DB rows use `id`; SSE uses `artifact_id`
+	execution_id: string;
+	name: string;
+	category: string;
+	filename: string;
+	mime_type: string | null;
+	storage_path: string | null;
+	size_bytes: number | null;
+	process_step: string | null;
+	signal_key: string | null;
+	user_metadata: Record<string, unknown> | null;
+	created_at: string;
+}
+
+export async function getProcessArtifactsList(
+	processId: string,
+	params?: {
+		categories?: string[];
+		render_hints?: string[];
+		since?: Date | string;
+		until?: Date | string;
+		limit?: number;
+	}
+): Promise<{ entries: LiveArtifactEntry[] }> {
+	const qs = new URLSearchParams();
+	if (params?.categories && params.categories.length > 0)
+		qs.set('categories', params.categories.join(','));
+	if (params?.render_hints && params.render_hints.length > 0)
+		qs.set('render_hints', params.render_hints.join(','));
+	if (params?.since) qs.set('since', toIso(params.since));
+	if (params?.until) qs.set('until', toIso(params.until));
+	if (params?.limit) qs.set('limit', String(params.limit));
+	const query = qs.toString();
+	return request(
+		`/processes/${processId}/artifacts/list${query ? `?${query}` : ''}`
+	);
+}
+
+export function processArtifactsStreamUrl(
+	processId: string,
+	params: { since_seq?: number; categories?: string[]; render_hints?: string[] } = {}
+): string {
+	const qs = new URLSearchParams();
+	if (params.since_seq !== undefined) qs.set('since_seq', String(params.since_seq));
+	if (params.categories && params.categories.length > 0)
+		qs.set('categories', params.categories.join(','));
+	if (params.render_hints && params.render_hints.length > 0)
+		qs.set('render_hints', params.render_hints.join(','));
+	const query = qs.toString();
+	return `${API_BASE}/processes/${processId}/artifacts/stream${query ? `?${query}` : ''}`;
+}
+
+function toIso(d: Date | string): string {
+	return typeof d === 'string' ? d : d.toISOString();
+}
+
 export async function getProcessArtifacts(
 	processId: string,
 	params?: { page?: number; page_size?: number }
