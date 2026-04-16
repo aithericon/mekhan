@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
+	import * as echarts from 'echarts';
 	import { catalogueDownloadUrl } from '$lib/api/client';
 	import type { LiveArtifactEntry } from '$lib/api/client';
 
@@ -39,27 +40,45 @@
 	let stdEl: HTMLDivElement | undefined = $state();
 	let eiEl: HTMLDivElement | undefined = $state();
 
+	let meanChart: echarts.ECharts | null = $state(null);
+	let stdChart: echarts.ECharts | null = $state(null);
+	let eiChart: echarts.ECharts | null = $state(null);
+
 	let model = $state<GpModel | null>(null);
 	let fetching = $state(false);
 	let error = $state<string | null>(null);
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	let Plotly: any = null;
 
-	onMount(async () => {
-		// plotly.js-dist-min ships no .d.ts; opt-in to any via @ts-expect-error.
-		// @ts-expect-error no types for plotly.js-dist-min
-		const mod = await import('plotly.js-dist-min');
-		Plotly = mod.default ?? mod;
+	// Unified Viridis palette across all three panels so spatial correlations
+	// are legible by eye: each panel keeps its own colorbar range so the
+	// absolute values stay unambiguous, but the shared perceptual scale lets
+	// you directly read off "high μ here coincides with low σ there".
+	// Viridis is also perceptually uniform, colorblind-safe, and grayscale-safe.
+	const VIRIDIS = ['#440154', '#3b528b', '#21918c', '#5ec962', '#fde725'];
+
+	onMount(() => {
+		if (meanEl) meanChart = echarts.init(meanEl);
+		if (stdEl) stdChart = echarts.init(stdEl);
+		if (eiEl) eiChart = echarts.init(eiEl);
+		const onResize = () => {
+			meanChart?.resize();
+			stdChart?.resize();
+			eiChart?.resize();
+		};
+		window.addEventListener('resize', onResize);
+		return () => window.removeEventListener('resize', onResize);
 	});
 
 	onDestroy(() => {
-		for (const el of [meanEl, stdEl, eiEl]) {
-			if (el && Plotly) Plotly.purge(el);
-		}
+		meanChart?.dispose();
+		stdChart?.dispose();
+		eiChart?.dispose();
+		meanChart = null;
+		stdChart = null;
+		eiChart = null;
 	});
 
 	// Fetch on entry change. Keep the previous model visible while the next
-	// one is in flight — swapping `model` atomically on success lets Plotly.react
+	// one is in flight — swapping `model` atomically on success lets ECharts
 	// transition the existing canvas instead of unmounting + re-initing.
 	$effect(() => {
 		const id = entry.artifact_id ?? entry.id;
@@ -88,120 +107,208 @@
 		return () => controller.abort();
 	});
 
-	function layout(title: string) {
+	/**
+	 * Transform a 2D grid `Z[y][x]` into ECharts heatmap tuples `[xIdx, yIdx, v]`.
+	 * Also returns min/max so visualMap can be scaled to the data range rather
+	 * than the global default.
+	 */
+	function grid(z: number[][]): { data: [number, number, number][]; min: number; max: number } {
+		const out: [number, number, number][] = [];
+		let min = Infinity;
+		let max = -Infinity;
+		for (let yi = 0; yi < z.length; yi++) {
+			const row = z[yi];
+			for (let xi = 0; xi < row.length; xi++) {
+				const v = row[xi];
+				out.push([xi, yi, v]);
+				if (v < min) min = v;
+				if (v > max) max = v;
+			}
+		}
+		if (!Number.isFinite(min)) min = 0;
+		if (!Number.isFinite(max)) max = 1;
+		return { data: out, min, max };
+	}
+
+	/** Locate the nearest grid index for a [0,1] coordinate. */
+	function nearestIdx(v: number, axis: number[]): number {
+		if (axis.length === 0) return 0;
+		let best = 0;
+		let bestDist = Math.abs(v - axis[0]);
+		for (let i = 1; i < axis.length; i++) {
+			const d = Math.abs(v - axis[i]);
+			if (d < bestDist) {
+				bestDist = d;
+				best = i;
+			}
+		}
+		return best;
+	}
+
+	function fmt(x: number): string {
+		return x.toFixed(3);
+	}
+
+	function buildOption(
+		m: GpModel,
+		which: 'mean' | 'std' | 'ei',
+		title: string,
+		colors: string[]
+	): echarts.EChartsOption {
+		const z = which === 'mean' ? m.gp_mean : which === 'std' ? m.gp_std : m.ei;
+		const { data, min, max } = grid(z);
+
+		// Category axes labelled with the underlying A/D values but thinned to
+		// avoid overlap. ECharts picks label interval automatically when 'auto'.
+		const xLabels = m.A_lin.map(fmt);
+		const yLabels = m.D_lin.map(fmt);
+
+		const markers: echarts.SeriesOption[] = [];
+		if (m.next_candidate) {
+			const xi = nearestIdx(m.next_candidate.a, m.A_lin);
+			const yi = nearestIdx(m.next_candidate.d, m.D_lin);
+			markers.push({
+				name: 'Next',
+				type: 'scatter',
+				symbol: 'path://M0,-10L0,10M-10,0L10,0', // clean crosshair
+				symbolSize: 18,
+				itemStyle: { color: '#fbbf24', borderColor: '#000', borderWidth: 2 },
+				data: [
+					{
+						value: [xi, yi],
+						// Keep the tooltip meaningful even though the marker is 1 point.
+						name: 'next candidate'
+					}
+				],
+				tooltip: {
+					formatter: () =>
+						`next candidate<br/>A=${fmt(m.next_candidate!.a)}<br/>D=${fmt(m.next_candidate!.d)}`
+				},
+				z: 10
+			});
+		}
+
+		const valueUnit = which === 'mean' ? 'μ' : which === 'std' ? 'σ' : 'EI';
+
 		return {
-			title: { text: title, font: { size: 13 } },
-			margin: { l: 50, r: 20, t: 36, b: 40 },
-			xaxis: { title: 'A', range: [0, 1] },
-			yaxis: { title: 'D', range: [0, 1] },
-			paper_bgcolor: 'rgba(0,0,0,0)',
-			plot_bgcolor: 'rgba(0,0,0,0)',
-			font: { color: '#888', size: 11 }
+			animation: false,
+			title: {
+				text: title,
+				left: 'center',
+				top: 2,
+				textStyle: { color: '#888', fontSize: 13, fontWeight: 'normal' }
+			},
+			grid: { left: 56, right: 96, top: 30, bottom: 48 },
+			tooltip: {
+				trigger: 'item',
+				confine: true,
+				formatter: (p) => {
+					const param = p as { seriesName?: string; value?: [number, number, number] };
+					if (param.seriesName === 'Next') return 'next candidate';
+					const [xi, yi, v] = param.value ?? [0, 0, 0];
+					return `A=${xLabels[xi]}<br/>D=${yLabels[yi]}<br/>${valueUnit}=${v.toPrecision(4)}`;
+				}
+			},
+			xAxis: {
+				type: 'category',
+				data: xLabels,
+				name: 'A',
+				nameLocation: 'middle',
+				nameGap: 28,
+				nameTextStyle: { color: '#888', fontSize: 11 },
+				axisLine: { lineStyle: { color: '#555' } },
+				axisTick: { show: false },
+				axisLabel: {
+					color: '#888',
+					fontSize: 10,
+					interval: Math.max(1, Math.floor(xLabels.length / 6)) - 1
+				}
+			},
+			yAxis: {
+				type: 'category',
+				data: yLabels,
+				name: 'D',
+				nameLocation: 'middle',
+				nameGap: 40,
+				nameRotate: 90,
+				nameTextStyle: { color: '#888', fontSize: 11 },
+				axisLine: { lineStyle: { color: '#555' } },
+				axisTick: { show: false },
+				axisLabel: {
+					color: '#888',
+					fontSize: 10,
+					interval: Math.max(1, Math.floor(yLabels.length / 6)) - 1
+				}
+			},
+			visualMap: {
+				min,
+				max,
+				calculable: true,
+				orient: 'vertical',
+				right: 18,
+				top: 'middle',
+				itemHeight: 160,
+				itemWidth: 10,
+				textStyle: { color: '#888', fontSize: 10 },
+				formatter: (v) => (typeof v === 'number' ? v.toExponential(1) : String(v)),
+				inRange: { color: colors }
+			},
+			series: [
+				{
+					name: valueUnit,
+					type: 'heatmap',
+					data,
+					progressive: 4000,
+					animation: false,
+					emphasis: { itemStyle: { borderColor: '#fff', borderWidth: 0.5 } }
+				},
+				...markers
+			]
 		};
 	}
 
-	function observedOrNextMarker(model: GpModel) {
-		if (!model.next_candidate) return [];
-		return [
-			{
-				x: [model.next_candidate.a],
-				y: [model.next_candidate.d],
-				mode: 'markers',
-				marker: {
-					size: 14,
-					color: '#fbbf24',
-					symbol: 'x',
-					line: { color: '#000', width: 2 }
-				},
-				name: 'Next',
-				showlegend: false,
-				hovertemplate: 'Next candidate<br>A=%{x:.3f}<br>D=%{y:.3f}<extra></extra>'
-			}
-		];
-	}
-
 	function render(m: GpModel) {
-		if (!Plotly) return;
-		const config = { responsive: true, displaylogo: false };
-
-		if (meanEl) {
-			Plotly.react(
-				meanEl,
-				[
-					{
-						z: m.gp_mean,
-						x: m.A_lin,
-						y: m.D_lin,
-						type: 'heatmap',
-						colorscale: 'Viridis',
-						colorbar: { title: 'μ', len: 0.9 },
-						hovertemplate: 'A=%{x:.3f}<br>D=%{y:.3f}<br>μ=%{z:.3f}<extra></extra>'
-					},
-					...observedOrNextMarker(m)
-				],
-				layout('Posterior mean μ'),
-				config
-			);
+		if (meanChart) {
+			meanChart.setOption(buildOption(m, 'mean', 'Posterior mean μ', VIRIDIS), {
+				notMerge: true,
+				lazyUpdate: true
+			});
 		}
-
-		if (stdEl) {
-			Plotly.react(
-				stdEl,
-				[
-					{
-						z: m.gp_std,
-						x: m.A_lin,
-						y: m.D_lin,
-						type: 'heatmap',
-						colorscale: 'Inferno',
-						colorbar: { title: 'σ', len: 0.9 },
-						hovertemplate: 'A=%{x:.3f}<br>D=%{y:.3f}<br>σ=%{z:.3f}<extra></extra>'
-					},
-					...observedOrNextMarker(m)
-				],
-				layout('Uncertainty σ'),
-				config
-			);
+		if (stdChart) {
+			stdChart.setOption(buildOption(m, 'std', 'Uncertainty σ', VIRIDIS), {
+				notMerge: true,
+				lazyUpdate: true
+			});
 		}
-
-		if (eiEl) {
-			Plotly.react(
-				eiEl,
-				[
-					{
-						z: m.ei,
-						x: m.A_lin,
-						y: m.D_lin,
-						type: 'heatmap',
-						colorscale: 'Hot',
-						reversescale: true,
-						colorbar: { title: 'EI', len: 0.9 },
-						hovertemplate: 'A=%{x:.3f}<br>D=%{y:.3f}<br>EI=%{z:.4f}<extra></extra>'
-					},
-					...observedOrNextMarker(m)
-				],
-				layout('Expected improvement'),
-				config
-			);
+		if (eiChart) {
+			eiChart.setOption(buildOption(m, 'ei', 'Expected improvement', VIRIDIS), {
+				notMerge: true,
+				lazyUpdate: true
+			});
 		}
 	}
 
 	$effect(() => {
-		if (model && Plotly) render(model);
+		const m = model;
+		// Also depend on chart instances so re-runs fire once charts initialize.
+		void meanChart;
+		void stdChart;
+		void eiChart;
+		if (m) render(m);
 	});
 </script>
 
 <div class="flex flex-col gap-3">
-	<!-- Chart divs always mounted so Plotly.react can transition smoothly
-	     between iterations instead of re-initializing on every scrub. -->
+	<!-- Chart divs always mounted so setOption transitions smoothly between
+	     iterations instead of re-initializing on every scrub. -->
 	<div class="relative grid grid-cols-1 gap-3 lg:grid-cols-3">
-		<div class="rounded-lg border border-border bg-card p-2">
+		<div class="rounded-lg bg-white p-2 shadow-md dark:bg-zinc-900">
 			<div bind:this={meanEl} class="h-80 w-full"></div>
 		</div>
-		<div class="rounded-lg border border-border bg-card p-2">
+		<div class="rounded-lg bg-white p-2 shadow-md dark:bg-zinc-900">
 			<div bind:this={stdEl} class="h-80 w-full"></div>
 		</div>
-		<div class="rounded-lg border border-border bg-card p-2">
+		<div class="rounded-lg bg-white p-2 shadow-md dark:bg-zinc-900">
 			<div bind:this={eiEl} class="h-80 w-full"></div>
 		</div>
 		{#if fetching && !model}

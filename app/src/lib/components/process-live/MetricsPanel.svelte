@@ -66,13 +66,24 @@
 		const keys = Object.keys(metrics.series);
 		const option: echarts.EChartsOption = {
 			animation: false,
-			grid: { left: 56, right: 24, top: 56, bottom: 36 },
+			grid: { left: 56, right: 40, top: 56, bottom: 56 },
 			tooltip: { trigger: 'axis', axisPointer: { type: 'line' }, confine: true },
+			toolbox: {
+				right: 8,
+				top: 4,
+				feature: {
+					dataZoom: { yAxisIndex: 'none', icon: { back: 'path://' } },
+					restore: {},
+					saveAsImage: {}
+				},
+				iconStyle: { borderColor: '#888' }
+			},
 			legend: {
 				data: keys,
 				type: 'scroll',
 				top: 4,
 				left: 'center',
+				right: 140,
 				textStyle: { color: '#888', fontSize: 11 },
 				pageIconColor: '#888',
 				pageIconInactiveColor: '#444',
@@ -93,6 +104,22 @@
 				axisLabel: { color: '#888' },
 				splitLine: { lineStyle: { color: 'rgba(127,127,127,0.15)' } }
 			},
+			dataZoom: [
+				// Wheel + pinch zoom on the plot area itself; no space cost.
+				{ type: 'inside', xAxisIndex: 0, filterMode: 'none' },
+				// Thin slider at the bottom for precise range selection.
+				{
+					type: 'slider',
+					xAxisIndex: 0,
+					height: 18,
+					bottom: 8,
+					borderColor: 'transparent',
+					backgroundColor: 'rgba(127,127,127,0.08)',
+					fillerColor: 'rgba(127,127,127,0.25)',
+					handleSize: '100%',
+					textStyle: { color: '#888', fontSize: 10 }
+				}
+			],
 			series: keys.map((k) => ({
 				name: k,
 				type: 'line',

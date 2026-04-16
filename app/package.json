@@ -56,7 +56,6 @@
 		"echarts": "^6.0.0",
 		"layerchart": "^2.0.0-next.43",
 		"monaco-editor": "^0.55.1",
-		"plotly.js-dist-min": "^3.5.0",
 		"runed": "^0.37.1",
 		"svelte-sonner": "^1.1.0",
 		"svelte-toolbelt": "^0.10.6",

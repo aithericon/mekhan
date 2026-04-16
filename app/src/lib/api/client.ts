@@ -280,7 +280,7 @@ export interface LiveLogEvent {
 	level: string;
 	source: string | null;
 	message: string;
-	detail: unknown;
+	detail: Record<string, unknown> | null;
 	timestamp: string;
 }
 
@@ -290,7 +290,7 @@ export interface LogTailRow {
 	level: string;
 	source: string | null;
 	message: string;
-	detail: unknown;
+	detail: Record<string, unknown> | null;
 	timestamp: string;
 	signal_key: string | null;
 }
