@@ -19,8 +19,20 @@ pub struct MekhanNats {
 }
 
 impl MekhanNats {
-    pub async fn connect(nats_url: &str) -> Result<Self, NatsError> {
-        let client = async_nats::connect(nats_url)
+    pub async fn connect(nats_url: &str, nats_creds: Option<&str>) -> Result<Self, NatsError> {
+        let options = if let Some(creds_path) = nats_creds {
+            let expanded = shellexpand::tilde(creds_path);
+            tracing::info!(url = %nats_url, creds = %expanded, "Connecting to NATS with credentials");
+            async_nats::ConnectOptions::with_credentials_file(expanded.as_ref())
+                .await
+                .map_err(|e| NatsError(format!("Failed to load NATS credentials: {e}")))?
+        } else {
+            async_nats::ConnectOptions::new()
+        };
+
+        let client = options
+            .name("mekhan")
+            .connect(nats_url)
             .await
             .map_err(|e| NatsError(e.to_string()))?;
         let jetstream = jetstream::new(client.clone());

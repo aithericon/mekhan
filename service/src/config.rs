@@ -12,6 +12,9 @@ pub struct AppConfig {
     pub petri_lab_url: String,
     #[serde(default = "default_nats_url")]
     pub nats_url: String,
+    /// Path to NATS credentials file (.creds) for authenticated connections.
+    #[serde(default)]
+    pub nats_creds: Option<String>,
     #[serde(default)]
     pub cleanup: CleanupConfig,
     #[serde(default)]

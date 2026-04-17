@@ -34,7 +34,7 @@ async fn main() -> anyhow::Result<()> {
 
     let petri = PetriClient::new(&config.petri_lab_url);
 
-    let mekhan_nats = MekhanNats::connect(&config.nats_url).await?;
+    let mekhan_nats = MekhanNats::connect(&config.nats_url, config.nats_creds.as_deref()).await?;
     tracing::info!("NATS connected at {}", config.nats_url);
 
     // Create catalogue subscription manager (KV-backed, in-memory cached)
