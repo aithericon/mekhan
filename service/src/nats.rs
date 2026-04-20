@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use async_nats::jetstream;
 use async_nats::jetstream::consumer::PullConsumer;
 use async_nats::jetstream::stream::PurgeResponse;
@@ -31,6 +33,18 @@ impl MekhanNats {
         };
 
         let client = options
+            .ping_interval(Duration::from_secs(20))
+            .connection_timeout(Duration::from_secs(10))
+            .request_timeout(Some(Duration::from_secs(10)))
+            .event_callback(|event| async move {
+                use async_nats::Event;
+                match event {
+                    Event::Disconnected => tracing::warn!("Mekhan NATS disconnected"),
+                    Event::Connected => tracing::info!("Mekhan NATS (re)connected"),
+                    Event::SlowConsumer(n) => tracing::warn!(n, "Mekhan NATS slow consumer"),
+                    other => tracing::debug!(?other, "Mekhan NATS event"),
+                }
+            })
             .name("mekhan")
             .connect(nats_url)
             .await
