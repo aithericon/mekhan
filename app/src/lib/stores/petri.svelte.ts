@@ -196,7 +196,14 @@ export function createPetriStore(netId: string, baseUrl: string = PETRI_BASE) {
 			const res = await fetch(`${apiBase}/events`);
 			if (!res.ok) throw new Error(`${res.status}`);
 			const data = await res.json();
-			events = data.events ?? [];
+			// Deduplicate by sequence (backend may emit duplicates)
+			const raw: PersistedEvent[] = data.events ?? [];
+			const seen = new Set<number>();
+			events = raw.filter((e) => {
+				if (seen.has(e.sequence)) return false;
+				seen.add(e.sequence);
+				return true;
+			});
 			if (events.length > 0) {
 				// Only jump to end on initial load (replayIndex not yet set)
 				if (replayIndex < 0) {
