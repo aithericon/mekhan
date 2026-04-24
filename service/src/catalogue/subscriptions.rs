@@ -306,9 +306,22 @@ impl SubscriptionManager {
         entry: &CatalogueEntry,
         signal_key: &str,
     ) {
+        // `dedup_id` is stable per (subscription, artifact) — identical to
+        // `msg_id` below. Populating it lets the subscriber engine's DedupIndex
+        // drop duplicate TokenCreated events even when the JetStream 120s
+        // duplicate window on PETRI_GLOBAL has expired (e.g., after a Mekhan
+        // consumer restart or replay). Without this, the engine signal listener
+        // reads `signal.dedup_id = None` and the time-unbounded safety net is
+        // effectively disabled for catalogue-driven subscription signals.
+        let dedup_id = format!(
+            "cat-sig-{}-{}-{}",
+            sub.subscription_id, entry.execution_id, entry.id
+        );
+
         let payload = serde_json::json!({
             "source": "catalogue",
             "signal_key": signal_key,
+            "dedup_id": dedup_id,
             "payload": {
                 "source": "catalogue",
                 "subscription_id": sub.subscription_id,
@@ -319,7 +332,7 @@ impl SubscriptionManager {
         });
 
         let subject = format!("petri.signal.{}.{}", sub.net_id, sub.signal_place);
-        let msg_id = format!("cat-sig-{}-{}-{}", sub.subscription_id, entry.execution_id, entry.id);
+        let msg_id = dedup_id.clone();
 
         let mut headers = async_nats::HeaderMap::new();
         headers.insert("Nats-Msg-Id", msg_id.as_str());
