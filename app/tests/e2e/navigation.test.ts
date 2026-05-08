@@ -57,9 +57,10 @@ test.describe('Navigation', () => {
 		await expect(page.getByTestId('home-page')).toBeVisible();
 	});
 
-	test('demo page loads with editor', async ({ page }) => {
-		await page.goto('/demo');
-		await expect(page.getByTestId('demo-page')).toBeVisible();
+	test('demo opens consolidated template editor', async ({ page }) => {
+		const { gotoDemoEditor } = await import('./helpers/demo');
+		await gotoDemoEditor(page);
+		await expect(page.getByTestId('template-editor-page')).toBeVisible();
 		await expect(page.getByTestId('editor-toolbar')).toBeVisible();
 		await expect(page.getByTestId('canvas-container')).toBeVisible();
 	});

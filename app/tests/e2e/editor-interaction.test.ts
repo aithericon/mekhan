@@ -1,16 +1,17 @@
 import { test, expect } from '@playwright/test';
+import { gotoDemoEditor } from './helpers/demo';
 
 test.describe('Editor Interaction', () => {
 	test.beforeEach(async ({ page }) => {
-		await page.goto('/demo');
-		await expect(page.getByTestId('demo-page')).toBeVisible();
+		await gotoDemoEditor(page);
+		await expect(page.getByTestId('template-editor-page')).toBeVisible();
 	});
 
 	test('demo editor loads with toolbar and palette', async ({ page }) => {
 		await expect(page.getByTestId('editor-toolbar')).toBeVisible();
 		await expect(page.getByTestId('canvas-container')).toBeVisible();
 		await expect(page.getByTestId('node-palette')).toBeVisible();
-		await expect(page.getByTestId('toolbar-template-name')).toContainText('Demo Workflow');
+		await expect(page.getByTestId('toolbar-template-name')).toContainText('Invoice Processing Demo');
 	});
 
 	test('palette shows all node types', async ({ page }) => {
@@ -103,6 +104,6 @@ test.describe('Editor Interaction', () => {
 	});
 
 	test('toolbar template name shows correct value', async ({ page }) => {
-		await expect(page.getByTestId('toolbar-template-name')).toContainText('Demo Workflow');
+		await expect(page.getByTestId('toolbar-template-name')).toContainText('Invoice Processing Demo');
 	});
 });

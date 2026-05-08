@@ -1,5 +1,7 @@
 <script lang="ts">
+	import { goto } from '$app/navigation';
 	import { Button } from '$lib/components/ui/button';
+	import { findOrCreateShowcaseTemplate } from '$lib/templates/showcase';
 	import Play from '@lucide/svelte/icons/play';
 	import Square from '@lucide/svelte/icons/square';
 	import User from '@lucide/svelte/icons/user';
@@ -12,6 +14,23 @@
 	import Layers from '@lucide/svelte/icons/layers';
 	import Activity from '@lucide/svelte/icons/activity';
 	import Zap from '@lucide/svelte/icons/zap';
+
+	let openingDemo = $state(false);
+	let demoError = $state<string | null>(null);
+
+	async function openDemo() {
+		if (openingDemo) return;
+		openingDemo = true;
+		demoError = null;
+		try {
+			const template = await findOrCreateShowcaseTemplate();
+			await goto(`/templates/${template.id}`);
+		} catch (e) {
+			demoError = e instanceof Error ? e.message : 'Failed to open demo. Is mekhan-service running?';
+		} finally {
+			openingDemo = false;
+		}
+	}
 
 	const nodeTypes = [
 		{ icon: Play, label: 'Start', color: '#22c55e' },
@@ -31,9 +50,9 @@
 			<h1 class="text-3xl font-semibold tracking-tight text-foreground">Mekhan</h1>
 			<p class="mt-2 text-sm text-muted-foreground">Visual workflow editor for Petri-Lab</p>
 			<div class="mt-6 flex items-center justify-center gap-3">
-				<Button href="/demo" data-testid="btn-try-demo">
+				<Button data-testid="btn-try-demo" disabled={openingDemo} onclick={openDemo}>
 					<Rocket class="size-4" />
-					Try Demo
+					{openingDemo ? 'Opening…' : 'Try Demo'}
 				</Button>
 				<Button variant="outline" href="/templates" data-testid="btn-view-templates">
 					Templates
@@ -42,6 +61,9 @@
 					Instances
 				</Button>
 			</div>
+			{#if demoError}
+				<p class="mt-3 text-xs text-amber-700" data-testid="demo-error">{demoError}</p>
+			{/if}
 		</div>
 
 		<!-- Feature cards -->

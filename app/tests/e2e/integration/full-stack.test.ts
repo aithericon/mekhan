@@ -579,8 +579,8 @@ test.describe('Test 6: Error cases', () => {
 
 test.describe('Test 7: Demo showcase graph lifecycle', () => {
 	test('creates, publishes, and deploys the showcase graph', async () => {
-		// This is the same graph the /demo page sends when you click "Run Instance".
-		// It tests realistic field configs and end-to-end deployment.
+		// Same showcase graph that seeds the "Try Demo" template.
+		// Tests realistic field configs and end-to-end deployment.
 		const showcaseGraph = {
 			nodes: [
 				{

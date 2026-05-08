@@ -1,4 +1,10 @@
 import type { WorkflowGraph } from '$lib/types/editor';
+import type { Template } from '$lib/types/api';
+import { listTemplates, getTemplate, createTemplate } from '$lib/api/client';
+
+export const SHOWCASE_TEMPLATE_NAME = 'Invoice Processing Demo';
+export const SHOWCASE_TEMPLATE_DESCRIPTION =
+	'Showcase workflow demonstrating human tasks, automated steps, decisions, parallel split/join, and scopes.';
 
 /**
  * Pre-built "Invoice Processing" workflow demonstrating node types with scoping.
@@ -319,3 +325,21 @@ export const showcaseGraph: WorkflowGraph = {
 		}
 	]
 };
+
+/**
+ * Find the singleton "Invoice Processing Demo" template, creating it on first use.
+ * The demo entry point uses this so every visit lands on the same shared template.
+ */
+export async function findOrCreateShowcaseTemplate(): Promise<Template> {
+	const existing = await listTemplates(1, 50, SHOWCASE_TEMPLATE_NAME);
+	const match = existing.items.find((t) => t.name === SHOWCASE_TEMPLATE_NAME);
+	if (match) {
+		return getTemplate(match.id);
+	}
+	return createTemplate({
+		name: SHOWCASE_TEMPLATE_NAME,
+		description: SHOWCASE_TEMPLATE_DESCRIPTION,
+		graph: showcaseGraph,
+		author_id: '00000000-0000-0000-0000-000000000000'
+	});
+}

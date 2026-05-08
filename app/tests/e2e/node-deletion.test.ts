@@ -1,9 +1,10 @@
 import { test, expect } from '@playwright/test';
+import { gotoDemoEditor } from './helpers/demo';
 
 test.describe('Node Deletion', () => {
 	test.beforeEach(async ({ page }) => {
-		await page.goto('/demo');
-		await expect(page.getByTestId('demo-page')).toBeVisible();
+		await gotoDemoEditor(page);
+		await expect(page.getByTestId('template-editor-page')).toBeVisible();
 	});
 
 	test('start and end nodes are initially visible', async ({ page }) => {

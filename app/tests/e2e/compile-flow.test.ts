@@ -1,9 +1,10 @@
 import { test, expect } from '@playwright/test';
+import { gotoDemoEditor } from './helpers/demo';
 
 test.describe('Compile / Preview AIR', () => {
 	test.beforeEach(async ({ page }) => {
-		await page.goto('/demo');
-		await expect(page.getByTestId('demo-page')).toBeVisible();
+		await gotoDemoEditor(page);
+		await expect(page.getByTestId('template-editor-page')).toBeVisible();
 	});
 
 	test('preview AIR button is visible', async ({ page }) => {
@@ -100,9 +101,8 @@ test.describe('Compile / Preview AIR', () => {
 	});
 
 	test('AIR preview can be closed', async ({ page }) => {
-		// We'll verify the close mechanism by using a template editor that
-		// might show the preview
-		await page.goto('/demo');
+		await gotoDemoEditor(page);
+		await expect(page.getByTestId('template-editor-page')).toBeVisible();
 
 		// Click Preview AIR
 		await page.getByTestId('btn-preview-air').click();
