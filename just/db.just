@@ -31,7 +31,7 @@ reset:
     cd ..
     docker compose stop postgres
     docker compose rm -f postgres
-    docker volume rm mekhan_mekhan-pgdata 2>/dev/null || true
+    docker volume rm aithericon-platform_mekhan-pgdata 2>/dev/null || true
     docker compose up -d postgres
     echo "▶ waiting for postgres..."
     until docker compose exec -T postgres pg_isready -U mekhan >/dev/null 2>&1; do sleep 1; done

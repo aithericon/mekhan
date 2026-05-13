@@ -1,6 +1,7 @@
 services:
   postgres:
     image: timescale/timescaledb:latest-pg16
+    container_name: mekhan-postgres
     environment:
       POSTGRES_DB: mekhan
       POSTGRES_USER: mekhan
@@ -16,19 +17,35 @@ services:
       retries: 5
 
   nats:
-    image: nats:2.10-alpine
-    command: ["--jetstream", "--store_dir", "/data"]
+    image: nats:2.12-alpine
+    container_name: mekhan-nats
+    command: ["--jetstream", "-m", "8222", "--store_dir", "/data"]
     ports:
-      - "4333:4222"
-      - "8333:8222"
+      - "4333:4222"   # client
+      - "8333:8222"   # http monitoring
     volumes:
       - mekhan-natsdata:/data
     healthcheck:
-      test: ["CMD", "nats-server", "--help"]
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8222/healthz"]
       interval: 5s
       timeout: 3s
       retries: 5
 
+  rustfs:
+    image: rustfs/rustfs:latest
+    container_name: mekhan-rustfs
+    ports:
+      - "9005:9000"   # S3 API (mekhan + executor artifact store)
+      - "9006:9001"   # web console
+    environment:
+      RUSTFS_ROOT_USER: rustfsadmin
+      RUSTFS_ROOT_PASSWORD: rustfsadmin
+    volumes:
+      - mekhan-rustfs-data:/data
+      - mekhan-rustfs-logs:/logs
+
 volumes:
   mekhan-pgdata:
   mekhan-natsdata:
+  mekhan-rustfs-data:
+  mekhan-rustfs-logs:

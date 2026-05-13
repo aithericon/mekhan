@@ -37,3 +37,6 @@ vite.config.ts.timestamp-*
 .cache/
 result
 result-*
+
+# Local dev stack runtime state (pidfiles, logs, executor work dir)
+.dev/
