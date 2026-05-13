@@ -133,7 +133,7 @@ async fn wait_for_status(db: &sqlx::PgPool, instance_id: Uuid, target: &str, tim
 async fn net_completed_updates_instance_status() {
     let db = common::create_test_db().await;
     let nats_url = common::nats_url();
-    let nats = MekhanNats::connect(&nats_url)
+    let nats = MekhanNats::connect(&nats_url, None)
         .await
         .expect("connect to NATS");
 
@@ -176,7 +176,7 @@ async fn net_completed_updates_instance_status() {
 async fn net_cancelled_updates_instance_status() {
     let db = common::create_test_db().await;
     let nats_url = common::nats_url();
-    let nats = MekhanNats::connect(&nats_url)
+    let nats = MekhanNats::connect(&nats_url, None)
         .await
         .expect("connect to NATS");
 
@@ -204,7 +204,7 @@ async fn net_cancelled_updates_instance_status() {
 async fn completed_event_is_idempotent() {
     let db = common::create_test_db().await;
     let nats_url = common::nats_url();
-    let nats = MekhanNats::connect(&nats_url)
+    let nats = MekhanNats::connect(&nats_url, None)
         .await
         .expect("connect to NATS");
 
@@ -239,7 +239,7 @@ async fn completed_event_is_idempotent() {
 async fn already_completed_instance_ignores_cancel() {
     let db = common::create_test_db().await;
     let nats_url = common::nats_url();
-    let nats = MekhanNats::connect(&nats_url)
+    let nats = MekhanNats::connect(&nats_url, None)
         .await
         .expect("connect to NATS");
 

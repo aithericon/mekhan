@@ -49,7 +49,8 @@ pub fn test_config() -> AppConfig {
         port: 0,
         database_url: String::new(),
         petri_lab_url: "http://localhost:3030".to_string(),
-        nats_url: aithericon_test_infra::nats_url(),
+        nats_url: nats_url(),
+        nats_creds: None,
         cleanup: CleanupConfig::default(),
         s3: S3Config {
             endpoint: s3_endpoint,
@@ -73,7 +74,7 @@ pub async fn test_app() -> (Router, PgPool) {
 
     let petri = PetriClient::new(&config.petri_lab_url);
 
-    let nats = MekhanNats::connect(&config.nats_url)
+    let nats = MekhanNats::connect(&config.nats_url, None)
         .await
         .expect("failed to connect to NATS — run: just -f aithericon-test-infra/justfile up");
 
@@ -106,7 +107,7 @@ pub async fn test_app_with_nats(nats_url: &str) -> (Router, PgPool) {
 
     let petri = PetriClient::new(&config.petri_lab_url);
 
-    let nats = MekhanNats::connect(nats_url)
+    let nats = MekhanNats::connect(nats_url, None)
         .await
         .unwrap_or_else(|e| panic!("failed to connect to NATS at {nats_url}: {e}"));
 
@@ -141,7 +142,7 @@ pub async fn test_app_with_petri_url(nats_url: &str, petri_url: &str) -> (Router
 
     let petri = PetriClient::new(petri_url);
 
-    let nats = MekhanNats::connect(nats_url)
+    let nats = MekhanNats::connect(nats_url, None)
         .await
         .unwrap_or_else(|e| panic!("failed to connect to NATS at {nats_url}: {e}"));
 

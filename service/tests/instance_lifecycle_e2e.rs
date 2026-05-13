@@ -127,7 +127,7 @@ async fn full_instance_lifecycle() {
     let (app, db) = common::test_app_with_nats(&engine_nats_url).await;
 
     // Start lifecycle listener on the engine's NATS
-    let listener_nats = MekhanNats::connect(&engine_nats_url).await.expect("nats");
+    let listener_nats = MekhanNats::connect(&engine_nats_url, None).await.expect("nats");
     let kv = listener_nats.ensure_catalogue_subscriptions_kv().await.expect("create KV");
     let sub_mgr = std::sync::Arc::new(SubscriptionManager::new(kv, listener_nats.jetstream().clone()));
     let listener_db = db.clone();

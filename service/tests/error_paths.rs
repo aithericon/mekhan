@@ -231,7 +231,7 @@ async fn cancel_instance_engine_down_still_cancels_in_db() {
 async fn lifecycle_listener_retries_then_succeeds() {
     let db = common::create_test_db().await;
     let nats_url = common::nats_url();
-    let nats = MekhanNats::connect(&nats_url).await.expect("connect NATS");
+    let nats = MekhanNats::connect(&nats_url, None).await.expect("connect NATS");
 
     ensure_petri_global_stream(nats.jetstream()).await;
 
@@ -308,7 +308,7 @@ async fn instance_state_engine_unavailable_shows_events() {
     let nats_url = common::nats_url();
     let (app, db) = common::test_app_with_petri_url(&nats_url, "http://localhost:1").await;
 
-    let nats = MekhanNats::connect(&nats_url).await.expect("connect NATS");
+    let nats = MekhanNats::connect(&nats_url, None).await.expect("connect NATS");
     ensure_petri_global_stream(nats.jetstream()).await;
 
     let template_id = insert_published_template(&db).await;

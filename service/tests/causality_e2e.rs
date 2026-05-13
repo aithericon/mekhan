@@ -29,7 +29,6 @@ use mekhan_service::causality::ingest::start_causality_ingest;
 use mekhan_service::causality::live::LiveBroadcasts;
 use mekhan_service::lifecycle::start_lifecycle_listener;
 use mekhan_service::nats::MekhanNats;
-use mekhan_service::process::ingest::{start_process_event_ingest, start_task_ingest};
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -255,7 +254,7 @@ async fn causality_full_pipeline() {
 
     let nats_url = engine_nats_url();
     let db = common::create_test_db().await;
-    let nats = MekhanNats::connect(&nats_url)
+    let nats = MekhanNats::connect(&nats_url, None)
         .await
         .expect("connect to NATS");
 
@@ -307,16 +306,13 @@ async fn causality_full_pipeline() {
         nats.jetstream().clone(),
     ));
 
-    // Causality ingest now handles catalogue registration directly
+    // Single consumer projects catalogue, human tasks, and step/metric/log
+    // breadcrumbs off the petri.events.> stream.
     let c_nats = nats.clone();
     let c_db = db.clone();
     let c_sub = sub_mgr.clone();
     let c_live = LiveBroadcasts::new();
     let _causality = spawn_consumer(move || start_causality_ingest(c_nats, c_db, c_sub, c_live)).await;
-
-    let t_nats = nats.clone();
-    let t_db = db.clone();
-    let _tasks = spawn_consumer(move || start_task_ingest(t_nats, t_db)).await;
 
     // Lifecycle listener
     let l_nats = nats.clone();
@@ -324,12 +320,6 @@ async fn causality_full_pipeline() {
     let l_sub = sub_mgr.clone();
     let _lifecycle =
         spawn_consumer(move || start_lifecycle_listener(l_nats, l_db, l_sub)).await;
-
-    // Process event ingest
-    let p_nats = nats.clone();
-    let p_db = db.clone();
-    let _process =
-        spawn_consumer(move || start_process_event_ingest(p_nats, p_db)).await;
 
     // ── 3. Compile & deploy scenario ─────────────────────────────────────
 
