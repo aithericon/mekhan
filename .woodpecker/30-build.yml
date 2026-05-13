@@ -13,8 +13,10 @@
 # =============================================================================
 
 when:
-    - event: push
-      branch: [main, dev]
+    - branch: main
+      event: push
+    - branch: dev
+      event: push
 
 labels:
     "!host": titan

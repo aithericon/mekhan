@@ -9,8 +9,14 @@
 # =============================================================================
 
 when:
-    - event: [push, pull_request]
-      branch: [main, dev]
+    - branch: main
+      event: push
+    - branch: dev
+      event: push
+    - branch: main
+      event: pull_request
+    - branch: dev
+      event: pull_request
 
 labels:
     "!host": titan
