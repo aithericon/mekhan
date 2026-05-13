@@ -1,0 +1,95 @@
+# =============================================================================
+# Mekhan CI builder image
+# =============================================================================
+# Fat Ubuntu image used by Woodpecker to run the full build pipeline:
+#   - cargo fmt / clippy / test
+#   - cross-compile aarch64-unknown-linux-musl
+#   - npm ci + svelte-check + vitest + playwright
+#   - docker buildx (to package the runtime image)
+#
+# Built + pushed manually (or via `just ci::build-ci-builder <registry>`) and
+# referenced by `.woodpecker/*.yml` as `<registry>/mekhan/ci-builder:latest`.
+# Rebuild when this file or the pinned tool versions change.
+# =============================================================================
+
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    LC_ALL=C.UTF-8 \
+    LANG=C.UTF-8 \
+    PATH=/root/.cargo/bin:/usr/local/bin:/usr/bin:/bin \
+    CARGO_NET_GIT_FETCH_WITH_CLI=true \
+    PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers
+
+# ── System deps ─────────────────────────────────────────────────────────────
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl wget git pkg-config build-essential \
+        libssl-dev cmake clang lld \
+        unzip xz-utils zstd jq \
+        python3 python3-pip \
+        qemu-user-static \
+        gnupg lsb-release \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── musl cross-compiler (aarch64-linux-musl-gcc) ────────────────────────────
+# musl.cc provides a static cross toolchain. The aarch64-linux-musl-cross
+# bundle is what cross-rs / cargo use to link a fully-static binary.
+ARG MUSL_CROSS_VERSION=11.2.1
+RUN cd /opt && \
+    curl -fsSL "https://more.musl.cc/${MUSL_CROSS_VERSION}/x86_64-linux-musl/aarch64-linux-musl-cross.tgz" -o /tmp/musl.tgz && \
+    tar -xzf /tmp/musl.tgz -C /opt && \
+    rm /tmp/musl.tgz && \
+    ln -s /opt/aarch64-linux-musl-cross/bin/aarch64-linux-musl-gcc /usr/local/bin/aarch64-linux-musl-gcc && \
+    ln -s /opt/aarch64-linux-musl-cross/bin/aarch64-linux-musl-g++ /usr/local/bin/aarch64-linux-musl-g++ && \
+    ln -s /opt/aarch64-linux-musl-cross/bin/aarch64-linux-musl-ar  /usr/local/bin/aarch64-linux-musl-ar
+
+# ── Rust stable + aarch64-unknown-linux-musl target ─────────────────────────
+ARG RUST_VERSION=1.83.0
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+      | sh -s -- -y --default-toolchain ${RUST_VERSION} --profile minimal \
+        --component rustfmt --component clippy && \
+    /root/.cargo/bin/rustup target add aarch64-unknown-linux-musl
+
+# Tell cargo to use the musl-cross linker when targeting aarch64-musl
+ENV CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-musl-gcc \
+    CC_aarch64_unknown_linux_musl=aarch64-linux-musl-gcc \
+    CXX_aarch64_unknown_linux_musl=aarch64-linux-musl-g++ \
+    AR_aarch64_unknown_linux_musl=aarch64-linux-musl-ar
+
+# ── cargo helpers (cross, cargo-cache) ──────────────────────────────────────
+# We use `cargo build` with the env vars above instead of `cross run`, but
+# keep cross available for users who prefer container-mounted builds.
+RUN cargo install --locked cross@0.2.5 cargo-cache@0.8.3
+
+# ── just (task runner) ──────────────────────────────────────────────────────
+ARG JUST_VERSION=1.36.0
+RUN curl -fsSL "https://github.com/casey/just/releases/download/${JUST_VERSION}/just-${JUST_VERSION}-x86_64-unknown-linux-musl.tar.gz" \
+      | tar -xzC /usr/local/bin just
+
+# ── Node 22 LTS ─────────────────────────────────────────────────────────────
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
+    apt-get install -y --no-install-recommends nodejs && \
+    rm -rf /var/lib/apt/lists/* && \
+    npm config set fund false && \
+    npm config set update-notifier false
+
+# ── Docker CLI + buildx (for `docker buildx build` from the pipeline) ───────
+RUN install -m 0755 -d /etc/apt/keyrings && \
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+      | gpg --dearmor -o /etc/apt/keyrings/docker.gpg && \
+    chmod a+r /etc/apt/keyrings/docker.gpg && \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
+      https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" \
+      > /etc/apt/sources.list.d/docker.list && \
+    apt-get update && apt-get install -y --no-install-recommends \
+        docker-ce-cli docker-buildx-plugin && \
+    rm -rf /var/lib/apt/lists/*
+
+# ── Playwright + Chromium (pre-baked so e2e jobs don't re-download) ─────────
+RUN npm install -g playwright@1.58.2 && \
+    playwright install --with-deps chromium
+
+# ── Workspace ───────────────────────────────────────────────────────────────
+WORKDIR /workspace
+
+CMD ["bash"]
