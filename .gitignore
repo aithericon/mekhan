@@ -31,3 +31,9 @@ playwright-report/
 # Vite temp files
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+# Nix / direnv
+.direnv/
+.cache/
+result
+result-*
