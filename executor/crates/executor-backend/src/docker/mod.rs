@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
-use aithericon_executor_domain::{ExecutionJob, ExecutionResult, ExecutorError, RunContext};
+use aithericon_executor_domain::{ExecutionJob, ExecutionResult, ExecutionSpec, ExecutorError, RunContext};
 
 use crate::traits::{ExecutionBackend, StatusCallback};
 

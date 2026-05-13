@@ -1100,7 +1100,7 @@ fn start_http_cancel(
 
     tokio::spawn(async move {
         let app = Router::new().route(
-            "/cancel/:execution_id",
+            "/cancel/{execution_id}",
             post(move |Path(execution_id): Path<String>| {
                 let registry = registry.clone();
                 async move {
