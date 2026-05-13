@@ -15,13 +15,14 @@ export default defineConfig({
 				changeOrigin: true,
 				rewrite: (path: string) => path.replace(/^\/petri/, '')
 			},
+			// Yjs WebSocket — must come before generic /api so the upgrade is preserved
 			'/api/yjs': {
 				target: 'http://localhost:3100',
 				ws: true,
 				changeOrigin: true
 			},
-			// File upload/serve — bypass SvelteKit to avoid body size limits
-			'/api/files': {
+			// All other /api/* requests → mekhan-service
+			'/api': {
 				target: 'http://localhost:3100',
 				changeOrigin: true
 			}
