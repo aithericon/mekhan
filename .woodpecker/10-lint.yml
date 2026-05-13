@@ -17,6 +17,10 @@ when:
       event: pull_request
     - branch: dev
       event: pull_request
+    - branch: main
+      event: manual
+    - branch: dev
+      event: manual
 
 labels:
     "!host": titan

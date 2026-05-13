@@ -17,6 +17,10 @@ when:
       event: push
     - branch: dev
       event: push
+    - branch: main
+      event: manual
+    - branch: dev
+      event: manual
 
 labels:
     "!host": titan
