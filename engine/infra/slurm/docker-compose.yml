@@ -1,0 +1,14 @@
+services:
+  slurm:
+    platform: linux/amd64
+    build: .
+    hostname: slurm-login
+    ports:
+      - "2222:22"       # SSH (login node simulation)
+      - "6820:6820"     # slurmrestd (REST API)
+    environment:
+      - TZ=UTC
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    tty: true
+    stdin_open: true

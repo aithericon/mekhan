@@ -1,0 +1,17 @@
+pub mod anthropic;
+pub mod ollama;
+pub mod openai;
+
+use std::sync::Arc;
+
+use crate::config::Provider;
+use crate::port::CompletionPort;
+
+/// Factory: select the appropriate adapter for the given provider enum.
+pub fn adapter_for(provider: &Provider) -> Arc<dyn CompletionPort> {
+    match provider {
+        Provider::OpenAi => Arc::new(openai::OpenAiAdapter),
+        Provider::Anthropic => Arc::new(anthropic::AnthropicAdapter),
+        Provider::Ollama => Arc::new(ollama::OllamaAdapter),
+    }
+}

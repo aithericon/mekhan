@@ -1,0 +1,52 @@
+# Rust build artefacts
+service/target/
+target/
+
+# Node modules and build output
+app/node_modules/
+app/build/
+app/.svelte-kit/
+app/.output/
+app/playwright-report/
+app/test-results/
+
+# Git
+.git/
+.gitignore
+
+# Docs / planning
+docs/
+*.md
+README*
+
+# Tests / fixtures (we don't ship them)
+service/tests/
+service/test-results/
+app/tests/
+
+# Local dev infra
+docker-compose.yml
+mekhan.toml
+
+# Editor / OS noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+.zed/
+
+# Agent / tooling
+.claude/
+.agent_status/
+.serena/
+
+# Env files
+.env
+.env.*
+
+# CI / deploy descriptors (not needed inside the runtime image)
+.woodpecker/
+deploy/
+just/
+justfile
+Cross.toml

@@ -1,0 +1,32 @@
+[package]
+name = "aithericon-executor-file-ops"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+aithericon-executor-domain = { workspace = true }
+aithericon-executor-backend = { workspace = true }
+aithericon-executor-storage = { workspace = true, features = ["opendal"] }
+aithericon-file-metadata = { workspace = true }
+opendal = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }
+async-compression = { workspace = true }
+futures = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+opendal = { workspace = true, features = ["services-memory"] }
+flate2 = "1"
+zstd = "0.13"
+tempfile = "3"

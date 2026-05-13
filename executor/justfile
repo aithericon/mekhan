@@ -1,0 +1,73 @@
+# List all available recipes
+default:
+    @just --list
+
+# Build all crates
+build:
+    cargo build --workspace
+
+# Check all crates
+check:
+    cargo check --workspace
+
+# Format all code
+fmt:
+    cargo fmt --all
+
+# Lint all code
+lint:
+    cargo clippy --workspace -- -D warnings
+
+# Run unit tests
+test:
+    cargo test --workspace
+
+# Run a specific crate's tests
+test-crate name:
+    cargo test -p {{name}}
+
+# Run the executor service
+run:
+    cargo run -p aithericon-executor-service
+
+# Run with debug logging
+run-debug:
+    RUST_LOG=debug cargo run -p aithericon-executor-service
+
+# Start NATS JetStream via Docker
+nats-up:
+    docker run -d --name executor-nats -p 4222:4222 nats:latest -js
+
+# Stop NATS
+nats-down:
+    docker rm -f executor-nats
+
+# Subscribe to executor status updates
+nats-subscribe:
+    nats sub 'executor.status.>'
+
+# Run integration tests (requires Docker)
+test-integration:
+    cargo test -p aithericon-executor-service --tests
+
+# Generate Python gRPC stubs from proto (uses a temp venv for grpcio-tools)
+gen-python-proto:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    VENV="$(mktemp -d)/proto-venv"
+    python3 -m venv "$VENV"
+    "$VENV/bin/pip" install -q grpcio-tools
+    "$VENV/bin/python" -m grpc_tools.protoc \
+        -Icrates/executor-ipc/proto \
+        --python_out=packages/aithericon-sdk/src/aithericon/_proto \
+        --grpc_python_out=packages/aithericon-sdk/src/aithericon/_proto \
+        executor_sidecar.proto
+    # Fix absolute import to package-relative
+    sed -i '' 's/^import executor_sidecar_pb2/from aithericon._proto import executor_sidecar_pb2/' \
+        packages/aithericon-sdk/src/aithericon/_proto/executor_sidecar_pb2_grpc.py
+    rm -rf "$VENV"
+    echo "Python proto stubs generated"
+
+# Clean build artifacts
+clean:
+    cargo clean

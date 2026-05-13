@@ -1,0 +1,149 @@
+use std::collections::HashMap;
+
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+
+/// Lifecycle status of an execution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionStatus {
+    Accepted,
+    Running,
+    Completed,
+    Failed,
+    Cancelled,
+    TimedOut,
+}
+
+impl ExecutionStatus {
+    /// Whether this status represents a terminal state (no further transitions).
+    pub fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            Self::Completed | Self::Failed | Self::Cancelled | Self::TimedOut
+        )
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Accepted => "accepted",
+            Self::Running => "running",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+            Self::TimedOut => "timed_out",
+        }
+    }
+}
+
+impl std::fmt::Display for ExecutionStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Published to NATS on every status transition.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct StatusUpdate {
+    /// The execution this update belongs to.
+    pub execution_id: String,
+
+    /// Current status.
+    pub status: ExecutionStatus,
+
+    /// Structured detail about the status (e.g., pid for Running, exit_code for Completed).
+    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+    pub detail: serde_json::Value,
+
+    /// Echoed from ExecutionJob.metadata — callers use this for routing.
+    pub metadata: HashMap<String, String>,
+
+    /// Which executor instance produced this update.
+    pub source: String,
+
+    /// When this update was produced.
+    pub timestamp: DateTime<Utc>,
+}
+
+impl StatusUpdate {
+    /// Build the NATS subject for this update.
+    /// Pattern: `executor.status.{execution_id}.{status}`
+    pub fn subject(&self) -> String {
+        format!(
+            "executor.status.{}.{}",
+            sanitize_subject_token(&self.execution_id),
+            self.status.as_str()
+        )
+    }
+
+    /// Deterministic message ID for JetStream dedup.
+    /// Each execution transitions through each status at most once.
+    pub fn msg_id(&self) -> String {
+        format!("{}-{}", self.execution_id, self.status.as_str())
+    }
+}
+
+/// Replace characters that are invalid in NATS subject tokens.
+pub(crate) fn sanitize_subject_token(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            ' ' | '>' | '*' => '_',
+            _ => c,
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn terminal_states() {
+        assert!(!ExecutionStatus::Accepted.is_terminal());
+        assert!(!ExecutionStatus::Running.is_terminal());
+        assert!(ExecutionStatus::Completed.is_terminal());
+        assert!(ExecutionStatus::Failed.is_terminal());
+        assert!(ExecutionStatus::Cancelled.is_terminal());
+        assert!(ExecutionStatus::TimedOut.is_terminal());
+    }
+
+    #[test]
+    fn as_str_roundtrip() {
+        for status in [
+            ExecutionStatus::Accepted,
+            ExecutionStatus::Running,
+            ExecutionStatus::Completed,
+            ExecutionStatus::Failed,
+            ExecutionStatus::Cancelled,
+            ExecutionStatus::TimedOut,
+        ] {
+            let s = status.as_str();
+            let deserialized: ExecutionStatus =
+                serde_json::from_value(serde_json::Value::String(s.to_string())).unwrap();
+            assert_eq!(status, deserialized);
+        }
+    }
+
+    #[test]
+    fn subject_sanitization() {
+        assert_eq!(sanitize_subject_token("train-alpha-0"), "train-alpha-0");
+        assert_eq!(sanitize_subject_token("has spaces"), "has_spaces");
+        assert_eq!(sanitize_subject_token("a>b*c"), "a_b_c");
+    }
+
+    #[test]
+    fn status_update_subject_and_msg_id() {
+        let update = StatusUpdate {
+            execution_id: "train-alpha-0".into(),
+            status: ExecutionStatus::Completed,
+            detail: serde_json::Value::Null,
+            metadata: Default::default(),
+            source: "exec-1".into(),
+            timestamp: Utc::now(),
+        };
+        assert_eq!(update.subject(), "executor.status.train-alpha-0.completed");
+        assert_eq!(update.msg_id(), "train-alpha-0-completed");
+    }
+}

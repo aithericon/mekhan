@@ -1,0 +1,80 @@
+{
+  "name": "Resource Allocation",
+  "description": "Worker-task assignment system. Workers take tasks, complete them, and return to the pool.",
+  "places": [
+    {
+      "id": "workers",
+      "name": "Workers",
+      "type": "resource",
+      "initial_tokens": [
+        { "worker_id": "W1", "skills": ["general"] },
+        { "worker_id": "W2", "skills": ["general"] },
+        { "worker_id": "W3", "skills": ["general"] }
+      ]
+    },
+    {
+      "id": "tasks",
+      "name": "Tasks",
+      "type": "resource",
+      "initial_tokens": [
+        { "task_id": "T1", "priority": 1 },
+        { "task_id": "T2", "priority": 2 },
+        { "task_id": "T3", "priority": 3 },
+        { "task_id": "T4", "priority": 4 },
+        { "task_id": "T5", "priority": 5 }
+      ]
+    },
+    {
+      "id": "in_progress",
+      "name": "In Progress",
+      "type": "state",
+      "initial_tokens": []
+    },
+    {
+      "id": "completed",
+      "name": "Completed",
+      "type": "terminal",
+      "initial_tokens": []
+    }
+  ],
+  "transitions": [
+    {
+      "id": "assign",
+      "name": "Assign",
+      "input_ports": [
+        { "name": "worker", "cardinality": "single" },
+        { "name": "task", "cardinality": "single" }
+      ],
+      "output_ports": [
+        { "name": "work", "cardinality": "single" }
+      ],
+      "inputs": [
+        { "place": "workers", "port": "worker", "weight": 1 },
+        { "place": "tasks", "port": "task", "weight": 1 }
+      ],
+      "outputs": [
+        { "place": "in_progress", "port": "work", "weight": 1 }
+      ],
+      "logic": { "type": "rhai", "source": "#{ work: #{ worker: worker, task: task, status: \"in_progress\" } }" }
+    },
+    {
+      "id": "complete",
+      "name": "Complete",
+      "input_ports": [
+        { "name": "work", "cardinality": "single" }
+      ],
+      "output_ports": [
+        { "name": "worker_out", "cardinality": "single" },
+        { "name": "done", "cardinality": "single" }
+      ],
+      "inputs": [
+        { "place": "in_progress", "port": "work", "weight": 1 }
+      ],
+      "outputs": [
+        { "place": "workers", "port": "worker_out", "weight": 1 },
+        { "place": "completed", "port": "done", "weight": 1 }
+      ],
+      "logic": { "type": "rhai", "source": "#{ worker_out: work.worker, done: #{ task: work.task, status: \"completed\" } }" }
+    }
+  ]
+}

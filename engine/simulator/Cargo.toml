@@ -1,0 +1,16 @@
+[package]
+name = "petri-simulator"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "In-memory test simulator for SDK-defined Petri net scenarios"
+
+[dependencies]
+aithericon-sdk = { path = "../sdk" }
+petri-test-harness = { workspace = true }
+petri-application = { workspace = true }
+petri-domain = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }

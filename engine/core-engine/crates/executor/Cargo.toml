@@ -1,0 +1,56 @@
+[package]
+name = "petri-executor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Aithericon executor integration for Petri-Lab workflow engine"
+
+[dependencies]
+# Async runtime
+tokio = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Time
+chrono = { workspace = true }
+
+# Async streams
+futures = { workspace = true }
+
+# NATS messaging
+async-nats = { workspace = true }
+bytes = { workspace = true }
+
+# Async traits
+async-trait = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+# IDs
+uuid = { workspace = true }
+ulid = { workspace = true }
+
+# Internal crates
+petri-domain = { workspace = true }
+petri-scheduler-bridge = { workspace = true }
+
+# Executor wire types
+aithericon-executor-domain = { workspace = true }
+
+# Secret management (optional, for wrapping secrets before publishing to NATS)
+aithericon-secrets = { workspace = true, optional = true }
+
+[features]
+default = []
+vault-secrets = ["dep:aithericon-secrets", "aithericon-secrets/vault"]
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tracing-subscriber = { workspace = true }

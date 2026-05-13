@@ -1,0 +1,32 @@
+[package]
+name = "aithericon-executor-metrics"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[features]
+default = []
+nats = ["dep:async-nats", "dep:serde_json"]
+loki = ["dep:reqwest", "dep:serde_json"]
+
+[dependencies]
+aithericon-executor-domain = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+chrono = { workspace = true }
+
+# Optional — NATS metric sink
+async-nats = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+
+# Optional — Loki metric sink
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"], optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

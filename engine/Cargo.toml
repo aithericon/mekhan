@@ -1,0 +1,135 @@
+[workspace]
+resolver = "2"
+members = [
+    "core-engine",
+    "core-engine/crates/domain",
+    "core-engine/crates/application",
+    "core-engine/crates/infrastructure",
+    "core-engine/crates/api",
+    "core-engine/crates/api-types",
+    "core-engine/crates/nats",
+    "core-engine/crates/scheduler-bridge",
+    "core-engine/crates/nomad",
+    "core-engine/crates/slurm",
+    "core-engine/crates/executor",
+    "core-engine/crates/test-harness",
+    "sdk",
+    "sdk-derive",
+    "simulator",
+    "cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Aithericon Research"]
+
+[workspace.dependencies]
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# IDs and Time
+uuid = { version = "1.6", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+
+# Configuration
+config = "0.14"
+
+# Error handling
+thiserror = "1.0"
+
+# Async runtime
+tokio = { version = "1.35", features = ["full"] }
+
+# Web framework
+axum = "0.7"
+tower-http = { version = "0.5", features = ["cors"] }
+
+# OpenAPI
+utoipa = { version = "4.2", features = ["axum_extras", "uuid", "chrono"] }
+utoipa-axum = "0.1"
+utoipa-swagger-ui = { version = "7", features = ["axum"] }
+
+# Hash chaining
+sha2 = "0.10"
+hex = "0.4"
+
+# Scripting engine
+rhai = { version = "1.19", features = ["sync", "serde", "metadata"] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# NATS messaging
+async-nats = "0.42"
+futures = "0.3"
+
+# Async streams (SSE)
+async-stream = "0.3"
+
+# Concurrency
+parking_lot = "0.12"
+
+# Testing
+rstest = "0.18"
+testcontainers = "0.23"
+testcontainers-modules = { version = "0.11", features = ["nats"] }
+
+# Async traits
+async-trait = "0.1"
+
+# Internal crates
+petri-domain = { path = "core-engine/crates/domain" }
+petri-application = { path = "core-engine/crates/application" }
+petri-infrastructure = { path = "core-engine/crates/infrastructure" }
+petri-api = { path = "core-engine/crates/api" }
+petri-api-types = { path = "core-engine/crates/api-types" }
+petri-nats = { path = "core-engine/crates/nats" }
+petri-scheduler-bridge = { path = "core-engine/crates/scheduler-bridge" }
+petri-nomad = { path = "core-engine/crates/nomad" }
+petri-slurm = { path = "core-engine/crates/slurm" }
+petri-executor = { path = "core-engine/crates/executor" }
+aithericon-executor-domain = { path = "../executor/crates/executor-domain" }
+aithericon-executor-storage = { path = "../executor/crates/executor-storage" }
+aithericon-executor-storage-types = { path = "../executor/crates/executor-storage-types" }
+aithericon-executor-worker = { path = "../executor/crates/executor-worker" }
+aithericon-executor-backend = { path = "../executor/crates/executor-backend" }
+aithericon-secrets = { path = "../shared/secrets" }
+apalis = { path = "../shared/apalis", default-features = false, features = ["limit"] }
+apalis-nats = { path = "../shared/apalis/packages/apalis-nats" }
+petri-test-harness = { path = "core-engine/crates/test-harness" }
+
+# CLI
+clap = { version = "4.4", features = ["derive"] }
+
+# JSON Schema validation
+jsonschema = "0.27"
+
+# HTTP clients
+ureq = { version = "2.9", features = ["json"] }
+
+# HTTP client (for Nomad integration)
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+tokio-util = { version = "0.7", features = ["io", "rt"] }
+bytes = "1.10"
+base64 = "0.22"
+opendal = { version = "0.55", default-features = false }
+
+# SSH (for Slurm integration)
+openssh = { version = "0.11", features = ["process-mux"] }
+shellexpand = "3.1"
+
+# Schema
+schemars = "0.8"
+
+# Random
+rand = "0.8"
+
+# String similarity (fuzzy matching for bridge validation)
+strsim = "0.11"
+
+# ULID (for apalis-nats job envelope compatibility)
+ulid = { version = "1.2", default-features = false, features = ["std"] }

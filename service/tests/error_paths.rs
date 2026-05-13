@@ -139,7 +139,7 @@ async fn ensure_petri_global_stream(js: &jetstream::Context) {
 #[tokio::test]
 async fn create_instance_engine_down_returns_502_and_cleans_db() {
     // Point PetriClient at a bogus URL (nothing listens on port 1)
-    let nats_url = aithericon_test_infra::nats_url();
+    let nats_url = common::nats_url();
     let (app, db) = common::test_app_with_petri_url(&nats_url, "http://localhost:1").await;
 
     let template_id = insert_published_template(&db).await;
@@ -187,7 +187,7 @@ async fn create_instance_engine_down_returns_502_and_cleans_db() {
 
 #[tokio::test]
 async fn cancel_instance_engine_down_still_cancels_in_db() {
-    let nats_url = aithericon_test_infra::nats_url();
+    let nats_url = common::nats_url();
     let (app, db) = common::test_app_with_petri_url(&nats_url, "http://localhost:1").await;
 
     let template_id = insert_published_template(&db).await;
@@ -230,7 +230,7 @@ async fn cancel_instance_engine_down_still_cancels_in_db() {
 #[tokio::test]
 async fn lifecycle_listener_retries_then_succeeds() {
     let db = common::create_test_db().await;
-    let nats_url = aithericon_test_infra::nats_url();
+    let nats_url = common::nats_url();
     let nats = MekhanNats::connect(&nats_url).await.expect("connect NATS");
 
     ensure_petri_global_stream(nats.jetstream()).await;
@@ -305,7 +305,7 @@ async fn lifecycle_listener_retries_then_succeeds() {
 
 #[tokio::test]
 async fn instance_state_engine_unavailable_shows_events() {
-    let nats_url = aithericon_test_infra::nats_url();
+    let nats_url = common::nats_url();
     let (app, db) = common::test_app_with_petri_url(&nats_url, "http://localhost:1").await;
 
     let nats = MekhanNats::connect(&nats_url).await.expect("connect NATS");

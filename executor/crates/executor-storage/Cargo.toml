@@ -1,0 +1,36 @@
+[package]
+name = "aithericon-executor-storage"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+aithericon-executor-domain = { workspace = true }
+aithericon-executor-storage-types = { workspace = true }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }
+
+aithericon-file-metadata = { workspace = true }
+
+# Optional: OpenDAL multi-backend storage
+opendal = { workspace = true, optional = true }
+
+[dev-dependencies]
+toml = "0.8"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[features]
+default = []
+opendal = ["dep:opendal", "opendal/services-fs"]
+opendal-s3 = ["opendal", "opendal/services-s3"]
+opendal-gcs = ["opendal", "opendal/services-gcs"]
+opendal-azblob = ["opendal", "opendal/services-azblob"]
+opendal-memory = ["opendal", "opendal/services-memory"]

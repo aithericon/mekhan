@@ -1,0 +1,30 @@
+# =============================================================================
+# Aithericon Platform — umbrella workspace
+# =============================================================================
+# Cargo workspace at the monorepo root. Lists the deployable application crates
+# as members. Sibling repos under engine/, executor/, shared/ keep their own
+# [workspace] roots and are excluded here so cargo doesn't try to merge them —
+# they remain reachable via path-deps from members.
+#
+# Why this exists:
+#   `cross` mounts the workspace root into its Docker container. With everything
+#   under aithericon-platform/, cross-musl builds can resolve `../../engine/...`
+#   etc. without escaping the mount. This was previously impossible when each
+#   repo lived as a top-level sibling of the others.
+
+[workspace]
+resolver = "2"
+
+members = [
+    "service",
+]
+
+exclude = [
+    "app",
+    "engine",
+    "executor",
+    "shared/secrets",
+    "shared/apalis",
+    "shared/file-metadata",
+    "deploy",
+]

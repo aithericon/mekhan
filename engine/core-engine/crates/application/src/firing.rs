@@ -1,0 +1,734 @@
+use std::collections::HashMap;
+use std::sync::RwLock;
+
+use petri_domain::{
+    DomainEvent, Marking, PersistedEvent, PetriNet, PlaceId, ReplyRouting, Token, Transition,
+    TransitionId,
+};
+use serde_json::Value as JsonValue;
+use uuid::Uuid;
+
+use aithericon_secrets::SecretStore;
+
+use crate::binding::find_valid_binding;
+use crate::effect::{EffectHandler, EffectInput, ExecutionMode};
+use crate::rhai_runtime::json_to_token_color;
+use crate::schema_registry::SchemaRegistry;
+use crate::{
+    EventRepository, ServiceError, StateProjection, TopologyRepository, TransitionExecutor,
+};
+
+use std::sync::Arc;
+
+/// Resolve a bridge target field.
+///
+/// - `$params.key` → look up from net parameters (set at net creation time)
+/// - `$result.key` → look up from effect handler result (available after effect execution)
+/// - anything else → literal string
+fn resolve_param(
+    field: &str,
+    params: Option<&JsonValue>,
+    effect_result: Option<&JsonValue>,
+) -> Result<String, ServiceError> {
+    if let Some(key) = field.strip_prefix("$result.") {
+        let result = effect_result.ok_or_else(|| {
+            ServiceError::Internal(format!(
+                "Bridge target '{}' references $result but no effect result available",
+                field
+            ))
+        })?;
+        result
+            .get(key)
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .ok_or_else(|| {
+                ServiceError::Internal(format!(
+                    "Effect result key '{}' not found or not a string",
+                    key
+                ))
+            })
+    } else if let Some(key) = field.strip_prefix("$params.") {
+        let params = params.ok_or_else(|| {
+            ServiceError::Internal(format!(
+                "Bridge target '{}' references $params but net has no parameters",
+                field
+            ))
+        })?;
+        params
+            .get(key)
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .ok_or_else(|| {
+                ServiceError::Internal(format!(
+                    "Net parameter '{}' not found or not a string",
+                    key
+                ))
+            })
+    } else {
+        Ok(field.to_string())
+    }
+}
+
+/// Route output tokens through bridge/claims logic.
+///
+/// Shared by both `fire_transition` (Rhai script results) and
+/// `fire_effect_transition` (effect handler results).
+///
+/// Returns `(produced_tokens, bridge_out_tokens)`.
+#[allow(clippy::type_complexity)]
+pub(crate) fn route_output_tokens(
+    net: &PetriNet,
+    transition: &Transition,
+    transition_id: &TransitionId,
+    script_result: HashMap<String, JsonValue>,
+    consumed_reply_routing: &Option<ReplyRouting>,
+    schema_registry: Option<&SchemaRegistry>,
+    net_parameters: Option<&JsonValue>,
+    effect_result: Option<&JsonValue>,
+) -> Result<
+    (
+        Vec<(PlaceId, Token)>,
+        Vec<(
+            PlaceId,
+            Token,
+            petri_domain::BridgeTarget,
+            String,
+            Option<String>,
+        )>,
+    ),
+    ServiceError,
+> {
+    let mut produced_tokens: Vec<(PlaceId, Token)> = Vec::new();
+    let mut bridge_out_tokens: Vec<(
+        PlaceId,
+        Token,
+        petri_domain::BridgeTarget,
+        String,
+        Option<String>,
+    )> = Vec::new();
+
+    for (port_name, token_data) in script_result {
+        let port = transition.output_port(&port_name);
+        if port.is_none() {
+            return Err(ServiceError::UnknownOutputPort {
+                port_name: port_name.clone(),
+            });
+        }
+
+        // Validate output token against schema (skip _error port)
+        if port_name != "_error" {
+            if let (Some(registry), Some(port)) = (schema_registry, port) {
+                if let Some(ref schema_ref) = port.schema_ref {
+                    if let Err(e) = registry.validate(schema_ref, &token_data) {
+                        return Err(ServiceError::SchemaValidationFailed {
+                            port_name: port_name.clone(),
+                            transition_id: transition_id.clone(),
+                            error: e.to_string(),
+                        });
+                    }
+                }
+            }
+        }
+
+        let output_arc = net
+            .output_arc_for_port(transition_id, &port_name)
+            .ok_or_else(|| ServiceError::NoArcForPort {
+                port_name: port_name.clone(),
+            })?;
+
+        let token_color = json_to_token_color(&token_data);
+        let mut token = Token::new(token_color);
+
+        if let Some(place) = net.get_place(&output_arc.place_id) {
+            match &place.kind {
+                petri_domain::PlaceKind::BridgeReply { channel } => {
+                    let reply_addr = consumed_reply_routing.as_ref().and_then(|meta| {
+                        if let Some(ch) = channel {
+                            meta.reply_channels
+                                .as_ref()
+                                .and_then(|m| m.get(ch.as_str()))
+                        } else {
+                            meta.reply_to.as_ref()
+                        }
+                    });
+
+                    match reply_addr {
+                        Some(addr) => {
+                            bridge_out_tokens.push((
+                                output_arc.place_id.clone(),
+                                token,
+                                petri_domain::BridgeTarget {
+                                    target_net_id: addr.net_id.clone(),
+                                    target_place_name: addr.place_name.clone(),
+                                    reply_to: None,
+                                    reply_channels: None,
+                                },
+                                place.name.clone(),
+                                None,
+                            ));
+                            continue;
+                        }
+                        None => {
+                            return Err(ServiceError::BridgeReplyMissing {
+                                place_name: place.name.clone(),
+                                channel: channel.clone(),
+                            });
+                        }
+                    }
+                }
+                petri_domain::PlaceKind::BridgeOut {
+                    target_net_id,
+                    target_place_name,
+                    reply_to,
+                    reply_channels,
+                    ..
+                } => {
+                    let resolved_net = resolve_param(target_net_id, net_parameters, effect_result)?;
+                    let resolved_place = resolve_param(target_place_name, net_parameters, effect_result)?;
+                    bridge_out_tokens.push((
+                        output_arc.place_id.clone(),
+                        token,
+                        petri_domain::BridgeTarget {
+                            target_net_id: resolved_net,
+                            target_place_name: resolved_place,
+                            reply_to: reply_to.clone(),
+                            reply_channels: reply_channels.clone(),
+                        },
+                        place.name.clone(),
+                        reply_to.clone(),
+                    ));
+                    continue;
+                }
+                _ => {
+                    if let Some(ref meta) = consumed_reply_routing {
+                        token = token.with_reply_routing(meta.clone());
+                    }
+                }
+            }
+        }
+
+        produced_tokens.push((output_arc.place_id.clone(), token));
+    }
+
+    Ok((produced_tokens, bridge_out_tokens))
+}
+
+/// Emit bridge-out events for tokens routed to remote nets.
+///
+/// `produced_by_event` is the sequence number of the TransitionFired /
+/// EffectCompleted event that produced these tokens. The causality consumer
+/// uses it to walk back to the producing event and inherit process tags
+/// from consumed tokens.
+pub(crate) async fn emit_bridge_out_events<E: EventRepository>(
+    events: &E,
+    transition_id: &TransitionId,
+    bridge_out_tokens: Vec<(
+        PlaceId,
+        Token,
+        petri_domain::BridgeTarget,
+        String,
+        Option<String>,
+    )>,
+    produced_by_event: Option<u64>,
+) -> Result<(), ServiceError> {
+    for (place_id, token, target, place_name, reply_to_place_name) in bridge_out_tokens {
+        events
+            .append(DomainEvent::TokenBridgedOut {
+                token,
+                source_place_id: place_id,
+                source_place_name: place_name,
+                target_net_id: target.target_net_id,
+                target_place_name: target.target_place_name,
+                transition_id: transition_id.clone(),
+                signal_key: Uuid::new_v4().to_string(),
+                produced_by_event,
+                reply_to_place_name,
+                reply_channels: target.reply_channels,
+            })
+            .await?;
+    }
+    Ok(())
+}
+
+/// Fire a transition using port-based routing.
+///
+/// The execution flow:
+/// 1. Find a valid token binding (searches combinations if guard present)
+/// 2. If effect transition -> delegate to `fire_effect_transition()`
+/// 3. Execute main script with the bound tokens
+/// 4. Route output tokens based on script result
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn fire_transition<
+    E: EventRepository,
+    T: TopologyRepository,
+    S: StateProjection,
+>(
+    events: &E,
+    topology: &T,
+    executor: &TransitionExecutor,
+    effect_handlers: &RwLock<HashMap<String, Arc<dyn EffectHandler>>>,
+    execution_mode: &RwLock<ExecutionMode>,
+    replay_cursor: &RwLock<usize>,
+    workflow_id: Option<Uuid>,
+    marking: &Marking,
+    transition_id: TransitionId,
+    schema_registry: Option<&SchemaRegistry>,
+    secret_store: Option<&dyn SecretStore>,
+    net_parameters: Option<&JsonValue>,
+) -> Result<PersistedEvent, ServiceError> {
+    let net = topology.get_topology().ok_or(ServiceError::NoTopology)?;
+
+    let transition = net
+        .get_transition(&transition_id)
+        .ok_or_else(|| ServiceError::TransitionNotFound(transition_id.clone()))?
+        .clone();
+
+    // Branch: effect transitions use a separate path
+    if transition.is_effect() {
+        return fire_effect_transition::<E, T, S>(
+            events,
+            topology,
+            executor,
+            effect_handlers,
+            execution_mode,
+            replay_cursor,
+            workflow_id,
+            marking,
+            &net,
+            &transition,
+            schema_registry,
+            secret_store,
+            net_parameters,
+        )
+        .await;
+    }
+
+    let input_arcs = net.input_arcs(&transition_id);
+    let binding = find_valid_binding(executor, &transition, &input_arcs, marking, schema_registry)
+        .ok_or_else(|| ServiceError::GuardNotSatisfied(transition_id.clone()))?;
+
+    let script_result = executor.execute_script(&transition.script, &binding.port_inputs)?;
+
+    let (produced_tokens, bridge_out_tokens) = route_output_tokens(
+        &net,
+        &transition,
+        &transition_id,
+        script_result,
+        &binding.consumed_reply_routing,
+        schema_registry,
+        net_parameters,
+        None, // Rhai transitions have no effect result
+    )?;
+
+    let event = events
+        .append(DomainEvent::TransitionFired {
+            transition_id: transition_id.clone(),
+            transition_name: None,
+            consumed_tokens: binding.consumed_tokens,
+            produced_tokens,
+            read_tokens: binding.read_tokens,
+            process_step_started: transition.process_step_started.clone(),
+            process_step_completed: transition.process_step_completed.clone(),
+        })
+        .await?;
+
+    emit_bridge_out_events(events, &transition_id, bridge_out_tokens, Some(event.sequence)).await?;
+
+    Ok(event)
+}
+
+/// Fire an effect transition.
+///
+/// - **Live mode**: Build `EffectInput` -> look up handler -> call `execute()` ->
+///   convert output -> emit `EffectCompleted` -> route output tokens.
+/// - **Replay mode**: Find next `EffectCompleted` event -> call `handler.replay()`
+///   to rebuild owned state -> use stored produced_tokens directly.
+#[allow(clippy::too_many_arguments, clippy::extra_unused_type_parameters)]
+async fn fire_effect_transition<E: EventRepository, T: TopologyRepository, S: StateProjection>(
+    events: &E,
+    _topology: &T,
+    executor: &TransitionExecutor,
+    effect_handlers: &RwLock<HashMap<String, Arc<dyn EffectHandler>>>,
+    execution_mode: &RwLock<ExecutionMode>,
+    replay_cursor: &RwLock<usize>,
+    _workflow_id: Option<Uuid>,
+    marking: &Marking,
+    net: &PetriNet,
+    transition: &Transition,
+    schema_registry: Option<&SchemaRegistry>,
+    secret_store: Option<&dyn SecretStore>,
+    net_parameters: Option<&JsonValue>,
+) -> Result<PersistedEvent, ServiceError> {
+    let transition_id = &transition.id;
+    let handler_id = transition.effect_handler_id.as_ref().unwrap();
+
+    let input_arcs = net.input_arcs(transition_id);
+    let binding = find_valid_binding(executor, transition, &input_arcs, marking, schema_registry)
+        .ok_or_else(|| ServiceError::GuardNotSatisfied(transition_id.clone()))?;
+
+    let mode = *execution_mode.read().unwrap();
+
+    match mode {
+        ExecutionMode::Live => {
+            // Look up handler (drop guard before .await)
+            let handler = {
+                let handlers = effect_handlers.read().unwrap();
+                handlers.get(handler_id).cloned().ok_or_else(|| {
+                    ServiceError::Internal(format!("Effect handler not found: {}", handler_id))
+                })?
+            };
+
+            // Resolve secrets in config (just-in-time, transient copy)
+            let resolved_config = match (secret_store, &transition.effect_config) {
+                (Some(store), Some(config)) => {
+                    Some(
+                        aithericon_secrets::resolve_secrets(config, store)
+                            .await
+                            .map_err(|e| ServiceError::SecretResolutionFailed {
+                                transition_id: transition_id.clone(),
+                                message: e.to_string(),
+                            })?,
+                    )
+                }
+                (_, config) => config.clone(),
+            };
+
+            // Build effect input with resolved config
+            // Extract read_inputs: entries from port_inputs that came via read arcs
+            let read_inputs: HashMap<String, serde_json::Value> = binding
+                .read_port_names
+                .iter()
+                .filter_map(|name| {
+                    binding
+                        .port_inputs
+                        .get(name)
+                        .map(|v| (name.clone(), v.clone()))
+                })
+                .collect();
+            let process_step = transition
+                .process_step_started
+                .clone()
+                .or_else(|| transition.process_step_completed.clone());
+
+            let effect_input = EffectInput {
+                transition_id: transition_id.clone(),
+                inputs: binding.port_inputs.clone(),
+                config: resolved_config,
+                read_inputs,
+                process_step,
+            };
+
+            // Execute handler
+            let effect_result = handler.execute(effect_input).await;
+
+            match effect_result {
+                Ok(effect_output) => {
+                    // Success path — route output tokens from effect result
+                    let (produced_tokens, bridge_out_tokens) = route_output_tokens(
+                        net,
+                        transition,
+                        transition_id,
+                        effect_output.tokens,
+                        &binding.consumed_reply_routing,
+                        schema_registry,
+                        net_parameters,
+                        Some(&effect_output.result),
+                    )?;
+
+                    let event = events
+                        .append(DomainEvent::EffectCompleted {
+                            transition_id: transition_id.clone(),
+                            transition_name: Some(transition.name.clone()),
+                            consumed_tokens: binding.consumed_tokens,
+                            produced_tokens,
+                            effect_handler_id: handler_id.clone(),
+                            effect_result: effect_output.result,
+                            read_tokens: binding.read_tokens,
+                            process_step_started: transition.process_step_started.clone(),
+                            process_step_completed: transition.process_step_completed.clone(),
+                        })
+                        .await?;
+
+                    emit_bridge_out_events(events, transition_id, bridge_out_tokens, Some(event.sequence)).await?;
+
+                    Ok(event)
+                }
+                Err(effect_error) => {
+                    let error_message = effect_error.to_string();
+                    let retryable = effect_error.is_retryable();
+
+                    if transition.output_port("_error").is_some() {
+                        // Error port path: consume tokens, route error token to _error place
+                        let error_data = serde_json::json!({
+                            "error": error_message,
+                            "handler_id": handler_id,
+                            "transition_id": transition_id.to_string(),
+                            "inputs": binding.port_inputs,
+                            "retryable": retryable,
+                        });
+                        let mut error_output = HashMap::new();
+                        error_output.insert("_error".to_string(), error_data);
+
+                        let (produced_tokens, bridge_out_tokens) = route_output_tokens(
+                            net,
+                            transition,
+                            transition_id,
+                            error_output,
+                            &binding.consumed_reply_routing,
+                            None, // Skip schema validation for error tokens
+                            net_parameters,
+                            None, // No effect result on error path
+                        )?;
+
+                        let event = events
+                            .append(DomainEvent::EffectFailed {
+                                transition_id: transition_id.clone(),
+                                transition_name: Some(transition.name.clone()),
+                                consumed_tokens: binding.consumed_tokens,
+                                produced_tokens,
+                                effect_handler_id: handler_id.clone(),
+                                error_message,
+                                tokens_consumed: true,
+                                input_data: Some(binding.port_inputs.clone()),
+                                retryable,
+                            })
+                            .await?;
+
+                        emit_bridge_out_events(events, transition_id, bridge_out_tokens, Some(event.sequence)).await?;
+                        Ok(event)
+                    } else {
+                        // No error port: audit event, tokens stay, return error
+                        events
+                            .append(DomainEvent::EffectFailed {
+                                transition_id: transition_id.clone(),
+                                transition_name: Some(transition.name.clone()),
+                                consumed_tokens: binding.consumed_tokens.clone(),
+                                produced_tokens: vec![],
+                                effect_handler_id: handler_id.clone(),
+                                error_message: error_message.clone(),
+                                tokens_consumed: false,
+                                input_data: Some(binding.port_inputs.clone()),
+                                retryable,
+                            })
+                            .await?;
+
+                        Err(ServiceError::EffectFailed {
+                            transition_id: transition_id.clone(),
+                            handler_id: handler_id.clone(),
+                            message: error_message,
+                        })
+                    }
+                }
+            }
+        }
+        ExecutionMode::Replay => {
+            let all_events = events.all_events().await;
+            let cursor = *replay_cursor.read().unwrap();
+
+            // Collect ALL effect events (completed + failed) in log order
+            let effect_events: Vec<_> = all_events
+                .iter()
+                .filter(|e| {
+                    matches!(
+                        &e.event,
+                        DomainEvent::EffectCompleted { .. } | DomainEvent::EffectFailed { .. }
+                    )
+                })
+                .collect();
+
+            let stored = effect_events.get(cursor).ok_or_else(|| {
+                ServiceError::Internal(format!(
+                    "Replay: no effect event at cursor {} (total: {})",
+                    cursor,
+                    effect_events.len()
+                ))
+            })?;
+
+            match &stored.event {
+                DomainEvent::EffectCompleted {
+                    transition_id: tid,
+                    effect_handler_id: hid,
+                    effect_result,
+                    produced_tokens,
+                    consumed_tokens,
+                    read_tokens: stored_read_tokens,
+                    ..
+                } if *tid == *transition_id && *hid == *handler_id => {
+                    *replay_cursor.write().unwrap() = cursor + 1;
+
+                    // Replay handler (drop guard before .await)
+                    {
+                        let handlers = effect_handlers.read().unwrap();
+                        if let Some(handler) = handlers.get(handler_id) {
+                            let replay_read_inputs: HashMap<String, serde_json::Value> = binding
+                                .read_port_names
+                                .iter()
+                                .filter_map(|name| {
+                                    binding
+                                        .port_inputs
+                                        .get(name)
+                                        .map(|v| (name.clone(), v.clone()))
+                                })
+                                .collect();
+                            let effect_input = EffectInput {
+                                transition_id: transition_id.clone(),
+                                inputs: binding.port_inputs.clone(),
+                                config: transition.effect_config.clone(),
+                                read_inputs: replay_read_inputs,
+                                process_step: transition
+                                    .process_step_started
+                                    .clone()
+                                    .or_else(|| transition.process_step_completed.clone()),
+                            };
+                            handler.replay(&effect_input, effect_result);
+                        }
+                    }
+
+                    // Re-emit the stored event (same tokens, same result)
+                    let event = events
+                        .append(DomainEvent::EffectCompleted {
+                            transition_id: transition_id.clone(),
+                            transition_name: Some(transition.name.clone()),
+                            consumed_tokens: consumed_tokens.clone(),
+                            produced_tokens: produced_tokens.clone(),
+                            effect_handler_id: handler_id.clone(),
+                            effect_result: effect_result.clone(),
+                            read_tokens: stored_read_tokens.clone(),
+                            process_step_started: transition.process_step_started.clone(),
+                            process_step_completed: transition.process_step_completed.clone(),
+                        })
+                        .await?;
+
+                    Ok(event)
+                }
+                DomainEvent::EffectFailed {
+                    transition_id: tid,
+                    effect_handler_id: hid,
+                    consumed_tokens,
+                    produced_tokens,
+                    error_message,
+                    tokens_consumed,
+                    input_data,
+                    retryable,
+                    ..
+                } if *tid == *transition_id && *hid == *handler_id => {
+                    *replay_cursor.write().unwrap() = cursor + 1;
+
+                    // Re-emit the stored EffectFailed event
+                    let event = events
+                        .append(DomainEvent::EffectFailed {
+                            transition_id: transition_id.clone(),
+                            transition_name: Some(transition.name.clone()),
+                            consumed_tokens: consumed_tokens.clone(),
+                            produced_tokens: produced_tokens.clone(),
+                            effect_handler_id: handler_id.clone(),
+                            error_message: error_message.clone(),
+                            tokens_consumed: *tokens_consumed,
+                            input_data: input_data.clone(),
+                            retryable: *retryable,
+                        })
+                        .await?;
+
+                    if *tokens_consumed {
+                        Ok(event)
+                    } else {
+                        Err(ServiceError::EffectFailed {
+                            transition_id: transition_id.clone(),
+                            handler_id: handler_id.clone(),
+                            message: error_message.clone(),
+                        })
+                    }
+                }
+                _ => Err(ServiceError::Internal(format!(
+                    "Replay mismatch at cursor {}: expected ({}, {})",
+                    cursor, transition_id, handler_id
+                ))),
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_resolve_param_literal_string() {
+        let result = resolve_param("my-net-123", None, None).unwrap();
+        assert_eq!(result, "my-net-123");
+    }
+
+    #[test]
+    fn test_resolve_param_literal_with_params_present() {
+        let params = serde_json::json!({"parent": "net-a"});
+        let result = resolve_param("static-net", Some(&params), None).unwrap();
+        assert_eq!(result, "static-net");
+    }
+
+    #[test]
+    fn test_resolve_param_from_params() {
+        let params = serde_json::json!({"parent_net_id": "orchestrator-abc"});
+        let result = resolve_param("$params.parent_net_id", Some(&params), None).unwrap();
+        assert_eq!(result, "orchestrator-abc");
+    }
+
+    #[test]
+    fn test_resolve_param_missing_params() {
+        let result = resolve_param("$params.parent_net_id", None, None);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("net has no parameters"));
+    }
+
+    #[test]
+    fn test_resolve_param_missing_key() {
+        let params = serde_json::json!({"other_key": "value"});
+        let result = resolve_param("$params.parent_net_id", Some(&params), None);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("not found or not a string"));
+    }
+
+    #[test]
+    fn test_resolve_param_non_string_value() {
+        let params = serde_json::json!({"parent_net_id": 42});
+        let result = resolve_param("$params.parent_net_id", Some(&params), None);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("not found or not a string"));
+    }
+
+    #[test]
+    fn test_resolve_param_from_result() {
+        let effect_result = serde_json::json!({"child_net_id": "spawned-net-xyz"});
+        let result = resolve_param("$result.child_net_id", None, Some(&effect_result)).unwrap();
+        assert_eq!(result, "spawned-net-xyz");
+    }
+
+    #[test]
+    fn test_resolve_param_result_missing() {
+        let result = resolve_param("$result.child_net_id", None, None);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("no effect result available"));
+    }
+
+    #[test]
+    fn test_resolve_param_result_key_missing() {
+        let effect_result = serde_json::json!({"other_key": "value"});
+        let result = resolve_param("$result.child_net_id", None, Some(&effect_result));
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("not found or not a string"));
+    }
+}

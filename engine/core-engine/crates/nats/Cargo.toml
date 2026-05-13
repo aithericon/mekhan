@@ -1,0 +1,56 @@
+[package]
+name = "petri-nats"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "NATS JetStream integration for Petri-Lab workflow engine"
+
+[features]
+human = ["petri-domain/human", "petri-application/human"]
+
+[dependencies]
+# NATS client
+async-nats = { workspace = true }
+bytes = { workspace = true }
+futures = { workspace = true }
+
+# Async runtime
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Time
+chrono = { workspace = true }
+
+# IDs
+uuid = { workspace = true }
+
+# Concurrency
+parking_lot = { workspace = true }
+
+# Async traits
+async-trait = { workspace = true }
+
+# Configuration
+config = { workspace = true }
+shellexpand = "3"
+
+# Error handling
+thiserror = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+# Internal crates
+petri-domain = { workspace = true }
+petri-application = { workspace = true }
+petri-infrastructure = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+petri-test-harness = { workspace = true, features = ["nats"] }
+petri-infrastructure = { workspace = true }

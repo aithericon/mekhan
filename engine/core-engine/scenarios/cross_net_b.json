@@ -1,0 +1,42 @@
+{
+  "name": "Cross-Net Consumer (Net B)",
+  "places": [
+    {
+      "id": "inbox",
+      "name": "Inbox (bridge-in)",
+      "type": "state",
+      "initial_tokens": []
+    },
+    {
+      "id": "processed",
+      "name": "Processed",
+      "type": "state",
+      "initial_tokens": []
+    },
+    {
+      "id": "reply_outbox",
+      "name": "Reply Outbox",
+      "type": "state",
+      "bridge_reply": true
+    }
+  ],
+  "transitions": [
+    {
+      "id": "process",
+      "name": "Process",
+      "input_ports": [{ "name": "input", "cardinality": "single" }],
+      "output_ports": [
+        { "name": "result", "cardinality": "single" },
+        { "name": "reply", "cardinality": "single" }
+      ],
+      "inputs": [{ "place": "inbox", "port": "input", "weight": 1 }],
+      "outputs": [
+        { "place": "processed", "port": "result", "weight": 1 },
+        { "place": "reply_outbox", "port": "reply", "weight": 1 }
+      ],
+      "logic": { "type": "rhai", "source": "#{result: input, reply: #{status: \"done\", original: input}}" }
+    }
+  ],
+  "groups": [],
+  "mock_adapters": []
+}

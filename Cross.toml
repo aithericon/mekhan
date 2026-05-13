@@ -1,0 +1,8 @@
+[build.env]
+passthrough = ["SQLX_OFFLINE"]
+
+[target.aarch64-unknown-linux-musl]
+image = "ghcr.io/cross-rs/aarch64-unknown-linux-musl:main"
+
+[target.aarch64-unknown-linux-musl.env]
+passthrough = ["SQLX_OFFLINE"]

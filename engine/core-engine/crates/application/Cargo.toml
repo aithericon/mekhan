@@ -1,0 +1,26 @@
+[package]
+name = "petri-application"
+version.workspace = true
+edition.workspace = true
+
+[features]
+human = ["petri-domain/human"]
+
+[dependencies]
+petri-domain.workspace = true
+
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+rhai.workspace = true
+utoipa.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+chrono.workspace = true
+rand = { workspace = true }
+parking_lot.workspace = true
+async-trait.workspace = true
+uuid.workspace = true
+jsonschema.workspace = true
+aithericon-secrets.workspace = true
+strsim.workspace = true

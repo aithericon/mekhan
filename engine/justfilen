@@ -1,0 +1,137 @@
+
+# ============================================
+# Clockmaster / Durable Timer Demo
+# ============================================
+
+# Stop the engine and timers
+timer-stop:
+    #!/usr/bin/env bash
+    if lsof -ti :3030 > /dev/null 2>&1; then
+        echo "Stopping engine on port 3030..."
+        kill $(lsof -ti :3030) 2>/dev/null || true
+    else
+        echo "No engine running on port 3030"
+    fi
+
+# Run the full Durable Timer demo end-to-end
+timer-demo:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    echo "=== Petri-Lab Durable Timer Demo ==="
+    echo ""
+
+    # 0. Kill any stale engine from a previous run
+    if lsof -ti :3030 > /dev/null 2>&1; then
+        echo "Stopping stale engine on port 3030..."
+        kill $(lsof -ti :3030) 2>/dev/null || true
+        sleep 1
+    fi
+
+    # 1. Start NATS
+    echo "1. Starting NATS..."
+    just nats-up
+
+    # 2. Build
+    echo ""
+    echo "2. Building engine + scenario..."
+    cargo build -p core-engine
+    cargo build -p aithericon-sdk --example durable_timer
+
+    # 3. Start engine
+    echo ""
+    echo "3. Starting engine..."
+    RUST_LOG=info,petri_nats=debug,petri_application=debug \n    cargo run -p core-engine &
+    ENGINE_PID=$!
+
+    # Trap: only kill engine on error
+    trap 'kill $ENGINE_PID 2>/dev/null; wait $ENGINE_PID 2>/dev/null' ERR
+
+    # 4. Wait for engine API
+    for i in $(seq 1 30); do
+        if curl -sf http://localhost:3030/api/state > /dev/null 2>&1; then
+            echo "   Engine API is ready"
+            break
+        fi
+        if [ "$i" -eq 30 ]; then echo "ERROR: Engine did not start"; exit 1; fi
+        sleep 1
+    done
+
+    # 5. Deploy scenario and capture place IDs
+    echo ""
+    echo "4. Deploying durable_timer scenario..."
+    DEPLOY=$(./target/debug/examples/durable_timer -- --deploy 2>&1)
+    
+    # Extract place UUIDs from deploy JSON
+    WAITING_ID=$(echo "$DEPLOY" | grep -o '"waiting":"[^"]*"' | head -1 | cut -d'"' -f4)
+    COMPLETED_ID=$(echo "$DEPLOY" | grep -o '"completed":"[^"]*"' | head -1 | cut -d'"' -f4)
+    
+    if [ -z "$WAITING_ID" ] || [ -z "$COMPLETED_ID" ]; then
+        echo "ERROR: Could not extract place IDs from deploy response"
+        exit 1
+    fi
+
+    # 6. Set engine to running mode + initial evaluate to start job
+    echo ""
+    echo "5. Starting workflow (triggers 'start' transition)..."
+    curl -s -X PUT -H "Content-Type: application/json" -d '{"mode":"running"}' http://localhost:3030/api/run-mode > /dev/null
+    curl -s -X POST -H "Content-Type: application/json" -d '{}' http://localhost:3030/api/command/evaluate > /dev/null
+
+    echo "   Job moved to 'waiting' place."
+    echo "   Durable timer scheduled for 5 seconds."
+
+    # 7. Demonstrate Durability: Kill and Restart Engine
+    echo ""
+    echo "6. DEMO: Killing engine while timer is active..."
+    kill $ENGINE_PID
+    wait $ENGINE_PID 2>/dev/null || true
+    echo "   Engine stopped. NATS is still holding the timer record."
+    
+    echo "   Waiting 2 seconds before restart..."
+    sleep 2
+
+    echo "   Restarting engine..."
+    cargo run -p core-engine &
+    ENGINE_PID=$!
+    
+    # Wait for restart
+    for i in $(seq 1 30); do
+        if curl -sf http://localhost:3030/api/state > /dev/null 2>&1; then break; fi
+        sleep 1
+    done
+    echo "   Engine back online. Clockmaster resuming..."
+
+    # 8. Poll until timer completes
+    echo ""
+    echo "7. Waiting for durable timer to fire..."
+    START_TIME=$(date +%s)
+    for i in $(seq 1 20); do
+        sleep 1
+        STATE=$(curl -s http://localhost:3030/api/state)
+        COMPLETED=$(echo "$STATE" | python3 -c "
+import json, sys
+s = json.load(sys.stdin)
+tokens = s.get('marking',{}).get('tokens',{}).get('$COMPLETED_ID',[])
+print(len(tokens))
+" 2>/dev/null || echo "0")
+
+        ELAPSED=$(($(date +%s) - START_TIME))
+        echo "   [${ELAPSED}s] completed: $COMPLETED / 1"
+
+        if [ "$COMPLETED" -ge 1 ]; then
+            echo ""
+            echo "=== Job completed! Durable timer fired successfully across restart. ==="
+            break
+        fi
+
+        if [ "$i" -eq 20 ]; then
+            echo "ERROR: Timer did not fire in time"
+            exit 1
+        fi
+    done
+
+    # 9. Final summary
+    echo ""
+    echo "=== Demo complete ==="
+    echo "Engine is running on http://localhost:3030 (PID $ENGINE_PID)"
+    echo "Stop with:  just timer-stop"

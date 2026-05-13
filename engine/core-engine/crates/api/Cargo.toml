@@ -1,0 +1,50 @@
+[package]
+name = "petri-api"
+version.workspace = true
+edition.workspace = true
+
+[features]
+default = []
+nomad = ["dep:petri-nomad"]
+slurm = ["dep:petri-slurm"]
+executor = ["dep:petri-executor", "dep:async-nats"]
+catalogue = ["dep:async-nats"]
+executor-vault-secrets = ["executor", "petri-executor/vault-secrets", "dep:aithericon-secrets", "aithericon-secrets/vault"]
+human = ["petri-domain/human", "petri-application/human"]
+artifact-store = ["dep:aithericon-executor-storage", "dep:aithericon-executor-storage-types", "dep:opendal", "aithericon-executor-storage/opendal-s3", "opendal/services-s3"]
+
+[dependencies]
+petri-nomad = { workspace = true, optional = true }
+petri-slurm = { workspace = true, optional = true }
+petri-executor = { workspace = true, optional = true }
+async-nats = { workspace = true, optional = true }
+aithericon-secrets = { workspace = true, optional = true }
+aithericon-executor-storage = { workspace = true, optional = true }
+aithericon-executor-storage-types = { workspace = true, optional = true }
+opendal = { workspace = true, optional = true }
+petri-domain.workspace = true
+petri-application.workspace = true
+petri-api-types.workspace = true
+
+parking_lot.workspace = true
+tokio-util.workspace = true
+
+axum.workspace = true
+tower-http.workspace = true
+tokio.workspace = true
+futures.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+utoipa.workspace = true
+utoipa-axum.workspace = true
+utoipa-swagger-ui.workspace = true
+uuid.workspace = true
+tracing.workspace = true
+chrono.workspace = true
+async-trait.workspace = true
+
+[dev-dependencies]
+petri-test-harness.workspace = true
+rstest.workspace = true
+tower = "0.5"
+http-body-util = "0.1"

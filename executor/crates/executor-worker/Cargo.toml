@@ -1,0 +1,49 @@
+[package]
+name = "aithericon-executor-worker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+aithericon-executor-domain = { workspace = true }
+aithericon-executor-storage-types = { workspace = true }
+aithericon-executor-backend = { workspace = true }
+aithericon-executor-ipc = { workspace = true }
+aithericon-executor-storage = { workspace = true }
+aithericon-executor-metrics = { workspace = true }
+aithericon-executor-logs = { workspace = true }
+async-nats = { workspace = true }
+async-trait = { workspace = true }
+tonic = { workspace = true }
+hyper = { workspace = true }
+hyper-util = { workspace = true }
+http-body-util = { workspace = true }
+tower = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+futures = { workspace = true }
+humantime-serde = { workspace = true }
+apalis-core = { workspace = true }
+apalis-nats = { workspace = true }
+uuid = { workspace = true }
+config = { version = "0.14", default-features = false, features = ["toml"] }
+sysinfo = "0.34"
+aithericon-secrets = { workspace = true }
+reqwest = { workspace = true, optional = true }
+
+[features]
+default = []
+vault = ["aithericon-secrets/vault"]
+opendal = ["aithericon-executor-storage/opendal"]
+url-inputs = ["dep:reqwest"]
+
+[dev-dependencies]
+tempfile = "3"

@@ -34,7 +34,7 @@ serde_qs = "0.13"
 urlencoding = "2"
 
 # HTTP client (for petri-lab engine)
-reqwest = { version = "0.12", features = ["json", "multipart"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls"] }
 
 # NATS (lifecycle events, cleanup)
 async-nats = "0.39"
@@ -60,18 +60,18 @@ anyhow = "1"
 async-trait = "0.1"
 
 # SDK for compiling workflow graphs to AIR
-aithericon-sdk = { path = "../../petri-lab/sdk" }
+aithericon-sdk = { path = "../engine/sdk" }
 schemars = "0.8"
 petgraph = "0.6"
 
 # Petri-net domain types (events, marking, tokens)
-petri-domain = { path = "../../petri-lab/core-engine/crates/domain" }
+petri-domain = { path = "../engine/core-engine/crates/domain" }
 
 # Petri-net API types (shared request/response DTOs for engine communication)
-petri-api-types = { path = "../../petri-lab/core-engine/crates/api-types" }
+petri-api-types = { path = "../engine/core-engine/crates/api-types" }
 
 # Executor backend config types (for compile-time validation of execution specs)
-aithericon-executor-backend-configs = { path = "../../aithericon-executor/crates/executor-backend-configs" }
+aithericon-executor-backend-configs = { path = "../executor/crates/executor-backend-configs" }
 
 # Yjs CRDT for real-time collaborative editing
 yrs = "0.21"
@@ -97,4 +97,3 @@ aws-credential-types = "1"
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 tempfile = "3"
-aithericon-test-infra = { path = "../../aithericon-test-infra/crates/test-infra" }

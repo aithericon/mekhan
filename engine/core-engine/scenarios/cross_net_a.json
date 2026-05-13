@@ -1,0 +1,43 @@
+{
+  "name": "Cross-Net Producer (Net A)",
+  "places": [
+    {
+      "id": "source",
+      "name": "Source",
+      "type": "state",
+      "initial_tokens": [
+        { "Data": { "msg": "hello from net-a" } }
+      ]
+    },
+    {
+      "id": "outbox",
+      "name": "Request Outbox (bridge-out)",
+      "type": "state",
+      "initial_tokens": [],
+      "bridge_out": {
+        "target_net_id": "net-b",
+        "target_place_name": "inbox",
+        "reply_to": "reply_inbox"
+      }
+    },
+    {
+      "id": "reply_inbox",
+      "name": "Reply Inbox",
+      "type": "state",
+      "bridge_reply": true
+    }
+  ],
+  "transitions": [
+    {
+      "id": "produce",
+      "name": "Produce",
+      "input_ports": [{ "name": "input", "cardinality": "single" }],
+      "output_ports": [{ "name": "output", "cardinality": "single" }],
+      "inputs": [{ "place": "source", "port": "input", "weight": 1 }],
+      "outputs": [{ "place": "outbox", "port": "output", "weight": 1 }],
+      "logic": { "type": "rhai", "source": "#{output: input}" }
+    }
+  ],
+  "groups": [],
+  "mock_adapters": []
+}

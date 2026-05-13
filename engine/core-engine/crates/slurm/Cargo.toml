@@ -1,0 +1,45 @@
+[package]
+name = "petri-slurm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Slurm scheduler integration for Petri-Lab workflow engine via SSH + CLI"
+
+[dependencies]
+# SSH (ControlMaster multiplexing, async, wraps system ssh)
+openssh = { workspace = true }
+shellexpand = { workspace = true }
+
+# Async runtime
+tokio = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Time
+chrono = { workspace = true }
+
+# NATS messaging (for watcher signal publishing)
+async-nats = { workspace = true }
+
+# Async traits
+async-trait = { workspace = true }
+
+# Configuration
+config = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+# Internal crates
+petri-domain = { workspace = true }
+petri-scheduler-bridge = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tracing-subscriber = { workspace = true }

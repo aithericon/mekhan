@@ -1,0 +1,67 @@
+{
+  "name": "Producer Consumer",
+  "description": "Classic producer-consumer pattern with a bounded buffer. Signals trigger production, consumption re-enables producers.",
+  "places": [
+    {
+      "id": "ready",
+      "name": "Ready to Produce",
+      "type": "signal",
+      "initial_tokens": [
+        { "signal": 1 },
+        { "signal": 2 },
+        { "signal": 3 }
+      ]
+    },
+    {
+      "id": "buffer",
+      "name": "Buffer",
+      "type": "resource",
+      "capacity": 5,
+      "initial_tokens": []
+    },
+    {
+      "id": "consumed",
+      "name": "Consumed",
+      "type": "terminal",
+      "initial_tokens": []
+    }
+  ],
+  "transitions": [
+    {
+      "id": "produce",
+      "name": "Produce",
+      "input_ports": [
+        { "name": "signal", "cardinality": "single" }
+      ],
+      "output_ports": [
+        { "name": "item", "cardinality": "single" }
+      ],
+      "inputs": [
+        { "place": "ready", "port": "signal", "weight": 1 }
+      ],
+      "outputs": [
+        { "place": "buffer", "port": "item", "weight": 1 }
+      ],
+      "logic": { "type": "rhai", "source": "#{ item: #{ produced_at: \"now\", from_signal: signal } }" }
+    },
+    {
+      "id": "consume",
+      "name": "Consume",
+      "input_ports": [
+        { "name": "item", "cardinality": "single" }
+      ],
+      "output_ports": [
+        { "name": "done", "cardinality": "single" },
+        { "name": "ready_signal", "cardinality": "single" }
+      ],
+      "inputs": [
+        { "place": "buffer", "port": "item", "weight": 1 }
+      ],
+      "outputs": [
+        { "place": "consumed", "port": "done", "weight": 1 },
+        { "place": "ready", "port": "ready_signal", "weight": 1 }
+      ],
+      "logic": { "type": "rhai", "source": "#{ done: #{ consumed: item, status: \"done\" }, ready_signal: #{ signal: \"recycled\" } }" }
+    }
+  ]
+}

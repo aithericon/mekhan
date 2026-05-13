@@ -1,0 +1,387 @@
+//! Built-in effect handler descriptors.
+//!
+//! Single source of truth for handler IDs, default port names, and service
+//! categories. Shared between the SDK (compile-time safety) and the engine
+//! (handler registration).
+
+use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
+
+/// Service category for infrastructure requirements.
+///
+/// Each category corresponds to a subsystem that must be configured in the
+/// engine for the associated effect handlers to work.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ServiceCategory {
+    /// External job scheduler (Nomad, Slurm, or Mock).
+    Scheduler,
+    /// Execution backend (aithericon-executor via NATS).
+    Executor,
+    /// Durable timer service (Clockmaster).
+    Timer,
+    /// Human-in-the-loop task service.
+    Human,
+    /// Orchestration services (dynamic net spawn).
+    Orchestration,
+    /// Data catalogue service (artifact registry).
+    Catalogue,
+}
+
+impl ServiceCategory {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Scheduler => "scheduler",
+            Self::Executor => "executor",
+            Self::Timer => "timer",
+            Self::Human => "human",
+            Self::Orchestration => "orchestration",
+            Self::Catalogue => "catalogue",
+        }
+    }
+}
+
+impl std::fmt::Display for ServiceCategory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Describes a built-in effect handler's contract.
+///
+/// Provides handler ID, default port names, service category, and expected
+/// token schema references. Both SDK and engine reference these descriptors
+/// instead of raw strings.
+#[derive(Clone, Debug)]
+pub struct EffectDescriptor {
+    /// Handler ID as registered in the engine (e.g., "scheduler_submit").
+    pub handler_id: &'static str,
+    /// Default input port name (e.g., "job").
+    pub default_input_port: &'static str,
+    /// Default output port name (e.g., "submitted").
+    pub default_output_port: &'static str,
+    /// Service category this handler belongs to.
+    pub category: ServiceCategory,
+    /// Expected JSON Schema `$ref` for the default input port token type
+    /// (e.g., `"#/definitions/SchedulerSubmitInput"`). `None` when the handler
+    /// accepts arbitrary input shapes.
+    pub default_input_schema: Option<&'static str>,
+    /// Expected JSON Schema `$ref` for the default output port token type
+    /// (e.g., `"#/definitions/SchedulerSubmitted"`). `None` when the handler
+    /// produces dynamic output shapes.
+    pub default_output_schema: Option<&'static str>,
+}
+
+// ---------------------------------------------------------------------------
+// Built-in descriptors (const, zero-cost)
+// ---------------------------------------------------------------------------
+
+/// Submit a job to the scheduler service (Nomad, Slurm, or Mock).
+pub const SCHEDULER_SUBMIT: EffectDescriptor = EffectDescriptor {
+    handler_id: "scheduler_submit",
+    default_input_port: "job",
+    default_output_port: "submitted",
+    category: ServiceCategory::Scheduler,
+    default_input_schema: Some("#/definitions/SchedulerSubmitInput"),
+    default_output_schema: Some("#/definitions/SchedulerSubmitted"),
+};
+
+/// Cancel a running scheduler job.
+pub const SCHEDULER_CANCEL: EffectDescriptor = EffectDescriptor {
+    handler_id: "scheduler_cancel",
+    default_input_port: "job",
+    default_output_port: "cancelled",
+    category: ServiceCategory::Scheduler,
+    default_input_schema: Some("#/definitions/SchedulerCancelInput"),
+    default_output_schema: Some("#/definitions/SchedulerCancelled"),
+};
+
+/// Submit an execution to the executor service.
+pub const EXECUTOR_SUBMIT: EffectDescriptor = EffectDescriptor {
+    handler_id: "executor_submit",
+    default_input_port: "job",
+    default_output_port: "submitted",
+    category: ServiceCategory::Executor,
+    default_input_schema: Some("#/definitions/ExecutorSubmitInput"),
+    default_output_schema: Some("#/definitions/ExecutorSubmitted"),
+};
+
+/// Cancel a running execution.
+pub const EXECUTOR_CANCEL: EffectDescriptor = EffectDescriptor {
+    handler_id: "executor_cancel",
+    default_input_port: "job",
+    default_output_port: "cancelled",
+    category: ServiceCategory::Executor,
+    default_input_schema: Some("#/definitions/ExecutorCancelInput"),
+    default_output_schema: Some("#/definitions/ExecutorCancelled"),
+};
+
+/// Schedule a durable timer via Clockmaster.
+pub const TIMER_SCHEDULE: EffectDescriptor = EffectDescriptor {
+    handler_id: "timer_schedule",
+    default_input_port: "timer",
+    default_output_port: "scheduled",
+    category: ServiceCategory::Timer,
+    default_input_schema: Some("#/definitions/TimerInput"),
+    default_output_schema: Some("#/definitions/TimerScheduled"),
+};
+
+/// Cancel a scheduled timer.
+pub const TIMER_CANCEL: EffectDescriptor = EffectDescriptor {
+    handler_id: "timer_cancel",
+    default_input_port: "timer",
+    default_output_port: "cancelled",
+    category: ServiceCategory::Timer,
+    default_input_schema: Some("#/definitions/TimerCancelInput"),
+    default_output_schema: Some("#/definitions/TimerCancelled"),
+};
+
+/// Submit a human-in-the-loop task.
+pub const HUMAN_TASK: EffectDescriptor = EffectDescriptor {
+    handler_id: "human_task",
+    default_input_port: "task",
+    default_output_port: "assigned",
+    category: ServiceCategory::Human,
+    default_input_schema: None,
+    default_output_schema: None,
+};
+
+/// Cancel a human task.
+pub const HUMAN_CANCEL: EffectDescriptor = EffectDescriptor {
+    handler_id: "human_cancel",
+    default_input_port: "task",
+    default_output_port: "cancelled",
+    category: ServiceCategory::Human,
+    default_input_schema: Some("#/definitions/HumanCancelInput"),
+    default_output_schema: Some("#/definitions/HumanTaskCancelled"),
+};
+
+/// Spawn a child net dynamically (create net + bridge initial token).
+pub const SPAWN_NET: EffectDescriptor = EffectDescriptor {
+    handler_id: "spawn_net",
+    default_input_port: "spawn_request",
+    default_output_port: "spawned",
+    category: ServiceCategory::Orchestration,
+    default_input_schema: None,
+    default_output_schema: None,
+};
+
+/// Start a process lifecycle (publishes "process started", outputs process token).
+pub const PROCESS_START: EffectDescriptor = EffectDescriptor {
+    handler_id: "process_start",
+    default_input_port: "trigger",
+    default_output_port: "process",
+    category: ServiceCategory::Orchestration,
+    default_input_schema: None,
+    default_output_schema: Some("#/definitions/ProcessStarted"),
+};
+
+/// Complete a process lifecycle (publishes "process completed", passes through input).
+pub const PROCESS_COMPLETE: EffectDescriptor = EffectDescriptor {
+    handler_id: "process_complete",
+    default_input_port: "done",
+    default_output_port: "completed",
+    category: ServiceCategory::Orchestration,
+    default_input_schema: None,
+    default_output_schema: None,
+};
+
+/// Register artifacts in the data catalogue.
+pub const CATALOGUE_REGISTER: EffectDescriptor = EffectDescriptor {
+    handler_id: "catalogue_register",
+    default_input_port: "artifacts",
+    default_output_port: "catalogued",
+    category: ServiceCategory::Catalogue,
+    default_input_schema: None,
+    default_output_schema: None,
+};
+
+/// Query the data catalogue for matching entries.
+pub const CATALOGUE_LOOKUP: EffectDescriptor = EffectDescriptor {
+    handler_id: "catalogue_lookup",
+    default_input_port: "query",
+    default_output_port: "results",
+    category: ServiceCategory::Catalogue,
+    default_input_schema: None,
+    default_output_schema: None,
+};
+
+/// Subscribe to reactive catalogue change notifications.
+pub const CATALOGUE_SUBSCRIBE: EffectDescriptor = EffectDescriptor {
+    handler_id: "catalogue_subscribe",
+    default_input_port: "subscription",
+    default_output_port: "subscribed",
+    category: ServiceCategory::Catalogue,
+    default_input_schema: None,
+    default_output_schema: None,
+};
+
+/// Unsubscribe from catalogue change notifications.
+pub const CATALOGUE_UNSUBSCRIBE: EffectDescriptor = EffectDescriptor {
+    handler_id: "catalogue_unsubscribe",
+    default_input_port: "handle",
+    default_output_port: "unsubscribed",
+    category: ServiceCategory::Catalogue,
+    default_input_schema: None,
+    default_output_schema: None,
+};
+
+/// Log a numeric metric to the process trace (e.g., loss, accuracy, acquisition value).
+pub const PROCESS_LOG_METRIC: EffectDescriptor = EffectDescriptor {
+    handler_id: "process_log_metric",
+    default_input_port: "metric",
+    default_output_port: "logged",
+    category: ServiceCategory::Human,
+    default_input_schema: None,
+    default_output_schema: None,
+};
+
+/// Log a structured message to the process trace (e.g., status updates, warnings).
+pub const PROCESS_LOG_MESSAGE: EffectDescriptor = EffectDescriptor {
+    handler_id: "process_log_message",
+    default_input_port: "message",
+    default_output_port: "logged",
+    category: ServiceCategory::Human,
+    default_input_schema: None,
+    default_output_schema: None,
+};
+
+/// All built-in effect descriptors.
+pub const ALL_BUILTIN: &[&EffectDescriptor] = &[
+    &SCHEDULER_SUBMIT,
+    &SCHEDULER_CANCEL,
+    &EXECUTOR_SUBMIT,
+    &EXECUTOR_CANCEL,
+    &TIMER_SCHEDULE,
+    &TIMER_CANCEL,
+    &HUMAN_TASK,
+    &HUMAN_CANCEL,
+    &SPAWN_NET,
+    &PROCESS_START,
+    &PROCESS_COMPLETE,
+    &CATALOGUE_REGISTER,
+    &CATALOGUE_LOOKUP,
+    &CATALOGUE_SUBSCRIBE,
+    &CATALOGUE_UNSUBSCRIBE,
+    &PROCESS_LOG_METRIC,
+    &PROCESS_LOG_MESSAGE,
+];
+
+/// Look up a built-in descriptor by handler_id.
+pub fn builtin_by_id(handler_id: &str) -> Option<&'static EffectDescriptor> {
+    ALL_BUILTIN
+        .iter()
+        .find(|d| d.handler_id == handler_id)
+        .copied()
+}
+
+/// Infrastructure requirement declared by a scenario.
+///
+/// Serialized into the AIR JSON `requirements` section so the engine
+/// can validate that all needed services are configured before running.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct ServiceRequirement {
+    /// Service category (e.g., "scheduler", "executor").
+    pub category: ServiceCategory,
+    /// Specific handler IDs used (e.g., ["scheduler_submit", "scheduler_cancel"]).
+    pub handler_ids: Vec<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn builtin_by_id_finds_known_handlers() {
+        assert_eq!(
+            builtin_by_id("scheduler_submit").unwrap().handler_id,
+            "scheduler_submit"
+        );
+        assert_eq!(
+            builtin_by_id("executor_cancel").unwrap().handler_id,
+            "executor_cancel"
+        );
+        assert_eq!(
+            builtin_by_id("timer_schedule").unwrap().handler_id,
+            "timer_schedule"
+        );
+        assert_eq!(
+            builtin_by_id("human_task").unwrap().handler_id,
+            "human_task"
+        );
+    }
+
+    #[test]
+    fn builtin_by_id_returns_none_for_unknown() {
+        assert!(builtin_by_id("nonexistent").is_none());
+        assert!(builtin_by_id("").is_none());
+    }
+
+    #[test]
+    fn all_builtin_covers_all_handlers() {
+        assert_eq!(ALL_BUILTIN.len(), 17);
+        let ids: Vec<&str> = ALL_BUILTIN.iter().map(|d| d.handler_id).collect();
+        assert!(ids.contains(&"scheduler_submit"));
+        assert!(ids.contains(&"scheduler_cancel"));
+        assert!(ids.contains(&"executor_submit"));
+        assert!(ids.contains(&"executor_cancel"));
+        assert!(ids.contains(&"timer_schedule"));
+        assert!(ids.contains(&"timer_cancel"));
+        assert!(ids.contains(&"human_task"));
+        assert!(ids.contains(&"human_cancel"));
+        assert!(ids.contains(&"process_start"));
+        assert!(ids.contains(&"process_complete"));
+        assert!(ids.contains(&"catalogue_register"));
+        assert!(ids.contains(&"catalogue_lookup"));
+        assert!(ids.contains(&"catalogue_subscribe"));
+        assert!(ids.contains(&"catalogue_unsubscribe"));
+    }
+
+    #[test]
+    fn service_category_serialization_roundtrip() {
+        let categories = [
+            ServiceCategory::Scheduler,
+            ServiceCategory::Executor,
+            ServiceCategory::Timer,
+            ServiceCategory::Human,
+            ServiceCategory::Orchestration,
+            ServiceCategory::Catalogue,
+        ];
+        for cat in &categories {
+            let json = serde_json::to_string(cat).unwrap();
+            let deserialized: ServiceCategory = serde_json::from_str(&json).unwrap();
+            assert_eq!(&deserialized, cat);
+        }
+    }
+
+    #[test]
+    fn service_category_as_str_matches_serde() {
+        let categories = [
+            ServiceCategory::Scheduler,
+            ServiceCategory::Executor,
+            ServiceCategory::Timer,
+            ServiceCategory::Human,
+            ServiceCategory::Orchestration,
+            ServiceCategory::Catalogue,
+        ];
+        for cat in &categories {
+            let serde_str = serde_json::to_value(cat)
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_string();
+            assert_eq!(cat.as_str(), serde_str);
+        }
+    }
+
+    #[test]
+    fn service_requirement_serialization_roundtrip() {
+        let req = ServiceRequirement {
+            category: ServiceCategory::Executor,
+            handler_ids: vec!["executor_submit".into(), "executor_cancel".into()],
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let deserialized: ServiceRequirement = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, req);
+    }
+}

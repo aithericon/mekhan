@@ -1,0 +1,44 @@
+[package]
+name = "aithericon-executor-kreuzberg"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[features]
+default = []
+pdf = ["kreuzberg/pdf"]
+pdf-bundled = ["kreuzberg/bundled-pdfium"]
+pdf-static = ["kreuzberg/static-pdfium"]
+pdf-system = ["kreuzberg/system-pdfium"]
+ocr = ["kreuzberg/ocr"]
+excel = ["kreuzberg/excel"]
+office = ["kreuzberg/office"]
+email = ["kreuzberg/email"]
+html = ["kreuzberg/html"]
+xml = ["kreuzberg/xml"]
+archives = ["kreuzberg/archives"]
+language-detection = ["kreuzberg/language-detection"]
+chunking = ["kreuzberg/chunking"]
+quality = ["kreuzberg/quality"]
+full = ["kreuzberg/full", "kreuzberg/bundled-pdfium"]
+
+[dependencies]
+aithericon-executor-domain = { workspace = true }
+aithericon-executor-backend = { workspace = true }
+kreuzberg = { version = "4", default-features = false, features = ["tokio-runtime"] }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+serde_json = { workspace = true }
+tempfile = "3"

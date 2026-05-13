@@ -1,0 +1,105 @@
+[workspace.package]
+edition = "2021"
+repository = "https://github.com/geofmureithi/apalis"
+
+[package]
+name = "apalis"
+version = "0.7.3"
+authors = ["Geoffrey Mureithi <mureithinjuguna@gmail.com>"]
+description = "Simple, extensible multithreaded background job processing for Rust"
+edition.workspace = true
+repository.workspace = true
+documentation = "https://docs.rs/apalis"
+readme = "README.md"
+license = "MIT OR Apache-2.0"
+keywords = ["job", "task", "scheduler", "worker", "cron"]
+categories = ["database"]
+
+[lib]
+bench = false
+
+[features]
+default = ["tracing"]
+
+
+## Support Tracing 👀
+tracing = ["dep:tracing", "dep:tracing-futures"]
+
+## Support for Sentry exception and performance monitoring
+sentry = ["sentry-core", "ulid?/uuid", "uuid"]
+## Support Prometheus metrics
+prometheus = ["metrics", "metrics-exporter-prometheus"]
+## Support direct retrying jobs
+retry = ["tower/retry"]
+## Support timeouts on jobs
+timeout = ["tower/timeout"]
+## 💪 Limit the amount of jobs
+limit = ["tower/limit"]
+## Support filtering jobs based on a predicate
+filter = ["tower/filter"]
+## Captures panics in executions and convert them to errors
+catch-panic = []
+
+layers = [
+  "sentry",
+  "prometheus",
+  "tracing",
+  "retry",
+  "timeout",
+  "limit",
+  "filter",
+  "catch-panic",
+]
+
+docsrs = ["document-features"]
+
+[dependencies.apalis-core]
+version = "0.7.3"
+default-features = false
+path = "./packages/apalis-core"
+
+[dependencies.document-features]
+version = "0.2"
+optional = true
+
+
+[package.metadata.docs.rs]
+# defines the configuration attribute `docsrs`
+rustdoc-args = ["--cfg", "docsrs"]
+all-features = true
+
+
+[dev-dependencies]
+# Pruned: redis/sql/sqlx dev-deps removed alongside apalis-redis / apalis-sql.
+# Apalis's benchmark + cross-backend tests aren't part of our build target.
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+apalis = { path = ".", features = ["limit"] }
+
+[workspace]
+# Pruned from upstream apalis (geofmureithi/apalis) — only the storage backends
+# the platform actually uses (NATS) are kept. cron/redis/sql backends and all
+# examples were dropped when vendoring into shared/apalis/.
+members = [
+  "packages/apalis-core",
+  "packages/apalis-nats",
+]
+
+
+[dependencies]
+tower = { version = "0.5", features = ["util"], default-features = false }
+tracing-futures = { version = "0.2.5", optional = true, default-features = false }
+sentry-core = { version = "0.42.0", optional = true, default-features = false }
+metrics = { version = "0.24.2", optional = true, default-features = false }
+metrics-exporter-prometheus = { version = "0.17", optional = true, default-features = false }
+thiserror = "2.0.16"
+futures = "0.3.31"
+pin-project-lite = "0.2.16"
+# Needed only for sentry reporting
+uuid = { version = "1.18", optional = true }
+ulid = { version = "1", optional = true }
+serde = { version = "1.0", features = ["derive"] }
+
+[dependencies.tracing]
+default-features = false
+version = "0.1.41"
+optional = true

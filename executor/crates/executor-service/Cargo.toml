@@ -1,0 +1,64 @@
+[package]
+name = "aithericon-executor-service"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+aithericon-executor-domain = { workspace = true }
+aithericon-executor-backend = { workspace = true }
+aithericon-executor-worker = { workspace = true }
+aithericon-executor-storage = { workspace = true }
+aithericon-executor-metrics = { workspace = true, features = ["nats", "loki"] }
+aithericon-executor-logs = { workspace = true, features = ["nats", "loki"] }
+apalis = { workspace = true }
+apalis-core = { workspace = true }
+apalis-nats = { workspace = true }
+async-nats = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+shellexpand = "3"
+serde_json = { workspace = true }
+tower = { workspace = true }
+axum = { workspace = true, optional = true }
+aithericon-executor-llm = { workspace = true, optional = true }
+aithericon-executor-file-ops = { workspace = true, optional = true }
+aithericon-executor-kreuzberg = { workspace = true, optional = true }
+aithericon-secrets = { workspace = true }
+
+[features]
+default = []
+opendal = ["aithericon-executor-storage/opendal", "aithericon-executor-worker/opendal"]
+url-inputs = ["aithericon-executor-worker/url-inputs"]
+opendal-s3 = ["opendal", "aithericon-executor-storage/opendal-s3"]
+opendal-gcs = ["opendal", "aithericon-executor-storage/opendal-gcs"]
+opendal-azblob = ["opendal", "aithericon-executor-storage/opendal-azblob"]
+docker = ["aithericon-executor-backend/docker", "aithericon-executor-test-harness/docker"]
+python = ["aithericon-executor-backend/python", "aithericon-executor-test-harness/python"]
+http-cancel = ["dep:axum"]
+http = ["aithericon-executor-backend/http"]
+llm = ["dep:aithericon-executor-llm"]
+vault = ["aithericon-secrets/vault", "aithericon-executor-worker/vault"]
+file-ops = ["dep:aithericon-executor-file-ops", "opendal", "aithericon-executor-test-harness/file-ops"]
+kreuzberg = ["dep:aithericon-executor-kreuzberg", "aithericon-executor-kreuzberg/full"]
+
+[dev-dependencies]
+aithericon-executor-test-harness = { workspace = true }
+aithericon-executor-domain = { workspace = true }
+aithericon-executor-worker = { workspace = true }
+aithericon-executor-storage = { workspace = true }
+aithericon-executor-ipc = { workspace = true }
+aithericon-executor-logs = { workspace = true, features = ["loki"] }
+aithericon-executor-metrics = { workspace = true, features = ["nats", "loki"] }
+uuid = { workspace = true }
+serde_json = { workspace = true }
+tracing-subscriber = { workspace = true }
+tokio = { workspace = true }
+tempfile = "3"
+futures = { workspace = true }
+async-nats = { workspace = true }

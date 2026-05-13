@@ -1,0 +1,17 @@
+/target
+Cargo.lock
+.agent_status/
+.claude/
+.pytest_cache/
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.venv*/

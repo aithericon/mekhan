@@ -1,0 +1,137 @@
+[package]
+name = "fmeta"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+authors = ["Aithericon Research"]
+description = "Unified file metadata extraction for scientific, tabular, and media data formats"
+readme = "README.md"
+repository = "https://github.com/aithericon/fmeta"
+homepage = "https://github.com/aithericon/fmeta"
+documentation = "https://docs.rs/fmeta"
+keywords = ["metadata", "parquet", "csv", "hdf5", "file-format"]
+categories = ["filesystem", "encoding", "science"]
+
+[dependencies]
+# Core (always required)
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "1.0"
+
+# Backend: CSV
+csv = { version = "1.3", optional = true }
+
+# Backend: Parquet
+parquet = { version = "53", optional = true, default-features = false, features = ["default"] }
+bytes = { version = "1", optional = true }
+
+# Backend: Image
+imagesize = { version = "0.13", optional = true }
+kamadak-exif = { version = "0.6", optional = true }
+
+# Backend: Audio + Video (symphonia handles both)
+symphonia = { version = "0.5", optional = true, default-features = false, features = [
+    "isomp4", "mkv", "ogg", "wav", "aiff",
+    "mp3", "flac", "aac", "pcm", "vorbis",
+] }
+
+# Backend: ZIP archives
+zip = { version = "2", optional = true, default-features = false, features = ["deflate"] }
+
+# Backend: Excel / spreadsheet
+calamine = { version = "0.26", optional = true }
+
+# Backend: Arrow IPC
+arrow-ipc = { version = "53", optional = true, default-features = false }
+arrow-schema = { version = "53", optional = true, default-features = false }
+
+# Backend: HDF5 + NetCDF (via libnetcdf/libhdf5)
+netcdf = { version = "0.12", optional = true, default-features = false }
+
+# Backend: Zarr V2/V3 (pure Rust)
+zarrs = { version = "0.22", optional = true, default-features = false, features = ["filesystem"] }
+
+# Backend: VTK mesh files (pure Rust)
+vtkio = { version = "0.6", optional = true, default-features = false, features = ["xml"] }
+
+# Checksums
+sha2 = { version = "0.10", optional = true }
+blake3 = { version = "1", optional = true }
+
+# Parallel extraction
+rayon = { version = "1.10", optional = true }
+
+# Classification / PII detection
+regex = { version = "1", optional = true }
+
+# CLI
+clap = { version = "4", optional = true, features = ["derive"] }
+
+# Backend: TOML config files (pure Rust)
+toml_crate = { package = "toml", version = "0.8", optional = true }
+
+# Backend: YAML config/data files
+serde_yaml = { version = "0.9", optional = true }
+
+# Backend: Markdown documents
+pulldown-cmark = { version = "0.12", optional = true }
+
+# Backend: XML documents
+quick-xml = { version = "0.37", optional = true }
+
+# Backend: HTML documents
+scraper = { version = "0.21", optional = true }
+
+# Async wrapper
+tokio = { version = "1", optional = true, features = ["rt"] }
+
+[dev-dependencies]
+serde_json = "1.0"
+tempfile = "3"
+parquet = { version = "53", default-features = false, features = ["default"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+rust_xlsxwriter = "0.79"
+arrow-ipc = { version = "53", default-features = false }
+arrow-schema = { version = "53", default-features = false }
+arrow-array = { version = "53", default-features = false }
+tokio = { version = "1", features = ["rt", "macros"] }
+zarrs = { version = "0.22", default-features = false, features = ["filesystem"] }
+vtkio = { version = "0.6", default-features = false, features = ["xml"] }
+
+[features]
+default = []
+csv = ["dep:csv"]
+json = []
+parquet = ["dep:parquet", "dep:bytes"]
+image = ["dep:imagesize", "dep:kamadak-exif"]
+audio = ["dep:symphonia"]
+video = ["dep:symphonia"]
+zip = ["dep:zip"]
+excel = ["dep:calamine"]
+arrow = ["dep:arrow-ipc", "dep:arrow-schema"]
+netcdf = ["dep:netcdf"]
+zarr = ["dep:zarrs"]
+vtk = ["dep:vtkio"]
+tokio = ["dep:tokio"]
+checksum-sha256 = ["dep:sha2"]
+checksum-blake3 = ["dep:blake3"]
+checksum = ["checksum-sha256"]
+rayon = ["dep:rayon"]
+classify = ["dep:regex"]
+toml = ["dep:toml_crate"]
+yaml = ["dep:serde_yaml"]
+markdown = ["dep:pulldown-cmark"]
+xml = ["dep:quick-xml"]
+html = ["dep:scraper"]
+ini = []
+env = []
+txt = []
+config = ["toml", "yaml", "ini", "env"]
+markup = ["markdown", "xml", "html"]
+cli = ["dep:clap", "all-backends", "checksum", "classify"]
+all-backends = ["csv", "json", "parquet", "image", "audio", "video", "zip", "excel", "arrow", "netcdf", "zarr", "vtk", "toml", "yaml", "markdown", "xml", "html", "ini", "env", "txt"]
+
+[[bin]]
+name = "fmeta"
+required-features = ["cli"]

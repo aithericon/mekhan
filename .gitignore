@@ -1,5 +1,8 @@
 # Rust
-service/target/
+target/
+**/target/
+Cargo.lock.bak
+*.rs.bk
 
 # Node
 app/node_modules/

@@ -1,0 +1,20 @@
+[package]
+name = "aithericon-executor-domain"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[features]
+schema = ["dep:schemars", "aithericon-executor-storage-types/schema"]
+
+[dependencies]
+aithericon-executor-storage-types = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+humantime-serde = { workspace = true }
+schemars = { workspace = true, optional = true }

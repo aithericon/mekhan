@@ -1,0 +1,47 @@
+{
+  "Job": {
+    "ID": "petri-batch-worker",
+    "Name": "petri-batch-worker",
+    "Type": "batch",
+    "Datacenters": ["dc1"],
+    "ParameterizedJob": {
+      "Payload": "optional",
+      "MetaRequired": [],
+      "MetaOptional": [
+        "petri_net_id",
+        "petri_place",
+        "petri_signal_key",
+        "petri_signal_running",
+        "petri_signal_completed",
+        "petri_signal_failed"
+      ]
+    },
+    "TaskGroups": [
+      {
+        "Name": "main",
+        "Count": 1,
+        "RestartPolicy": {
+          "Attempts": 0,
+          "Mode": "fail"
+        },
+        "ReschedulePolicy": {
+          "Attempts": 0
+        },
+        "Tasks": [
+          {
+            "Name": "petri-worker",
+            "Driver": "raw_exec",
+            "Config": {
+              "command": "/bin/echo",
+              "args": ["done"]
+            },
+            "Resources": {
+              "CPU": 1,
+              "MemoryMB": 32
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

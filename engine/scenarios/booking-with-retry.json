@@ -1,0 +1,107 @@
+{
+  "name": "Booking with Retry",
+  "description": "Demonstrates port-based routing with conditional logic. Requests are submitted, awaited, and then routed to success, retry, or fatal based on signal status and retry count.",
+  "places": [
+    {
+      "id": "requests",
+      "name": "Requests",
+      "type": "resource",
+      "initial_tokens": [
+        { "id": "booking-001", "customer": "Alice", "room_type": "deluxe" },
+        { "id": "booking-002", "customer": "Bob", "room_type": "standard" }
+      ]
+    },
+    {
+      "id": "pending",
+      "name": "Pending",
+      "type": "state",
+      "initial_tokens": []
+    },
+    {
+      "id": "signals",
+      "name": "Signals",
+      "type": "signal",
+      "initial_tokens": [
+        { "id": "booking-001", "status": "OK", "resource_id": "ROOM-42" }
+      ]
+    },
+    {
+      "id": "completed",
+      "name": "Completed",
+      "type": "terminal",
+      "initial_tokens": []
+    },
+    {
+      "id": "retry_queue",
+      "name": "Retry Queue",
+      "type": "state",
+      "initial_tokens": []
+    },
+    {
+      "id": "failed",
+      "name": "Failed",
+      "type": "terminal",
+      "initial_tokens": []
+    }
+  ],
+  "transitions": [
+    {
+      "id": "submit",
+      "name": "Submit",
+      "input_ports": [
+        { "name": "request", "cardinality": "single" }
+      ],
+      "output_ports": [
+        { "name": "context", "cardinality": "single" }
+      ],
+      "inputs": [
+        { "place": "requests", "port": "request", "weight": 1 }
+      ],
+      "outputs": [
+        { "place": "pending", "port": "context", "weight": 1 }
+      ],
+      "logic": { "type": "rhai", "source": "#{ context: #{ id: request.id, customer: request.customer, room_type: request.room_type, retry_count: 0, status: \"pending\" } }" }
+    },
+    {
+      "id": "handle_response",
+      "name": "Handle Response",
+      "input_ports": [
+        { "name": "ctx", "cardinality": "single" },
+        { "name": "signal", "cardinality": "single" }
+      ],
+      "output_ports": [
+        { "name": "success", "cardinality": "single" },
+        { "name": "retry", "cardinality": "single" },
+        { "name": "fatal", "cardinality": "single" }
+      ],
+      "inputs": [
+        { "place": "pending", "port": "ctx", "weight": 1 },
+        { "place": "signals", "port": "signal", "weight": 1 }
+      ],
+      "outputs": [
+        { "place": "completed", "port": "success", "weight": 1 },
+        { "place": "retry_queue", "port": "retry", "weight": 1 },
+        { "place": "failed", "port": "fatal", "weight": 1 }
+      ],
+      "guard": { "type": "rhai", "source": "ctx.id == signal.id" },
+      "logic": { "type": "rhai", "source": "if signal.status == \"OK\" { #{ success: #{ id: ctx.id, customer: ctx.customer, resource: signal.resource_id, status: \"completed\" } } } else if ctx.retry_count < 3 { #{ retry: #{ id: ctx.id, customer: ctx.customer, room_type: ctx.room_type, retry_count: ctx.retry_count + 1, status: \"retrying\" } } } else { #{ fatal: #{ id: ctx.id, customer: ctx.customer, error: \"Max retries exceeded\", status: \"failed\" } } }" }
+    },
+    {
+      "id": "resubmit",
+      "name": "Resubmit",
+      "input_ports": [
+        { "name": "retry_ctx", "cardinality": "single" }
+      ],
+      "output_ports": [
+        { "name": "pending_ctx", "cardinality": "single" }
+      ],
+      "inputs": [
+        { "place": "retry_queue", "port": "retry_ctx", "weight": 1 }
+      ],
+      "outputs": [
+        { "place": "pending", "port": "pending_ctx", "weight": 1 }
+      ],
+      "logic": { "type": "rhai", "source": "#{ pending_ctx: retry_ctx }" }
+    }
+  ]
+}

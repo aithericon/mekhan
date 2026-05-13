@@ -1,0 +1,34 @@
+[package]
+name = "aithericon-sdk"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Type-safe SDK for building Petri Net topologies"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+schemars = { workspace = true }
+rhai = { workspace = true }
+petri-domain = { workspace = true, features = ["human"] }
+aithericon-executor-domain = { workspace = true, features = ["schema"] }
+aithericon-sdk-derive = { path = "../sdk-derive" }
+ureq = { workspace = true }
+regex = "1"
+
+[dev-dependencies]
+clap = { workspace = true }
+
+[[example]]
+name = "resource_allocation"
+path = "examples/resource_allocation.rs"
+
+[[example]]
+name = "claim_pattern"
+path = "examples/claim_pattern.rs"
+
+[[example]]
+name = "nomad_batch_net"
+path = "examples/nomad_batch_net.rs"
+

@@ -1,0 +1,274 @@
+# Petri-Lab Development Commands
+# ===============================
+#
+# Core dev commands live here. Infrastructure and demos are in modules:
+#   just infra --list    NATS, Nomad, Slurm lifecycle
+#   just demo --list     All demos (nomad, slurm, executor, three-layer, etc.)
+
+set dotenv-load := true
+
+mod infra 'just/infra.just'
+mod demo 'just/demo.just'
+
+# Default recipe - show available commands
+default:
+    @just --list --list-submodules
+
+# ============================================
+# Engine Commands
+# ============================================
+
+# Build the engine
+build:
+    cargo build -p core-engine
+
+# Run the engine
+run: (infra::nats-up)
+    NATS_URL=nats://localhost:4333 cargo run -p core-engine
+
+# Run the engine with debug logging
+run-debug: (infra::nats-up)
+    RUST_LOG=debug NATS_URL=nats://localhost:4333 cargo run -p core-engine
+
+# Run the trace exporter sidecar (exports spans to OTLP endpoint)
+trace-exporter: (infra::nats-up)
+    NATS_URL=nats://localhost:4333 cargo run -p petri-trace-exporter
+
+# Run the trace exporter with debug logging
+trace-exporter-debug: (infra::nats-up)
+    RUST_LOG=debug NATS_URL=nats://localhost:4333 cargo run -p petri-trace-exporter
+
+# ============================================
+# Testing
+# ============================================
+
+# Run all unit tests
+test:
+    cargo test --workspace
+
+# Run unit tests for a specific crate
+test-crate crate:
+    cargo test -p {{crate}}
+
+# Run NATS integration tests (shell-based end-to-end test)
+test-nats: (infra::nats-up)
+    @echo "Running NATS integration tests..."
+    @just _integration-test
+
+# Run NATS Rust integration tests (requires `just infra nats-up` first)
+test-nats-rust: (infra::nats-up)
+    @echo "Running NATS Rust integration tests..."
+    cargo test -p petri-nats -- --test-threads=1
+    @sleep 1
+    @just infra nats-cleanup 2>/dev/null
+
+# Internal: Run the actual integration test
+_integration-test:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    echo "=== NATS Integration Test ==="
+    echo ""
+
+    # 1. Verify NATS is running
+    echo "1. Checking NATS health..."
+    if ! curl -sf http://localhost:8333/healthz > /dev/null; then
+        echo "ERROR: NATS is not healthy"
+        exit 1
+    fi
+    echo "   NATS is healthy"
+
+    # Start nats-box for token injection testing
+    echo "   Starting nats-box for injection testing..."
+    docker compose --profile tools up -d nats-box 2>/dev/null || true
+    sleep 1
+
+    # 2. Build the engine
+    echo ""
+    echo "2. Building engine..."
+    cargo build -p core-engine --quiet
+
+    # 3. Start the engine in background
+    echo ""
+    echo "3. Starting engine..."
+    NATS_URL=nats://localhost:4333 \
+    RUST_LOG=info,petri_nats=debug \
+    ./target/debug/core-engine &
+    ENGINE_PID=$!
+
+    # Ensure cleanup on exit
+    cleanup() {
+        echo ""
+        echo "Cleaning up..."
+        kill $ENGINE_PID 2>/dev/null || true
+        wait $ENGINE_PID 2>/dev/null || true
+    }
+    trap cleanup EXIT
+
+    # 4. Wait for engine to be ready
+    echo ""
+    echo "4. Waiting for engine API..."
+    for i in $(seq 1 30); do
+        if curl -sf http://localhost:3030/api/state > /dev/null 2>&1; then
+            echo "   Engine is ready!"
+            break
+        fi
+        if [ $i -eq 30 ]; then
+            echo "ERROR: Engine did not start in time"
+            echo "Checking if process is still running..."
+            ps -p $ENGINE_PID || echo "Process not found"
+            exit 1
+        fi
+        echo "   Waiting... ($i/30)"
+        sleep 1
+    done
+
+    # 5. Check initial state
+    echo ""
+    echo "5. Checking initial state..."
+    STATE=$(curl -s http://localhost:3030/api/state)
+    TOKEN_COUNT=$(echo "$STATE" | jq '[.marking.tokens | to_entries[] | .value | length] | add')
+    echo "   Total tokens: $TOKEN_COUNT"
+
+    # 6. Fire transitions via evaluate
+    echo ""
+    echo "6. Triggering transitions..."
+    EVAL_RESULT=$(curl -s -X POST -H "Content-Type: application/json" -d '{}' http://localhost:3030/api/command/evaluate)
+    FIRED_COUNT=$(echo "$EVAL_RESULT" | jq '.transitions_fired | length')
+    STEPS=$(echo "$EVAL_RESULT" | jq '.steps_executed')
+    echo "   Steps executed: $STEPS"
+    echo "   Transitions fired: $FIRED_COUNT"
+
+    # 7. Check state after transitions
+    echo ""
+    echo "7. State after transitions:"
+    STATE_AFTER=$(curl -s http://localhost:3030/api/state)
+    TOKENS_AFTER=$(echo "$STATE_AFTER" | jq '[.marking.tokens | to_entries[] | .value | length] | add')
+    echo "   Total tokens: $TOKENS_AFTER"
+
+    # 8. Test token injection via NATS
+    echo ""
+    echo "8. Testing token injection via NATS..."
+
+    EVENTS_BEFORE=$(curl -s http://localhost:3030/api/events | jq '.events | length')
+    echo "   Events before injection: $EVENTS_BEFORE"
+
+    docker compose exec -T nats-box nats pub -s nats://nats:4222 \
+        petri.commands.inject.token \
+        '{"place_id":"Tasks","color":{"task_id":"INJECTED-1","priority":99}}' \
+        2>/dev/null || echo "   Warning: nats-box not available, using alternative method"
+
+    sleep 1
+
+    STATE_AFTER_INJECT=$(curl -s http://localhost:3030/api/state)
+    TOKENS_AFTER_INJECT=$(echo "$STATE_AFTER_INJECT" | jq '[.marking.tokens | to_entries[] | .value | length] | add')
+    EVENTS_AFTER=$(curl -s http://localhost:3030/api/events | jq '.events | length')
+    echo "   Events after injection: $EVENTS_AFTER"
+    echo "   Tokens after injection: $TOKENS_AFTER_INJECT"
+
+    INJECTION_SUCCESS="false"
+    if [ "$EVENTS_AFTER" -gt "$EVENTS_BEFORE" ]; then
+        echo "   Token injection: SUCCESS"
+        INJECTION_SUCCESS="true"
+    else
+        echo "   Token injection: SKIPPED (nats-box may not be available)"
+    fi
+
+    # 9. Check NATS JetStream stats
+    echo ""
+    echo "9. Checking NATS JetStream stats..."
+    JETSTREAM_INFO=$(curl -s http://localhost:8333/jsz)
+    STREAM_COUNT=$(echo "$JETSTREAM_INFO" | jq '.streams // 0')
+    TOTAL_MSGS=$(echo "$JETSTREAM_INFO" | jq '.messages // 0')
+    echo "   Streams: $STREAM_COUNT"
+    echo "   Total messages in JetStream: $TOTAL_MSGS"
+
+    # 10. Verify events in event store
+    echo ""
+    echo "10. Verifying event store..."
+    EVENTS=$(curl -s http://localhost:3030/api/events)
+    EVENT_STORE_COUNT=$(echo "$EVENTS" | jq '.events | length')
+    CHAIN_VALID=$(echo "$EVENTS" | jq '.chain_valid')
+    echo "   Event count: $EVENT_STORE_COUNT"
+    echo "   Chain valid: $CHAIN_VALID"
+
+    # 11. Summary
+    echo ""
+    echo "=== Test Summary ==="
+    if [ "$FIRED_COUNT" -gt 0 ] && [ "$CHAIN_VALID" = "true" ] && [ "$TOTAL_MSGS" -gt 0 ]; then
+        echo "SUCCESS: Integration test passed!"
+        echo "  - Transitions fired: $FIRED_COUNT"
+        echo "  - Events stored: $EVENT_STORE_COUNT"
+        echo "  - Event chain valid: $CHAIN_VALID"
+        echo "  - NATS JetStream messages: $TOTAL_MSGS"
+        echo "  - Token injection via NATS: $INJECTION_SUCCESS"
+        exit 0
+    else
+        echo "FAILURE: Integration test failed"
+        echo "  - FIRED_COUNT=$FIRED_COUNT (should be > 0)"
+        echo "  - CHAIN_VALID=$CHAIN_VALID (should be true)"
+        echo "  - TOTAL_MSGS=$TOTAL_MSGS (should be > 0)"
+        exit 1
+    fi
+
+# Full integration test suite (shell + Rust integration tests)
+test-integration: (infra::nats-up) test-nats-rust test-nats
+
+# ============================================
+# Development Utilities
+# ============================================
+
+# Check all code compiles
+check:
+    cargo check --workspace
+
+# Format all code
+fmt:
+    cargo fmt --all
+
+# Run clippy lints
+lint:
+    cargo clippy --workspace -- -D warnings
+
+# Clean build artifacts
+clean:
+    cargo clean
+
+# Clean everything including Docker
+clean-all: (infra::nats-down) (infra::nats-cleanup) clean
+
+# ============================================
+# SDK Commands
+# ============================================
+
+# Build SDK
+sdk-build:
+    cargo build -p aithericon-sdk
+
+# Run SDK examples
+sdk-example name:
+    cargo run -p aithericon-sdk --example {{name}}
+
+# ============================================
+# File Metadata (standalone crate)
+# ============================================
+
+# Run file-metadata tests (all backends)
+test-metadata:
+    cd file-metadata && cargo test --features all-backends
+
+# Run file-metadata clippy
+lint-metadata:
+    cd file-metadata && cargo clippy --features all-backends -- -D warnings
+
+# ============================================
+# Documentation
+# ============================================
+
+# Generate and open documentation
+docs:
+    cargo doc --workspace --no-deps --open
+
+# Generate docs with private items
+docs-private:
+    cargo doc --workspace --no-deps --document-private-items --open

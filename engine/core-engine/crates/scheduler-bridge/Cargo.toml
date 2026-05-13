@@ -1,0 +1,33 @@
+[package]
+name = "petri-scheduler-bridge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Shared scheduler-to-NATS bridge infrastructure for Petri-Lab watchers"
+
+[dependencies]
+# NATS messaging (signal publishing + checkpoint KV)
+async-nats = { workspace = true }
+
+# Async runtime
+tokio = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Time
+chrono = { workspace = true }
+
+# Byte manipulation
+bytes = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+
+# Domain types (ExternalSignal, JobStatus)
+petri-domain = { workspace = true }

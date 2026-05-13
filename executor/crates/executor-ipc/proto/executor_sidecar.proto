@@ -1,0 +1,124 @@
+syntax = "proto3";
+package aithericon.executor.ipc;
+
+service ExecutorSidecar {
+    rpc LogArtifact(LogArtifactRequest) returns (SidecarResponse);
+    rpc UpdateProgress(UpdateProgressRequest) returns (SidecarResponse);
+    rpc DefinePhases(DefinePhasesRequest) returns (SidecarResponse);
+    rpc UpdatePhase(UpdatePhaseRequest) returns (SidecarResponse);
+    rpc LogMessage(LogMessageRequest) returns (SidecarResponse);
+    rpc SetOutput(SetOutputRequest) returns (SidecarResponse);
+    rpc LogMetrics(LogMetricsRequest) returns (SidecarResponse);
+    rpc HealthCheck(HealthCheckRequest) returns (SidecarResponse);
+    rpc ShutdownAck(ShutdownAckRequest) returns (SidecarResponse);
+}
+
+enum ArtifactCategory {
+    ARTIFACT_CATEGORY_OTHER = 0;
+    ARTIFACT_CATEGORY_MODEL = 1;
+    ARTIFACT_CATEGORY_DATASET = 2;
+    ARTIFACT_CATEGORY_PLOT = 3;
+    ARTIFACT_CATEGORY_LOG = 4;
+    ARTIFACT_CATEGORY_CHECKPOINT = 5;
+    ARTIFACT_CATEGORY_CONFIG = 6;
+    ARTIFACT_CATEGORY_METRIC = 7;
+}
+
+enum PhaseStatus {
+    PHASE_STATUS_PENDING = 0;
+    PHASE_STATUS_RUNNING = 1;
+    PHASE_STATUS_COMPLETED = 2;
+    PHASE_STATUS_FAILED = 3;
+    PHASE_STATUS_SKIPPED = 4;
+}
+
+enum LogLevel {
+    LOG_LEVEL_INFO = 0;
+    LOG_LEVEL_TRACE = 1;
+    LOG_LEVEL_DEBUG = 2;
+    LOG_LEVEL_WARN = 3;
+    LOG_LEVEL_ERROR = 4;
+}
+
+enum ResponseStatus {
+    RESPONSE_STATUS_OK = 0;
+    RESPONSE_STATUS_ERROR = 1;
+    RESPONSE_STATUS_NOT_FOUND = 2;
+    RESPONSE_STATUS_INVALID_ARGUMENT = 3;
+}
+
+enum MetricType {
+    METRIC_TYPE_SCALAR = 0;
+    METRIC_TYPE_COUNTER = 1;
+    METRIC_TYPE_GAUGE = 2;
+    METRIC_TYPE_HISTOGRAM = 3;
+}
+
+message LogArtifactRequest {
+    string artifact_id = 1;
+    string path = 2;
+    string name = 3;
+    ArtifactCategory category = 4;
+    string mime_type = 5;
+    map<string, string> metadata = 6;
+    bool extract_file_metadata = 7;
+    bool blocking = 8;
+    // JSON-serialized StorageConfig for per-artifact storage.
+    // When non-empty, the artifact is uploaded to this storage backend
+    // instead of the global ArtifactStore.
+    string storage_config_json = 9;
+}
+
+message UpdateProgressRequest {
+    float fraction = 1;
+    string message = 2;
+    uint64 current_step = 3;
+    uint64 total_steps = 4;
+}
+
+message DefinePhasesRequest {
+    repeated string phase_names = 1;
+}
+
+message UpdatePhaseRequest {
+    string phase_name = 1;
+    PhaseStatus status = 2;
+    string message = 3;
+}
+
+message LogMessageRequest {
+    LogLevel level = 1;
+    string message = 2;
+    map<string, string> fields = 3;
+}
+
+message SetOutputRequest {
+    string name = 1;
+    string value_json = 2;
+}
+
+message MetricPoint {
+    string name = 1;
+    double value = 2;
+    optional uint64 step = 3;
+    int64 timestamp_ms = 4;
+    MetricType metric_type = 5;
+    map<string, string> labels = 6;
+}
+
+message LogMetricsRequest {
+    repeated MetricPoint points = 1;
+}
+
+message HealthCheckRequest {
+    uint64 sequence = 1;
+}
+
+message ShutdownAckRequest {
+    int32 exit_code = 1;
+}
+
+message SidecarResponse {
+    ResponseStatus status = 1;
+    string error_message = 2;
+}

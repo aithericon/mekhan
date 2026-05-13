@@ -93,7 +93,7 @@ async fn spawn_task_ingest(nats: &MekhanNats, db: &sqlx::PgPool) -> IngestHandle
 #[tokio::test]
 async fn human_request_creates_task() {
     let db = common::create_test_db().await;
-    let nats = MekhanNats::connect(&aithericon_test_infra::nats_url())
+    let nats = MekhanNats::connect(&common::nats_url())
         .await
         .expect("connect NATS");
     ensure_human_stream(nats.jetstream()).await;
@@ -148,7 +148,7 @@ async fn human_request_creates_task() {
 #[tokio::test]
 async fn duplicate_task_is_idempotent() {
     let db = common::create_test_db().await;
-    let nats = MekhanNats::connect(&aithericon_test_infra::nats_url())
+    let nats = MekhanNats::connect(&common::nats_url())
         .await
         .expect("connect NATS");
     ensure_human_stream(nats.jetstream()).await;
@@ -184,7 +184,7 @@ async fn duplicate_task_is_idempotent() {
 #[tokio::test]
 async fn task_without_process_id_uses_net_id() {
     let db = common::create_test_db().await;
-    let nats = MekhanNats::connect(&aithericon_test_infra::nats_url())
+    let nats = MekhanNats::connect(&common::nats_url())
         .await
         .expect("connect NATS");
     ensure_human_stream(nats.jetstream()).await;

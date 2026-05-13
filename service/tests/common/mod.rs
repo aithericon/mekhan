@@ -6,7 +6,9 @@ use axum::Router;
 use sqlx::PgPool;
 use tokio::net::TcpListener;
 
-use aithericon_test_infra::TestDb;
+pub mod test_infra;
+pub use test_infra::{nats_url, postgres_url, wait_for_nats, wait_for_postgres, TestDb, TestNats};
+
 use mekhan_service::config::{AppConfig, CleanupConfig, S3Config};
 use mekhan_service::nats::MekhanNats;
 use mekhan_service::petri::client::PetriClient;

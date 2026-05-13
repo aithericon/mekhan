@@ -1,0 +1,17 @@
+[package]
+name = "petri-infrastructure"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+petri-domain.workspace = true
+petri-application.workspace = true
+
+serde.workspace = true
+serde_json.workspace = true
+async-trait.workspace = true
+
+[dev-dependencies]
+petri-test-harness.workspace = true
+tokio = { workspace = true, features = ["macros", "rt"] }
+rstest.workspace = true

@@ -245,7 +245,7 @@ fn transition_fired_event(
 #[tokio::test]
 async fn token_created_seeds_process() {
     let db = common::create_test_db().await;
-    let nats = MekhanNats::connect(&aithericon_test_infra::nats_url())
+    let nats = MekhanNats::connect(&common::nats_url())
         .await
         .expect("connect NATS");
     ensure_petri_global_stream(nats.jetstream()).await;
@@ -306,7 +306,7 @@ async fn token_created_seeds_process() {
 #[tokio::test]
 async fn transition_fired_propagates_tags() {
     let db = common::create_test_db().await;
-    let nats = MekhanNats::connect(&aithericon_test_infra::nats_url())
+    let nats = MekhanNats::connect(&common::nats_url())
         .await
         .expect("connect NATS");
     ensure_petri_global_stream(nats.jetstream()).await;
@@ -370,7 +370,7 @@ async fn transition_fired_propagates_tags() {
 #[tokio::test]
 async fn effect_completed_creates_cross_link() {
     let db = common::create_test_db().await;
-    let nats = MekhanNats::connect(&aithericon_test_infra::nats_url())
+    let nats = MekhanNats::connect(&common::nats_url())
         .await
         .expect("connect NATS");
     ensure_petri_global_stream(nats.jetstream()).await;
@@ -409,7 +409,7 @@ async fn effect_completed_creates_cross_link() {
 #[tokio::test]
 async fn bridge_transfer_links_cross_net() {
     let db = common::create_test_db().await;
-    let nats = MekhanNats::connect(&aithericon_test_infra::nats_url())
+    let nats = MekhanNats::connect(&common::nats_url())
         .await
         .expect("connect NATS");
     ensure_petri_global_stream(nats.jetstream()).await;
@@ -498,7 +498,7 @@ async fn bridge_transfer_links_cross_net() {
 #[tokio::test]
 async fn duplicate_events_are_idempotent() {
     let db = common::create_test_db().await;
-    let nats = MekhanNats::connect(&aithericon_test_infra::nats_url())
+    let nats = MekhanNats::connect(&common::nats_url())
         .await
         .expect("connect NATS");
     ensure_petri_global_stream(nats.jetstream()).await;
@@ -534,7 +534,7 @@ async fn duplicate_events_are_idempotent() {
 #[tokio::test]
 async fn signal_key_inherits_process_tags() {
     let db = common::create_test_db().await;
-    let nats = MekhanNats::connect(&aithericon_test_infra::nats_url())
+    let nats = MekhanNats::connect(&common::nats_url())
         .await
         .expect("connect NATS");
     ensure_petri_global_stream(nats.jetstream()).await;
@@ -605,7 +605,7 @@ async fn signal_key_inherits_process_tags() {
 #[tokio::test]
 async fn non_seed_token_without_signal_key_does_not_create_process() {
     let db = common::create_test_db().await;
-    let nats = MekhanNats::connect(&aithericon_test_infra::nats_url())
+    let nats = MekhanNats::connect(&common::nats_url())
         .await
         .expect("connect NATS");
     ensure_petri_global_stream(nats.jetstream()).await;

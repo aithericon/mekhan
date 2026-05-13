@@ -1,0 +1,114 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/executor-domain",
+    "crates/executor-ipc",
+    "crates/executor-storage",
+    "crates/executor-backend",
+    "crates/executor-worker",
+    "crates/executor-service",
+    "crates/executor-metrics",
+    "crates/executor-logs",
+    "crates/executor-test-harness",
+    "crates/executor-cli",
+    "crates/executor-llm",
+    "crates/executor-file-ops",
+    "crates/executor-kreuzberg",
+    "crates/executor-storage-types",
+    "crates/executor-backend-configs",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+authors = ["Aithericon Research"]
+repository = "https://github.com/aithericon/aithericon-executor"
+homepage = "https://github.com/aithericon/aithericon-executor"
+
+[workspace.dependencies]
+# Internal crates
+aithericon-executor-domain = { path = "crates/executor-domain" }
+aithericon-executor-backend = { path = "crates/executor-backend" }
+aithericon-executor-worker = { path = "crates/executor-worker" }
+aithericon-executor-ipc = { path = "crates/executor-ipc" }
+aithericon-executor-storage = { path = "crates/executor-storage" }
+aithericon-executor-storage-types = { path = "crates/executor-storage-types" }
+aithericon-executor-backend-configs = { path = "crates/executor-backend-configs" }
+aithericon-executor-metrics = { path = "crates/executor-metrics" }
+aithericon-executor-logs = { path = "crates/executor-logs" }
+aithericon-executor-test-harness = { path = "crates/executor-test-harness" }
+aithericon-executor-cli = { path = "crates/executor-cli" }
+aithericon-executor-llm = { path = "crates/executor-llm" }
+aithericon-executor-file-ops = { path = "crates/executor-file-ops" }
+aithericon-executor-kreuzberg = { path = "crates/executor-kreuzberg" }
+aithericon-secrets = { path = "../shared/secrets" }
+
+# Apalis (forked with NATS backend) — use local path for development, switch to git for CI/deploy
+apalis = { path = "../shared/apalis", default-features = false, features = ["limit"] }
+apalis-core = { path = "../shared/apalis/packages/apalis-core", default-features = false, features = ["sleep", "json"] }
+apalis-nats = { path = "../shared/apalis/packages/apalis-nats" }
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7" }
+
+# NATS
+async-nats = "0.42"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = { version = "0.8", features = ["chrono"] }
+
+# Error handling
+thiserror = "2"
+async-trait = "0.1"
+
+# Observability
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Time
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+humantime-serde = "1"
+
+# Testing
+uuid = { version = "1", features = ["v4"] }
+testcontainers = "0.26"
+testcontainers-modules = { version = "0.14", features = ["nats"] }
+
+# CLI
+clap = { version = "4", features = ["derive", "env"] }
+
+# gRPC / Protobuf
+tonic = "0.12"
+prost = "0.13"
+tonic-build = "0.12"
+tokio-stream = "0.1"
+hyper = { version = "1", features = ["server", "http2"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+
+# Storage
+opendal = { version = "0.55", default-features = false }
+
+# File metadata
+aithericon-file-metadata = { path = "../shared/file-metadata", package = "fmeta", features = ["tokio", "all-backends", "checksum"] }
+
+# Docker
+bollard = "0.19"
+
+# HTTP
+axum = "0.8"
+
+# HTTP
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+# Compression
+async-compression = { version = "0.4", features = ["futures-io", "gzip", "zstd"] }
+
+# Misc
+bytes = "1"
+futures = "0.3"
+tower = { version = "0.5", features = ["util"] }

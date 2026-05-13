@@ -1,0 +1,88 @@
+{
+  "name": "Order State Machine",
+  "description": "Simple order lifecycle with submit, approve, and reject paths. Demonstrates conditional routing based on order review.",
+  "places": [
+    {
+      "id": "pending",
+      "name": "Pending",
+      "type": "state",
+      "initial_tokens": [
+        { "order_id": "ORD-001", "amount": 150.00, "customer": "Alice" },
+        { "order_id": "ORD-002", "amount": 75.00, "customer": "Bob" }
+      ]
+    },
+    {
+      "id": "submitted",
+      "name": "Submitted",
+      "type": "state",
+      "initial_tokens": []
+    },
+    {
+      "id": "approved",
+      "name": "Approved",
+      "type": "terminal",
+      "initial_tokens": []
+    },
+    {
+      "id": "rejected",
+      "name": "Rejected",
+      "type": "terminal",
+      "initial_tokens": []
+    }
+  ],
+  "transitions": [
+    {
+      "id": "submit",
+      "name": "Submit",
+      "input_ports": [
+        { "name": "order", "cardinality": "single" }
+      ],
+      "output_ports": [
+        { "name": "submitted_order", "cardinality": "single" }
+      ],
+      "inputs": [
+        { "place": "pending", "port": "order", "weight": 1 }
+      ],
+      "outputs": [
+        { "place": "submitted", "port": "submitted_order", "weight": 1 }
+      ],
+      "logic": { "type": "rhai", "source": "#{ submitted_order: #{ order_id: order.order_id, amount: order.amount, customer: order.customer, status: \"submitted\" } }" }
+    },
+    {
+      "id": "approve",
+      "name": "Approve",
+      "input_ports": [
+        { "name": "order", "cardinality": "single" }
+      ],
+      "output_ports": [
+        { "name": "approved_order", "cardinality": "single" }
+      ],
+      "inputs": [
+        { "place": "submitted", "port": "order", "weight": 1 }
+      ],
+      "outputs": [
+        { "place": "approved", "port": "approved_order", "weight": 1 }
+      ],
+      "guard": { "type": "rhai", "source": "order.amount <= 100" },
+      "logic": { "type": "rhai", "source": "#{ approved_order: #{ order_id: order.order_id, amount: order.amount, customer: order.customer, status: \"approved\", reason: \"Auto-approved (amount <= 100)\" } }" }
+    },
+    {
+      "id": "reject",
+      "name": "Reject",
+      "input_ports": [
+        { "name": "order", "cardinality": "single" }
+      ],
+      "output_ports": [
+        { "name": "rejected_order", "cardinality": "single" }
+      ],
+      "inputs": [
+        { "place": "submitted", "port": "order", "weight": 1 }
+      ],
+      "outputs": [
+        { "place": "rejected", "port": "rejected_order", "weight": 1 }
+      ],
+      "guard": { "type": "rhai", "source": "order.amount > 100" },
+      "logic": { "type": "rhai", "source": "#{ rejected_order: #{ order_id: order.order_id, amount: order.amount, customer: order.customer, status: \"rejected\", reason: \"Requires manual approval (amount > 100)\" } }" }
+    }
+  ]
+}

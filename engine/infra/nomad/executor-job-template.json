@@ -1,0 +1,60 @@
+{
+  "Job": {
+    "ID": "petri-executor-worker",
+    "Name": "petri-executor-worker",
+    "Type": "batch",
+    "Datacenters": ["dc1"],
+    "ParameterizedJob": {
+      "Payload": "optional",
+      "MaxPayloadSize": 131072,
+      "MetaRequired": [],
+      "MetaOptional": [
+        "petri_net_id",
+        "petri_place",
+        "petri_signal_key",
+        "petri_signal_running",
+        "petri_signal_completed",
+        "petri_signal_failed"
+      ]
+    },
+    "TaskGroups": [
+      {
+        "Name": "executor",
+        "Count": 1,
+        "RestartPolicy": {
+          "Attempts": 0,
+          "Mode": "fail"
+        },
+        "ReschedulePolicy": {
+          "Attempts": 0
+        },
+        "Tasks": [
+          {
+            "Name": "petri-worker",
+            "Driver": "raw_exec",
+            "Config": {
+              "command": "PLACEHOLDER_EXECUTOR_BINARY",
+              "args": []
+            },
+            "Env": {
+              "EXECUTOR_NATS_URL": "nats://localhost:4333",
+              "EXECUTOR_NAMESPACE": "executor_jobs",
+              "EXECUTOR_SOURCE": "nats_queue",
+              "EXECUTOR_LIFETIME": "run_to_completion",
+              "EXECUTOR_MAX_JOBS": "1",
+              "EXECUTOR_IDLE_TIMEOUT_SECS": "60",
+              "EXECUTOR_CONCURRENCY": "1",
+              "EXECUTOR_NAME": "nomad-executor",
+              "EXECUTOR_BASE_DIR": "/tmp/aithericon-executor-nomad",
+              "EXECUTOR_DEFAULT_TIMEOUT_SECS": "60"
+            },
+            "Resources": {
+              "CPU": 500,
+              "MemoryMB": 256
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

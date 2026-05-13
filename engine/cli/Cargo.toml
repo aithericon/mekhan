@@ -1,0 +1,27 @@
+[package]
+name = "aithericon-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "CLI tool for deploying Aithericon Petri Net topologies"
+
+[[bin]]
+name = "aithericon"
+path = "src/main.rs"
+
+[dependencies]
+clap = { workspace = true }
+ureq = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+colored = "2"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }
+axum = { workspace = true }
+parking_lot = { workspace = true }
+tower-http = { workspace = true }
+petri-api = { path = "../core-engine/crates/api" }
+petri-application = { path = "../core-engine/crates/application" }
+petri-infrastructure = { path = "../core-engine/crates/infrastructure" }

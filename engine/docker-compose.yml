@@ -1,0 +1,66 @@
+services:
+  nats:
+    image: nats:2.12-alpine
+    container_name: petri-nats
+    ports:
+      - "4333:4222"   # Client connections
+      - "8333:8222"   # HTTP monitoring
+    command: ["-js", "-m", "8222"]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8222/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+
+  # RustFS — S3-compatible object storage (Rust-native)
+  rustfs:
+    image: rustfs/rustfs:latest
+    container_name: petri-rustfs
+    ports:
+      - "9005:9000"   # S3 API
+      - "9006:9001"   # Console UI
+    volumes:
+      - rustfs-data:/data
+      - rustfs-logs:/logs
+    environment:
+      - RUSTFS_ROOT_USER=rustfsadmin
+      - RUSTFS_ROOT_PASSWORD=rustfsadmin
+    profiles:
+      - storage
+
+  # Grafana Tempo — distributed tracing backend (OTLP receiver)
+  tempo:
+    image: grafana/tempo:2.6.1
+    container_name: petri-tempo
+    ports:
+      - "4318:4318"   # OTLP HTTP receiver
+      - "3200:3200"   # Tempo query API
+    volumes:
+      - ./infra/tempo/tempo.yaml:/etc/tempo/tempo.yaml:ro
+    command: ["-config.file=/etc/tempo/tempo.yaml"]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3200/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    profiles:
+      - tracing
+    restart: unless-stopped
+
+  # NATS CLI for debugging and testing
+  nats-box:
+    image: natsio/nats-box:latest
+    container_name: petri-nats-box
+    depends_on:
+      nats:
+        condition: service_healthy
+    entrypoint: ["tail", "-f", "/dev/null"]
+    profiles:
+      - tools
+
+volumes:
+  rustfs-data:
+  rustfs-logs:

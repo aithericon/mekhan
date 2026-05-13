@@ -1,0 +1,50 @@
+[package]
+name = "apalis-nats"
+version = "0.7.3"
+authors = ["Milan Ender<ender@aithericon.com>"]
+edition.workspace = true
+repository.workspace = true
+readme = "README.md"
+
+license = "MIT"
+description = "NATS JetStream Storage for apalis: use NATS for background jobs and message queueing"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+apalis-core = { path = "../../packages/apalis-core", version = "0.7.3", default-features = false, features = [
+    "sleep",
+    "json",
+] }
+async-nats = "0.42"
+serde = "1"
+serde_json = "1"
+chrono = { version = "0.4.42", default-features = false, features = [
+    "clock",
+    "serde",
+] }
+futures = "0.3.31"
+tokio = { version = "1", features = ["rt", "net", "macros"] }
+thiserror = "2.0.16"
+async-trait = "0.1"
+bytes = "1.10"
+tower = { version = "0.5", features = ["util"] }
+opentelemetry = { version = "0.31", optional = true }
+opentelemetry_sdk = { version = "0.31", optional = true }
+once_cell = { version = "1", optional = true }
+tracing = "0.1"
+tracing-opentelemetry = { version = "0.32", optional = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+email-service = { path = "../../examples/email-service" }
+apalis = { path = "../../", default-features = false, features = ["limit"] }
+apalis-core = { path = "../apalis-core", features = ["test-utils"] }
+testcontainers = "0.23"
+testcontainers-modules = { version = "0.11", features = ["nats"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1.18", features = ["v4"] }
+
+[features]
+default = []
+otel = ["opentelemetry", "opentelemetry_sdk", "tracing-opentelemetry", "once_cell"]
