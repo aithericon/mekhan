@@ -18,6 +18,8 @@ pub mod yjs;
 
 use std::sync::Arc;
 
+use std::path::PathBuf;
+
 use axum::{
     extract::DefaultBodyLimit,
     routing::{delete, get, post, put},
@@ -25,6 +27,7 @@ use axum::{
 };
 use sqlx::PgPool;
 use tower_http::cors::CorsLayer;
+use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 
 use crate::catalogue::repository::CatalogueRepository;
@@ -49,7 +52,11 @@ pub struct AppState {
 }
 
 pub fn build_router(state: AppState) -> Router {
-    Router::new()
+    let frontend_dir = state.config.frontend_dir.clone();
+
+    let api = Router::new()
+        // Health
+        .route("/health", get(handlers::health::liveness))
         // Template endpoints
         .route("/api/templates", get(handlers::templates::list_templates))
         .route(
@@ -237,7 +244,17 @@ pub fn build_router(state: AppState) -> Router {
             "/api/yjs/{template_id}",
             get(handlers::yjs_sync::ws_handler),
         )
-        .layer(CorsLayer::permissive())
+        .with_state(state);
+
+    let app = if let Some(dir) = frontend_dir {
+        let path = PathBuf::from(dir);
+        let index = path.join("index.html");
+        let spa = ServeDir::new(&path).fallback(ServeFile::new(&index));
+        api.fallback_service(spa)
+    } else {
+        api
+    };
+
+    app.layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
-        .with_state(state)
 }

@@ -21,6 +21,11 @@ pub struct AppConfig {
     pub s3: S3Config,
     #[serde(default)]
     pub artifact_s3: Option<S3Config>,
+    /// Path to a built static SPA (adapter-static output). When set, the service
+    /// serves files from this directory and falls back to `index.html` for SPA
+    /// routing. Unset in dev — the Vite dev server fronts the SPA directly.
+    #[serde(default)]
+    pub frontend_dir: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]

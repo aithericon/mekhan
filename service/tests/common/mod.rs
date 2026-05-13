@@ -59,6 +59,7 @@ pub fn test_config() -> AppConfig {
             region: "us-east-1".to_string(),
         },
         artifact_s3: None,
+        frontend_dir: None,
     }
 }
 
