@@ -1,0 +1,36 @@
+# =============================================================================
+# Lint pool — fmt, clippy, svelte-check
+# =============================================================================
+# Fast feedback loop. Runs on every push to main/dev and every PR targeting
+# them. Scheduled on the lint pool (8 concurrent slots on titan).
+#
+# Recipes live in just/ci.just; the pipeline just shells out to them inside a
+# `nix develop` shell so the toolchain is whatever flake.lock pins.
+# =============================================================================
+
+when:
+    - event: [push, pull_request]
+      branch: [main, dev]
+
+labels:
+    "!host": titan
+    role: lint
+
+steps:
+    - name: rust-fmt-clippy
+      image: 192.168.101.1:5000/nixos/nix:2.32.8
+      environment:
+          NIX_CONFIG: "experimental-features = nix-command flakes"
+          CARGO_HOME: /var/lib/ci-jobs/cache/cargo
+      commands:
+          - nix develop --no-write-lock-file --command bash -lc 'just ci::quality-rust'
+      depends_on: []
+
+    - name: web-quality
+      image: 192.168.101.1:5000/nixos/nix:2.32.8
+      environment:
+          NIX_CONFIG: "experimental-features = nix-command flakes"
+          NPM_CONFIG_CACHE: /var/lib/ci-jobs/cache/npm
+      commands:
+          - nix develop --no-write-lock-file --command bash -lc 'just ci::quality-frontend'
+      depends_on: []

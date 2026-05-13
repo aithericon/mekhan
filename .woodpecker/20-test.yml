@@ -1,0 +1,40 @@
+# =============================================================================
+# Test pool — cargo check (until tests compile) + vitest
+# =============================================================================
+# `service/tests/` has pre-existing compile errors (NATS API mismatch, removed
+# process::ingest, missing nats_creds initializer) that pre-date the CI work.
+# Running `cargo test` would fail at compile time and mask the actual signal.
+#
+# For now: `just ci::check-rust` validates lib + bins compile cleanly.
+# Once tests are repaired, swap to `just ci::test-rust` (one-line change).
+#
+# `services:` would normally spin up postgres + nats here — add it together
+# with the swap to ci::test-rust.
+# =============================================================================
+
+when:
+    - event: [push, pull_request]
+      branch: [main, dev]
+
+labels:
+    "!host": titan
+    role: test
+
+steps:
+    - name: rust-check
+      image: 192.168.101.1:5000/nixos/nix:2.32.8
+      environment:
+          NIX_CONFIG: "experimental-features = nix-command flakes"
+          CARGO_HOME: /var/lib/ci-jobs/cache/cargo
+      commands:
+          - nix develop --no-write-lock-file --command bash -lc 'just ci::check-rust'
+      depends_on: []
+
+    - name: web-test
+      image: 192.168.101.1:5000/nixos/nix:2.32.8
+      environment:
+          NIX_CONFIG: "experimental-features = nix-command flakes"
+          NPM_CONFIG_CACHE: /var/lib/ci-jobs/cache/npm
+      commands:
+          - nix develop --no-write-lock-file --command bash -lc 'just ci::test-frontend-unit'
+      depends_on: []

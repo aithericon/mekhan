@@ -1,0 +1,61 @@
+# =============================================================================
+# Build pool — cross-musl binary, frontend bundle, package & push image
+# =============================================================================
+# Runs only on push to main/dev (not on PRs — PRs run lint+test but don't
+# produce a registry image). Output is `<registry>/mekhan-service:{sha,branch}`,
+# consumed by the deploy pipelines in PRs 6/7.
+#
+# Registry: forge.aithericon.eu (Forgejo built-in OCI registry). Auth via the
+# `forgejo_registry_user` / `forgejo_registry_password` Woodpecker secrets.
+#
+# `package` does `docker buildx build --platform linux/arm64`, so the build
+# runner needs either native ARM64 hardware or QEMU + binfmt registered.
+# =============================================================================
+
+when:
+    - event: push
+      branch: [main, dev]
+
+labels:
+    "!host": titan
+    role: build
+
+steps:
+    - name: build-backend
+      image: 192.168.101.1:5000/nixos/nix:2.32.8
+      environment:
+          NIX_CONFIG: "experimental-features = nix-command flakes"
+          CARGO_HOME: /var/lib/ci-jobs/cache/cargo
+      commands:
+          - nix develop --no-write-lock-file --command bash -lc 'just ci::build-backend'
+      depends_on: []
+
+    - name: build-frontend
+      image: 192.168.101.1:5000/nixos/nix:2.32.8
+      environment:
+          NIX_CONFIG: "experimental-features = nix-command flakes"
+          NPM_CONFIG_CACHE: /var/lib/ci-jobs/cache/npm
+      commands:
+          - nix develop --no-write-lock-file --command bash -lc 'just ci::build-frontend'
+      depends_on: []
+
+    - name: package-and-push
+      image: 192.168.101.1:5000/nixos/nix:2.32.8
+      environment:
+          NIX_CONFIG: "experimental-features = nix-command flakes"
+          REGISTRY: forge.aithericon.eu/MilanEnder
+      secrets:
+          - forgejo_registry_user
+          - forgejo_registry_password
+      volumes:
+          - /var/run/docker.sock:/var/run/docker.sock
+      commands:
+          - |
+            nix develop --no-write-lock-file --command bash -lc '
+              set -euo pipefail
+              echo "$FORGEJO_REGISTRY_PASSWORD" \
+                | docker login forge.aithericon.eu -u "$FORGEJO_REGISTRY_USER" --password-stdin
+              just ci::package "$REGISTRY" "$CI_COMMIT_SHA" "$CI_COMMIT_BRANCH"
+              just ci::push    "$REGISTRY" "$CI_COMMIT_SHA" "$CI_COMMIT_BRANCH"
+            '
+      depends_on: [build-backend, build-frontend]

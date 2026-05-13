@@ -34,6 +34,14 @@ quality-frontend:
 
 # ── Test ────────────────────────────────────────────────────────────────────
 
+# cargo check on the workspace (lib + bins). Use this in CI until the
+# pre-existing test compile errors in service/tests/ are resolved — running
+# `cargo test` would fail at compile time, not on actual test logic.
+check-rust:
+    #!/usr/bin/env bash
+    cd ..
+    cargo check --workspace --lib --bins
+
 # cargo test on the workspace
 test-rust:
     #!/usr/bin/env bash
