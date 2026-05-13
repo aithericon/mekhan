@@ -43,6 +43,9 @@
             pkgs.docker-client
             pkgs.docker-buildx
 
+            # CI tooling
+            pkgs.woodpecker-cli
+
             # Misc
             pkgs.jq
             pkgs.curl

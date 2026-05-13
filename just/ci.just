@@ -18,6 +18,18 @@ platform      := "linux/arm64"
 
 # ── Quality (lint / format / type-check) ────────────────────────────────────
 
+# Validate every Woodpecker pipeline file against the upstream schema.
+# Run before pushing to catch syntax / deprecation errors locally.
+lint-woodpecker:
+    #!/usr/bin/env bash
+    cd ..
+    fail=0
+    for f in .woodpecker/*.yml; do
+      echo "=== $f ==="
+      woodpecker-cli lint "$f" || fail=1
+    done
+    exit "$fail"
+
 # cargo fmt + clippy on the workspace
 quality-rust:
     #!/usr/bin/env bash

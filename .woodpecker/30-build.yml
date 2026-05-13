@@ -44,9 +44,10 @@ steps:
       environment:
           NIX_CONFIG: "experimental-features = nix-command flakes"
           REGISTRY: forge.aithericon.eu/MilanEnder
-      secrets:
-          - forgejo_registry_user
-          - forgejo_registry_password
+          FORGEJO_REGISTRY_USER:
+              from_secret: forgejo_registry_user
+          FORGEJO_REGISTRY_PASSWORD:
+              from_secret: forgejo_registry_password
       volumes:
           - /var/run/docker.sock:/var/run/docker.sock
       commands:
