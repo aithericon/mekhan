@@ -1,4 +1,3 @@
-// Petri net visualizer components (migrated from petri-lab/lab-ui)
 export { default as LabCanvas } from './LabCanvas.svelte';
 export { default as PlaceNode } from './PlaceNode.svelte';
 export { default as TransitionNode } from './TransitionNode.svelte';

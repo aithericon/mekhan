@@ -3,8 +3,6 @@
  *
  * Connects to petri-lab's API for a specific net instance, provides reactive
  * state for the visualizer components (LabCanvas, Timeline, EventLog, Inspector).
- *
- * Based on petri-lab/lab-ui's createLabStore but adapted for Mekhan's context.
  */
 
 import type {

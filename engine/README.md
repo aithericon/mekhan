@@ -4,14 +4,11 @@ A "Digital Lab" prototype demonstrating Colored Petri Nets with Event Sourcing.
 
 ## Architecture
 
-This project is a monorepo with two main components:
-
-- **core-engine** (Rust): Domain logic, event sourcing, and REST API
-- **lab-ui** (SvelteKit): Interactive visualizer and time-travel debugger
+This crate is the Rust engine: domain logic, event sourcing, and REST API. The
+visualizer / debugger UI lives in the platform's `app/` (Mekhan); it talks to
+this engine over HTTP and NATS.
 
 ## Quick Start
-
-### Backend
 
 ```bash
 cd core-engine
@@ -19,16 +16,6 @@ cargo run
 ```
 
 The API will be available at `http://localhost:3000` with Swagger UI at `/swagger-ui`.
-
-### Frontend
-
-```bash
-cd lab-ui
-npm install
-npm run dev
-```
-
-The UI will be available at `http://localhost:5173`.
 
 ## API Endpoints
 
@@ -129,13 +116,9 @@ SCHEDULER_SIGNAL_ROUTES="running:sig_running,completed:sig_completed,failed:sig_
 cargo run -p aithericon-sdk --example nomad_batch_net -- --deploy
 ```
 
-### 4. Open the UI and evaluate
+### 4. Evaluate
 
-```bash
-cd lab-ui && npm run dev
-```
-
-Open `http://localhost:5173`, then click **Evaluate**. The 3 seed jobs will dispatch to Nomad, the NomadWatcher detects completion via Nomad's event stream, publishes signals to NATS, the SignalListener injects tokens, and subsequent evaluations route them to the `completed` place.
+Trigger evaluation via the engine API (or the Mekhan `app/` debugger). The 3 seed jobs will dispatch to Nomad, the NomadWatcher detects completion via Nomad's event stream, publishes signals to NATS, the SignalListener injects tokens, and subsequent evaluations route them to the `completed` place.
 
 ### Environment variables
 

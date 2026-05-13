@@ -101,7 +101,6 @@ petri-lab/
 │   │   ├── application/         # Business logic (Firing, Evaluation)
 │   │   ├── api/                 # HTTP API (Axum)
 │   │   └── nats/                # NATS integration
-├── lab-ui/                      # SvelteKit-based visualization UI
 └── docs/                        # Documentation (you are here)
     ├── sdk/                     # SDK guides
     ├── engine/                  # Engine internals

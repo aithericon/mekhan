@@ -1169,7 +1169,7 @@ async fn delete_net_handler(
             .terminate(
                 &net_id,
                 Some("Deleted by user".to_string()),
-                Some("lab-ui".to_string()),
+                Some("engine-api".to_string()),
             )
             .await
         {
@@ -1207,7 +1207,7 @@ async fn delete_net_handler(
             let event = petri_domain::DomainEvent::NetCancelled {
                 net_id: net_id.clone(),
                 reason: Some("Deleted by user".to_string()),
-                cancelled_by: Some("lab-ui".to_string()),
+                cancelled_by: Some("engine-api".to_string()),
             };
             let persisted = petri_domain::PersistedEvent::new(0, event, None);
             let subject = Subjects::for_event(&persisted.event, Some(&net_id));
