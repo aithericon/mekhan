@@ -1,5 +1,4 @@
-import type { Tooltip } from 'layerchart';
-import { getContext, setContext, type Component, type ComponentProps, type Snippet } from 'svelte';
+import { getContext, setContext, type Component, type Snippet } from 'svelte';
 
 export const THEMES = { light: '', dark: '.dark' } as const;
 
@@ -15,9 +14,16 @@ export type ChartConfig = {
 
 export type ExtractSnippetParams<T> = T extends Snippet<[infer P]> ? P : never;
 
-export type TooltipPayload = ExtractSnippetParams<
-	ComponentProps<typeof Tooltip.Root>['children']
->['payload'][number];
+// Shape adapted from layerchart's TooltipSeries plus the raw data point.
+// chart-tooltip.svelte builds this from `getChartContext().tooltip.series`.
+export type TooltipPayload = {
+	key?: string;
+	name?: string;
+	label?: string;
+	value?: unknown;
+	color?: string;
+	payload?: Record<string, unknown>;
+};
 
 // Helper to extract item config from a payload.
 export function getPayloadConfigFromPayload(

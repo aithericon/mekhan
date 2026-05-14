@@ -2,7 +2,7 @@
 	import { cn, type WithElementRef, type WithoutChildren } from '$lib/utils.js';
 	import type { HTMLAttributes } from 'svelte/elements';
 	import { getPayloadConfigFromPayload, useChart, type TooltipPayload } from './chart-utils.js';
-	import { getTooltipContext, Tooltip as TooltipPrimitive } from 'layerchart';
+	import { getChartContext, Tooltip as TooltipPrimitive } from 'layerchart';
 	import type { Snippet } from 'svelte';
 
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -48,12 +48,27 @@
 	} = $props();
 
 	const chart = useChart();
-	const tooltipCtx = getTooltipContext();
+	const chartCtx = getChartContext();
+
+	// Adapt layerchart's TooltipSeries[] (+ raw data point) into the Recharts-style
+	// payload shape this component was originally built around.
+	const payload = $derived<TooltipPayload[]>(
+		chartCtx.tooltip.series
+			.filter((s) => s.visible !== false)
+			.map((s) => ({
+				key: s.key,
+				name: s.key,
+				label: s.label,
+				value: s.value,
+				color: s.color,
+				payload: (chartCtx.tooltip.data ?? {}) as Record<string, unknown>
+			}))
+	);
 
 	const formattedLabel = $derived.by(() => {
-		if (hideLabel || !tooltipCtx.payload?.length) return null;
+		if (hideLabel || !payload.length) return null;
 
-		const [item] = tooltipCtx.payload;
+		const [item] = payload;
 		const key = labelKey ?? item?.label ?? item?.name ?? 'value';
 
 		const itemConfig = getPayloadConfigFromPayload(chart.config, item, key);
@@ -65,10 +80,10 @@
 
 		if (value === undefined) return null;
 		if (!labelFormatter) return value;
-		return labelFormatter(value, tooltipCtx.payload);
+		return labelFormatter(value, payload);
 	});
 
-	const nestLabel = $derived(tooltipCtx.payload.length === 1 && indicator !== 'dot');
+	const nestLabel = $derived(payload.length === 1 && indicator !== 'dot');
 </script>
 
 {#snippet TooltipLabel()}
@@ -96,10 +111,13 @@
 			{@render TooltipLabel()}
 		{/if}
 		<div class="grid gap-1.5">
-			{#each tooltipCtx.payload as item, i (item.key + i)}
+			{#each payload as item, i ((item.key ?? '') + i)}
 				{@const key = `${nameKey || item.key || item.name || 'value'}`}
 				{@const itemConfig = getPayloadConfigFromPayload(chart.config, item, key)}
-				{@const indicatorColor = color || item.payload?.color || item.color}
+				{@const indicatorColor =
+					color ||
+					(item.payload?.color as string | undefined) ||
+					item.color}
 				<div
 					class={cn(
 						'[&>svg]:text-muted-foreground flex w-full flex-wrap items-stretch gap-2 [&>svg]:size-2.5',
@@ -112,7 +130,7 @@
 							name: item.name,
 							item,
 							index: i,
-							payload: tooltipCtx.payload
+							payload
 						})}
 					{:else}
 						{#if itemConfig?.icon}
@@ -142,9 +160,11 @@
 									{itemConfig?.label || item.name}
 								</span>
 							</div>
-							{#if item.value !== undefined}
+							{#if item.value !== undefined && item.value !== null}
 								<span class="text-foreground font-mono font-medium tabular-nums">
-									{item.value.toLocaleString()}
+									{typeof item.value === 'number' || typeof item.value === 'bigint'
+										? item.value.toLocaleString()
+										: String(item.value)}
 								</span>
 							{/if}
 						</div>
