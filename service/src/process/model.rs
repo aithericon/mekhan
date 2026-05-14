@@ -1,7 +1,8 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, ToSchema)]
 pub struct HpiProcess {
     pub process_id: String,
     pub name: Option<String>,
@@ -13,7 +14,7 @@ pub struct HpiProcess {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, ToSchema)]
 pub struct HpiTask {
     pub id: String,
     pub process_id: String,
@@ -25,7 +26,7 @@ pub struct HpiTask {
     pub completed_at: Option<DateTime<Utc>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, ToSchema)]
 pub struct HpiMetric {
     pub process_id: String,
     pub key: String,
@@ -33,7 +34,7 @@ pub struct HpiMetric {
     pub timestamp: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, sqlx::FromRow, ToSchema)]
 pub struct HpiMetricSummary {
     pub key: String,
     pub count: i64,
@@ -44,7 +45,7 @@ pub struct HpiMetricSummary {
     pub last_timestamp: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, ToSchema)]
 pub struct HpiLog {
     pub id: i64,
     pub process_id: String,
@@ -57,7 +58,7 @@ pub struct HpiLog {
 
 // API response types
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ProcessDetail {
     #[serde(flatten)]
     pub process: HpiProcess,
@@ -67,7 +68,7 @@ pub struct ProcessDetail {
     pub artifact_count: i64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ProcessStats {
     pub total: i64,
     pub active: i64,
@@ -77,7 +78,7 @@ pub struct ProcessStats {
 
 // Update request
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct ProcessUpdateRequest {
     pub name: Option<String>,
     pub kind: Option<String>,

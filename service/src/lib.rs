@@ -23,7 +23,7 @@ use std::path::PathBuf;
 
 use axum::{
     extract::DefaultBodyLimit,
-    routing::{delete, get, post},
+    routing::get,
     Router,
 };
 use sqlx::PgPool;
@@ -61,6 +61,9 @@ pub struct AppState {
 /// swagger-ui) and [`openapi_spec`] (CLI dump for frontend codegen).
 fn build_openapi_router() -> OpenApiRouter<AppState> {
     OpenApiRouter::<AppState>::with_openapi(ApiDoc::openapi())
+        // Health
+        .routes(routes!(handlers::health::liveness))
+        // Templates
         .routes(routes!(
             handlers::templates::list_templates,
             handlers::templates::create_template
@@ -76,162 +79,72 @@ fn build_openapi_router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::templates::get_air))
         .routes(routes!(handlers::templates::compile_preview))
         .routes(routes!(handlers::templates::compile_graph))
+        // Instances
+        .routes(routes!(
+            handlers::instances::list_instances,
+            handlers::instances::create_instance
+        ))
+        .routes(routes!(
+            handlers::instances::get_instance,
+            handlers::instances::cancel_instance
+        ))
+        .routes(routes!(handlers::instances::get_instance_state))
+        .routes(routes!(handlers::instances::get_instance_events))
+        // Processes (HPI inspection)
+        .routes(routes!(process::handlers::list_processes))
+        .routes(routes!(process::handlers::process_stats))
+        .routes(routes!(
+            process::handlers::get_process,
+            process::handlers::update_process
+        ))
+        .routes(routes!(process::handlers::get_process_metrics))
+        .routes(routes!(process::handlers::get_process_metrics_summary))
+        .routes(routes!(process::handlers::get_process_logs))
+        .routes(routes!(process::handlers::get_process_tasks))
+        .routes(routes!(process::handlers::get_process_artifacts))
+        // Processes-live (SSE)
+        .routes(routes!(handlers::process_live::metrics_series))
+        .routes(routes!(handlers::process_live::metrics_stream))
+        .routes(routes!(handlers::process_live::logs_tail))
+        .routes(routes!(handlers::process_live::logs_stream))
+        .routes(routes!(handlers::process_live::artifacts_list))
+        .routes(routes!(handlers::process_live::artifacts_stream))
+        // Tasks
+        .routes(routes!(process::handlers::list_tasks))
+        .routes(routes!(handlers::task_stream::task_stream))
+        .routes(routes!(process::handlers::get_task))
+        .routes(routes!(process::handlers::complete_task))
+        .routes(routes!(process::handlers::cancel_task))
+        // Catalogue
+        .routes(routes!(catalogue::handlers::list_entries))
+        .routes(routes!(catalogue::handlers::stats))
+        .routes(routes!(catalogue::handlers::stats_by_net))
+        .routes(routes!(catalogue::handlers::lineage))
+        .routes(routes!(catalogue::handlers::distinct_values))
+        .routes(routes!(catalogue::handlers::distinct_jsonb_values))
+        .routes(routes!(catalogue::handlers::download_artifact))
+        .routes(routes!(catalogue::handlers::get_entry))
+        // Provenance
+        .routes(routes!(causality::routes::token_provenance))
+        .routes(routes!(causality::routes::cross_link))
+        .routes(routes!(causality::routes::provenance_from_artifact))
+        .routes(routes!(causality::routes::event_detail))
+        // Files (upload has a 50 MB body limit applied at the merged-router level
+        // since utoipa-axum doesn't expose per-route layers here)
+        .routes(routes!(handlers::files::upload_file))
+        .routes(routes!(handlers::files::get_file))
 }
 
 pub fn build_router(state: AppState) -> Router {
     let frontend_dir = state.config.frontend_dir.clone();
 
-    // Routes that are #[utoipa::path]-annotated go through OpenApiRouter so
-    // they appear in the generated spec. Remaining (legacy) routes are wired
-    // on the plain axum Router below and merged together.
-    let (templates_router, api_spec) = build_openapi_router().split_for_parts();
+    // Every #[utoipa::path]-annotated handler is registered via OpenApiRouter
+    // so the spec stays in sync with the runtime mounts. The Yjs WebSocket is
+    // out-of-band (binary protocol, not OpenAPI-modeled).
+    let (api_router, api_spec) = build_openapi_router().split_for_parts();
 
     let legacy = Router::new()
-        // Health
-        .route("/health", get(handlers::health::liveness))
-        // Instance endpoints
-        .route(
-            "/api/instances",
-            get(handlers::instances::list_instances),
-        )
-        .route(
-            "/api/instances",
-            post(handlers::instances::create_instance),
-        )
-        .route(
-            "/api/instances/{id}",
-            get(handlers::instances::get_instance),
-        )
-        .route(
-            "/api/instances/{id}/state",
-            get(handlers::instances::get_instance_state),
-        )
-        .route(
-            "/api/instances/{id}/events",
-            get(handlers::instances::get_instance_events),
-        )
-        .route(
-            "/api/instances/{id}",
-            delete(handlers::instances::cancel_instance),
-        )
-        // Process endpoints (native)
-        .route("/api/processes", get(process::handlers::list_processes))
-        .route("/api/processes/stats", get(process::handlers::process_stats))
-        .route(
-            "/api/processes/{process_id}",
-            get(process::handlers::get_process).put(process::handlers::update_process),
-        )
-        .route(
-            "/api/processes/{process_id}/metrics",
-            get(process::handlers::get_process_metrics),
-        )
-        .route(
-            "/api/processes/{process_id}/metrics/summary",
-            get(process::handlers::get_process_metrics_summary),
-        )
-        .route(
-            "/api/processes/{process_id}/logs",
-            get(process::handlers::get_process_logs),
-        )
-        .route(
-            "/api/processes/{process_id}/tasks",
-            get(process::handlers::get_process_tasks),
-        )
-        .route(
-            "/api/processes/{process_id}/metrics/series",
-            get(handlers::process_live::metrics_series),
-        )
-        .route(
-            "/api/processes/{process_id}/metrics/stream",
-            get(handlers::process_live::metrics_stream),
-        )
-        .route(
-            "/api/processes/{process_id}/logs/tail",
-            get(handlers::process_live::logs_tail),
-        )
-        .route(
-            "/api/processes/{process_id}/logs/stream",
-            get(handlers::process_live::logs_stream),
-        )
-        .route(
-            "/api/processes/{process_id}/artifacts/list",
-            get(handlers::process_live::artifacts_list),
-        )
-        .route(
-            "/api/processes/{process_id}/artifacts/stream",
-            get(handlers::process_live::artifacts_stream),
-        )
-        .route(
-            "/api/processes/{process_id}/artifacts",
-            get(process::handlers::get_process_artifacts),
-        )
-        // Provenance endpoints (causality)
-        .route(
-            "/api/provenance/{net_id}/{token_id}",
-            get(causality::routes::token_provenance),
-        )
-        .route(
-            "/api/provenance/link/{signal_key}",
-            get(causality::routes::cross_link),
-        )
-        .route(
-            "/api/provenance/from-artifact/{execution_id}/{artifact_id}",
-            get(causality::routes::provenance_from_artifact),
-        )
-        .route(
-            "/api/provenance/{net_id}/{event_seq}/detail",
-            get(causality::routes::event_detail),
-        )
-        // Task endpoints (native)
-        .route("/api/tasks", get(process::handlers::list_tasks))
-        .route(
-            "/api/tasks/stream",
-            get(handlers::task_stream::task_stream),
-        )
-        .route("/api/tasks/{id}", get(process::handlers::get_task))
-        .route(
-            "/api/tasks/{id}/complete",
-            post(process::handlers::complete_task),
-        )
-        .route(
-            "/api/tasks/{id}/cancel",
-            post(process::handlers::cancel_task),
-        )
-        // File upload/download endpoints (50 MB limit)
-        .route(
-            "/api/files/upload/{id}/{node_id}",
-            post(handlers::files::upload_file)
-                .layer(DefaultBodyLimit::max(50 * 1024 * 1024)),
-        )
-        .route("/api/files/{*key}", get(handlers::files::get_file))
-        // Catalogue endpoints
-        .route("/api/catalogue", get(catalogue::handlers::list_entries))
-        .route("/api/catalogue/stats", get(catalogue::handlers::stats))
-        .route(
-            "/api/catalogue/stats/by-net",
-            get(catalogue::handlers::stats_by_net),
-        )
-        .route(
-            "/api/catalogue/lineage/{process_id}",
-            get(catalogue::handlers::lineage),
-        )
-        .route(
-            "/api/catalogue/distinct/{column}",
-            get(catalogue::handlers::distinct_values),
-        )
-        .route(
-            "/api/catalogue/distinct-jsonb/{column}/{key}",
-            get(catalogue::handlers::distinct_jsonb_values),
-        )
-        .route(
-            "/api/catalogue/download/{*path}",
-            get(catalogue::handlers::download_artifact),
-        )
-        .route(
-            "/api/catalogue/{execution_id}/{id}",
-            get(catalogue::handlers::get_entry),
-        )
-        // Yjs WebSocket endpoint
+        // Yjs WebSocket endpoint — binary CRDT protocol, intentionally not in the spec.
         .route(
             "/api/yjs/{template_id}",
             get(handlers::yjs_sync::ws_handler),
@@ -239,8 +152,12 @@ pub fn build_router(state: AppState) -> Router {
 
     // Merge stateful sub-routers first, then ground out the state generic with
     // `.with_state(state)` so we can attach the stateless SwaggerUI router and
-    // SPA fallback.
-    let api: Router = templates_router.merge(legacy).with_state(state);
+    // SPA fallback. The 50 MB body limit covers /api/files/upload (only path
+    // that exceeds Axum's default).
+    let api: Router = api_router
+        .merge(legacy)
+        .layer(DefaultBodyLimit::max(50 * 1024 * 1024))
+        .with_state(state);
 
     let swagger = SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", api_spec);
 

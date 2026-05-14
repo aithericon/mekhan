@@ -9,6 +9,348 @@
     "version": "0.1.0"
   },
   "paths": {
+    "/api/catalogue": {
+      "get": {
+        "tags": [
+          "catalogue"
+        ],
+        "summary": "GET /api/catalogue",
+        "description": "List/search catalogue entries with full filter, sort, pagination support.\n\nQuery parameters:\n  - `page`, `page_size` — pagination (0-based)\n  - `sort` — e.g. `-created_at`, `+name`, `size_bytes`\n  - `search` — free-text search across name, filename, storage_path\n  - `filter[field][op]=value` — typed filters (eq, ne, gt, gte, lt, lte,\n    contains, starts_with, ends_with, in, not_in, is_null, is_not_null)\n  - `metadata` — JSONB containment on user_metadata (e.g. `{\"kernel\":\"rbf\"}`)\n  - `file_metadata` — JSONB containment on file_metadata\n\nExample:\n  GET /api/catalogue?filter[category][eq]=model&filter[source_net][contains]=surrogate&sort=-size_bytes&page=0&page_size=10",
+        "operationId": "list_entries",
+        "responses": {
+          "200": {
+            "description": "Paginated catalogue entries",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query DSL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/catalogue/distinct-jsonb/{column}/{key}": {
+      "get": {
+        "tags": [
+          "catalogue"
+        ],
+        "summary": "GET /api/catalogue/distinct-jsonb/:column/:key",
+        "description": "Distinct values for a JSONB key within file_metadata or user_metadata.\nExample: GET /api/catalogue/distinct-jsonb/file_metadata/format → [\"json\", \"csv\"]",
+        "operationId": "distinct_jsonb_values",
+        "parameters": [
+          {
+            "name": "column",
+            "in": "path",
+            "description": "JSONB column (file_metadata or user_metadata)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "description": "JSONB key inside the column",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Distinct values for the JSONB key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid column/key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/catalogue/distinct/{column}": {
+      "get": {
+        "tags": [
+          "catalogue"
+        ],
+        "summary": "GET /api/catalogue/distinct/:column",
+        "description": "Returns distinct non-null values for a column (for populating filter dropdowns).\nColumn must be in the allowed filter fields whitelist.\n\nExample: GET /api/catalogue/distinct/category → [\"model\", \"dataset\", \"plot\"]",
+        "operationId": "distinct_values",
+        "parameters": [
+          {
+            "name": "column",
+            "in": "path",
+            "description": "Allowed filter column name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Distinct non-null values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Column not in whitelist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/catalogue/download/{path}": {
+      "get": {
+        "tags": [
+          "catalogue"
+        ],
+        "summary": "GET /api/catalogue/download/{path} — download artifact bytes by storage path.",
+        "description": "The path parameter is the S3 storage_path from the catalogue entry.\nExample: GET /api/catalogue/download/artifacts/exec-123/gp_model/gp_model.json",
+        "operationId": "download_artifact",
+        "parameters": [
+          {
+            "name": "path",
+            "in": "path",
+            "description": "S3 storage path (may contain slashes)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Artifact bytes with Content-Disposition: attachment",
+            "content": {
+              "application/octet-stream": {}
+            }
+          },
+          "400": {
+            "description": "Empty path",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Artifact not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/catalogue/lineage/{process_id}": {
+      "get": {
+        "tags": [
+          "catalogue"
+        ],
+        "summary": "GET /api/catalogue/lineage/{process_id} — all artifacts for a campaign, grouped by step.",
+        "operationId": "lineage",
+        "parameters": [
+          {
+            "name": "process_id",
+            "in": "path",
+            "description": "Process id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Artifacts grouped by step + iteration",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LineageResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/catalogue/stats": {
+      "get": {
+        "tags": [
+          "catalogue"
+        ],
+        "summary": "GET /api/catalogue/stats",
+        "description": "Aggregate statistics. Accepts the same filter params as the list endpoint,\nso you can get stats for a subset (e.g., stats for a specific net or category).",
+        "operationId": "stats",
+        "responses": {
+          "200": {
+            "description": "Aggregate stats",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogueStats"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query DSL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/catalogue/stats/by-net": {
+      "get": {
+        "tags": [
+          "catalogue"
+        ],
+        "summary": "GET /api/catalogue/stats/by-net — per-net breakdown.",
+        "operationId": "stats_by_net",
+        "responses": {
+          "200": {
+            "description": "Per-net summary stats",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/NetStats"
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/catalogue/{execution_id}/{id}": {
+      "get": {
+        "tags": [
+          "catalogue"
+        ],
+        "summary": "GET /api/catalogue/{execution_id}/{id} — single catalogue entry.",
+        "operationId": "get_entry",
+        "parameters": [
+          {
+            "name": "execution_id",
+            "in": "path",
+            "description": "Execution id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Catalogue entry id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Catalogue entry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogueEntry"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Entry not found"
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/compile": {
       "post": {
         "tags": [
@@ -38,6 +380,1788 @@
           },
           "400": {
             "description": "Compilation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/files/upload/{id}/{node_id}": {
+      "post": {
+        "tags": [
+          "files"
+        ],
+        "summary": "POST /api/files/upload/{id}/{node_id}\nAccepts multipart/form-data with a `file` field.",
+        "operationId": "upload_file",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Template id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "node_id",
+            "in": "path",
+            "description": "Workflow node id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/MultipartFileUpload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "File uploaded; returns S3 key + metadata",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileUploadResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid multipart or unsupported content type",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Upload failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/files/{key}": {
+      "get": {
+        "tags": [
+          "files"
+        ],
+        "summary": "GET /api/files/{key}\nServes a file from S3 with the correct content type.",
+        "operationId": "get_file",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "description": "S3 object key (templates/{template_id}/v{ver}/{node_id}/{filename})",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Binary file contents",
+            "content": {
+              "application/octet-stream": {}
+            }
+          },
+          "404": {
+            "description": "File not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/instances": {
+      "get": {
+        "tags": [
+          "instances"
+        ],
+        "summary": "GET /api/instances",
+        "operationId": "list_instances",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "template_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated list of instances",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedResponse_InstanceListItem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "instances"
+        ],
+        "summary": "POST /api/instances",
+        "operationId": "create_instance",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateInstanceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Instance created and deployed to engine",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowInstance"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Template not published",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Template not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Engine deploy failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/instances/{id}": {
+      "get": {
+        "tags": [
+          "instances"
+        ],
+        "summary": "GET /api/instances/:id",
+        "operationId": "get_instance",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Instance id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Instance",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowInstance"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Instance not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "instances"
+        ],
+        "summary": "DELETE /api/instances/:id",
+        "operationId": "cancel_instance",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Instance id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Instance cancelled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowInstance"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Instance not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/instances/{id}/events": {
+      "get": {
+        "tags": [
+          "instances"
+        ],
+        "summary": "GET /api/instances/:id/events",
+        "description": "Returns the full event log for an instance from JetStream.",
+        "operationId": "get_instance_events",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Instance id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JetStream events for this instance (untyped envelope)",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "404": {
+            "description": "Instance not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/instances/{id}/state": {
+      "get": {
+        "tags": [
+          "instances"
+        ],
+        "summary": "GET /api/instances/:id/state",
+        "description": "Returns instance state with marking projected from JetStream events (source\nof truth) and best-effort engine status for enabled transitions / run mode.",
+        "operationId": "get_instance_state",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Instance id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Instance state with marking + engine status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstanceStateResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Instance not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/processes": {
+      "get": {
+        "tags": [
+          "processes"
+        ],
+        "summary": "GET /api/processes — list processes with filter/sort/pagination.",
+        "description": "Query parameters use a custom DSL (see `query/extractor.rs`): `filter`,\n`sort`, `page`, `page_size`. Response shape is paginated.",
+        "operationId": "list_processes",
+        "responses": {
+          "200": {
+            "description": "Paginated list of processes",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/processes/stats": {
+      "get": {
+        "tags": [
+          "processes"
+        ],
+        "summary": "GET /api/processes/stats — aggregate process statistics.",
+        "operationId": "process_stats",
+        "responses": {
+          "200": {
+            "description": "Process counts by status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessStats"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/processes/{process_id}": {
+      "get": {
+        "tags": [
+          "processes"
+        ],
+        "summary": "GET /api/processes/{process_id} — get process detail (with tasks, metrics, logs, artifact count).",
+        "operationId": "get_process",
+        "parameters": [
+          {
+            "name": "process_id",
+            "in": "path",
+            "description": "Process id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Process detail with tasks, metrics, logs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Process not found"
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "processes"
+        ],
+        "summary": "PUT /api/processes/{process_id} — partial update of a process.",
+        "operationId": "update_process",
+        "parameters": [
+          {
+            "name": "process_id",
+            "in": "path",
+            "description": "Process id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProcessUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Updated process",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HpiProcess"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Process not found"
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/processes/{process_id}/artifacts": {
+      "get": {
+        "tags": [
+          "processes"
+        ],
+        "summary": "GET /api/processes/{process_id}/artifacts — list catalogue entries for a process.",
+        "operationId": "get_process_artifacts",
+        "parameters": [
+          {
+            "name": "process_id",
+            "in": "path",
+            "description": "Process id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated catalogue entries",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/processes/{process_id}/artifacts/list": {
+      "get": {
+        "tags": [
+          "processes-live"
+        ],
+        "operationId": "artifacts_list",
+        "parameters": [
+          {
+            "name": "process_id",
+            "in": "path",
+            "description": "Process id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "categories",
+            "in": "query",
+            "description": "Comma-separated category whitelist. Empty = all.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "render_hints",
+            "in": "query",
+            "description": "Comma-separated render_hint whitelist (matched against\n`user_metadata->>'render_hint'`).",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "until",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Recent artifacts wrapped in `{ entries: [...] }`",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/processes/{process_id}/artifacts/stream": {
+      "get": {
+        "tags": [
+          "processes-live"
+        ],
+        "summary": "SSE: emits `artifact` events whose `data` field is a JSON-stringified `LiveArtifactEvent`.",
+        "operationId": "artifacts_stream",
+        "parameters": [
+          {
+            "name": "process_id",
+            "in": "path",
+            "description": "Process id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "since_seq",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "categories",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "render_hints",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "SSE stream of artifact events",
+            "content": {
+              "text/event-stream": {}
+            }
+          }
+        }
+      }
+    },
+    "/api/processes/{process_id}/logs": {
+      "get": {
+        "tags": [
+          "processes"
+        ],
+        "summary": "GET /api/processes/{process_id}/logs — list logs for a process with filter/pagination.",
+        "operationId": "get_process_logs",
+        "parameters": [
+          {
+            "name": "process_id",
+            "in": "path",
+            "description": "Process id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated logs",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/processes/{process_id}/logs/stream": {
+      "get": {
+        "tags": [
+          "processes-live"
+        ],
+        "summary": "SSE: emits `log` events whose `data` field is a JSON-stringified `LiveLogEvent`.",
+        "operationId": "logs_stream",
+        "parameters": [
+          {
+            "name": "process_id",
+            "in": "path",
+            "description": "Process id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "since_seq",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "signal_key",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "level",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "SSE stream of log events",
+            "content": {
+              "text/event-stream": {}
+            }
+          }
+        }
+      }
+    },
+    "/api/processes/{process_id}/logs/tail": {
+      "get": {
+        "tags": [
+          "processes-live"
+        ],
+        "operationId": "logs_tail",
+        "parameters": [
+          {
+            "name": "process_id",
+            "in": "path",
+            "description": "Process id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "until",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "level",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "signal_key",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Recent log rows wrapped in `{ logs: [...] }`",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/processes/{process_id}/metrics": {
+      "get": {
+        "tags": [
+          "processes"
+        ],
+        "summary": "GET /api/processes/{process_id}/metrics — list metrics for a process.",
+        "operationId": "get_process_metrics",
+        "parameters": [
+          {
+            "name": "process_id",
+            "in": "path",
+            "description": "Process id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "key",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Recent metric rows",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/HpiMetric"
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/processes/{process_id}/metrics/series": {
+      "get": {
+        "tags": [
+          "processes-live"
+        ],
+        "operationId": "metrics_series",
+        "parameters": [
+          {
+            "name": "process_id",
+            "in": "path",
+            "description": "Process id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "keys",
+            "in": "query",
+            "description": "Comma-separated metric keys.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "until",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "signal_key",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "max_points",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Backfilled metric series (adaptive bucket when window > max_points)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetricsSeriesResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/processes/{process_id}/metrics/stream": {
+      "get": {
+        "tags": [
+          "processes-live"
+        ],
+        "summary": "SSE: emits `connected`, optional `gap`/`resync`, then `metric` events\nwhose `data` field is a JSON-stringified `LiveMetricEvent`.",
+        "operationId": "metrics_stream",
+        "parameters": [
+          {
+            "name": "process_id",
+            "in": "path",
+            "description": "Process id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "since_seq",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "signal_key",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "keys",
+            "in": "query",
+            "description": "Comma-separated metric keys to filter.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "SSE stream of metric events",
+            "content": {
+              "text/event-stream": {}
+            }
+          }
+        }
+      }
+    },
+    "/api/processes/{process_id}/metrics/summary": {
+      "get": {
+        "tags": [
+          "processes"
+        ],
+        "summary": "GET /api/processes/{process_id}/metrics/summary — aggregated metric stats per key.",
+        "operationId": "get_process_metrics_summary",
+        "parameters": [
+          {
+            "name": "process_id",
+            "in": "path",
+            "description": "Process id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Per-key min/max/avg/last",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/HpiMetricSummary"
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/processes/{process_id}/tasks": {
+      "get": {
+        "tags": [
+          "processes"
+        ],
+        "summary": "GET /api/processes/{process_id}/tasks — list tasks for a process.",
+        "operationId": "get_process_tasks",
+        "parameters": [
+          {
+            "name": "process_id",
+            "in": "path",
+            "description": "Process id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tasks (HumanTask-shaped JSON)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {}
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/provenance/from-artifact/{execution_id}/{artifact_id}": {
+      "get": {
+        "tags": [
+          "provenance"
+        ],
+        "summary": "GET /api/provenance/from-artifact/{execution_id}/{artifact_id}?depth=10",
+        "description": "Resolves a catalogue entry to its producing token and returns the full\nancestry chain. Uses `source_event_sequence` for direct lookup when\navailable, falling back to signal_key → cross-link resolution.",
+        "operationId": "provenance_from_artifact",
+        "parameters": [
+          {
+            "name": "execution_id",
+            "in": "path",
+            "description": "Execution id from the catalogue entry",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "artifact_id",
+            "in": "path",
+            "description": "Catalogue entry id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "depth",
+            "in": "query",
+            "description": "Max ancestry depth (clamped to [1, 50]; default 10).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Ancestry walked back from the producing token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProvenanceResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Catalogue entry not found"
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/provenance/link/{signal_key}": {
+      "get": {
+        "tags": [
+          "provenance"
+        ],
+        "summary": "GET /api/provenance/link/{signal_key}",
+        "description": "Look up a cross-net bridge link by signal_key.",
+        "operationId": "cross_link",
+        "parameters": [
+          {
+            "name": "signal_key",
+            "in": "path",
+            "description": "Signal key identifying the bridge",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Cross-net link",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CrossLink"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Signal key not found"
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/provenance/{net_id}/{event_seq}/detail": {
+      "get": {
+        "tags": [
+          "provenance"
+        ],
+        "summary": "GET /api/provenance/{net_id}/{event_seq}/detail",
+        "description": "Returns the full context for a causality event by joining to domain\ntables based on effect_handler. Enables rich detail views in the\nprovenance DAG visualization.",
+        "operationId": "event_detail",
+        "parameters": [
+          {
+            "name": "net_id",
+            "in": "path",
+            "description": "Net id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "event_seq",
+            "in": "path",
+            "description": "Event sequence number within the net",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Full event detail with related rows",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Event not found"
+          }
+        }
+      }
+    },
+    "/api/provenance/{net_id}/{token_id}": {
+      "get": {
+        "tags": [
+          "provenance"
+        ],
+        "summary": "GET /api/provenance/{net_id}/{token_id}?depth=10",
+        "description": "Recursive CTE walking token ancestry: for a given token, find which events\nproduced it, what tokens those events consumed, and recurse.",
+        "operationId": "token_provenance",
+        "parameters": [
+          {
+            "name": "net_id",
+            "in": "path",
+            "description": "Net id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "token_id",
+            "in": "path",
+            "description": "Token id to walk ancestry from",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "depth",
+            "in": "query",
+            "description": "Max ancestry depth (clamped to [1, 50]; default 10).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Ancestry nodes + cross-net edges",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProvenanceResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/tasks": {
+      "get": {
+        "tags": [
+          "tasks"
+        ],
+        "summary": "GET /api/tasks — list all tasks with filter/sort/pagination.",
+        "description": "Returns `{ tasks, total, page, page_size, total_pages, has_next, has_previous }`\nwhere each task is a `HumanTask`-shaped JSON object (see `to_human_task_json`).\nThe `tasks` key is what the Mekhan frontend's task store expects; the rest\nof the pagination envelope is preserved for richer clients.",
+        "operationId": "list_tasks",
+        "responses": {
+          "200": {
+            "description": "Paginated tasks (HumanTask-shaped) in `tasks` envelope",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/tasks/stream": {
+      "get": {
+        "tags": [
+          "tasks"
+        ],
+        "summary": "GET /api/tasks/stream — SSE endpoint for real-time task events from NATS.",
+        "description": "Emits `{event, data}` lines for `task_created`, `task_completed`,\n`task_failed`, `task_cancelled`, `process_update`. `data` is the raw\nNATS payload as a JSON string (clients re-parse it).",
+        "operationId": "task_stream",
+        "responses": {
+          "200": {
+            "description": "SSE stream of task lifecycle events",
+            "content": {
+              "text/event-stream": {}
+            }
+          }
+        }
+      }
+    },
+    "/api/tasks/{id}": {
+      "get": {
+        "tags": [
+          "tasks"
+        ],
+        "summary": "GET /api/tasks/:id — get a single task.",
+        "description": "Returns a `HumanTask`-shaped JSON object built from the DB row + `detail`\nJSONB projected by the causality consumer. This includes `task_id`, `steps`,\n`instructions_mdsvex`, `net_id`, `place`, etc. — everything the frontend\ntask form needs to render.",
+        "operationId": "get_task",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Task id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "HumanTask-shaped JSON object",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "404": {
+            "description": "Task not found"
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/tasks/{id}/cancel": {
+      "post": {
+        "tags": [
+          "tasks"
+        ],
+        "summary": "POST /api/tasks/{id}/cancel — cancel a task and publish NATS signal.",
+        "operationId": "cancel_task",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Task id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Optional `reason` field",
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Task cancelled",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "404": {
+            "description": "Task not found"
+          },
+          "409": {
+            "description": "Task is not pending",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/tasks/{id}/complete": {
+      "post": {
+        "tags": [
+          "tasks"
+        ],
+        "summary": "POST /api/tasks/{id}/complete — complete a task and publish NATS signal.",
+        "operationId": "complete_task",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Task id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Completion payload — `data` field is forwarded as the task result",
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Task completed",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "404": {
+            "description": "Task not found"
+          },
+          "409": {
+            "description": "Task is not pending",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
             "content": {
               "application/json": {
                 "schema": {
@@ -654,10 +2778,92 @@
           }
         }
       }
+    },
+    "/health": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "GET /health",
+        "description": "Liveness probe — fixed shape, no DB / NATS dependencies.",
+        "operationId": "liveness",
+        "responses": {
+          "200": {
+            "description": "Service is alive",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
     "schemas": {
+      "AncestryNode": {
+        "type": "object",
+        "required": [
+          "depth",
+          "net_id",
+          "event_seq",
+          "event_type",
+          "token_id",
+          "role",
+          "place_id",
+          "timestamp"
+        ],
+        "properties": {
+          "depth": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "effect_handler": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "event_seq": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "event_type": {
+            "type": "string"
+          },
+          "net_id": {
+            "type": "string"
+          },
+          "place_id": {
+            "type": "string"
+          },
+          "place_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "role": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "token_id": {
+            "type": "string"
+          },
+          "transition_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "BranchCondition": {
         "type": "object",
         "required": [
@@ -674,6 +2880,178 @@
           },
           "label": {
             "type": "string"
+          }
+        }
+      },
+      "BridgeTarget": {
+        "type": "object",
+        "required": [
+          "target_net",
+          "target_place"
+        ],
+        "properties": {
+          "target_net": {
+            "type": "string"
+          },
+          "target_place": {
+            "type": "string"
+          }
+        }
+      },
+      "CatalogueEntry": {
+        "type": "object",
+        "description": "A single catalogue entry (maps 1:1 to the `catalogue_entries` table).",
+        "required": [
+          "id",
+          "execution_id",
+          "name",
+          "category",
+          "filename",
+          "file_metadata",
+          "user_metadata",
+          "created_at",
+          "catalogued_at"
+        ],
+        "properties": {
+          "catalogued_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "category": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "execution_id": {
+            "type": "string"
+          },
+          "file_metadata": {},
+          "filename": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "job_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mime_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "process_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "process_step": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "signal_key": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "size_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "source_event_sequence": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "source_net": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source_place": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "storage_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "user_metadata": {}
+        }
+      },
+      "CatalogueStats": {
+        "type": "object",
+        "description": "Aggregate statistics.",
+        "required": [
+          "total_entries",
+          "total_size_bytes",
+          "by_category"
+        ],
+        "properties": {
+          "by_category": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CategoryStats"
+            }
+          },
+          "latest_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "total_entries": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total_size_bytes": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "CategoryStats": {
+        "type": "object",
+        "required": [
+          "category",
+          "count",
+          "total_bytes"
+        ],
+        "properties": {
+          "category": {
+            "type": "string"
+          },
+          "count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total_bytes": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
@@ -714,6 +3092,24 @@
           }
         }
       },
+      "CreateInstanceRequest": {
+        "type": "object",
+        "required": [
+          "template_id",
+          "created_by"
+        ],
+        "properties": {
+          "created_by": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "metadata": {},
+          "template_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
       "CreateTemplateRequest": {
         "type": "object",
         "required": [
@@ -746,6 +3142,98 @@
           }
         }
       },
+      "CrossLink": {
+        "type": "object",
+        "required": [
+          "signal_key",
+          "link_type"
+        ],
+        "properties": {
+          "egress_net": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "egress_seq": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "ingress_net": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ingress_seq": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "link_type": {
+            "type": "string"
+          },
+          "signal_key": {
+            "type": "string"
+          }
+        }
+      },
+      "CrossNetEdge": {
+        "type": "object",
+        "description": "Explicit cross-net edge resolved from causality_cross_links.",
+        "required": [
+          "signal_key",
+          "egress_net",
+          "egress_seq",
+          "ingress_net",
+          "ingress_seq",
+          "link_type"
+        ],
+        "properties": {
+          "egress_net": {
+            "type": "string"
+          },
+          "egress_seq": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "ingress_net": {
+            "type": "string"
+          },
+          "ingress_seq": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "link_type": {
+            "type": "string"
+          },
+          "signal_key": {
+            "type": "string"
+          }
+        }
+      },
+      "EngineStatus": {
+        "type": "object",
+        "required": [
+          "available"
+        ],
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "run_mode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "ErrorResponse": {
         "type": "object",
         "description": "Uniform error body returned by every fallible handler. Replaces the ad-hoc\n`json!({\"error\": ...})` pattern so the spec exposes a single\n`ErrorResponse` schema and the frontend gets one consistent error shape.",
@@ -755,6 +3243,109 @@
         "properties": {
           "error": {
             "type": "string"
+          }
+        }
+      },
+      "EventDetail": {
+        "type": "object",
+        "required": [
+          "net_id",
+          "event_seq",
+          "event_type",
+          "timestamp",
+          "tokens",
+          "metrics",
+          "logs"
+        ],
+        "properties": {
+          "artifact": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CatalogueEntry"
+              }
+            ]
+          },
+          "bridge": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BridgeTarget",
+                "description": "Present only for `TokenBridgedOut`."
+              }
+            ]
+          },
+          "effect_handler": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "effect_result": {
+            "description": "Raw JSON returned by the effect handler (EffectCompleted) or a\nfailure envelope (EffectFailed). Null for other event types."
+          },
+          "event_seq": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "event_type": {
+            "type": "string"
+          },
+          "logs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HpiLog"
+            }
+          },
+          "metrics": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HpiMetric"
+            }
+          },
+          "net_id": {
+            "type": "string"
+          },
+          "signal_dispatch": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SignalDispatch",
+                "description": "Present when this event is a signal-injected `TokenCreated` whose\nsignal_key matches a row in `causality_signal_dispatches` — i.e.\nwe know which effect originally dispatched this signal."
+              }
+            ]
+          },
+          "task": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/HpiTask"
+              }
+            ]
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "tokens": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TokenInfo"
+            }
+          },
+          "transition_name": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -769,6 +3360,593 @@
             "type": "string"
           },
           "config": {}
+        }
+      },
+      "FileUploadResponse": {
+        "type": "object",
+        "required": [
+          "key",
+          "filename",
+          "content_type",
+          "size"
+        ],
+        "properties": {
+          "content_type": {
+            "type": "string"
+          },
+          "filename": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "HealthResponse": {
+        "type": "object",
+        "required": [
+          "status",
+          "service",
+          "version"
+        ],
+        "properties": {
+          "service": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
+      "HpiLog": {
+        "type": "object",
+        "required": [
+          "id",
+          "process_id",
+          "level",
+          "message",
+          "detail",
+          "timestamp"
+        ],
+        "properties": {
+          "detail": {},
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "level": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "process_id": {
+            "type": "string"
+          },
+          "source": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "HpiMetric": {
+        "type": "object",
+        "required": [
+          "process_id",
+          "key",
+          "value",
+          "timestamp"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "process_id": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "value": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
+      "HpiMetricSummary": {
+        "type": "object",
+        "required": [
+          "key",
+          "count",
+          "min_value",
+          "max_value",
+          "avg_value",
+          "last_value",
+          "last_timestamp"
+        ],
+        "properties": {
+          "avg_value": {
+            "type": "number",
+            "format": "double"
+          },
+          "count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "key": {
+            "type": "string"
+          },
+          "last_timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "last_value": {
+            "type": "number",
+            "format": "double"
+          },
+          "max_value": {
+            "type": "number",
+            "format": "double"
+          },
+          "min_value": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
+      "HpiProcess": {
+        "type": "object",
+        "required": [
+          "process_id",
+          "status",
+          "config",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "config": {},
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "kind": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "owner": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "process_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "HpiTask": {
+        "type": "object",
+        "required": [
+          "id",
+          "process_id",
+          "title",
+          "status",
+          "detail",
+          "created_at"
+        ],
+        "properties": {
+          "assignee": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "completed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "detail": {},
+          "id": {
+            "type": "string"
+          },
+          "process_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        }
+      },
+      "InstanceListItem": {
+        "type": "object",
+        "description": "Instance with template name, returned by list queries (JOIN with workflow_templates).",
+        "required": [
+          "id",
+          "template_id",
+          "template_version",
+          "net_id",
+          "status",
+          "created_by",
+          "created_at",
+          "metadata",
+          "template_name"
+        ],
+        "properties": {
+          "completed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "current_step": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "metadata": {},
+          "net_id": {
+            "type": "string"
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string"
+          },
+          "template_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "template_name": {
+            "type": "string"
+          },
+          "template_version": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
+      "InstanceStateResponse": {
+        "type": "object",
+        "required": [
+          "instance_id",
+          "net_id",
+          "status",
+          "events",
+          "event_count",
+          "marking",
+          "engine",
+          "enabled_transitions"
+        ],
+        "properties": {
+          "current_step": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "enabled_transitions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "engine": {
+            "$ref": "#/components/schemas/EngineStatus"
+          },
+          "event_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "events": {
+            "type": "array",
+            "items": {}
+          },
+          "instance_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "marking": {},
+          "net_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "LineageResponse": {
+        "type": "object",
+        "description": "Lineage response: artifacts grouped by iteration/step.",
+        "required": [
+          "process_id",
+          "steps",
+          "total_artifacts"
+        ],
+        "properties": {
+          "process_id": {
+            "type": "string"
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LineageStep"
+            }
+          },
+          "total_artifacts": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "LineageStep": {
+        "type": "object",
+        "required": [
+          "step",
+          "artifacts"
+        ],
+        "properties": {
+          "artifacts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CatalogueEntry"
+            }
+          },
+          "iteration": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "step": {
+            "type": "string"
+          }
+        }
+      },
+      "MetricPoint": {
+        "type": "object",
+        "required": [
+          "t",
+          "v"
+        ],
+        "properties": {
+          "t": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "v": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
+      "MetricsSeriesResponse": {
+        "type": "object",
+        "required": [
+          "bucket_seconds",
+          "series"
+        ],
+        "properties": {
+          "bucket_seconds": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Seconds per bucket (0 = raw rows)."
+          },
+          "series": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/MetricPoint"
+              }
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "MultipartFileUpload": {
+        "type": "object",
+        "description": "Multipart body wrapper for spec documentation. The runtime extractor is\n`axum::extract::Multipart`; this struct only exists so the spec shows the\nexpected field name and type.",
+        "required": [
+          "file"
+        ],
+        "properties": {
+          "file": {
+            "type": "string",
+            "format": "binary",
+            "description": "Binary file contents (one of the allowed mime types)."
+          }
+        }
+      },
+      "NetStats": {
+        "type": "object",
+        "description": "Per-net summary.",
+        "required": [
+          "total_artifacts",
+          "total_bytes"
+        ],
+        "properties": {
+          "first_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "latest_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "source_net": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "total_artifacts": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total_bytes": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "PaginatedResponse_InstanceListItem": {
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "per_page"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "Instance with template name, returned by list queries (JOIN with workflow_templates).",
+              "required": [
+                "id",
+                "template_id",
+                "template_version",
+                "net_id",
+                "status",
+                "created_by",
+                "created_at",
+                "metadata",
+                "template_name"
+              ],
+              "properties": {
+                "completed_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "date-time"
+                },
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "created_by": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "current_step": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "metadata": {},
+                "net_id": {
+                  "type": "string"
+                },
+                "started_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "date-time"
+                },
+                "status": {
+                  "type": "string"
+                },
+                "template_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "template_name": {
+                  "type": "string"
+                },
+                "template_version": {
+                  "type": "integer",
+                  "format": "int32"
+                }
+              }
+            }
+          },
+          "page": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "per_page": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64"
+          }
         }
       },
       "PaginatedResponse_WorkflowTemplate": {
@@ -890,6 +4068,144 @@
           "y": {
             "type": "number",
             "format": "double"
+          }
+        }
+      },
+      "ProcessDetail": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/HpiProcess"
+          },
+          {
+            "type": "object",
+            "required": [
+              "tasks",
+              "recent_metrics",
+              "recent_logs",
+              "artifact_count"
+            ],
+            "properties": {
+              "artifact_count": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "recent_logs": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/HpiLog"
+                }
+              },
+              "recent_metrics": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/HpiMetric"
+                }
+              },
+              "tasks": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/HpiTask"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "ProcessStats": {
+        "type": "object",
+        "required": [
+          "total",
+          "active",
+          "completed",
+          "failed"
+        ],
+        "properties": {
+          "active": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "completed": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "failed": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "ProcessUpdateRequest": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "owner": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "ProvenanceResponse": {
+        "type": "object",
+        "description": "Full provenance response: ancestry nodes + explicit cross-net edges.",
+        "required": [
+          "nodes",
+          "cross_net_edges"
+        ],
+        "properties": {
+          "cross_net_edges": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CrossNetEdge"
+            }
+          },
+          "nodes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AncestryNode"
+            }
+          }
+        }
+      },
+      "SignalDispatch": {
+        "type": "object",
+        "required": [
+          "dispatch_net",
+          "dispatch_seq",
+          "signal_key"
+        ],
+        "properties": {
+          "dispatch_net": {
+            "type": "string"
+          },
+          "dispatch_seq": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "signal_key": {
+            "type": "string"
           }
         }
       },
@@ -1086,6 +4402,34 @@
           }
         }
       },
+      "TokenInfo": {
+        "type": "object",
+        "required": [
+          "token_id",
+          "role",
+          "place_id"
+        ],
+        "properties": {
+          "data": {
+            "description": "Full token payload (color). Null for `consumed` role when the\nproducer's row isn't available for join-back."
+          },
+          "place_id": {
+            "type": "string"
+          },
+          "place_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "role": {
+            "type": "string"
+          },
+          "token_id": {
+            "type": "string"
+          }
+        }
+      },
       "UpdateTemplateRequest": {
         "type": "object",
         "properties": {
@@ -1198,6 +4542,68 @@
                 "$ref": "#/components/schemas/Viewport"
               }
             ]
+          }
+        }
+      },
+      "WorkflowInstance": {
+        "type": "object",
+        "required": [
+          "id",
+          "template_id",
+          "template_version",
+          "net_id",
+          "status",
+          "created_by",
+          "created_at",
+          "metadata"
+        ],
+        "properties": {
+          "completed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "current_step": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "metadata": {},
+          "net_id": {
+            "type": "string"
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string"
+          },
+          "template_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "template_version": {
+            "type": "integer",
+            "format": "int32"
           }
         }
       },

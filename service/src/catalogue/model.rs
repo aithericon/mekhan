@@ -1,8 +1,9 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 /// A single catalogue entry (maps 1:1 to the `catalogue_entries` table).
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, ToSchema)]
 pub struct CatalogueEntry {
     pub id: String,
     pub execution_id: String,
@@ -26,7 +27,7 @@ pub struct CatalogueEntry {
 }
 
 /// Aggregate statistics.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct CatalogueStats {
     pub total_entries: i64,
     pub total_size_bytes: i64,
@@ -34,7 +35,7 @@ pub struct CatalogueStats {
     pub latest_at: Option<DateTime<Utc>>,
 }
 
-#[derive(Debug, Serialize, sqlx::FromRow)]
+#[derive(Debug, Serialize, sqlx::FromRow, ToSchema)]
 pub struct CategoryStats {
     pub category: String,
     pub count: i64,
@@ -42,7 +43,7 @@ pub struct CategoryStats {
 }
 
 /// Per-net summary.
-#[derive(Debug, Serialize, sqlx::FromRow)]
+#[derive(Debug, Serialize, sqlx::FromRow, ToSchema)]
 pub struct NetStats {
     pub source_net: Option<String>,
     pub total_artifacts: i64,
@@ -52,14 +53,14 @@ pub struct NetStats {
 }
 
 /// Lineage response: artifacts grouped by iteration/step.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct LineageResponse {
     pub process_id: String,
     pub steps: Vec<LineageStep>,
     pub total_artifacts: i64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct LineageStep {
     pub step: String,
     pub iteration: Option<i64>,

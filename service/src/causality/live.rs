@@ -15,13 +15,14 @@ use std::sync::{Arc, RwLock};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use tokio::sync::broadcast;
+use utoipa::ToSchema;
 
 const SSE_BUFFER_CAP: usize = 10_000;
 const BROADCAST_CAP: usize = 1024;
 const ARTIFACT_BUFFER_CAP: usize = 2_000;
 const ARTIFACT_BROADCAST_CAP: usize = 256;
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, ToSchema)]
 pub struct LiveMetricEvent {
     pub seq: u64,
     pub process_id: String,
@@ -31,7 +32,7 @@ pub struct LiveMetricEvent {
     pub timestamp: DateTime<Utc>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, ToSchema)]
 pub struct LiveLogEvent {
     pub seq: u64,
     pub process_id: String,
@@ -46,7 +47,7 @@ pub struct LiveLogEvent {
 /// Emitted when a catalogue entry INSERT succeeds for a process-tagged
 /// artifact. The SSE handler filters by `process_id` and optionally by
 /// `category` / `user_metadata.render_hint` before forwarding to clients.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, ToSchema)]
 pub struct LiveArtifactEvent {
     pub seq: u64,
     pub process_id: String,

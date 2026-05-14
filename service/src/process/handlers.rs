@@ -8,9 +8,13 @@ use chrono::Utc;
 use serde::Deserialize;
 use serde_json::{json, Value as JsonValue};
 
+use crate::models::error::ErrorResponse;
 use crate::query::extractor::QueryParams;
 use crate::AppState;
-use super::model::{HpiTask, ProcessUpdateRequest};
+use super::model::{
+    HpiMetric, HpiMetricSummary, HpiProcess, HpiTask, ProcessDetail, ProcessStats,
+    ProcessUpdateRequest,
+};
 use super::queries;
 
 /// Convert a DB `HpiTask` row into the `HumanTask`-shaped JSON expected by the
@@ -67,6 +71,18 @@ fn to_human_task_json(task: &HpiTask) -> JsonValue {
 }
 
 /// GET /api/processes — list processes with filter/sort/pagination.
+///
+/// Query parameters use a custom DSL (see `query/extractor.rs`): `filter`,
+/// `sort`, `page`, `page_size`. Response shape is paginated.
+#[utoipa::path(
+    get,
+    path = "/api/processes",
+    responses(
+        (status = 200, description = "Paginated list of processes", body = serde_json::Value),
+        (status = 400, description = "Invalid query", body = ErrorResponse),
+    ),
+    tag = "processes",
+)]
 pub async fn list_processes(
     State(state): State<AppState>,
     params: QueryParams,
@@ -85,6 +101,15 @@ pub async fn list_processes(
 }
 
 /// GET /api/processes/stats — aggregate process statistics.
+#[utoipa::path(
+    get,
+    path = "/api/processes/stats",
+    responses(
+        (status = 200, description = "Process counts by status", body = ProcessStats),
+        (status = 500, description = "Server error", body = ErrorResponse),
+    ),
+    tag = "processes",
+)]
 pub async fn process_stats(State(state): State<AppState>) -> impl IntoResponse {
     match queries::process_stats(&state.db).await {
         Ok(stats) => Json(stats).into_response(),
@@ -95,7 +120,18 @@ pub async fn process_stats(State(state): State<AppState>) -> impl IntoResponse {
     }
 }
 
-/// GET /api/processes/:process_id — get process detail (with tasks, metrics, logs, artifact count).
+/// GET /api/processes/{process_id} — get process detail (with tasks, metrics, logs, artifact count).
+#[utoipa::path(
+    get,
+    path = "/api/processes/{process_id}",
+    params(("process_id" = String, Path, description = "Process id")),
+    responses(
+        (status = 200, description = "Process detail with tasks, metrics, logs", body = ProcessDetail),
+        (status = 404, description = "Process not found"),
+        (status = 500, description = "Server error", body = ErrorResponse),
+    ),
+    tag = "processes",
+)]
 pub async fn get_process(
     State(state): State<AppState>,
     Path(process_id): Path<String>,
@@ -110,7 +146,19 @@ pub async fn get_process(
     }
 }
 
-/// PUT /api/processes/:process_id — partial update of a process.
+/// PUT /api/processes/{process_id} — partial update of a process.
+#[utoipa::path(
+    put,
+    path = "/api/processes/{process_id}",
+    params(("process_id" = String, Path, description = "Process id")),
+    request_body = ProcessUpdateRequest,
+    responses(
+        (status = 200, description = "Updated process", body = HpiProcess),
+        (status = 404, description = "Process not found"),
+        (status = 500, description = "Server error", body = ErrorResponse),
+    ),
+    tag = "processes",
+)]
 pub async fn update_process(
     State(state): State<AppState>,
     Path(process_id): Path<String>,
@@ -126,13 +174,23 @@ pub async fn update_process(
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
 pub struct MetricQueryParams {
     pub key: Option<String>,
     pub limit: Option<i64>,
 }
 
-/// GET /api/processes/:process_id/metrics/summary — aggregated metric stats per key.
+/// GET /api/processes/{process_id}/metrics/summary — aggregated metric stats per key.
+#[utoipa::path(
+    get,
+    path = "/api/processes/{process_id}/metrics/summary",
+    params(("process_id" = String, Path, description = "Process id")),
+    responses(
+        (status = 200, description = "Per-key min/max/avg/last", body = Vec<HpiMetricSummary>),
+        (status = 500, description = "Server error", body = ErrorResponse),
+    ),
+    tag = "processes",
+)]
 pub async fn get_process_metrics_summary(
     State(state): State<AppState>,
     Path(process_id): Path<String>,
@@ -146,7 +204,20 @@ pub async fn get_process_metrics_summary(
     }
 }
 
-/// GET /api/processes/:process_id/metrics — list metrics for a process.
+/// GET /api/processes/{process_id}/metrics — list metrics for a process.
+#[utoipa::path(
+    get,
+    path = "/api/processes/{process_id}/metrics",
+    params(
+        ("process_id" = String, Path, description = "Process id"),
+        MetricQueryParams,
+    ),
+    responses(
+        (status = 200, description = "Recent metric rows", body = Vec<HpiMetric>),
+        (status = 500, description = "Server error", body = ErrorResponse),
+    ),
+    tag = "processes",
+)]
 pub async fn get_process_metrics(
     State(state): State<AppState>,
     Path(process_id): Path<String>,
@@ -162,7 +233,17 @@ pub async fn get_process_metrics(
     }
 }
 
-/// GET /api/processes/:process_id/logs — list logs for a process with filter/pagination.
+/// GET /api/processes/{process_id}/logs — list logs for a process with filter/pagination.
+#[utoipa::path(
+    get,
+    path = "/api/processes/{process_id}/logs",
+    params(("process_id" = String, Path, description = "Process id")),
+    responses(
+        (status = 200, description = "Paginated logs", body = serde_json::Value),
+        (status = 400, description = "Invalid query", body = ErrorResponse),
+    ),
+    tag = "processes",
+)]
 pub async fn get_process_logs(
     State(state): State<AppState>,
     Path(process_id): Path<String>,
@@ -181,7 +262,17 @@ pub async fn get_process_logs(
     }
 }
 
-/// GET /api/processes/:process_id/tasks — list tasks for a process.
+/// GET /api/processes/{process_id}/tasks — list tasks for a process.
+#[utoipa::path(
+    get,
+    path = "/api/processes/{process_id}/tasks",
+    params(("process_id" = String, Path, description = "Process id")),
+    responses(
+        (status = 200, description = "Tasks (HumanTask-shaped JSON)", body = Vec<serde_json::Value>),
+        (status = 500, description = "Server error", body = ErrorResponse),
+    ),
+    tag = "processes",
+)]
 pub async fn get_process_tasks(
     State(state): State<AppState>,
     Path(process_id): Path<String>,
@@ -198,7 +289,17 @@ pub async fn get_process_tasks(
     }
 }
 
-/// GET /api/processes/:process_id/artifacts — list catalogue entries for a process.
+/// GET /api/processes/{process_id}/artifacts — list catalogue entries for a process.
+#[utoipa::path(
+    get,
+    path = "/api/processes/{process_id}/artifacts",
+    params(("process_id" = String, Path, description = "Process id")),
+    responses(
+        (status = 200, description = "Paginated catalogue entries", body = serde_json::Value),
+        (status = 400, description = "Invalid query", body = ErrorResponse),
+    ),
+    tag = "processes",
+)]
 pub async fn get_process_artifacts(
     State(state): State<AppState>,
     Path(process_id): Path<String>,
@@ -223,6 +324,15 @@ pub async fn get_process_artifacts(
 /// where each task is a `HumanTask`-shaped JSON object (see `to_human_task_json`).
 /// The `tasks` key is what the Mekhan frontend's task store expects; the rest
 /// of the pagination envelope is preserved for richer clients.
+#[utoipa::path(
+    get,
+    path = "/api/tasks",
+    responses(
+        (status = 200, description = "Paginated tasks (HumanTask-shaped) in `tasks` envelope", body = serde_json::Value),
+        (status = 400, description = "Invalid query", body = ErrorResponse),
+    ),
+    tag = "tasks",
+)]
 pub async fn list_tasks(
     State(state): State<AppState>,
     params: QueryParams,
@@ -259,6 +369,17 @@ pub async fn list_tasks(
 /// JSONB projected by the causality consumer. This includes `task_id`, `steps`,
 /// `instructions_mdsvex`, `net_id`, `place`, etc. — everything the frontend
 /// task form needs to render.
+#[utoipa::path(
+    get,
+    path = "/api/tasks/{id}",
+    params(("id" = String, Path, description = "Task id")),
+    responses(
+        (status = 200, description = "HumanTask-shaped JSON object", body = serde_json::Value),
+        (status = 404, description = "Task not found"),
+        (status = 500, description = "Server error", body = ErrorResponse),
+    ),
+    tag = "tasks",
+)]
 pub async fn get_task(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -273,7 +394,20 @@ pub async fn get_task(
     }
 }
 
-/// POST /api/tasks/:id/complete — complete a task and publish NATS signal.
+/// POST /api/tasks/{id}/complete — complete a task and publish NATS signal.
+#[utoipa::path(
+    post,
+    path = "/api/tasks/{id}/complete",
+    params(("id" = String, Path, description = "Task id")),
+    request_body(content = serde_json::Value, description = "Completion payload — `data` field is forwarded as the task result"),
+    responses(
+        (status = 200, description = "Task completed", body = serde_json::Value),
+        (status = 404, description = "Task not found"),
+        (status = 409, description = "Task is not pending", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse),
+    ),
+    tag = "tasks",
+)]
 pub async fn complete_task(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -331,7 +465,20 @@ pub async fn complete_task(
     Json(to_human_task_json(&updated)).into_response()
 }
 
-/// POST /api/tasks/:id/cancel — cancel a task and publish NATS signal.
+/// POST /api/tasks/{id}/cancel — cancel a task and publish NATS signal.
+#[utoipa::path(
+    post,
+    path = "/api/tasks/{id}/cancel",
+    params(("id" = String, Path, description = "Task id")),
+    request_body(content = serde_json::Value, description = "Optional `reason` field"),
+    responses(
+        (status = 200, description = "Task cancelled", body = serde_json::Value),
+        (status = 404, description = "Task not found"),
+        (status = 409, description = "Task is not pending", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse),
+    ),
+    tag = "tasks",
+)]
 pub async fn cancel_task(
     State(state): State<AppState>,
     Path(id): Path<String>,

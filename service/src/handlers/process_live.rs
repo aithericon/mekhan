@@ -25,13 +25,15 @@ use chrono::{DateTime, Utc};
 use futures::stream::Stream;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
+use utoipa::{IntoParams, ToSchema};
 
 use crate::causality::live::{LiveArtifactEvent, LiveLogEvent, LiveMetricEvent};
+use crate::models::error::ErrorResponse;
 use crate::AppState;
 
 // ─── metrics/series (DB backfill with adaptive downsampling) ───────────────
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, IntoParams)]
 pub struct MetricsSeriesQuery {
     /// Comma-separated metric keys.
     #[serde(default)]
@@ -47,13 +49,13 @@ fn default_max_points() -> i64 {
     2000
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct MetricPoint {
     pub t: DateTime<Utc>,
     pub v: f64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct MetricsSeriesResponse {
     /// Seconds per bucket (0 = raw rows).
     pub bucket_seconds: i64,
@@ -82,6 +84,19 @@ fn choose_bucket_seconds(window_seconds: i64, max_points: i64) -> i64 {
     86400
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/processes/{process_id}/metrics/series",
+    params(
+        ("process_id" = String, Path, description = "Process id"),
+        MetricsSeriesQuery,
+    ),
+    responses(
+        (status = 200, description = "Backfilled metric series (adaptive bucket when window > max_points)", body = MetricsSeriesResponse),
+        (status = 500, description = "Server error", body = ErrorResponse),
+    ),
+    tag = "processes-live",
+)]
 pub async fn metrics_series(
     State(state): State<AppState>,
     Path(process_id): Path<String>,
@@ -193,7 +208,7 @@ pub async fn metrics_series(
 
 // ─── metrics/stream (SSE) ───────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, IntoParams)]
 pub struct MetricsStreamQuery {
     #[serde(default)]
     pub since_seq: Option<u64>,
@@ -202,6 +217,20 @@ pub struct MetricsStreamQuery {
     pub keys: Option<String>,
 }
 
+/// SSE: emits `connected`, optional `gap`/`resync`, then `metric` events
+/// whose `data` field is a JSON-stringified `LiveMetricEvent`.
+#[utoipa::path(
+    get,
+    path = "/api/processes/{process_id}/metrics/stream",
+    params(
+        ("process_id" = String, Path, description = "Process id"),
+        MetricsStreamQuery,
+    ),
+    responses(
+        (status = 200, description = "SSE stream of metric events", content_type = "text/event-stream"),
+    ),
+    tag = "processes-live",
+)]
 pub async fn metrics_stream(
     State(state): State<AppState>,
     Path(process_id): Path<String>,
@@ -314,7 +343,7 @@ fn metric_event_to_sse(e: &LiveMetricEvent) -> Event {
 
 // ─── logs/tail (DB backfill) ────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, IntoParams)]
 pub struct LogsTailQuery {
     pub since: Option<DateTime<Utc>>,
     pub until: Option<DateTime<Utc>>,
@@ -329,7 +358,7 @@ fn default_log_limit() -> i64 {
     500
 }
 
-#[derive(Debug, Serialize, sqlx::FromRow)]
+#[derive(Debug, Serialize, sqlx::FromRow, ToSchema)]
 pub struct LogRow {
     pub id: i64,
     pub process_id: String,
@@ -341,6 +370,19 @@ pub struct LogRow {
     pub signal_key: Option<String>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/processes/{process_id}/logs/tail",
+    params(
+        ("process_id" = String, Path, description = "Process id"),
+        LogsTailQuery,
+    ),
+    responses(
+        (status = 200, description = "Recent log rows wrapped in `{ logs: [...] }`", body = serde_json::Value),
+        (status = 500, description = "Server error", body = ErrorResponse),
+    ),
+    tag = "processes-live",
+)]
 pub async fn logs_tail(
     State(state): State<AppState>,
     Path(process_id): Path<String>,
@@ -387,7 +429,7 @@ pub async fn logs_tail(
 
 // ─── logs/stream (SSE) ──────────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, IntoParams)]
 pub struct LogsStreamQuery {
     #[serde(default)]
     pub since_seq: Option<u64>,
@@ -396,6 +438,19 @@ pub struct LogsStreamQuery {
     pub q: Option<String>,
 }
 
+/// SSE: emits `log` events whose `data` field is a JSON-stringified `LiveLogEvent`.
+#[utoipa::path(
+    get,
+    path = "/api/processes/{process_id}/logs/stream",
+    params(
+        ("process_id" = String, Path, description = "Process id"),
+        LogsStreamQuery,
+    ),
+    responses(
+        (status = 200, description = "SSE stream of log events", content_type = "text/event-stream"),
+    ),
+    tag = "processes-live",
+)]
 pub async fn logs_stream(
     State(state): State<AppState>,
     Path(process_id): Path<String>,
@@ -516,7 +571,7 @@ fn parse_csv(s: Option<&str>) -> Vec<String> {
     .unwrap_or_default()
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, IntoParams)]
 pub struct ArtifactsListQuery {
     /// Comma-separated category whitelist. Empty = all.
     pub categories: Option<String>,
@@ -533,6 +588,19 @@ fn default_artifact_limit() -> i64 {
     200
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/processes/{process_id}/artifacts/list",
+    params(
+        ("process_id" = String, Path, description = "Process id"),
+        ArtifactsListQuery,
+    ),
+    responses(
+        (status = 200, description = "Recent artifacts wrapped in `{ entries: [...] }`", body = serde_json::Value),
+        (status = 500, description = "Server error", body = ErrorResponse),
+    ),
+    tag = "processes-live",
+)]
 pub async fn artifacts_list(
     State(state): State<AppState>,
     Path(process_id): Path<String>,
@@ -565,7 +633,7 @@ pub async fn artifacts_list(
 
 // ─── artifacts/stream (SSE) ─────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, IntoParams)]
 pub struct ArtifactsStreamQuery {
     #[serde(default)]
     pub since_seq: Option<u64>,
@@ -600,6 +668,19 @@ fn artifact_matches(
     true
 }
 
+/// SSE: emits `artifact` events whose `data` field is a JSON-stringified `LiveArtifactEvent`.
+#[utoipa::path(
+    get,
+    path = "/api/processes/{process_id}/artifacts/stream",
+    params(
+        ("process_id" = String, Path, description = "Process id"),
+        ArtifactsStreamQuery,
+    ),
+    responses(
+        (status = 200, description = "SSE stream of artifact events", content_type = "text/event-stream"),
+    ),
+    tag = "processes-live",
+)]
 pub async fn artifacts_stream(
     State(state): State<AppState>,
     Path(process_id): Path<String>,

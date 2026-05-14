@@ -6,13 +6,16 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
+use utoipa::{IntoParams, ToSchema};
 
 use crate::catalogue::model::CatalogueEntry;
+use crate::models::error::ErrorResponse;
 use crate::process::model::{HpiLog, HpiMetric, HpiTask};
 use crate::AppState;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, IntoParams)]
 pub struct ProvenanceParams {
+    /// Max ancestry depth (clamped to [1, 50]; default 10).
     #[serde(default = "default_depth")]
     pub depth: i32,
 }
@@ -21,7 +24,7 @@ fn default_depth() -> i32 {
     10
 }
 
-#[derive(Debug, Serialize, FromRow)]
+#[derive(Debug, Serialize, FromRow, ToSchema)]
 pub struct AncestryNode {
     pub depth: i32,
     pub net_id: String,
@@ -37,7 +40,7 @@ pub struct AncestryNode {
 }
 
 /// Explicit cross-net edge resolved from causality_cross_links.
-#[derive(Debug, Serialize, FromRow)]
+#[derive(Debug, Serialize, FromRow, ToSchema)]
 pub struct CrossNetEdge {
     pub signal_key: String,
     pub egress_net: String,
@@ -48,7 +51,7 @@ pub struct CrossNetEdge {
 }
 
 /// Full provenance response: ancestry nodes + explicit cross-net edges.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ProvenanceResponse {
     pub nodes: Vec<AncestryNode>,
     pub cross_net_edges: Vec<CrossNetEdge>,
@@ -58,6 +61,20 @@ pub struct ProvenanceResponse {
 ///
 /// Recursive CTE walking token ancestry: for a given token, find which events
 /// produced it, what tokens those events consumed, and recurse.
+#[utoipa::path(
+    get,
+    path = "/api/provenance/{net_id}/{token_id}",
+    params(
+        ("net_id" = String, Path, description = "Net id"),
+        ("token_id" = String, Path, description = "Token id to walk ancestry from"),
+        ProvenanceParams,
+    ),
+    responses(
+        (status = 200, description = "Ancestry nodes + cross-net edges", body = ProvenanceResponse),
+        (status = 500, description = "Server error", body = ErrorResponse),
+    ),
+    tag = "provenance",
+)]
 pub async fn token_provenance(
     State(state): State<AppState>,
     Path((net_id, token_id)): Path<(String, String)>,
@@ -74,7 +91,7 @@ pub async fn token_provenance(
     }
 }
 
-#[derive(Debug, Serialize, FromRow)]
+#[derive(Debug, Serialize, FromRow, ToSchema)]
 pub struct CrossLink {
     pub signal_key: String,
     pub egress_net: Option<String>,
@@ -87,6 +104,17 @@ pub struct CrossLink {
 /// GET /api/provenance/link/{signal_key}
 ///
 /// Look up a cross-net bridge link by signal_key.
+#[utoipa::path(
+    get,
+    path = "/api/provenance/link/{signal_key}",
+    params(("signal_key" = String, Path, description = "Signal key identifying the bridge")),
+    responses(
+        (status = 200, description = "Cross-net link", body = CrossLink),
+        (status = 404, description = "Signal key not found"),
+        (status = 500, description = "Server error", body = ErrorResponse),
+    ),
+    tag = "provenance",
+)]
 pub async fn cross_link(
     State(state): State<AppState>,
     Path(signal_key): Path<String>,
@@ -115,6 +143,21 @@ pub async fn cross_link(
 /// Resolves a catalogue entry to its producing token and returns the full
 /// ancestry chain. Uses `source_event_sequence` for direct lookup when
 /// available, falling back to signal_key → cross-link resolution.
+#[utoipa::path(
+    get,
+    path = "/api/provenance/from-artifact/{execution_id}/{artifact_id}",
+    params(
+        ("execution_id" = String, Path, description = "Execution id from the catalogue entry"),
+        ("artifact_id" = String, Path, description = "Catalogue entry id"),
+        ProvenanceParams,
+    ),
+    responses(
+        (status = 200, description = "Ancestry walked back from the producing token", body = ProvenanceResponse),
+        (status = 404, description = "Catalogue entry not found"),
+        (status = 500, description = "Server error", body = ErrorResponse),
+    ),
+    tag = "provenance",
+)]
 pub async fn provenance_from_artifact(
     State(state): State<AppState>,
     Path((execution_id, artifact_id)): Path<(String, String)>,
@@ -409,7 +452,7 @@ async fn phase1_cte(
 
 // ── Event detail ──────────────────────────────────────────────────────────
 
-#[derive(Debug, Serialize, FromRow)]
+#[derive(Debug, Serialize, FromRow, ToSchema)]
 pub struct TokenInfo {
     pub token_id: String,
     pub role: String,
@@ -420,20 +463,20 @@ pub struct TokenInfo {
     pub data: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct BridgeTarget {
     pub target_net: String,
     pub target_place: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct SignalDispatch {
     pub dispatch_net: String,
     pub dispatch_seq: i64,
     pub signal_key: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct EventDetail {
     pub net_id: String,
     pub event_seq: i64,
@@ -462,6 +505,19 @@ pub struct EventDetail {
 /// Returns the full context for a causality event by joining to domain
 /// tables based on effect_handler. Enables rich detail views in the
 /// provenance DAG visualization.
+#[utoipa::path(
+    get,
+    path = "/api/provenance/{net_id}/{event_seq}/detail",
+    params(
+        ("net_id" = String, Path, description = "Net id"),
+        ("event_seq" = i64, Path, description = "Event sequence number within the net"),
+    ),
+    responses(
+        (status = 200, description = "Full event detail with related rows", body = EventDetail),
+        (status = 404, description = "Event not found"),
+    ),
+    tag = "provenance",
+)]
 pub async fn event_detail(
     State(state): State<AppState>,
     Path((net_id, event_seq)): Path<(String, i64)>,

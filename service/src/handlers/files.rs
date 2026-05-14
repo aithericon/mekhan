@@ -4,10 +4,32 @@ use axum::{
     response::IntoResponse,
     Json,
 };
+use serde::Serialize;
 use serde_json::json;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
+use crate::models::error::ErrorResponse;
 use crate::AppState;
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct FileUploadResponse {
+    pub key: String,
+    pub filename: String,
+    pub content_type: String,
+    pub size: usize,
+}
+
+/// Multipart body wrapper for spec documentation. The runtime extractor is
+/// `axum::extract::Multipart`; this struct only exists so the spec shows the
+/// expected field name and type.
+#[derive(Debug, ToSchema)]
+#[allow(dead_code)]
+pub struct MultipartFileUpload {
+    /// Binary file contents (one of the allowed mime types).
+    #[schema(value_type = String, format = Binary)]
+    pub file: Vec<u8>,
+}
 
 const ALLOWED_TYPES: &[&str] = &[
     "image/png",
@@ -30,6 +52,21 @@ const ALLOWED_TYPES: &[&str] = &[
 
 /// POST /api/files/upload/{id}/{node_id}
 /// Accepts multipart/form-data with a `file` field.
+#[utoipa::path(
+    post,
+    path = "/api/files/upload/{id}/{node_id}",
+    params(
+        ("id" = Uuid, Path, description = "Template id"),
+        ("node_id" = String, Path, description = "Workflow node id"),
+    ),
+    request_body(content = MultipartFileUpload, content_type = "multipart/form-data"),
+    responses(
+        (status = 201, description = "File uploaded; returns S3 key + metadata", body = FileUploadResponse),
+        (status = 400, description = "Invalid multipart or unsupported content type", body = ErrorResponse),
+        (status = 500, description = "Upload failed", body = ErrorResponse),
+    ),
+    tag = "files",
+)]
 pub async fn upload_file(
     State(state): State<AppState>,
     Path((template_id, node_id)): Path<(Uuid, String)>,
@@ -105,8 +142,18 @@ pub async fn upload_file(
     }
 }
 
-/// GET /api/files/{*key}
+/// GET /api/files/{key}
 /// Serves a file from S3 with the correct content type.
+#[utoipa::path(
+    get,
+    path = "/api/files/{key}",
+    params(("key" = String, Path, description = "S3 object key (templates/{template_id}/v{ver}/{node_id}/{filename})")),
+    responses(
+        (status = 200, description = "Binary file contents", content_type = "application/octet-stream"),
+        (status = 404, description = "File not found", body = ErrorResponse),
+    ),
+    tag = "files",
+)]
 pub async fn get_file(
     State(state): State<AppState>,
     Path(key): Path<String>,

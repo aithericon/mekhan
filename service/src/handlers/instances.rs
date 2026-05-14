@@ -7,6 +7,7 @@ use axum::{
 use serde_json::json;
 use uuid::Uuid;
 
+use crate::models::error::ErrorResponse;
 use crate::models::instance::{
     CreateInstanceRequest, EngineStatus, InstanceListItem, InstanceStateResponse,
     ListInstancesQuery, WorkflowInstance,
@@ -17,6 +18,19 @@ use crate::petri::instance::{deploy_instance, parameterize_air};
 use crate::AppState;
 
 /// POST /api/instances
+#[utoipa::path(
+    post,
+    path = "/api/instances",
+    request_body = CreateInstanceRequest,
+    responses(
+        (status = 201, description = "Instance created and deployed to engine", body = WorkflowInstance),
+        (status = 400, description = "Template not published", body = ErrorResponse),
+        (status = 404, description = "Template not found", body = ErrorResponse),
+        (status = 502, description = "Engine deploy failed", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse),
+    ),
+    tag = "instances",
+)]
 pub async fn create_instance(
     State(state): State<AppState>,
     Json(req): Json<CreateInstanceRequest>,
@@ -103,6 +117,15 @@ pub async fn create_instance(
 }
 
 /// GET /api/instances
+#[utoipa::path(
+    get,
+    path = "/api/instances",
+    params(ListInstancesQuery),
+    responses(
+        (status = 200, description = "Paginated list of instances", body = PaginatedResponse<InstanceListItem>),
+    ),
+    tag = "instances",
+)]
 pub async fn list_instances(
     State(state): State<AppState>,
     Query(params): Query<ListInstancesQuery>,
@@ -172,6 +195,17 @@ pub async fn list_instances(
 }
 
 /// GET /api/instances/:id
+#[utoipa::path(
+    get,
+    path = "/api/instances/{id}",
+    params(("id" = Uuid, Path, description = "Instance id")),
+    responses(
+        (status = 200, description = "Instance", body = WorkflowInstance),
+        (status = 404, description = "Instance not found", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse),
+    ),
+    tag = "instances",
+)]
 pub async fn get_instance(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
@@ -196,6 +230,17 @@ pub async fn get_instance(
 ///
 /// Returns instance state with marking projected from JetStream events (source
 /// of truth) and best-effort engine status for enabled transitions / run mode.
+#[utoipa::path(
+    get,
+    path = "/api/instances/{id}/state",
+    params(("id" = Uuid, Path, description = "Instance id")),
+    responses(
+        (status = 200, description = "Instance state with marking + engine status", body = InstanceStateResponse),
+        (status = 404, description = "Instance not found", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse),
+    ),
+    tag = "instances",
+)]
 pub async fn get_instance_state(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
@@ -279,6 +324,17 @@ pub async fn get_instance_state(
 /// GET /api/instances/:id/events
 ///
 /// Returns the full event log for an instance from JetStream.
+#[utoipa::path(
+    get,
+    path = "/api/instances/{id}/events",
+    params(("id" = Uuid, Path, description = "Instance id")),
+    responses(
+        (status = 200, description = "JetStream events for this instance (untyped envelope)", body = serde_json::Value),
+        (status = 404, description = "Instance not found", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse),
+    ),
+    tag = "instances",
+)]
 pub async fn get_instance_events(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
@@ -322,6 +378,17 @@ pub async fn get_instance_events(
 }
 
 /// DELETE /api/instances/:id
+#[utoipa::path(
+    delete,
+    path = "/api/instances/{id}",
+    params(("id" = Uuid, Path, description = "Instance id")),
+    responses(
+        (status = 200, description = "Instance cancelled", body = WorkflowInstance),
+        (status = 404, description = "Instance not found", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse),
+    ),
+    tag = "instances",
+)]
 pub async fn cancel_instance(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,

@@ -11,6 +11,18 @@ use futures::StreamExt;
 use crate::AppState;
 
 /// GET /api/tasks/stream — SSE endpoint for real-time task events from NATS.
+///
+/// Emits `{event, data}` lines for `task_created`, `task_completed`,
+/// `task_failed`, `task_cancelled`, `process_update`. `data` is the raw
+/// NATS payload as a JSON string (clients re-parse it).
+#[utoipa::path(
+    get,
+    path = "/api/tasks/stream",
+    responses(
+        (status = 200, description = "SSE stream of task lifecycle events", content_type = "text/event-stream"),
+    ),
+    tag = "tasks",
+)]
 pub async fn task_stream(
     State(state): State<AppState>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
