@@ -8,9 +8,9 @@ export type {
 	ProcessState,
 	ProcessStepDef,
 	ProcessTimelineEntry
-} from '@aithericon/hpi-ui/types';
+} from '$lib/hpi/types';
 
-import type { HumanTask } from '@aithericon/hpi-ui/types';
+import type { HumanTask } from '$lib/hpi/types';
 
 export type TaskStatus = 'pending' | 'completed' | 'cancelled' | 'failed';
 

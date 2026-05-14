@@ -2,7 +2,7 @@
 	// SPDX-License-Identifier: Apache-2.0
 	import { Button } from '$lib/components/ui/button';
 	import type { SignaturePadProps } from './types';
-	import type { SignatureValue } from '@aithericon/hpi-ui/types';
+	import type { SignatureValue } from '$lib/hpi/types';
 
 	let {
 		value = '',

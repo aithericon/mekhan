@@ -1,7 +1,7 @@
 <script lang="ts">
-	import type { HumanTask, TaskStep } from '@aithericon/hpi-ui/types';
-	import { BlockRenderer, FieldDisplay, ProcessBanner } from '@aithericon/hpi-ui';
-	import type { ProcessState } from '@aithericon/hpi-ui/types';
+	import type { HumanTask, TaskStep } from '$lib/hpi/types';
+	import { BlockRenderer, FieldDisplay, ProcessBanner } from '$lib/hpi';
+	import type { ProcessState } from '$lib/hpi/types';
 	import BlockChart from '$lib/components/ui/block-chart/block-chart.svelte';
 	import { Badge } from '$lib/components/ui/badge';
 	import Clock from '@lucide/svelte/icons/clock';

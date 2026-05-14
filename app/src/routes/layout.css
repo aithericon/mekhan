@@ -3,8 +3,6 @@
 @import 'tailwindcss';
 @import 'tw-animate-css';
 
-@source "../../node_modules/@aithericon/hpi-ui/dist";
-
 @custom-variant dark (&:is(.dark *));
 
 :root {
@@ -30,6 +28,14 @@
 	--warning-foreground: oklch(0.22 0.04 75);
 	--info: oklch(0.62 0.14 240);
 	--info-foreground: oklch(0.98 0.01 240);
+	--node-start: oklch(0.68 0.16 145);
+	--node-end: oklch(0.62 0.19 25);
+	--node-decision: oklch(0.78 0.16 75);
+	--node-human-task: oklch(0.62 0.14 240);
+	--node-loop: oklch(0.70 0.17 350);
+	--node-scope: oklch(0.62 0.03 250);
+	--node-parallel: oklch(0.72 0.12 200);
+	--node-automated: oklch(0.62 0.16 290);
 	--border: oklch(0.82 0.02 250);
 	--input: oklch(0.92 0.01 250);
 	--ring: oklch(0.55 0.12 245);
@@ -64,6 +70,14 @@
 	--color-warning-foreground: var(--warning-foreground);
 	--color-info: var(--info);
 	--color-info-foreground: var(--info-foreground);
+	--color-node-start: var(--node-start);
+	--color-node-end: var(--node-end);
+	--color-node-decision: var(--node-decision);
+	--color-node-human-task: var(--node-human-task);
+	--color-node-loop: var(--node-loop);
+	--color-node-scope: var(--node-scope);
+	--color-node-parallel: var(--node-parallel);
+	--color-node-automated: var(--node-automated);
 	--color-border: var(--border);
 	--color-input: var(--input);
 	--color-ring: var(--ring);

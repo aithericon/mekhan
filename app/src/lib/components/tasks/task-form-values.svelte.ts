@@ -1,5 +1,5 @@
 import { CalendarDate } from '@internationalized/date';
-import type { TaskField, TaskStep } from '@aithericon/hpi-ui/types';
+import type { TaskField, TaskStep } from '$lib/hpi/types';
 
 export type UploadedFile = { url: string; name: string; size: number; type: string };
 

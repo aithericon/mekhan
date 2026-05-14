@@ -25,7 +25,13 @@ import { fileURLToPath } from 'node:url';
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(SCRIPT_DIR, '..', 'src');
 const REPO = join(SCRIPT_DIR, '..');
-const UI_DIR = join(ROOT, 'lib', 'components', 'ui') + sep;
+// Directories holding vendored / primitive UI code that the guardrail
+// intentionally exempts. Feature code outside these trees must use the
+// primitives + theme tokens.
+const EXEMPT_PREFIXES = [
+	join(ROOT, 'lib', 'components', 'ui') + sep,
+	join(ROOT, 'lib', 'hpi') + sep,
+];
 const BASELINE_PATH = join(SCRIPT_DIR, 'lint-ui.baseline.json');
 
 const PALETTE_FAMILIES = [
@@ -70,7 +76,7 @@ function lineAllowed(lines, idx) {
 const violations = [];
 
 for (const file of walk(ROOT)) {
-	if (file.startsWith(UI_DIR)) continue;
+	if (EXEMPT_PREFIXES.some((prefix) => file.startsWith(prefix))) continue;
 	const text = readFileSync(file, 'utf8');
 	const lines = text.split('\n');
 	const rel = relative(REPO, file);

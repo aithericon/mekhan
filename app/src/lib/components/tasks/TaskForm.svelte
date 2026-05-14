@@ -1,6 +1,6 @@
 <script lang="ts">
-	import type { TaskStep, TaskField } from '@aithericon/hpi-ui/types';
-	import { BlockRenderer } from '@aithericon/hpi-ui';
+	import type { TaskStep, TaskField } from '$lib/hpi/types';
+	import { BlockRenderer } from '$lib/hpi';
 	import BlockChart from '$lib/components/ui/block-chart/block-chart.svelte';
 	import * as Select from '$lib/components/ui/select';
 	import { Input } from '$lib/components/ui/input';

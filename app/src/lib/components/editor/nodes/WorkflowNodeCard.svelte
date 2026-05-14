@@ -1,0 +1,141 @@
+<script lang="ts" module>
+	import { type VariantProps, tv } from 'tailwind-variants';
+
+	export type WorkflowNodeKind =
+		| 'start'
+		| 'end'
+		| 'decision'
+		| 'human-task'
+		| 'loop'
+		| 'scope'
+		| 'parallel'
+		| 'automated';
+
+	// tailwind-variants with explicit per-kind classes — Tailwind's JIT
+	// scanner can't expand `border-node-${kind}` dynamically.
+	export const workflowNodeCardVariants = tv({
+		base: 'rounded-xl border-2 shadow-sm transition-shadow bg-gradient-to-br',
+		variants: {
+			kind: {
+				'start':       'from-node-start/10       to-node-start/25       border-node-start/60',
+				'end':         'from-node-end/10         to-node-end/25         border-node-end/60',
+				'decision':    'from-node-decision/10    to-node-decision/25    border-node-decision/60',
+				'human-task':  'from-node-human-task/10  to-node-human-task/25  border-node-human-task/60',
+				'loop':        'from-node-loop/10        to-node-loop/25        border-node-loop/60',
+				'scope':       'from-node-scope/5        to-node-scope/15       border-node-scope/60',
+				'parallel':    'from-node-parallel/10    to-node-parallel/25    border-node-parallel/60',
+				'automated':   'from-node-automated/10   to-node-automated/25   border-node-automated/60',
+			},
+			selected: {
+				true: 'shadow-md',
+				false: '',
+			},
+		},
+		compoundVariants: [
+			{ kind: 'start',      selected: true, class: 'border-node-start' },
+			{ kind: 'end',        selected: true, class: 'border-node-end' },
+			{ kind: 'decision',   selected: true, class: 'border-node-decision' },
+			{ kind: 'human-task', selected: true, class: 'border-node-human-task' },
+			{ kind: 'loop',       selected: true, class: 'border-node-loop' },
+			{ kind: 'scope',      selected: true, class: 'border-node-scope' },
+			{ kind: 'parallel',   selected: true, class: 'border-node-parallel' },
+			{ kind: 'automated',  selected: true, class: 'border-node-automated' },
+		],
+		defaultVariants: {
+			kind: 'start',
+			selected: false,
+		},
+	});
+
+	// Per-kind classes for the icon chip background. Same JIT-expansion
+	// constraint applies — keep them as full literals.
+	const ICON_BG: Record<WorkflowNodeKind, string> = {
+		'start':       'bg-node-start',
+		'end':         'bg-node-end',
+		'decision':    'bg-node-decision',
+		'human-task':  'bg-node-human-task',
+		'loop':        'bg-node-loop',
+		'scope':       'bg-node-scope',
+		'parallel':    'bg-node-parallel',
+		'automated':   'bg-node-automated',
+	};
+
+	const HEADER_BORDER: Record<WorkflowNodeKind, string> = {
+		'start':       'border-node-start/30',
+		'end':         'border-node-end/30',
+		'decision':    'border-node-decision/30',
+		'human-task':  'border-node-human-task/30',
+		'loop':        'border-node-loop/30',
+		'scope':       'border-node-scope/30',
+		'parallel':    'border-node-parallel/30',
+		'automated':   'border-node-automated/30',
+	};
+
+	const HANDLE_BORDER: Record<WorkflowNodeKind, string> = {
+		'start':       '!border-node-start',
+		'end':         '!border-node-end',
+		'decision':    '!border-node-decision',
+		'human-task':  '!border-node-human-task',
+		'loop':        '!border-node-loop',
+		'scope':       '!border-node-scope',
+		'parallel':    '!border-node-parallel',
+		'automated':   '!border-node-automated',
+	};
+
+	export function workflowNodeIconBg(kind: WorkflowNodeKind): string {
+		return ICON_BG[kind];
+	}
+
+	export function workflowNodeHandleClass(kind: WorkflowNodeKind): string {
+		return `!h-3 !w-3 !border-2 !bg-card ${HANDLE_BORDER[kind]}`;
+	}
+
+	export type WorkflowNodeCardVariant = VariantProps<typeof workflowNodeCardVariants>;
+</script>
+
+<script lang="ts">
+	import { cn } from '$lib/utils';
+	import type { Component, Snippet } from 'svelte';
+
+	let {
+		kind,
+		icon,
+		label,
+		selected = false,
+		body,
+		class: className,
+		'data-testid': dataTestid,
+	}: {
+		kind: WorkflowNodeKind;
+		icon: Component<{ class?: string }>;
+		label: string;
+		selected?: boolean;
+		body?: Snippet;
+		class?: string;
+		'data-testid'?: string;
+	} = $props();
+
+	const Icon = $derived(icon);
+</script>
+
+<div
+	class={cn(workflowNodeCardVariants({ kind, selected }), className)}
+	data-testid={dataTestid}
+>
+	<div
+		class={cn(
+			'flex items-center gap-2 px-3 py-2',
+			body ? `border-b ${HEADER_BORDER[kind]}` : '',
+		)}
+	>
+		<div class={cn('flex size-6 items-center justify-center rounded-md', ICON_BG[kind])}>
+			<Icon class="size-3.5 text-white" />
+		</div>
+		<span class="text-sm font-medium text-foreground">{label}</span>
+	</div>
+	{#if body}
+		<div class="px-3 py-2 text-[11px] text-muted-foreground">
+			{@render body()}
+		</div>
+	{/if}
+</div>
