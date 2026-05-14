@@ -125,6 +125,10 @@ pub enum CompileError {
         field: String,
         message: String,
     },
+
+    /// Phase 5b: invalid cron schedule (bad cron string or unknown IANA tz).
+    #[error("trigger '{node_id}': invalid cron schedule: {message}")]
+    TriggerCronInvalid { node_id: String, message: String },
 }
 
 impl CompileError {
@@ -144,6 +148,7 @@ impl CompileError {
             Self::TriggerIsEdgeTarget { .. } => "trigger_is_edge_target",
             Self::TriggerUnknownTargetField { .. } => "trigger_unknown_target_field",
             Self::TriggerMappingSyntax { .. } => "trigger_mapping_syntax",
+            Self::TriggerCronInvalid { .. } => "trigger_cron_invalid",
         }
     }
 
@@ -169,7 +174,8 @@ impl CompileError {
             Self::TriggerEdgeCardinality { node_id, .. }
             | Self::TriggerIsEdgeTarget { node_id, .. }
             | Self::TriggerUnknownTargetField { node_id, .. }
-            | Self::TriggerMappingSyntax { node_id, .. } => Some(node_id),
+            | Self::TriggerMappingSyntax { node_id, .. }
+            | Self::TriggerCronInvalid { node_id, .. } => Some(node_id),
             _ => None,
         }
     }
@@ -814,11 +820,24 @@ fn validate_triggers(graph: &WorkflowGraph) -> Result<(), CompileError> {
     // targets exist on the resolved port, expressions parse.
     for node in &graph.nodes {
         let WorkflowNodeData::Trigger {
-            payload_mapping, ..
+            payload_mapping,
+            source,
+            ..
         } = &node.data
         else {
             continue;
         };
+
+        // Per-source validation. Phase 5b ships cron parsing; other sources'
+        // checks land alongside their dispatcher wiring (5c–5e).
+        if let crate::models::template::TriggerSource::Cron(cron) = source {
+            if let Err(msg) = crate::triggers::sources::cron::parse_cron(cron) {
+                return Err(CompileError::TriggerCronInvalid {
+                    node_id: node.id.clone(),
+                    message: msg,
+                });
+            }
+        }
 
         let outgoing: Vec<&WorkflowEdge> = graph
             .edges

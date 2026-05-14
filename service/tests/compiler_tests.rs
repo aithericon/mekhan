@@ -2249,3 +2249,66 @@ fn trigger_payload_mapping_rejects_invalid_rhai() {
         "unexpected error: {err}"
     );
 }
+
+#[test]
+fn trigger_cron_invalid_schedule_fails() {
+    use mekhan_service::models::template::{CronCatchup, CronTrigger, TriggerSource};
+    let mut trig = trigger_node(
+        "t",
+        TriggerSource::Cron(CronTrigger {
+            schedule: "not a real cron".to_string(),
+            timezone: "UTC".to_string(),
+            jitter_secs: 0,
+            catchup: CronCatchup::SkipMissed,
+        }),
+    );
+    if let WorkflowNodeData::Trigger {
+        ref mut payload_mapping,
+        ..
+    } = trig.data
+    {
+        *payload_mapping = vec![];
+    }
+    let graph = WorkflowGraph {
+        nodes: vec![start_node("s"), end_node("e"), trig],
+        edges: vec![
+            edge("e1", "s", "e"),
+            edge_with_handle("te", "t", "s", "in"),
+        ],
+        viewport: None,
+    };
+    let err = compile_to_air(&graph, "", "", &Default::default())
+        .expect_err("bad cron should fail");
+    assert!(
+        err.to_string().contains("invalid cron"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn trigger_cron_invalid_timezone_fails() {
+    use mekhan_service::models::template::{CronCatchup, CronTrigger, TriggerSource};
+    let trig = trigger_node(
+        "t",
+        TriggerSource::Cron(CronTrigger {
+            schedule: "0 0 9 * * *".to_string(),
+            timezone: "Not/A/Real/Zone".to_string(),
+            jitter_secs: 0,
+            catchup: CronCatchup::SkipMissed,
+        }),
+    );
+    let graph = WorkflowGraph {
+        nodes: vec![start_node("s"), end_node("e"), trig],
+        edges: vec![
+            edge("e1", "s", "e"),
+            edge_with_handle("te", "t", "s", "in"),
+        ],
+        viewport: None,
+    };
+    let err = compile_to_air(&graph, "", "", &Default::default())
+        .expect_err("bad timezone should fail");
+    assert!(
+        err.to_string().contains("invalid timezone"),
+        "unexpected error: {err}"
+    );
+}

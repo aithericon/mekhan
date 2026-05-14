@@ -2849,6 +2849,38 @@
         }
       }
     },
+    "/api/triggers/preview/cron": {
+      "post": {
+        "tags": [
+          "triggers"
+        ],
+        "summary": "POST /api/triggers/preview/cron",
+        "description": "Returns the next N fire times for a cron schedule. Used by the editor's\ntrigger inspector to show users when their cron will fire next without\nhaving to ship the workflow first.",
+        "operationId": "preview_cron",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CronPreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Upcoming fire times (or error)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CronPreviewResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/triggers/{node_id}/fire": {
       "post": {
         "tags": [
@@ -3466,6 +3498,48 @@
           "fire_missed",
           "skip_missed"
         ]
+      },
+      "CronPreviewRequest": {
+        "type": "object",
+        "required": [
+          "schedule"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Number of upcoming fire times to compute (clamped to 1..=10).",
+            "minimum": 0
+          },
+          "schedule": {
+            "type": "string"
+          },
+          "timezone": {
+            "type": "string"
+          }
+        }
+      },
+      "CronPreviewResponse": {
+        "type": "object",
+        "required": [
+          "upcoming"
+        ],
+        "properties": {
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Error message if the schedule or timezone is invalid; `upcoming` is\nempty when set."
+          },
+          "upcoming": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Upcoming fire times in RFC 3339 (UTC)."
+          }
+        }
       },
       "CronTrigger": {
         "type": "object",

@@ -902,6 +902,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/triggers/preview/cron": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * POST /api/triggers/preview/cron
+         * @description Returns the next N fire times for a cron schedule. Used by the editor's
+         *     trigger inspector to show users when their cron will fire next without
+         *     having to ship the workflow first.
+         */
+        post: operations["preview_cron"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/triggers/{node_id}/fire": {
         parameters: {
             query?: never;
@@ -1131,6 +1153,24 @@ export interface components {
         };
         /** @enum {string} */
         CronCatchup: "fire_missed" | "skip_missed";
+        CronPreviewRequest: {
+            /**
+             * Format: int32
+             * @description Number of upcoming fire times to compute (clamped to 1..=10).
+             */
+            count?: number;
+            schedule: string;
+            timezone?: string;
+        };
+        CronPreviewResponse: {
+            /**
+             * @description Error message if the schedule or timezone is invalid; `upcoming` is
+             *     empty when set.
+             */
+            error?: string | null;
+            /** @description Upcoming fire times in RFC 3339 (UTC). */
+            upcoming: string[];
+        };
         CronTrigger: {
             /** @description What to do after a service restart with missed fire windows. */
             catchup?: components["schemas"]["CronCatchup"];
@@ -4119,6 +4159,30 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TriggerListResponse"];
+                };
+            };
+        };
+    };
+    preview_cron: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CronPreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Upcoming fire times (or error) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CronPreviewResponse"];
                 };
             };
         };

@@ -82,6 +82,33 @@ pub struct TriggerHistoryResponse {
     pub history: Vec<FireResult>,
 }
 
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct CronPreviewRequest {
+    pub schedule: String,
+    #[serde(default = "default_tz")]
+    pub timezone: String,
+    /// Number of upcoming fire times to compute (clamped to 1..=10).
+    #[serde(default = "default_count")]
+    pub count: u32,
+}
+
+fn default_tz() -> String {
+    "UTC".to_string()
+}
+fn default_count() -> u32 {
+    5
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct CronPreviewResponse {
+    /// Upcoming fire times in RFC 3339 (UTC).
+    pub upcoming: Vec<String>,
+    /// Error message if the schedule or timezone is invalid; `upcoming` is
+    /// empty when set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 /// GET /api/triggers
 #[utoipa::path(
     get,
@@ -165,6 +192,49 @@ pub async fn trigger_history(
 ) -> Json<TriggerHistoryResponse> {
     let history = state.triggers.history_for(&node_id);
     Json(TriggerHistoryResponse { history })
+}
+
+/// POST /api/triggers/preview/cron
+///
+/// Returns the next N fire times for a cron schedule. Used by the editor's
+/// trigger inspector to show users when their cron will fire next without
+/// having to ship the workflow first.
+#[utoipa::path(
+    post,
+    path = "/api/triggers/preview/cron",
+    request_body = CronPreviewRequest,
+    responses(
+        (status = 200, description = "Upcoming fire times (or error)", body = CronPreviewResponse),
+    ),
+    tag = "triggers",
+)]
+pub async fn preview_cron(Json(req): Json<CronPreviewRequest>) -> Json<CronPreviewResponse> {
+    use crate::models::template::{CronCatchup, CronTrigger};
+    let count = req.count.clamp(1, 10) as usize;
+    let trigger = CronTrigger {
+        schedule: req.schedule,
+        timezone: req.timezone,
+        jitter_secs: 0,
+        catchup: CronCatchup::SkipMissed,
+    };
+    match crate::triggers::sources::cron::parse_cron(&trigger) {
+        Ok((schedule, tz)) => {
+            let now = chrono::Utc::now().with_timezone(&tz);
+            let upcoming: Vec<String> = schedule
+                .after(&now)
+                .take(count)
+                .map(|t| t.with_timezone(&chrono::Utc).to_rfc3339())
+                .collect();
+            Json(CronPreviewResponse {
+                upcoming,
+                error: None,
+            })
+        }
+        Err(msg) => Json(CronPreviewResponse {
+            upcoming: vec![],
+            error: Some(msg),
+        }),
+    }
 }
 
 fn map_trigger_error(e: TriggerError) -> ApiError {

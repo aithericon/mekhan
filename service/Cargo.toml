@@ -72,6 +72,11 @@ petgraph = "0.6"
 # resolution; we never evaluate guard scripts here.
 rhai = { version = "1.19", features = ["sync", "serde"] }
 
+# Cron schedule parsing for the trigger dispatcher (Phase 5b). `cron` is the
+# parser; `chrono-tz` provides IANA timezone resolution.
+cron = "0.12"
+chrono-tz = "0.10"
+
 # Petri-net domain types (events, marking, tokens)
 petri-domain = { path = "../engine/core-engine/crates/domain" }
 

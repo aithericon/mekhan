@@ -7,6 +7,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import Plus from '@lucide/svelte/icons/plus';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
+	import CronPreview from './CronPreview.svelte';
 
 	type FieldMapping = components['schemas']['FieldMapping'];
 
@@ -102,6 +103,7 @@
 					update('source', { ...source, timezone: (e.currentTarget as HTMLInputElement).value })}
 			/>
 		</FormField>
+		<CronPreview schedule={source.schedule} timezone={source.timezone ?? 'UTC'} />
 	{:else if source?.kind === 'webhook'}
 		<FormField label="Slug" for="trigger-slug">
 			<Input

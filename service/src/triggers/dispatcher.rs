@@ -435,18 +435,30 @@ impl TriggerDispatcher {
     }
 }
 
-/// Entry point spawned from `main`. Hydrates the dispatcher and (later) kicks
-/// off background source listeners. Returns the shared dispatcher so the
-/// caller can stash it in `AppState`.
+/// Entry point spawned from `main`. Hydrates the dispatcher and kicks off
+/// background source listeners. Returns the shared dispatcher so the caller
+/// can stash it in `AppState`.
 pub async fn start_trigger_dispatcher(
     db: PgPool,
     petri: PetriClient,
     nats: MekhanNats,
 ) -> Arc<TriggerDispatcher> {
-    let dispatcher = Arc::new(TriggerDispatcher::new(db, petri, nats));
+    let dispatcher = Arc::new(TriggerDispatcher::new(db, petri, nats.clone()));
     if let Err(e) = dispatcher.hydrate().await {
         tracing::warn!("trigger dispatcher initial hydrate failed: {e}");
     }
+
+    // Cron source (Phase 5b). The bucket is shared with future state stores —
+    // any source that needs persistence between restarts writes through it.
+    let kv = match nats.ensure_trigger_state_kv().await {
+        Ok(kv) => Some(kv),
+        Err(e) => {
+            tracing::warn!("TRIGGER_STATE KV unavailable, cron catch-up disabled: {e}");
+            None
+        }
+    };
+    crate::triggers::sources::cron::register_all(dispatcher.clone(), kv).await;
+
     dispatcher
 }
 

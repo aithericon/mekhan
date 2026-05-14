@@ -11,4 +11,5 @@
 //! `TriggerDispatcher::fire`. They share the dispatcher's fire path so payload
 //! mapping, concurrency policy, and history accounting all happen in one place.
 
+pub mod cron;
 pub mod manual;

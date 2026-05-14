@@ -135,6 +135,23 @@ impl MekhanNats {
         Ok(kv)
     }
 
+    /// Ensure the TRIGGER_STATE KV bucket exists. Used by the cron source for
+    /// last-fire timestamps and by future sources (catalog dedup, etc.) that
+    /// need to survive restarts.
+    pub async fn ensure_trigger_state_kv(
+        &self,
+    ) -> Result<async_nats::jetstream::kv::Store, async_nats::Error> {
+        let kv = self
+            .jetstream
+            .create_key_value(jetstream::kv::Config {
+                bucket: "TRIGGER_STATE".into(),
+                history: 1,
+                ..Default::default()
+            })
+            .await?;
+        Ok(kv)
+    }
+
     /// Ensure the HUMAN_REQUESTS JetStream stream exists.
     pub async fn ensure_human_stream(&self) -> Result<(), async_nats::Error> {
         self.jetstream
