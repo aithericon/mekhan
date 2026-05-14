@@ -182,7 +182,7 @@ async fn spawn_causality_ingest(nats: &MekhanNats, db: &sqlx::PgPool) -> IngestH
     let sub_mgr = Arc::new(SubscriptionManager::new(kv, nats.jetstream().clone()));
     let live = LiveBroadcasts::new();
     let handle = tokio::spawn(async move {
-        start_causality_ingest(nats, db, sub_mgr, live).await;
+        start_causality_ingest(nats, db, sub_mgr, live, None).await;
     });
     // Give consumer time to subscribe
     tokio::time::sleep(Duration::from_millis(300)).await;

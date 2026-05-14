@@ -11,6 +11,7 @@ use crate::catalogue::model::CatalogueRegisterCommand;
 use crate::catalogue::subscriptions::SubscriptionManager;
 use crate::causality::live::LiveBroadcasts;
 use crate::nats::MekhanNats;
+use crate::triggers::TriggerDispatcher;
 
 /// Slim serde type for CrossNetTokenTransfer messages on `petri.bridge.>`.
 /// Avoids depending on `petri-nats` crate.
@@ -29,6 +30,7 @@ pub async fn start_causality_ingest(
     db: PgPool,
     subscription_manager: Arc<SubscriptionManager>,
     live: Arc<LiveBroadcasts>,
+    triggers: Option<Arc<TriggerDispatcher>>,
 ) {
     let consumer = match nats.causality_consumer().await {
         Ok(c) => c,
@@ -64,7 +66,15 @@ pub async fn start_causality_ingest(
             process_bridge_transfer(&db, subject, &msg.payload).await
         } else if subject.starts_with("petri.events.") {
             // Domain event: petri.events.{net_id}.{event_type...}
-            process_domain_event(&db, subject, &msg.payload, &subscription_manager, &live).await
+            process_domain_event(
+                &db,
+                subject,
+                &msg.payload,
+                &subscription_manager,
+                &live,
+                triggers.as_deref(),
+            )
+            .await
         } else {
             tracing::warn!("causality ingest: unexpected subject: {subject}");
             Ok(())
@@ -135,6 +145,7 @@ async fn process_domain_event(
     payload: &[u8],
     subscription_manager: &SubscriptionManager,
     live: &LiveBroadcasts,
+    triggers: Option<&TriggerDispatcher>,
 ) -> Result<(), sqlx::Error> {
     // Extract net_id from subject: petri.events.{net_id}.{event_type...}
     let net_id = match subject.split('.').nth(2) {
@@ -330,6 +341,7 @@ async fn process_domain_event(
                     ts,
                     subscription_manager,
                     live,
+                    triggers,
                 ).await?;
             }
 
@@ -1058,6 +1070,7 @@ async fn register_catalogue_entry(
     _ts: chrono::DateTime<chrono::Utc>,
     subscription_manager: &SubscriptionManager,
     live: &LiveBroadcasts,
+    triggers: Option<&TriggerDispatcher>,
 ) -> Result<(), sqlx::Error> {
     let cmd: CatalogueRegisterCommand = match serde_json::from_value(effect_result.clone()) {
         Ok(c) => c,
@@ -1192,6 +1205,15 @@ async fn register_catalogue_entry(
                     catalogued_at: Utc::now(),
                 };
                 let matched = subscription_manager.evaluate_new_artifact(&entry).await;
+
+                // Catalog triggers (Phase 5c): fire any static `Catalog`
+                // triggers whose filters match this entry. Static triggers
+                // coexist with the engine's runtime `catalogue_subscribe`
+                // effect — they share the same `CatalogueEntry` source of
+                // truth, just author it differently.
+                if let Some(dispatcher) = triggers {
+                    crate::triggers::sources::catalog::evaluate(dispatcher, &entry).await;
+                }
 
                 // Record egress-side cross-links for every matched subscription.
                 // The ingress side is filled in later by the TokenCreated handler

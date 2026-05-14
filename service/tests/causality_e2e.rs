@@ -330,7 +330,7 @@ async fn causality_full_pipeline() {
     let c_db = db.clone();
     let c_sub = sub_mgr.clone();
     let c_live = LiveBroadcasts::new();
-    let _causality = spawn_consumer(move || start_causality_ingest(c_nats, c_db, c_sub, c_live)).await;
+    let _causality = spawn_consumer(move || start_causality_ingest(c_nats, c_db, c_sub, c_live, None)).await;
 
     // Lifecycle listener
     let l_nats = nats.clone();

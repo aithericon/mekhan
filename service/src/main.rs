@@ -94,6 +94,19 @@ async fn main() -> anyhow::Result<()> {
     // Live broadcasts for SSE fan-out of metric/log events.
     let live = mekhan_service::causality::live::LiveBroadcasts::new();
 
+    // Trigger dispatcher — hydrates from every published template's
+    // graph_json on boot. Background sources (cron, catalog, lifecycle,
+    // webhook) hang off the same dispatcher in subsequent sub-phases.
+    // Created before the causality ingest so we can hand it through; the
+    // ingest hook fires catalog triggers on new artifacts.
+    let trigger_dispatcher = mekhan_service::triggers::start_trigger_dispatcher(
+        db.clone(),
+        petri.clone(),
+        mekhan_nats.clone(),
+    )
+    .await;
+    tracing::info!("trigger dispatcher ready");
+
     // Causality ingest (PETRI_GLOBAL domain events → causality tables)
     // Single projection path for processes, tasks, metrics, logs, and catalogue.
     tokio::spawn(mekhan_service::causality::ingest::start_causality_ingest(
@@ -101,6 +114,7 @@ async fn main() -> anyhow::Result<()> {
         db.clone(),
         subscription_manager.clone(),
         live.clone(),
+        Some(trigger_dispatcher.clone()),
     ));
 
     let catalogue_repo = Arc::new(PgCatalogueRepository::new(db.clone()));
@@ -111,17 +125,6 @@ async fn main() -> anyhow::Result<()> {
         catalogue_repo.clone(),
         subscription_manager.clone(),
     ));
-
-    // Trigger dispatcher — hydrates from every published template's
-    // graph_json on boot. Background sources (cron, catalog, lifecycle,
-    // webhook) hang off the same dispatcher in subsequent sub-phases.
-    let trigger_dispatcher = mekhan_service::triggers::start_trigger_dispatcher(
-        db.clone(),
-        petri.clone(),
-        mekhan_nats.clone(),
-    )
-    .await;
-    tracing::info!("trigger dispatcher ready");
 
     // Auth adapters — composition root chooses the implementation by config.
     let token_verifier = build_token_verifier(&config).await?;

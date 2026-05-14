@@ -104,6 +104,82 @@
 			/>
 		</FormField>
 		<CronPreview schedule={source.schedule} timezone={source.timezone ?? 'UTC'} />
+	{:else if source?.kind === 'catalog'}
+		<div class="space-y-1.5">
+			<div class="flex items-center justify-between">
+				<span class="text-xs font-medium text-muted-foreground">Filters (eq only)</span>
+				{#if !readonly}
+					<Button
+						variant="ghost"
+						size="sm"
+						onclick={() => {
+							const next = { ...(source.filters ?? {}) };
+							const key = `field${Object.keys(next).length + 1}`;
+							next[key] = { eq: '' };
+							update('source', { ...source, filters: next });
+						}}
+					>
+						<Plus class="size-3.5" />
+						Add
+					</Button>
+				{/if}
+			</div>
+			{#each Object.entries(source.filters ?? {}) as [field, ops] (field)}
+				<div class="flex items-center gap-1.5">
+					<Input
+						type="text"
+						value={field}
+						disabled={readonly}
+						placeholder="field"
+						oninput={(e) => {
+							const next = { ...(source.filters ?? {}) };
+							delete next[field];
+							next[(e.currentTarget as HTMLInputElement).value] = ops;
+							update('source', { ...source, filters: next });
+						}}
+					/>
+					<span class="text-[10px] text-muted-foreground">=</span>
+					<Input
+						type="text"
+						value={ops.eq ?? ''}
+						disabled={readonly}
+						placeholder="value"
+						oninput={(e) => {
+							const next = { ...(source.filters ?? {}) };
+							next[field] = { eq: (e.currentTarget as HTMLInputElement).value };
+							update('source', { ...source, filters: next });
+						}}
+					/>
+					{#if !readonly}
+						<Button
+							variant="ghost"
+							size="sm"
+							onclick={() => {
+								const next = { ...(source.filters ?? {}) };
+								delete next[field];
+								update('source', { ...source, filters: next });
+							}}
+							aria-label="Remove"
+						>
+							<Trash2 class="size-3.5" />
+						</Button>
+					{/if}
+				</div>
+			{/each}
+			<label class="flex items-center gap-2 pt-1">
+				<input
+					type="checkbox"
+					checked={source.backfill ?? false}
+					disabled={readonly}
+					onchange={(e) =>
+						update('source', {
+							...source,
+							backfill: (e.currentTarget as HTMLInputElement).checked
+						})}
+				/>
+				<span class="text-[11px]">Backfill on publish</span>
+			</label>
+		</div>
 	{:else if source?.kind === 'webhook'}
 		<FormField label="Slug" for="trigger-slug">
 			<Input
