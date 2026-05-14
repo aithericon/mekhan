@@ -11,12 +11,31 @@
  * `components['schemas'][...]` so changes to the Rust DTOs flow into TS
  * automatically.
  */
-import createClient from 'openapi-fetch';
+import createClient, { type Middleware } from 'openapi-fetch';
+import { auth } from '$lib/auth/store.svelte';
+import { authFetch } from '$lib/auth/fetch';
 import type { components, paths } from './schema';
 
 const API_BASE = '/api';
 
+/**
+ * openapi-fetch middleware that injects the active Bearer token on every
+ * request. Sourced from the auth store so silent renew and sign-out are
+ * picked up automatically. In dev-noop mode the token is empty — the
+ * backend's `NoopTokenVerifier` accepts that.
+ */
+const authMiddleware: Middleware = {
+	async onRequest({ request }) {
+		const token = auth.getAccessToken();
+		if (token) {
+			request.headers.set('Authorization', `Bearer ${token}`);
+		}
+		return request;
+	}
+};
+
 const client = createClient<paths>({ baseUrl: '' });
+client.use(authMiddleware);
 
 // ── Type aliases (schema-driven) ───────────────────────────────────────────
 
@@ -597,7 +616,7 @@ export async function uploadFile(
 	const formData = new FormData();
 	formData.append('file', file);
 
-	const res = await fetch(`${API_BASE}/files/upload/${templateId}/${nodeId}`, {
+	const res = await authFetch(`${API_BASE}/files/upload/${templateId}/${nodeId}`, {
 		method: 'POST',
 		body: formData
 	});
@@ -661,7 +680,7 @@ export async function getCrossLink(signalKey: string): Promise<CrossLink> {
 // responses are typed on the backend, fall back to plain fetch with the call
 // site asserting the shape.
 async function rawJson<T>(path: string, init?: RequestInit): Promise<T> {
-	const res = await fetch(`${API_BASE}${path}`, {
+	const res = await authFetch(`${API_BASE}${path}`, {
 		...init,
 		headers: { 'Content-Type': 'application/json', ...init?.headers }
 	});

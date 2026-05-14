@@ -44,8 +44,113 @@ services:
       - mekhan-rustfs-data:/data
       - mekhan-rustfs-logs:/logs
 
+  # ── Zitadel: local OIDC/SSO provider for the auth integration ────────────
+  # First-instance bootstrap creates:
+  #   - org "Mekhan"
+  #   - human admin   zitadel-admin@mekhan.localhost / Password1!
+  #   - machine admin zitadel-admin-sa (PAT written to ./deploy/zitadel/pat/)
+  # Run `deploy/zitadel/bootstrap.sh` once after `docker compose up -d` to
+  # create the OIDC application and write app/.env.local.
+  zitadel-db:
+    image: postgres:16-alpine
+    container_name: zitadel-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: zitadel
+    ports:
+      - "5440:5432"
+    volumes:
+      - zitadel-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  zitadel:
+    image: ghcr.io/zitadel/zitadel:v4.15.0
+    container_name: zitadel
+    restart: unless-stopped
+    # FirstInstance config (admin user, machine user, PAT path) is supplied
+    # via `--steps /zitadel-config/zitadel.yaml`. Database + external URL
+    # come from env so they're discoverable in `docker compose config`.
+    #
+    # Not publishing port 8080 to the host — `zitadel-proxy` (caddy) fronts
+    # the core API + the split-out login UI on a single host port.
+    command: >
+      start-from-init
+      --masterkey "MasterkeyNeedsToHave32Characters"
+      --tlsMode disabled
+      --steps /zitadel-config/zitadel.yaml
+    environment:
+      ZITADEL_DATABASE_POSTGRES_HOST: zitadel-db
+      ZITADEL_DATABASE_POSTGRES_PORT: 5432
+      ZITADEL_DATABASE_POSTGRES_DATABASE: zitadel
+      ZITADEL_DATABASE_POSTGRES_USER_USERNAME: postgres
+      ZITADEL_DATABASE_POSTGRES_USER_PASSWORD: postgres
+      ZITADEL_DATABASE_POSTGRES_USER_SSL_MODE: disable
+      ZITADEL_DATABASE_POSTGRES_ADMIN_USERNAME: postgres
+      ZITADEL_DATABASE_POSTGRES_ADMIN_PASSWORD: postgres
+      ZITADEL_DATABASE_POSTGRES_ADMIN_SSL_MODE: disable
+      ZITADEL_EXTERNALDOMAIN: localhost
+      ZITADEL_EXTERNALPORT: 8080
+      ZITADEL_EXTERNALSECURE: "false"
+      ZITADEL_TLS_ENABLED: "false"
+    expose:
+      - "8080"
+    depends_on:
+      zitadel-db:
+        condition: service_healthy
+    volumes:
+      - ./deploy/zitadel/pat:/pat
+      - ./deploy/zitadel/zitadel.yaml:/zitadel-config/zitadel.yaml:ro
+    healthcheck:
+      test: ["CMD", "/app/zitadel", "ready", "--config", "/app/configs/defaults.yaml"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  # Zitadel v4 split the login UI into its own Next.js container. It needs a
+  # PAT to call the core API for session management — we reuse the machine
+  # admin's PAT that FirstInstance writes to /pat.
+  zitadel-login:
+    image: ghcr.io/zitadel/zitadel-login:v4.15.0
+    container_name: zitadel-login
+    restart: unless-stopped
+    environment:
+      # Route the login UI's internal API calls back through caddy so the
+      # upstream `Host: localhost:8080` header matches Zitadel's
+      # ExternalDomain. Hitting `zitadel:8080` directly trips the instance
+      # resolver and returns "Instance not found".
+      ZITADEL_API_URL: "http://zitadel-proxy:8080"
+      ZITADEL_SERVICE_USER_TOKEN_FILE: /pat/zitadel-admin-sa.pat
+      NEXT_PUBLIC_BASE_PATH: "/ui/v2/login"
+    expose:
+      - "3000"
+    depends_on:
+      zitadel:
+        condition: service_healthy
+    volumes:
+      - ./deploy/zitadel/pat:/pat:ro
+
+  # Reverse proxy: routes /ui/v2/login/* to zitadel-login and everything else
+  # to zitadel core, so the whole stack appears on a single host port.
+  zitadel-proxy:
+    image: caddy:2-alpine
+    container_name: zitadel-proxy
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./deploy/zitadel/Caddyfile:/etc/caddy/Caddyfile:ro
+    depends_on:
+      - zitadel
+      - zitadel-login
+
 volumes:
   mekhan-pgdata:
   mekhan-natsdata:
   mekhan-rustfs-data:
   mekhan-rustfs-logs:
+  zitadel-pgdata:

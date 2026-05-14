@@ -6,6 +6,7 @@
  */
 
 import { listTasks } from '$lib/api/client';
+import { authFetch } from '$lib/auth/fetch';
 import type { HumanTask } from '$lib/types/tasks';
 
 const SSE_URL = '/api/tasks/stream';
@@ -50,7 +51,7 @@ export function createTaskStore() {
 
 		(async () => {
 			try {
-				const resp = await fetch(SSE_URL, { signal: controller.signal });
+				const resp = await authFetch(SSE_URL, { signal: controller.signal });
 				if (!resp.ok || !resp.body) {
 					throw new Error(`SSE connect failed: ${resp.status}`);
 				}

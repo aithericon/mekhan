@@ -1,0 +1,39 @@
+# Local-dev Zitadel config overlay.
+#
+# `start-from-init --steps /zitadel-config/zitadel.yaml` merges this on top
+# of Zitadel's built-in defaults. We only override `FirstInstance` so the
+# bootstrap script has a PAT to authenticate against the Management API.
+#
+# Never reuse these values in production.
+
+FirstInstance:
+  MachineKeyPath: /pat/zitadel-admin-sa.json
+  PatPath: /pat/zitadel-admin-sa.pat
+  InstanceName: "Mekhan"
+  DefaultLanguage: en
+  Org:
+    Name: "Mekhan"
+    Human:
+      UserName: zitadel-admin
+      FirstName: Mekhan
+      LastName: Admin
+      NickName: Admin
+      DisplayName: "Mekhan Admin"
+      Email:
+        Address: admin@mekhan.localhost
+        Verified: true
+      PreferredLanguage: en
+      Password: "Password1!"
+      PasswordChangeRequired: false
+    Machine:
+      Machine:
+        Username: zitadel-admin-sa
+        Name: "Mekhan Bootstrap"
+      MachineKey:
+        Type: 1   # 1 = JSON
+        ExpirationDate: 2099-01-01T00:00:00Z
+      Pat:
+        ExpirationDate: 2099-01-01T00:00:00Z
+        Scopes:
+          - openid
+          - urn:zitadel:iam:org:project:id:zitadel:aud

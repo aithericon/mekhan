@@ -11,6 +11,7 @@ use uuid::Uuid;
 
 use aithericon_executor_domain::InputSource;
 
+use crate::auth::AuthUser;
 use crate::compiler::compile_to_air;
 use crate::lifecycle::cleanup_net;
 use crate::models::error::ErrorResponse;
@@ -33,6 +34,7 @@ use crate::AppState;
 )]
 pub async fn create_template(
     State(state): State<AppState>,
+    user: AuthUser,
     Json(req): Json<CreateTemplateRequest>,
 ) -> impl IntoResponse {
     let id = Uuid::new_v4();
@@ -51,7 +53,7 @@ pub async fn create_template(
     .bind(&req.name)
     .bind(&description)
     .bind(&graph_json)
-    .bind(req.author_id)
+    .bind(user.subject_as_uuid())
     .fetch_one(&state.db)
     .await;
 

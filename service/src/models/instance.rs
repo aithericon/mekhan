@@ -68,7 +68,6 @@ pub struct InstanceListItem {
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateInstanceRequest {
     pub template_id: Uuid,
-    pub created_by: Uuid,
     #[serde(default)]
     pub metadata: Option<serde_json::Value>,
 }

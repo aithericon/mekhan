@@ -12,6 +12,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import ArrowLeft from '@lucide/svelte/icons/arrow-left';
 	import GitBranch from '@lucide/svelte/icons/git-branch';
+	import { authFetch } from '$lib/auth/fetch';
 
 	let ancestry = $state<AncestryNode[]>([]);
 	let crossNetEdges = $state<CrossNetEdge[]>([]);
@@ -38,7 +39,7 @@
 
 			// Also load the artifact metadata for the header
 			try {
-				const res = await fetch(`/api/catalogue/${encodeURIComponent(execId)}/${encodeURIComponent(artId)}`);
+				const res = await authFetch(`/api/catalogue/${encodeURIComponent(execId)}/${encodeURIComponent(artId)}`);
 				if (res.ok) {
 					artifact = await res.json();
 				}

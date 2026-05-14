@@ -3,13 +3,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use axum::{
     extract::{
         ws::{Message, WebSocket},
-        Path, State, WebSocketUpgrade,
+        Path, Query, State, WebSocketUpgrade,
     },
     http::StatusCode,
     response::IntoResponse,
     Json,
 };
 use futures::{SinkExt, StreamExt};
+use serde::Deserialize;
 use serde_json::json;
 use tokio::sync::mpsc;
 use uuid::Uuid;
@@ -20,12 +21,46 @@ use crate::AppState;
 /// Global client ID counter for uniquely identifying WebSocket connections.
 static NEXT_CLIENT_ID: AtomicU64 = AtomicU64::new(1);
 
+#[derive(Debug, Deserialize)]
+pub struct YjsAuthQuery {
+    /// Bearer token (same JWT used on HTTP routes). Browsers can't send the
+    /// Authorization header on WS upgrades, so it's threaded through the query
+    /// string. Validated against the same [`crate::auth::TokenVerifier`] port.
+    #[serde(default)]
+    pub token: Option<String>,
+}
+
 /// GET /api/yjs/{template_id} -> WebSocket upgrade
 pub async fn ws_handler(
     ws: WebSocketUpgrade,
     Path(template_id): Path<Uuid>,
+    Query(auth): Query<YjsAuthQuery>,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
+    // Pass the (possibly empty) token to the verifier and let the adapter
+    // decide — matches the HTTP middleware contract so tests with the noop
+    // verifier work without a token while real Zitadel deployments reject.
+    let token = auth.token.as_deref().unwrap_or("");
+    let claims = match state.token_verifier.verify(token).await {
+        Ok(claims) => claims,
+        Err(e) => {
+            tracing::debug!(template_id = %template_id, "yjs ws token rejected: {e}");
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({"error": "invalid token"})),
+            )
+                .into_response();
+        }
+    };
+    if let Err(e) = state.principal_resolver.resolve(claims).await {
+        tracing::debug!(template_id = %template_id, "yjs ws resolver rejected: {e}");
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"error": "invalid principal"})),
+        )
+            .into_response();
+    }
+
     // Verify the template exists. Published templates connect read-only so the
     // editor can render the frozen graph; writes are dropped in `handle_socket`.
     let existing = sqlx::query_as::<_, WorkflowTemplate>(

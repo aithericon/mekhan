@@ -40,3 +40,9 @@ result-*
 
 # Local dev stack runtime state (pidfiles, logs, executor work dir)
 .dev/
+
+# Local Zitadel bootstrap output (PAT secret + generated config)
+deploy/zitadel/pat/*.pat
+deploy/zitadel/pat/*.json
+mekhan.local.toml
+service/mekhan.local.toml

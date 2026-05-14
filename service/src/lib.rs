@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+pub mod auth;
 pub mod catalogue;
 pub mod causality;
 pub mod compiler;
@@ -23,17 +24,19 @@ use std::path::PathBuf;
 
 use axum::{
     extract::DefaultBodyLimit,
+    http::{header, HeaderValue, Method},
     routing::get,
     Router,
 };
 use sqlx::PgPool;
-use tower_http::cors::CorsLayer;
+use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 use utoipa::OpenApi;
 use utoipa_axum::{router::OpenApiRouter, routes};
 use utoipa_swagger_ui::SwaggerUi;
 
+use crate::auth::{PrincipalResolver, TokenVerifier};
 use crate::catalogue::repository::CatalogueRepository;
 use crate::causality::live::LiveBroadcasts;
 use crate::config::AppConfig;
@@ -54,6 +57,8 @@ pub struct AppState {
     pub artifact_s3: Option<Arc<ArtifactStore>>,
     pub catalogue_repo: Arc<dyn CatalogueRepository>,
     pub live: Arc<LiveBroadcasts>,
+    pub token_verifier: Arc<dyn TokenVerifier>,
+    pub principal_resolver: Arc<dyn PrincipalResolver>,
 }
 
 /// Build the `OpenApiRouter` containing every `#[utoipa::path]`-annotated
@@ -137,27 +142,33 @@ fn build_openapi_router() -> OpenApiRouter<AppState> {
 
 pub fn build_router(state: AppState) -> Router {
     let frontend_dir = state.config.frontend_dir.clone();
+    let cors_config = state.config.clone();
 
     // Every #[utoipa::path]-annotated handler is registered via OpenApiRouter
     // so the spec stays in sync with the runtime mounts. The Yjs WebSocket is
     // out-of-band (binary protocol, not OpenAPI-modeled).
     let (api_router, api_spec) = build_openapi_router().split_for_parts();
 
-    let legacy = Router::new()
-        // Yjs WebSocket endpoint — binary CRDT protocol, intentionally not in the spec.
+    // The auth middleware gates every JSON API route. The WS endpoint is
+    // mounted OUTSIDE this layer because browsers can't send Authorization
+    // headers on WS upgrades — `ws_handler` validates a `?token=…` query
+    // param against the same `TokenVerifier` port.
+    let protected: Router = api_router
+        .layer(DefaultBodyLimit::max(50 * 1024 * 1024))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth::extractor::require_auth_middleware,
+        ))
+        .with_state(state.clone());
+
+    let ws_router: Router = Router::new()
         .route(
             "/api/yjs/{template_id}",
             get(handlers::yjs_sync::ws_handler),
-        );
-
-    // Merge stateful sub-routers first, then ground out the state generic with
-    // `.with_state(state)` so we can attach the stateless SwaggerUI router and
-    // SPA fallback. The 50 MB body limit covers /api/files/upload (only path
-    // that exceeds Axum's default).
-    let api: Router = api_router
-        .merge(legacy)
-        .layer(DefaultBodyLimit::max(50 * 1024 * 1024))
+        )
         .with_state(state);
+
+    let protected = protected.merge(ws_router);
 
     let swagger = SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", api_spec);
 
@@ -165,13 +176,41 @@ pub fn build_router(state: AppState) -> Router {
         let path = PathBuf::from(dir);
         let index = path.join("index.html");
         let spa = ServeDir::new(&path).fallback(ServeFile::new(&index));
-        api.merge(swagger).fallback_service(spa)
+        protected.merge(swagger).fallback_service(spa)
     } else {
-        api.merge(swagger)
+        protected.merge(swagger)
     };
 
-    app.layer(CorsLayer::permissive())
+    app.layer(build_cors_layer(&cors_config))
         .layer(TraceLayer::new_for_http())
+}
+
+/// CORS that permits the configured frontend origins to send the
+/// Authorization header. When no origins are configured, falls back to
+/// `Any` (dev-only — paired with `auth.mode = "dev_noop"`).
+fn build_cors_layer(cfg: &AppConfig) -> CorsLayer {
+    let methods = [Method::GET, Method::POST, Method::PUT, Method::PATCH, Method::DELETE, Method::OPTIONS];
+    let headers = [header::AUTHORIZATION, header::CONTENT_TYPE];
+
+    if cfg.auth.cors_origins.is_empty() {
+        return CorsLayer::new()
+            .allow_origin(AllowOrigin::any())
+            .allow_methods(methods)
+            .allow_headers(headers);
+    }
+
+    let origins: Vec<HeaderValue> = cfg
+        .auth
+        .cors_origins
+        .iter()
+        .filter_map(|o| HeaderValue::from_str(o).ok())
+        .collect();
+
+    CorsLayer::new()
+        .allow_origin(AllowOrigin::list(origins))
+        .allow_credentials(true)
+        .allow_methods(methods)
+        .allow_headers(headers)
 }
 
 /// Build the OpenAPI document without booting any state — used by the CLI's

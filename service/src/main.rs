@@ -1,7 +1,11 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use mekhan_service::config::AppConfig;
+use mekhan_service::auth::dev::NoopTokenVerifier;
+use mekhan_service::auth::resolver::StaticPrincipalResolver;
+use mekhan_service::auth::zitadel::{ZitadelConfig, ZitadelTokenVerifier};
+use mekhan_service::auth::{PrincipalResolver, TokenVerifier};
+use mekhan_service::config::{AppConfig, AuthMode};
 use mekhan_service::db;
 use mekhan_service::lifecycle;
 use mekhan_service::nats::MekhanNats;
@@ -108,6 +112,11 @@ async fn main() -> anyhow::Result<()> {
         subscription_manager.clone(),
     ));
 
+    // Auth adapters — composition root chooses the implementation by config.
+    let token_verifier = build_token_verifier(&config).await?;
+    let principal_resolver: Arc<dyn PrincipalResolver> =
+        Arc::new(StaticPrincipalResolver);
+
     let state = AppState {
         db,
         petri,
@@ -118,6 +127,8 @@ async fn main() -> anyhow::Result<()> {
         artifact_s3,
         catalogue_repo,
         live,
+        token_verifier,
+        principal_resolver,
     };
 
     let app = build_router(state);
@@ -129,4 +140,39 @@ async fn main() -> anyhow::Result<()> {
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+async fn build_token_verifier(config: &AppConfig) -> anyhow::Result<Arc<dyn TokenVerifier>> {
+    match config.auth.mode {
+        AuthMode::Zitadel => {
+            let issuer_url = config
+                .auth
+                .issuer_url
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("auth.mode=zitadel requires auth.issuer_url"))?;
+            let audience = config
+                .auth
+                .audience
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("auth.mode=zitadel requires auth.audience"))?;
+            let verifier = ZitadelTokenVerifier::new(&ZitadelConfig {
+                issuer_url,
+                audience,
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("zitadel verifier init: {e}"))?;
+            tracing::info!("auth: Zitadel verifier ready");
+            Ok(Arc::new(verifier))
+        }
+        AuthMode::DevNoop => {
+            let prod = std::env::var("MEKHAN_ENV")
+                .map(|v| v.eq_ignore_ascii_case("prod") || v.eq_ignore_ascii_case("production"))
+                .unwrap_or(false);
+            if prod {
+                anyhow::bail!("auth.mode=dev_noop is forbidden when MEKHAN_ENV=prod");
+            }
+            tracing::warn!("auth: NoopTokenVerifier active — every request becomes the dev user");
+            Ok(Arc::new(NoopTokenVerifier::default()))
+        }
+    }
 }

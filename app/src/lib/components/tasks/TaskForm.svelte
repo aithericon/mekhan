@@ -18,6 +18,7 @@
 	import { CalendarDate, getLocalTimeZone } from '@internationalized/date';
 	import { renderMdsvex } from '$lib/mdsvex';
 	import { MDSVEX_CLASS } from '$lib/mdsvex-styles';
+	import { authFetch } from '$lib/auth/fetch';
 	import { toast } from 'svelte-sonner';
 	import {
 		getTextValue as _getTextValue,
@@ -123,7 +124,7 @@
 			fd.append('file', file);
 			fd.append('field_name', field.name);
 			try {
-				const res = await fetch('/api/files/upload', { method: 'POST', body: fd });
+				const res = await authFetch('/api/files/upload', { method: 'POST', body: fd });
 				if (res.ok) {
 					const result = (await res.json()) as UploadedFile;
 					const current = parseFileValue(getTextValue(field.name));

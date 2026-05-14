@@ -1,4 +1,5 @@
 import * as Y from 'yjs';
+import { auth } from '$lib/auth/store.svelte';
 import { MekhanWsProvider } from './ws-provider';
 
 export type YjsSession = {
@@ -27,7 +28,7 @@ export function createYjsSession(templateId: string): YjsSession {
 		wsUrl = 'ws://localhost:3100/api/yjs';
 	}
 
-	const provider = new MekhanWsProvider(wsUrl, templateId, doc);
+	const provider = new MekhanWsProvider(wsUrl, templateId, doc, auth.getAccessToken());
 	const awareness = provider.awareness;
 
 	// Expose Y.Doc for E2E test assertions (dev only, tree-shaken in prod)

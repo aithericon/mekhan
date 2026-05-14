@@ -36,9 +36,13 @@ export class MekhanWsProvider {
 	private synced = false;
 	private currentStatus: StatusEvent['status'] = 'connecting';
 
-	constructor(wsUrl: string, templateId: string, doc: Y.Doc) {
+	constructor(wsUrl: string, templateId: string, doc: Y.Doc, token?: string) {
 		this.doc = doc;
-		this.wsUrl = `${wsUrl}/${templateId}`;
+		const base = `${wsUrl}/${templateId}`;
+		// Auth: browsers can't send Authorization on WS upgrades, so the
+		// access token rides as a query param. The backend validates it inside
+		// the upgrade handler against the same `TokenVerifier`.
+		this.wsUrl = token ? `${base}?token=${encodeURIComponent(token)}` : base;
 		this.awareness = new Awareness(doc);
 
 		// Listen for local doc changes and send them as SyncUpdate

@@ -1,12 +1,23 @@
 <script lang="ts">
 	import './layout.css';
+	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
 	import { Button } from '$lib/components/ui/button';
 	import { TooltipProvider } from '$lib/components/ui/tooltip';
 	import { findOrCreateShowcaseTemplate } from '$lib/templates/showcase';
+	import { auth } from '$lib/auth/store.svelte';
+	import { ensureAuthInitialized, requireSession } from '$lib/auth/guard';
 
 	let { children } = $props();
 	let openingDemo = $state(false);
+
+	onMount(async () => {
+		await ensureAuthInitialized();
+		// The /auth/callback route runs the redirect handshake — never gate it.
+		if (page.url.pathname.startsWith('/auth/')) return;
+		await requireSession();
+	});
 
 	async function openDemo() {
 		if (openingDemo) return;

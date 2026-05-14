@@ -392,7 +392,6 @@ pub struct CreateTemplateRequest {
     #[serde(default)]
     pub description: Option<String>,
     pub graph: Option<WorkflowGraph>,
-    pub author_id: Uuid,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
