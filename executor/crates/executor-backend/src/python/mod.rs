@@ -100,8 +100,13 @@ impl ExecutionBackend for PythonBackend {
     ) -> Result<RunContext, ExecutorError> {
         let config = PythonConfig::from_spec(&run_context.spec)?;
 
+        // The SDK can only be installed into a virtualenv (no sudo, no global
+        // site-packages writes). Treat `sdk: true` as implying `virtualenv:
+        // true` so users don't have to toggle both.
+        let needs_venv = config.virtualenv || config.sdk;
+
         // Determine Python binary
-        let python_bin = if config.virtualenv {
+        let python_bin = if needs_venv {
             let venv_link = run_context.run_dir.root.join("venv");
             let sdk_path = if config.sdk { Self::find_sdk_path() } else { None };
 

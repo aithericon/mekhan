@@ -516,6 +516,7 @@ async fn graph_topology_roundtrip() {
                     description: Some("Processes input data".to_string()),
                     execution_spec: ExecutionSpecConfig {
                         backend_type: "docker".to_string(),
+                        entrypoint: None,
                         config: serde_json::json!({"image": "python:3.12"}),
                     },
                 },
@@ -749,6 +750,7 @@ async fn yaml_format_roundtrip() {
                         description: Some("Processes input data".to_string()),
                         execution_spec: ExecutionSpecConfig {
                             backend_type: "docker".to_string(),
+                            entrypoint: None,
                             config: serde_json::json!({"image": "python:3.12"}),
                         },
                     },

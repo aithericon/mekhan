@@ -253,6 +253,7 @@ fn automated_step_produces_executor_lifecycle() {
                     description: None,
                     execution_spec: ExecutionSpecConfig {
                         backend_type: "docker".to_string(),
+                        entrypoint: None,
                         config: json!({"image": "alpine:latest"}),
                     },
                 },
@@ -849,6 +850,7 @@ fn automated_step_has_scoped_effect_errors() {
                     description: None,
                     execution_spec: ExecutionSpecConfig {
                         backend_type: "docker".to_string(),
+                        entrypoint: None,
                         config: json!({"image": "alpine:latest"}),
                     },
                 },
@@ -885,6 +887,7 @@ fn auto_node(id: &str, label: &str) -> WorkflowNode {
             description: None,
             execution_spec: ExecutionSpecConfig {
                 backend_type: "docker".to_string(),
+                entrypoint: None,
                 config: json!({"image": "alpine:latest"}),
             },
         },
