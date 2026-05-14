@@ -4,6 +4,8 @@
 	import { Separator } from '$lib/components/ui/separator';
 	import { CopyButton } from '$lib/components/ui/copy-button';
 	import { Card } from '$lib/components/ui/card';
+	import { Badge } from '$lib/components/ui/badge';
+	import NodeKindBadge from './NodeKindBadge.svelte';
 
 	// ---------------------------------------------------------------------------
 	// Detail shape interfaces
@@ -168,16 +170,6 @@
 		return `${(durationMs / 1000).toFixed(2)}s`;
 	}
 
-	function getSignalTypeBadgeClass(signalType: string): string {
-		switch (signalType) {
-			case 'accepted': return 'bg-green-500/15 text-green-500';
-			case 'denied': return 'bg-red-500/15 text-red-500';
-			case 'confirmed': return 'bg-blue-500/15 text-blue-500';
-			case 'failed': return 'bg-red-500/15 text-red-500';
-			default: return 'bg-muted text-foreground';
-		}
-	}
-
 	function getLeaseJobId(token: { color: { type: string; value?: unknown } }): string | null {
 		if (!isLeaseToken(token)) return null;
 		const data = token.color.value as Record<string, unknown>;
@@ -286,19 +278,7 @@
 					<h3 class="text-lg font-medium text-foreground">{placeDetails.place.name}</h3>
 					<p class="text-xs text-muted-foreground font-mono">{placeDetails.place.id}</p>
 					<div class="flex items-center gap-2 mt-2">
-						<span
-							class="px-2 py-0.5 text-xs rounded {(placeDetails.place as any).kind === 'signal'
-								? 'bg-amber-500/15 text-amber-500'
-								: (placeDetails.place as any).kind === 'bridge_out'
-									? 'bg-rose-500/15 text-rose-500'
-									: (placeDetails.place as any).kind === 'bridge_reply'
-										? 'bg-indigo-500/15 text-indigo-500'
-										: (placeDetails.place as any).kind === 'bridge_in'
-											? 'bg-teal-500/15 text-teal-500'
-											: 'bg-blue-500/15 text-blue-500'}"
-						>
-							{(placeDetails.place as any).kind ?? 'internal'}
-						</span>
+						<NodeKindBadge kind={((placeDetails.place as any).kind ?? 'place') as any} />
 						{#if placeDetails.place.capacity}
 							<span class="text-xs text-muted-foreground">
 								Capacity: <span class="font-medium">{placeDetails.place.capacity}</span>
@@ -321,18 +301,14 @@
 							{#each placeDetails.tokens as token (token.id)}
 								<button
 									class="w-full text-left p-2 rounded border transition-colors {isLeaseToken(token)
-										? 'border-l-2 border-l-amber-500 border-amber-500/30 bg-amber-500/10 hover:border-amber-500/50 hover:bg-amber-500/20'
+										? 'border-l-2 border-l-warning border-warning/30 bg-warning/10 hover:border-warning/50 hover:bg-warning/20'
 										: 'border-l-2 border-l-primary/50 border-border hover:border-primary/50 hover:bg-primary/10'}"
 									onclick={() => onSelectToken?.(placeDetails.place.id, token.id)}
 								>
 									<div class="flex items-start gap-2">
-										<span class="text-xs px-1.5 py-0.5 rounded bg-muted text-muted-foreground font-medium shrink-0">
-											{token.color.type}
-										</span>
+										<Badge variant="muted" size="xs" class="shrink-0">{token.color.type}</Badge>
 										{#if isLeaseToken(token)}
-											<span class="text-xs px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400 font-medium shrink-0">
-												Lease
-											</span>
+											<NodeKindBadge kind="lease" size="xs" class="shrink-0" />
 										{/if}
 										<div class="flex-1 min-w-0">
 											{#if token.color.type === 'Unit'}
@@ -359,14 +335,14 @@
 					<textarea
 						bind:value={injectJsonInput}
 						placeholder={'{"amount": 500}'}
-						class="w-full h-20 text-sm font-mono p-2 border rounded bg-gray-900 text-green-400 resize-none"
+						class="w-full h-20 text-sm font-mono p-2 border border-input rounded bg-muted text-foreground resize-none"
 						spellcheck="false"
 					></textarea>
 					{#if injectError}
-						<p class="text-xs text-red-600 mt-1">{injectError}</p>
+						<p class="text-xs text-destructive mt-1">{injectError}</p>
 					{/if}
 					{#if injectSuccess}
-						<p class="text-xs text-green-600 mt-1">Token injected!</p>
+						<p class="text-xs text-success mt-1">Token injected!</p>
 					{/if}
 					<button
 						onclick={handleInjectToken}
@@ -385,16 +361,12 @@
 					<p class="text-xs text-muted-foreground font-mono">{transitionDetails.transition.id}</p>
 					<div class="flex items-center gap-2 mt-2">
 						{#if (transitionDetails.transition as any).effect_handler_id}
-							<span class="px-2 py-0.5 text-xs rounded font-medium bg-purple-500/15 text-purple-700 dark:text-purple-400">
-								Effect
-							</span>
+							<NodeKindBadge kind="effect" />
 							<span class="text-xs font-mono text-muted-foreground">
 								{(transitionDetails.transition as any).effect_handler_id}
 							</span>
 						{:else}
-							<span class="px-2 py-0.5 text-xs rounded font-medium bg-blue-500/15 text-blue-700 dark:text-blue-400">
-								Rhai Script
-							</span>
+							<NodeKindBadge kind="rhai" />
 						{/if}
 					</div>
 				</Card>
@@ -405,7 +377,7 @@
 				{#if (transitionDetails.transition as any).effect_handler_id}
 					<Card tone="muted">
 						<h4 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Effect Handler</h4>
-						<div class="px-3 py-2 rounded text-sm bg-purple-500/10 border border-purple-500/30 text-purple-700 dark:text-purple-400 font-mono">
+						<div class="px-3 py-2 rounded text-sm bg-secondary border border-border text-secondary-foreground font-mono">
 							{(transitionDetails.transition as any).effect_handler_id}
 						</div>
 						<p class="text-xs text-muted-foreground mt-2">
@@ -423,7 +395,7 @@
 						<h4 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Guard Condition</h4>
 						<div
 							class="px-3 py-2 rounded text-sm font-mono {guardScript
-								? 'bg-amber-500/10 border border-amber-500/30 text-amber-700 dark:text-amber-400'
+								? 'bg-warning/10 border border-warning/30 text-warning-foreground'
 								: 'bg-muted text-muted-foreground'}"
 						>
 							{guardScript ?? 'None (always enabled)'}
@@ -550,24 +522,7 @@
 
 				<!-- Event Type Badge -->
 				<div>
-					<span
-						class="px-2 py-1 text-xs rounded font-medium
-						{eventDetails.eventTypeName === 'TransitionFired'
-							? 'bg-green-500/15 text-green-500'
-							: eventDetails.eventTypeName === 'EffectCompleted'
-								? 'bg-emerald-500/15 text-emerald-500'
-								: eventDetails.eventTypeName === 'EffectFailed'
-									? 'bg-red-500/15 text-red-500'
-									: eventDetails.eventTypeName === 'TokenCreated'
-										? 'bg-blue-500/15 text-blue-500'
-										: eventDetails.eventTypeName === 'TokenBridgedOut'
-											? 'bg-rose-500/15 text-rose-500'
-											: eventDetails.eventTypeName === 'ErrorOccurred'
-												? 'bg-red-500/15 text-red-500'
-												: 'bg-muted text-foreground'}"
-					>
-						{eventDetails.eventTypeName}
-					</span>
+					<NodeKindBadge kind={eventDetails.eventTypeName} />
 				</div>
 
 				{#if eventDetails.eventTypeName === 'TransitionFired'}
@@ -590,7 +545,7 @@
 							<div class="space-y-0.5">
 								{#each eventDetails.consumedTokens as ct (ct.tokenId)}
 									<div class="flex items-center gap-2 text-xs">
-										<span class="text-red-500">-</span>
+										<span class="text-destructive">-</span>
 										<button class="text-primary hover:underline" onclick={() => onSelectPlace?.(ct.placeId)}>{ct.placeName}</button>
 										<button
 											class="text-muted-foreground font-mono hover:text-primary hover:underline"
@@ -608,7 +563,7 @@
 							<div class="space-y-0.5">
 								{#each eventDetails.producedTokens as pt (pt.token.id)}
 									<div class="flex items-center gap-2 text-xs">
-										<span class="text-green-500">+</span>
+										<span class="text-success">+</span>
 										<button class="text-primary hover:underline" onclick={() => onSelectPlace?.(pt.placeId)}>{pt.placeName}</button>
 										<button
 											class="text-muted-foreground font-mono hover:text-primary hover:underline"
@@ -626,7 +581,7 @@
 							<div class="space-y-0.5">
 								{#each eventDetails.readTokens as rt (rt.token.id)}
 									<div class="flex items-center gap-2 text-xs">
-										<span class="text-blue-400">&cir;</span>
+										<span class="text-info">&cir;</span>
 										<button class="text-primary hover:underline" onclick={() => onSelectPlace?.(rt.placeId)}>{rt.placeName}</button>
 										<button
 											class="text-muted-foreground font-mono hover:text-primary hover:underline"
@@ -654,9 +609,7 @@
 
 					<div>
 						<h4 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1">Handler</h4>
-						<span class="px-2 py-0.5 text-xs rounded bg-emerald-500/15 text-emerald-500 font-mono">
-							{eventDetails.effectHandlerId}
-						</span>
+						<Badge variant="success" class="font-mono">{eventDetails.effectHandlerId}</Badge>
 					</div>
 
 					{#if eventDetails.consumedTokens && eventDetails.consumedTokens.length > 0}
@@ -665,7 +618,7 @@
 							<div class="space-y-0.5">
 								{#each eventDetails.consumedTokens as ct (ct.tokenId)}
 									<div class="flex items-center gap-2 text-xs">
-										<span class="text-red-500">-</span>
+										<span class="text-destructive">-</span>
 										<button class="text-primary hover:underline" onclick={() => onSelectPlace?.(ct.placeId)}>{ct.placeName}</button>
 										<button
 											class="text-muted-foreground font-mono hover:text-primary hover:underline"
@@ -683,7 +636,7 @@
 							<div class="space-y-0.5">
 								{#each eventDetails.producedTokens as pt (pt.token.id)}
 									<div class="flex items-center gap-2 text-xs">
-										<span class="text-green-500">+</span>
+										<span class="text-success">+</span>
 										<button class="text-primary hover:underline" onclick={() => onSelectPlace?.(pt.placeId)}>{pt.placeName}</button>
 										<button
 											class="text-muted-foreground font-mono hover:text-primary hover:underline"
@@ -701,7 +654,7 @@
 							<div class="space-y-0.5">
 								{#each eventDetails.readTokens as rt (rt.token.id)}
 									<div class="flex items-center gap-2 text-xs">
-										<span class="text-blue-400">&cir;</span>
+										<span class="text-info">&cir;</span>
 										<button class="text-primary hover:underline" onclick={() => onSelectPlace?.(rt.placeId)}>{rt.placeName}</button>
 										<button
 											class="text-muted-foreground font-mono hover:text-primary hover:underline"
@@ -729,20 +682,18 @@
 
 					<div>
 						<h4 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1">Handler</h4>
-						<span class="px-2 py-0.5 text-xs rounded bg-red-500/15 text-red-500 font-mono">
-							{eventDetails.effectHandlerId}
-						</span>
+						<Badge variant="destructive" class="font-mono">{eventDetails.effectHandlerId}</Badge>
 					</div>
 
-					<div class="bg-red-500/10 border border-red-500/30 rounded p-2 text-xs text-red-400">
+					<div class="bg-destructive/10 border border-destructive/30 rounded p-2 text-xs text-destructive">
 						{eventDetails.errorMessage}
 					</div>
 
 					<div class="flex items-center gap-2">
 						{#if eventDetails.retryable !== undefined}
-							<span class="px-1.5 py-0.5 text-[10px] rounded font-medium {eventDetails.retryable ? 'bg-amber-500/15 text-amber-500' : 'bg-red-500/15 text-red-500'}">
+							<Badge variant={eventDetails.retryable ? 'warning' : 'destructive'} size="xs">
 								{eventDetails.retryable ? 'Retryable' : 'Non-retryable'}
-							</span>
+							</Badge>
 						{/if}
 					</div>
 
@@ -759,7 +710,7 @@
 							<div class="space-y-0.5">
 								{#each eventDetails.consumedTokens as ct (ct.tokenId)}
 									<div class="flex items-center gap-2 text-xs">
-										<span class="text-red-500">-</span>
+										<span class="text-destructive">-</span>
 										<button class="text-primary hover:underline" onclick={() => onSelectPlace?.(ct.placeId)}>{ct.placeName}</button>
 										<button
 											class="text-muted-foreground font-mono hover:text-primary hover:underline"
@@ -777,7 +728,7 @@
 							<div class="space-y-0.5">
 								{#each eventDetails.producedTokens as pt (pt.token.id)}
 									<div class="flex items-center gap-2 text-xs">
-										<span class="text-green-500">+</span>
+										<span class="text-success">+</span>
 										<button class="text-primary hover:underline" onclick={() => onSelectPlace?.(pt.placeId)}>{pt.placeName}</button>
 										<button
 											class="text-muted-foreground font-mono hover:text-primary hover:underline"
@@ -869,9 +820,7 @@
 
 					<div>
 						<h4 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1">Target</h4>
-						<span class="px-2 py-0.5 text-xs rounded font-medium bg-rose-500/15 text-rose-500">
-							{eventDetails.targetNetId} / {eventDetails.targetPlaceName}
-						</span>
+						<NodeKindBadge kind="bridge_out" label="{eventDetails.targetNetId} / {eventDetails.targetPlaceName}" />
 					</div>
 
 					{#if eventDetails.token}
@@ -904,7 +853,7 @@
 							<div class="space-y-0.5">
 								{#each Object.entries(eventDetails.replyChannels) as [channel, place] (channel)}
 									<div class="text-xs">
-										<span class="font-mono text-rose-400">{channel}</span>
+										<span class="font-mono text-destructive">{channel}</span>
 										<span class="text-muted-foreground mx-1">&rarr;</span>
 										<span class="font-medium text-foreground/80">{place}</span>
 									</div>
@@ -914,7 +863,7 @@
 					{/if}
 
 				{:else if eventDetails.eventTypeName === 'ErrorOccurred'}
-					<div class="bg-red-500/10 border border-red-500/30 rounded p-2 text-xs text-red-400">
+					<div class="bg-destructive/10 border border-destructive/30 rounded p-2 text-xs text-destructive">
 						{eventDetails.errorMessage}
 					</div>
 
@@ -950,9 +899,7 @@
 					<h3 class="text-lg font-medium text-foreground">{groupDetails.group.name}</h3>
 					<p class="text-xs text-muted-foreground font-mono">{groupDetails.group.id}</p>
 					<div class="flex items-center gap-2 mt-2">
-						<span class="px-2 py-0.5 text-xs rounded bg-primary/15 text-primary font-medium">
-							Group
-						</span>
+						<NodeKindBadge kind="group" />
 						<span class="text-xs text-muted-foreground">
 							{groupDetails.places.length} places · {groupDetails.transitions.length} transitions
 						</span>
@@ -1057,7 +1004,7 @@
 							>
 								<span class="text-xs font-medium text-foreground truncate">{transition.name}</span>
 								{#if (transition as any).effect_handler_id}
-									<span class="ml-auto text-[10px] px-1 py-0.5 rounded bg-purple-500/15 text-purple-500 font-mono shrink-0">FX</span>
+									<Badge variant="secondary" size="xs" class="ml-auto font-mono shrink-0">FX</Badge>
 								{/if}
 							</button>
 						{/each}
@@ -1072,9 +1019,7 @@
 					<h3 class="text-lg font-medium text-foreground">{rn.label}</h3>
 					<p class="text-xs text-muted-foreground font-mono">{rn.id}</p>
 					<div class="flex items-center gap-2 mt-2">
-						<span class="px-2 py-0.5 text-xs rounded bg-teal-500/15 text-teal-500 font-medium">
-							Remote Net
-						</span>
+						<NodeKindBadge kind="remote_net" />
 						{#if rn.childNetIds.length > 0}
 							<span class="text-xs text-muted-foreground">
 								{rn.childNetIds.length} {rn.childNetIds.length === 1 ? 'instance' : 'instances'}
@@ -1094,7 +1039,7 @@
 						<div class="space-y-1">
 							{#each rn.targets as port (port)}
 								<div class="px-2 py-1 rounded border border-border flex items-center gap-2">
-									<span class="w-2 h-2 rounded-full bg-rose-400 shrink-0"></span>
+									<span class="w-2 h-2 rounded-full bg-destructive shrink-0"></span>
 									<span class="text-xs font-mono text-foreground truncate">{port}</span>
 								</div>
 							{/each}
@@ -1110,7 +1055,7 @@
 						<div class="space-y-1">
 							{#each rn.sources as port (port)}
 								<div class="px-2 py-1 rounded border border-border flex items-center gap-2">
-									<span class="w-2 h-2 rounded-full bg-teal-400 shrink-0"></span>
+									<span class="w-2 h-2 rounded-full bg-success shrink-0"></span>
 									<span class="text-xs font-mono text-foreground truncate">{port}</span>
 								</div>
 							{/each}
@@ -1129,11 +1074,11 @@
 						<div class="space-y-1 max-h-48 overflow-y-auto">
 							{#each rn.childNetIds as childId (childId)}
 								<button
-									class="w-full text-left px-2 py-1.5 rounded border border-border hover:border-teal-500/50 hover:bg-teal-500/10 transition-colors flex items-center gap-2"
+									class="w-full text-left px-2 py-1.5 rounded border border-border hover:border-success/50 hover:bg-success/10 transition-colors flex items-center gap-2"
 									onclick={() => onNavigateToChild?.(childId)}
 								>
 									<span class="text-xs font-mono text-foreground truncate">{childId.slice(0, 12)}...</span>
-									<ExternalLink class="w-3 h-3 ml-auto shrink-0 text-teal-500" />
+									<ExternalLink class="w-3 h-3 ml-auto shrink-0 text-success" />
 								</button>
 							{/each}
 						</div>

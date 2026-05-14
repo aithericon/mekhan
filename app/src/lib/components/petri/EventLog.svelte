@@ -13,6 +13,7 @@
 		CircleX,
 		X
 	} from '@lucide/svelte';
+	import NodeKindBadge, { type NodeKind } from './NodeKindBadge.svelte';
 
 	interface Props {
 		events: PersistedEvent[];
@@ -32,12 +33,12 @@
 	let typeFilter = new SvelteSet<string>();
 	let textSearch = $state('');
 
-	const eventTypeChips = [
-		{ key: 'TransitionFired', label: 'Fired', color: 'bg-amber-500/15 text-amber-500 border-amber-500/30' },
-		{ key: 'EffectCompleted', label: 'Effect', color: 'bg-emerald-500/15 text-emerald-500 border-emerald-500/30' },
-		{ key: 'EffectFailed', label: 'Fx Err', color: 'bg-red-500/15 text-red-500 border-red-500/30' },
-		{ key: 'TokenCreated', label: 'Created', color: 'bg-green-500/15 text-green-500 border-green-500/30' },
-		{ key: 'TokenBridgedOut', label: 'Bridge', color: 'bg-rose-500/15 text-rose-500 border-rose-500/30' },
+	const eventTypeChips: { key: NodeKind; label: string }[] = [
+		{ key: 'TransitionFired', label: 'Fired' },
+		{ key: 'EffectCompleted', label: 'Effect' },
+		{ key: 'EffectFailed', label: 'Fx Err' },
+		{ key: 'TokenCreated', label: 'Created' },
+		{ key: 'TokenBridgedOut', label: 'Bridge' },
 	];
 
 	const hasFilters = $derived(typeFilter.size > 0 || textSearch.trim() !== '');
@@ -101,14 +102,14 @@
 		return null;
 	}
 
-	// Get badge class for signal type
+	// Get badge class for signal type (routed through theme tokens)
 	function getSignalBadgeClass(signalType: string): string {
 		switch (signalType) {
-			case 'accepted': return 'bg-green-500/15 text-green-500';
-			case 'denied': return 'bg-red-500/15 text-red-500';
-			case 'confirmed': return 'bg-blue-500/15 text-blue-500';
-			case 'failed': return 'bg-red-500/15 text-red-500';
-			default: return 'bg-purple-500/15 text-purple-500';
+			case 'accepted': return 'bg-success/15 text-success';
+			case 'denied': return 'bg-destructive/15 text-destructive';
+			case 'confirmed': return 'bg-info/15 text-info';
+			case 'failed': return 'bg-destructive/15 text-destructive';
+			default: return 'bg-secondary text-secondary-foreground';
 		}
 	}
 
@@ -129,7 +130,7 @@
 				icon: Globe,
 				title: 'Init',
 				detail: 'Net initialized',
-				iconColor: 'text-blue-500'
+				iconColor: 'text-info'
 			};
 		}
 
@@ -144,7 +145,7 @@
 				icon: Plus,
 				title: signalType ? '📡' : '+',
 				detail,
-				iconColor: signalType ? 'text-indigo-500' : 'text-green-500',
+				iconColor: signalType ? 'text-info' : 'text-success',
 				signalType: signalType ?? undefined,
 				signalBadgeClass: signalType ? getSignalBadgeClass(signalType) : undefined
 			};
@@ -167,7 +168,7 @@
 				icon: Zap,
 				title: `${consumed}→${produced}`,
 				detail: `${transitionName}${correlationHint}`,
-				iconColor: 'text-amber-500'
+				iconColor: 'text-warning'
 			};
 		}
 
@@ -177,7 +178,7 @@
 				icon: Minus,
 				title: '−',
 				detail: placeName ?? '',
-				iconColor: 'text-red-400'
+				iconColor: 'text-destructive'
 			};
 		}
 
@@ -191,7 +192,7 @@
 				icon: ArrowUpRight,
 				title: 'OUT',
 				detail,
-				iconColor: 'text-rose-500'
+				iconColor: 'text-destructive'
 			};
 		}
 
@@ -204,7 +205,7 @@
 				icon: Cog,
 				title: `${consumed}→${produced}`,
 				detail: `${transitionName} [${handlerId}]`,
-				iconColor: 'text-emerald-500'
+				iconColor: 'text-success'
 			};
 		}
 
@@ -216,7 +217,7 @@
 				icon: CircleX,
 				title: 'Fx!',
 				detail: `${transitionName} [${handlerId}]: ${errorMsg}`,
-				iconColor: 'text-red-500'
+				iconColor: 'text-destructive'
 			};
 		}
 
@@ -225,7 +226,7 @@
 				icon: AlertCircle,
 				title: 'Err',
 				detail: e.message ?? 'Error',
-				iconColor: 'text-red-500'
+				iconColor: 'text-destructive'
 			};
 		}
 
@@ -265,11 +266,11 @@
 		<div class="flex flex-wrap gap-1">
 			{#each eventTypeChips as chip (chip.key)}
 				<button
-					class="px-1.5 py-0.5 text-[10px] rounded border transition-colors
-						{typeFilter.has(chip.key) ? chip.color + ' border-current font-medium' : 'text-muted-foreground border-transparent hover:border-border'}"
+					class="rounded transition-opacity {typeFilter.has(chip.key) ? '' : 'opacity-50 hover:opacity-100'}"
 					onclick={() => toggleTypeFilter(chip.key)}
+					aria-pressed={typeFilter.has(chip.key)}
 				>
-					{chip.label}
+					<NodeKindBadge kind={chip.key} label={chip.label} size="xs" />
 				</button>
 			{/each}
 			{#if hasFilters}
