@@ -1,6 +1,8 @@
 <script lang="ts">
 	import type { LoopNodeData } from '$lib/types/editor';
 	import CodeEditor from '../shared/CodeEditor.svelte';
+	import { Input } from '$lib/components/ui/input';
+	import { FormField } from '$lib/components/ui/form-field';
 
 	type Props = {
 		data: LoopNodeData;
@@ -11,11 +13,8 @@
 	let { data, readonly = false, onchange }: Props = $props();
 </script>
 
-<div class="space-y-1.5">
-	<label for="max-iterations" class="text-xs font-medium text-muted-foreground"
-		>Max Iterations</label
-	>
-	<input
+<FormField label="Max Iterations" for="max-iterations">
+	<Input
 		id="max-iterations"
 		type="number"
 		min={1}
@@ -26,9 +25,8 @@
 				...data,
 				maxIterations: parseInt((e.currentTarget as HTMLInputElement).value) || 1
 			})}
-		class="w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-sm text-foreground focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70"
 	/>
-</div>
+</FormField>
 
 <div class="space-y-1.5">
 	<span class="text-xs font-medium text-muted-foreground">Loop Condition (Rhai)</span>

@@ -5,6 +5,9 @@
 	import type * as Y from 'yjs';
 	import Plus from '@lucide/svelte/icons/plus';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
+	import { Input } from '$lib/components/ui/input';
+	import { Checkbox } from '$lib/components/ui/checkbox';
+	import { FormField } from '$lib/components/ui/form-field';
 
 	type Props = {
 		config: Record<string, unknown>;
@@ -116,37 +119,35 @@
 	{/if}
 </div>
 
-<div class="space-y-1.5">
-	<label for="entrypoint" class="text-xs font-medium text-muted-foreground">Entrypoint</label>
-	<input
+<FormField
+	label="Entrypoint"
+	for="entrypoint"
+	error={filenames.length > 0 && !filenames.includes(entrypoint)
+		? `Entrypoint ${entrypoint} is not in the file list — publish will fail.`
+		: undefined}
+>
+	<Input
 		id="entrypoint"
 		type="text"
 		value={entrypoint}
 		disabled={readonly}
 		oninput={(e) => handleEntrypoint((e.currentTarget as HTMLInputElement).value)}
 		placeholder="main.py"
-		class="w-full rounded-md border border-input bg-background px-2.5 py-1.5 font-mono text-sm text-foreground focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70"
+		class="font-mono"
 	/>
-	{#if filenames.length > 0 && !filenames.includes(entrypoint)}
-		<p class="text-[11px] text-amber-700">
-			Entrypoint <code class="font-mono">{entrypoint}</code> is not in the file list — publish
-			will fail.
-		</p>
-	{/if}
-</div>
+</FormField>
 
-<div class="space-y-1.5">
-	<label for="python-bin" class="text-xs font-medium text-muted-foreground">Python Binary</label>
-	<input
+<FormField label="Python Binary" for="python-bin">
+	<Input
 		id="python-bin"
 		type="text"
 		value={(config.python as string) ?? 'python3'}
 		placeholder="python3"
 		disabled={readonly}
 		oninput={(e) => onchange({ ...config, python: (e.currentTarget as HTMLInputElement).value })}
-		class="w-full rounded-md border border-input bg-background px-2.5 py-1.5 font-mono text-sm text-foreground focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70"
+		class="font-mono"
 	/>
-</div>
+</FormField>
 
 <div class="space-y-1.5">
 	<span class="text-xs font-medium text-muted-foreground">Pip Requirements</span>
@@ -160,38 +161,28 @@
 
 <div class="flex flex-wrap items-center gap-3">
 	<label class="flex items-center gap-1.5 text-xs text-muted-foreground">
-		<input
-			type="checkbox"
+		<Checkbox
 			checked={(config.virtualenv as boolean) ?? false}
 			disabled={readonly}
-			onchange={(e) =>
-				onchange({ ...config, virtualenv: (e.currentTarget as HTMLInputElement).checked })}
-			class="size-3.5 disabled:cursor-default disabled:opacity-70"
+			onCheckedChange={(checked) => onchange({ ...config, virtualenv: checked === true })}
 		/>
 		Virtualenv
 	</label>
 	<label class="flex items-center gap-1.5 text-xs text-muted-foreground">
-		<input
-			type="checkbox"
+		<Checkbox
 			checked={(config.sdk as boolean) ?? true}
 			disabled={readonly}
-			onchange={(e) =>
-				onchange({ ...config, sdk: (e.currentTarget as HTMLInputElement).checked })}
-			class="size-3.5 disabled:cursor-default disabled:opacity-70"
+			onCheckedChange={(checked) => onchange({ ...config, sdk: checked === true })}
 		/>
 		SDK
 	</label>
 	<label class="flex items-center gap-1.5 text-xs text-muted-foreground">
-		<input
-			type="checkbox"
+		<Checkbox
 			checked={(config.inherit_env as boolean) ?? true}
 			disabled={readonly}
-			onchange={(e) =>
-				onchange({ ...config, inherit_env: (e.currentTarget as HTMLInputElement).checked })}
-			class="size-3.5 disabled:cursor-default disabled:opacity-70"
+			onCheckedChange={(checked) => onchange({ ...config, inherit_env: checked === true })}
 		/>
 		Inherit Env
-	</label>
 </div>
 
 <div class="space-y-1.5">

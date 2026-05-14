@@ -2,6 +2,9 @@
 	import KeyValueEditor from '../../shared/KeyValueEditor.svelte';
 	import CodeEditor from '../../shared/CodeEditor.svelte';
 	import * as Select from '$lib/components/ui/select';
+	import { Input } from '$lib/components/ui/input';
+	import { Checkbox } from '$lib/components/ui/checkbox';
+	import { FormField } from '$lib/components/ui/form-field';
 
 	type Props = {
 		config: Record<string, unknown>;
@@ -62,18 +65,17 @@
 	</Select.Root>
 </div>
 
-<div class="space-y-1.5">
-	<label for="http-url" class="text-xs font-medium text-muted-foreground">URL</label>
-	<input
+<FormField label="URL" for="http-url">
+	<Input
 		id="http-url"
 		type="text"
 		value={(config.url as string) ?? ''}
 		placeholder={'https://api.example.com/{{id}}'}
 		disabled={readonly}
 		oninput={(e) => onchange({ ...config, url: (e.currentTarget as HTMLInputElement).value })}
-		class="w-full rounded-md border border-input bg-background px-2.5 py-1.5 font-mono text-sm text-foreground focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70"
+		class="font-mono"
 	/>
-</div>
+</FormField>
 
 <div class="space-y-1.5">
 	<span class="text-xs font-medium text-muted-foreground">Headers</span>
@@ -146,83 +148,83 @@
 
 {#if auth && authType === 'bearer'}
 	<div class="space-y-1.5 rounded-lg border border-border bg-muted/30 p-2">
-		<input
+		<Input
 			type="text"
 			value={(auth.token as string) ?? ''}
 			placeholder="Token (or leave empty for env var)"
 			disabled={readonly}
 			oninput={(e) =>
 				onchange({ ...config, auth: { ...auth, token: (e.currentTarget as HTMLInputElement).value } })}
-			class="w-full rounded border border-input bg-background px-1.5 py-0.5 font-mono text-[10px] focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70"
+			class="h-6 px-1.5 py-0.5 font-mono text-[10px]"
 		/>
-		<input
+		<Input
 			type="text"
 			value={(auth.token_env as string) ?? ''}
 			placeholder="Env var name (e.g. API_TOKEN)"
 			disabled={readonly}
 			oninput={(e) =>
 				onchange({ ...config, auth: { ...auth, token_env: (e.currentTarget as HTMLInputElement).value } })}
-			class="w-full rounded border border-input bg-background px-1.5 py-0.5 text-[10px] focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70"
+			class="h-6 px-1.5 py-0.5 text-[10px]"
 		/>
 	</div>
 {:else if auth && authType === 'basic'}
 	<div class="space-y-1.5 rounded-lg border border-border bg-muted/30 p-2">
-		<input
+		<Input
 			type="text"
 			value={(auth.username as string) ?? ''}
 			placeholder="Username"
 			disabled={readonly}
 			oninput={(e) =>
 				onchange({ ...config, auth: { ...auth, username: (e.currentTarget as HTMLInputElement).value } })}
-			class="w-full rounded border border-input bg-background px-1.5 py-0.5 text-[10px] focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70"
+			class="h-6 px-1.5 py-0.5 text-[10px]"
 		/>
-		<input
+		<Input
 			type="text"
 			value={(auth.password as string) ?? ''}
 			placeholder="Password (or leave empty for env var)"
 			disabled={readonly}
 			oninput={(e) =>
 				onchange({ ...config, auth: { ...auth, password: (e.currentTarget as HTMLInputElement).value } })}
-			class="w-full rounded border border-input bg-background px-1.5 py-0.5 text-[10px] focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70"
+			class="h-6 px-1.5 py-0.5 text-[10px]"
 		/>
-		<input
+		<Input
 			type="text"
 			value={(auth.password_env as string) ?? ''}
 			placeholder="Password env var"
 			disabled={readonly}
 			oninput={(e) =>
 				onchange({ ...config, auth: { ...auth, password_env: (e.currentTarget as HTMLInputElement).value } })}
-			class="w-full rounded border border-input bg-background px-1.5 py-0.5 text-[10px] focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70"
+			class="h-6 px-1.5 py-0.5 text-[10px]"
 		/>
 	</div>
 {:else if auth && authType === 'header'}
 	<div class="space-y-1.5 rounded-lg border border-border bg-muted/30 p-2">
-		<input
+		<Input
 			type="text"
 			value={(auth.name as string) ?? ''}
 			placeholder="Header name (e.g. X-API-Key)"
 			disabled={readonly}
 			oninput={(e) =>
 				onchange({ ...config, auth: { ...auth, name: (e.currentTarget as HTMLInputElement).value } })}
-			class="w-full rounded border border-input bg-background px-1.5 py-0.5 text-[10px] focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70"
+			class="h-6 px-1.5 py-0.5 text-[10px]"
 		/>
-		<input
+		<Input
 			type="text"
 			value={(auth.value as string) ?? ''}
 			placeholder="Value (or leave empty for env var)"
 			disabled={readonly}
 			oninput={(e) =>
 				onchange({ ...config, auth: { ...auth, value: (e.currentTarget as HTMLInputElement).value } })}
-			class="w-full rounded border border-input bg-background px-1.5 py-0.5 text-[10px] focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70"
+			class="h-6 px-1.5 py-0.5 text-[10px]"
 		/>
-		<input
+		<Input
 			type="text"
 			value={(auth.value_env as string) ?? ''}
 			placeholder="Value env var"
 			disabled={readonly}
 			oninput={(e) =>
 				onchange({ ...config, auth: { ...auth, value_env: (e.currentTarget as HTMLInputElement).value } })}
-			class="w-full rounded border border-input bg-background px-1.5 py-0.5 text-[10px] focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70"
+			class="h-6 px-1.5 py-0.5 text-[10px]"
 		/>
 	</div>
 {/if}
@@ -247,11 +249,8 @@
 	</Select.Root>
 </div>
 
-<div class="space-y-1.5">
-	<label for="http-timeout" class="text-xs font-medium text-muted-foreground"
-		>Timeout (seconds)</label
-	>
-	<input
+<FormField label="Timeout (seconds)" for="http-timeout">
+	<Input
 		id="http-timeout"
 		type="number"
 		min={1}
@@ -262,18 +261,14 @@
 			const val = parseInt((e.currentTarget as HTMLInputElement).value);
 			onchange({ ...config, timeout_secs: isNaN(val) ? undefined : val });
 		}}
-		class="w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-sm text-foreground focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70"
 	/>
-</div>
+</FormField>
 
 <label class="flex items-center gap-1.5 text-xs text-muted-foreground">
-	<input
-		type="checkbox"
+	<Checkbox
 		checked={(config.follow_redirects as boolean) ?? true}
 		disabled={readonly}
-		onchange={(e) =>
-			onchange({ ...config, follow_redirects: (e.currentTarget as HTMLInputElement).checked })}
-		class="size-3.5 disabled:cursor-default disabled:opacity-70"
+		onCheckedChange={(v) => onchange({ ...config, follow_redirects: v })}
 	/>
 	Follow redirects
 </label>

@@ -34,8 +34,10 @@
 	}
 </script>
 
+<!-- ui-allow: block-type accent — no theme token for file/sky identity -->
 <div class="rounded-md border border-border/50 border-l-2 border-l-sky-400 bg-background p-3">
 	<div class="mb-2 flex items-center justify-between">
+		<!-- ui-allow: block-type badge color — no theme token for file/sky identity -->
 		<span class="rounded bg-sky-100 px-2 py-0.5 text-xs font-medium text-sky-700 dark:bg-sky-900/30 dark:text-sky-300">
 			File
 		</span>

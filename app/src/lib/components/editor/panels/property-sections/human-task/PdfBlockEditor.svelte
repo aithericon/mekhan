@@ -29,8 +29,10 @@
 	);
 </script>
 
+<!-- ui-allow: block-type accent — no theme token for pdf/rose identity -->
 <div class="rounded-md border border-border/50 border-l-2 border-l-rose-400 bg-background p-3">
 	<div class="mb-2 flex items-center justify-between">
+		<!-- ui-allow: block-type badge color — no theme token for pdf/rose identity -->
 		<span class="rounded bg-rose-100 px-2 py-0.5 text-xs font-medium text-rose-700 dark:bg-rose-900/30 dark:text-rose-300">
 			PDF
 		</span>

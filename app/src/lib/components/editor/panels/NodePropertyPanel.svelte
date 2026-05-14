@@ -11,6 +11,9 @@
 	import DecisionNodeSection from './property-sections/DecisionNodeSection.svelte';
 	import LoopNodeSection from './property-sections/LoopNodeSection.svelte';
 	import { Button } from '$lib/components/ui/button';
+	import { Input } from '$lib/components/ui/input';
+	import { Textarea } from '$lib/components/ui/textarea';
+	import { FormField } from '$lib/components/ui/form-field';
 
 	type Props = {
 		data: WorkflowNodeData;
@@ -90,32 +93,28 @@
 
 	<div class="flex-1 space-y-4 overflow-y-auto p-3">
 		<!-- Common: Label -->
-		<div class="space-y-1.5">
-			<label for="node-label" class="text-xs font-medium text-muted-foreground">Label</label>
-			<input
+		<FormField label="Label" for="node-label">
+			<Input
 				id="node-label"
 				type="text"
 				value={data.label}
 				disabled={readonly}
 				data-testid="input-node-label"
 				oninput={(e) => updateField('label', (e.currentTarget as HTMLInputElement).value)}
-				class="w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-sm text-foreground focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70"
 			/>
-		</div>
+		</FormField>
 
 		<!-- Common: Description -->
-		<div class="space-y-1.5">
-			<label for="node-desc" class="text-xs font-medium text-muted-foreground">Description</label>
-			<textarea
+		<FormField label="Description" for="node-desc">
+			<Textarea
 				id="node-desc"
 				value={data.description ?? ''}
 				disabled={readonly}
 				data-testid="input-node-description"
 				oninput={(e) => updateField('description', (e.currentTarget as HTMLTextAreaElement).value)}
 				rows={2}
-				class="w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-sm text-foreground focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70"
-			></textarea>
-		</div>
+			/>
+		</FormField>
 
 		<!-- Type-specific sections -->
 		{#if data.type === 'start'}

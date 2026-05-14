@@ -2,6 +2,7 @@
 	import type { DecisionNodeData } from '$lib/types/editor';
 	import Plus from '@lucide/svelte/icons/plus';
 	import CodeEditor from '../shared/CodeEditor.svelte';
+	import { Input } from '$lib/components/ui/input';
 
 	type Props = {
 		data: DecisionNodeData;
@@ -56,13 +57,13 @@
 	{#each data.conditions as condition, i (condition.edgeId)}
 		<div class="rounded-lg border border-border bg-muted/30 p-2 text-[11px]">
 			<div class="space-y-1.5">
-				<input
+				<Input
 					type="text"
 					value={condition.label}
 					placeholder="Branch label"
 					disabled={readonly}
 					oninput={(e) => updateConditionLabel(i, (e.currentTarget as HTMLInputElement).value)}
-					class="w-full rounded border border-input bg-background px-2 py-1 text-[11px] focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70"
+					class="h-7 px-2 py-1 text-[11px]"
 				/>
 				<div class="space-y-0.5">
 					<span class="text-[9px] text-muted-foreground">Guard (Rhai)</span>

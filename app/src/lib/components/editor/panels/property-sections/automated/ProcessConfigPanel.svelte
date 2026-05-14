@@ -1,6 +1,9 @@
 <script lang="ts">
 	import KeyValueEditor from '../../shared/KeyValueEditor.svelte';
 	import StringListEditor from '../../shared/StringListEditor.svelte';
+	import { Input } from '$lib/components/ui/input';
+	import { Checkbox } from '$lib/components/ui/checkbox';
+	import { FormField } from '$lib/components/ui/form-field';
 
 	type Props = {
 		config: Record<string, unknown>;
@@ -11,18 +14,17 @@
 	let { config, readonly = false, onchange }: Props = $props();
 </script>
 
-<div class="space-y-1.5">
-	<label for="process-command" class="text-xs font-medium text-muted-foreground">Command</label>
-	<input
+<FormField label="Command" for="process-command">
+	<Input
 		id="process-command"
 		type="text"
 		value={(config.command as string) ?? ''}
 		placeholder="e.g. python3"
 		disabled={readonly}
 		oninput={(e) => onchange({ ...config, command: (e.currentTarget as HTMLInputElement).value })}
-		class="w-full rounded-md border border-input bg-background px-2.5 py-1.5 font-mono text-sm text-foreground focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70"
+		class="font-mono"
 	/>
-</div>
+</FormField>
 
 <div class="space-y-1.5">
 	<span class="text-xs font-medium text-muted-foreground">Arguments</span>
@@ -34,11 +36,8 @@
 	/>
 </div>
 
-<div class="space-y-1.5">
-	<label for="process-workdir" class="text-xs font-medium text-muted-foreground"
-		>Working Directory (optional)</label
-	>
-	<input
+<FormField label="Working Directory (optional)" for="process-workdir">
+	<Input
 		id="process-workdir"
 		type="text"
 		value={(config.working_dir as string) ?? ''}
@@ -46,18 +45,15 @@
 		disabled={readonly}
 		oninput={(e) =>
 			onchange({ ...config, working_dir: (e.currentTarget as HTMLInputElement).value || undefined })}
-		class="w-full rounded-md border border-input bg-background px-2.5 py-1.5 font-mono text-sm text-foreground focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70"
+		class="font-mono"
 	/>
-</div>
+</FormField>
 
 <label class="flex items-center gap-1.5 text-xs text-muted-foreground">
-	<input
-		type="checkbox"
+	<Checkbox
 		checked={(config.inherit_env as boolean) ?? true}
 		disabled={readonly}
-		onchange={(e) =>
-			onchange({ ...config, inherit_env: (e.currentTarget as HTMLInputElement).checked })}
-		class="size-3.5 disabled:cursor-default disabled:opacity-70"
+		onCheckedChange={(v) => onchange({ ...config, inherit_env: v })}
 	/>
 	Inherit environment
 </label>

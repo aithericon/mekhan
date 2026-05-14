@@ -79,6 +79,7 @@
 				class="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-accent"
 				onclick={addInput}
 			>
+				<!-- ui-allow: block-type swatch — no theme token for input-field/blue identity -->
 				<span class="size-2.5 rounded-sm bg-blue-400"></span>
 				Input Field
 			</button>
@@ -87,6 +88,7 @@
 				class="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-accent"
 				onclick={addMdsvex}
 			>
+				<!-- ui-allow: block-type swatch — no theme token for markdown/purple identity -->
 				<span class="size-2.5 rounded-sm bg-purple-400"></span>
 				Markdown Content
 			</button>
@@ -95,6 +97,7 @@
 				class="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-accent"
 				onclick={addCallout}
 			>
+				<!-- ui-allow: block-type swatch — no theme token for callout/amber identity -->
 				<span class="size-2.5 rounded-sm bg-amber-400"></span>
 				Callout
 			</button>
@@ -103,6 +106,7 @@
 				class="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-accent"
 				onclick={addDivider}
 			>
+				<!-- ui-allow: block-type swatch — no theme token for divider/gray identity -->
 				<span class="size-2.5 rounded-sm bg-gray-400"></span>
 				Divider
 			</button>
@@ -111,6 +115,7 @@
 				class="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-accent"
 				onclick={addImage}
 			>
+				<!-- ui-allow: block-type swatch — no theme token for image/emerald identity -->
 				<span class="size-2.5 rounded-sm bg-emerald-400"></span>
 				Image
 			</button>
@@ -119,6 +124,7 @@
 				class="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-accent"
 				onclick={addFile}
 			>
+				<!-- ui-allow: block-type swatch — no theme token for file/sky identity -->
 				<span class="size-2.5 rounded-sm bg-sky-400"></span>
 				File
 			</button>
@@ -127,6 +133,7 @@
 				class="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-accent"
 				onclick={addPdf}
 			>
+				<!-- ui-allow: block-type swatch — no theme token for pdf/rose identity -->
 				<span class="size-2.5 rounded-sm bg-rose-400"></span>
 				PDF
 			</button>

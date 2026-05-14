@@ -5,6 +5,7 @@
 	import ChevronRight from '@lucide/svelte/icons/chevron-right';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
+	import { Checkbox } from '$lib/components/ui/checkbox';
 	import StringListEditor from '../../shared/StringListEditor.svelte';
 	import * as Select from '$lib/components/ui/select';
 
@@ -90,16 +91,10 @@
 			</Select.Root>
 		</div>
 		<label class="flex items-center gap-1.5">
-			<input
-				type="checkbox"
+			<Checkbox
 				checked={field.required ?? false}
 				disabled={readonly}
-				onchange={(e) =>
-					onchange({
-						...field,
-						required: (e.currentTarget as HTMLInputElement).checked
-					})}
-				class="size-4 disabled:cursor-default disabled:opacity-70"
+				onCheckedChange={(v) => onchange({ ...field, required: v === true })}
 			/>
 			<span class="text-xs text-muted-foreground">Required</span>
 		</label>

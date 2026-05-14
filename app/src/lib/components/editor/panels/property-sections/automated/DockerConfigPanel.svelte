@@ -2,6 +2,9 @@
 	import KeyValueEditor from '../../shared/KeyValueEditor.svelte';
 	import StringListEditor from '../../shared/StringListEditor.svelte';
 	import * as Select from '$lib/components/ui/select';
+	import { Input } from '$lib/components/ui/input';
+	import { Checkbox } from '$lib/components/ui/checkbox';
+	import { FormField } from '$lib/components/ui/form-field';
 
 	type Props = {
 		config: Record<string, unknown>;
@@ -18,18 +21,17 @@
 	};
 </script>
 
-<div class="space-y-1.5">
-	<label for="docker-image" class="text-xs font-medium text-muted-foreground">Image</label>
-	<input
+<FormField label="Image" for="docker-image">
+	<Input
 		id="docker-image"
 		type="text"
 		value={(config.image as string) ?? ''}
 		placeholder="e.g. python:3.12-slim"
 		disabled={readonly}
 		oninput={(e) => onchange({ ...config, image: (e.currentTarget as HTMLInputElement).value })}
-		class="w-full rounded-md border border-input bg-background px-2.5 py-1.5 font-mono text-sm text-foreground focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70"
+		class="font-mono"
 	/>
-</div>
+</FormField>
 
 <div class="space-y-1.5">
 	<span class="text-xs font-medium text-muted-foreground">Command</span>
@@ -70,11 +72,8 @@
 	</Select.Root>
 </div>
 
-<div class="space-y-1.5">
-	<label for="network-mode" class="text-xs font-medium text-muted-foreground"
-		>Network Mode (optional)</label
-	>
-	<input
+<FormField label="Network Mode (optional)" for="network-mode">
+	<Input
 		id="network-mode"
 		type="text"
 		value={(config.network_mode as string) ?? ''}
@@ -82,9 +81,8 @@
 		disabled={readonly}
 		oninput={(e) =>
 			onchange({ ...config, network_mode: (e.currentTarget as HTMLInputElement).value || undefined })}
-		class="w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-sm text-foreground focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70"
 	/>
-</div>
+</FormField>
 
 <div class="space-y-1.5">
 	<span class="text-xs font-medium text-muted-foreground">Environment Variables</span>
@@ -108,13 +106,10 @@
 </div>
 
 <label class="flex items-center gap-1.5 text-xs text-muted-foreground">
-	<input
-		type="checkbox"
+	<Checkbox
 		checked={(config.remove_container as boolean) ?? true}
 		disabled={readonly}
-		onchange={(e) =>
-			onchange({ ...config, remove_container: (e.currentTarget as HTMLInputElement).checked })}
-		class="size-3.5 disabled:cursor-default disabled:opacity-70"
+		onCheckedChange={(v) => onchange({ ...config, remove_container: v })}
 	/>
 	Remove container after execution
 </label>

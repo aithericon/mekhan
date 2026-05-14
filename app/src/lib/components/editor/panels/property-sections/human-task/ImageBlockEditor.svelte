@@ -63,9 +63,11 @@
 	];
 </script>
 
+<!-- ui-allow: block-type accent — no theme token for image/emerald identity -->
 <div class="rounded-md border border-border/50 border-l-2 border-l-emerald-400 bg-background p-3">
 	<!-- Header -->
 	<div class="mb-2 flex items-center justify-between">
+		<!-- ui-allow: block-type badge color — no theme token for image/emerald identity -->
 		<span class="rounded bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">
 			Image
 		</span>

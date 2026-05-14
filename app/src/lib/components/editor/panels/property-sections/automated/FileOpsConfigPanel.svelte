@@ -1,6 +1,9 @@
 <script lang="ts">
 	import KeyValueEditor from '../../shared/KeyValueEditor.svelte';
 	import * as Select from '$lib/components/ui/select';
+	import { Input } from '$lib/components/ui/input';
+	import { Checkbox } from '$lib/components/ui/checkbox';
+	import { FormField } from '$lib/components/ui/form-field';
 
 	type Props = {
 		config: Record<string, unknown>;
@@ -93,9 +96,8 @@
 
 <!-- Path fields per operation -->
 {#if operation === 'list'}
-	<div class="space-y-1.5">
-		<label for="fo-prefix" class="text-xs font-medium text-muted-foreground">Prefix</label>
-		<input
+	<FormField label="Prefix" for="fo-prefix">
+		<Input
 			id="fo-prefix"
 			type="text"
 			value={(config.prefix as string) ?? ''}
@@ -103,14 +105,11 @@
 			disabled={readonly}
 			oninput={(e) =>
 				onchange({ ...config, prefix: (e.currentTarget as HTMLInputElement).value })}
-			class="w-full rounded-md border border-input bg-background px-2.5 py-1.5 font-mono text-sm text-foreground focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70"
+			class="font-mono"
 		/>
-	</div>
-	<div class="space-y-1.5">
-		<label for="fo-limit" class="text-xs font-medium text-muted-foreground"
-			>Limit (optional)</label
-		>
-		<input
+	</FormField>
+	<FormField label="Limit (optional)" for="fo-limit">
+		<Input
 			id="fo-limit"
 			type="number"
 			min={1}
@@ -121,13 +120,11 @@
 				const val = parseInt((e.currentTarget as HTMLInputElement).value);
 				onchange({ ...config, limit: isNaN(val) ? undefined : val });
 			}}
-			class="w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-sm text-foreground focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70"
 		/>
-	</div>
+	</FormField>
 {:else if operation === 'copy' || operation === 'move'}
-	<div class="space-y-1.5">
-		<label for="fo-source" class="text-xs font-medium text-muted-foreground">Source Path</label>
-		<input
+	<FormField label="Source Path" for="fo-source">
+		<Input
 			id="fo-source"
 			type="text"
 			value={(config.source as string) ?? ''}
@@ -135,14 +132,11 @@
 			disabled={readonly}
 			oninput={(e) =>
 				onchange({ ...config, source: (e.currentTarget as HTMLInputElement).value })}
-			class="w-full rounded-md border border-input bg-background px-2.5 py-1.5 font-mono text-sm text-foreground focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70"
+			class="font-mono"
 		/>
-	</div>
-	<div class="space-y-1.5">
-		<label for="fo-dest" class="text-xs font-medium text-muted-foreground"
-			>Destination Path</label
-		>
-		<input
+	</FormField>
+	<FormField label="Destination Path" for="fo-dest">
+		<Input
 			id="fo-dest"
 			type="text"
 			value={(config.destination as string) ?? ''}
@@ -150,13 +144,12 @@
 			disabled={readonly}
 			oninput={(e) =>
 				onchange({ ...config, destination: (e.currentTarget as HTMLInputElement).value })}
-			class="w-full rounded-md border border-input bg-background px-2.5 py-1.5 font-mono text-sm text-foreground focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70"
+			class="font-mono"
 		/>
-	</div>
+	</FormField>
 {:else if operation === 'annotate'}
-	<div class="space-y-1.5">
-		<label for="fo-path" class="text-xs font-medium text-muted-foreground">Path</label>
-		<input
+	<FormField label="Path" for="fo-path">
+		<Input
 			id="fo-path"
 			type="text"
 			value={(config.path as string) ?? ''}
@@ -164,9 +157,9 @@
 			disabled={readonly}
 			oninput={(e) =>
 				onchange({ ...config, path: (e.currentTarget as HTMLInputElement).value })}
-			class="w-full rounded-md border border-input bg-background px-2.5 py-1.5 font-mono text-sm text-foreground focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70"
+			class="font-mono"
 		/>
-	</div>
+	</FormField>
 	<div class="space-y-1.5">
 		<span class="text-xs font-medium text-muted-foreground">Annotations</span>
 		<KeyValueEditor
@@ -176,21 +169,17 @@
 		/>
 	</div>
 	<label class="flex items-center gap-1.5 text-xs text-muted-foreground">
-		<input
-			type="checkbox"
+		<Checkbox
 			checked={(config.merge as boolean) ?? false}
 			disabled={readonly}
-			onchange={(e) =>
-				onchange({ ...config, merge: (e.currentTarget as HTMLInputElement).checked })}
-			class="size-3.5 disabled:cursor-default disabled:opacity-70"
+			onCheckedChange={(v) => onchange({ ...config, merge: v })}
 		/>
 		Merge with existing annotations
 	</label>
 {:else}
 	<!-- stat, probe, delete -->
-	<div class="space-y-1.5">
-		<label for="fo-path2" class="text-xs font-medium text-muted-foreground">Path</label>
-		<input
+	<FormField label="Path" for="fo-path2">
+		<Input
 			id="fo-path2"
 			type="text"
 			value={(config.path as string) ?? ''}
@@ -198,18 +187,15 @@
 			disabled={readonly}
 			oninput={(e) =>
 				onchange({ ...config, path: (e.currentTarget as HTMLInputElement).value })}
-			class="w-full rounded-md border border-input bg-background px-2.5 py-1.5 font-mono text-sm text-foreground focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70"
+			class="font-mono"
 		/>
-	</div>
+	</FormField>
 	{#if operation === 'delete'}
 		<label class="flex items-center gap-1.5 text-xs text-muted-foreground">
-			<input
-				type="checkbox"
+			<Checkbox
 				checked={(config.ignore_missing as boolean) ?? false}
 				disabled={readonly}
-				onchange={(e) =>
-					onchange({ ...config, ignore_missing: (e.currentTarget as HTMLInputElement).checked })}
-				class="size-3.5 disabled:cursor-default disabled:opacity-70"
+				onCheckedChange={(v) => onchange({ ...config, ignore_missing: v })}
 			/>
 			Ignore if missing
 		</label>
@@ -236,22 +222,22 @@
 				<Select.Item value="azblob" label="Azure Blob" />
 			</Select.Content>
 		</Select.Root>
-		<input
+		<Input
 			type="text"
 			value={(storage.endpoint as string) ?? ''}
 			placeholder={(storage.backend as string) === 'local' ? '/tmp/store' : 'https://...'}
 			disabled={readonly}
 			oninput={(e) => updateStorage({ endpoint: (e.currentTarget as HTMLInputElement).value })}
-			class="w-full rounded border border-input bg-background px-1.5 py-0.5 font-mono text-[10px] focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70"
+			class="h-6 px-1.5 py-0.5 font-mono text-[10px]"
 		/>
 		{#if (storage.backend as string) !== 'local'}
-			<input
+			<Input
 				type="text"
 				value={(storage.bucket as string) ?? ''}
 				placeholder="Bucket name"
 				disabled={readonly}
 				oninput={(e) => updateStorage({ bucket: (e.currentTarget as HTMLInputElement).value })}
-				class="w-full rounded border border-input bg-background px-1.5 py-0.5 text-[10px] focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70"
+				class="h-6 px-1.5 py-0.5 text-[10px]"
 			/>
 		{/if}
 	</div>
@@ -274,22 +260,22 @@
 				<Select.Item value="azblob" label="Azure Blob" />
 			</Select.Content>
 		</Select.Root>
-		<input
+		<Input
 			type="text"
 			value={(srcStorage.endpoint as string) ?? ''}
 			placeholder={(srcStorage.backend as string) === 'local' ? '/tmp/store' : 'https://...'}
 			disabled={readonly}
 			oninput={(e) => updateSrcStorage({ endpoint: (e.currentTarget as HTMLInputElement).value })}
-			class="w-full rounded border border-input bg-background px-1.5 py-0.5 font-mono text-[10px] focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70"
+			class="h-6 px-1.5 py-0.5 font-mono text-[10px]"
 		/>
 		{#if (srcStorage.backend as string) !== 'local'}
-			<input
+			<Input
 				type="text"
 				value={(srcStorage.bucket as string) ?? ''}
 				placeholder="Bucket name"
 				disabled={readonly}
 				oninput={(e) => updateSrcStorage({ bucket: (e.currentTarget as HTMLInputElement).value })}
-				class="w-full rounded border border-input bg-background px-1.5 py-0.5 text-[10px] focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70"
+				class="h-6 px-1.5 py-0.5 text-[10px]"
 			/>
 		{/if}
 	</div>

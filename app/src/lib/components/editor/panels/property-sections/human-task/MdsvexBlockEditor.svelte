@@ -12,8 +12,10 @@
 	let { content, readonly = false, onchange, onremove }: Props = $props();
 </script>
 
+<!-- ui-allow: block-type accent — no theme token for markdown/purple identity -->
 <div class="rounded-md border border-border/50 border-l-2 border-l-purple-400 bg-background p-3">
 	<div class="mb-2 flex items-center justify-between">
+		<!-- ui-allow: block-type badge color — no theme token for markdown/purple identity -->
 		<span
 			class="rounded bg-purple-100 px-2 py-0.5 text-xs font-medium text-purple-700 dark:bg-purple-900/30 dark:text-purple-300"
 			>Markdown</span

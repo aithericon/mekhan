@@ -1,6 +1,9 @@
 <script lang="ts">
 	import StringListEditor from '../../shared/StringListEditor.svelte';
 	import * as Select from '$lib/components/ui/select';
+	import { Input } from '$lib/components/ui/input';
+	import { Checkbox } from '$lib/components/ui/checkbox';
+	import { FormField } from '$lib/components/ui/form-field';
 
 	type Props = {
 		config: Record<string, unknown>;
@@ -44,11 +47,8 @@
 		<p class="text-[9px] italic text-muted-foreground">Empty = use all staged inputs</p>
 	</div>
 {:else}
-	<div class="space-y-1.5">
-		<label for="kz-file" class="text-xs font-medium text-muted-foreground"
-			>File (input name)</label
-		>
-		<input
+	<FormField label="File (input name)" for="kz-file">
+		<Input
 			id="kz-file"
 			type="text"
 			value={(config.file as string) ?? ''}
@@ -56,16 +56,12 @@
 			disabled={readonly}
 			oninput={(e) =>
 				onchange({ ...config, file: (e.currentTarget as HTMLInputElement).value })}
-			class="w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-sm text-foreground focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70"
 		/>
-	</div>
+	</FormField>
 {/if}
 
-<div class="space-y-1.5">
-	<label for="kz-mime" class="text-xs font-medium text-muted-foreground"
-		>MIME Type (optional)</label
-	>
-	<input
+<FormField label="MIME Type (optional)" for="kz-mime">
+	<Input
 		id="kz-mime"
 		type="text"
 		value={(config.mime_type as string) ?? ''}
@@ -73,18 +69,14 @@
 		disabled={readonly}
 		oninput={(e) =>
 			onchange({ ...config, mime_type: (e.currentTarget as HTMLInputElement).value || undefined })}
-		class="w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-sm text-foreground focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70"
 	/>
-</div>
+</FormField>
 
 <label class="flex items-center gap-1.5 text-xs text-muted-foreground">
-	<input
-		type="checkbox"
+	<Checkbox
 		checked={(config.force_ocr as boolean) ?? false}
 		disabled={readonly}
-		onchange={(e) =>
-			onchange({ ...config, force_ocr: (e.currentTarget as HTMLInputElement).checked })}
-		class="size-3.5 disabled:cursor-default disabled:opacity-70"
+		onCheckedChange={(v) => onchange({ ...config, force_ocr: v })}
 	/>
 	Force OCR
 </label>
@@ -108,7 +100,7 @@
 			<Select.Item value="paddle-ocr" label="PaddleOCR" />
 		</Select.Content>
 	</Select.Root>
-	<input
+	<Input
 		type="text"
 		value={(ocr?.language as string) ?? 'eng'}
 		placeholder="Language (ISO 639-3)"
@@ -118,22 +110,20 @@
 				...config,
 				ocr: { ...(ocr ?? {}), language: (e.currentTarget as HTMLInputElement).value }
 			})}
-		class="w-full rounded border border-input bg-background px-1.5 py-0.5 text-[10px] focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70"
+		class="h-6 px-1.5 py-0.5 text-[10px]"
 	/>
 	<label class="flex items-center gap-1 text-[10px] text-muted-foreground">
-		<input
-			type="checkbox"
+		<Checkbox
 			checked={(ocr?.enable_table_detection as boolean) ?? false}
 			disabled={readonly}
-			onchange={(e) =>
+			onCheckedChange={(v) =>
 				onchange({
 					...config,
 					ocr: {
 						...(ocr ?? {}),
-						enable_table_detection: (e.currentTarget as HTMLInputElement).checked
+						enable_table_detection: v
 					}
 				})}
-			class="size-3 disabled:cursor-default disabled:opacity-70"
 		/>
 		Table detection
 	</label>

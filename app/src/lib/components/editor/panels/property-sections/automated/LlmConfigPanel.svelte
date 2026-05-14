@@ -1,6 +1,9 @@
 <script lang="ts">
 	import CodeEditor from '../../shared/CodeEditor.svelte';
 	import * as Select from '$lib/components/ui/select';
+	import { Input } from '$lib/components/ui/input';
+	import { Textarea } from '$lib/components/ui/textarea';
+	import { FormField } from '$lib/components/ui/form-field';
 
 	type Props = {
 		config: Record<string, unknown>;
@@ -40,9 +43,8 @@
 	</Select.Root>
 </div>
 
-<div class="space-y-1.5">
-	<label for="llm-model" class="text-xs font-medium text-muted-foreground">Model</label>
-	<input
+<FormField label="Model" for="llm-model">
+	<Input
 		id="llm-model"
 		type="text"
 		value={(config.model as string) ?? ''}
@@ -55,15 +57,12 @@
 		}
 		disabled={readonly}
 		oninput={(e) => onchange({ ...config, model: (e.currentTarget as HTMLInputElement).value })}
-		class="w-full rounded-md border border-input bg-background px-2.5 py-1.5 font-mono text-sm text-foreground focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70"
+		class="font-mono"
 	/>
-</div>
+</FormField>
 
-<div class="space-y-1.5">
-	<label for="llm-api-key" class="text-xs font-medium text-muted-foreground"
-		>API Key (optional)</label
-	>
-	<input
+<FormField label="API Key (optional)" for="llm-api-key">
+	<Input
 		id="llm-api-key"
 		type="password"
 		value={(config.api_key as string) ?? ''}
@@ -71,15 +70,11 @@
 		disabled={readonly}
 		oninput={(e) =>
 			onchange({ ...config, api_key: (e.currentTarget as HTMLInputElement).value || undefined })}
-		class="w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-sm text-foreground focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70"
 	/>
-</div>
+</FormField>
 
-<div class="space-y-1.5">
-	<label for="llm-base-url" class="text-xs font-medium text-muted-foreground"
-		>Base URL (optional)</label
-	>
-	<input
+<FormField label="Base URL (optional)" for="llm-base-url">
+	<Input
 		id="llm-base-url"
 		type="text"
 		value={(config.base_url as string) ?? ''}
@@ -87,13 +82,13 @@
 		disabled={readonly}
 		oninput={(e) =>
 			onchange({ ...config, base_url: (e.currentTarget as HTMLInputElement).value || undefined })}
-		class="w-full rounded-md border border-input bg-background px-2.5 py-1.5 font-mono text-sm text-foreground focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70"
+		class="font-mono"
 	/>
-</div>
+</FormField>
 
 <div class="space-y-1.5">
 	<span class="text-xs font-medium text-muted-foreground">System Prompt (optional)</span>
-	<textarea
+	<Textarea
 		value={(config.system_prompt as string) ?? ''}
 		placeholder="System instructions..."
 		disabled={readonly}
@@ -103,27 +98,24 @@
 				system_prompt: (e.currentTarget as HTMLTextAreaElement).value || undefined
 			})}
 		rows={2}
-		class="w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-sm text-foreground focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70"
-	></textarea>
+	/>
 </div>
 
 <div class="space-y-1.5">
 	<span class="text-xs font-medium text-muted-foreground">Prompt</span>
-	<textarea
+	<Textarea
 		value={(config.prompt as string) ?? ''}
 		placeholder={'User prompt (supports {{variable}} templates)...'}
 		disabled={readonly}
 		oninput={(e) =>
 			onchange({ ...config, prompt: (e.currentTarget as HTMLTextAreaElement).value })}
 		rows={4}
-		class="w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-sm text-foreground focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70"
-	></textarea>
+	/>
 </div>
 
 <div class="flex gap-3">
-	<div class="flex-1 space-y-1.5">
-		<label for="llm-temp" class="text-xs font-medium text-muted-foreground">Temperature</label>
-		<input
+	<FormField label="Temperature" for="llm-temp" class="flex-1">
+		<Input
 			id="llm-temp"
 			type="number"
 			min={0}
@@ -136,13 +128,10 @@
 				const val = parseFloat((e.currentTarget as HTMLInputElement).value);
 				onchange({ ...config, temperature: isNaN(val) ? undefined : val });
 			}}
-			class="w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-sm text-foreground focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70"
 		/>
-	</div>
-	<div class="flex-1 space-y-1.5">
-		<label for="llm-max-tokens" class="text-xs font-medium text-muted-foreground">Max Tokens</label
-		>
-		<input
+	</FormField>
+	<FormField label="Max Tokens" for="llm-max-tokens" class="flex-1">
+		<Input
 			id="llm-max-tokens"
 			type="number"
 			min={1}
@@ -153,9 +142,8 @@
 				const val = parseInt((e.currentTarget as HTMLInputElement).value);
 				onchange({ ...config, max_tokens: isNaN(val) ? undefined : val });
 			}}
-			class="w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-sm text-foreground focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70"
 		/>
-	</div>
+	</FormField>
 </div>
 
 <div class="space-y-1.5">
