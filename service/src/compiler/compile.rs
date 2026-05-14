@@ -531,7 +531,7 @@ fn expand_node(
                     .auto_input("input", &p_input)
                     .auto_output("job", &exec_inbox)
                     .logic(format!(
-                        r#"let d = input; d.job_id = "{id}"; d.run = 0; d.retries = 0; d.max_retries = 3; d.spec = #{{ "type": "{backend_type}", "inputs": {inputs_rhai}, "outputs": [], "config": {config_rhai} }}; #{{ job: d }}"#
+                        r#"let d = input; d.job_id = "{id}"; d.run = 0; d.retries = 0; d.max_retries = 3; d.spec = #{{ "backend": "{backend_type}", "inputs": {inputs_rhai}, "outputs": [], "config": {config_rhai} }}; #{{ job: d }}"#
                     ));
 
                 executor_lifecycle(ctx, ExecutorBridges {
