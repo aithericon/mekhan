@@ -17,6 +17,7 @@
 		onentrypointchange?: (entrypoint: string) => void;
 		binding?: YjsGraphBinding;
 		nodeId?: string;
+		templateId?: string;
 	};
 
 	let {
@@ -26,8 +27,18 @@
 		onchange,
 		onentrypointchange,
 		binding,
-		nodeId
+		nodeId,
+		templateId
 	}: Props = $props();
+
+	function fileHref(filename: string): string | null {
+		if (!templateId || !nodeId) return null;
+		const params = new URLSearchParams({
+			node: nodeId,
+			file: `${nodeId}:${filename}`
+		});
+		return `/templates/${templateId}/ide?${params.toString()}`;
+	}
 
 	// Files for this node (collaborative). Empty Map when binding/nodeId aren't
 	// provided (e.g. in test harnesses); the panel still renders the rest of the
@@ -83,13 +94,23 @@
 	{:else}
 		<div class="flex flex-col gap-0.5">
 			{#each filenames as filename (filename)}
+				{@const href = fileHref(filename)}
 				<div
 					class="group flex items-center gap-1 rounded border px-2 py-1 text-xs transition-colors {filename ===
 					entrypoint
 						? 'border-primary bg-primary/5 text-foreground'
 						: 'border-border text-muted-foreground hover:bg-accent/30'}"
 				>
-					<span class="flex-1 truncate font-mono">{filename}</span>
+					{#if href}
+						<a
+							{href}
+							class="flex-1 truncate font-mono hover:text-foreground hover:underline"
+							title="Open {filename} in IDE"
+							data-testid="file-link-{filename}"
+						>{filename}</a>
+					{:else}
+						<span class="flex-1 truncate font-mono">{filename}</span>
+					{/if}
 					{#if filename === entrypoint}
 						<span class="rounded bg-primary/10 px-1 py-px text-[9px] uppercase tracking-wider text-primary">
 							entry

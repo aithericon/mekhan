@@ -138,6 +138,23 @@
 		panelExpanded = false;
 	}
 
+	function handleDeleteSelectedNode() {
+		if (!selectedNodeId) return;
+		// Mirror WorkflowCanvas.handleDelete cascade: a scope node also removes
+		// its children. binding.removeNode already cascades connected edges.
+		const idsToDelete = new Set<string>([selectedNodeId]);
+		for (const n of binding.graph.nodes) {
+			if (n.parentId && idsToDelete.has(n.parentId)) {
+				idsToDelete.add(n.id);
+			}
+		}
+		for (const id of idsToDelete) {
+			binding.removeNode(id);
+		}
+		selectedNodeId = null;
+		panelExpanded = false;
+	}
+
 	function handleNodeDataChange(data: WorkflowNodeData) {
 		if (!selectedNodeId) return;
 		binding.updateNodeData(selectedNodeId, data);
@@ -206,6 +223,7 @@
 					onchange={handleNodeDataChange}
 					onclose={() => (selectedNodeId = null)}
 					onexpand={() => (panelExpanded = true)}
+					ondelete={handleDeleteSelectedNode}
 					{binding}
 					nodeId={selectedNodeId ?? undefined}
 					{templateId}
@@ -227,6 +245,7 @@
 							onchange={handleNodeDataChange}
 							onclose={() => (selectedNodeId = null)}
 							oncollapse={() => (panelExpanded = false)}
+							ondelete={handleDeleteSelectedNode}
 							{binding}
 							nodeId={selectedNodeId ?? undefined}
 							{templateId}

@@ -38,6 +38,7 @@
 
 		const extensions: any[] = [
 			EditorView.lineWrapping,
+			lineNumbers(),
 			syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
 			bracketMatching(),
 			history(),
@@ -56,7 +57,14 @@
 					fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace'
 				},
 				'.cm-content': { padding: '8px 0' },
-				'.cm-gutters': { display: 'none' },
+				'.cm-gutters': {
+					backgroundColor: 'transparent',
+					borderRight: '1px solid var(--border)'
+				},
+				'.cm-lineNumbers .cm-gutterElement': {
+					padding: '0 8px 0 6px',
+					minWidth: '2ch'
+				},
 				'&.cm-focused': { outline: '2px solid var(--ring)', outlineOffset: '-1px' }
 			})
 		];

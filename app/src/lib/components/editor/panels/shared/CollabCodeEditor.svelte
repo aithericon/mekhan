@@ -28,7 +28,7 @@
 	onMount(async () => {
 		if (!browser || !containerEl) return;
 
-		const { EditorView, keymap } = await import('@codemirror/view');
+		const { EditorView, keymap, lineNumbers } = await import('@codemirror/view');
 		const { EditorState } = await import('@codemirror/state');
 		const { defaultKeymap, history, historyKeymap } = await import('@codemirror/commands');
 		const {
@@ -41,6 +41,7 @@
 
 		const extensions: any[] = [
 			EditorView.lineWrapping,
+			lineNumbers(),
 			syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
 			bracketMatching(),
 			history(),
@@ -59,7 +60,14 @@
 					fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace'
 				},
 				'.cm-content': { padding: '8px 0' },
-				'.cm-gutters': { display: 'none' },
+				'.cm-gutters': {
+					backgroundColor: 'transparent',
+					borderRight: '1px solid var(--border)'
+				},
+				'.cm-lineNumbers .cm-gutterElement': {
+					padding: '0 8px 0 6px',
+					minWidth: '2ch'
+				},
 				'&.cm-focused': { outline: '2px solid var(--ring)', outlineOffset: '-1px' }
 			}),
 			yCollab(ytext, awareness ?? null)
@@ -94,8 +102,9 @@
 <style>
 	.collab-code-editor-container {
 		width: 100%;
+		height: 100%;
 	}
 	.collab-code-editor-container :global(.cm-editor) {
-		height: auto;
+		height: 100%;
 	}
 </style>

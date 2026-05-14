@@ -23,9 +23,10 @@
 		onchange: (data: AutomatedStepNodeData) => void;
 		binding?: YjsGraphBinding;
 		nodeId?: string;
+		templateId?: string;
 	};
 
-	let { data, readonly = false, onchange, binding, nodeId }: Props = $props();
+	let { data, readonly = false, onchange, binding, nodeId, templateId }: Props = $props();
 
 	const outputPort = $derived<Port>(data.output ?? emptyOutputPort());
 
@@ -119,6 +120,7 @@
 		onentrypointchange={handleEntrypointChange}
 		{binding}
 		{nodeId}
+		{templateId}
 	/>
 {:else if data.executionSpec.backendType === 'docker'}
 	<DockerConfigPanel config={data.executionSpec.config as Record<string, unknown>} {readonly} onchange={handleConfigChange} />
