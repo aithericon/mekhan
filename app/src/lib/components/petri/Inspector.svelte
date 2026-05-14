@@ -6,6 +6,8 @@
 	import { Card } from '$lib/components/ui/card';
 	import { Badge } from '$lib/components/ui/badge';
 	import NodeKindBadge from './NodeKindBadge.svelte';
+	import { Button } from '$lib/components/ui/button';
+	import { Textarea } from '$lib/components/ui/textarea';
 
 	// ---------------------------------------------------------------------------
 	// Detail shape interfaces
@@ -256,12 +258,9 @@
 	<div class="px-3 py-2 border-b border-border bg-muted flex items-center justify-between">
 		<h3 class="font-semibold text-foreground text-sm">Inspector</h3>
 		{#if selectedElement}
-			<button
-				onclick={() => onClearSelection?.()}
-				class="text-muted-foreground hover:text-foreground text-sm"
-			>
+			<Button variant="ghost" size="xs" onclick={() => onClearSelection?.()}>
 				Clear
-			</button>
+			</Button>
 		{/if}
 	</div>
 
@@ -332,25 +331,21 @@
 				<!-- Token Injection -->
 				<div>
 					<h4 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Inject Token</h4>
-					<textarea
+					<Textarea
 						bind:value={injectJsonInput}
 						placeholder={'{"amount": 500}'}
-						class="w-full h-20 text-sm font-mono p-2 border border-input rounded bg-muted text-foreground resize-none"
+						class="h-20 font-mono text-sm resize-none"
 						spellcheck="false"
-					></textarea>
+					/>
 					{#if injectError}
 						<p class="text-xs text-destructive mt-1">{injectError}</p>
 					{/if}
 					{#if injectSuccess}
 						<p class="text-xs text-success mt-1">Token injected!</p>
 					{/if}
-					<button
-						onclick={handleInjectToken}
-						disabled={loading}
-						class="mt-2 w-full px-3 py-1.5 text-sm bg-primary text-primary-foreground rounded hover:bg-primary/90 disabled:opacity-50"
-					>
+					<Button onclick={handleInjectToken} disabled={loading} size="sm" class="mt-2 w-full">
 						{loading ? 'Injecting...' : 'Inject Token'}
-					</button>
+					</Button>
 				</div>
 			</div>
 		{:else if selectedElement.type === 'transition' && transitionDetails}
@@ -459,13 +454,10 @@
 
 				<!-- Open Script/Effect Sheet -->
 				{#if onOpenScript}
-					<button
-						onclick={onOpenScript}
-						class="w-full flex items-center justify-center gap-2 px-3 py-2 text-sm font-medium rounded bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
-					>
+					<Button onclick={onOpenScript} class="w-full">
 						<Pencil class="w-4 h-4" />
 						View / Edit Logic
-					</button>
+					</Button>
 				{/if}
 			</div>
 		{:else if selectedElement.type === 'token' && tokenDetails}
@@ -493,12 +485,9 @@
 						<CopyButton text={tokenDetails.token.color.type === 'Integer' ? String(tokenDetails.token.color.value) : JSON.stringify(tokenDetails.token.color.value, null, 2)} />
 					{/if}
 					{#if onViewToken}
-						<button
-							onclick={onViewToken}
-							class="flex-1 flex items-center justify-center gap-2 px-3 py-2 text-sm font-medium rounded bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
-						>
+						<Button onclick={onViewToken} class="flex-1">
 							View Details
-						</button>
+						</Button>
 					{/if}
 				</div>
 			</div>
@@ -756,12 +745,12 @@
 
 					<div class="flex items-center gap-2">
 						<span class="text-xs text-muted-foreground font-mono">{eventDetails.token.id.slice(0, 8)}</span>
-						<button
+						<Button
+							size="xs"
 							onclick={() => { onSelectToken?.((eventDetails.event.event as any).place_id, eventDetails.token!.id); onViewToken?.(); }}
-							class="px-3 py-1.5 text-xs font-medium rounded bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
 						>
 							View Details
-						</button>
+						</Button>
 					</div>
 
 					{#if eventDetails.signalKey}
@@ -826,12 +815,12 @@
 					{#if eventDetails.token}
 						<div class="flex items-center gap-2">
 							<span class="text-xs text-muted-foreground font-mono">{eventDetails.token.id.slice(0, 8)}</span>
-							<button
+							<Button
+								size="xs"
 								onclick={() => { onSelectToken?.((eventDetails.event.event as any).source_place_id, eventDetails.token!.id); onViewToken?.(); }}
-								class="px-3 py-1.5 text-xs font-medium rounded bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
 							>
 								View Details
-							</button>
+							</Button>
 						</div>
 					{/if}
 

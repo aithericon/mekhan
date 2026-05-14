@@ -14,6 +14,8 @@
 		X
 	} from '@lucide/svelte';
 	import NodeKindBadge, { type NodeKind } from './NodeKindBadge.svelte';
+	import { Button } from '$lib/components/ui/button';
+	import { Input } from '$lib/components/ui/input';
 
 	interface Props {
 		events: PersistedEvent[];
@@ -274,19 +276,20 @@
 				</button>
 			{/each}
 			{#if hasFilters}
-				<button
-					class="px-1 py-0.5 text-muted-foreground hover:text-foreground"
+				<Button
+					variant="ghost"
+					size="icon-xs"
 					onclick={() => { typeFilter.clear(); textSearch = ''; }}
 					title="Clear filters"
 				>
 					<X class="w-3 h-3" />
-				</button>
+				</Button>
 			{/if}
 		</div>
-		<input
+		<Input
 			bind:value={textSearch}
 			placeholder="Search events..."
-			class="w-full px-2 py-1 text-xs rounded border border-border bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+			class="h-7 text-xs"
 		/>
 	</div>
 
