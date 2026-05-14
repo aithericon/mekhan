@@ -44,6 +44,28 @@ quality-frontend:
     npm ci
     npm run check
 
+# Regenerate the OpenAPI spec + TS schema and fail if they differ from
+# what's committed. Catches PRs that change a Rust DTO / handler but forget
+# `just dev::openapi`. Run inside the CI builder so `cargo build` + the
+# `openapi-typescript` devDep are both available.
+openapi-drift:
+    #!/usr/bin/env bash
+    cd ..
+    echo "▶ Rebuilding mekhan CLI and dumping spec…"
+    cargo build --bin mekhan
+    ./target/debug/mekhan openapi > /tmp/openapi-mekhan.regen.json
+    if ! diff -u openapi-mekhan.json /tmp/openapi-mekhan.regen.json; then
+      echo "✗ openapi-mekhan.json is stale. Run \`just dev::openapi\` and commit." >&2
+      exit 1
+    fi
+    echo "▶ Rebuilding TS schema and diffing…"
+    (cd app && npm ci && npm run openapi:generate)
+    if ! git diff --exit-code app/src/lib/api/schema.d.ts; then
+      echo "✗ app/src/lib/api/schema.d.ts is stale. Run \`just dev::openapi\` and commit." >&2
+      exit 1
+    fi
+    echo "✓ OpenAPI spec + TS schema are in sync."
+
 # ── Test ────────────────────────────────────────────────────────────────────
 
 # cargo check on the workspace (lib + bins). Use this in CI until the

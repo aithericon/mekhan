@@ -97,6 +97,20 @@ logs name:
 psql:
     psql "{{database_url}}"
 
+# Regenerate openapi-mekhan.json (from the mekhan-service binary, no infra
+# needed) and refresh the SvelteKit app's typed schema from it. Run this
+# after any change to a #[utoipa::path] annotation or ToSchema-derived DTO.
+openapi:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "▶ building mekhan CLI…"
+    cargo build --bin mekhan
+    echo "▶ dumping spec → openapi-mekhan.json"
+    ./target/debug/mekhan openapi > openapi-mekhan.json
+    echo "▶ regenerating app/src/lib/api/schema.d.ts"
+    (cd app && npm run openapi:generate)
+    echo "✓ openapi spec + schema regenerated"
+
 # ── Infra ────────────────────────────────────────────────────────────────────
 
 _infra-up:
