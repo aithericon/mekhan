@@ -36,8 +36,12 @@ fn engine_nats_url() -> String {
     std::env::var("ENGINE_NATS_URL").unwrap_or_else(|_| "nats://localhost:4322".to_string())
 }
 
+fn engine_url() -> String {
+    std::env::var("TEST_ENGINE_URL").unwrap_or_else(|_| "http://localhost:3030".to_string())
+}
+
 async fn engine_available() -> bool {
-    reqwest::get("http://localhost:3030/api/nets/metadata")
+    reqwest::get(format!("{}/api/nets/metadata", engine_url()))
         .await
         .map(|r| r.status().is_success())
         .unwrap_or(false)
@@ -49,10 +53,14 @@ async fn body_json(body: Body) -> Value {
 }
 
 /// Compile the SDK example to AIR JSON.
+///
+/// The example is part of the in-repo `aithericon-sdk` workspace at
+/// `../engine` (relative to the `service/` crate root, which is cargo's CWD
+/// when running tests).
 fn compile_sdk_example(name: &str) -> Value {
     let output = std::process::Command::new("cargo")
-        .args(["run", "--example", name])
-        .current_dir("../../petri-lab")
+        .args(["run", "-p", "aithericon-sdk", "--example", name])
+        .current_dir("../engine")
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .output()
@@ -70,10 +78,11 @@ fn compile_sdk_example(name: &str) -> Value {
 /// Deploy a scenario via HTTP API and start it.
 async fn deploy_scenario(net_id: &str, air_json: &Value) {
     let client = reqwest::Client::new();
+    let base = engine_url();
 
     // Deploy scenario
     let resp = client
-        .post(format!("http://localhost:3030/api/nets/{net_id}/scenario"))
+        .post(format!("{base}/api/nets/{net_id}/scenario"))
         .json(air_json)
         .send()
         .await
@@ -87,7 +96,7 @@ async fn deploy_scenario(net_id: &str, air_json: &Value) {
 
     // Set run mode to running
     let resp = client
-        .put(format!("http://localhost:3030/api/nets/{net_id}/run-mode"))
+        .put(format!("{base}/api/nets/{net_id}/run-mode"))
         .json(&json!({ "mode": "running" }))
         .send()
         .await
@@ -478,7 +487,9 @@ async fn causality_full_pipeline() {
 
     assert_eq!(resp.status(), StatusCode::OK);
     let provenance = body_json(resp.into_body()).await;
-    let nodes = provenance.as_array().expect("provenance should be array");
+    let nodes = provenance["nodes"]
+        .as_array()
+        .expect("provenance.nodes should be array");
     eprintln!("  provenance nodes for {some_token}: {}", nodes.len());
     // At minimum depth 0 (the event that produced this token)
     assert!(!nodes.is_empty(), "provenance should return at least 1 node");

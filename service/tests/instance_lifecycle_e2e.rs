@@ -24,13 +24,18 @@ use uuid::Uuid;
 use mekhan_service::catalogue::subscriptions::SubscriptionManager;
 use mekhan_service::lifecycle::start_lifecycle_listener;
 use mekhan_service::models::template::{
-    Position, WorkflowEdge, WorkflowGraph, WorkflowNode, WorkflowNodeData,
+    Port, Position, WorkflowEdge, WorkflowGraph, WorkflowNode, WorkflowNodeData,
 };
 use mekhan_service::nats::MekhanNats;
 
+/// Test engine URL (override with TEST_ENGINE_URL).
+fn engine_url() -> String {
+    std::env::var("TEST_ENGINE_URL").unwrap_or_else(|_| "http://localhost:3030".to_string())
+}
+
 /// Check if the petri-lab engine is reachable.
 async fn engine_available() -> bool {
-    match reqwest::get("http://localhost:3030/api/nets/metadata").await {
+    match reqwest::get(format!("{}/api/nets/metadata", engine_url())).await {
         Ok(resp) if resp.status().is_success() => true,
         _ => false,
     }
@@ -47,7 +52,7 @@ fn simple_graph() -> WorkflowGraph {
                 data: WorkflowNodeData::Start {
                     label: "Start".to_string(),
                     description: None,
-                    initial_data: Some(json!({"test": true})),
+                    initial: Port::empty_input(),
                 },
                 parent_id: None,
                 width: None,
@@ -60,6 +65,7 @@ fn simple_graph() -> WorkflowGraph {
                 data: WorkflowNodeData::End {
                     label: "End".to_string(),
                     description: None,
+                terminal: mekhan_service::models::template::default_terminal_port(),
                 },
                 parent_id: None,
                 width: None,
@@ -71,6 +77,7 @@ fn simple_graph() -> WorkflowGraph {
             source: "start".to_string(),
             target: "end".to_string(),
             source_handle: None,
+            target_handle: Some("in".to_string()),
             label: None,
             edge_type: "sequence".to_string(),
         }],
@@ -113,18 +120,21 @@ async fn wait_for_status(db: &sqlx::PgPool, instance_id: Uuid, target: &str, tim
 async fn full_instance_lifecycle() {
     if !engine_available().await {
         panic!(
-            "petri-lab engine not available at http://localhost:3030\n\
-             Start with: cd petri-lab && cargo run -p core-engine"
+            "petri-lab engine not available at {}\n\
+             Start with: cd engine && cargo run -p core-engine --features executor,catalogue,human",
+            engine_url()
         );
     }
 
     // E2E test must use the SAME NATS as the running engine.
-    // The engine is on the dev NATS (4222), not the test NATS (4322).
-    // Override the NATS URL for this test.
+    // Default to the test NATS (4322); override via ENGINE_NATS_URL if the
+    // engine is on a different broker.
     let engine_nats_url = std::env::var("ENGINE_NATS_URL")
-        .unwrap_or_else(|_| "nats://localhost:4222".to_string());
+        .unwrap_or_else(|_| common::nats_url());
+    let engine_http_url = engine_url();
 
-    let (app, db) = common::test_app_with_nats(&engine_nats_url).await;
+    let (app, db) =
+        common::test_app_with_petri_url(&engine_nats_url, &engine_http_url).await;
 
     // Start lifecycle listener on the engine's NATS
     let listener_nats = MekhanNats::connect(&engine_nats_url, None).await.expect("nats");

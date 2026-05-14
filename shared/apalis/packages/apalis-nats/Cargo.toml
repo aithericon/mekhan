@@ -37,7 +37,8 @@ tracing-opentelemetry = { version = "0.32", optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
-email-service = { path = "../../examples/email-service" }
+# Upstream `email-service` example dropped when vendoring apalis into
+# shared/apalis/ — the platform doesn't ship apalis's example crates.
 apalis = { path = "../../", default-features = false, features = ["limit"] }
 apalis-core = { path = "../apalis-core", features = ["test-utils"] }
 testcontainers = "0.23"

@@ -22,7 +22,8 @@ use mekhan_service::compiler::compile_to_air;
 use mekhan_service::catalogue::subscriptions::SubscriptionManager;
 use mekhan_service::lifecycle::start_lifecycle_listener;
 use mekhan_service::models::template::{
-    Position, WorkflowEdge, WorkflowGraph, WorkflowNode, WorkflowNodeData,
+    FieldKind, Port, PortField, Position, WorkflowEdge, WorkflowGraph, WorkflowNode,
+    WorkflowNodeData,
 };
 use mekhan_service::nats::MekhanNats;
 
@@ -45,7 +46,7 @@ fn simple_graph() -> WorkflowGraph {
                 data: WorkflowNodeData::Start {
                     label: "Start".to_string(),
                     description: None,
-                    initial_data: None,
+                    initial: Port::empty_input(),
                 },
                 parent_id: None,
                 width: None,
@@ -58,6 +59,7 @@ fn simple_graph() -> WorkflowGraph {
                 data: WorkflowNodeData::End {
                     label: "End".to_string(),
                     description: None,
+                terminal: mekhan_service::models::template::default_terminal_port(),
                 },
                 parent_id: None,
                 width: None,
@@ -69,6 +71,7 @@ fn simple_graph() -> WorkflowGraph {
             source: "start".to_string(),
             target: "end".to_string(),
             source_handle: None,
+            target_handle: Some("in".to_string()),
             label: None,
             edge_type: "sequence".to_string(),
         }],
@@ -368,4 +371,194 @@ async fn instance_state_engine_unavailable_shows_events() {
         event_count > 0,
         "should have events from NATS even when engine is down (got {event_count})"
     );
+}
+
+// ===========================================================================
+// Test: start_tokens validation (typed-ports Phase 1)
+// ===========================================================================
+//
+// These tests exercise the per-request validation path of `parameterize_air`
+// via the HTTP handler. Engine never gets called — the request 400s before
+// petri-lab is touched, so no engine availability is required.
+
+/// Build a published template whose Start has one required `customer_id`
+/// (Text) field. Used by the start_tokens validation tests below.
+async fn insert_published_template_with_required_start_field(db: &sqlx::PgPool) -> Uuid {
+    let template_id = Uuid::new_v4();
+    let author_id = Uuid::new_v4();
+    let graph = WorkflowGraph {
+        nodes: vec![
+            WorkflowNode {
+                id: "start".to_string(),
+                node_type: "start".to_string(),
+                position: Position { x: 0.0, y: 0.0 },
+                data: WorkflowNodeData::Start {
+                    label: "Start".to_string(),
+                    description: None,
+                    initial: Port {
+                        id: "in".to_string(),
+                        label: "Input".to_string(),
+                        fields: vec![PortField {
+                            name: "customer_id".to_string(),
+                            label: "Customer ID".to_string(),
+                            kind: FieldKind::Text,
+                            required: true,
+                            options: None,
+                            description: None,
+                        }],
+                    },
+                },
+                parent_id: None,
+                width: None,
+                height: None,
+            },
+            WorkflowNode {
+                id: "end".to_string(),
+                node_type: "end".to_string(),
+                position: Position { x: 200.0, y: 0.0 },
+                data: WorkflowNodeData::End {
+                    label: "End".to_string(),
+                    description: None,
+                terminal: mekhan_service::models::template::default_terminal_port(),
+                },
+                parent_id: None,
+                width: None,
+                height: None,
+            },
+        ],
+        edges: vec![WorkflowEdge {
+            id: "e1".to_string(),
+            source: "start".to_string(),
+            target: "end".to_string(),
+            source_handle: None,
+            target_handle: Some("in".to_string()),
+            label: None,
+            edge_type: "sequence".to_string(),
+        }],
+        viewport: None,
+    };
+    let air = compile_to_air(&graph, "typed-template", "", &std::collections::HashMap::new())
+        .expect("compile AIR");
+
+    sqlx::query(
+        r#"INSERT INTO workflow_templates
+           (id, name, description, version, is_latest, published, published_at, graph, air_json, author_id)
+           VALUES ($1, 'Typed Start Template', '', 1, true, true, NOW(), $2, $3, $4)"#,
+    )
+    .bind(template_id)
+    .bind(json!(graph))
+    .bind(&air)
+    .bind(author_id)
+    .execute(db)
+    .await
+    .expect("insert published template");
+    template_id
+}
+
+#[tokio::test]
+async fn create_instance_rejects_missing_start_tokens_for_typed_start() {
+    let nats_url = common::nats_url();
+    let (app, db) = common::test_app_with_petri_url(&nats_url, "http://localhost:1").await;
+
+    let template_id = insert_published_template_with_required_start_field(&db).await;
+
+    // No start_tokens supplied — the Start declares a required field, so the
+    // handler must reject with 400 before touching the engine.
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/instances")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&json!({
+                        "template_id": template_id,
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        resp.status(),
+        StatusCode::BAD_REQUEST,
+        "should return 400 when typed Start has no matching start_tokens"
+    );
+
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM workflow_instances WHERE template_id = $1",
+    )
+    .bind(template_id)
+    .fetch_one(&db)
+    .await
+    .expect("count instances");
+    assert_eq!(count, 0, "no instance row should be created on validation failure");
+}
+
+#[tokio::test]
+async fn create_instance_rejects_missing_required_field() {
+    let nats_url = common::nats_url();
+    let (app, db) = common::test_app_with_petri_url(&nats_url, "http://localhost:1").await;
+
+    let template_id = insert_published_template_with_required_start_field(&db).await;
+
+    // start_tokens supplied but the `customer_id` required field is absent.
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/instances")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&json!({
+                        "template_id": template_id,
+                        "start_tokens": [
+                            { "start_block_id": "start", "token": { "other_key": "x" } }
+                        ]
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        resp.status(),
+        StatusCode::BAD_REQUEST,
+        "should return 400 when a required field is missing from the supplied token"
+    );
+}
+
+#[tokio::test]
+async fn create_instance_rejects_unknown_start_block_id() {
+    let nats_url = common::nats_url();
+    let (app, db) = common::test_app_with_petri_url(&nats_url, "http://localhost:1").await;
+
+    let template_id = insert_published_template_with_required_start_field(&db).await;
+
+    // start_tokens references a block id that doesn't exist in the graph.
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/instances")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&json!({
+                        "template_id": template_id,
+                        "start_tokens": [
+                            { "start_block_id": "bogus", "token": { "customer_id": "c-1" } }
+                        ]
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }

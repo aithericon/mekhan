@@ -17,8 +17,8 @@ use yrs::updates::decoder::Decode;
 use yrs::{Array, Doc, GetString, Map, ReadTxn, Text, Transact, Update, WriteTxn};
 
 use mekhan_service::models::template::{
-    ExecutionBackendType, ExecutionSpecConfig, Position, WorkflowEdge, WorkflowGraph, WorkflowNode,
-    WorkflowNodeData,
+    ExecutionBackendType, ExecutionSpecConfig, Port, Position, WorkflowEdge, WorkflowGraph,
+    WorkflowNode, WorkflowNodeData,
 };
 use mekhan_service::yjs::doc_ops;
 use mekhan_service::yjs::persistence::YjsPersistence;
@@ -278,13 +278,15 @@ async fn cli_workflow_roundtrip() {
     assert_eq!(body["published"], true);
 
     // -----------------------------------------------------------------------
-    // 8. WS REJECTED — published template rejects WS connections
+    // 8. WS READ-ONLY — published template accepts WS in read-only mode
+    //    (handler serves the initial sync so the editor can render the frozen
+    //    graph; client updates are dropped on the server side)
     // -----------------------------------------------------------------------
     let ws_url = format!("ws://{addr}/api/yjs/{template_id}");
     let result = tokio_tungstenite::connect_async(&ws_url).await;
     assert!(
-        result.is_err(),
-        "WS connect to published template should fail (403)"
+        result.is_ok(),
+        "WS connect to published template should succeed (read-only)"
     );
 
     // -----------------------------------------------------------------------
@@ -502,7 +504,7 @@ async fn graph_topology_roundtrip() {
                 data: WorkflowNodeData::Start {
                     label: "Start".to_string(),
                     description: None,
-                    initial_data: None,
+                    initial: Port::empty_input(),
                 },
                 parent_id: None,
                 width: None,
@@ -520,6 +522,10 @@ async fn graph_topology_roundtrip() {
                         entrypoint: None,
                         config: serde_json::json!({"image": "python:3.12"}),
                     },
+                    input: mekhan_service::models::template::Port::empty_input(),
+                    output: mekhan_service::models::template::default_output_port(
+                        mekhan_service::models::template::ExecutionBackendType::Docker,
+                    ),
                 },
                 parent_id: None,
                 width: None,
@@ -532,6 +538,7 @@ async fn graph_topology_roundtrip() {
                 data: WorkflowNodeData::End {
                     label: "End".to_string(),
                     description: None,
+                terminal: mekhan_service::models::template::default_terminal_port(),
                 },
                 parent_id: None,
                 width: None,
@@ -544,6 +551,7 @@ async fn graph_topology_roundtrip() {
                 source: "start".to_string(),
                 target: "process".to_string(),
                 source_handle: None,
+                target_handle: Some("in".to_string()),
                 label: None,
                 edge_type: "sequence".to_string(),
             },
@@ -552,6 +560,7 @@ async fn graph_topology_roundtrip() {
                 source: "process".to_string(),
                 target: "end".to_string(),
                 source_handle: None,
+                target_handle: Some("in".to_string()),
                 label: None,
                 edge_type: "sequence".to_string(),
             },
@@ -736,7 +745,7 @@ async fn yaml_format_roundtrip() {
                     data: WorkflowNodeData::Start {
                         label: "Start".to_string(),
                         description: None,
-                        initial_data: None,
+                        initial: Port::empty_input(),
                     },
                     parent_id: None,
                     width: None,
@@ -754,6 +763,10 @@ async fn yaml_format_roundtrip() {
                             entrypoint: None,
                             config: serde_json::json!({"image": "python:3.12"}),
                         },
+                        input: mekhan_service::models::template::Port::empty_input(),
+                        output: mekhan_service::models::template::default_output_port(
+                            mekhan_service::models::template::ExecutionBackendType::Docker,
+                        ),
                     },
                     parent_id: None,
                     width: None,
@@ -766,6 +779,7 @@ async fn yaml_format_roundtrip() {
                     data: WorkflowNodeData::End {
                         label: "End".to_string(),
                         description: None,
+                    terminal: mekhan_service::models::template::default_terminal_port(),
                     },
                     parent_id: None,
                     width: None,
@@ -778,6 +792,7 @@ async fn yaml_format_roundtrip() {
                     source: "start".to_string(),
                     target: "process".to_string(),
                     source_handle: None,
+                    target_handle: Some("in".to_string()),
                     label: None,
                     edge_type: "sequence".to_string(),
                 },
@@ -786,6 +801,7 @@ async fn yaml_format_roundtrip() {
                     source: "process".to_string(),
                     target: "end".to_string(),
                     source_handle: None,
+                    target_handle: Some("in".to_string()),
                     label: None,
                     edge_type: "sequence".to_string(),
                 },

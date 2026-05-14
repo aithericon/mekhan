@@ -591,7 +591,7 @@ async fn task_filter_by_status() {
     assert_eq!(resp.status(), StatusCode::OK);
     let body = body_json(resp.into_body()).await;
     assert_eq!(body["total"], 1);
-    assert_eq!(body["items"][0]["title"], "Pending Task");
+    assert_eq!(body["tasks"][0]["title"], "Pending Task");
 }
 
 // ---------------------------------------------------------------------------

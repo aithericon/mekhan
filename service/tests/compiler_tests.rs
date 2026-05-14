@@ -4,7 +4,7 @@
 
 use mekhan_service::compiler::compile_to_air;
 use mekhan_service::models::template::{
-    BranchCondition, ExecutionBackendType, ExecutionSpecConfig, Position, TaskBlockConfig,
+    BranchCondition, ExecutionBackendType, ExecutionSpecConfig, Port, Position, TaskBlockConfig,
     TaskFieldConfig, TaskFieldKind, TaskStepConfig, WorkflowEdge, WorkflowGraph, WorkflowNode,
     WorkflowNodeData,
 };
@@ -26,7 +26,7 @@ fn start_node(id: &str) -> WorkflowNode {
         data: WorkflowNodeData::Start {
             label: "Start".to_string(),
             description: None,
-            initial_data: None,
+            initial: Port::empty_input(),
         },
         parent_id: None,
         width: None,
@@ -42,6 +42,7 @@ fn end_node(id: &str) -> WorkflowNode {
         data: WorkflowNodeData::End {
             label: "End".to_string(),
             description: None,
+        terminal: mekhan_service::models::template::default_terminal_port(),
         },
         parent_id: None,
         width: None,
@@ -55,6 +56,7 @@ fn edge(id: &str, source: &str, target: &str) -> WorkflowEdge {
         source: source.to_string(),
         target: target.to_string(),
         source_handle: None,
+        target_handle: Some("in".to_string()),
         label: None,
         edge_type: "sequence".to_string(),
     }
@@ -66,6 +68,7 @@ fn edge_with_handle(id: &str, source: &str, target: &str, handle: &str) -> Workf
         source: source.to_string(),
         target: target.to_string(),
         source_handle: Some(handle.to_string()),
+        target_handle: Some("in".to_string()),
         label: None,
         edge_type: "sequence".to_string(),
     }
@@ -137,6 +140,40 @@ fn start_to_end_produces_terminal_place() {
 }
 
 #[test]
+fn start_place_initial_tokens_empty_after_compile() {
+    // Typed-ports change: compiler no longer seeds initial tokens from
+    // `Start.initial_data` (which is gone) — instance-time `parameterize_air`
+    // does that based on `start_tokens` from the API request. Compile-time
+    // output may omit `initial_tokens` entirely or carry an empty array; the
+    // contract is "no seeded tokens at compile time."
+    let graph = WorkflowGraph {
+        nodes: vec![start_node("s"), end_node("e")],
+        edges: vec![edge("e1", "s", "e")],
+        viewport: None,
+    };
+
+    let air = compile_to_air(&graph, "t", "", &std::collections::HashMap::new()).expect("should compile");
+
+    let start_place = places(&air)
+        .iter()
+        .find(|p| p["id"] == "p_s_ready")
+        .expect("missing start ready place")
+        .clone();
+
+    // Either the field is absent (SDK omits empty arrays) or it's an empty
+    // array. Both are fine; parameterize_air inserts the field at deploy time.
+    let count = start_place
+        .get("initial_tokens")
+        .and_then(|v| v.as_array())
+        .map(|a| a.len())
+        .unwrap_or(0);
+    assert_eq!(
+        count, 0,
+        "compile-time should seed no initial tokens; parameterize_air does that at deploy"
+    );
+}
+
+#[test]
 fn start_to_end_has_correct_structure() {
     let graph = WorkflowGraph {
         nodes: vec![start_node("start"), end_node("end")],
@@ -149,15 +186,13 @@ fn start_to_end_has_correct_structure() {
     assert_eq!(air["name"], "my_workflow");
     assert_eq!(air["description"], "a test workflow");
 
-    // After merge: Start place absorbs End's terminal type
+    // After merge: Start place absorbs End's terminal type. The Start no
+    // longer carries initial_tokens at compile time (parameterize_air seeds
+    // them at instance creation), but it must still be typed as terminal.
     let start_place = places(&air)
         .iter()
         .find(|p| p["id"] == "p_start_ready")
         .expect("missing start ready place");
-    assert!(
-        start_place.get("initial_tokens").is_some(),
-        "start place should have initial_tokens"
-    );
     assert_eq!(start_place["type"], "terminal", "start place should be terminal after merge");
 }
 
@@ -257,6 +292,10 @@ fn automated_step_produces_executor_lifecycle() {
                         entrypoint: None,
                         config: json!({"image": "alpine:latest"}),
                     },
+                    input: mekhan_service::models::template::Port::empty_input(),
+                    output: mekhan_service::models::template::default_output_port(
+                        mekhan_service::models::template::ExecutionBackendType::Docker,
+                    ),
                 },
                 parent_id: None,
                 width: None,
@@ -303,10 +342,9 @@ fn automated_step_produces_executor_lifecycle() {
         has_place(&air, "auto/dead_letter"),
         "expected dead_letter place"
     );
-    assert!(
-        has_transition(&air, "auto/retry"),
-        "expected retry transition"
-    );
+    // Local retry was removed from the executor lifecycle (engine SDK 2026-05-08);
+    // failures now propagate upstream via `failure_out`. `dead_letter` is kept as
+    // an unreachable terminal place for callers still holding the handle.
 
     // Bridging transitions from lifecycle to node interface
     assert!(
@@ -854,6 +892,10 @@ fn automated_step_has_scoped_effect_errors() {
                         entrypoint: None,
                         config: json!({"image": "alpine:latest"}),
                     },
+                    input: mekhan_service::models::template::Port::empty_input(),
+                    output: mekhan_service::models::template::default_output_port(
+                        mekhan_service::models::template::ExecutionBackendType::Docker,
+                    ),
                 },
                 parent_id: None,
                 width: None,
@@ -891,6 +933,10 @@ fn auto_node(id: &str, label: &str) -> WorkflowNode {
                 entrypoint: None,
                 config: json!({"image": "alpine:latest"}),
             },
+            input: mekhan_service::models::template::Port::empty_input(),
+            output: mekhan_service::models::template::default_output_port(
+                mekhan_service::models::template::ExecutionBackendType::Docker,
+            ),
         },
         parent_id: None,
         width: None,
@@ -999,18 +1045,12 @@ fn transitive_merge_chain_resolves_correctly() {
 
     let air = compile_to_air(&graph, "transitive_test", "", &std::collections::HashMap::new()).expect("should compile");
 
-    // Start place still exists with its initial token
-    let start_place = places(&air)
+    // Start place still exists (initial tokens are now seeded at instance time
+    // via parameterize_air, not compile time, so we only verify survival here).
+    let _start_place = places(&air)
         .iter()
         .find(|p| p["id"] == "p_s_ready")
         .expect("start place should survive merges");
-    assert!(
-        !start_place["initial_tokens"]
-            .as_array()
-            .unwrap()
-            .is_empty(),
-        "start place should retain initial tokens"
-    );
 
     // A's input place (p_a_input) should be merged away (into p_s_ready)
     assert!(

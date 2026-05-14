@@ -179,12 +179,49 @@ fn create_minimal_bmp() -> Vec<u8> {
 // Tests
 // ---------------------------------------------------------------------------
 
+/// Probe the testcontainer Ollama by issuing a one-token chat. Returns true
+/// when the model can serve inferences; false (with stderr note) when the
+/// container starts but the loader fails (CPU-only Docker on Apple Silicon,
+/// low-memory CI runners, etc).
+async fn ollama_model_usable(base_url: &str, model: &str) -> bool {
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{base_url}/api/chat"))
+        .json(&serde_json::json!({
+            "model": model,
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": false,
+            "options": {"num_predict": 1},
+        }))
+        .timeout(Duration::from_secs(120))
+        .send()
+        .await;
+    match resp {
+        Ok(r) if r.status().is_success() => true,
+        Ok(r) => {
+            eprintln!(
+                "SKIPPED: Ollama vision testcontainer can't run {model}: {}",
+                r.text().await.unwrap_or_default()
+            );
+            false
+        }
+        Err(e) => {
+            eprintln!("SKIPPED: Ollama vision probe failed: {e}");
+            false
+        }
+    }
+}
+
 /// Validates that the vision pipeline works end-to-end:
 /// image file → base64 encoding → Ollama API with images field → response.
 #[tokio::test]
 async fn ollama_vision_basic() {
     let base_url = shared_vision_ollama_base_url().await;
     let model = vision_ollama_model();
+
+    if !ollama_model_usable(base_url, model).await {
+        return;
+    }
 
     // Create a temporary directory with a test image
     let tmp_dir = tempfile::tempdir().expect("create temp dir");
@@ -234,6 +271,10 @@ async fn ollama_vision_basic() {
 async fn ollama_vision_structured_output() {
     let base_url = shared_vision_ollama_base_url().await;
     let model = vision_ollama_model();
+
+    if !ollama_model_usable(base_url, model).await {
+        return;
+    }
 
     let tmp_dir = tempfile::tempdir().expect("create temp dir");
     let image_path = create_test_image(tmp_dir.path());

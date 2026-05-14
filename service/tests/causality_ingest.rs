@@ -19,6 +19,7 @@ use mekhan_service::catalogue::subscriptions::SubscriptionManager;
 use mekhan_service::causality::ingest::start_causality_ingest;
 use mekhan_service::causality::live::LiveBroadcasts;
 use mekhan_service::nats::MekhanNats;
+use serial_test::serial;
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -243,6 +244,7 @@ fn transition_fired_event(
 // ── Tests ──────────────────────────────────────────────────────────────────
 
 #[tokio::test]
+#[serial]
 async fn token_created_seeds_process() {
     let db = common::create_test_db().await;
     let nats = MekhanNats::connect(&common::nats_url(), None)
@@ -304,6 +306,7 @@ async fn token_created_seeds_process() {
 }
 
 #[tokio::test]
+#[serial]
 async fn transition_fired_propagates_tags() {
     let db = common::create_test_db().await;
     let nats = MekhanNats::connect(&common::nats_url(), None)
@@ -368,6 +371,7 @@ async fn transition_fired_propagates_tags() {
 }
 
 #[tokio::test]
+#[serial]
 async fn effect_completed_creates_cross_link() {
     let db = common::create_test_db().await;
     let nats = MekhanNats::connect(&common::nats_url(), None)
@@ -407,6 +411,7 @@ async fn effect_completed_creates_cross_link() {
 }
 
 #[tokio::test]
+#[serial]
 async fn bridge_transfer_links_cross_net() {
     let db = common::create_test_db().await;
     let nats = MekhanNats::connect(&common::nats_url(), None)
@@ -496,6 +501,7 @@ async fn bridge_transfer_links_cross_net() {
 }
 
 #[tokio::test]
+#[serial]
 async fn duplicate_events_are_idempotent() {
     let db = common::create_test_db().await;
     let nats = MekhanNats::connect(&common::nats_url(), None)
@@ -532,6 +538,7 @@ async fn duplicate_events_are_idempotent() {
 /// Signal-injected tokens (with signal_key) should inherit process tags
 /// from the egress event that produced the signal_key, NOT create new processes.
 #[tokio::test]
+#[serial]
 async fn signal_key_inherits_process_tags() {
     let db = common::create_test_db().await;
     let nats = MekhanNats::connect(&common::nats_url(), None)
@@ -603,6 +610,7 @@ async fn signal_key_inherits_process_tags() {
 /// Tokens with created_by_event but no signal_key should NOT create processes
 /// (they're produced by transitions and inherit via propagation).
 #[tokio::test]
+#[serial]
 async fn non_seed_token_without_signal_key_does_not_create_process() {
     let db = common::create_test_db().await;
     let nats = MekhanNats::connect(&common::nats_url(), None)

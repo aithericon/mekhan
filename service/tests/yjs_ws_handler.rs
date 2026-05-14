@@ -96,21 +96,27 @@ async fn ws_404_for_missing_template() {
 }
 
 // ---------------------------------------------------------------------------
-// 3. WS to published template is rejected (403)
+// 3. WS to a published template connects in read-only mode (server still
+//    serves the initial sync so the editor can render the frozen graph)
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn ws_403_for_published_template() {
+async fn ws_published_template_is_readonly() {
     let (addr, db) = common::start_test_server().await;
     let template_id = create_template(&addr, &db).await;
     publish_template(&db, template_id).await;
 
     let url = format!("ws://{addr}/api/yjs/{template_id}");
-    let result = tokio_tungstenite::connect_async(&url).await;
+    let (mut ws, _) = tokio_tungstenite::connect_async(&url)
+        .await
+        .expect("WS connect to published template should succeed (read-only)");
 
-    assert!(
-        result.is_err(),
-        "WS connect to published template should fail"
+    // First message is the initial SyncStep2 snapshot.
+    let msg = ws.next().await.unwrap().unwrap();
+    let data = msg.into_data();
+    assert_eq!(
+        data[0], MSG_SYNC_STEP2,
+        "first message should be SyncStep2 even for published templates"
     );
 }
 

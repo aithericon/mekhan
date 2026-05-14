@@ -40,6 +40,35 @@ impl LlmTestKit for LlmTestKitImpl {
         Ok(Arc::new(LlmBackend::new()))
     }
 
+    /// Probe the testcontainer Ollama by issuing a one-token chat. Some host
+    /// configurations (CPU-only Docker on Apple Silicon, low-memory CI runners)
+    /// start the container fine but crash the model loader at inference time
+    /// (HTTP 500 "llama runner process has terminated"). Skip the conformance
+    /// suite in those environments rather than failing.
+    async fn skip_reason(&self) -> Option<String> {
+        let client = reqwest::Client::new();
+        let resp = client
+            .post(format!("{}/api/chat", self.ollama_url))
+            .json(&serde_json::json!({
+                "model": self.model,
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": false,
+                "options": {"num_predict": 1},
+            }))
+            .timeout(std::time::Duration::from_secs(60))
+            .send()
+            .await
+            .ok()?;
+        if resp.status().is_success() {
+            return None;
+        }
+        let body = resp.text().await.unwrap_or_default();
+        Some(format!(
+            "Ollama testcontainer can't run model {} on this host: {body}",
+            self.model
+        ))
+    }
+
     fn chat_spec(&self) -> ExecutionSpec {
         ExecutionSpec {
             backend: "llm".into(),

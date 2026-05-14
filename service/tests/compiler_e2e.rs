@@ -3,9 +3,11 @@
 //! These tests load actual camelCase JSON (the format emitted by the editor)
 //! and run it through the full deserialization → compile_to_air pipeline.
 
+use aithericon_executor_domain::InputSource;
 use mekhan_service::compiler::compile_to_air;
 use mekhan_service::models::template::WorkflowGraph;
 use serde_json::Value;
+use std::collections::HashMap;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -38,10 +40,6 @@ fn has_transition(air: &Value, id: &str) -> bool {
 
 fn has_place_of_type(air: &Value, place_type: &str) -> bool {
     places(air).iter().any(|p| p["type"] == place_type)
-}
-
-fn count_places_of_type(air: &Value, place_type: &str) -> usize {
-    places(air).iter().filter(|p| p["type"] == place_type).count()
 }
 
 fn has_group(air: &Value, id: &str) -> bool {
@@ -175,19 +173,40 @@ fn ui_invoice_processing_deserializes_and_compiles() {
     assert_eq!(graph.nodes.len(), 11);
     assert_eq!(graph.edges.len(), 11);
 
-    let air =
-        compile_to_air(&graph, "invoice_processing", "Invoice workflow", &std::collections::HashMap::new()).expect("should compile");
+    // The "extract" node is a Python automation; the backend-config validator
+    // requires at least one staged file with a matching entrypoint default.
+    let mut files: HashMap<String, HashMap<String, InputSource>> = HashMap::new();
+    let mut extract_files = HashMap::new();
+    extract_files.insert(
+        "main.py".to_string(),
+        InputSource::Raw {
+            content: "# stub\n".to_string(),
+        },
+    );
+    files.insert("extract".to_string(), extract_files);
+
+    let air = compile_to_air(&graph, "invoice_processing", "Invoice workflow", &files)
+        .expect("should compile");
 
     // Structural invariants
     assert_all_transitions_wired(&air);
     assert_arcs_reference_existing_places(&air);
     assert_single_seeded_place(&air);
 
-    // Two terminal places (end-approved, end-processed)
+    // Two End-node terminal places (end-approved, end-processed). The executor
+    // lifecycle scaffolding emits additional terminals scoped to the node id
+    // (e.g. "extract/dead_letter") — filter those out by excluding place IDs
+    // that contain a "/" prefix separator.
+    let end_terminals: Vec<&str> = places(&air)
+        .iter()
+        .filter(|p| p["type"] == "terminal")
+        .filter_map(|p| p["id"].as_str())
+        .filter(|id| !id.contains('/'))
+        .collect();
     assert_eq!(
-        count_places_of_type(&air, "terminal"),
+        end_terminals.len(),
         2,
-        "expected 2 terminal places for 2 End nodes"
+        "expected 2 End-node terminal places, got {end_terminals:?}"
     );
 
     // Initial token carries invoice_id

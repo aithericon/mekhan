@@ -107,3 +107,6 @@ tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 tempfile = "3"
 wiremock = "0.6"
+# Used by integration tests that share global NATS streams (e.g. PETRI_GLOBAL)
+# to force sequential execution and avoid stream-state collisions.
+serial_test = "3"

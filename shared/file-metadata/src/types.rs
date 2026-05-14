@@ -345,6 +345,7 @@ mod tests {
         assert!(meta.unix_mode.is_some());
     }
 
+    #[cfg(feature = "csv")]
     #[test]
     fn extract_metadata_populates_fs_fields() {
         let tmp = tempfile::NamedTempFile::with_suffix(".csv").unwrap();

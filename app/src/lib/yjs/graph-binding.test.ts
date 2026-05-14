@@ -190,10 +190,15 @@ describe('YjsGraphBinding', () => {
 		const data = createDefaultNodeData('automated_step');
 		binding.addNode('n1', 'automated_step', { x: 0, y: 0 }, data);
 
+		// Python automated_step seeds `main.py` at addNode time, so the file
+		// we delete must be a different filename and the post-delete size
+		// reflects only the seed.
 		binding.createFile('n1', 'script.py', 'x = 1');
+		expect(binding.getNodeFiles('n1').size).toBe(2);
 		binding.deleteFile('n1', 'script.py');
 
-		expect(binding.getNodeFiles('n1').size).toBe(0);
+		expect(binding.getNodeFiles('n1').size).toBe(1);
+		expect(binding.getNodeFiles('n1').has('main.py')).toBe(true);
 		expect(binding.getFileText('n1', 'script.py')).toBeNull();
 	});
 

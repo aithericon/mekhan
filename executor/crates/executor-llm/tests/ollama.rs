@@ -140,6 +140,39 @@ fn collect_blocks(response: &Value) -> Vec<&serde_json::Map<String, Value>> {
     blocks
 }
 
+/// Probe the testcontainer Ollama by issuing a one-token chat. Returns true
+/// when the model can serve inferences; false (with stderr note) when the
+/// container starts but the loader fails (CPU-only Docker on Apple Silicon,
+/// low-memory CI runners, etc).
+async fn ollama_model_usable(base_url: &str, model: &str) -> bool {
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{base_url}/api/chat"))
+        .json(&serde_json::json!({
+            "model": model,
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": false,
+            "options": {"num_predict": 1},
+        }))
+        .timeout(Duration::from_secs(60))
+        .send()
+        .await;
+    match resp {
+        Ok(r) if r.status().is_success() => true,
+        Ok(r) => {
+            eprintln!(
+                "SKIPPED: Ollama testcontainer can't run {model}: {}",
+                r.text().await.unwrap_or_default()
+            );
+            false
+        }
+        Err(e) => {
+            eprintln!("SKIPPED: Ollama probe failed: {e}");
+            false
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Structured output tests
 // ---------------------------------------------------------------------------
@@ -149,6 +182,10 @@ fn collect_blocks(response: &Value) -> Vec<&serde_json::Map<String, Value>> {
 async fn ollama_extract_structured_blocks() {
     let base_url = shared_ollama_base_url().await;
     let model = ollama_model();
+
+    if !ollama_model_usable(base_url, model).await {
+        return;
+    }
 
     let system = "You are a task designer. You MUST use structured block types.\n\n\
         Block types:\n\
@@ -252,6 +289,10 @@ async fn openai_extract_structured_blocks() {
     let base_url = shared_ollama_base_url().await;
     let model = ollama_model();
 
+    if !ollama_model_usable(base_url, model).await {
+        return;
+    }
+
     let system = "You are a task designer. You MUST use structured block types.\n\n\
         Block types:\n\
         - table: { type: \"table\", headers: [...], rows: [[...]], alignments?: [...], caption?: \"...\" }\n\
@@ -337,6 +378,10 @@ async fn ollama_chat_with_history() {
     let base_url = shared_ollama_base_url().await;
     let model = ollama_model();
 
+    if !ollama_model_usable(base_url, model).await {
+        return;
+    }
+
     let backend = LlmBackend::new();
     let spec = make_llm_spec(serde_json::json!({
         "provider": "ollama",
@@ -388,6 +433,10 @@ async fn ollama_chat_with_history() {
 async fn ollama_metrics_always_populated() {
     let base_url = shared_ollama_base_url().await;
     let model = ollama_model();
+
+    if !ollama_model_usable(base_url, model).await {
+        return;
+    }
 
     let backend = LlmBackend::new();
     let spec = make_llm_spec(serde_json::json!({
