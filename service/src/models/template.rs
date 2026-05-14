@@ -83,14 +83,24 @@ pub enum WorkflowNodeData {
         label: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         description: Option<String>,
-        #[serde(rename = "initialData", skip_serializing_if = "Option::is_none")]
-        initial_data: Option<serde_json::Value>,
+        /// Declared input schema. The token this Start emits has this shape.
+        /// Defaults to an empty-fields port so pre-typed-ports templates load
+        /// unchanged. Replaces the previous opaque `initialData` blob; initial
+        /// tokens are now seeded per-Start at instance creation time via the
+        /// `start_tokens` field of `CreateInstanceRequest`.
+        #[serde(default = "default_initial_port")]
+        initial: Port,
     },
     #[serde(rename = "end")]
     End {
         label: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         description: Option<String>,
+        /// Declared terminal token shape. Defaults to an empty port (accepts
+        /// any incoming token) so existing End nodes keep working. UI editor
+        /// for `terminal` lands in Phase 4.
+        #[serde(default = "default_terminal_port")]
+        terminal: Port,
     },
     #[serde(rename = "human_task")]
     HumanTask {
@@ -110,6 +120,18 @@ pub enum WorkflowNodeData {
         description: Option<String>,
         #[serde(rename = "executionSpec")]
         execution_spec: ExecutionSpecConfig,
+        /// Declared input shape. Empty by default — empty `fields` means
+        /// "accepts any token" (Json pass-through), preserving back-compat
+        /// for templates that wire arbitrary upstream output into an
+        /// automated step. Phase 4 may derive richer defaults.
+        #[serde(default = "default_automated_input_port")]
+        input: Port,
+        /// Declared output shape. Persisted as-is once authored; the bare
+        /// default has no fields and should be re-derived from
+        /// `execution_spec.backend_type` via `default_output_port` whenever a
+        /// caller needs the canonical backend shape.
+        #[serde(default = "default_automated_output_port")]
+        output: Port,
     },
     #[serde(rename = "decision")]
     Decision {
@@ -190,6 +212,31 @@ impl WorkflowNodeData {
             | Self::ParallelJoin { description, .. }
             | Self::Loop { description, .. }
             | Self::Scope { description, .. } => description.as_deref(),
+        }
+    }
+
+    /// Typed input ports declared or derived for this node. Phase 2 fills in
+    /// `End` (`terminal`) and `AutomatedStep` (`input`). HumanTask, Decision,
+    /// ParallelSplit/Join, Loop, Scope return empty until Phase 4 wires their
+    /// derived shapes; consumers of `input_ports()` treat an empty list as
+    /// "single anonymous input" so existing edges with `target_handle: "in"`
+    /// still resolve.
+    pub fn input_ports(&self) -> Vec<&Port> {
+        match self {
+            Self::Start { .. } => vec![],
+            Self::End { terminal, .. } => vec![terminal],
+            Self::AutomatedStep { input, .. } => vec![input],
+            _ => vec![],
+        }
+    }
+
+    /// Typed output ports declared or derived for this node. Phase 1 declared
+    /// `Start`; Phase 2 adds `AutomatedStep.output`.
+    pub fn output_ports(&self) -> Vec<&Port> {
+        match self {
+            Self::Start { initial, .. } => vec![initial],
+            Self::AutomatedStep { output, .. } => vec![output],
+            _ => vec![],
         }
     }
 }
@@ -292,6 +339,161 @@ pub enum TaskFieldKind {
     Signature,
 }
 
+/// Type kind for a typed port field. Superset of `TaskFieldKind`: adds `Bool`
+/// (currently piggybacks on `Checkbox` in human-task forms), `Timestamp`
+/// (needed for trigger fire times and audit fields), and `Json` (opaque
+/// escape hatch for legacy / dynamic payloads). Snake-case wire values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum FieldKind {
+    Text,
+    Textarea,
+    Number,
+    Bool,
+    Select,
+    File,
+    Signature,
+    Timestamp,
+    Json,
+}
+
+impl FieldKind {
+    /// Best-effort runtime check that a JSON value is acceptable for this kind.
+    /// `Json` accepts anything. Used by `parameterize_air` to validate start
+    /// tokens against the declared Start `initial` port.
+    pub fn accepts(&self, value: &serde_json::Value) -> bool {
+        match self {
+            Self::Json => true,
+            Self::Bool => value.is_boolean(),
+            Self::Number => value.is_number(),
+            Self::Text
+            | Self::Textarea
+            | Self::Select
+            | Self::Signature
+            | Self::Timestamp => value.is_string(),
+            // File is a catalog reference (`file_metadata::StoragePath`); accept
+            // any string or object, validation happens deeper.
+            Self::File => value.is_string() || value.is_object(),
+        }
+    }
+}
+
+/// A single field within a typed `Port`. Identifier-like `name` is the wire
+/// key in the token; `label` is for display.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PortField {
+    pub name: String,
+    pub label: String,
+    pub kind: FieldKind,
+    #[serde(default)]
+    pub required: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub options: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+/// A named bundle of typed fields exchanged at a block boundary. Two ports
+/// type-match if their field sets are equal (same names, same kinds, with
+/// `Json` as the escape hatch).
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Port {
+    /// Unique within the block (e.g. `"in"`, `"out"`, `"approved"`).
+    pub id: String,
+    pub label: String,
+    #[serde(default)]
+    pub fields: Vec<PortField>,
+}
+
+impl Port {
+    /// Empty input port — used as the deserialization default for `Start.initial`
+    /// and similar so existing templates load unchanged.
+    pub fn empty_input() -> Self {
+        Self { id: "in".to_string(), label: "Input".to_string(), fields: vec![] }
+    }
+}
+
+pub fn default_initial_port() -> Port {
+    Port::empty_input()
+}
+
+pub fn default_terminal_port() -> Port {
+    Port {
+        id: "in".to_string(),
+        label: "Terminal".to_string(),
+        fields: vec![],
+    }
+}
+
+pub fn default_automated_input_port() -> Port {
+    Port::empty_input()
+}
+
+/// Canonical output-port shape for an `AutomatedStep` whose `output` field
+/// hasn't been customized. Each backend declares the fields its executor
+/// reliably surfaces. Editor exposes "Reset to default" by re-deriving against
+/// the current `backendType`.
+pub fn default_output_port(backend: ExecutionBackendType) -> Port {
+    let fields = match backend {
+        ExecutionBackendType::Python => vec![port_field("result", "Result", FieldKind::Json)],
+        ExecutionBackendType::Process => vec![
+            port_field("stdout", "Stdout", FieldKind::Textarea),
+            port_field("stderr", "Stderr", FieldKind::Textarea),
+            port_field("exit_code", "Exit Code", FieldKind::Number),
+        ],
+        ExecutionBackendType::Docker => vec![
+            port_field("stdout", "Stdout", FieldKind::Textarea),
+            port_field("stderr", "Stderr", FieldKind::Textarea),
+            port_field("exit_code", "Exit Code", FieldKind::Number),
+            port_field("image", "Image", FieldKind::Text),
+        ],
+        ExecutionBackendType::Http => vec![
+            port_field("status_code", "Status Code", FieldKind::Number),
+            port_field("body", "Body", FieldKind::Json),
+            port_field("headers", "Headers", FieldKind::Json),
+        ],
+        ExecutionBackendType::Llm => vec![
+            port_field("text", "Text", FieldKind::Textarea),
+            port_field("usage", "Usage", FieldKind::Json),
+        ],
+        ExecutionBackendType::FileOps => vec![port_field("files", "Files", FieldKind::Json)],
+        ExecutionBackendType::Kreuzberg => vec![
+            port_field("text", "Text", FieldKind::Textarea),
+            port_field("metadata", "Metadata", FieldKind::Json),
+        ],
+    };
+    Port {
+        id: "out".to_string(),
+        label: "Output".to_string(),
+        fields,
+    }
+}
+
+fn port_field(name: &str, label: &str, kind: FieldKind) -> PortField {
+    PortField {
+        name: name.to_string(),
+        label: label.to_string(),
+        kind,
+        required: false,
+        options: None,
+        description: None,
+    }
+}
+
+pub fn default_automated_output_port() -> Port {
+    // Serde default fires before we know the backend type, so we fall back to a
+    // generic empty port. `AutomatedStep::ensure_output_default` (called from
+    // the compiler and editor) re-derives backend-specific fields when the
+    // stored `output` is the bare default and the user hasn't customized it.
+    Port {
+        id: "out".to_string(),
+        label: "Output".to_string(),
+        fields: vec![],
+    }
+}
+
 // --- Branch conditions ---
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -362,8 +564,14 @@ pub struct WorkflowEdge {
     pub id: String,
     pub source: String,
     pub target: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_handle: Option<String>,
+    /// Required at publish time (Phase 2 typed-ports). Stays optional in
+    /// serde so pre-typed-ports edges still deserialize, but the compiler
+    /// rejects `None` with `CompileError::MissingTargetHandle` so existing
+    /// templates need an editor pass before they republish.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_handle: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
     #[serde(rename = "type")]
@@ -392,6 +600,12 @@ pub struct CreateTemplateRequest {
     #[serde(default)]
     pub description: Option<String>,
     pub graph: Option<WorkflowGraph>,
+    /// Optional per-node file map (filename → inline contents). Files are
+    /// seeded as Y.Text entries inside each node's `files` Y.Map so that the
+    /// new template lands ready-to-publish for backends that require
+    /// attached scripts (e.g. Python's entrypoint).
+    #[serde(default)]
+    pub files: std::collections::HashMap<String, std::collections::HashMap<String, String>>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -439,7 +653,7 @@ impl WorkflowGraph {
                     data: WorkflowNodeData::Start {
                         label: "Start".to_string(),
                         description: None,
-                        initial_data: None,
+                        initial: Port::empty_input(),
                     },
                     parent_id: None,
                     width: None,
@@ -452,6 +666,7 @@ impl WorkflowGraph {
                     data: WorkflowNodeData::End {
                         label: "End".to_string(),
                         description: None,
+                        terminal: default_terminal_port(),
                     },
                     parent_id: None,
                     width: None,
@@ -463,6 +678,7 @@ impl WorkflowGraph {
                 source: "start".to_string(),
                 target: "end".to_string(),
                 source_handle: None,
+                target_handle: Some("in".to_string()),
                 label: None,
                 edge_type: "sequence".to_string(),
             }],
@@ -550,6 +766,7 @@ mod tests {
             data: WorkflowNodeData::End {
                 label: "End".to_string(),
                 description: None,
+                terminal: default_terminal_port(),
             },
             parent_id: None,
             width: None,

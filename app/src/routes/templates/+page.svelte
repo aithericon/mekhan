@@ -13,10 +13,13 @@
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import FileText from '@lucide/svelte/icons/file-text';
 	import Rocket from '@lucide/svelte/icons/rocket';
+	import CreateInstanceDialog from '$lib/components/instances/CreateInstanceDialog.svelte';
 
 	let templates = $state<TemplateSummary[]>([]);
 	let loading = $state(true);
 	let error = $state<string | null>(null);
+	let dialogOpen = $state(false);
+	let dialogTemplateId = $state<string | null>(null);
 
 	async function load() {
 		loading = true;
@@ -56,16 +59,26 @@
 		}
 	}
 
-	async function handleCreateInstance(templateId: string) {
-		try {
-			const instance = await createInstance({
-				template_id: templateId
-			});
-			goto(`/instances/${instance.id}`);
-		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to create instance';
-		}
+	function handleCreateInstance(templateId: string) {
+		// Open the dialog. It loads the template, inspects each Start block's
+		// `initial` port, and either prompts for tokens or POSTs immediately when
+		// no typed fields are declared. Direct call no longer hits the API here.
+		dialogTemplateId = templateId;
+		dialogOpen = true;
 	}
+
+	function onInstanceCreated(instanceId: string) {
+		dialogOpen = false;
+		dialogTemplateId = null;
+		goto(`/instances/${instanceId}`);
+	}
+
+	// Clear the stashed template id once the dialog closes (whatever path —
+	// X button, Cancel, or successful submit). This keeps the dialog inert
+	// after dismissal so opening it again starts fresh.
+	$effect(() => {
+		if (!dialogOpen) dialogTemplateId = null;
+	});
 
 	const formatDate = (s: string) => new Date(s).toLocaleDateString();
 
@@ -167,3 +180,9 @@
 		{/if}
 	</div>
 </div>
+
+<CreateInstanceDialog
+	bind:open={dialogOpen}
+	templateId={dialogTemplateId}
+	oncreated={onInstanceCreated}
+/>

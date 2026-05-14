@@ -6,7 +6,14 @@
 	import { Sheet, SheetContent, SheetTitle, SheetDescription } from '$lib/components/ui/sheet';
 	import { getSheetWidthClass } from '$lib/components/editor/panels/panel-width';
 	import EditorToolbar from '$lib/components/editor/toolbar/EditorToolbar.svelte';
-	import { getTemplate, publishTemplate, compileGraph, type Template } from '$lib/api/client';
+	import {
+		getTemplate,
+		publishTemplate,
+		compileGraph,
+		CompileApiError,
+		type Template
+	} from '$lib/api/client';
+	import { compileErrors } from '$lib/editor/compile-errors.svelte';
 	import { getSession, releaseSession } from '$lib/yjs/session-store';
 	import { YjsGraphBinding } from '$lib/yjs/graph-binding.svelte';
 	import type {
@@ -53,8 +60,14 @@
 		try {
 			saving = true;
 			template = await publishTemplate(template.id);
+			compileErrors.clear();
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to publish';
+			if (e instanceof CompileApiError) {
+				compileErrors.set(e.compileErrors);
+				error = `${e.message} — ${e.compileErrors.length} issue${e.compileErrors.length === 1 ? '' : 's'} highlighted on the canvas`;
+			} else {
+				error = e instanceof Error ? e.message : 'Failed to publish';
+			}
 		} finally {
 			saving = false;
 		}

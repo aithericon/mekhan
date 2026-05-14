@@ -7,7 +7,7 @@
 	let { data, selected }: { data: EndNodeData; selected?: boolean } = $props();
 </script>
 
-<Handle type="target" position={Position.Left} class={workflowNodeHandleClass('end')} />
+<Handle id="in" type="target" position={Position.Left} class={workflowNodeHandleClass('end')} />
 <WorkflowNodeCard
 	kind="end"
 	icon={Square}

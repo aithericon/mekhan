@@ -12,7 +12,7 @@
 	);
 </script>
 
-<Handle type="target" position={Position.Left} class={workflowNodeHandleClass('human-task')} />
+<Handle id="in" type="target" position={Position.Left} class={workflowNodeHandleClass('human-task')} />
 <WorkflowNodeCard
 	kind="human-task"
 	icon={User}

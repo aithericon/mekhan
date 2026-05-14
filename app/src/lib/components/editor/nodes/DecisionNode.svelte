@@ -9,7 +9,7 @@
 	const branchCount = $derived((data.conditions?.length ?? 0) + 1); // +1 for default
 </script>
 
-<Handle type="target" position={Position.Left} class={workflowNodeHandleClass('decision')} />
+<Handle id="in" type="target" position={Position.Left} class={workflowNodeHandleClass('decision')} />
 <WorkflowNodeCard
 	kind="decision"
 	icon={GitBranch}

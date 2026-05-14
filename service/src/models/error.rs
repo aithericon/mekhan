@@ -9,14 +9,28 @@ use utoipa::ToSchema;
 /// Uniform error body returned by every fallible handler. Replaces the ad-hoc
 /// `json!({"error": ...})` pattern so the spec exposes a single
 /// `ErrorResponse` schema and the frontend gets one consistent error shape.
+///
+/// Optional `compile_errors` carries structured per-edge / per-node failures
+/// from the workflow compiler so the editor can highlight inline (Phase 2
+/// typed-ports). Absent on non-compile errors.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ErrorResponse {
     pub error: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compile_errors: Option<Vec<crate::compiler::CompileErrorView>>,
 }
 
 impl ErrorResponse {
     pub fn new(error: impl Into<String>) -> Self {
-        Self { error: error.into() }
+        Self {
+            error: error.into(),
+            compile_errors: None,
+        }
+    }
+
+    pub fn with_compile_errors(mut self, views: Vec<crate::compiler::CompileErrorView>) -> Self {
+        self.compile_errors = Some(views);
+        self
     }
 }
 
@@ -59,6 +73,20 @@ impl ApiError {
 
     pub fn conflict(message: impl Into<String>) -> Self {
         Self::new(StatusCode::CONFLICT, message)
+    }
+
+    /// Bad-request error that attaches a structured `compile_errors` payload
+    /// so the editor can highlight inline. The handler stays in control of
+    /// the surrounding human-readable message (kept terse to avoid duplicating
+    /// every per-edge message in the top-line `error`).
+    pub fn compile(
+        message: impl Into<String>,
+        views: Vec<crate::compiler::CompileErrorView>,
+    ) -> Self {
+        Self {
+            status: StatusCode::BAD_REQUEST,
+            body: Some(ErrorResponse::new(message).with_compile_errors(views)),
+        }
     }
 }
 

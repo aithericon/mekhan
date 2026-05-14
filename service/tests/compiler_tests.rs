@@ -1374,3 +1374,137 @@ fn scope_without_children_compiles() {
         "empty scope should still produce a group"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Phase 2 typed-ports edge validation
+// ---------------------------------------------------------------------------
+
+#[test]
+fn edge_missing_target_handle_fails() {
+    // Build an edge with target_handle: None — Phase 2 hard-require should
+    // surface CompileError::MissingTargetHandle stamped with edge_id.
+    let bad_edge = WorkflowEdge {
+        id: "e1".to_string(),
+        source: "s".to_string(),
+        target: "e".to_string(),
+        source_handle: None,
+        target_handle: None,
+        label: None,
+        edge_type: "sequence".to_string(),
+    };
+    let graph = WorkflowGraph {
+        nodes: vec![start_node("s"), end_node("e")],
+        edges: vec![bad_edge],
+        viewport: None,
+    };
+    let err = compile_to_air(&graph, "missing-th", "", &std::collections::HashMap::new())
+        .expect_err("should reject edge missing target_handle");
+    match err {
+        mekhan_service::compiler::CompileError::MissingTargetHandle { edge_id } => {
+            assert_eq!(edge_id, "e1");
+        }
+        e => panic!("unexpected error: {e:?}"),
+    }
+}
+
+#[test]
+fn edge_type_mismatch_fails_when_target_port_has_required_fields() {
+    // Start declares no fields; build an End with a non-empty terminal port
+    // (a required field). The edge type-check should reject because the
+    // source's empty port doesn't satisfy a non-empty target requirement.
+    use mekhan_service::models::template::{FieldKind, Port, PortField};
+
+    let typed_end = WorkflowNode {
+        id: "e".to_string(),
+        node_type: "end".to_string(),
+        position: pos(),
+        data: WorkflowNodeData::End {
+            label: "End".to_string(),
+            description: None,
+            terminal: Port {
+                id: "in".to_string(),
+                label: "Terminal".to_string(),
+                fields: vec![PortField {
+                    name: "approval".to_string(),
+                    label: "Approval".to_string(),
+                    kind: FieldKind::Bool,
+                    required: true,
+                    options: None,
+                    description: None,
+                }],
+            },
+        },
+        parent_id: None,
+        width: None,
+        height: None,
+    };
+
+    let graph = WorkflowGraph {
+        nodes: vec![start_node("s"), typed_end],
+        edges: vec![edge("e1", "s", "e")],
+        viewport: None,
+    };
+    let err = compile_to_air(&graph, "type-mismatch", "", &std::collections::HashMap::new())
+        .expect_err("should reject edge with field-set mismatch");
+    match err {
+        mekhan_service::compiler::CompileError::EdgeTypeMismatch { edge_id, .. } => {
+            assert_eq!(edge_id, "e1");
+        }
+        e => panic!("unexpected error: {e:?}"),
+    }
+}
+
+#[test]
+fn edge_empty_target_port_accepts_anything() {
+    // Default `End.terminal` is empty (Json pass-through). Even if the Start
+    // declares many fields, the empty target port should accept the edge.
+    use mekhan_service::models::template::{FieldKind, Port, PortField};
+
+    let typed_start = WorkflowNode {
+        id: "s".to_string(),
+        node_type: "start".to_string(),
+        position: pos(),
+        data: WorkflowNodeData::Start {
+            label: "Start".to_string(),
+            description: None,
+            initial: Port {
+                id: "in".to_string(),
+                label: "Input".to_string(),
+                fields: vec![PortField {
+                    name: "anything".to_string(),
+                    label: "Anything".to_string(),
+                    kind: FieldKind::Text,
+                    required: true,
+                    options: None,
+                    description: None,
+                }],
+            },
+        },
+        parent_id: None,
+        width: None,
+        height: None,
+    };
+
+    let graph = WorkflowGraph {
+        nodes: vec![typed_start, end_node("e")],
+        edges: vec![edge("e1", "s", "e")],
+        viewport: None,
+    };
+    let result = compile_to_air(&graph, "passthrough", "", &std::collections::HashMap::new());
+    assert!(
+        result.is_ok(),
+        "empty target port should accept any source shape; got: {:?}",
+        result.err()
+    );
+}
+
+#[test]
+fn compile_error_view_carries_edge_id() {
+    let err = mekhan_service::compiler::CompileError::MissingTargetHandle {
+        edge_id: "the-edge".to_string(),
+    };
+    let view = err.to_view();
+    assert_eq!(view.kind, "missing_target_handle");
+    assert_eq!(view.edge_id.as_deref(), Some("the-edge"));
+    assert!(view.message.contains("the-edge"));
+}

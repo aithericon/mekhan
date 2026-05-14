@@ -3096,6 +3096,34 @@
           }
         }
       },
+      "CompileErrorView": {
+        "type": "object",
+        "description": "Structured payload of a compile error for the editor. Returned as part of\nthe publish API response so the frontend can highlight the offending\nnode/edge inline instead of just showing a flat error string.",
+        "required": [
+          "kind",
+          "message"
+        ],
+        "properties": {
+          "edge_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "node_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "CompileRequest": {
         "type": "object",
         "description": "Request body for stateless compilation. Used by `POST /api/compile` and\n`POST /api/templates/{id}/compile`. `files` is a per-node, per-filename map\nof inline contents; the preview compile emits `InputSource::Raw` entries so\nthe AIR matches the StoragePath-keyed shape produced by publish.",
@@ -3139,7 +3167,16 @@
           "template_id"
         ],
         "properties": {
-          "metadata": {},
+          "metadata": {
+            "description": "Free-form audit metadata stored on the instance row. Unlike pre-typed-ports\nbehavior, this is NOT merged into initial Petri tokens — token shape is\ndriven solely by `start_tokens`."
+          },
+          "start_tokens": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StartToken"
+            },
+            "description": "Typed seeds for each Start block in the template. A Start with a\nnon-empty `initial` port requires a matching entry here; otherwise the\nAPI returns 400. Starts with an empty `initial` port can be omitted\n(each gets a default `{}` token with system fields injected)."
+          },
           "template_id": {
             "type": "string",
             "format": "uuid"
@@ -3157,6 +3194,22 @@
               "string",
               "null"
             ]
+          },
+          "files": {
+            "type": "object",
+            "description": "Optional per-node file map (filename → inline contents). Files are\nseeded as Y.Text entries inside each node's `files` Y.Map so that the\nnew template lands ready-to-publish for backends that require\nattached scripts (e.g. Python's entrypoint).",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "propertyNames": {
+                "type": "string"
+              }
+            },
+            "propertyNames": {
+              "type": "string"
+            }
           },
           "graph": {
             "oneOf": [
@@ -3267,11 +3320,20 @@
       },
       "ErrorResponse": {
         "type": "object",
-        "description": "Uniform error body returned by every fallible handler. Replaces the ad-hoc\n`json!({\"error\": ...})` pattern so the spec exposes a single\n`ErrorResponse` schema and the frontend gets one consistent error shape.",
+        "description": "Uniform error body returned by every fallible handler. Replaces the ad-hoc\n`json!({\"error\": ...})` pattern so the spec exposes a single\n`ErrorResponse` schema and the frontend gets one consistent error shape.\n\nOptional `compile_errors` carries structured per-edge / per-node failures\nfrom the workflow compiler so the editor can highlight inline (Phase 2\ntyped-ports). Absent on non-compile errors.",
         "required": [
           "error"
         ],
         "properties": {
+          "compile_errors": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/CompileErrorView"
+            }
+          },
           "error": {
             "type": "string"
           }
@@ -3412,6 +3474,21 @@
             "description": "Filename of the entrypoint script within the node's staged files.\nBackends that don't run a user script (e.g. `http`) ignore this; the\neditor still surfaces it for python/process/docker."
           }
         }
+      },
+      "FieldKind": {
+        "type": "string",
+        "description": "Type kind for a typed port field. Superset of `TaskFieldKind`: adds `Bool`\n(currently piggybacks on `Checkbox` in human-task forms), `Timestamp`\n(needed for trigger fire times and audit fields), and `Json` (opaque\nescape hatch for legacy / dynamic payloads). Snake-case wire values.",
+        "enum": [
+          "text",
+          "textarea",
+          "number",
+          "bool",
+          "select",
+          "file",
+          "signature",
+          "timestamp",
+          "json"
+        ]
       },
       "FileUploadResponse": {
         "type": "object",
@@ -4658,6 +4735,67 @@
           }
         }
       },
+      "Port": {
+        "type": "object",
+        "description": "A named bundle of typed fields exchanged at a block boundary. Two ports\ntype-match if their field sets are equal (same names, same kinds, with\n`Json` as the escape hatch).",
+        "required": [
+          "id",
+          "label"
+        ],
+        "properties": {
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PortField"
+            }
+          },
+          "id": {
+            "type": "string",
+            "description": "Unique within the block (e.g. `\"in\"`, `\"out\"`, `\"approved\"`)."
+          },
+          "label": {
+            "type": "string"
+          }
+        }
+      },
+      "PortField": {
+        "type": "object",
+        "description": "A single field within a typed `Port`. Identifier-like `name` is the wire\nkey in the token; `label` is for display.",
+        "required": [
+          "name",
+          "label",
+          "kind"
+        ],
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "$ref": "#/components/schemas/FieldKind"
+          },
+          "label": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "options": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "required": {
+            "type": "boolean"
+          }
+        }
+      },
       "Position": {
         "type": "object",
         "required": [
@@ -4810,6 +4948,23 @@
           },
           "signal_key": {
             "type": "string"
+          }
+        }
+      },
+      "StartToken": {
+        "type": "object",
+        "description": "A typed token seed for a single `Start` block in the template. The token\nmust be a JSON object matching the Start's declared `initial` port shape\n(required fields present, kinds compatible). See `FieldKind::accepts`.\n\nSnake-case wire fields to match the surrounding `CreateInstanceRequest`\n(`start_tokens`, `template_id`, etc.).",
+        "required": [
+          "start_block_id",
+          "token"
+        ],
+        "properties": {
+          "start_block_id": {
+            "type": "string",
+            "description": "`WorkflowNode.id` of the Start block this token seeds."
+          },
+          "token": {
+            "description": "JSON object whose keys match the Start's `initial` port field names."
           }
         }
       },
@@ -5198,6 +5353,13 @@
           "target": {
             "type": "string"
           },
+          "targetHandle": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Required at publish time (Phase 2 typed-ports). Stays optional in\nserde so pre-typed-ports edges still deserialize, but the compiler\nrejects `None` with `CompileError::MissingTargetHandle` so existing\ntemplates need an editor pass before they republish."
+          },
           "type": {
             "type": "string"
           }
@@ -5357,7 +5519,10 @@
                   "null"
                 ]
               },
-              "initialData": {},
+              "initial": {
+                "$ref": "#/components/schemas/Port",
+                "description": "Declared input schema. The token this Start emits has this shape.\nDefaults to an empty-fields port so pre-typed-ports templates load\nunchanged. Replaces the previous opaque `initialData` blob; initial\ntokens are now seeded per-Start at instance creation time via the\n`start_tokens` field of `CreateInstanceRequest`."
+              },
               "label": {
                 "type": "string"
               },
@@ -5384,6 +5549,10 @@
               },
               "label": {
                 "type": "string"
+              },
+              "terminal": {
+                "$ref": "#/components/schemas/Port",
+                "description": "Declared terminal token shape. Defaults to an empty port (accepts\nany incoming token) so existing End nodes keep working. UI editor\nfor `terminal` lands in Phase 4."
               },
               "type": {
                 "type": "string",
@@ -5451,8 +5620,16 @@
               "executionSpec": {
                 "$ref": "#/components/schemas/ExecutionSpecConfig"
               },
+              "input": {
+                "$ref": "#/components/schemas/Port",
+                "description": "Declared input shape. Empty by default — empty `fields` means\n\"accepts any token\" (Json pass-through), preserving back-compat\nfor templates that wire arbitrary upstream output into an\nautomated step. Phase 4 may derive richer defaults."
+              },
               "label": {
                 "type": "string"
+              },
+              "output": {
+                "$ref": "#/components/schemas/Port",
+                "description": "Declared output shape. Persisted as-is once authored; the bare\ndefault has no fields and should be re-derived from\n`execution_spec.backend_type` via `default_output_port` whenever a\ncaller needs the canonical backend shape."
               },
               "type": {
                 "type": "string",

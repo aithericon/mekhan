@@ -115,6 +115,7 @@ export class YjsGraphBinding {
 				source: item.source as string,
 				target: item.target as string,
 				sourceHandle: item.sourceHandle as string | undefined,
+				targetHandle: item.targetHandle as string | undefined,
 				label: item.label as string | undefined,
 				type: (item.type as WorkflowEdgeType) ?? 'sequence'
 			});
@@ -139,14 +140,27 @@ export class YjsGraphBinding {
 			configMap instanceof Y.Map ? Object.fromEntries(configMap.entries()) : undefined;
 
 		switch (type) {
-			case 'start':
+			case 'start': {
+				// Typed-ports model: Start carries a declared `initial` port.
+				// Pre-typed-ports templates have no `initial` in Y.Doc — default
+				// to the empty input port so legacy data loads unchanged.
+				const initial = (config?.initial as
+					| { id: string; label: string; fields?: unknown[] }
+					| undefined) ?? { id: 'in', label: 'Input', fields: [] };
 				return {
 					...base,
 					type: 'start',
-					...(config?.initialData
-						? { initialData: config.initialData as Record<string, unknown> }
-						: {})
+					initial: {
+						id: initial.id ?? 'in',
+						label: initial.label ?? 'Input',
+						fields: (initial.fields ?? []) as WorkflowNodeData extends {
+							initial: { fields: infer F };
+						}
+							? F
+							: never
+					}
 				};
+			}
 			case 'end':
 				return { ...base, type: 'end' };
 			case 'human_task':
@@ -289,6 +303,7 @@ export class YjsGraphBinding {
 				type: edge.type
 			};
 			if (edge.sourceHandle) obj.sourceHandle = edge.sourceHandle;
+			if (edge.targetHandle) obj.targetHandle = edge.targetHandle;
 			if (edge.label) obj.label = edge.label;
 			this.yEdges.push([obj]);
 		});
@@ -392,7 +407,11 @@ export class YjsGraphBinding {
 	private writeDataToConfig(config: Y.Map<unknown>, data: WorkflowNodeData): void {
 		switch (data.type) {
 			case 'start':
-				if (data.initialData) config.set('initialData', data.initialData);
+				// Typed-ports: persist the full `initial` port shape (id, label,
+				// fields). Stored as a plain object — Y.Map subkeys would help
+				// multiplayer per-field edits but require richer cell wiring
+				// (TODO when concurrent port editing becomes a real workflow).
+				config.set('initial', data.initial);
 				break;
 			case 'end':
 				break;

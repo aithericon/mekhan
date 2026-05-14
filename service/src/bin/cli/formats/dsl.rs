@@ -4,7 +4,7 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
 use mekhan_service::models::template::{
-    BranchCondition, ExecutionBackendType, ExecutionSpecConfig, Position, TaskBlockConfig,
+    BranchCondition, ExecutionBackendType, ExecutionSpecConfig, Port, Position, TaskBlockConfig,
     TaskStepConfig, WorkflowEdge, WorkflowGraph, WorkflowNode, WorkflowNodeData,
 };
 
@@ -240,6 +240,7 @@ impl DslWorkflow {
                     source: pe.source,
                     target: pe.target,
                     source_handle: pe.source_handle,
+                    target_handle: Some("in".to_string()),
                     label: None,
                     edge_type: "sequence".to_string(),
                 });
@@ -271,11 +272,17 @@ fn step_to_node_data(
         "start" => Ok(WorkflowNodeData::Start {
             label: label.to_string(),
             description: step.description.clone(),
-            initial_data: step.initial_data.clone(),
+            // DSL still carries `initial_data` for read-compat with old files;
+            // the typed-ports model expects a `Port` here. CLI DSL doesn't yet
+            // express ports, so we default to an empty input port. Round-trip
+            // through DSL is lossy for typed Start ports until the DSL format
+            // gains a `initial` schema.
+            initial: Port::empty_input(),
         }),
         "end" => Ok(WorkflowNodeData::End {
             label: label.to_string(),
             description: step.description.clone(),
+            terminal: mekhan_service::models::template::default_terminal_port(),
         }),
         "human_task" => {
             let task_steps = step
@@ -353,6 +360,8 @@ fn step_to_node_data(
                     entrypoint: None,
                     config,
                 },
+                input: Port::empty_input(),
+                output: mekhan_service::models::template::default_output_port(backend_type),
             })
         }
         "decision" => {
@@ -481,8 +490,11 @@ fn node_to_dsl_step(node: &WorkflowNode) -> DslStep {
     };
 
     match &node.data {
-        WorkflowNodeData::Start { initial_data, .. } => {
-            step.initial_data = initial_data.clone();
+        WorkflowNodeData::Start { .. } => {
+            // DSL doesn't yet express typed Start ports; the round-trip drops
+            // the declared `initial` port shape. CLI DSL is dev tooling — when
+            // the format gains a `initial` schema (Phase 4-ish), populate it
+            // here.
         }
         WorkflowNodeData::End { .. } => {}
         WorkflowNodeData::HumanTask {
@@ -739,7 +751,7 @@ flow:
                     data: WorkflowNodeData::Start {
                         label: "Start".to_string(),
                         description: None,
-                        initial_data: None,
+                        initial: Port::empty_input(),
                     },
                     parent_id: None,
                     width: None,
@@ -764,6 +776,7 @@ flow:
                     data: WorkflowNodeData::End {
                         label: "Done".to_string(),
                         description: None,
+                    terminal: mekhan_service::models::template::default_terminal_port(),
                     },
                     parent_id: Some("container".to_string()),
                     width: None,
@@ -775,6 +788,7 @@ flow:
                 source: "start".to_string(),
                 target: "task1".to_string(),
                 source_handle: None,
+                target_handle: Some("in".to_string()),
                 label: None,
                 edge_type: "sequence".to_string(),
             }],

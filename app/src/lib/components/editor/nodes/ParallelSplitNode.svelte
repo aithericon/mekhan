@@ -7,7 +7,7 @@
 	let { data, selected }: { data: ParallelSplitNodeData; selected?: boolean } = $props();
 </script>
 
-<Handle type="target" position={Position.Left} class={workflowNodeHandleClass('parallel')} />
+<Handle id="in" type="target" position={Position.Left} class={workflowNodeHandleClass('parallel')} />
 <WorkflowNodeCard
 	kind="parallel"
 	icon={GitFork}

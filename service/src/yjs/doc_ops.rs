@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use yrs::types::map::MapPrelim;
+use yrs::types::text::TextPrelim;
 use yrs::{Any, Array, Doc, GetString, Map, ReadTxn, Transact, WriteTxn};
 
 use crate::models::template::*;
@@ -129,6 +130,7 @@ pub fn doc_to_graph(doc: &Doc) -> Result<WorkflowGraph, String> {
                     source: get_str("source").unwrap_or_default(),
                     target: get_str("target").unwrap_or_default(),
                     source_handle: get_str("sourceHandle"),
+                    target_handle: get_str("targetHandle"),
                     label: get_str("label"),
                     edge_type: get_str("type").unwrap_or_else(|| "sequence".to_string()),
                 });
@@ -199,11 +201,22 @@ pub fn extract_files_from_doc(doc: &Doc) -> HashMap<String, HashMap<String, Stri
     result
 }
 
-/// Initialize a Y.Doc from a WorkflowGraph.
+/// Initialize a Y.Doc from a WorkflowGraph with no attached files.
 ///
 /// Creates the Y.Map("nodes"), Y.Array("edges"), and Y.Map("viewport") structure
 /// and returns the encoded update bytes.
 pub fn graph_to_doc(graph: &WorkflowGraph) -> Doc {
+    graph_to_doc_with_files(graph, &HashMap::new())
+}
+
+/// Initialize a Y.Doc from a WorkflowGraph, seeding each node's `files` Y.Map
+/// with the provided contents (filename → Y.Text). Used by `create_template`
+/// so seed templates (showcase, GitOps imports) can ship ready-to-publish
+/// scripts without a second round-trip.
+pub fn graph_to_doc_with_files(
+    graph: &WorkflowGraph,
+    files: &HashMap<String, HashMap<String, String>>,
+) -> Doc {
     let doc = Doc::new();
     {
         let mut txn = doc.transact_mut();
@@ -244,9 +257,16 @@ pub fn graph_to_doc(graph: &WorkflowGraph) -> Doc {
             let config_map = node_map.insert(&mut txn, "config", config_empty);
             write_node_config(&mut txn, &config_map, &node.data);
 
-            // files as empty Y.Map
+            // files: Y.Map whose entries are Y.Text (matches frontend binding).
+            // Seeds from the caller-provided map; nodes with no entry get an
+            // empty files map.
             let files_empty: MapPrelim = std::iter::empty::<(&str, Any)>().collect();
-            node_map.insert(&mut txn, "files", files_empty);
+            let files_map = node_map.insert(&mut txn, "files", files_empty);
+            if let Some(node_files) = files.get(&node.id) {
+                for (filename, content) in node_files {
+                    files_map.insert(&mut txn, filename.as_str(), TextPrelim::new(content));
+                }
+            }
         }
 
         // -- edges: Y.Array("edges") with Any::Map objects --
@@ -273,6 +293,12 @@ pub fn graph_to_doc(graph: &WorkflowGraph) -> Doc {
                 edge_map.insert(
                     "sourceHandle".to_string(),
                     Any::String(Arc::from(sh.as_str())),
+                );
+            }
+            if let Some(ref th) = edge.target_handle {
+                edge_map.insert(
+                    "targetHandle".to_string(),
+                    Any::String(Arc::from(th.as_str())),
                 );
             }
             if let Some(ref label) = edge.label {
@@ -302,10 +328,10 @@ pub fn write_node_config(
     data: &WorkflowNodeData,
 ) {
     match data {
-        WorkflowNodeData::Start { initial_data, .. } => {
-            if let Some(init) = initial_data {
-                config.insert(txn, "initialData", json_value_to_any(init));
-            }
+        WorkflowNodeData::Start { initial, .. } => {
+            let initial_val =
+                serde_json::to_value(initial).unwrap_or(serde_json::Value::Object(Default::default()));
+            config.insert(txn, "initial", json_value_to_any(&initial_val));
         }
         WorkflowNodeData::End { .. } => {}
         WorkflowNodeData::HumanTask {
@@ -381,6 +407,11 @@ mod tests {
                     data: WorkflowNodeData::End {
                         label: "Done".to_string(),
                         description: None,
+                        terminal: Port {
+                            id: "in".to_string(),
+                            label: "Terminal".to_string(),
+                            fields: vec![],
+                        },
                     },
                     parent_id: Some("scope1".to_string()),
                     width: None,
@@ -422,5 +453,29 @@ mod tests {
         let start = roundtripped.nodes.iter().find(|n| n.node_type == "start").unwrap();
         assert_eq!(start.parent_id, None);
         assert_eq!(start.width, None);
+    }
+
+    /// Verifies inline files at template creation make it into the Y.Doc as
+    /// real Y.Text entries — the path the showcase relies on.
+    #[test]
+    fn graph_to_doc_with_files_seeds_y_text_entries() {
+        let graph = WorkflowGraph::default_graph();
+        let mut files: HashMap<String, HashMap<String, String>> = HashMap::new();
+        files.insert(
+            "start".to_string(),
+            HashMap::from([(
+                "main.py".to_string(),
+                "print('seeded')\n".to_string(),
+            )]),
+        );
+
+        let doc = graph_to_doc_with_files(&graph, &files);
+        let extracted = extract_files_from_doc(&doc);
+
+        let start_files = extracted.get("start").expect("start node should have files");
+        assert_eq!(
+            start_files.get("main.py").map(String::as_str),
+            Some("print('seeded')\n")
+        );
     }
 }

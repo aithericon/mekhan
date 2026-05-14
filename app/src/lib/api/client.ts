@@ -179,10 +179,40 @@ export async function deleteTemplate(id: string): Promise<void> {
 	}
 }
 
+/// Compile-error structured response from the workflow compiler. Maps to
+/// `service::compiler::CompileErrorView`. Surfaced by `publishTemplate` via
+/// `CompileApiError` when the publish handler returns a 400 with a body that
+/// includes structured per-edge / per-node errors.
+export type CompileErrorView = components['schemas']['CompileErrorView'];
+
+export class CompileApiError extends Error {
+	readonly compileErrors: CompileErrorView[];
+	constructor(message: string, errors: CompileErrorView[]) {
+		super(message);
+		this.name = 'CompileApiError';
+		this.compileErrors = errors;
+	}
+}
+
 export async function publishTemplate(id: string): Promise<Template> {
-	return unwrap(
-		await client.POST('/api/templates/{id}/publish', { params: { path: { id } } })
-	);
+	const res = await client.POST('/api/templates/{id}/publish', {
+		params: { path: { id } }
+	});
+	const rawErr = res.error as unknown;
+	if (rawErr !== undefined) {
+		// Try to surface a structured compile failure so the editor can
+		// highlight inline. Fall back to a generic Error otherwise.
+		const body = rawErr as {
+			error?: string;
+			compile_errors?: CompileErrorView[] | null;
+		};
+		if (body && Array.isArray(body.compile_errors) && body.compile_errors.length > 0) {
+			throw new CompileApiError(body.error ?? 'compilation failed', body.compile_errors);
+		}
+		const detail = typeof rawErr === 'object' ? JSON.stringify(rawErr) : String(rawErr);
+		throw new Error(`API error ${res.response.status}: ${detail}`);
+	}
+	return res.data as Template;
 }
 
 export async function createNewVersion(id: string): Promise<Template> {

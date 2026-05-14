@@ -45,6 +45,94 @@ pub enum CompileError {
     Validation(String),
     #[error("compilation error: {0}")]
     Compilation(String),
+
+    // --- Typed-ports edge errors (Phase 2). Carry the offending edge_id (and
+    //     sometimes a node_id / handle) so the editor can highlight inline.
+    #[error("edge '{edge_id}' is missing a target_handle (required at publish time)")]
+    MissingTargetHandle { edge_id: String },
+
+    #[error(
+        "edge '{edge_id}': source handle '{handle}' is not a declared output port on node '{node_id}'"
+    )]
+    UnknownSourcePort {
+        edge_id: String,
+        node_id: String,
+        handle: String,
+    },
+
+    #[error(
+        "edge '{edge_id}': target handle '{handle}' is not a declared input port on node '{node_id}'"
+    )]
+    UnknownTargetPort {
+        edge_id: String,
+        node_id: String,
+        handle: String,
+    },
+
+    #[error(
+        "edge '{edge_id}': source port fields {expected:?} don't match target port fields {found:?}"
+    )]
+    EdgeTypeMismatch {
+        edge_id: String,
+        expected: Vec<String>,
+        found: Vec<String>,
+    },
+}
+
+impl CompileError {
+    /// Stable discriminant for the editor's error map. Keeps the wire format
+    /// independent of Rust enum variant names.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Validation(_) => "validation",
+            Self::Compilation(_) => "compilation",
+            Self::MissingTargetHandle { .. } => "missing_target_handle",
+            Self::UnknownSourcePort { .. } => "unknown_source_port",
+            Self::UnknownTargetPort { .. } => "unknown_target_port",
+            Self::EdgeTypeMismatch { .. } => "edge_type_mismatch",
+        }
+    }
+
+    pub fn edge_id(&self) -> Option<&str> {
+        match self {
+            Self::MissingTargetHandle { edge_id }
+            | Self::UnknownSourcePort { edge_id, .. }
+            | Self::UnknownTargetPort { edge_id, .. }
+            | Self::EdgeTypeMismatch { edge_id, .. } => Some(edge_id),
+            _ => None,
+        }
+    }
+
+    pub fn node_id(&self) -> Option<&str> {
+        match self {
+            Self::UnknownSourcePort { node_id, .. } | Self::UnknownTargetPort { node_id, .. } => {
+                Some(node_id)
+            }
+            _ => None,
+        }
+    }
+
+    pub fn to_view(&self) -> CompileErrorView {
+        CompileErrorView {
+            kind: self.kind().to_string(),
+            message: self.to_string(),
+            edge_id: self.edge_id().map(str::to_string),
+            node_id: self.node_id().map(str::to_string),
+        }
+    }
+}
+
+/// Structured payload of a compile error for the editor. Returned as part of
+/// the publish API response so the frontend can highlight the offending
+/// node/edge inline instead of just showing a flat error string.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
+pub struct CompileErrorView {
+    pub kind: String,
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edge_id: Option<String>,
 }
 
 /// Tracks which places are the input/output interface of each expanded node.
@@ -160,6 +248,12 @@ pub fn compile_to_air(
 
     // 2. Validate
     validate(graph, &wg)?;
+
+    // 2b. Typed-ports edge validation (Phase 2). Every edge must carry an
+    //     explicit `target_handle` (Phase 2 hard-require) and the resolved
+    //     source/target ports must type-match (empty target port = Json
+    //     pass-through, otherwise exact field-name + kind match).
+    validate_edges_typed(graph)?;
 
     // 3. Topological sort (on DAG — loop_back edges excluded)
     let sorted = topo_order(&wg)?;
@@ -342,6 +436,142 @@ fn validate(graph: &WorkflowGraph, wg: &WorkflowDiGraph) -> Result<(), CompileEr
     Ok(())
 }
 
+// --- Typed-ports edge validation (Phase 2) ---
+
+fn validate_edges_typed(graph: &WorkflowGraph) -> Result<(), CompileError> {
+    use crate::models::template::{FieldKind, Port};
+
+    // Index nodes by id for quick lookup. Skipping this would force an
+    // O(edges * nodes) walk; templates can have ~50 nodes so it's not worth it.
+    let nodes_by_id: HashMap<&str, &crate::models::template::WorkflowNode> =
+        graph.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+
+    for edge in &graph.edges {
+        // 1. Hard-require target_handle.
+        let target_handle = edge
+            .target_handle
+            .as_deref()
+            .ok_or_else(|| CompileError::MissingTargetHandle {
+                edge_id: edge.id.clone(),
+            })?;
+
+        // 2. Look up source/target nodes. Missing-node cases are handled by
+        //    the structural validate(); here we just defensively skip if the
+        //    edge points into the void.
+        let Some(src_node) = nodes_by_id.get(edge.source.as_str()) else {
+            continue;
+        };
+        let Some(tgt_node) = nodes_by_id.get(edge.target.as_str()) else {
+            continue;
+        };
+
+        // 3. Resolve source port. `source_handle: None` resolves to the
+        //    canonical single output port; some node kinds (Decision,
+        //    ParallelSplit) require an explicit handle and have no canonical
+        //    single output. Phase 4 will fill in output_ports() for those.
+        let src_ports = src_node.data.output_ports();
+        let src_port: Option<&Port> = match edge.source_handle.as_deref() {
+            Some(h) => src_ports.iter().copied().find(|p| p.id == h),
+            None => {
+                if src_ports.len() == 1 {
+                    Some(src_ports[0])
+                } else if src_ports.is_empty() {
+                    // Node has no declared output ports yet (HumanTask/Decision/etc.
+                    // pre-Phase-4). Treat as "Json pass-through" — skip type check
+                    // for this edge. Once Phase 4 lands and these gain ports, this
+                    // path stops being reached.
+                    None
+                } else {
+                    return Err(CompileError::UnknownSourcePort {
+                        edge_id: edge.id.clone(),
+                        node_id: edge.source.clone(),
+                        handle: "<missing>".to_string(),
+                    });
+                }
+            }
+        };
+        if let Some(h) = edge.source_handle.as_deref() {
+            if src_port.is_none() && !src_ports.is_empty() {
+                return Err(CompileError::UnknownSourcePort {
+                    edge_id: edge.id.clone(),
+                    node_id: edge.source.clone(),
+                    handle: h.to_string(),
+                });
+            }
+        }
+
+        // 4. Resolve target port. Same fall-through for "no declared input
+        //    ports yet" semantics; otherwise the target_handle must hit a port.
+        let tgt_ports = tgt_node.data.input_ports();
+        let tgt_port: Option<&Port> = tgt_ports.iter().copied().find(|p| p.id == target_handle);
+        if tgt_port.is_none() && !tgt_ports.is_empty() {
+            return Err(CompileError::UnknownTargetPort {
+                edge_id: edge.id.clone(),
+                node_id: edge.target.clone(),
+                handle: target_handle.to_string(),
+            });
+        }
+
+        // 5. Type-check field sets. Skip when either side is "no declared
+        //    ports yet" (Phase 4 will tighten these) or when the target port
+        //    has no fields (= Json pass-through).
+        let (Some(src), Some(tgt)) = (src_port, tgt_port) else {
+            continue;
+        };
+        if tgt.fields.is_empty() {
+            continue;
+        }
+        if !ports_type_compatible(src, tgt) {
+            let mut expected: Vec<String> = src
+                .fields
+                .iter()
+                .map(|f| format!("{}:{:?}", f.name, f.kind))
+                .collect();
+            let mut found: Vec<String> = tgt
+                .fields
+                .iter()
+                .map(|f| format!("{}:{:?}", f.name, f.kind))
+                .collect();
+            expected.sort();
+            found.sort();
+            return Err(CompileError::EdgeTypeMismatch {
+                edge_id: edge.id.clone(),
+                expected,
+                found,
+            });
+        }
+
+        // Local helper kept here so it doesn't pollute the module namespace —
+        // type-compat semantics are entirely scoped to this validation pass.
+        fn ports_type_compatible(src: &Port, tgt: &Port) -> bool {
+            if src.fields.len() != tgt.fields.len() {
+                return false;
+            }
+            let src_map: HashMap<&str, FieldKind> =
+                src.fields.iter().map(|f| (f.name.as_str(), f.kind)).collect();
+            for f in &tgt.fields {
+                match src_map.get(f.name.as_str()) {
+                    None => return false,
+                    Some(sk) => {
+                        if !kinds_compatible(*sk, f.kind) {
+                            return false;
+                        }
+                    }
+                }
+            }
+            true
+        }
+
+        fn kinds_compatible(a: FieldKind, b: FieldKind) -> bool {
+            // Json on either side is the escape hatch (accepts anything).
+            // Otherwise require exact match (Phase 2 nominal type system).
+            a == b || a == FieldKind::Json || b == FieldKind::Json
+        }
+    }
+
+    Ok(())
+}
+
 // --- Topological sort ---
 
 fn topo_order(wg: &WorkflowDiGraph) -> Result<Vec<NodeIndex>, CompileError> {
@@ -434,11 +664,14 @@ fn expand_node(
     let id = &node.id;
 
     match &node.data {
-        WorkflowNodeData::Start { label, initial_data, .. } => {
+        WorkflowNodeData::Start { label, .. } => {
+            // Initial tokens are seeded per-Start at instance creation time by
+            // `parameterize_air` based on the request's `start_tokens` (typed
+            // against the Start's declared `initial` port). Compile-time emits
+            // an unseeded place; the instance API replaces `initial_tokens` at
+            // deploy time.
             let place_id = format!("p_{id}_ready");
             let place: PlaceHandle<DynamicToken> = ctx.state(&place_id, label);
-            let token = initial_data.clone().unwrap_or_else(|| json!({}));
-            ctx.seed_one(&place, DynamicToken::new(token));
 
             ports.insert(
                 id.clone(),
@@ -1019,7 +1252,7 @@ mod tests {
             data: WorkflowNodeData::Start {
                 label: "Start".to_string(),
                 description: None,
-                initial_data: None,
+                initial: Port::empty_input(),
             },
             parent_id: None,
             width: None,
@@ -1035,6 +1268,7 @@ mod tests {
             data: WorkflowNodeData::End {
                 label: "End".to_string(),
                 description: None,
+            terminal: crate::models::template::default_terminal_port(),
             },
             parent_id: None,
             width: None,
@@ -1048,6 +1282,7 @@ mod tests {
             source: source.to_string(),
             target: target.to_string(),
             source_handle: None,
+            target_handle: Some("in".to_string()),
             label: None,
             edge_type: "sequence".to_string(),
         }
@@ -1072,9 +1307,10 @@ mod tests {
         assert_eq!(places.len(), 1);
         assert_eq!(transitions.len(), 0);
 
-        // Start place absorbs terminal type and has initial tokens
+        // Start place absorbs terminal type. With typed ports, initial tokens
+        // are NOT seeded at compile time — `parameterize_air` seeds them at
+        // instance creation. Just verify the place is terminal-typed here.
         let start_place = places.iter().find(|p| p["id"] == "p_s_ready").unwrap();
-        assert!(!start_place["initial_tokens"].as_array().unwrap().is_empty());
         assert_eq!(start_place["type"], "terminal");
     }
 
@@ -1181,6 +1417,7 @@ mod tests {
             data: WorkflowNodeData::End {
                 label: format!("End {id}"),
                 description: None,
+                terminal: crate::models::template::default_terminal_port(),
             },
             parent_id: None,
             width: None,
@@ -1194,6 +1431,7 @@ mod tests {
             source: source.to_string(),
             target: target.to_string(),
             source_handle: Some(handle.to_string()),
+            target_handle: Some("in".to_string()),
             label: None,
             edge_type: "sequence".to_string(),
         }

@@ -976,6 +976,17 @@ export interface components {
             total_bytes: number;
         };
         /**
+         * @description Structured payload of a compile error for the editor. Returned as part of
+         *     the publish API response so the frontend can highlight the offending
+         *     node/edge inline instead of just showing a flat error string.
+         */
+        CompileErrorView: {
+            edge_id?: string | null;
+            kind: string;
+            message: string;
+            node_id?: string | null;
+        };
+        /**
          * @description Request body for stateless compilation. Used by `POST /api/compile` and
          *     `POST /api/templates/{id}/compile`. `files` is a per-node, per-filename map
          *     of inline contents; the preview compile emits `InputSource::Raw` entries so
@@ -992,12 +1003,35 @@ export interface components {
             name: string;
         };
         CreateInstanceRequest: {
+            /**
+             * @description Free-form audit metadata stored on the instance row. Unlike pre-typed-ports
+             *     behavior, this is NOT merged into initial Petri tokens — token shape is
+             *     driven solely by `start_tokens`.
+             */
             metadata?: unknown;
+            /**
+             * @description Typed seeds for each Start block in the template. A Start with a
+             *     non-empty `initial` port requires a matching entry here; otherwise the
+             *     API returns 400. Starts with an empty `initial` port can be omitted
+             *     (each gets a default `{}` token with system fields injected).
+             */
+            start_tokens?: components["schemas"]["StartToken"][];
             /** Format: uuid */
             template_id: string;
         };
         CreateTemplateRequest: {
             description?: string | null;
+            /**
+             * @description Optional per-node file map (filename → inline contents). Files are
+             *     seeded as Y.Text entries inside each node's `files` Y.Map so that the
+             *     new template lands ready-to-publish for backends that require
+             *     attached scripts (e.g. Python's entrypoint).
+             */
+            files?: {
+                [key: string]: {
+                    [key: string]: string;
+                };
+            };
             graph?: null | components["schemas"]["WorkflowGraph"];
             name: string;
         };
@@ -1030,8 +1064,13 @@ export interface components {
          * @description Uniform error body returned by every fallible handler. Replaces the ad-hoc
          *     `json!({"error": ...})` pattern so the spec exposes a single
          *     `ErrorResponse` schema and the frontend gets one consistent error shape.
+         *
+         *     Optional `compile_errors` carries structured per-edge / per-node failures
+         *     from the workflow compiler so the editor can highlight inline (Phase 2
+         *     typed-ports). Absent on non-compile errors.
          */
         ErrorResponse: {
+            compile_errors?: components["schemas"]["CompileErrorView"][] | null;
             error: string;
         };
         EventDetail: {
@@ -1073,6 +1112,14 @@ export interface components {
              */
             entrypoint?: string | null;
         };
+        /**
+         * @description Type kind for a typed port field. Superset of `TaskFieldKind`: adds `Bool`
+         *     (currently piggybacks on `Checkbox` in human-task forms), `Timestamp`
+         *     (needed for trigger fire times and audit fields), and `Json` (opaque
+         *     escape hatch for legacy / dynamic payloads). Snake-case wire values.
+         * @enum {string}
+         */
+        FieldKind: "text" | "textarea" | "number" | "bool" | "select" | "file" | "signature" | "timestamp" | "json";
         /**
          * @description Response shape for `POST /api/files/upload/{id}/{node_id}`.
          *
@@ -1469,6 +1516,29 @@ export interface components {
             /** Format: int64 */
             total_pages: number;
         };
+        /**
+         * @description A named bundle of typed fields exchanged at a block boundary. Two ports
+         *     type-match if their field sets are equal (same names, same kinds, with
+         *     `Json` as the escape hatch).
+         */
+        Port: {
+            fields?: components["schemas"]["PortField"][];
+            /** @description Unique within the block (e.g. `"in"`, `"out"`, `"approved"`). */
+            id: string;
+            label: string;
+        };
+        /**
+         * @description A single field within a typed `Port`. Identifier-like `name` is the wire
+         *     key in the token; `label` is for display.
+         */
+        PortField: {
+            description?: string | null;
+            kind: components["schemas"]["FieldKind"];
+            label: string;
+            name: string;
+            options?: string[] | null;
+            required?: boolean;
+        };
         Position: {
             /** Format: double */
             x: number;
@@ -1508,6 +1578,20 @@ export interface components {
             /** Format: int64 */
             dispatch_seq: number;
             signal_key: string;
+        };
+        /**
+         * @description A typed token seed for a single `Start` block in the template. The token
+         *     must be a JSON object matching the Start's declared `initial` port shape
+         *     (required fields present, kinds compatible). See `FieldKind::accepts`.
+         *
+         *     Snake-case wire fields to match the surrounding `CreateInstanceRequest`
+         *     (`start_tokens`, `template_id`, etc.).
+         */
+        StartToken: {
+            /** @description `WorkflowNode.id` of the Start block this token seeds. */
+            start_block_id: string;
+            /** @description JSON object whose keys match the Start's `initial` port field names. */
+            token: unknown;
         };
         TaskBlockConfig: {
             field: components["schemas"]["TaskFieldConfig"];
@@ -1613,6 +1697,13 @@ export interface components {
             source: string;
             sourceHandle?: string | null;
             target: string;
+            /**
+             * @description Required at publish time (Phase 2 typed-ports). Stays optional in
+             *     serde so pre-typed-ports edges still deserialize, but the compiler
+             *     rejects `None` with `CompileError::MissingTargetHandle` so existing
+             *     templates need an editor pass before they republish.
+             */
+            targetHandle?: string | null;
             type: string;
         };
         WorkflowGraph: {
@@ -1660,13 +1751,26 @@ export interface components {
         };
         WorkflowNodeData: {
             description?: string | null;
-            initialData?: unknown;
+            /**
+             * @description Declared input schema. The token this Start emits has this shape.
+             *     Defaults to an empty-fields port so pre-typed-ports templates load
+             *     unchanged. Replaces the previous opaque `initialData` blob; initial
+             *     tokens are now seeded per-Start at instance creation time via the
+             *     `start_tokens` field of `CreateInstanceRequest`.
+             */
+            initial?: components["schemas"]["Port"];
             label: string;
             /** @enum {string} */
             type: "start";
         } | {
             description?: string | null;
             label: string;
+            /**
+             * @description Declared terminal token shape. Defaults to an empty port (accepts
+             *     any incoming token) so existing End nodes keep working. UI editor
+             *     for `terminal` lands in Phase 4.
+             */
+            terminal?: components["schemas"]["Port"];
             /** @enum {string} */
             type: "end";
         } | {
@@ -1680,7 +1784,21 @@ export interface components {
         } | {
             description?: string | null;
             executionSpec: components["schemas"]["ExecutionSpecConfig"];
+            /**
+             * @description Declared input shape. Empty by default — empty `fields` means
+             *     "accepts any token" (Json pass-through), preserving back-compat
+             *     for templates that wire arbitrary upstream output into an
+             *     automated step. Phase 4 may derive richer defaults.
+             */
+            input?: components["schemas"]["Port"];
             label: string;
+            /**
+             * @description Declared output shape. Persisted as-is once authored; the bare
+             *     default has no fields and should be re-derived from
+             *     `execution_spec.backend_type` via `default_output_port` whenever a
+             *     caller needs the canonical backend shape.
+             */
+            output?: components["schemas"]["Port"];
             /** @enum {string} */
             type: "automated_step";
         } | {

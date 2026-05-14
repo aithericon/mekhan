@@ -59,11 +59,13 @@ pub async fn create_template(
         ApiError::internal(e.to_string())
     })?;
 
-    // Initialize Y.Doc from the graph for real-time collaboration
+    // Initialize Y.Doc from the graph for real-time collaboration. Seed any
+    // inline files the caller supplied so the template lands ready-to-publish
+    // for Python and other file-bearing backends.
     if let Err(e) = state
         .yjs
         .persistence
-        .init_doc_from_graph(id, &graph)
+        .init_doc_from_graph_with_files(id, &graph, &req.files)
         .await
     {
         tracing::error!("failed to init Y.Doc for template {id}: {e}");
@@ -455,7 +457,10 @@ pub async fn publish_template(
 
     // Compile to AIR
     let air_json = compile_to_air(&graph, &existing.name, &existing.description, &files)
-        .map_err(|e| ApiError::bad_request(format!("compilation failed: {e}")))?;
+        .map_err(|e| {
+            let view = e.to_view();
+            ApiError::compile(format!("compilation failed: {e}"), vec![view])
+        })?;
 
     let template = sqlx::query_as::<_, WorkflowTemplate>(
         r#"
@@ -821,7 +826,10 @@ pub async fn compile_preview(
     let files = storage_path_files(id, existing.version, &ydoc_files);
 
     let air = compile_to_air(&graph, &existing.name, &existing.description, &files)
-        .map_err(|e| ApiError::bad_request(format!("compilation failed: {e}")))?;
+        .map_err(|e| {
+            let view = e.to_view();
+            ApiError::compile(format!("compilation failed: {e}"), vec![view])
+        })?;
 
     Ok(Json(air))
 }
@@ -848,6 +856,9 @@ pub async fn compile_graph(
     let description = body.description.as_deref().unwrap_or("");
     let files = inline_files(&body.files);
     let air = compile_to_air(&body.graph, &body.name, description, &files)
-        .map_err(|e| ApiError::bad_request(format!("compilation failed: {e}")))?;
+        .map_err(|e| {
+            let view = e.to_view();
+            ApiError::compile(format!("compilation failed: {e}"), vec![view])
+        })?;
     Ok(Json(air))
 }

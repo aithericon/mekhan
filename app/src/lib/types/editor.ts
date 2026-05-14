@@ -138,7 +138,11 @@ export const NODE_PALETTE: NodePaletteItem[] = [
 export function createDefaultNodeData(type: WorkflowNodeType): SchemaWorkflowNodeData {
 	switch (type) {
 		case 'start':
-			return { type: 'start', label: 'Start' };
+			return {
+				type: 'start',
+				label: 'Start',
+				initial: { id: 'in', label: 'Input', fields: [] }
+			};
 		case 'end':
 			return { type: 'end', label: 'End' };
 		case 'human_task':

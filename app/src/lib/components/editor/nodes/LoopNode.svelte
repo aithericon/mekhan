@@ -7,7 +7,7 @@
 	let { data, selected }: { data: LoopNodeData; selected?: boolean } = $props();
 </script>
 
-<Handle type="target" position={Position.Left} class={workflowNodeHandleClass('loop')} />
+<Handle id="in" type="target" position={Position.Left} class={workflowNodeHandleClass('loop')} />
 <WorkflowNodeCard
 	kind="loop"
 	icon={Repeat}

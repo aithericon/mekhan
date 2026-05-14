@@ -13,9 +13,9 @@ use crate::models::instance::{
     ListInstancesQuery, WorkflowInstance,
 };
 use crate::models::responses::InstanceEventsResponse;
-use crate::models::template::{PaginatedResponse, WorkflowTemplate};
+use crate::models::template::{PaginatedResponse, WorkflowGraph, WorkflowTemplate};
 use crate::petri::events::fetch_events;
-use crate::petri::instance::{deploy_instance, parameterize_air};
+use crate::petri::instance::{deploy_instance, parameterize_air, ParameterizeError};
 use crate::AppState;
 
 /// POST /api/instances
@@ -57,19 +57,34 @@ pub async fn create_instance(
         .clone()
         .ok_or_else(|| ApiError::internal("published template has no AIR JSON"))?;
 
+    // Deserialize the template's graph so parameterize_air can validate
+    // start_tokens against each Start block's declared `initial` port.
+    let graph: WorkflowGraph = serde_json::from_value(template.graph.clone())
+        .map_err(|e| ApiError::internal(format!("template graph is invalid: {e}")))?;
+
     let instance_id = Uuid::new_v4();
     let net_id = format!("mekhan-{instance_id}");
     let metadata = req.metadata.clone().unwrap_or(json!({}));
 
-    // Parameterize AIR JSON for this instance
+    // Parameterize AIR JSON for this instance. Validation failures (missing
+    // start_tokens, kind mismatch, etc.) become 400s — the request is invalid.
     let parameterized_air = parameterize_air(
         &air_json,
         instance_id,
         template.id,
         template.version,
         created_by,
-        req.metadata.as_ref(),
-    );
+        &graph,
+        &req.start_tokens,
+    )
+    .map_err(|e| match e {
+        ParameterizeError::MissingStartTokens(_)
+        | ParameterizeError::UnknownStartBlock(_)
+        | ParameterizeError::DuplicateStartToken(_)
+        | ParameterizeError::TokenNotObject(_)
+        | ParameterizeError::MissingRequiredField { .. }
+        | ParameterizeError::FieldKindMismatch { .. } => ApiError::bad_request(e.to_string()),
+    })?;
 
     // Insert instance record FIRST so the lifecycle listener can find it
     // if the net completes before we return.

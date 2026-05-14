@@ -15,6 +15,7 @@
 	import { edgeTypes } from './edges';
 	import NodePalette from './NodePalette.svelte';
 	import DropHandler from './DropHandler.svelte';
+	import { compileErrors } from '$lib/editor/compile-errors.svelte';
 	import {
 		createDefaultNodeData,
 		type WorkflowNodeData,
@@ -60,7 +61,8 @@
 			data: n.data,
 			...(n.parentId ? { parentId: n.parentId, extent: 'parent' as const } : {}),
 			...(n.width != null ? { width: n.width } : {}),
-			...(n.height != null ? { height: n.height } : {})
+			...(n.height != null ? { height: n.height } : {}),
+			...(compileErrors.byNodeId.has(n.id) ? { className: 'workflow-node-error' } : {})
 		}));
 	}
 
@@ -70,10 +72,17 @@
 			source: e.source,
 			target: e.target,
 			sourceHandle: e.sourceHandle ?? undefined,
+			targetHandle: e.targetHandle ?? undefined,
 			label: e.label ?? undefined,
 			type: 'deletable' as const,
 			animated: e.type === 'loop_back',
-			deletable: !isReadonly
+			deletable: !isReadonly,
+			...(compileErrors.byEdgeId.has(e.id)
+				? {
+						className: 'workflow-edge-error',
+						style: 'stroke: hsl(var(--destructive)); stroke-width: 2;'
+					}
+				: {})
 		}));
 	}
 
@@ -105,6 +114,33 @@
 		}
 	});
 
+	// Re-decorate nodes/edges when the compile-error store changes (e.g. after
+	// a failed publish or an explicit clear). We keep all other state (positions,
+	// selection, data) intact and just toggle the `className` / `style` fields.
+	$effect(() => {
+		const nodeErrors = compileErrors.byNodeId;
+		const edgeErrors = compileErrors.byEdgeId;
+		nodes = nodes.map((n) => {
+			const hasErr = nodeErrors.has(n.id);
+			const { className: _, ...rest } = n as Node & { className?: string };
+			return hasErr ? { ...rest, className: 'workflow-node-error' } : rest;
+		});
+		edges = edges.map((e) => {
+			const hasErr = edgeErrors.has(e.id);
+			const { className: _c, style: _s, ...rest } = e as Edge & {
+				className?: string;
+				style?: string;
+			};
+			return hasErr
+				? {
+						...rest,
+						className: 'workflow-edge-error',
+						style: 'stroke: hsl(var(--destructive)); stroke-width: 2;'
+					}
+				: rest;
+		});
+	});
+
 	function serializeAndEmit() {
 		const serialized: WorkflowGraph = {
 			nodes: nodes.map((n) => ({
@@ -121,6 +157,11 @@
 				source: e.source,
 				target: e.target,
 				sourceHandle: e.sourceHandle as string | undefined,
+				// Phase 2 typed-ports: every edge must carry a target_handle at
+				// publish. We default to "in" so legacy edges round-trip cleanly
+				// once the user opens the editor; new connections set this via
+				// xyflow's Connection (see onConnect).
+				targetHandle: (e.targetHandle as string | undefined) ?? 'in',
 				label: typeof e.label === 'string' ? e.label : undefined,
 				type: e.animated ? ('loop_back' as const) : ('sequence' as const)
 			}))
@@ -148,6 +189,10 @@
 				source: connection.source!,
 				target: connection.target!,
 				sourceHandle: connection.sourceHandle ?? undefined,
+				// Phase 2 hard-require: target_handle must be present on the
+				// wire. Fall back to "in" when xyflow returns null (user dropped
+				// on the node body without a specific handle).
+				targetHandle: connection.targetHandle ?? 'in',
 				type: 'sequence'
 			});
 		} else {
@@ -281,3 +326,18 @@
 		</SvelteFlow>
 	</div>
 </div>
+
+<style>
+	/* Phase 2 publish-error highlighting: nodes / edges flagged by the
+	   compiler get a red ring + outline so the user can see exactly which
+	   element triggered the failure. Cleared on the next successful publish. */
+	:global(.svelte-flow__node.workflow-node-error) {
+		outline: 2px solid hsl(var(--destructive));
+		outline-offset: 4px;
+		border-radius: 12px;
+	}
+	:global(.svelte-flow__edge.workflow-edge-error path.svelte-flow__edge-path) {
+		stroke: hsl(var(--destructive));
+		stroke-width: 2.5;
+	}
+</style>

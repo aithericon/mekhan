@@ -1,6 +1,9 @@
 <script lang="ts">
 	import type { AutomatedStepNodeData, ExecutionBackendType } from '$lib/types/editor';
+	import type { components } from '$lib/api/schema';
 	import * as Select from '$lib/components/ui/select';
+	import { Button } from '$lib/components/ui/button';
+	import RotateCcw from '@lucide/svelte/icons/rotate-ccw';
 	import PythonConfigPanel from './automated/PythonConfigPanel.svelte';
 	import DockerConfigPanel from './automated/DockerConfigPanel.svelte';
 	import ProcessConfigPanel from './automated/ProcessConfigPanel.svelte';
@@ -8,7 +11,11 @@
 	import LlmConfigPanel from './automated/LlmConfigPanel.svelte';
 	import FileOpsConfigPanel from './automated/FileOpsConfigPanel.svelte';
 	import KreuzbergConfigPanel from './automated/KreuzbergConfigPanel.svelte';
+	import PortsSection from './PortsSection.svelte';
+	import { defaultOutputPort, emptyOutputPort } from '$lib/editor/automated-ports';
 	import type { YjsGraphBinding } from '$lib/yjs/graph-binding.svelte';
+
+	type Port = components['schemas']['Port'];
 
 	type Props = {
 		data: AutomatedStepNodeData;
@@ -19,6 +26,16 @@
 	};
 
 	let { data, readonly = false, onchange, binding, nodeId }: Props = $props();
+
+	const outputPort = $derived<Port>(data.output ?? emptyOutputPort());
+
+	function handleOutputPortChange(port: Port) {
+		onchange({ ...data, output: port });
+	}
+
+	function resetOutputToBackendDefault() {
+		onchange({ ...data, output: defaultOutputPort(data.executionSpec.backendType) });
+	}
 
 	const defaultConfigs: Record<ExecutionBackendType, Record<string, unknown>> = {
 		python: { python: 'python3', requirements: [], virtualenv: false, sdk: true, inherit_env: true, env: {} },
@@ -116,3 +133,28 @@
 {:else if data.executionSpec.backendType === 'kreuzberg'}
 	<KreuzbergConfigPanel config={data.executionSpec.config as Record<string, unknown>} {readonly} onchange={handleConfigChange} />
 {/if}
+
+<div class="space-y-2 pt-3 border-t border-border/40">
+	<div class="flex items-center justify-between">
+		<span class="text-xs font-medium text-muted-foreground">Output port</span>
+		{#if !readonly}
+			<Button
+				variant="ghost"
+				size="sm"
+				onclick={resetOutputToBackendDefault}
+				class="h-7 gap-1 px-2 text-xs"
+				title="Reset output port to the backend's canonical shape"
+			>
+				<RotateCcw class="size-3.5" />
+				Reset to {data.executionSpec.backendType} default
+			</Button>
+		{/if}
+	</div>
+	<PortsSection
+		port={outputPort}
+		{readonly}
+		title="Fields"
+		emptyHint="No declared output fields. Downstream edges with declared input ports will type-mismatch on publish — click reset to seed the backend's default shape."
+		onchange={handleOutputPortChange}
+	/>
+</div>

@@ -39,7 +39,22 @@ export const showcaseGraph: WorkflowGraph = {
 			id: 'start',
 			type: 'start',
 			position: { x: 40, y: 280 },
-			data: { type: 'start', label: 'Start', initialData: { invoice_id: 'INV-2024-001' } }
+			data: {
+				type: 'start',
+				label: 'Start',
+				initial: {
+					id: 'in',
+					label: 'Input',
+					fields: [
+						{
+							name: 'invoice_id',
+							label: 'Invoice ID',
+							kind: 'text',
+							required: true
+						}
+					]
+				}
+			}
 		},
 
 		// ── Row 2: Review ─────────────────────────────────────
@@ -119,8 +134,14 @@ export const showcaseGraph: WorkflowGraph = {
 				description: 'OCR + NLP extraction pipeline',
 				executionSpec: {
 					backendType: 'python',
+					entrypoint: 'main.py',
 					config: {
-						scriptContent: 'import json, sys\ndata = json.load(sys.stdin)\nresult = {"vendor": data.get("vendor_name", ""), "amount": data.get("invoice_amount", 0), "extracted": True}\nprint(json.dumps(result))',
+						python: 'python3',
+						requirements: [],
+						virtualenv: false,
+						sdk: true,
+						inherit_env: true,
+						env: {}
 					}
 				}
 			}
@@ -214,8 +235,14 @@ export const showcaseGraph: WorkflowGraph = {
 				description: 'Sanctions & fraud screening',
 				executionSpec: {
 					backendType: 'python',
+					entrypoint: 'main.py',
 					config: {
-						scriptContent: 'import json, sys\ndata = json.load(sys.stdin)\nresult = {"compliant": True, "risk_score": 0.12, "checked_at": "2024-01-01"}\nprint(json.dumps(result))',
+						python: 'python3',
+						requirements: [],
+						virtualenv: false,
+						sdk: true,
+						inherit_env: true,
+						env: {}
 					}
 				}
 			}
@@ -327,6 +354,45 @@ export const showcaseGraph: WorkflowGraph = {
 };
 
 /**
+ * Inline `main.py` contents for each automated_step node. Seeded into the
+ * Y.Doc at template creation so the demo lands publishable without the user
+ * having to open the IDE and type a script first.
+ *
+ * The runner reads upstream token data from `inputs["input.json"]` (see
+ * `engine/sdk/...` and the prepare-transition snapshot in the compiler).
+ */
+const showcaseFiles: Record<string, Record<string, string>> = {
+	extract: {
+		'main.py':
+			'import json, os\n' +
+			'\n' +
+			'with open(os.path.join(os.environ["AITHERICON_INPUTS_DIR"], "input.json")) as f:\n' +
+			'    data = json.load(f)\n' +
+			'\n' +
+			'result = {\n' +
+			'    "vendor": data.get("vendor_name", ""),\n' +
+			'    "amount": data.get("invoice_amount", 0),\n' +
+			'    "extracted": True,\n' +
+			'}\n' +
+			'print(json.dumps(result))\n'
+	},
+	compliance: {
+		'main.py':
+			'import json, os\n' +
+			'\n' +
+			'with open(os.path.join(os.environ["AITHERICON_INPUTS_DIR"], "input.json")) as f:\n' +
+			'    data = json.load(f)\n' +
+			'\n' +
+			'result = {\n' +
+			'    "compliant": True,\n' +
+			'    "risk_score": 0.12,\n' +
+			'    "checked_at": "2024-01-01",\n' +
+			'}\n' +
+			'print(json.dumps(result))\n'
+	}
+};
+
+/**
  * Find the singleton "Invoice Processing Demo" template, creating it on first use.
  * The demo entry point uses this so every visit lands on the same shared template.
  */
@@ -339,6 +405,7 @@ export async function findOrCreateShowcaseTemplate(): Promise<Template> {
 	return createTemplate({
 		name: SHOWCASE_TEMPLATE_NAME,
 		description: SHOWCASE_TEMPLATE_DESCRIPTION,
-		graph: showcaseGraph
+		graph: showcaseGraph,
+		files: showcaseFiles
 	});
 }

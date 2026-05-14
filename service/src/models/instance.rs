@@ -65,9 +65,32 @@ pub struct InstanceListItem {
 
 // --- API request/response types ---
 
+/// A typed token seed for a single `Start` block in the template. The token
+/// must be a JSON object matching the Start's declared `initial` port shape
+/// (required fields present, kinds compatible). See `FieldKind::accepts`.
+///
+/// Snake-case wire fields to match the surrounding `CreateInstanceRequest`
+/// (`start_tokens`, `template_id`, etc.).
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+pub struct StartToken {
+    /// `WorkflowNode.id` of the Start block this token seeds.
+    pub start_block_id: String,
+    /// JSON object whose keys match the Start's `initial` port field names.
+    pub token: serde_json::Value,
+}
+
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateInstanceRequest {
     pub template_id: Uuid,
+    /// Typed seeds for each Start block in the template. A Start with a
+    /// non-empty `initial` port requires a matching entry here; otherwise the
+    /// API returns 400. Starts with an empty `initial` port can be omitted
+    /// (each gets a default `{}` token with system fields injected).
+    #[serde(default)]
+    pub start_tokens: Vec<StartToken>,
+    /// Free-form audit metadata stored on the instance row. Unlike pre-typed-ports
+    /// behavior, this is NOT merged into initial Petri tokens — token shape is
+    /// driven solely by `start_tokens`.
     #[serde(default)]
     pub metadata: Option<serde_json::Value>,
 }
