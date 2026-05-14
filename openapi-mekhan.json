@@ -22,7 +22,9 @@
             "description": "Paginated catalogue entries",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/Paginated_CatalogueEntry"
+                }
               }
             }
           },
@@ -760,10 +762,12 @@
         ],
         "responses": {
           "200": {
-            "description": "JetStream events for this instance (untyped envelope)",
+            "description": "JetStream events for this instance",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/InstanceEventsResponse"
+                }
               }
             }
           },
@@ -857,7 +861,9 @@
             "description": "Paginated list of processes",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/Paginated_HpiProcess"
+                }
               }
             }
           },
@@ -1026,7 +1032,9 @@
             "description": "Paginated catalogue entries",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/Paginated_CatalogueEntry"
+                }
               }
             }
           },
@@ -1119,10 +1127,12 @@
         ],
         "responses": {
           "200": {
-            "description": "Recent artifacts wrapped in `{ entries: [...] }`",
+            "description": "Recent artifacts",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactsListResponse"
+                }
               }
             }
           },
@@ -1225,7 +1235,9 @@
             "description": "Paginated logs",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/Paginated_HpiLog"
+                }
               }
             }
           },
@@ -1401,10 +1413,12 @@
         ],
         "responses": {
           "200": {
-            "description": "Recent log rows wrapped in `{ logs: [...] }`",
+            "description": "Recent log rows",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/LogsTailResponse"
+                }
               }
             }
           },
@@ -1970,7 +1984,9 @@
             "description": "Paginated tasks (HumanTask-shaped) in `tasks` envelope",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/TaskListResponse"
+                }
               }
             }
           },
@@ -2864,6 +2880,21 @@
           }
         }
       },
+      "ArtifactsListResponse": {
+        "type": "object",
+        "description": "Response shape for `GET /api/processes/{process_id}/artifacts/list`.\n\nFrontend reads `body.entries[]` directly — keep the single-field envelope.",
+        "required": [
+          "entries"
+        ],
+        "properties": {
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CatalogueEntry"
+            }
+          }
+        }
+      },
       "BranchCondition": {
         "type": "object",
         "required": [
@@ -3394,6 +3425,7 @@
       },
       "FileUploadResponse": {
         "type": "object",
+        "description": "Response shape for `POST /api/files/upload/{id}/{node_id}`.\n\nThe handler returns S3 metadata after a successful upload.",
         "required": [
           "key",
           "filename",
@@ -3634,6 +3666,28 @@
           "grid",
           "gallery"
         ]
+      },
+      "InstanceEventsResponse": {
+        "type": "object",
+        "description": "Response shape for `GET /api/instances/{id}/events`.\n\nMirrors the literal `json!({ \"net_id\": ..., \"events\": [...], \"event_count\": ... })`\nenvelope the handler previously emitted. `events` stays `Vec<serde_json::Value>`\nbecause the petri-lab event shape is heterogeneous (one of many event types).",
+        "required": [
+          "net_id",
+          "events",
+          "event_count"
+        ],
+        "properties": {
+          "event_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "events": {
+            "type": "array",
+            "items": {}
+          },
+          "net_id": {
+            "type": "string"
+          }
+        }
       },
       "InstanceListItem": {
         "type": "object",
@@ -3957,6 +4011,64 @@
           }
         }
       },
+      "LogRow": {
+        "type": "object",
+        "required": [
+          "id",
+          "process_id",
+          "level",
+          "message",
+          "detail",
+          "timestamp"
+        ],
+        "properties": {
+          "detail": {},
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "level": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "process_id": {
+            "type": "string"
+          },
+          "signal_key": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "LogsTailResponse": {
+        "type": "object",
+        "description": "Response shape for `GET /api/processes/{process_id}/logs/tail`.\n\nFrontend reads `body.logs[]` directly — keep the single-field envelope.",
+        "required": [
+          "logs"
+        ],
+        "properties": {
+          "logs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LogRow"
+            }
+          }
+        }
+      },
       "MetricPoint": {
         "type": "object",
         "required": [
@@ -4245,6 +4357,312 @@
             "format": "int64"
           },
           "total": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "Paginated_CatalogueEntry": {
+        "type": "object",
+        "description": "Paginated response wrapper.",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "page_size",
+          "total_pages",
+          "has_next",
+          "has_previous"
+        ],
+        "properties": {
+          "has_next": {
+            "type": "boolean"
+          },
+          "has_previous": {
+            "type": "boolean"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "A single catalogue entry (maps 1:1 to the `catalogue_entries` table).",
+              "required": [
+                "id",
+                "execution_id",
+                "name",
+                "category",
+                "filename",
+                "file_metadata",
+                "user_metadata",
+                "created_at",
+                "catalogued_at"
+              ],
+              "properties": {
+                "catalogued_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "category": {
+                  "type": "string"
+                },
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "execution_id": {
+                  "type": "string"
+                },
+                "file_metadata": {},
+                "filename": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "job_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "mime_type": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "name": {
+                  "type": "string"
+                },
+                "process_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "process_step": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "signal_key": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "size_bytes": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int64"
+                },
+                "source_event_sequence": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int64"
+                },
+                "source_net": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "source_place": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "storage_path": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "user_metadata": {}
+              }
+            }
+          },
+          "page": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "page_size": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total_pages": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "Paginated_HpiLog": {
+        "type": "object",
+        "description": "Paginated response wrapper.",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "page_size",
+          "total_pages",
+          "has_next",
+          "has_previous"
+        ],
+        "properties": {
+          "has_next": {
+            "type": "boolean"
+          },
+          "has_previous": {
+            "type": "boolean"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "process_id",
+                "level",
+                "message",
+                "detail",
+                "timestamp"
+              ],
+              "properties": {
+                "detail": {},
+                "id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "level": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                },
+                "process_id": {
+                  "type": "string"
+                },
+                "source": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "timestamp": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              }
+            }
+          },
+          "page": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "page_size": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total_pages": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "Paginated_HpiProcess": {
+        "type": "object",
+        "description": "Paginated response wrapper.",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "page_size",
+          "total_pages",
+          "has_next",
+          "has_previous"
+        ],
+        "properties": {
+          "has_next": {
+            "type": "boolean"
+          },
+          "has_previous": {
+            "type": "boolean"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "process_id",
+                "status",
+                "config",
+                "created_at",
+                "updated_at"
+              ],
+              "properties": {
+                "config": {},
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "kind": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "name": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "owner": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "process_id": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string"
+                },
+                "updated_at": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              }
+            }
+          },
+          "page": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "page_size": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total_pages": {
             "type": "integer",
             "format": "int64"
           }
@@ -4613,6 +5031,47 @@
           "file",
           "signature"
         ]
+      },
+      "TaskListResponse": {
+        "type": "object",
+        "description": "Response shape for `GET /api/tasks`.\n\n`tasks` is `Vec<serde_json::Value>` because each task is a\n`HumanTask`-shaped JSON built by `to_human_task_json` from heterogeneous DB\nrows — the right level of typing for this endpoint.",
+        "required": [
+          "tasks",
+          "total",
+          "page",
+          "page_size",
+          "total_pages",
+          "has_next",
+          "has_previous"
+        ],
+        "properties": {
+          "has_next": {
+            "type": "boolean"
+          },
+          "has_previous": {
+            "type": "boolean"
+          },
+          "page": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "page_size": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "tasks": {
+            "type": "array",
+            "items": {}
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total_pages": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
       },
       "TaskStepConfig": {
         "type": "object",

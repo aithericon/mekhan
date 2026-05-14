@@ -4,21 +4,13 @@ use axum::{
     response::IntoResponse,
     Json,
 };
-use serde::Serialize;
 use serde_json::json;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::models::error::ErrorResponse;
+use crate::models::responses::FileUploadResponse;
 use crate::AppState;
-
-#[derive(Debug, Serialize, ToSchema)]
-pub struct FileUploadResponse {
-    pub key: String,
-    pub filename: String,
-    pub content_type: String,
-    pub size: usize,
-}
 
 /// Multipart body wrapper for spec documentation. The runtime extractor is
 /// `axum::extract::Multipart`; this struct only exists so the spec shows the

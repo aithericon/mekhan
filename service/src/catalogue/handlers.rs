@@ -8,6 +8,7 @@ use axum::{
 use crate::catalogue::model::{CatalogueEntry, CatalogueStats, LineageResponse, NetStats};
 use crate::models::error::ErrorResponse;
 use crate::query::extractor::QueryParams;
+use crate::query::pagination::Paginated;
 use crate::AppState;
 
 /// GET /api/catalogue
@@ -29,7 +30,7 @@ use crate::AppState;
     get,
     path = "/api/catalogue",
     responses(
-        (status = 200, description = "Paginated catalogue entries", body = serde_json::Value),
+        (status = 200, description = "Paginated catalogue entries", body = Paginated<CatalogueEntry>),
         (status = 400, description = "Invalid query DSL", body = ErrorResponse),
     ),
     tag = "catalogue",

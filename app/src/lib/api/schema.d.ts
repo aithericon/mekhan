@@ -908,6 +908,14 @@ export interface components {
             token_id: string;
             transition_name?: string | null;
         };
+        /**
+         * @description Response shape for `GET /api/processes/{process_id}/artifacts/list`.
+         *
+         *     Frontend reads `body.entries[]` directly — keep the single-field envelope.
+         */
+        ArtifactsListResponse: {
+            entries: components["schemas"]["CatalogueEntry"][];
+        };
         BranchCondition: {
             edgeId: string;
             guard: string;
@@ -1069,6 +1077,11 @@ export interface components {
              */
             entrypoint?: string | null;
         };
+        /**
+         * @description Response shape for `POST /api/files/upload/{id}/{node_id}`.
+         *
+         *     The handler returns S3 metadata after a successful upload.
+         */
         FileUploadResponse: {
             content_type: string;
             filename: string;
@@ -1144,6 +1157,18 @@ export interface components {
          * @enum {string}
          */
         ImageDisplay: "single" | "grid" | "gallery";
+        /**
+         * @description Response shape for `GET /api/instances/{id}/events`.
+         *
+         *     Mirrors the literal `json!({ "net_id": ..., "events": [...], "event_count": ... })`
+         *     envelope the handler previously emitted. `events` stays `Vec<serde_json::Value>`
+         *     because the petri-lab event shape is heterogeneous (one of many event types).
+         */
+        InstanceEventsResponse: {
+            event_count: number;
+            events: unknown[];
+            net_id: string;
+        };
         /** @description Instance with template name, returned by list queries (JOIN with workflow_templates). */
         InstanceListItem: {
             /** Format: date-time */
@@ -1237,6 +1262,26 @@ export interface components {
             timestamp: string;
             /** Format: double */
             value: number;
+        };
+        LogRow: {
+            detail: unknown;
+            /** Format: int64 */
+            id: number;
+            level: string;
+            message: string;
+            process_id: string;
+            signal_key?: string | null;
+            source?: string | null;
+            /** Format: date-time */
+            timestamp: string;
+        };
+        /**
+         * @description Response shape for `GET /api/processes/{process_id}/logs/tail`.
+         *
+         *     Frontend reads `body.logs[]` directly — keep the single-field envelope.
+         */
+        LogsTailResponse: {
+            logs: components["schemas"]["LogRow"][];
         };
         MetricPoint: {
             /** Format: date-time */
@@ -1341,6 +1386,93 @@ export interface components {
             /** Format: int64 */
             total: number;
         };
+        /** @description Paginated response wrapper. */
+        Paginated_CatalogueEntry: {
+            has_next: boolean;
+            has_previous: boolean;
+            items: {
+                /** Format: date-time */
+                catalogued_at: string;
+                category: string;
+                /** Format: date-time */
+                created_at: string;
+                execution_id: string;
+                file_metadata: unknown;
+                filename: string;
+                id: string;
+                job_id?: string | null;
+                mime_type?: string | null;
+                name: string;
+                process_id?: string | null;
+                process_step?: string | null;
+                signal_key?: string | null;
+                /** Format: int64 */
+                size_bytes?: number | null;
+                /** Format: int64 */
+                source_event_sequence?: number | null;
+                source_net?: string | null;
+                source_place?: string | null;
+                storage_path?: string | null;
+                user_metadata: unknown;
+            }[];
+            /** Format: int64 */
+            page: number;
+            /** Format: int64 */
+            page_size: number;
+            /** Format: int64 */
+            total: number;
+            /** Format: int64 */
+            total_pages: number;
+        };
+        /** @description Paginated response wrapper. */
+        Paginated_HpiLog: {
+            has_next: boolean;
+            has_previous: boolean;
+            items: {
+                detail: unknown;
+                /** Format: int64 */
+                id: number;
+                level: string;
+                message: string;
+                process_id: string;
+                source?: string | null;
+                /** Format: date-time */
+                timestamp: string;
+            }[];
+            /** Format: int64 */
+            page: number;
+            /** Format: int64 */
+            page_size: number;
+            /** Format: int64 */
+            total: number;
+            /** Format: int64 */
+            total_pages: number;
+        };
+        /** @description Paginated response wrapper. */
+        Paginated_HpiProcess: {
+            has_next: boolean;
+            has_previous: boolean;
+            items: {
+                config: unknown;
+                /** Format: date-time */
+                created_at: string;
+                kind?: string | null;
+                name?: string | null;
+                owner?: string | null;
+                process_id: string;
+                status: string;
+                /** Format: date-time */
+                updated_at: string;
+            }[];
+            /** Format: int64 */
+            page: number;
+            /** Format: int64 */
+            page_size: number;
+            /** Format: int64 */
+            total: number;
+            /** Format: int64 */
+            total_pages: number;
+        };
         Position: {
             /** Format: double */
             x: number;
@@ -1429,6 +1561,26 @@ export interface components {
          * @enum {string}
          */
         TaskFieldKind: "text" | "textarea" | "number" | "select" | "checkbox" | "file" | "signature";
+        /**
+         * @description Response shape for `GET /api/tasks`.
+         *
+         *     `tasks` is `Vec<serde_json::Value>` because each task is a
+         *     `HumanTask`-shaped JSON built by `to_human_task_json` from heterogeneous DB
+         *     rows — the right level of typing for this endpoint.
+         */
+        TaskListResponse: {
+            has_next: boolean;
+            has_previous: boolean;
+            /** Format: int64 */
+            page: number;
+            /** Format: int64 */
+            page_size: number;
+            tasks: unknown[];
+            /** Format: int64 */
+            total: number;
+            /** Format: int64 */
+            total_pages: number;
+        };
         TaskStepConfig: {
             blocks: components["schemas"]["TaskBlockConfig"][];
             descriptionMdsvex?: string | null;
@@ -1616,7 +1768,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["Paginated_CatalogueEntry"];
                 };
             };
             /** @description Invalid query DSL */
@@ -2159,13 +2311,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description JetStream events for this instance (untyped envelope) */
+            /** @description JetStream events for this instance */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["InstanceEventsResponse"];
                 };
             };
             /** @description Instance not found */
@@ -2244,7 +2396,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["Paginated_HpiProcess"];
                 };
             };
             /** @description Invalid query */
@@ -2387,7 +2539,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["Paginated_CatalogueEntry"];
                 };
             };
             /** @description Invalid query */
@@ -2424,13 +2576,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Recent artifacts wrapped in `{ entries: [...] }` */
+            /** @description Recent artifacts */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["ArtifactsListResponse"];
                 };
             };
             /** @description Server error */
@@ -2489,7 +2641,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["Paginated_HpiLog"];
                 };
             };
             /** @description Invalid query */
@@ -2550,13 +2702,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Recent log rows wrapped in `{ logs: [...] }` */
+            /** @description Recent log rows */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["LogsTailResponse"];
                 };
             };
             /** @description Server error */
@@ -2903,7 +3055,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["TaskListResponse"];
                 };
             };
             /** @description Invalid query */

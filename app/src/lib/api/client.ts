@@ -90,6 +90,16 @@ export type LiveMetricEvent = components['schemas']['LiveMetricEvent'];
 export type LiveLogEvent = components['schemas']['LiveLogEvent'];
 export type LiveArtifactEvent = components['schemas']['LiveArtifactEvent'];
 
+// ─── Typed response envelopes ──────────────────────────────────────────────
+export type InstanceEventsResponse = components['schemas']['InstanceEventsResponse'];
+export type LogsTailResponse = components['schemas']['LogsTailResponse'];
+export type ArtifactsListResponse = components['schemas']['ArtifactsListResponse'];
+export type TaskListResponse = components['schemas']['TaskListResponse'];
+export type FileUploadResponse = components['schemas']['FileUploadResponse'];
+export type PaginatedProcesses = components['schemas']['Paginated_HpiProcess'];
+export type PaginatedLogs = components['schemas']['Paginated_HpiLog'];
+export type PaginatedArtifacts = components['schemas']['Paginated_CatalogueEntry'];
+
 // Internal helper — `openapi-fetch` returns { data, error }. We surface the
 // older "throws on non-2xx" contract so call sites don't need to change.
 function unwrap<T>(result: { data?: T; error?: unknown; response: Response }): T {
@@ -387,7 +397,7 @@ export async function getProcessLogsTail(
 		q?: string;
 		limit?: number;
 	}
-): Promise<{ logs: LogTailRow[] }> {
+): Promise<LogsTailResponse> {
 	const qs = new URLSearchParams();
 	if (params?.since) qs.set('since', toIso(params.since));
 	if (params?.until) qs.set('until', toIso(params.until));
@@ -453,7 +463,7 @@ export async function getProcessArtifactsList(
 		until?: Date | string;
 		limit?: number;
 	}
-): Promise<{ entries: LiveArtifactEntry[] }> {
+): Promise<ArtifactsListResponse> {
 	const qs = new URLSearchParams();
 	if (params?.categories && params.categories.length > 0)
 		qs.set('categories', params.categories.join(','));
@@ -583,7 +593,7 @@ export async function uploadFile(
 	templateId: string,
 	nodeId: string,
 	file: File
-): Promise<{ key: string; filename: string; content_type: string; size: number }> {
+): Promise<FileUploadResponse> {
 	const formData = new FormData();
 	formData.append('file', file);
 

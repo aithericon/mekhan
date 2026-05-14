@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 /// Page-based pagination parameters.
 #[derive(Debug, Clone, Deserialize)]
@@ -84,8 +85,11 @@ impl Sort {
 }
 
 /// Paginated response wrapper.
-#[derive(Debug, Clone, Serialize)]
-pub struct Paginated<T: Serialize> {
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct Paginated<T>
+where
+    T: Serialize + ToSchema,
+{
     pub items: Vec<T>,
     pub total: i64,
     pub page: i64,
@@ -95,7 +99,7 @@ pub struct Paginated<T: Serialize> {
     pub has_previous: bool,
 }
 
-impl<T: Serialize> Paginated<T> {
+impl<T: Serialize + ToSchema> Paginated<T> {
     pub fn new(items: Vec<T>, total: i64, page_query: &PageQuery) -> Self {
         let page_size = page_query.limit();
         let total_pages = if page_size > 0 {

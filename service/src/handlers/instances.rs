@@ -7,11 +7,13 @@ use axum::{
 use serde_json::json;
 use uuid::Uuid;
 
+use crate::auth::AuthUser;
 use crate::models::error::ErrorResponse;
 use crate::models::instance::{
     CreateInstanceRequest, EngineStatus, InstanceListItem, InstanceStateResponse,
     ListInstancesQuery, WorkflowInstance,
 };
+use crate::models::responses::InstanceEventsResponse;
 use crate::models::template::{PaginatedResponse, WorkflowTemplate};
 use crate::petri::events::fetch_events;
 use crate::petri::instance::{deploy_instance, parameterize_air};
@@ -33,8 +35,10 @@ use crate::AppState;
 )]
 pub async fn create_instance(
     State(state): State<AppState>,
+    user: AuthUser,
     Json(req): Json<CreateInstanceRequest>,
 ) -> impl IntoResponse {
+    let created_by = user.subject_as_uuid();
     // Fetch the template (must be published)
     let template = sqlx::query_as::<_, WorkflowTemplate>(
         "SELECT * FROM workflow_templates WHERE id = $1",
@@ -73,7 +77,7 @@ pub async fn create_instance(
         instance_id,
         template.id,
         template.version,
-        req.created_by,
+        created_by,
         req.metadata.as_ref(),
     );
 
@@ -90,7 +94,7 @@ pub async fn create_instance(
     .bind(template.id)
     .bind(template.version)
     .bind(&net_id)
-    .bind(req.created_by)
+    .bind(created_by)
     .bind(&metadata)
     .fetch_one(&state.db)
     .await
@@ -329,7 +333,7 @@ pub async fn get_instance_state(
     path = "/api/instances/{id}/events",
     params(("id" = Uuid, Path, description = "Instance id")),
     responses(
-        (status = 200, description = "JetStream events for this instance (untyped envelope)", body = serde_json::Value),
+        (status = 200, description = "JetStream events for this instance", body = InstanceEventsResponse),
         (status = 404, description = "Instance not found", body = ErrorResponse),
         (status = 500, description = "Server error", body = ErrorResponse),
     ),
@@ -368,12 +372,13 @@ pub async fn get_instance_events(
         .iter()
         .filter_map(|e| serde_json::to_value(e).ok())
         .collect();
+    let event_count = events_json.len();
 
-    Json(json!({
-        "net_id": instance.net_id,
-        "events": events_json,
-        "event_count": events_json.len(),
-    }))
+    Json(InstanceEventsResponse {
+        net_id: instance.net_id,
+        events: events_json,
+        event_count,
+    })
     .into_response()
 }
 

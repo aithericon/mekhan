@@ -194,7 +194,14 @@ export function createProcessLiveStore(processId: string, opts: ProcessLiveOptio
 				q: logQuery,
 				limit: 500
 			});
-			logs = resp.logs;
+			// LogsTailResponse.logs has slightly broader nullability than LogTailRow
+			// (LogRow uses `source: Option<String>` → `string | null | undefined`).
+			logs = resp.logs.map((r) => ({
+				...r,
+				source: r.source ?? null,
+				signal_key: r.signal_key ?? null,
+				detail: (r.detail as Record<string, unknown> | null) ?? null
+			}));
 			errorMessage = null;
 		} catch (e) {
 			errorMessage = e instanceof Error ? e.message : String(e);
@@ -213,7 +220,19 @@ export function createProcessLiveStore(processId: string, opts: ProcessLiveOptio
 				render_hints: artifactRenderHints.length > 0 ? artifactRenderHints : undefined,
 				limit: maxArtifactBuffer
 			});
-			artifacts = resp.entries;
+			// CatalogueEntry → LiveArtifactEntry: CatalogueEntry has `process_id: string | null`,
+			// LiveArtifactEntry uses `string | undefined`. Same for several other Option fields.
+			artifacts = resp.entries.map((e) => ({
+				...e,
+				id: e.id,
+				process_id: e.process_id ?? undefined,
+				mime_type: e.mime_type ?? null,
+				storage_path: e.storage_path ?? null,
+				size_bytes: e.size_bytes ?? null,
+				process_step: e.process_step ?? null,
+				signal_key: e.signal_key ?? null,
+				user_metadata: (e.user_metadata as Record<string, unknown> | null) ?? null
+			}));
 			errorMessage = null;
 		} catch (e) {
 			errorMessage = e instanceof Error ? e.message : String(e);

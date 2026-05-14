@@ -29,6 +29,7 @@ use utoipa::{IntoParams, ToSchema};
 
 use crate::causality::live::{LiveArtifactEvent, LiveLogEvent, LiveMetricEvent};
 use crate::models::error::ErrorResponse;
+use crate::models::responses::{ArtifactsListResponse, LogsTailResponse};
 use crate::AppState;
 
 // ─── metrics/series (DB backfill with adaptive downsampling) ───────────────
@@ -358,7 +359,7 @@ fn default_log_limit() -> i64 {
     500
 }
 
-#[derive(Debug, Serialize, sqlx::FromRow, ToSchema)]
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow, ToSchema)]
 pub struct LogRow {
     pub id: i64,
     pub process_id: String,
@@ -378,7 +379,7 @@ pub struct LogRow {
         LogsTailQuery,
     ),
     responses(
-        (status = 200, description = "Recent log rows wrapped in `{ logs: [...] }`", body = serde_json::Value),
+        (status = 200, description = "Recent log rows", body = LogsTailResponse),
         (status = 500, description = "Server error", body = ErrorResponse),
     ),
     tag = "processes-live",
@@ -414,7 +415,7 @@ pub async fn logs_tail(
         Ok(mut rs) => {
             // Client wants ascending timeline for tail rendering.
             rs.reverse();
-            Json(serde_json::json!({ "logs": rs })).into_response()
+            Json(LogsTailResponse { logs: rs }).into_response()
         }
         Err(e) => {
             tracing::warn!(process_id = %process_id, "logs_tail: {e}");
@@ -596,7 +597,7 @@ fn default_artifact_limit() -> i64 {
         ArtifactsListQuery,
     ),
     responses(
-        (status = 200, description = "Recent artifacts wrapped in `{ entries: [...] }`", body = serde_json::Value),
+        (status = 200, description = "Recent artifacts", body = ArtifactsListResponse),
         (status = 500, description = "Server error", body = ErrorResponse),
     ),
     tag = "processes-live",
@@ -619,7 +620,7 @@ pub async fn artifacts_list(
     )
     .await
     {
-        Ok(entries) => Json(serde_json::json!({ "entries": entries })).into_response(),
+        Ok(entries) => Json(ArtifactsListResponse { entries }).into_response(),
         Err(e) => {
             tracing::warn!(process_id = %process_id, "artifacts_list: {e}");
             (

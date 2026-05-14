@@ -8,11 +8,14 @@ use chrono::Utc;
 use serde::Deserialize;
 use serde_json::{json, Value as JsonValue};
 
+use crate::catalogue::model::CatalogueEntry;
 use crate::models::error::ErrorResponse;
+use crate::models::responses::TaskListResponse;
 use crate::query::extractor::QueryParams;
+use crate::query::pagination::Paginated;
 use crate::AppState;
 use super::model::{
-    HpiMetric, HpiMetricSummary, HpiProcess, HpiTask, ProcessDetail, ProcessStats,
+    HpiLog, HpiMetric, HpiMetricSummary, HpiProcess, HpiTask, ProcessDetail, ProcessStats,
     ProcessUpdateRequest,
 };
 use super::queries;
@@ -78,7 +81,7 @@ fn to_human_task_json(task: &HpiTask) -> JsonValue {
     get,
     path = "/api/processes",
     responses(
-        (status = 200, description = "Paginated list of processes", body = serde_json::Value),
+        (status = 200, description = "Paginated list of processes", body = Paginated<HpiProcess>),
         (status = 400, description = "Invalid query", body = ErrorResponse),
     ),
     tag = "processes",
@@ -239,7 +242,7 @@ pub async fn get_process_metrics(
     path = "/api/processes/{process_id}/logs",
     params(("process_id" = String, Path, description = "Process id")),
     responses(
-        (status = 200, description = "Paginated logs", body = serde_json::Value),
+        (status = 200, description = "Paginated logs", body = Paginated<HpiLog>),
         (status = 400, description = "Invalid query", body = ErrorResponse),
     ),
     tag = "processes",
@@ -295,7 +298,7 @@ pub async fn get_process_tasks(
     path = "/api/processes/{process_id}/artifacts",
     params(("process_id" = String, Path, description = "Process id")),
     responses(
-        (status = 200, description = "Paginated catalogue entries", body = serde_json::Value),
+        (status = 200, description = "Paginated catalogue entries", body = Paginated<CatalogueEntry>),
         (status = 400, description = "Invalid query", body = ErrorResponse),
     ),
     tag = "processes",
@@ -328,7 +331,7 @@ pub async fn get_process_artifacts(
     get,
     path = "/api/tasks",
     responses(
-        (status = 200, description = "Paginated tasks (HumanTask-shaped) in `tasks` envelope", body = serde_json::Value),
+        (status = 200, description = "Paginated tasks (HumanTask-shaped) in `tasks` envelope", body = TaskListResponse),
         (status = 400, description = "Invalid query", body = ErrorResponse),
     ),
     tag = "tasks",
@@ -341,15 +344,15 @@ pub async fn list_tasks(
         Ok(response) => {
             let tasks: Vec<JsonValue> =
                 response.items.iter().map(to_human_task_json).collect();
-            Json(json!({
-                "tasks": tasks,
-                "total": response.total,
-                "page": response.page,
-                "page_size": response.page_size,
-                "total_pages": response.total_pages,
-                "has_next": response.has_next,
-                "has_previous": response.has_previous,
-            }))
+            Json(TaskListResponse {
+                tasks,
+                total: response.total,
+                page: response.page,
+                page_size: response.page_size,
+                total_pages: response.total_pages,
+                has_next: response.has_next,
+                has_previous: response.has_previous,
+            })
             .into_response()
         }
         Err(e) => {
