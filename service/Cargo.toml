@@ -74,6 +74,11 @@ petri-api-types = { path = "../engine/core-engine/crates/api-types" }
 aithericon-executor-backend-configs = { path = "../executor/crates/executor-backend-configs" }
 aithericon-executor-domain = { path = "../executor/crates/executor-domain" }
 
+# OpenAPI — typed spec generation for the SPA's typed client codegen
+utoipa = { version = "5.4", features = ["axum_extras", "uuid", "chrono"] }
+utoipa-axum = "0.2"
+utoipa-swagger-ui = { version = "9", features = ["axum", "vendored"] }
+
 # Yjs CRDT for real-time collaborative editing
 yrs = "0.21"
 

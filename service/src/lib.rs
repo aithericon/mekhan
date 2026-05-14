@@ -10,6 +10,7 @@ pub mod handlers;
 pub mod lifecycle;
 pub mod models;
 pub mod nats;
+pub mod openapi;
 pub mod petri;
 pub mod process;
 pub mod query;
@@ -22,18 +23,22 @@ use std::path::PathBuf;
 
 use axum::{
     extract::DefaultBodyLimit,
-    routing::{delete, get, post, put},
+    routing::{delete, get, post},
     Router,
 };
 use sqlx::PgPool;
 use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
+use utoipa::OpenApi;
+use utoipa_axum::{router::OpenApiRouter, routes};
+use utoipa_swagger_ui::SwaggerUi;
 
 use crate::catalogue::repository::CatalogueRepository;
 use crate::causality::live::LiveBroadcasts;
 use crate::config::AppConfig;
 use crate::nats::MekhanNats;
+use crate::openapi::ApiDoc;
 use crate::petri::client::PetriClient;
 use crate::s3::ArtifactStore;
 use crate::yjs::manager::YjsManager;
@@ -51,52 +56,39 @@ pub struct AppState {
     pub live: Arc<LiveBroadcasts>,
 }
 
+/// Build the `OpenApiRouter` containing every `#[utoipa::path]`-annotated
+/// handler. Single source of truth for both [`build_router`] (runtime mount +
+/// swagger-ui) and [`openapi_spec`] (CLI dump for frontend codegen).
+fn build_openapi_router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::<AppState>::with_openapi(ApiDoc::openapi())
+        .routes(routes!(
+            handlers::templates::list_templates,
+            handlers::templates::create_template
+        ))
+        .routes(routes!(
+            handlers::templates::get_template,
+            handlers::templates::update_template,
+            handlers::templates::delete_template
+        ))
+        .routes(routes!(handlers::templates::publish_template))
+        .routes(routes!(handlers::templates::new_version))
+        .routes(routes!(handlers::templates::list_versions))
+        .routes(routes!(handlers::templates::get_air))
+        .routes(routes!(handlers::templates::compile_preview))
+        .routes(routes!(handlers::templates::compile_graph))
+}
+
 pub fn build_router(state: AppState) -> Router {
     let frontend_dir = state.config.frontend_dir.clone();
 
-    let api = Router::new()
+    // Routes that are #[utoipa::path]-annotated go through OpenApiRouter so
+    // they appear in the generated spec. Remaining (legacy) routes are wired
+    // on the plain axum Router below and merged together.
+    let (templates_router, api_spec) = build_openapi_router().split_for_parts();
+
+    let legacy = Router::new()
         // Health
         .route("/health", get(handlers::health::liveness))
-        // Template endpoints
-        .route("/api/templates", get(handlers::templates::list_templates))
-        .route(
-            "/api/templates",
-            post(handlers::templates::create_template),
-        )
-        .route(
-            "/api/templates/{id}",
-            get(handlers::templates::get_template),
-        )
-        .route(
-            "/api/templates/{id}",
-            put(handlers::templates::update_template),
-        )
-        .route(
-            "/api/templates/{id}",
-            delete(handlers::templates::delete_template),
-        )
-        .route(
-            "/api/templates/{id}/publish",
-            post(handlers::templates::publish_template),
-        )
-        .route(
-            "/api/templates/{id}/new-version",
-            post(handlers::templates::new_version),
-        )
-        .route(
-            "/api/templates/{id}/versions",
-            get(handlers::templates::list_versions),
-        )
-        .route(
-            "/api/templates/{id}/air",
-            get(handlers::templates::get_air),
-        )
-        .route(
-            "/api/templates/{id}/compile",
-            post(handlers::templates::compile_preview),
-        )
-        // Stateless compile endpoint
-        .route("/api/compile", post(handlers::templates::compile_graph))
         // Instance endpoints
         .route(
             "/api/instances",
@@ -243,18 +235,31 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/yjs/{template_id}",
             get(handlers::yjs_sync::ws_handler),
-        )
-        .with_state(state);
+        );
+
+    // Merge stateful sub-routers first, then ground out the state generic with
+    // `.with_state(state)` so we can attach the stateless SwaggerUI router and
+    // SPA fallback.
+    let api: Router = templates_router.merge(legacy).with_state(state);
+
+    let swagger = SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", api_spec);
 
     let app = if let Some(dir) = frontend_dir {
         let path = PathBuf::from(dir);
         let index = path.join("index.html");
         let spa = ServeDir::new(&path).fallback(ServeFile::new(&index));
-        api.fallback_service(spa)
+        api.merge(swagger).fallback_service(spa)
     } else {
-        api
+        api.merge(swagger)
     };
 
     app.layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
+}
+
+/// Build the OpenAPI document without booting any state — used by the CLI's
+/// `mekhan openapi` subcommand to dump the spec for codegen pipelines.
+pub fn openapi_spec() -> utoipa::openapi::OpenApi {
+    let (_, api) = build_openapi_router().split_for_parts();
+    api
 }

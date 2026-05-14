@@ -114,6 +114,11 @@ enum Commands {
         #[arg(short, long)]
         tail: Option<usize>,
     },
+
+    /// Print the OpenAPI 3 spec to stdout (no DB or NATS required).
+    /// Used by the frontend codegen pipeline to regenerate
+    /// `app/src/lib/api/schema.d.ts`.
+    Openapi,
 }
 
 #[tokio::main]
@@ -154,6 +159,14 @@ async fn main() -> anyhow::Result<()> {
         Commands::Cancel { instance_id } => cancel::run(&cli.server, &instance_id).await,
         Commands::Logs { instance_id, tail } => {
             logs::run(&cli.server, &instance_id, tail).await
+        }
+        Commands::Openapi => {
+            let spec = mekhan_service::openapi_spec();
+            let json = spec
+                .to_pretty_json()
+                .map_err(|e| anyhow::anyhow!("serialize openapi: {e}"))?;
+            println!("{json}");
+            Ok(())
         }
     }
 }

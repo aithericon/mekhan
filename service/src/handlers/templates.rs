@@ -9,33 +9,28 @@ use axum::{
 use serde_json::json;
 use uuid::Uuid;
 
-use serde::Deserialize;
-
 use aithericon_executor_domain::InputSource;
 
 use crate::compiler::compile_to_air;
 use crate::lifecycle::cleanup_net;
+use crate::models::error::ErrorResponse;
 use crate::models::template::{
-    CreateTemplateRequest, ListTemplatesQuery, PaginatedResponse, UpdateTemplateRequest,
-    WorkflowGraph, WorkflowTemplate,
+    CompileRequest, CreateTemplateRequest, ListTemplatesQuery, PaginatedResponse,
+    UpdateTemplateRequest, WorkflowGraph, WorkflowTemplate,
 };
 use crate::AppState;
 
-/// Request body for stateless compilation.
-#[derive(Debug, Deserialize)]
-pub struct CompileRequest {
-    pub name: String,
-    #[serde(default)]
-    pub description: Option<String>,
-    pub graph: WorkflowGraph,
-    /// Per-node, per-filename inline file contents. The compiler emits
-    /// `InputSource::Raw` entries for these so the preview AIR shows the same
-    /// staging shape that publish produces (with `StoragePath` keys).
-    #[serde(default)]
-    pub files: HashMap<String, HashMap<String, String>>,
-}
-
 /// POST /api/templates
+#[utoipa::path(
+    post,
+    path = "/api/templates",
+    request_body = CreateTemplateRequest,
+    responses(
+        (status = 201, description = "Template created", body = WorkflowTemplate),
+        (status = 500, description = "Server error", body = ErrorResponse),
+    ),
+    tag = "templates",
+)]
 pub async fn create_template(
     State(state): State<AppState>,
     Json(req): Json<CreateTemplateRequest>,
@@ -83,6 +78,15 @@ pub async fn create_template(
 }
 
 /// GET /api/templates
+#[utoipa::path(
+    get,
+    path = "/api/templates",
+    params(ListTemplatesQuery),
+    responses(
+        (status = 200, description = "Paginated list of templates", body = PaginatedResponse<WorkflowTemplate>),
+    ),
+    tag = "templates",
+)]
 pub async fn list_templates(
     State(state): State<AppState>,
     Query(params): Query<ListTemplatesQuery>,
@@ -211,7 +215,18 @@ pub async fn list_templates(
     })
 }
 
-/// GET /api/templates/:id
+/// GET /api/templates/{id}
+#[utoipa::path(
+    get,
+    path = "/api/templates/{id}",
+    params(("id" = Uuid, Path, description = "Template id")),
+    responses(
+        (status = 200, description = "Template", body = WorkflowTemplate),
+        (status = 404, description = "Template not found", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse),
+    ),
+    tag = "templates",
+)]
 pub async fn get_template(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
@@ -233,7 +248,20 @@ pub async fn get_template(
     }
 }
 
-/// PUT /api/templates/:id
+/// PUT /api/templates/{id}
+#[utoipa::path(
+    put,
+    path = "/api/templates/{id}",
+    params(("id" = Uuid, Path, description = "Template id")),
+    request_body = UpdateTemplateRequest,
+    responses(
+        (status = 200, description = "Template updated", body = WorkflowTemplate),
+        (status = 404, description = "Template not found", body = ErrorResponse),
+        (status = 409, description = "Template is published and locked", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse),
+    ),
+    tag = "templates",
+)]
 pub async fn update_template(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
@@ -292,8 +320,20 @@ pub async fn update_template(
     }
 }
 
-/// DELETE /api/templates/:id
+/// DELETE /api/templates/{id}
 /// Per Section 11.7: cascade cleanup for published templates with finished instances.
+#[utoipa::path(
+    delete,
+    path = "/api/templates/{id}",
+    params(("id" = Uuid, Path, description = "Template id")),
+    responses(
+        (status = 204, description = "Template deleted"),
+        (status = 404, description = "Template not found", body = ErrorResponse),
+        (status = 409, description = "Template has active instances", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse),
+    ),
+    tag = "templates",
+)]
 pub async fn delete_template(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
@@ -375,7 +415,20 @@ pub async fn delete_template(
     }
 }
 
-/// POST /api/templates/:id/publish
+/// POST /api/templates/{id}/publish
+#[utoipa::path(
+    post,
+    path = "/api/templates/{id}/publish",
+    params(("id" = Uuid, Path, description = "Template id")),
+    responses(
+        (status = 200, description = "Template published; AIR compiled and stored", body = WorkflowTemplate),
+        (status = 400, description = "Compilation failed or graph invalid", body = ErrorResponse),
+        (status = 404, description = "Template not found", body = ErrorResponse),
+        (status = 409, description = "Template already published", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse),
+    ),
+    tag = "templates",
+)]
 pub async fn publish_template(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
@@ -603,7 +656,19 @@ fn inline_files(
         .collect()
 }
 
-/// POST /api/templates/:id/new-version
+/// POST /api/templates/{id}/new-version
+#[utoipa::path(
+    post,
+    path = "/api/templates/{id}/new-version",
+    params(("id" = Uuid, Path, description = "Source template id")),
+    responses(
+        (status = 201, description = "New draft version created from published source", body = WorkflowTemplate),
+        (status = 404, description = "Template not found", body = ErrorResponse),
+        (status = 409, description = "Source must be published", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse),
+    ),
+    tag = "templates",
+)]
 pub async fn new_version(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
@@ -697,7 +762,18 @@ pub async fn new_version(
     }
 }
 
-/// GET /api/templates/:id/versions
+/// GET /api/templates/{id}/versions
+#[utoipa::path(
+    get,
+    path = "/api/templates/{id}/versions",
+    params(("id" = Uuid, Path, description = "Any template id in the version chain")),
+    responses(
+        (status = 200, description = "All versions in the template's chain, newest first", body = Vec<WorkflowTemplate>),
+        (status = 404, description = "Template not found", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse),
+    ),
+    tag = "templates",
+)]
 pub async fn list_versions(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
@@ -733,7 +809,19 @@ pub async fn list_versions(
     Json(json!(versions)).into_response()
 }
 
-/// GET /api/templates/:id/air
+/// GET /api/templates/{id}/air
+#[utoipa::path(
+    get,
+    path = "/api/templates/{id}/air",
+    params(("id" = Uuid, Path, description = "Template id")),
+    responses(
+        (status = 200, description = "Compiled AIR JSON for the published template", body = serde_json::Value),
+        (status = 404, description = "Template not found", body = ErrorResponse),
+        (status = 409, description = "Template is not published", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse),
+    ),
+    tag = "templates",
+)]
 pub async fn get_air(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
@@ -765,7 +853,19 @@ pub async fn get_air(
     }
 }
 
-/// POST /api/templates/:id/compile
+/// POST /api/templates/{id}/compile
+#[utoipa::path(
+    post,
+    path = "/api/templates/{id}/compile",
+    params(("id" = Uuid, Path, description = "Template id")),
+    responses(
+        (status = 200, description = "Compiled AIR JSON preview from current draft graph", body = serde_json::Value),
+        (status = 400, description = "Compilation failed or graph invalid", body = ErrorResponse),
+        (status = 404, description = "Template not found", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse),
+    ),
+    tag = "templates",
+)]
 pub async fn compile_preview(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
@@ -812,9 +912,21 @@ pub async fn compile_preview(
 }
 
 /// POST /api/compile
+/// POST /api/compile
+///
 /// Stateless compilation: accepts a graph (and optional inline file contents)
 /// and returns AIR JSON without database access. Used by the editor's "Preview
 /// AIR" button before publish.
+#[utoipa::path(
+    post,
+    path = "/api/compile",
+    request_body = CompileRequest,
+    responses(
+        (status = 200, description = "Compiled AIR JSON", body = serde_json::Value),
+        (status = 400, description = "Compilation failed", body = ErrorResponse),
+    ),
+    tag = "templates",
+)]
 pub async fn compile_graph(
     Json(body): Json<CompileRequest>,
 ) -> impl IntoResponse {

@@ -17,10 +17,11 @@ use petri_application::{
 use petri_domain::{verify_event_chain, DomainEvent, PlaceId, TokenColor, TokenId, TransitionId};
 
 use crate::dto::{
-    AnalysisReport, AnalysisSummary, CommandResponse, CreateTokenRequest, EvaluateFinalState,
-    EvaluateRequest, EvaluateResponse, EventsResponse, FiredTransition, IssueLevel,
-    LoadScenarioRequest, LoadScenarioResponse, RunMode, RunModeResponse, SetRunModeRequest,
-    StateResponse, TopologyResponse, TransitionStatus, UpdateTransitionRequest, ValidationIssue,
+    AnalysisReport, AnalysisSummary, CommandResponse, CreateTokenRequest, ErrorResponse,
+    EvaluateFinalState, EvaluateRequest, EvaluateResponse, EventsResponse, FiredTransition,
+    IssueLevel, LoadScenarioRequest, LoadScenarioResponse, RunMode, RunModeResponse,
+    SetRunModeRequest, StateResponse, TopologyResponse, TransitionStatus,
+    UpdateTransitionRequest, ValidationIssue,
 };
 use crate::router::{AppState, SseSignal};
 use crate::scenario_bridge::ScenarioBridge;

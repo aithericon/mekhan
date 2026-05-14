@@ -1,10 +1,11 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 // --- Database row ---
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, ToSchema)]
 pub struct WorkflowTemplate {
     pub id: Uuid,
     pub name: String,
@@ -35,7 +36,7 @@ pub struct WorkflowTemplate {
 
 // --- Visual editor data model (Section 2) ---
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct WorkflowGraph {
     pub nodes: Vec<WorkflowNode>,
     pub edges: Vec<WorkflowEdge>,
@@ -43,14 +44,14 @@ pub struct WorkflowGraph {
     pub viewport: Option<Viewport>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct Viewport {
     pub x: f64,
     pub y: f64,
     pub zoom: f64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct WorkflowNode {
     pub id: String,
     #[serde(rename = "type")]
@@ -68,13 +69,13 @@ pub struct WorkflowNode {
     pub height: Option<f64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct Position {
     pub x: f64,
     pub y: f64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum WorkflowNodeData {
     #[serde(rename = "start")]
@@ -195,7 +196,7 @@ impl WorkflowNodeData {
 
 // --- Task step configuration (maps to human-ui TaskStep) ---
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskStepConfig {
     pub id: String,
@@ -205,7 +206,7 @@ pub struct TaskStepConfig {
     pub blocks: Vec<TaskBlockConfig>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(tag = "type")]
 pub enum TaskBlockConfig {
     #[serde(rename = "input")]
@@ -230,7 +231,7 @@ pub enum TaskBlockConfig {
     File { filename: String },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct TaskFieldConfig {
     pub name: String,
     pub label: String,
@@ -245,7 +246,7 @@ pub struct TaskFieldConfig {
 
 // --- Branch conditions ---
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct BranchCondition {
     pub edge_id: String,
@@ -255,7 +256,7 @@ pub struct BranchCondition {
 
 // --- Execution spec configuration ---
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ExecutionSpecConfig {
     pub backend_type: String,
@@ -264,7 +265,7 @@ pub struct ExecutionSpecConfig {
 
 // --- Edge types ---
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkflowEdge {
     pub id: String,
@@ -280,7 +281,21 @@ pub struct WorkflowEdge {
 
 // --- API request/response types ---
 
-#[derive(Debug, Deserialize)]
+/// Request body for stateless compilation. Used by `POST /api/compile` and
+/// `POST /api/templates/{id}/compile`. `files` is a per-node, per-filename map
+/// of inline contents; the preview compile emits `InputSource::Raw` entries so
+/// the AIR matches the StoragePath-keyed shape produced by publish.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct CompileRequest {
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    pub graph: WorkflowGraph,
+    #[serde(default)]
+    pub files: std::collections::HashMap<String, std::collections::HashMap<String, String>>,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateTemplateRequest {
     pub name: String,
     #[serde(default)]
@@ -289,14 +304,14 @@ pub struct CreateTemplateRequest {
     pub author_id: Uuid,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct UpdateTemplateRequest {
     pub name: Option<String>,
     pub description: Option<String>,
     pub graph: Option<WorkflowGraph>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema, utoipa::IntoParams)]
 pub struct ListTemplatesQuery {
     #[serde(default = "default_page")]
     pub page: i64,
@@ -314,8 +329,8 @@ fn default_per_page() -> i64 {
     20
 }
 
-#[derive(Debug, Serialize)]
-pub struct PaginatedResponse<T> {
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PaginatedResponse<T: ToSchema> {
     pub items: Vec<T>,
     pub total: i64,
     pub page: i64,

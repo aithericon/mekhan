@@ -1,8 +1,9 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, ToSchema)]
 pub struct WorkflowInstance {
     pub id: Uuid,
     pub template_id: Uuid,
@@ -17,7 +18,7 @@ pub struct WorkflowInstance {
     pub metadata: serde_json::Value,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum InstanceStatus {
     Created,
@@ -46,7 +47,7 @@ impl std::fmt::Display for InstanceStatus {
 }
 
 /// Instance with template name, returned by list queries (JOIN with workflow_templates).
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, ToSchema)]
 pub struct InstanceListItem {
     pub id: Uuid,
     pub template_id: Uuid,
@@ -64,7 +65,7 @@ pub struct InstanceListItem {
 
 // --- API request/response types ---
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateInstanceRequest {
     pub template_id: Uuid,
     pub created_by: Uuid,
@@ -72,7 +73,7 @@ pub struct CreateInstanceRequest {
     pub metadata: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema, utoipa::IntoParams)]
 pub struct ListInstancesQuery {
     #[serde(default = "default_page")]
     pub page: i64,
@@ -89,7 +90,7 @@ fn default_per_page() -> i64 {
     20
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct InstanceStateResponse {
     pub instance_id: Uuid,
     pub net_id: String,
@@ -102,8 +103,9 @@ pub struct InstanceStateResponse {
     pub current_step: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct EngineStatus {
     pub available: bool,
+    #[schema(value_type = Option<String>)]
     pub run_mode: Option<petri_api_types::RunMode>,
 }
