@@ -4,8 +4,9 @@
 
 use mekhan_service::compiler::compile_to_air;
 use mekhan_service::models::template::{
-    BranchCondition, ExecutionSpecConfig, Position, TaskBlockConfig, TaskFieldConfig,
-    TaskStepConfig, WorkflowEdge, WorkflowGraph, WorkflowNode, WorkflowNodeData,
+    BranchCondition, ExecutionBackendType, ExecutionSpecConfig, Position, TaskBlockConfig,
+    TaskFieldConfig, TaskFieldKind, TaskStepConfig, WorkflowEdge, WorkflowGraph, WorkflowNode,
+    WorkflowNodeData,
 };
 use serde_json::{json, Value};
 
@@ -186,7 +187,7 @@ fn human_task_produces_group_signal_and_transitions() {
                             field: TaskFieldConfig {
                                 name: "approval".to_string(),
                                 label: "Approved?".to_string(),
-                                kind: "text".to_string(),
+                                kind: TaskFieldKind::Text,
                                 required: Some(true),
                                 placeholder: None,
                                 options: None,
@@ -252,7 +253,7 @@ fn automated_step_produces_executor_lifecycle() {
                     label: "Run Script".to_string(),
                     description: None,
                     execution_spec: ExecutionSpecConfig {
-                        backend_type: "docker".to_string(),
+                        backend_type: ExecutionBackendType::Docker,
                         entrypoint: None,
                         config: json!({"image": "alpine:latest"}),
                     },
@@ -849,7 +850,7 @@ fn automated_step_has_scoped_effect_errors() {
                     label: "Run Script".to_string(),
                     description: None,
                     execution_spec: ExecutionSpecConfig {
-                        backend_type: "docker".to_string(),
+                        backend_type: ExecutionBackendType::Docker,
                         entrypoint: None,
                         config: json!({"image": "alpine:latest"}),
                     },
@@ -886,7 +887,7 @@ fn auto_node(id: &str, label: &str) -> WorkflowNode {
             label: label.to_string(),
             description: None,
             execution_spec: ExecutionSpecConfig {
-                backend_type: "docker".to_string(),
+                backend_type: ExecutionBackendType::Docker,
                 entrypoint: None,
                 config: json!({"image": "alpine:latest"}),
             },

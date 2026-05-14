@@ -25,7 +25,13 @@ export type {
 	TaskBlockConfig,
 	TaskFieldConfig,
 	BranchCondition,
-	ExecutionSpecConfig
+	ExecutionSpecConfig,
+	// Schema-emitted enums — re-exported so editor components import a single
+	// place. Wire values are snake_case (see Rust models in template.rs).
+	CalloutSeverity,
+	ImageDisplay,
+	TaskFieldKind,
+	ExecutionBackendType
 } from '$lib/api/client';
 
 export type WorkflowNodeType = SchemaWorkflowNodeData['type'];
@@ -50,29 +56,6 @@ export type DividerBlock = Extract<SchemaTaskBlockConfig, { type: 'divider' }>;
 export type ImageBlock = Extract<SchemaTaskBlockConfig, { type: 'image' }>;
 export type FileBlock = Extract<SchemaTaskBlockConfig, { type: 'file' }>;
 export type PdfBlock = Extract<SchemaTaskBlockConfig, { type: 'pdf' }>;
-
-// Backend's TaskFieldConfig.kind is a free-form string at the wire layer.
-// The editor only ever produces one of these — narrow the type here so the
-// UI components get autocomplete on the form-builder field kind.
-export type TaskFieldKind =
-	| 'text'
-	| 'textarea'
-	| 'number'
-	| 'select'
-	| 'checkbox'
-	| 'file'
-	| 'signature';
-
-// Backend's ExecutionSpecConfig.backend_type is also a free-form string at the
-// wire layer; same reasoning as TaskFieldKind.
-export type ExecutionBackendType =
-	| 'python'
-	| 'process'
-	| 'docker'
-	| 'http'
-	| 'llm'
-	| 'file_ops'
-	| 'kreuzberg';
 
 /** Node type metadata for the sidebar palette. */
 export type NodePaletteItem = {

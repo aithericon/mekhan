@@ -2898,6 +2898,16 @@
           }
         }
       },
+      "CalloutSeverity": {
+        "type": "string",
+        "description": "Severity for callout blocks. Snake-case on the wire (`\"info\"`,\n`\"warning\"`, `\"error\"`, `\"success\"`) to keep the byte-for-byte shape that\nthe editor and human-task UI already produce/consume.",
+        "enum": [
+          "info",
+          "warning",
+          "error",
+          "success"
+        ]
+      },
       "CatalogueEntry": {
         "type": "object",
         "description": "A single catalogue entry (maps 1:1 to the `catalogue_entries` table).",
@@ -3349,6 +3359,19 @@
           }
         }
       },
+      "ExecutionBackendType": {
+        "type": "string",
+        "description": "Discriminator selecting which executor backend handles an automated step.\nSnake-case wire values: `\"python\"`, `\"process\"`, `\"docker\"`, `\"http\"`,\n`\"llm\"`, `\"file_ops\"`, `\"kreuzberg\"`.",
+        "enum": [
+          "python",
+          "process",
+          "docker",
+          "http",
+          "llm",
+          "file_ops",
+          "kreuzberg"
+        ]
+      },
       "ExecutionSpecConfig": {
         "type": "object",
         "required": [
@@ -3357,7 +3380,7 @@
         ],
         "properties": {
           "backendType": {
-            "type": "string"
+            "$ref": "#/components/schemas/ExecutionBackendType"
           },
           "config": {},
           "entrypoint": {
@@ -3602,6 +3625,15 @@
             "type": "string"
           }
         }
+      },
+      "ImageDisplay": {
+        "type": "string",
+        "description": "Layout mode for image blocks. Snake-case wire values: `\"single\"`,\n`\"grid\"`, `\"gallery\"`.",
+        "enum": [
+          "single",
+          "grid",
+          "gallery"
+        ]
       },
       "InstanceListItem": {
         "type": "object",
@@ -4423,7 +4455,7 @@
                 "type": "string"
               },
               "severity": {
-                "type": "string"
+                "$ref": "#/components/schemas/CalloutSeverity"
               },
               "title": {
                 "type": [
@@ -4462,7 +4494,7 @@
             ],
             "properties": {
               "display": {
-                "type": "string"
+                "$ref": "#/components/schemas/ImageDisplay"
               },
               "filenames": {
                 "type": "array",
@@ -4538,7 +4570,7 @@
         ],
         "properties": {
           "kind": {
-            "type": "string"
+            "$ref": "#/components/schemas/TaskFieldKind"
           },
           "label": {
             "type": "string"
@@ -4568,6 +4600,19 @@
             ]
           }
         }
+      },
+      "TaskFieldKind": {
+        "type": "string",
+        "description": "Form-field control kind for `input` task blocks. Snake-case wire values\nsuch as `\"text\"`, `\"textarea\"`, `\"number\"`, `\"select\"`, `\"checkbox\"`,\n`\"file\"`, `\"signature\"`.",
+        "enum": [
+          "text",
+          "textarea",
+          "number",
+          "select",
+          "checkbox",
+          "file",
+          "signature"
+        ]
       },
       "TaskStepConfig": {
         "type": "object",

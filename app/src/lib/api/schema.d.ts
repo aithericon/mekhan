@@ -917,6 +917,13 @@ export interface components {
             target_net: string;
             target_place: string;
         };
+        /**
+         * @description Severity for callout blocks. Snake-case on the wire (`"info"`,
+         *     `"warning"`, `"error"`, `"success"`) to keep the byte-for-byte shape that
+         *     the editor and human-task UI already produce/consume.
+         * @enum {string}
+         */
+        CalloutSeverity: "info" | "warning" | "error" | "success";
         /** @description A single catalogue entry (maps 1:1 to the `catalogue_entries` table). */
         CatalogueEntry: {
             /** Format: date-time */
@@ -1045,8 +1052,15 @@ export interface components {
             tokens: components["schemas"]["TokenInfo"][];
             transition_name?: string | null;
         };
+        /**
+         * @description Discriminator selecting which executor backend handles an automated step.
+         *     Snake-case wire values: `"python"`, `"process"`, `"docker"`, `"http"`,
+         *     `"llm"`, `"file_ops"`, `"kreuzberg"`.
+         * @enum {string}
+         */
+        ExecutionBackendType: "python" | "process" | "docker" | "http" | "llm" | "file_ops" | "kreuzberg";
         ExecutionSpecConfig: {
-            backendType: string;
+            backendType: components["schemas"]["ExecutionBackendType"];
             config: unknown;
             /**
              * @description Filename of the entrypoint script within the node's staged files.
@@ -1124,6 +1138,12 @@ export interface components {
             status: string;
             title: string;
         };
+        /**
+         * @description Layout mode for image blocks. Snake-case wire values: `"single"`,
+         *     `"grid"`, `"gallery"`.
+         * @enum {string}
+         */
+        ImageDisplay: "single" | "grid" | "gallery";
         /** @description Instance with template name, returned by list queries (JOIN with workflow_templates). */
         InstanceListItem: {
             /** Format: date-time */
@@ -1371,7 +1391,7 @@ export interface components {
             type: "mdsvex";
         } | {
             content: string;
-            severity: string;
+            severity: components["schemas"]["CalloutSeverity"];
             title?: string | null;
             /** @enum {string} */
             type: "callout";
@@ -1379,7 +1399,7 @@ export interface components {
             /** @enum {string} */
             type: "divider";
         } | {
-            display: string;
+            display: components["schemas"]["ImageDisplay"];
             filenames: string[];
             /** @enum {string} */
             type: "image";
@@ -1395,13 +1415,20 @@ export interface components {
             type: "pdf";
         };
         TaskFieldConfig: {
-            kind: string;
+            kind: components["schemas"]["TaskFieldKind"];
             label: string;
             name: string;
             options?: string[] | null;
             placeholder?: string | null;
             required?: boolean | null;
         };
+        /**
+         * @description Form-field control kind for `input` task blocks. Snake-case wire values
+         *     such as `"text"`, `"textarea"`, `"number"`, `"select"`, `"checkbox"`,
+         *     `"file"`, `"signature"`.
+         * @enum {string}
+         */
+        TaskFieldKind: "text" | "textarea" | "number" | "select" | "checkbox" | "file" | "signature";
         TaskStepConfig: {
             blocks: components["schemas"]["TaskBlockConfig"][];
             descriptionMdsvex?: string | null;

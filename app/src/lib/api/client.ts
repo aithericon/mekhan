@@ -42,6 +42,13 @@ export type TaskBlockConfig = components['schemas']['TaskBlockConfig'];
 export type TaskFieldConfig = components['schemas']['TaskFieldConfig'];
 export type BranchCondition = components['schemas']['BranchCondition'];
 export type ExecutionSpecConfig = components['schemas']['ExecutionSpecConfig'];
+// Enum aliases — schema-generated string literal unions kept in lockstep
+// with the Rust `#[serde(rename_all = "snake_case")]` enums in
+// `service/src/models/template.rs`.
+export type CalloutSeverity = components['schemas']['CalloutSeverity'];
+export type ImageDisplay = components['schemas']['ImageDisplay'];
+export type TaskFieldKind = components['schemas']['TaskFieldKind'];
+export type ExecutionBackendType = components['schemas']['ExecutionBackendType'];
 
 // ─── Instances ──────────────────────────────────────────────────────────────
 export type WorkflowInstance = components['schemas']['WorkflowInstance'];

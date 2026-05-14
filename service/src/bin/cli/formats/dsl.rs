@@ -4,8 +4,8 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
 use mekhan_service::models::template::{
-    BranchCondition, ExecutionSpecConfig, Position, TaskBlockConfig, TaskStepConfig,
-    WorkflowEdge, WorkflowGraph, WorkflowNode, WorkflowNodeData,
+    BranchCondition, ExecutionBackendType, ExecutionSpecConfig, Position, TaskBlockConfig,
+    TaskStepConfig, WorkflowEdge, WorkflowGraph, WorkflowNode, WorkflowNodeData,
 };
 
 use super::layout;
@@ -334,11 +334,22 @@ fn step_to_node_data(
                     map.insert("required_files".to_string(), serde_json::Value::Array(files_arr));
                 }
             }
+            // Parse the backend discriminator via serde — keeps the DSL's
+            // accepted value set in lockstep with the wire enum.
+            let backend_type: ExecutionBackendType = serde_json::from_value(
+                serde_json::Value::String(exec.backend.clone()),
+            )
+            .map_err(|_| {
+                format!(
+                    "automated_step '{}' has unknown backend '{}' (expected one of: python, process, docker, http, llm, file_ops, kreuzberg)",
+                    key, exec.backend
+                )
+            })?;
             Ok(WorkflowNodeData::AutomatedStep {
                 label: label.to_string(),
                 description: step.description.clone(),
                 execution_spec: ExecutionSpecConfig {
-                    backend_type: exec.backend.clone(),
+                    backend_type,
                     entrypoint: None,
                     config,
                 },
@@ -523,8 +534,15 @@ fn node_to_dsl_step(node: &WorkflowNode) -> DslStep {
             } else {
                 (None, vec![])
             };
+            // Round-trip the enum through serde to recover the canonical
+            // snake_case wire string (`python`, `file_ops`, …) so the DSL
+            // export matches what users would type into YAML/HCL.
+            let backend = serde_json::to_value(execution_spec.backend_type)
+                .ok()
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+                .unwrap_or_default();
             step.execution = Some(DslExecution {
-                backend: execution_spec.backend_type.clone(),
+                backend,
                 entrypoint,
                 files,
                 config,
@@ -839,7 +857,7 @@ flow:
             // Verify image block
             if let TaskBlockConfig::Image { filenames, display } = &steps[0].blocks[0] {
                 assert_eq!(filenames, &["photo1.png", "photo2.jpg"]);
-                assert_eq!(display, "grid");
+                assert_eq!(*display, mekhan_service::models::template::ImageDisplay::Grid);
             } else {
                 panic!("expected Image block, got {:?}", steps[0].blocks[0]);
             }

@@ -40,6 +40,10 @@
 		kreuzberg: 'Document Extraction'
 	};
 
+	function isExecutionBackendType(v: string): v is ExecutionBackendType {
+		return v in backendLabels;
+	}
+
 	function handleBackendTypeChange(backendType: ExecutionBackendType) {
 		onchange({
 			...data,
@@ -71,11 +75,11 @@
 	<Select.Root
 		type="single"
 		value={data.executionSpec.backendType}
-		onValueChange={(v) => { if (v) handleBackendTypeChange(v as ExecutionBackendType); }}
+		onValueChange={(v) => { if (v && isExecutionBackendType(v)) handleBackendTypeChange(v); }}
 		disabled={readonly}
 	>
 		<Select.Trigger disabled={readonly}>
-			{backendLabels[data.executionSpec.backendType as ExecutionBackendType] ?? data.executionSpec.backendType}
+			{backendLabels[data.executionSpec.backendType] ?? data.executionSpec.backendType}
 		</Select.Trigger>
 		<Select.Content>
 			<Select.Item value="python" label="Python" />

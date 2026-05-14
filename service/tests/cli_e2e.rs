@@ -17,7 +17,8 @@ use yrs::updates::decoder::Decode;
 use yrs::{Array, Doc, GetString, Map, ReadTxn, Text, Transact, Update, WriteTxn};
 
 use mekhan_service::models::template::{
-    ExecutionSpecConfig, Position, WorkflowEdge, WorkflowGraph, WorkflowNode, WorkflowNodeData,
+    ExecutionBackendType, ExecutionSpecConfig, Position, WorkflowEdge, WorkflowGraph, WorkflowNode,
+    WorkflowNodeData,
 };
 use mekhan_service::yjs::doc_ops;
 use mekhan_service::yjs::persistence::YjsPersistence;
@@ -515,7 +516,7 @@ async fn graph_topology_roundtrip() {
                     label: "Process Data".to_string(),
                     description: Some("Processes input data".to_string()),
                     execution_spec: ExecutionSpecConfig {
-                        backend_type: "docker".to_string(),
+                        backend_type: ExecutionBackendType::Docker,
                         entrypoint: None,
                         config: serde_json::json!({"image": "python:3.12"}),
                     },
@@ -749,7 +750,7 @@ async fn yaml_format_roundtrip() {
                         label: "Process Data".to_string(),
                         description: Some("Processes input data".to_string()),
                         execution_spec: ExecutionSpecConfig {
-                            backend_type: "docker".to_string(),
+                            backend_type: ExecutionBackendType::Docker,
                             entrypoint: None,
                             config: serde_json::json!({"image": "python:3.12"}),
                         },

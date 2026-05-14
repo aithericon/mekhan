@@ -215,7 +215,7 @@ pub enum TaskBlockConfig {
     Mdsvex { content: String },
     #[serde(rename = "callout")]
     Callout {
-        severity: String,
+        severity: CalloutSeverity,
         #[serde(skip_serializing_if = "Option::is_none")]
         title: Option<String>,
         content: String,
@@ -225,7 +225,7 @@ pub enum TaskBlockConfig {
     #[serde(rename = "image")]
     Image {
         filenames: Vec<String>,
-        display: String,
+        display: ImageDisplay,
     },
     #[serde(rename = "file")]
     File { filename: String },
@@ -242,17 +242,54 @@ pub enum TaskBlockConfig {
     },
 }
 
+/// Severity for callout blocks. Snake-case on the wire (`"info"`,
+/// `"warning"`, `"error"`, `"success"`) to keep the byte-for-byte shape that
+/// the editor and human-task UI already produce/consume.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CalloutSeverity {
+    Info,
+    Warning,
+    Error,
+    Success,
+}
+
+/// Layout mode for image blocks. Snake-case wire values: `"single"`,
+/// `"grid"`, `"gallery"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ImageDisplay {
+    Single,
+    Grid,
+    Gallery,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct TaskFieldConfig {
     pub name: String,
     pub label: String,
-    pub kind: String,
+    pub kind: TaskFieldKind,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub required: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub placeholder: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub options: Option<Vec<String>>,
+}
+
+/// Form-field control kind for `input` task blocks. Snake-case wire values
+/// such as `"text"`, `"textarea"`, `"number"`, `"select"`, `"checkbox"`,
+/// `"file"`, `"signature"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskFieldKind {
+    Text,
+    Textarea,
+    Number,
+    Select,
+    Checkbox,
+    File,
+    Signature,
 }
 
 // --- Branch conditions ---
@@ -270,13 +307,51 @@ pub struct BranchCondition {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ExecutionSpecConfig {
-    pub backend_type: String,
+    pub backend_type: ExecutionBackendType,
     /// Filename of the entrypoint script within the node's staged files.
     /// Backends that don't run a user script (e.g. `http`) ignore this; the
     /// editor still surfaces it for python/process/docker.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub entrypoint: Option<String>,
     pub config: serde_json::Value,
+}
+
+/// Discriminator selecting which executor backend handles an automated step.
+/// Snake-case wire values: `"python"`, `"process"`, `"docker"`, `"http"`,
+/// `"llm"`, `"file_ops"`, `"kreuzberg"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionBackendType {
+    Python,
+    Process,
+    Docker,
+    Http,
+    Llm,
+    FileOps,
+    Kreuzberg,
+}
+
+impl ExecutionBackendType {
+    /// Canonical snake_case wire string. Keep in lockstep with the
+    /// `#[serde(rename_all = "snake_case")]` derive — these strings are what
+    /// the executor and editor pass around at runtime.
+    pub fn as_wire_str(&self) -> &'static str {
+        match self {
+            Self::Python => "python",
+            Self::Process => "process",
+            Self::Docker => "docker",
+            Self::Http => "http",
+            Self::Llm => "llm",
+            Self::FileOps => "file_ops",
+            Self::Kreuzberg => "kreuzberg",
+        }
+    }
+}
+
+impl std::fmt::Display for ExecutionBackendType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_wire_str())
+    }
 }
 
 // --- Edge types ---
@@ -491,7 +566,7 @@ mod tests {
     fn image_block_roundtrip() {
         let block = TaskBlockConfig::Image {
             filenames: vec!["photo.png".to_string(), "diagram.svg".to_string()],
-            display: "grid".to_string(),
+            display: ImageDisplay::Grid,
         };
         let json = serde_json::to_value(&block).unwrap();
         assert_eq!(json["type"], "image");
@@ -502,10 +577,58 @@ mod tests {
         let back: TaskBlockConfig = serde_json::from_value(json).unwrap();
         if let TaskBlockConfig::Image { filenames, display } = back {
             assert_eq!(filenames.len(), 2);
-            assert_eq!(display, "grid");
+            assert_eq!(display, ImageDisplay::Grid);
         } else {
             panic!("expected Image variant");
         }
+    }
+
+    /// Canary: each newly-enumified field must serialize to the same wire
+    /// strings it produced when typed as `String`. If this fails, the JSON in
+    /// the database / on the network has diverged from the Rust type.
+    #[test]
+    fn enumified_fields_preserve_wire_format() {
+        // Callout severity
+        let json = serde_json::json!({
+            "type": "callout",
+            "severity": "warning",
+            "content": "hi",
+        });
+        let block: TaskBlockConfig = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&block).unwrap(), json);
+
+        // Image display + nested field kind for full coverage
+        let json = serde_json::json!({
+            "type": "image",
+            "filenames": ["a.png"],
+            "display": "gallery",
+        });
+        let block: TaskBlockConfig = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&block).unwrap(), json);
+
+        // TaskFieldKind via the input variant
+        let json = serde_json::json!({
+            "type": "input",
+            "field": {
+                "name": "n",
+                "label": "L",
+                "kind": "textarea",
+            },
+        });
+        let block: TaskBlockConfig = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&block).unwrap(), json);
+
+        // ExecutionBackendType snake_case rename (file_ops is the canary —
+        // PascalCase would emit `"fileOps"` and break the wire).
+        let spec = ExecutionSpecConfig {
+            backend_type: ExecutionBackendType::FileOps,
+            entrypoint: None,
+            config: serde_json::json!({}),
+        };
+        let json = serde_json::to_value(&spec).unwrap();
+        assert_eq!(json["backendType"], "file_ops");
+        let back: ExecutionSpecConfig = serde_json::from_value(json).unwrap();
+        assert_eq!(back.backend_type, ExecutionBackendType::FileOps);
     }
 
     #[test]

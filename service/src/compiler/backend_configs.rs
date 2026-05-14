@@ -15,6 +15,8 @@ use std::collections::HashMap;
 use aithericon_executor_backend_configs::python::{default_python, PythonConfig};
 use aithericon_executor_domain::{InputDeclaration, InputSource};
 
+use crate::models::template::ExecutionBackendType;
+
 use super::CompileError;
 
 /// Editor-side Python config. The script is selected by `entrypoint`, which
@@ -108,31 +110,31 @@ impl EditorPythonConfig {
 /// `node_files` is the per-node map of filename → source (consulted by backends
 /// that stage files; ignored otherwise).
 pub fn validate_and_transform(
-    backend_type: &str,
+    backend_type: &ExecutionBackendType,
     config: &Value,
     node_files: &HashMap<String, InputSource>,
 ) -> Result<(Value, Vec<InputDeclaration>), CompileError> {
     match backend_type {
-        "python" => {
+        ExecutionBackendType::Python => {
             let editor_config: EditorPythonConfig = serde_json::from_value(config.clone())
                 .map_err(|e| CompileError::Validation(format!("invalid python config: {e}")))?;
             editor_config.to_executor_config(node_files)
         }
-        "process" => {
+        ExecutionBackendType::Process => {
             let _: aithericon_executor_backend_configs::process::ProcessConfig =
                 serde_json::from_value(config.clone()).map_err(|e| {
                     CompileError::Validation(format!("invalid process config: {e}"))
                 })?;
             Ok((config.clone(), vec![]))
         }
-        "docker" => {
+        ExecutionBackendType::Docker => {
             let _: aithericon_executor_backend_configs::docker::DockerConfig =
                 serde_json::from_value(config.clone()).map_err(|e| {
                     CompileError::Validation(format!("invalid docker config: {e}"))
                 })?;
             Ok((config.clone(), vec![]))
         }
-        "http" => {
+        ExecutionBackendType::Http => {
             let _: aithericon_executor_backend_configs::http::HttpConfig =
                 serde_json::from_value(config.clone()).map_err(|e| {
                     CompileError::Validation(format!("invalid http config: {e}"))
@@ -140,6 +142,8 @@ pub fn validate_and_transform(
             Ok((config.clone(), vec![]))
         }
         // LLM, file_ops, kreuzberg — pass through unvalidated for now.
-        _ => Ok((config.clone(), vec![])),
+        ExecutionBackendType::Llm
+        | ExecutionBackendType::FileOps
+        | ExecutionBackendType::Kreuzberg => Ok((config.clone(), vec![])),
     }
 }

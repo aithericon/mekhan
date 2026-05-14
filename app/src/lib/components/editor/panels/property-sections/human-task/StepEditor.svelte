@@ -97,7 +97,7 @@
 				/>
 			{:else if block.type === 'callout'}
 				<CalloutBlockEditor
-					severity={block.severity as 'warning' | 'info' | 'error' | 'success'}
+					severity={block.severity}
 					title={block.title ?? undefined}
 					content={block.content}
 					{readonly}
@@ -110,7 +110,7 @@
 			{:else if block.type === 'image'}
 				<ImageBlockEditor
 					filenames={block.filenames}
-					display={block.display as 'single' | 'grid' | 'gallery'}
+					display={block.display}
 					{binding}
 					{nodeId}
 					{readonly}
