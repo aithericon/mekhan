@@ -2739,6 +2739,39 @@
         }
       }
     },
+    "/api/templates/{id}/triggers": {
+      "get": {
+        "tags": [
+          "triggers"
+        ],
+        "summary": "GET /api/templates/{id}/triggers",
+        "operationId": "list_template_triggers",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Template id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Triggers for this template",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TriggerListResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/templates/{id}/versions": {
       "get": {
         "tags": [
@@ -2788,6 +2821,121 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/triggers": {
+      "get": {
+        "tags": [
+          "triggers"
+        ],
+        "summary": "GET /api/triggers",
+        "operationId": "list_triggers",
+        "responses": {
+          "200": {
+            "description": "All registered triggers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TriggerListResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/triggers/{node_id}/fire": {
+      "post": {
+        "tags": [
+          "triggers"
+        ],
+        "summary": "POST /api/triggers/{node_id}/fire",
+        "operationId": "fire_trigger",
+        "parameters": [
+          {
+            "name": "node_id",
+            "in": "path",
+            "description": "Trigger node id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FireTriggerRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Trigger fired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FireTriggerResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Fire failed (e.g. mapping or instance error)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Trigger not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/triggers/{node_id}/history": {
+      "get": {
+        "tags": [
+          "triggers"
+        ],
+        "summary": "GET /api/triggers/{node_id}/history",
+        "operationId": "trigger_history",
+        "parameters": [
+          {
+            "name": "node_id",
+            "in": "path",
+            "description": "Trigger node id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Recent fire history",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TriggerHistoryResponse"
                 }
               }
             }
@@ -2938,6 +3086,31 @@
           "error",
           "success"
         ]
+      },
+      "CatalogTrigger": {
+        "type": "object",
+        "properties": {
+          "backfill": {
+            "type": "boolean",
+            "description": "If true, the dispatcher walks existing catalogue entries matching the\nfilters when the trigger is first registered."
+          },
+          "filters": {
+            "type": "object",
+            "description": "Same filter shape as `CatalogueSubscription.filters`.",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "propertyNames": {
+                "type": "string"
+              }
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
       },
       "CatalogueEntry": {
         "type": "object",
@@ -3161,6 +3334,67 @@
           }
         }
       },
+      "CompletionStatus": {
+        "type": "string",
+        "enum": [
+          "success",
+          "failure",
+          "cancelled",
+          "any"
+        ]
+      },
+      "ConcurrencyPolicy": {
+        "oneOf": [
+          {
+            "type": "string",
+            "description": "Every fire produces an event (default).",
+            "enum": [
+              "allow"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "At most one fire in flight; subsequent fires are dropped while running.",
+            "enum": [
+              "skip"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "Queue fires behind the active one; drained when it completes.",
+            "enum": [
+              "queue"
+            ]
+          },
+          {
+            "type": "object",
+            "description": "Dedup by hashing the result of a Rhai `expression` over the event scope;\nfires whose key has been seen within `window_secs` are dropped.",
+            "required": [
+              "dedup_key"
+            ],
+            "properties": {
+              "dedup_key": {
+                "type": "object",
+                "description": "Dedup by hashing the result of a Rhai `expression` over the event scope;\nfires whose key has been seen within `window_secs` are dropped.",
+                "required": [
+                  "expression",
+                  "window_secs"
+                ],
+                "properties": {
+                  "expression": {
+                    "type": "string"
+                  },
+                  "window_secs": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 0
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
       "CreateInstanceRequest": {
         "type": "object",
         "required": [
@@ -3223,6 +3457,39 @@
           },
           "name": {
             "type": "string"
+          }
+        }
+      },
+      "CronCatchup": {
+        "type": "string",
+        "enum": [
+          "fire_missed",
+          "skip_missed"
+        ]
+      },
+      "CronTrigger": {
+        "type": "object",
+        "required": [
+          "schedule"
+        ],
+        "properties": {
+          "catchup": {
+            "$ref": "#/components/schemas/CronCatchup",
+            "description": "What to do after a service restart with missed fire windows."
+          },
+          "jitterSecs": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Optional jitter window in seconds; the dispatcher fires within\n`[scheduled, scheduled + jitter_secs]` to spread load.",
+            "minimum": 0
+          },
+          "schedule": {
+            "type": "string",
+            "description": "Standard cron expression (5- or 6-field). Validated at compile time."
+          },
+          "timezone": {
+            "type": "string",
+            "description": "IANA timezone (e.g. `\"Europe/Berlin\"`). Defaults to `\"UTC\"` if absent."
           }
         }
       },
@@ -3490,6 +3757,24 @@
           "json"
         ]
       },
+      "FieldMapping": {
+        "type": "object",
+        "description": "A single field mapping for `Trigger.payload_mapping`. Each entry projects\nan event scope into a typed token field via a Rhai expression. The compiler\nvalidates that `target_field` exists in the resolved target port and that\n`expression` parses.",
+        "required": [
+          "targetField",
+          "expression"
+        ],
+        "properties": {
+          "expression": {
+            "type": "string",
+            "description": "Rhai expression evaluated against the trigger source's event scope\n(`payload`, `fire_time`, etc. — varies by source kind)."
+          },
+          "targetField": {
+            "type": "string",
+            "description": "Name of the target port field this mapping fills."
+          }
+        }
+      },
       "FileUploadResponse": {
         "type": "object",
         "description": "Response shape for `POST /api/files/upload/{id}/{node_id}`.\n\nThe handler returns S3 metadata after a successful upload.",
@@ -3512,6 +3797,129 @@
           "size": {
             "type": "integer",
             "minimum": 0
+          }
+        }
+      },
+      "FireOutcome": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Spawn: an instance was created. `instance_id` is the new instance.",
+            "required": [
+              "instance_id",
+              "outcome"
+            ],
+            "properties": {
+              "instance_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "outcome": {
+                "type": "string",
+                "enum": [
+                  "spawned"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Signal: at least one running instance received the signal.",
+            "required": [
+              "delivered_to",
+              "outcome"
+            ],
+            "properties": {
+              "delivered_to": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "outcome": {
+                "type": "string",
+                "enum": [
+                  "signaled"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Signal had no running instances to send to. Not an error — just\nreported so the caller knows.",
+            "required": [
+              "outcome"
+            ],
+            "properties": {
+              "outcome": {
+                "type": "string",
+                "enum": [
+                  "no_targets"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Concurrency policy dropped the fire (`Skip`/`DedupKey`).",
+            "required": [
+              "reason",
+              "outcome"
+            ],
+            "properties": {
+              "outcome": {
+                "type": "string",
+                "enum": [
+                  "dropped"
+                ]
+              },
+              "reason": {
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "description": "Result of a single fire attempt. Kept structurally similar across sources\nso the history endpoint can render a uniform table."
+      },
+      "FireResult": {
+        "type": "object",
+        "description": "Wrap an outcome with metadata the history endpoint records on every fire.",
+        "required": [
+          "locator",
+          "fired_at",
+          "source_kind",
+          "outcome"
+        ],
+        "properties": {
+          "fired_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "locator": {
+            "$ref": "#/components/schemas/TriggerLocator"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/FireOutcome"
+          },
+          "source_kind": {
+            "type": "string"
+          }
+        }
+      },
+      "FireTriggerRequest": {
+        "type": "object",
+        "properties": {
+          "payload": {
+            "description": "Free-form JSON payload made available to `payload_mapping` as `payload`.\nFor `Manual` triggers this is typically the form submission body; for\nother sources the dispatcher synthesizes the scope from the event."
+          }
+        }
+      },
+      "FireTriggerResponse": {
+        "type": "object",
+        "required": [
+          "result"
+        ],
+        "properties": {
+          "result": {
+            "$ref": "#/components/schemas/FireResult"
           }
         }
       },
@@ -3724,6 +4132,16 @@
             "type": "string"
           }
         }
+      },
+      "HttpMethod": {
+        "type": "string",
+        "enum": [
+          "GET",
+          "POST",
+          "PUT",
+          "PATCH",
+          "DELETE"
+        ]
       },
       "ImageDisplay": {
         "type": "string",
@@ -4136,6 +4554,18 @@
           }
         }
       },
+      "ManualTrigger": {
+        "type": "object",
+        "properties": {
+          "form": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaskFieldConfig"
+            },
+            "description": "Form schema for the \"Run with parameters\" dialog. Reuses the same\n`TaskFieldConfig` shape as human-task forms."
+          }
+        }
+      },
       "MetricPoint": {
         "type": "object",
         "required": [
@@ -4190,6 +4620,32 @@
             "type": "string",
             "format": "binary",
             "description": "Binary file contents (one of the allowed mime types)."
+          }
+        }
+      },
+      "NetCompletionTrigger": {
+        "type": "object",
+        "required": [
+          "sourceTemplateId",
+          "on"
+        ],
+        "properties": {
+          "on": {
+            "$ref": "#/components/schemas/CompletionStatus",
+            "description": "Which terminal status counts as a fire."
+          },
+          "sourceTemplateId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Source template whose instance completion fires this trigger."
+          },
+          "sourceVersion": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Specific version, or `None` for any published version."
           }
         }
       },
@@ -5274,6 +5730,212 @@
           }
         }
       },
+      "TriggerHistoryResponse": {
+        "type": "object",
+        "required": [
+          "history"
+        ],
+        "properties": {
+          "history": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FireResult"
+            }
+          }
+        }
+      },
+      "TriggerListResponse": {
+        "type": "object",
+        "required": [
+          "triggers"
+        ],
+        "properties": {
+          "triggers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TriggerView"
+            }
+          }
+        }
+      },
+      "TriggerLocator": {
+        "type": "object",
+        "description": "Used in handler responses and history records. Distinguishes a trigger by\nits (template, node) identity since `node_id` is only unique within a graph.",
+        "required": [
+          "template_id",
+          "template_version",
+          "node_id"
+        ],
+        "properties": {
+          "node_id": {
+            "type": "string"
+          },
+          "template_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "template_version": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
+      "TriggerSource": {
+        "oneOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CronTrigger"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "kind"
+                ],
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "cron"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CatalogTrigger"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "kind"
+                ],
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "catalog"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NetCompletionTrigger"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "kind"
+                ],
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "net_completion"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/WebhookTrigger"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "kind"
+                ],
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "webhook"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ManualTrigger"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "kind"
+                ],
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "manual"
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        ],
+        "description": "What event source fires a `Trigger` node. Tagged enum on the wire\n(`{\"kind\": \"cron\", ...}`). Phase 5a only wires `Manual` into the dispatcher\nend-to-end; the other variants are stored as data and surfaced through the\nAPI for the editor to round-trip, but firing logic for each lands in 5b–5e."
+      },
+      "TriggerView": {
+        "type": "object",
+        "required": [
+          "template_id",
+          "template_version",
+          "node_id",
+          "kind",
+          "target_node_id",
+          "target_handle",
+          "source_kind",
+          "enabled",
+          "registered_at"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "node_id": {
+            "type": "string"
+          },
+          "registered_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "source_kind": {
+            "type": "string"
+          },
+          "target_handle": {
+            "type": "string"
+          },
+          "target_node_id": {
+            "type": "string"
+          },
+          "template_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "template_version": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
       "UpdateTemplateRequest": {
         "type": "object",
         "properties": {
@@ -5320,6 +5982,97 @@
           "zoom": {
             "type": "number",
             "format": "double"
+          }
+        }
+      },
+      "WebhookAuth": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "No auth — endpoint is publicly fireable. Sane only for staging or\ntrusted networks; the editor surfaces a warning.",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "none"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Compare a header (typically `Authorization` or `X-Webhook-Token`) to a\nstatic shared secret. Secret is stored encrypted at rest.",
+            "required": [
+              "header",
+              "secret_ref",
+              "kind"
+            ],
+            "properties": {
+              "header": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "shared_secret"
+                ]
+              },
+              "secret_ref": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "HMAC-SHA256 signature over the request body, with the signing key\nstored encrypted at rest and the signature read from `header`.",
+            "required": [
+              "header",
+              "secret_ref",
+              "kind"
+            ],
+            "properties": {
+              "header": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "signed_hmac"
+                ]
+              },
+              "secret_ref": {
+                "type": "string"
+              }
+            }
+          }
+        ]
+      },
+      "WebhookTrigger": {
+        "type": "object",
+        "required": [
+          "slug",
+          "auth"
+        ],
+        "properties": {
+          "auth": {
+            "$ref": "#/components/schemas/WebhookAuth"
+          },
+          "requireMethod": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/HttpMethod"
+              }
+            ]
+          },
+          "slug": {
+            "type": "string",
+            "description": "Stable slug appended to `/api/triggers/webhook/{slug}`. Must be unique\nacross published templates — the editor reserves it at publish."
           }
         }
       },
@@ -5780,6 +6533,51 @@
                 ]
               }
             }
+          },
+          {
+            "type": "object",
+            "description": "Trigger node (Phase 5). Lives at the template level and connects to a\ntarget input port via a single outgoing edge. Triggers are never edge\ntargets; they are *inputs to the workflow*, not part of it. AIR\ncompilation skips trigger nodes — they are a pre-compile concern owned\nby the dispatcher (`service::triggers`).",
+            "required": [
+              "label",
+              "source",
+              "type"
+            ],
+            "properties": {
+              "concurrency": {
+                "$ref": "#/components/schemas/ConcurrencyPolicy",
+                "description": "Concurrency / dedup policy applied by the dispatcher."
+              },
+              "description": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "enabled": {
+                "type": "boolean",
+                "description": "Disabled triggers are stored but the dispatcher ignores them."
+              },
+              "label": {
+                "type": "string"
+              },
+              "payloadMapping": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/FieldMapping"
+                },
+                "description": "Per-target-field mapping. Each entry's `expression` is a Rhai\nexpression evaluated against the trigger source's event payload."
+              },
+              "source": {
+                "$ref": "#/components/schemas/TriggerSource",
+                "description": "Tagged source describing what event fires this trigger."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "trigger"
+                ]
+              }
+            }
           }
         ]
       },
@@ -5896,6 +6694,10 @@
     {
       "name": "files",
       "description": "Per-template file upload/download (50 MB limit, S3-backed)."
+    },
+    {
+      "name": "triggers",
+      "description": "Workflow triggers — cron/catalog/lifecycle/webhook/manual entry points."
     },
     {
       "name": "health",

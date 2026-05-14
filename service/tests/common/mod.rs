@@ -21,7 +21,15 @@ use mekhan_service::yjs::manager::YjsManager;
 use mekhan_service::yjs::persistence::YjsPersistence;
 use mekhan_service::catalogue::repository::PgCatalogueRepository;
 use mekhan_service::causality::live::LiveBroadcasts;
+use mekhan_service::triggers::TriggerDispatcher;
 use mekhan_service::{build_router, AppState};
+
+/// Build a `TriggerDispatcher` for tests. The dispatcher's `hydrate()` is
+/// skipped here — tests that exercise trigger behavior should call it
+/// explicitly after seeding template rows.
+fn test_triggers(db: PgPool, petri: PetriClient, nats: MekhanNats) -> Arc<TriggerDispatcher> {
+    Arc::new(TriggerDispatcher::new(db, petri, nats))
+}
 
 /// Create an isolated test database with migrations applied.
 /// Uses the shared test infrastructure at localhost:5599.
@@ -96,6 +104,7 @@ pub async fn test_app_with_verifier(
     let yjs_manager = Arc::new(YjsManager::new(yjs_persistence));
     let artifact_store = Arc::new(ArtifactStore::new(&config.s3));
 
+    let triggers = test_triggers(db.clone(), petri.clone(), nats.clone());
     let state = AppState {
         db: db.clone(),
         petri,
@@ -108,6 +117,7 @@ pub async fn test_app_with_verifier(
         live: LiveBroadcasts::new(),
         token_verifier: verifier,
         principal_resolver: Arc::new(StaticPrincipalResolver),
+        triggers,
     };
 
     let router = build_router(state);
@@ -132,6 +142,7 @@ pub async fn test_app() -> (Router, PgPool) {
     let yjs_manager = Arc::new(YjsManager::new(yjs_persistence));
     let artifact_store = Arc::new(ArtifactStore::new(&config.s3));
 
+    let triggers = test_triggers(db.clone(), petri.clone(), nats.clone());
     let state = AppState {
         db: db.clone(),
         petri,
@@ -144,6 +155,7 @@ pub async fn test_app() -> (Router, PgPool) {
         live: LiveBroadcasts::new(),
         token_verifier: Arc::new(NoopTokenVerifier::default()),
         principal_resolver: Arc::new(StaticPrincipalResolver),
+        triggers,
     };
 
     let router = build_router(state);
@@ -167,6 +179,7 @@ pub async fn test_app_with_nats(nats_url: &str) -> (Router, PgPool) {
     let yjs_manager = Arc::new(YjsManager::new(yjs_persistence));
     let artifact_store = Arc::new(ArtifactStore::new(&config.s3));
 
+    let triggers = test_triggers(db.clone(), petri.clone(), nats.clone());
     let state = AppState {
         db: db.clone(),
         petri,
@@ -179,6 +192,7 @@ pub async fn test_app_with_nats(nats_url: &str) -> (Router, PgPool) {
         live: LiveBroadcasts::new(),
         token_verifier: Arc::new(NoopTokenVerifier::default()),
         principal_resolver: Arc::new(StaticPrincipalResolver),
+        triggers,
     };
 
     let router = build_router(state);
@@ -204,6 +218,7 @@ pub async fn test_app_with_petri_url(nats_url: &str, petri_url: &str) -> (Router
     let yjs_manager = Arc::new(YjsManager::new(yjs_persistence));
     let artifact_store = Arc::new(ArtifactStore::new(&config.s3));
 
+    let triggers = test_triggers(db.clone(), petri.clone(), nats.clone());
     let state = AppState {
         db: db.clone(),
         petri,
@@ -216,6 +231,7 @@ pub async fn test_app_with_petri_url(nats_url: &str, petri_url: &str) -> (Router
         live: LiveBroadcasts::new(),
         token_verifier: Arc::new(NoopTokenVerifier::default()),
         principal_resolver: Arc::new(StaticPrincipalResolver),
+        triggers,
     };
 
     let router = build_router(state);

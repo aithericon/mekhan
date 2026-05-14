@@ -33,6 +33,7 @@ use utoipa::OpenApi;
         (name = "catalogue", description = "Artifact catalogue, lineage, distinct-value filters."),
         (name = "provenance", description = "Token ancestry walks and cross-net signal links."),
         (name = "files", description = "Per-template file upload/download (50 MB limit, S3-backed)."),
+        (name = "triggers", description = "Workflow triggers — cron/catalog/lifecycle/webhook/manual entry points."),
         (name = "health", description = "Liveness probe."),
     ),
 )]

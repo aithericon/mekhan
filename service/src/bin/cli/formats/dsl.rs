@@ -598,6 +598,11 @@ fn node_to_dsl_step(node: &WorkflowNode) -> DslStep {
             step.max_iterations = Some(*max_iterations);
             step.loop_condition = Some(loop_condition.clone());
         }
+        WorkflowNodeData::Trigger { .. } => {
+            // DSL doesn't yet model triggers — they're declared in the GUI for
+            // now. Round-trip through JSON would lose the trigger; this exit
+            // simply drops them, matching how legacy DSL templates behave.
+        }
     }
 
     step

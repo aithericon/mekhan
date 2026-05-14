@@ -147,9 +147,12 @@ function outputPorts(data: WorkflowNodeData): Port[] {
 		case 'parallel_join':
 		case 'loop':
 		case 'scope':
+		case 'trigger':
 			// Phase 4 stub: pass-through. Contributes no fields to downstream
 			// scope; once a block carries real outputs the editor will pick
-			// them up here without further changes.
+			// them up here without further changes. Triggers fall through too
+			// — they "wear the shape" of the target port and don't contribute
+			// to scope as DAG predecessors.
 			return [{ id: 'out', label: 'Output', fields: [] }];
 		default:
 			return [];

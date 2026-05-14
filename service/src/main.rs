@@ -112,6 +112,17 @@ async fn main() -> anyhow::Result<()> {
         subscription_manager.clone(),
     ));
 
+    // Trigger dispatcher — hydrates from every published template's
+    // graph_json on boot. Background sources (cron, catalog, lifecycle,
+    // webhook) hang off the same dispatcher in subsequent sub-phases.
+    let trigger_dispatcher = mekhan_service::triggers::start_trigger_dispatcher(
+        db.clone(),
+        petri.clone(),
+        mekhan_nats.clone(),
+    )
+    .await;
+    tracing::info!("trigger dispatcher ready");
+
     // Auth adapters — composition root chooses the implementation by config.
     let token_verifier = build_token_verifier(&config).await?;
     let principal_resolver: Arc<dyn PrincipalResolver> =
@@ -129,6 +140,7 @@ async fn main() -> anyhow::Result<()> {
         live,
         token_verifier,
         principal_resolver,
+        triggers: trigger_dispatcher,
     };
 
     let app = build_router(state);

@@ -276,6 +276,11 @@ async fn causality_full_pipeline() {
     let artifact_store = Arc::new(mekhan_service::s3::ArtifactStore::new(&config.s3));
     let catalogue_repo = Arc::new(mekhan_service::catalogue::repository::PgCatalogueRepository::new(db.clone()));
     let (token_verifier, principal_resolver) = common::default_test_auth();
+    let triggers = Arc::new(mekhan_service::triggers::TriggerDispatcher::new(
+        db.clone(),
+        petri.clone(),
+        nats.clone(),
+    ));
     let app = mekhan_service::build_router(mekhan_service::AppState {
         db: db.clone(),
         petri,
@@ -288,6 +293,7 @@ async fn causality_full_pipeline() {
         live: LiveBroadcasts::new(),
         token_verifier,
         principal_resolver,
+        triggers,
     });
 
     // ── 2. Spawn Mekhan consumers (clean slate) ──────────────────────────

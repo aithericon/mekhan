@@ -16,6 +16,7 @@ pub mod petri;
 pub mod process;
 pub mod query;
 pub mod s3;
+pub mod triggers;
 pub mod yjs;
 
 use std::sync::Arc;
@@ -44,6 +45,7 @@ use crate::nats::MekhanNats;
 use crate::openapi::ApiDoc;
 use crate::petri::client::PetriClient;
 use crate::s3::ArtifactStore;
+use crate::triggers::TriggerDispatcher;
 use crate::yjs::manager::YjsManager;
 
 #[derive(Clone)]
@@ -59,6 +61,7 @@ pub struct AppState {
     pub live: Arc<LiveBroadcasts>,
     pub token_verifier: Arc<dyn TokenVerifier>,
     pub principal_resolver: Arc<dyn PrincipalResolver>,
+    pub triggers: Arc<TriggerDispatcher>,
 }
 
 /// Build the `OpenApiRouter` containing every `#[utoipa::path]`-annotated
@@ -138,6 +141,11 @@ fn build_openapi_router() -> OpenApiRouter<AppState> {
         // since utoipa-axum doesn't expose per-route layers here)
         .routes(routes!(handlers::files::upload_file))
         .routes(routes!(handlers::files::get_file))
+        // Triggers (Phase 5)
+        .routes(routes!(handlers::triggers::list_triggers))
+        .routes(routes!(handlers::triggers::list_template_triggers))
+        .routes(routes!(handlers::triggers::fire_trigger))
+        .routes(routes!(handlers::triggers::trigger_history))
 }
 
 pub fn build_router(state: AppState) -> Router {

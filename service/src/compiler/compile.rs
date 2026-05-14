@@ -94,6 +94,37 @@ pub enum CompileError {
         identifier: String,
         available: Vec<String>,
     },
+
+    // --- Trigger node errors (Phase 5a). Triggers connect to a target input
+    //     port via one outgoing edge and supply a payload_mapping. The
+    //     compiler enforces:
+    //       - Trigger has exactly one outgoing edge.
+    //       - Trigger is never an edge target.
+    //       - payload_mapping.target_field exists on the resolved target port.
+    //       - payload_mapping.expression parses as Rhai.
+    #[error("trigger '{node_id}' must have exactly one outgoing edge (found {found})")]
+    TriggerEdgeCardinality { node_id: String, found: usize },
+
+    #[error("trigger '{node_id}' cannot be the target of edge '{edge_id}'")]
+    TriggerIsEdgeTarget { node_id: String, edge_id: String },
+
+    #[error(
+        "trigger '{node_id}': payload mapping references unknown target field '{field}' (available: {available:?})"
+    )]
+    TriggerUnknownTargetField {
+        node_id: String,
+        field: String,
+        available: Vec<String>,
+    },
+
+    #[error(
+        "trigger '{node_id}': payload mapping for field '{field}' has a Rhai syntax error: {message}"
+    )]
+    TriggerMappingSyntax {
+        node_id: String,
+        field: String,
+        message: String,
+    },
 }
 
 impl CompileError {
@@ -109,6 +140,10 @@ impl CompileError {
             Self::EdgeTypeMismatch { .. } => "edge_type_mismatch",
             Self::GuardSyntax { .. } => "guard_syntax",
             Self::GuardUnresolved { .. } => "guard_unresolved",
+            Self::TriggerEdgeCardinality { .. } => "trigger_edge_cardinality",
+            Self::TriggerIsEdgeTarget { .. } => "trigger_is_edge_target",
+            Self::TriggerUnknownTargetField { .. } => "trigger_unknown_target_field",
+            Self::TriggerMappingSyntax { .. } => "trigger_mapping_syntax",
         }
     }
 
@@ -118,6 +153,7 @@ impl CompileError {
             | Self::UnknownSourcePort { edge_id, .. }
             | Self::UnknownTargetPort { edge_id, .. }
             | Self::EdgeTypeMismatch { edge_id, .. } => Some(edge_id),
+            Self::TriggerIsEdgeTarget { edge_id, .. } => Some(edge_id),
             _ => None,
         }
     }
@@ -130,6 +166,10 @@ impl CompileError {
             Self::GuardSyntax { node_id, .. } | Self::GuardUnresolved { node_id, .. } => {
                 Some(node_id)
             }
+            Self::TriggerEdgeCardinality { node_id, .. }
+            | Self::TriggerIsEdgeTarget { node_id, .. }
+            | Self::TriggerUnknownTargetField { node_id, .. }
+            | Self::TriggerMappingSyntax { node_id, .. } => Some(node_id),
             _ => None,
         }
     }
@@ -282,6 +322,11 @@ pub fn compile_to_air(
     //     against the topological scope at that node.
     validate_guards(graph, &wg)?;
 
+    // 2d. Trigger node validation (Phase 5a). Trigger nodes connect to the
+    //     workflow via a single outgoing edge; payload_mapping entries must
+    //     reference real target-port fields and parse as Rhai.
+    validate_triggers(graph)?;
+
     // 3. Topological sort (on DAG — loop_back edges excluded)
     let sorted = topo_order(&wg)?;
 
@@ -404,8 +449,13 @@ fn validate(graph: &WorkflowGraph, wg: &WorkflowDiGraph) -> Result<(), CompileEr
         .iter()
         .filter(|(_, &ni)| !visited.contains(&ni))
         .filter(|(_, &ni)| {
-            // Scope nodes are containers — they have no edges and are not reachable via BFS
-            !matches!(wg.full.node_weight(ni).unwrap().data, WorkflowNodeData::Scope { .. })
+            // Scope nodes are containers — they have no edges and are not reachable via BFS.
+            // Trigger nodes are inputs to the workflow, not part of it — they're never
+            // reachable from Start either.
+            !matches!(
+                wg.full.node_weight(ni).unwrap().data,
+                WorkflowNodeData::Scope { .. } | WorkflowNodeData::Trigger { .. }
+            )
         })
         .map(|(&id, _)| id)
         .collect();
@@ -491,6 +541,14 @@ fn validate_edges_typed(graph: &WorkflowGraph) -> Result<(), CompileError> {
         let Some(tgt_node) = nodes_by_id.get(edge.target.as_str()) else {
             continue;
         };
+
+        // 2a. Edges from Trigger nodes are validated by `validate_triggers`
+        //     instead — the dispatcher constructs the token from
+        //     `payload_mapping` at fire time, so source/target type compat
+        //     doesn't apply.
+        if matches!(src_node.data, WorkflowNodeData::Trigger { .. }) {
+            continue;
+        }
 
         // 3. Resolve source port. `source_handle: None` resolves to the
         //    canonical single output port; node kinds with multiple outputs
@@ -729,6 +787,114 @@ fn validate_one_guard(
             });
         }
     }
+    Ok(())
+}
+
+// --- Trigger node validation (Phase 5a) ---
+
+fn validate_triggers(graph: &WorkflowGraph) -> Result<(), CompileError> {
+    use crate::models::template::Port;
+
+    let nodes_by_id: HashMap<&str, &WorkflowNode> =
+        graph.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+
+    // First: triggers must never be edge targets.
+    for edge in &graph.edges {
+        if let Some(tgt) = nodes_by_id.get(edge.target.as_str()) {
+            if matches!(tgt.data, WorkflowNodeData::Trigger { .. }) {
+                return Err(CompileError::TriggerIsEdgeTarget {
+                    node_id: edge.target.clone(),
+                    edge_id: edge.id.clone(),
+                });
+            }
+        }
+    }
+
+    // Then per-trigger checks: exactly one outgoing edge, payload_mapping
+    // targets exist on the resolved port, expressions parse.
+    for node in &graph.nodes {
+        let WorkflowNodeData::Trigger {
+            payload_mapping, ..
+        } = &node.data
+        else {
+            continue;
+        };
+
+        let outgoing: Vec<&WorkflowEdge> = graph
+            .edges
+            .iter()
+            .filter(|e| e.source == node.id)
+            .collect();
+        if outgoing.len() != 1 {
+            return Err(CompileError::TriggerEdgeCardinality {
+                node_id: node.id.clone(),
+                found: outgoing.len(),
+            });
+        }
+        let edge = outgoing[0];
+
+        // Resolve target port by handle. Triggers always need an explicit
+        // `target_handle` — the edge validation in `validate_edges_typed`
+        // skips Trigger sources, so we re-enforce target_handle here.
+        let target_handle = edge.target_handle.as_deref().ok_or_else(|| {
+            CompileError::MissingTargetHandle {
+                edge_id: edge.id.clone(),
+            }
+        })?;
+
+        let Some(tgt_node) = nodes_by_id.get(edge.target.as_str()) else {
+            continue;
+        };
+        // For Start targets the "input shape" of the workflow is the Start's
+        // declared `initial` port — even though that's stored under
+        // `output_ports()` because Start *emits* the token. The trigger feeds
+        // data into that shape. For every other target, use the regular
+        // `input_ports()`.
+        let tgt_ports = match &tgt_node.data {
+            WorkflowNodeData::Start { .. } => tgt_node.data.output_ports(),
+            _ => tgt_node.data.input_ports(),
+        };
+        let tgt_port: Option<Port> =
+            tgt_ports.iter().find(|p| p.id == target_handle).cloned();
+        let Some(tgt_port) = tgt_port else {
+            return Err(CompileError::UnknownTargetPort {
+                edge_id: edge.id.clone(),
+                node_id: edge.target.clone(),
+                handle: target_handle.to_string(),
+            });
+        };
+
+        let available: Vec<String> =
+            tgt_port.fields.iter().map(|f| f.name.clone()).collect();
+
+        for mapping in payload_mapping {
+            // Target-field membership: skip for pass-through targets (empty
+            // `fields`) which accept anything, but still validate syntax below.
+            if !tgt_port.fields.is_empty()
+                && !tgt_port
+                    .fields
+                    .iter()
+                    .any(|f| f.name == mapping.target_field)
+            {
+                return Err(CompileError::TriggerUnknownTargetField {
+                    node_id: node.id.clone(),
+                    field: mapping.target_field.clone(),
+                    available: available.clone(),
+                });
+            }
+
+            // Parse the Rhai expression — same engine as guard validation.
+            if let Err(msg) = crate::compiler::rhai_scope::parse_guard(&mapping.expression)
+            {
+                return Err(CompileError::TriggerMappingSyntax {
+                    node_id: node.id.clone(),
+                    field: mapping.target_field.clone(),
+                    message: msg,
+                });
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -1195,6 +1361,12 @@ fn expand_node(
             let parent_group = fixups.scope_groups.get(id).cloned();
             fixups.groups.push((group_id, label.clone(), parent_group));
         }
+
+        WorkflowNodeData::Trigger { .. } => {
+            // Trigger nodes are NOT compiled into AIR — they are a pre-compile
+            // concern owned by the trigger dispatcher (`service::triggers`).
+            // The trigger's outgoing edge is also skipped during wire_edge.
+        }
     }
 
     Ok(())
@@ -1218,6 +1390,12 @@ fn wire_edge(
     ctx: &mut Context,
     fixups: &mut PostProcess,
 ) -> Result<(), CompileError> {
+    // Edges from Trigger nodes are pre-compile dispatcher concerns — they don't
+    // exist in AIR. Skip silently so the rest of the graph still wires up.
+    if matches!(wg.node(&edge.source).data, WorkflowNodeData::Trigger { .. }) {
+        return Ok(());
+    }
+
     let source_ports = node_ports.get(&edge.source).ok_or_else(|| {
         CompileError::Compilation(format!("no ports for source node '{}'", edge.source))
     })?;

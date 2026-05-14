@@ -4,7 +4,8 @@ import type {
 	WorkflowNodeData,
 	WorkflowNodeType,
 	WorkflowEdge,
-	WorkflowEdgeType
+	WorkflowEdgeType,
+	TriggerNodeData
 } from '$lib/types/editor';
 
 /**
@@ -205,6 +206,18 @@ export class YjsGraphBinding {
 				};
 			case 'scope':
 				return { ...base, type: 'scope' };
+			case 'trigger':
+				return {
+					...base,
+					type: 'trigger',
+					source: (config?.source as TriggerNodeData['source']) ?? {
+						kind: 'manual',
+						form: []
+					},
+					concurrency: (config?.concurrency as TriggerNodeData['concurrency']) ?? 'allow',
+					payloadMapping: (config?.payloadMapping as TriggerNodeData['payloadMapping']) ?? [],
+					enabled: (config?.enabled as boolean) ?? false
+				};
 		}
 	}
 
@@ -435,6 +448,12 @@ export class YjsGraphBinding {
 				config.set('loopCondition', data.loopCondition);
 				break;
 			case 'scope':
+				break;
+			case 'trigger':
+				config.set('source', data.source);
+				config.set('concurrency', data.concurrency);
+				config.set('payloadMapping', data.payloadMapping ?? []);
+				config.set('enabled', data.enabled ?? false);
 				break;
 		}
 	}

@@ -851,6 +851,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/templates/{id}/triggers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** GET /api/templates/{id}/triggers */
+        get: operations["list_template_triggers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/templates/{id}/versions": {
         parameters: {
             query?: never;
@@ -860,6 +877,57 @@ export interface paths {
         };
         /** GET /api/templates/{id}/versions */
         get: operations["list_versions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/triggers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** GET /api/triggers */
+        get: operations["list_triggers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/triggers/{node_id}/fire": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** POST /api/triggers/{node_id}/fire */
+        post: operations["fire_trigger"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/triggers/{node_id}/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** GET /api/triggers/{node_id}/history */
+        get: operations["trigger_history"];
         put?: never;
         post?: never;
         delete?: never;
@@ -932,6 +1000,19 @@ export interface components {
          * @enum {string}
          */
         CalloutSeverity: "info" | "warning" | "error" | "success";
+        CatalogTrigger: {
+            /**
+             * @description If true, the dispatcher walks existing catalogue entries matching the
+             *     filters when the trigger is first registered.
+             */
+            backfill?: boolean;
+            /** @description Same filter shape as `CatalogueSubscription.filters`. */
+            filters?: {
+                [key: string]: {
+                    [key: string]: string;
+                };
+            };
+        };
         /** @description A single catalogue entry (maps 1:1 to the `catalogue_entries` table). */
         CatalogueEntry: {
             /** Format: date-time */
@@ -1002,6 +1083,19 @@ export interface components {
             graph: components["schemas"]["WorkflowGraph"];
             name: string;
         };
+        /** @enum {string} */
+        CompletionStatus: "success" | "failure" | "cancelled" | "any";
+        ConcurrencyPolicy: "allow" | "skip" | "queue" | {
+            /**
+             * @description Dedup by hashing the result of a Rhai `expression` over the event scope;
+             *     fires whose key has been seen within `window_secs` are dropped.
+             */
+            dedup_key: {
+                expression: string;
+                /** Format: int32 */
+                window_secs: number;
+            };
+        };
         CreateInstanceRequest: {
             /**
              * @description Free-form audit metadata stored on the instance row. Unlike pre-typed-ports
@@ -1034,6 +1128,22 @@ export interface components {
             };
             graph?: null | components["schemas"]["WorkflowGraph"];
             name: string;
+        };
+        /** @enum {string} */
+        CronCatchup: "fire_missed" | "skip_missed";
+        CronTrigger: {
+            /** @description What to do after a service restart with missed fire windows. */
+            catchup?: components["schemas"]["CronCatchup"];
+            /**
+             * Format: int32
+             * @description Optional jitter window in seconds; the dispatcher fires within
+             *     `[scheduled, scheduled + jitter_secs]` to spread load.
+             */
+            jitterSecs?: number;
+            /** @description Standard cron expression (5- or 6-field). Validated at compile time. */
+            schedule: string;
+            /** @description IANA timezone (e.g. `"Europe/Berlin"`). Defaults to `"UTC"` if absent. */
+            timezone?: string;
         };
         CrossLink: {
             egress_net?: string | null;
@@ -1121,6 +1231,21 @@ export interface components {
          */
         FieldKind: "text" | "textarea" | "number" | "bool" | "select" | "file" | "signature" | "timestamp" | "json";
         /**
+         * @description A single field mapping for `Trigger.payload_mapping`. Each entry projects
+         *     an event scope into a typed token field via a Rhai expression. The compiler
+         *     validates that `target_field` exists in the resolved target port and that
+         *     `expression` parses.
+         */
+        FieldMapping: {
+            /**
+             * @description Rhai expression evaluated against the trigger source's event scope
+             *     (`payload`, `fire_time`, etc. — varies by source kind).
+             */
+            expression: string;
+            /** @description Name of the target port field this mapping fills. */
+            targetField: string;
+        };
+        /**
          * @description Response shape for `POST /api/files/upload/{id}/{node_id}`.
          *
          *     The handler returns S3 metadata after a successful upload.
@@ -1130,6 +1255,46 @@ export interface components {
             filename: string;
             key: string;
             size: number;
+        };
+        /**
+         * @description Result of a single fire attempt. Kept structurally similar across sources
+         *     so the history endpoint can render a uniform table.
+         */
+        FireOutcome: {
+            /** Format: uuid */
+            instance_id: string;
+            /** @enum {string} */
+            outcome: "spawned";
+        } | {
+            delivered_to: number;
+            /** @enum {string} */
+            outcome: "signaled";
+        } | {
+            /** @enum {string} */
+            outcome: "no_targets";
+        } | {
+            /** @enum {string} */
+            outcome: "dropped";
+            reason: string;
+        };
+        /** @description Wrap an outcome with metadata the history endpoint records on every fire. */
+        FireResult: {
+            /** Format: date-time */
+            fired_at: string;
+            locator: components["schemas"]["TriggerLocator"];
+            outcome: components["schemas"]["FireOutcome"];
+            source_kind: string;
+        };
+        FireTriggerRequest: {
+            /**
+             * @description Free-form JSON payload made available to `payload_mapping` as `payload`.
+             *     For `Manual` triggers this is typically the form submission body; for
+             *     other sources the dispatcher synthesizes the scope from the event.
+             */
+            payload?: unknown;
+        };
+        FireTriggerResponse: {
+            result: components["schemas"]["FireResult"];
         };
         HealthResponse: {
             service: string;
@@ -1194,6 +1359,8 @@ export interface components {
             status: string;
             title: string;
         };
+        /** @enum {string} */
+        HttpMethod: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
         /**
          * @description Layout mode for image blocks. Snake-case wire values: `"single"`,
          *     `"grid"`, `"gallery"`.
@@ -1326,6 +1493,13 @@ export interface components {
         LogsTailResponse: {
             logs: components["schemas"]["LogRow"][];
         };
+        ManualTrigger: {
+            /**
+             * @description Form schema for the "Run with parameters" dialog. Reuses the same
+             *     `TaskFieldConfig` shape as human-task forms.
+             */
+            form?: components["schemas"]["TaskFieldConfig"][];
+        };
         MetricPoint: {
             /** Format: date-time */
             t: string;
@@ -1353,6 +1527,20 @@ export interface components {
              * @description Binary file contents (one of the allowed mime types).
              */
             file: string;
+        };
+        NetCompletionTrigger: {
+            /** @description Which terminal status counts as a fire. */
+            on: components["schemas"]["CompletionStatus"];
+            /**
+             * Format: uuid
+             * @description Source template whose instance completion fires this trigger.
+             */
+            sourceTemplateId: string;
+            /**
+             * Format: int32
+             * @description Specific version, or `None` for any published version.
+             */
+            sourceVersion?: number | null;
         };
         /** @description Per-net summary. */
         NetStats: {
@@ -1678,6 +1866,59 @@ export interface components {
             role: string;
             token_id: string;
         };
+        TriggerHistoryResponse: {
+            history: components["schemas"]["FireResult"][];
+        };
+        TriggerListResponse: {
+            triggers: components["schemas"]["TriggerView"][];
+        };
+        /**
+         * @description Used in handler responses and history records. Distinguishes a trigger by
+         *     its (template, node) identity since `node_id` is only unique within a graph.
+         */
+        TriggerLocator: {
+            node_id: string;
+            /** Format: uuid */
+            template_id: string;
+            /** Format: int32 */
+            template_version: number;
+        };
+        /**
+         * @description What event source fires a `Trigger` node. Tagged enum on the wire
+         *     (`{"kind": "cron", ...}`). Phase 5a only wires `Manual` into the dispatcher
+         *     end-to-end; the other variants are stored as data and surfaced through the
+         *     API for the editor to round-trip, but firing logic for each lands in 5b–5e.
+         */
+        TriggerSource: (components["schemas"]["CronTrigger"] & {
+            /** @enum {string} */
+            kind: "cron";
+        }) | (components["schemas"]["CatalogTrigger"] & {
+            /** @enum {string} */
+            kind: "catalog";
+        }) | (components["schemas"]["NetCompletionTrigger"] & {
+            /** @enum {string} */
+            kind: "net_completion";
+        }) | (components["schemas"]["WebhookTrigger"] & {
+            /** @enum {string} */
+            kind: "webhook";
+        }) | (components["schemas"]["ManualTrigger"] & {
+            /** @enum {string} */
+            kind: "manual";
+        });
+        TriggerView: {
+            enabled: boolean;
+            kind: string;
+            node_id: string;
+            /** Format: date-time */
+            registered_at: string;
+            source_kind: string;
+            target_handle: string;
+            target_node_id: string;
+            /** Format: uuid */
+            template_id: string;
+            /** Format: int32 */
+            template_version: number;
+        };
         UpdateTemplateRequest: {
             description?: string | null;
             graph?: null | components["schemas"]["WorkflowGraph"];
@@ -1690,6 +1931,29 @@ export interface components {
             y: number;
             /** Format: double */
             zoom: number;
+        };
+        WebhookAuth: {
+            /** @enum {string} */
+            kind: "none";
+        } | {
+            header: string;
+            /** @enum {string} */
+            kind: "shared_secret";
+            secret_ref: string;
+        } | {
+            header: string;
+            /** @enum {string} */
+            kind: "signed_hmac";
+            secret_ref: string;
+        };
+        WebhookTrigger: {
+            auth: components["schemas"]["WebhookAuth"];
+            requireMethod?: null | components["schemas"]["HttpMethod"];
+            /**
+             * @description Stable slug appended to `/api/triggers/webhook/{slug}`. Must be unique
+             *     across published templates — the editor reserves it at publish.
+             */
+            slug: string;
         };
         WorkflowEdge: {
             id: string;
@@ -1831,6 +2095,22 @@ export interface components {
             label: string;
             /** @enum {string} */
             type: "scope";
+        } | {
+            /** @description Concurrency / dedup policy applied by the dispatcher. */
+            concurrency?: components["schemas"]["ConcurrencyPolicy"];
+            description?: string | null;
+            /** @description Disabled triggers are stored but the dispatcher ignores them. */
+            enabled?: boolean;
+            label: string;
+            /**
+             * @description Per-target-field mapping. Each entry's `expression` is a Rhai
+             *     expression evaluated against the trigger source's event payload.
+             */
+            payloadMapping?: components["schemas"]["FieldMapping"][];
+            /** @description Tagged source describing what event fires this trigger. */
+            source: components["schemas"]["TriggerSource"];
+            /** @enum {string} */
+            type: "trigger";
         };
         WorkflowTemplate: {
             air_json?: unknown;
@@ -3759,6 +4039,29 @@ export interface operations {
             };
         };
     };
+    list_template_triggers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Template id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Triggers for this template */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TriggerListResponse"];
+                };
+            };
+        };
+    };
     list_versions: {
         parameters: {
             query?: never;
@@ -3796,6 +4099,94 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_triggers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description All registered triggers */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TriggerListResponse"];
+                };
+            };
+        };
+    };
+    fire_trigger: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Trigger node id */
+                node_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FireTriggerRequest"];
+            };
+        };
+        responses: {
+            /** @description Trigger fired */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FireTriggerResponse"];
+                };
+            };
+            /** @description Fire failed (e.g. mapping or instance error) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Trigger not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    trigger_history: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Trigger node id */
+                node_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Recent fire history */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TriggerHistoryResponse"];
                 };
             };
         };

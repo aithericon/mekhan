@@ -47,6 +47,7 @@ export type ParallelSplitNodeData = Extract<SchemaWorkflowNodeData, { type: 'par
 export type ParallelJoinNodeData = Extract<SchemaWorkflowNodeData, { type: 'parallel_join' }>;
 export type LoopNodeData = Extract<SchemaWorkflowNodeData, { type: 'loop' }>;
 export type ScopeNodeData = Extract<SchemaWorkflowNodeData, { type: 'scope' }>;
+export type TriggerNodeData = Extract<SchemaWorkflowNodeData, { type: 'trigger' }>;
 
 // Convenience aliases for TaskBlockConfig variants used in editor pickers.
 export type InputBlock = Extract<SchemaTaskBlockConfig, { type: 'input' }>;
@@ -131,6 +132,13 @@ export const NODE_PALETTE: NodePaletteItem[] = [
 		description: 'Visual container for grouping nodes',
 		icon: 'group',
 		color: '#64748b'
+	},
+	{
+		type: 'trigger',
+		label: 'Trigger',
+		description: 'Fires the workflow on cron, catalog, webhook, etc.',
+		icon: 'zap',
+		color: '#fbbf24'
 	}
 ];
 
@@ -187,5 +195,14 @@ export function createDefaultNodeData(type: WorkflowNodeType): SchemaWorkflowNod
 			};
 		case 'scope':
 			return { type: 'scope', label: 'Scope' };
+		case 'trigger':
+			return {
+				type: 'trigger',
+				label: 'Trigger',
+				source: { kind: 'manual', form: [] },
+				concurrency: 'allow',
+				payloadMapping: [],
+				enabled: false
+			};
 	}
 }

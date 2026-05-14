@@ -12,6 +12,7 @@
 	import DecisionNodeSection from './property-sections/DecisionNodeSection.svelte';
 	import LoopNodeSection from './property-sections/LoopNodeSection.svelte';
 	import DerivedPortsSection from './property-sections/DerivedPortsSection.svelte';
+	import TriggerNodeSection from './property-sections/TriggerNodeSection.svelte';
 	import { computeScopes, type ScopeEntry } from '$lib/editor/guard-scope';
 	import { outputPortsFor } from '$lib/editor/derived-ports';
 	import { Button } from '$lib/components/ui/button';
@@ -177,6 +178,8 @@
 			<DecisionNodeSection {data} {readonly} {onchange} {scope} />
 		{:else if data.type === 'loop'}
 			<LoopNodeSection {data} {readonly} {onchange} {scope} />
+		{:else if data.type === 'trigger'}
+			<TriggerNodeSection {data} {readonly} {onchange} />
 		{/if}
 
 		<!-- Phase 4: read-only derived port preview for variants whose outputs

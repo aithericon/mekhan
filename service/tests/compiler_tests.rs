@@ -2010,3 +2010,242 @@ fn guard_can_reference_human_task_derived_field() {
         result.err()
     );
 }
+
+// ---------------------------------------------------------------------------
+// Phase 5a — Trigger node validation
+// ---------------------------------------------------------------------------
+
+fn trigger_node(id: &str, source: mekhan_service::models::template::TriggerSource) -> WorkflowNode {
+    WorkflowNode {
+        id: id.to_string(),
+        node_type: "trigger".to_string(),
+        position: pos(),
+        data: WorkflowNodeData::Trigger {
+            label: "Trigger".to_string(),
+            description: None,
+            source,
+            concurrency: Default::default(),
+            payload_mapping: vec![],
+            enabled: true,
+        },
+        parent_id: None,
+        width: None,
+        height: None,
+    }
+}
+
+fn manual_source() -> mekhan_service::models::template::TriggerSource {
+    use mekhan_service::models::template::{ManualTrigger, TriggerSource};
+    TriggerSource::Manual(ManualTrigger { form: vec![] })
+}
+
+#[test]
+fn trigger_node_is_skipped_during_compile() {
+    // A trigger node attached to Start should not contribute places/transitions
+    // to the AIR. The workflow's Start → End structure must be intact.
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            end_node("e"),
+            trigger_node("t", manual_source()),
+        ],
+        edges: vec![
+            edge("e1", "s", "e"),
+            edge_with_handle("t_edge", "t", "s", "in"),
+        ],
+        viewport: None,
+    };
+    let air = compile_to_air(&graph, "Trigger Compile", "", &Default::default())
+        .expect("trigger-attached graph should compile");
+    // Trigger node contributes no places/transitions. The Start→End edge gets
+    // merged by the pass-through optimization (same as start_to_end_produces_terminal_place).
+    assert!(
+        places(&air).iter().any(|p| p["type"] == "terminal"),
+        "expected a terminal place after Start→End merge"
+    );
+    assert!(!places(&air).iter().any(|p| p["id"].as_str() == Some("p_t_ready")));
+    assert!(!transitions(&air).iter().any(|t| t["id"].as_str().is_some_and(|s| s.contains("_t_"))));
+}
+
+#[test]
+fn trigger_must_have_exactly_one_outgoing_edge() {
+    // Zero outgoing → error.
+    let graph_zero = WorkflowGraph {
+        nodes: vec![start_node("s"), end_node("e"), trigger_node("t", manual_source())],
+        edges: vec![edge("e1", "s", "e")],
+        viewport: None,
+    };
+    let err = compile_to_air(&graph_zero, "", "", &Default::default()).expect_err("zero outgoing should fail");
+    assert!(err.to_string().contains("trigger 't'"));
+
+    // Two outgoing → error.
+    let graph_two = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            end_node("e"),
+            trigger_node("t", manual_source()),
+        ],
+        edges: vec![
+            edge("e1", "s", "e"),
+            edge_with_handle("te1", "t", "s", "in"),
+            edge_with_handle("te2", "t", "e", "in"),
+        ],
+        viewport: None,
+    };
+    let err = compile_to_air(&graph_two, "", "", &Default::default()).expect_err("two outgoing should fail");
+    assert!(err.to_string().contains("trigger 't'"));
+}
+
+#[test]
+fn trigger_cannot_be_edge_target() {
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            end_node("e"),
+            trigger_node("t", manual_source()),
+        ],
+        edges: vec![
+            edge("e1", "s", "e"),
+            // illegal: start → trigger
+            WorkflowEdge {
+                id: "bad".to_string(),
+                source: "s".to_string(),
+                target: "t".to_string(),
+                source_handle: None,
+                target_handle: Some("in".to_string()),
+                label: None,
+                edge_type: "sequence".to_string(),
+            },
+            edge_with_handle("te", "t", "e", "in"),
+        ],
+        viewport: None,
+    };
+    let err = compile_to_air(&graph, "", "", &Default::default())
+        .expect_err("trigger as target should fail");
+    assert!(
+        err.to_string().contains("cannot be the target"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn trigger_payload_mapping_references_known_fields() {
+    // Start declares a `customer_id` field; trigger payload_mapping references
+    // it — should compile.
+    use mekhan_service::models::template::{FieldKind, FieldMapping, PortField};
+    let start_port = Port {
+        id: "in".to_string(),
+        label: "Input".to_string(),
+        fields: vec![PortField {
+            name: "customer_id".to_string(),
+            label: "Customer".to_string(),
+            kind: FieldKind::Text,
+            required: true,
+            options: None,
+            description: None,
+        }],
+    };
+    let mut start = start_node("s");
+    if let WorkflowNodeData::Start { ref mut initial, .. } = start.data {
+        *initial = start_port;
+    }
+    let mut trig = trigger_node("t", manual_source());
+    if let WorkflowNodeData::Trigger {
+        ref mut payload_mapping,
+        ..
+    } = trig.data
+    {
+        *payload_mapping = vec![FieldMapping {
+            target_field: "customer_id".to_string(),
+            expression: "payload.cid".to_string(),
+        }];
+    }
+    let graph = WorkflowGraph {
+        nodes: vec![start, end_node("e"), trig],
+        edges: vec![
+            edge("e1", "s", "e"),
+            edge_with_handle("te", "t", "s", "in"),
+        ],
+        viewport: None,
+    };
+    compile_to_air(&graph, "", "", &Default::default())
+        .expect("valid payload_mapping should compile");
+}
+
+#[test]
+fn trigger_payload_mapping_rejects_unknown_field() {
+    use mekhan_service::models::template::{FieldKind, FieldMapping, PortField};
+    let start_port = Port {
+        id: "in".to_string(),
+        label: "Input".to_string(),
+        fields: vec![PortField {
+            name: "customer_id".to_string(),
+            label: "Customer".to_string(),
+            kind: FieldKind::Text,
+            required: true,
+            options: None,
+            description: None,
+        }],
+    };
+    let mut start = start_node("s");
+    if let WorkflowNodeData::Start { ref mut initial, .. } = start.data {
+        *initial = start_port;
+    }
+    let mut trig = trigger_node("t", manual_source());
+    if let WorkflowNodeData::Trigger {
+        ref mut payload_mapping,
+        ..
+    } = trig.data
+    {
+        *payload_mapping = vec![FieldMapping {
+            target_field: "nope".to_string(),
+            expression: "payload.x".to_string(),
+        }];
+    }
+    let graph = WorkflowGraph {
+        nodes: vec![start, end_node("e"), trig],
+        edges: vec![
+            edge("e1", "s", "e"),
+            edge_with_handle("te", "t", "s", "in"),
+        ],
+        viewport: None,
+    };
+    let err = compile_to_air(&graph, "", "", &Default::default())
+        .expect_err("unknown target_field should fail");
+    assert!(
+        err.to_string().contains("unknown target field"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn trigger_payload_mapping_rejects_invalid_rhai() {
+    use mekhan_service::models::template::FieldMapping;
+    let mut trig = trigger_node("t", manual_source());
+    if let WorkflowNodeData::Trigger {
+        ref mut payload_mapping,
+        ..
+    } = trig.data
+    {
+        *payload_mapping = vec![FieldMapping {
+            target_field: "ignored".to_string(),
+            expression: "let x =;".to_string(),
+        }];
+    }
+    // Target is an empty-input port, so target_field check is bypassed, but
+    // syntax check still fires.
+    let graph = WorkflowGraph {
+        nodes: vec![start_node("s"), end_node("e"), trig],
+        edges: vec![
+            edge("e1", "s", "e"),
+            edge_with_handle("te", "t", "s", "in"),
+        ],
+        viewport: None,
+    };
+    let err = compile_to_air(&graph, "", "", &Default::default())
+        .expect_err("bad rhai should fail");
+    assert!(
+        err.to_string().contains("Rhai syntax"),
+        "unexpected error: {err}"
+    );
+}
