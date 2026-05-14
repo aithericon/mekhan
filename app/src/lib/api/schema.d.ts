@@ -902,6 +902,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/triggers/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/triggers/metrics
+         * @description Returns aggregate counters per source kind plus the registry size. Useful
+         *     for /admin dashboards and the editor's trigger landing page.
+         */
+        get: operations["trigger_metrics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/triggers/preview/cron": {
         parameters: {
             query?: never;
@@ -1295,6 +1316,20 @@ export interface components {
             filename: string;
             key: string;
             size: number;
+        };
+        FireMetrics: {
+            /** Format: int64 */
+            dropped: number;
+            /** Format: int64 */
+            errors: number;
+            /** Format: int64 */
+            fires: number;
+            /** Format: int64 */
+            no_targets: number;
+            /** Format: int64 */
+            signaled: number;
+            /** Format: int64 */
+            spawned: number;
         };
         /**
          * @description Result of a single fire attempt. Kept structurally similar across sources
@@ -1922,6 +1957,12 @@ export interface components {
             template_id: string;
             /** Format: int32 */
             template_version: number;
+        };
+        TriggerMetricsResponse: {
+            by_source_kind: {
+                [key: string]: components["schemas"]["FireMetrics"];
+            };
+            total_registered: number;
         };
         /**
          * @description What event source fires a `Trigger` node. Tagged enum on the wire
@@ -4159,6 +4200,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TriggerListResponse"];
+                };
+            };
+        };
+    };
+    trigger_metrics: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Per-source-kind fire counters */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TriggerMetricsResponse"];
                 };
             };
         };

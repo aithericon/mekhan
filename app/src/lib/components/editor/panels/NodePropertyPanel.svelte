@@ -179,7 +179,7 @@
 		{:else if data.type === 'loop'}
 			<LoopNodeSection {data} {readonly} {onchange} {scope} />
 		{:else if data.type === 'trigger'}
-			<TriggerNodeSection {data} {readonly} {onchange} />
+			<TriggerNodeSection {data} {readonly} {onchange} {nodeId} />
 		{/if}
 
 		<!-- Phase 4: read-only derived port preview for variants whose outputs

@@ -2849,6 +2849,28 @@
         }
       }
     },
+    "/api/triggers/metrics": {
+      "get": {
+        "tags": [
+          "triggers"
+        ],
+        "summary": "GET /api/triggers/metrics",
+        "description": "Returns aggregate counters per source kind plus the registry size. Useful\nfor /admin dashboards and the editor's trigger landing page.",
+        "operationId": "trigger_metrics",
+        "responses": {
+          "200": {
+            "description": "Per-source-kind fire counters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TriggerMetricsResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/triggers/preview/cron": {
       "post": {
         "tags": [
@@ -3870,6 +3892,49 @@
           },
           "size": {
             "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "FireMetrics": {
+        "type": "object",
+        "required": [
+          "fires",
+          "spawned",
+          "signaled",
+          "no_targets",
+          "dropped",
+          "errors"
+        ],
+        "properties": {
+          "dropped": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "errors": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "fires": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "no_targets": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "signaled": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "spawned": {
+            "type": "integer",
+            "format": "int64",
             "minimum": 0
           }
         }
@@ -5851,6 +5916,28 @@
           "template_version": {
             "type": "integer",
             "format": "int32"
+          }
+        }
+      },
+      "TriggerMetricsResponse": {
+        "type": "object",
+        "required": [
+          "by_source_kind",
+          "total_registered"
+        ],
+        "properties": {
+          "by_source_kind": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/FireMetrics"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "total_registered": {
+            "type": "integer",
+            "minimum": 0
           }
         }
       },

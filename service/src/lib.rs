@@ -147,6 +147,7 @@ fn build_openapi_router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::triggers::fire_trigger))
         .routes(routes!(handlers::triggers::trigger_history))
         .routes(routes!(handlers::triggers::preview_cron))
+        .routes(routes!(handlers::triggers::trigger_metrics))
 }
 
 pub fn build_router(state: AppState) -> Router {

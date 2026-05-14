@@ -8,6 +8,7 @@
 	import Plus from '@lucide/svelte/icons/plus';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import CronPreview from './CronPreview.svelte';
+	import TriggerHistory from './TriggerHistory.svelte';
 
 	type FieldMapping = components['schemas']['FieldMapping'];
 
@@ -15,9 +16,10 @@
 		data: TriggerNodeData;
 		readonly?: boolean;
 		onchange: (data: TriggerNodeData) => void;
+		nodeId?: string;
 	};
 
-	let { data, readonly = false, onchange }: Props = $props();
+	let { data, readonly = false, onchange, nodeId }: Props = $props();
 
 	const source = $derived(data.source);
 	const sourceKind = $derived(source?.kind ?? 'manual');
@@ -297,4 +299,8 @@
 	<p class="text-[11px] text-muted-foreground">
 		Disabled triggers are stored with the template but the dispatcher ignores them.
 	</p>
+
+	{#if nodeId}
+		<TriggerHistory {nodeId} />
+	{/if}
 </div>

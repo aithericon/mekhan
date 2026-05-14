@@ -198,6 +198,31 @@ pub async fn trigger_history(
     Json(TriggerHistoryResponse { history })
 }
 
+#[derive(Debug, Serialize, ToSchema)]
+pub struct TriggerMetricsResponse {
+    pub by_source_kind: HashMap<String, crate::triggers::dispatcher::FireMetrics>,
+    pub total_registered: usize,
+}
+
+/// GET /api/triggers/metrics
+///
+/// Returns aggregate counters per source kind plus the registry size. Useful
+/// for /admin dashboards and the editor's trigger landing page.
+#[utoipa::path(
+    get,
+    path = "/api/triggers/metrics",
+    responses(
+        (status = 200, description = "Per-source-kind fire counters", body = TriggerMetricsResponse),
+    ),
+    tag = "triggers",
+)]
+pub async fn trigger_metrics(State(state): State<AppState>) -> Json<TriggerMetricsResponse> {
+    Json(TriggerMetricsResponse {
+        by_source_kind: state.triggers.metrics_snapshot(),
+        total_registered: state.triggers.list_all().len(),
+    })
+}
+
 /// POST /api/triggers/preview/cron
 ///
 /// Returns the next N fire times for a cron schedule. Used by the editor's

@@ -36,6 +36,19 @@ pub struct TriggerDispatcher {
     /// Last N fire results, keyed by `node_id`. Bounded per-trigger to keep
     /// memory predictable. The history endpoint (Phase 5f) serves from here.
     history: DashMap<String, Vec<FireResult>>,
+    /// Per-source-kind fire counter for observability (Phase 5f). Monotonic
+    /// since boot; the metrics endpoint exposes raw counts.
+    metrics: DashMap<String, FireMetrics>,
+}
+
+#[derive(Debug, Default, Clone, serde::Serialize, utoipa::ToSchema)]
+pub struct FireMetrics {
+    pub fires: u64,
+    pub spawned: u64,
+    pub signaled: u64,
+    pub no_targets: u64,
+    pub dropped: u64,
+    pub errors: u64,
 }
 
 impl TriggerDispatcher {
@@ -46,6 +59,30 @@ impl TriggerDispatcher {
             petri,
             nats,
             history: DashMap::new(),
+            metrics: DashMap::new(),
+        }
+    }
+
+    /// Snapshot of fire counters per source kind. Cheap clone.
+    pub fn metrics_snapshot(&self) -> std::collections::HashMap<String, FireMetrics> {
+        self.metrics
+            .iter()
+            .map(|r| (r.key().clone(), r.value().clone()))
+            .collect()
+    }
+
+    fn record_metric(&self, source_kind: &str, outcome: &FireOutcome, errored: bool) {
+        let mut entry = self.metrics.entry(source_kind.to_string()).or_default();
+        entry.fires += 1;
+        if errored {
+            entry.errors += 1;
+            return;
+        }
+        match outcome {
+            FireOutcome::Spawned { .. } => entry.spawned += 1,
+            FireOutcome::Signaled { .. } => entry.signaled += 1,
+            FireOutcome::NoTargets => entry.no_targets += 1,
+            FireOutcome::Dropped { .. } => entry.dropped += 1,
         }
     }
 
@@ -249,10 +286,17 @@ impl TriggerDispatcher {
         // (e.g. `fire_time` for cron, `catalogue_entry` for catalog).
         let token = evaluate_mapping(payload_mapping, &event_payload)?;
 
-        let outcome = match record.kind {
-            TriggerKind::Spawn => self.fire_spawn(&record, &template, &graph, token).await?,
-            TriggerKind::Signal => self.fire_signal(&record, token).await?,
+        let source_kind = record.source.kind().to_string();
+        let outcome_result = match record.kind {
+            TriggerKind::Spawn => self.fire_spawn(&record, &template, &graph, token).await,
+            TriggerKind::Signal => self.fire_signal(&record, token).await,
         };
+        let outcome = match &outcome_result {
+            Ok(o) => o.clone(),
+            Err(_) => FireOutcome::NoTargets, // sentinel for metric path
+        };
+        self.record_metric(&source_kind, &outcome, outcome_result.is_err());
+        let outcome = outcome_result?;
 
         let result = FireResult {
             locator: TriggerLocator {
@@ -261,7 +305,7 @@ impl TriggerDispatcher {
                 node_id: record.node_id.clone(),
             },
             fired_at: Utc::now(),
-            source_kind: record.source.kind().to_string(),
+            source_kind,
             outcome,
         };
         self.record_history(&record.node_id, result.clone());
