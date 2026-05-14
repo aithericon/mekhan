@@ -60,7 +60,7 @@ async fn connect_nats(
                 ping_interval_secs = ping_interval.as_secs(),
                 "connecting to NATS with credentials"
             );
-            async_nats::ConnectOptions::with_credentials_file(expanded.as_ref()).await?
+            async_nats::ConnectOptions::with_credentials_file(&*expanded).await?
         }
         None => {
             info!(

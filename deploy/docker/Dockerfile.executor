@@ -1,0 +1,206 @@
+# syntax=docker/dockerfile:1.7
+# =============================================================================
+# Aithericon Executor — comprehensive runtime image (CPU)
+# =============================================================================
+# Enabled cargo features (every flag the service crate exposes):
+#   opendal-s3, opendal-gcs, opendal-azblob   (object-store backends)
+#   url-inputs                                 (fetch staged inputs by URL)
+#   docker                                     (Docker exec backend, needs sock)
+#   python                                     (Python venv backend)
+#   http, http-cancel                          (HTTP exec backend + cancel API)
+#   llm                                        (OpenAI / Anthropic / Ollama)
+#   vault                                      (HashiCorp Vault secrets)
+#   file-ops                                   (storage file ops backend)
+#   kreuzberg                                  (75+ format document extraction)
+#
+# Build context: the monorepo root (path dependencies on ../shared/*).
+#
+#   docker build -f deploy/docker/Dockerfile.executor \
+#                -t aithericon-executor:latest .
+#
+# Runtime notes:
+#   * llm backend is a pure HTTP client. Run Ollama / vLLM / etc. as a sibling
+#     container (with --gpus all if you want local GPU inference) and point
+#     the executor at it via provider base_url.
+#   * Docker backend: bind-mount /var/run/docker.sock (no DinD).
+#   * A CUDA-base variant (for Python venvs that need GPU torch) is planned
+#     but deliberately deferred — keep this Dockerfile single-base for now.
+# =============================================================================
+
+# Rust MSRV is set by the kreuzberg-4.x crate (1.91). Override with
+# --build-arg RUST_VERSION=… if the workspace bumps.
+ARG RUST_VERSION=1.91
+
+# -----------------------------------------------------------------------------
+# Builder — glibc-based; kreuzberg + libtesseract FFI rules out musl.
+# -----------------------------------------------------------------------------
+FROM rust:${RUST_VERSION}-bookworm AS builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Build-time system deps:
+#   pkg-config + libtesseract-dev + libleptonica-dev — kreuzberg-tesseract FFI
+#   libclang-dev                                     — bindgen for tesseract FFI
+#   build-essential                                  — C++ stdlib + linker
+#   curl, ca-certificates                            — pdfium download in build.rs
+#   protobuf-compiler                                — tonic-build (gRPC)
+#   cmake, perl, libssl-dev                          — fallbacks for any C dep
+#   libhdf5-dev + libnetcdf-dev                      — fmeta `all-backends`
+#                                                       pulls netcdf-sys →
+#                                                       hdf5-metno-sys (build
+#                                                       script probes headers
+#                                                       via pkg-config).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        cmake \
+        curl \
+        libclang-dev \
+        libhdf5-dev \
+        libleptonica-dev \
+        libnetcdf-dev \
+        libssl-dev \
+        libtesseract-dev \
+        perl \
+        pkg-config \
+        protobuf-compiler \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+# Path-dep layout must mirror the host: executor/ at /build/executor with
+# shared/ as a sibling at /build/shared. Copy the workspaces wholesale — the
+# root .dockerignore already excludes target/ and similar noise.
+COPY executor/  /build/executor/
+COPY shared/    /build/shared/
+
+# Cache mounts: /usr/local/cargo for the registry+git, /build/executor/target
+# for incremental artifacts. The final binary is copied out of the cache
+# mount before the layer is committed (otherwise it disappears with the mount).
+#
+# CARGO_BUILD_JOBS capped at 2 (override with --build-arg CARGO_BUILD_JOBS=…)
+# because polars + arrow + kreuzberg + fmeta(all-backends) generate ~25 GB of
+# intermediate artifacts; running 8-16 rustc jobs in parallel spikes /tmp and
+# the cache mount enough to OOM small Docker Desktop VMs. Slower wall time,
+# stable disk footprint.
+ARG CARGO_BUILD_JOBS=2
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/build/executor/target \
+    set -eux; \
+    cd /build/executor; \
+    CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS} cargo build --release \
+        --bin aithericon-executor-service \
+        --features "opendal-s3 opendal-gcs opendal-azblob url-inputs docker python http http-cancel llm vault file-ops kreuzberg"; \
+    mkdir -p /out; \
+    cp target/release/aithericon-executor-service /out/aithericon-executor-service; \
+    strip /out/aithericon-executor-service || true
+
+# -----------------------------------------------------------------------------
+# Runtime — Debian bookworm slim (glibc; kreuzberg + libtesseract FFI rule out
+# musl). A CUDA variant will be added as a separate Dockerfile when needed.
+# -----------------------------------------------------------------------------
+FROM debian:bookworm-slim AS runtime
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+# Runtime system deps:
+#   ca-certificates, tzdata    — TLS + correct timestamps
+#   libssl3, libstdc++6        — pdfium + tesseract FFI need C++ stdlib
+#   tesseract-ocr + lang packs — kreuzberg OCR (libtesseract pulled in via dep)
+#   python3, python3-venv, pip — python backend
+#   curl                       — fetching uv installer + healthchecks
+#   git                        — pip VCS installs in user-supplied requirements
+#
+# Docker backend uses bollard against /var/run/docker.sock directly, so the
+# `docker` CLI is NOT installed here. Mount the host's socket at run time.
+#
+# LibreOffice deliberately omitted (~700 MB). Modern docx/xlsx/pptx still
+# work via kreuzberg's pure-Rust extractors; legacy .doc/.ppt/.xls (which
+# kreuzberg handles by shelling out to `soffice --headless`) will return a
+# "missing dependency" error. Add libreoffice-core when somebody asks for it.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        git \
+        libhdf5-103-1 \
+        libnetcdf19 \
+        libssl3 \
+        libstdc++6 \
+        python3 \
+        python3-pip \
+        python3-venv \
+        tesseract-ocr \
+        tesseract-ocr-eng \
+        tesseract-ocr-deu \
+        tesseract-ocr-fra \
+        tesseract-ocr-spa \
+        tesseract-ocr-ita \
+        tesseract-ocr-por \
+        tesseract-ocr-nld \
+        tesseract-ocr-osd \
+        tzdata \
+    && rm -rf /var/lib/apt/lists/*
+
+# Pin TESSDATA_PREFIX to a stable path. Debian 12 puts it at
+# /usr/share/tesseract-ocr/5/tessdata; the symlink keeps a future base bump
+# from breaking the ENV below.
+RUN ln -sfn "$(find /usr/share/tesseract-ocr -maxdepth 2 -type d -name tessdata | head -n1)" \
+            /opt/tessdata
+
+# uv — astral's fast Python venv/installer. The python backend prefers it
+# (10-100× faster than pip+venv); falls back transparently when absent, but
+# we want the fast path on by default.
+RUN curl -LsSf https://astral.sh/uv/install.sh \
+        | env UV_INSTALL_DIR=/usr/local/bin UV_UNMANAGED_INSTALL=1 sh \
+    && uv --version
+
+# Non-root user. UID/GID 1000 to match the service image convention.
+RUN groupadd -g 1000 executor \
+    && useradd  -m -u 1000 -g 1000 -s /bin/bash executor
+
+# Base directory the executor uses for run dirs, venv cache, artifacts, ipc.
+RUN mkdir -p /var/lib/aithericon/executor \
+    && chown -R executor:executor /var/lib/aithericon
+
+# Binary.
+COPY --from=builder /out/aithericon-executor-service /usr/local/bin/aithericon-executor-service
+RUN chmod +x /usr/local/bin/aithericon-executor-service
+
+# Default config — env vars only; no executor.toml baked in. Everything below
+# can be overridden at run time.
+ENV HOME=/var/lib/aithericon/executor \
+    EXECUTOR_BASE_DIR=/var/lib/aithericon/executor \
+    EXECUTOR_NATS_URL=nats://nats:4222 \
+    EXECUTOR_CONCURRENCY=4 \
+    EXECUTOR_PYTHON__ENABLED=true \
+    EXECUTOR_PYTHON__PREFER_UV=true \
+    EXECUTOR_CANCEL__HTTP=false \
+    EXECUTOR_CANCEL__HTTP_PORT=9090 \
+    TESSDATA_PREFIX=/opt/tessdata \
+    RUST_LOG=info
+
+# Cancel HTTP API port (only relevant when EXECUTOR_CANCEL__HTTP=true).
+EXPOSE 9090
+
+# Bind the docker socket at run time if the docker backend is used:
+#   -v /var/run/docker.sock:/var/run/docker.sock
+# Membership in the `docker` group lets the executor user talk to the bind-
+# mounted socket without root. The host's docker gid varies by distro
+# (commonly 999 on Debian, 998 elsewhere); the image picks 999 here. If your
+# host disagrees, override at run time with `--group-add <gid>` rather than
+# rebuilding the image.
+RUN groupadd -g 999 docker || true \
+    && usermod -aG docker executor
+
+USER executor
+WORKDIR /var/lib/aithericon/executor
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD /usr/local/bin/aithericon-executor-service --help >/dev/null 2>&1 || exit 1
+
+ENTRYPOINT ["/usr/local/bin/aithericon-executor-service"]
