@@ -3,10 +3,8 @@ use std::collections::HashMap;
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
-    response::IntoResponse,
     Json,
 };
-use serde_json::json;
 use uuid::Uuid;
 
 use aithericon_executor_domain::InputSource;
@@ -14,7 +12,7 @@ use aithericon_executor_domain::InputSource;
 use crate::auth::AuthUser;
 use crate::compiler::compile_to_air;
 use crate::lifecycle::cleanup_net;
-use crate::models::error::ErrorResponse;
+use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::template::{
     CompileRequest, CreateTemplateRequest, ListTemplatesQuery, PaginatedResponse,
     UpdateTemplateRequest, WorkflowGraph, WorkflowTemplate,
@@ -36,13 +34,13 @@ pub async fn create_template(
     State(state): State<AppState>,
     user: AuthUser,
     Json(req): Json<CreateTemplateRequest>,
-) -> impl IntoResponse {
+) -> Result<(StatusCode, Json<WorkflowTemplate>), ApiError> {
     let id = Uuid::new_v4();
     let graph = req.graph.unwrap_or_else(WorkflowGraph::default_graph);
     let graph_json = serde_json::to_value(&graph).unwrap();
     let description = req.description.unwrap_or_default();
 
-    let result = sqlx::query_as::<_, WorkflowTemplate>(
+    let template = sqlx::query_as::<_, WorkflowTemplate>(
         r#"
         INSERT INTO workflow_templates (id, name, description, base_template_id, version, is_latest, graph, author_id)
         VALUES ($1, $2, $3, $1, 1, TRUE, $4, $5)
@@ -55,28 +53,24 @@ pub async fn create_template(
     .bind(&graph_json)
     .bind(user.subject_as_uuid())
     .fetch_one(&state.db)
-    .await;
+    .await
+    .map_err(|e| {
+        tracing::error!("failed to create template: {e}");
+        ApiError::internal(e.to_string())
+    })?;
 
-    match result {
-        Ok(template) => {
-            // Initialize Y.Doc from the graph for real-time collaboration
-            if let Err(e) = state
-                .yjs
-                .persistence
-                .init_doc_from_graph(id, &graph)
-                .await
-            {
-                tracing::error!("failed to init Y.Doc for template {id}: {e}");
-                // Non-fatal: template is created, Y.Doc can be initialized later
-            }
-
-            (StatusCode::CREATED, Json(json!(template))).into_response()
-        }
-        Err(e) => {
-            tracing::error!("failed to create template: {e}");
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response()
-        }
+    // Initialize Y.Doc from the graph for real-time collaboration
+    if let Err(e) = state
+        .yjs
+        .persistence
+        .init_doc_from_graph(id, &graph)
+        .await
+    {
+        tracing::error!("failed to init Y.Doc for template {id}: {e}");
+        // Non-fatal: template is created, Y.Doc can be initialized later
     }
+
+    Ok((StatusCode::CREATED, Json(template)))
 }
 
 /// GET /api/templates
@@ -92,7 +86,7 @@ pub async fn create_template(
 pub async fn list_templates(
     State(state): State<AppState>,
     Query(params): Query<ListTemplatesQuery>,
-) -> impl IntoResponse {
+) -> Json<PaginatedResponse<WorkflowTemplate>> {
     let offset = (params.page - 1) * params.per_page;
 
     // Build dynamic query based on filters
@@ -232,22 +226,20 @@ pub async fn list_templates(
 pub async fn get_template(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-) -> impl IntoResponse {
-    let result = sqlx::query_as::<_, WorkflowTemplate>(
+) -> Result<Json<WorkflowTemplate>, ApiError> {
+    let template = sqlx::query_as::<_, WorkflowTemplate>(
         "SELECT * FROM workflow_templates WHERE id = $1",
     )
     .bind(id)
     .fetch_optional(&state.db)
-    .await;
+    .await
+    .map_err(|e| {
+        tracing::error!("failed to get template: {e}");
+        ApiError::internal(e.to_string())
+    })?
+    .ok_or_else(|| ApiError::not_found("template not found"))?;
 
-    match result {
-        Ok(Some(template)) => Json(json!(template)).into_response(),
-        Ok(None) => (StatusCode::NOT_FOUND, Json(json!({"error": "template not found"}))).into_response(),
-        Err(e) => {
-            tracing::error!("failed to get template: {e}");
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response()
-        }
-    }
+    Ok(Json(template))
 }
 
 /// PUT /api/templates/{id}
@@ -268,27 +260,19 @@ pub async fn update_template(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Json(req): Json<UpdateTemplateRequest>,
-) -> impl IntoResponse {
+) -> Result<Json<WorkflowTemplate>, ApiError> {
     // Check if template exists and is not published
     let existing = sqlx::query_as::<_, WorkflowTemplate>(
         "SELECT * FROM workflow_templates WHERE id = $1",
     )
     .bind(id)
     .fetch_optional(&state.db)
-    .await;
-
-    let existing = match existing {
-        Ok(Some(t)) => t,
-        Ok(None) => {
-            return (StatusCode::NOT_FOUND, Json(json!({"error": "template not found"}))).into_response();
-        }
-        Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response();
-        }
-    };
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .ok_or_else(|| ApiError::not_found("template not found"))?;
 
     if existing.published {
-        return (StatusCode::CONFLICT, Json(json!({"error": "cannot edit a published template"}))).into_response();
+        return Err(ApiError::conflict("cannot edit a published template"));
     }
 
     let name = req.name.unwrap_or(existing.name);
@@ -298,7 +282,7 @@ pub async fn update_template(
         .map(|g| serde_json::to_value(&g).unwrap())
         .unwrap_or(existing.graph);
 
-    let result = sqlx::query_as::<_, WorkflowTemplate>(
+    let template = sqlx::query_as::<_, WorkflowTemplate>(
         r#"
         UPDATE workflow_templates
         SET name = $2, description = $3, graph = $4, updated_at = NOW()
@@ -311,15 +295,13 @@ pub async fn update_template(
     .bind(&description)
     .bind(&graph)
     .fetch_one(&state.db)
-    .await;
+    .await
+    .map_err(|e| {
+        tracing::error!("failed to update template: {e}");
+        ApiError::internal(e.to_string())
+    })?;
 
-    match result {
-        Ok(template) => Json(json!(template)).into_response(),
-        Err(e) => {
-            tracing::error!("failed to update template: {e}");
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response()
-        }
-    }
+    Ok(Json(template))
 }
 
 /// DELETE /api/templates/{id}
@@ -339,23 +321,15 @@ pub async fn update_template(
 pub async fn delete_template(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-) -> impl IntoResponse {
+) -> Result<StatusCode, ApiError> {
     let existing = sqlx::query_as::<_, WorkflowTemplate>(
         "SELECT * FROM workflow_templates WHERE id = $1",
     )
     .bind(id)
     .fetch_optional(&state.db)
-    .await;
-
-    let existing = match existing {
-        Ok(Some(t)) => t,
-        Ok(None) => {
-            return (StatusCode::NOT_FOUND, Json(json!({"error": "template not found"}))).into_response();
-        }
-        Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response();
-        }
-    };
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .ok_or_else(|| ApiError::not_found("template not found"))?;
 
     let base_id = existing.base_template_id.unwrap_or(existing.id);
 
@@ -372,7 +346,9 @@ pub async fn delete_template(
         .unwrap_or((0,));
 
         if running_count.0 > 0 {
-            return (StatusCode::CONFLICT, Json(json!({"error": "cannot delete template with active instances"}))).into_response();
+            return Err(ApiError::conflict(
+                "cannot delete template with active instances",
+            ));
         }
 
         // Cascade cleanup: clean up all finished instances for this template chain
@@ -403,18 +379,16 @@ pub async fn delete_template(
     }
 
     // Delete all versions in the template chain
-    let result = sqlx::query("DELETE FROM workflow_templates WHERE base_template_id = $1")
+    sqlx::query("DELETE FROM workflow_templates WHERE base_template_id = $1")
         .bind(base_id)
         .execute(&state.db)
-        .await;
-
-    match result {
-        Ok(_) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => {
+        .await
+        .map_err(|e| {
             tracing::error!("failed to delete template: {e}");
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response()
-        }
-    }
+            ApiError::internal(e.to_string())
+        })?;
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// POST /api/templates/{id}/publish
@@ -434,52 +408,39 @@ pub async fn delete_template(
 pub async fn publish_template(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-) -> impl IntoResponse {
+) -> Result<Json<WorkflowTemplate>, ApiError> {
     let existing = sqlx::query_as::<_, WorkflowTemplate>(
         "SELECT * FROM workflow_templates WHERE id = $1",
     )
     .bind(id)
     .fetch_optional(&state.db)
-    .await;
-
-    let existing = match existing {
-        Ok(Some(t)) => t,
-        Ok(None) => {
-            return (StatusCode::NOT_FOUND, Json(json!({"error": "template not found"}))).into_response();
-        }
-        Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response();
-        }
-    };
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .ok_or_else(|| ApiError::not_found("template not found"))?;
 
     if existing.published {
-        return (StatusCode::CONFLICT, Json(json!({"error": "template is already published"}))).into_response();
+        return Err(ApiError::conflict("template is already published"));
     }
 
     // Try to reconstruct graph + files from Y.Doc first (collaborative editing source of truth),
     // falling back to the DB graph column for legacy templates.
-    let (graph, ydoc_files): (WorkflowGraph, HashMap<String, HashMap<String, String>>) = match reconstruct_graph_from_ydoc(&state, id).await {
-        Ok(Some((g, f))) => (g, f),
-        Ok(None) => {
-            // No Y.Doc exists — fall back to DB graph
-            match serde_json::from_value(existing.graph.clone()) {
-                Ok(g) => (g, HashMap::new()),
-                Err(e) => {
-                    return (StatusCode::BAD_REQUEST, Json(json!({"error": format!("invalid graph: {e}")}))).into_response();
-                }
+    let (graph, ydoc_files): (WorkflowGraph, HashMap<String, HashMap<String, String>>) =
+        match reconstruct_graph_from_ydoc(&state, id).await {
+            Ok(Some((g, f))) => (g, f),
+            Ok(None) => {
+                // No Y.Doc exists — fall back to DB graph
+                let g = serde_json::from_value(existing.graph.clone())
+                    .map_err(|e| ApiError::bad_request(format!("invalid graph: {e}")))?;
+                (g, HashMap::new())
             }
-        }
-        Err(e) => {
-            tracing::error!("failed to load Y.Doc for template {id}: {e}");
-            // Fall back to DB graph
-            match serde_json::from_value(existing.graph.clone()) {
-                Ok(g) => (g, HashMap::new()),
-                Err(e) => {
-                    return (StatusCode::BAD_REQUEST, Json(json!({"error": format!("invalid graph: {e}")}))).into_response();
-                }
+            Err(e) => {
+                tracing::error!("failed to load Y.Doc for template {id}: {e}");
+                // Fall back to DB graph
+                let g = serde_json::from_value(existing.graph.clone())
+                    .map_err(|e| ApiError::bad_request(format!("invalid graph: {e}")))?;
+                (g, HashMap::new())
             }
-        }
-    };
+        };
 
     // Upload node file contents to S3 so the executor can stage them at runtime.
     if let Err(e) = upload_node_files(&state, id, existing.version, &ydoc_files).await {
@@ -493,14 +454,10 @@ pub async fn publish_template(
     let files = storage_path_files(id, existing.version, &ydoc_files);
 
     // Compile to AIR
-    let air_json = match compile_to_air(&graph, &existing.name, &existing.description, &files) {
-        Ok(air) => air,
-        Err(e) => {
-            return (StatusCode::BAD_REQUEST, Json(json!({"error": format!("compilation failed: {e}")}))).into_response();
-        }
-    };
+    let air_json = compile_to_air(&graph, &existing.name, &existing.description, &files)
+        .map_err(|e| ApiError::bad_request(format!("compilation failed: {e}")))?;
 
-    let result = sqlx::query_as::<_, WorkflowTemplate>(
+    let template = sqlx::query_as::<_, WorkflowTemplate>(
         r#"
         UPDATE workflow_templates
         SET published = TRUE, published_at = NOW(), air_json = $2, updated_at = NOW()
@@ -511,15 +468,13 @@ pub async fn publish_template(
     .bind(id)
     .bind(&air_json)
     .fetch_one(&state.db)
-    .await;
+    .await
+    .map_err(|e| {
+        tracing::error!("failed to publish template: {e}");
+        ApiError::internal(e.to_string())
+    })?;
 
-    match result {
-        Ok(template) => Json(json!(template)).into_response(),
-        Err(e) => {
-            tracing::error!("failed to publish template: {e}");
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response()
-        }
-    }
+    Ok(Json(template))
 }
 
 /// Try to reconstruct a WorkflowGraph and file contents from the Y.Doc stored for this template.
@@ -674,26 +629,20 @@ fn inline_files(
 pub async fn new_version(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-) -> impl IntoResponse {
+) -> Result<(StatusCode, Json<WorkflowTemplate>), ApiError> {
     let existing = sqlx::query_as::<_, WorkflowTemplate>(
         "SELECT * FROM workflow_templates WHERE id = $1",
     )
     .bind(id)
     .fetch_optional(&state.db)
-    .await;
-
-    let existing = match existing {
-        Ok(Some(t)) => t,
-        Ok(None) => {
-            return (StatusCode::NOT_FOUND, Json(json!({"error": "template not found"}))).into_response();
-        }
-        Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response();
-        }
-    };
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .ok_or_else(|| ApiError::not_found("template not found"))?;
 
     if !existing.published {
-        return (StatusCode::CONFLICT, Json(json!({"error": "can only create new version from a published template"}))).into_response();
+        return Err(ApiError::conflict(
+            "can only create new version from a published template",
+        ));
     }
 
     let new_id = Uuid::new_v4();
@@ -701,24 +650,21 @@ pub async fn new_version(
     let base_id = existing.base_template_id.unwrap_or(existing.id);
 
     // Start a transaction
-    let mut tx = match state.db.begin().await {
-        Ok(tx) => tx,
-        Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response();
-        }
-    };
+    let mut tx = state
+        .db
+        .begin()
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     // Mark old version as not latest
-    if let Err(e) = sqlx::query("UPDATE workflow_templates SET is_latest = FALSE WHERE id = $1")
+    sqlx::query("UPDATE workflow_templates SET is_latest = FALSE WHERE id = $1")
         .bind(id)
         .execute(&mut *tx)
         .await
-    {
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response();
-    }
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     // Create new version
-    let result = sqlx::query_as::<_, WorkflowTemplate>(
+    let template = sqlx::query_as::<_, WorkflowTemplate>(
         r#"
         INSERT INTO workflow_templates (id, name, description, base_template_id, parent_id, version, is_latest, graph, author_id)
         VALUES ($1, $2, $3, $4, $5, $6, TRUE, $7, $8)
@@ -734,34 +680,30 @@ pub async fn new_version(
     .bind(&existing.graph)
     .bind(existing.author_id)
     .fetch_one(&mut *tx)
-    .await;
+    .await
+    .map_err(|e| {
+        tracing::error!("failed to create new version: {e}");
+        ApiError::internal(e.to_string())
+    })?;
 
-    match result {
-        Ok(template) => {
-            if let Err(e) = tx.commit().await {
-                return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response();
-            }
+    tx.commit()
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
-            // Seed Y.Doc for the new version so WS collaboration works immediately
-            let graph: WorkflowGraph = serde_json::from_value(existing.graph.clone())
-                .unwrap_or_else(|_| WorkflowGraph::default_graph());
-            if let Err(e) = state
-                .yjs
-                .persistence
-                .init_doc_from_graph(new_id, &graph)
-                .await
-            {
-                tracing::error!("failed to init Y.Doc for new version {new_id}: {e}");
-                // Non-fatal: template is created, Y.Doc can be initialized later
-            }
-
-            (StatusCode::CREATED, Json(json!(template))).into_response()
-        }
-        Err(e) => {
-            tracing::error!("failed to create new version: {e}");
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response()
-        }
+    // Seed Y.Doc for the new version so WS collaboration works immediately
+    let graph: WorkflowGraph = serde_json::from_value(existing.graph.clone())
+        .unwrap_or_else(|_| WorkflowGraph::default_graph());
+    if let Err(e) = state
+        .yjs
+        .persistence
+        .init_doc_from_graph(new_id, &graph)
+        .await
+    {
+        tracing::error!("failed to init Y.Doc for new version {new_id}: {e}");
+        // Non-fatal: template is created, Y.Doc can be initialized later
     }
+
+    Ok((StatusCode::CREATED, Json(template)))
 }
 
 /// GET /api/templates/{id}/versions
@@ -779,24 +721,16 @@ pub async fn new_version(
 pub async fn list_versions(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-) -> impl IntoResponse {
+) -> Result<Json<Vec<WorkflowTemplate>>, ApiError> {
     // First find the base_template_id for this template
     let existing = sqlx::query_as::<_, WorkflowTemplate>(
         "SELECT * FROM workflow_templates WHERE id = $1",
     )
     .bind(id)
     .fetch_optional(&state.db)
-    .await;
-
-    let existing = match existing {
-        Ok(Some(t)) => t,
-        Ok(None) => {
-            return (StatusCode::NOT_FOUND, Json(json!({"error": "template not found"}))).into_response();
-        }
-        Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response();
-        }
-    };
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .ok_or_else(|| ApiError::not_found("template not found"))?;
 
     let base_id = existing.base_template_id.unwrap_or(existing.id);
 
@@ -808,7 +742,7 @@ pub async fn list_versions(
     .await
     .unwrap_or_default();
 
-    Json(json!(versions)).into_response()
+    Ok(Json(versions))
 }
 
 /// GET /api/templates/{id}/air
@@ -827,32 +761,25 @@ pub async fn list_versions(
 pub async fn get_air(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-) -> impl IntoResponse {
+) -> Result<Json<serde_json::Value>, ApiError> {
     let existing = sqlx::query_as::<_, WorkflowTemplate>(
         "SELECT * FROM workflow_templates WHERE id = $1",
     )
     .bind(id)
     .fetch_optional(&state.db)
-    .await;
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .ok_or_else(|| ApiError::not_found("template not found"))?;
 
-    match existing {
-        Ok(Some(t)) if t.published => {
-            if let Some(air) = t.air_json {
-                Json(air).into_response()
-            } else {
-                (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "published template has no AIR JSON"}))).into_response()
-            }
-        }
-        Ok(Some(_)) => {
-            (StatusCode::CONFLICT, Json(json!({"error": "template is not published"}))).into_response()
-        }
-        Ok(None) => {
-            (StatusCode::NOT_FOUND, Json(json!({"error": "template not found"}))).into_response()
-        }
-        Err(e) => {
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response()
-        }
+    if !existing.published {
+        return Err(ApiError::conflict("template is not published"));
     }
+
+    let air = existing
+        .air_json
+        .ok_or_else(|| ApiError::internal("published template has no AIR JSON"))?;
+
+    Ok(Json(air))
 }
 
 /// POST /api/templates/{id}/compile
@@ -871,30 +798,18 @@ pub async fn get_air(
 pub async fn compile_preview(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-) -> impl IntoResponse {
+) -> Result<Json<serde_json::Value>, ApiError> {
     let existing = sqlx::query_as::<_, WorkflowTemplate>(
         "SELECT * FROM workflow_templates WHERE id = $1",
     )
     .bind(id)
     .fetch_optional(&state.db)
-    .await;
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .ok_or_else(|| ApiError::not_found("template not found"))?;
 
-    let existing = match existing {
-        Ok(Some(t)) => t,
-        Ok(None) => {
-            return (StatusCode::NOT_FOUND, Json(json!({"error": "template not found"}))).into_response();
-        }
-        Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response();
-        }
-    };
-
-    let graph: WorkflowGraph = match serde_json::from_value(existing.graph) {
-        Ok(g) => g,
-        Err(e) => {
-            return (StatusCode::BAD_REQUEST, Json(json!({"error": format!("invalid graph: {e}")}))).into_response();
-        }
-    };
+    let graph: WorkflowGraph = serde_json::from_value(existing.graph)
+        .map_err(|e| ApiError::bad_request(format!("invalid graph: {e}")))?;
 
     // Try to pull files from the Y.Doc so the preview AIR matches what publish
     // would emit. If the Y.Doc has nothing, the empty map yields a compile
@@ -905,12 +820,10 @@ pub async fn compile_preview(
     };
     let files = storage_path_files(id, existing.version, &ydoc_files);
 
-    match compile_to_air(&graph, &existing.name, &existing.description, &files) {
-        Ok(air) => Json(air).into_response(),
-        Err(e) => {
-            (StatusCode::BAD_REQUEST, Json(json!({"error": format!("compilation failed: {e}")}))).into_response()
-        }
-    }
+    let air = compile_to_air(&graph, &existing.name, &existing.description, &files)
+        .map_err(|e| ApiError::bad_request(format!("compilation failed: {e}")))?;
+
+    Ok(Json(air))
 }
 
 /// POST /api/compile
@@ -931,13 +844,10 @@ pub async fn compile_preview(
 )]
 pub async fn compile_graph(
     Json(body): Json<CompileRequest>,
-) -> impl IntoResponse {
+) -> Result<Json<serde_json::Value>, ApiError> {
     let description = body.description.as_deref().unwrap_or("");
     let files = inline_files(&body.files);
-    match compile_to_air(&body.graph, &body.name, description, &files) {
-        Ok(air) => Json(air).into_response(),
-        Err(e) => {
-            (StatusCode::BAD_REQUEST, Json(json!({"error": format!("compilation failed: {e}")}))).into_response()
-        }
-    }
+    let air = compile_to_air(&body.graph, &body.name, description, &files)
+        .map_err(|e| ApiError::bad_request(format!("compilation failed: {e}")))?;
+    Ok(Json(air))
 }

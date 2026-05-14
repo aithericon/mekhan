@@ -1,7 +1,6 @@
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
-    response::IntoResponse,
     Json,
 };
 use serde::{Deserialize, Serialize};
@@ -9,7 +8,7 @@ use sqlx::FromRow;
 use utoipa::{IntoParams, ToSchema};
 
 use crate::catalogue::model::CatalogueEntry;
-use crate::models::error::ErrorResponse;
+use crate::models::error::{ApiError, ErrorResponse};
 use crate::process::model::{HpiLog, HpiMetric, HpiTask};
 use crate::AppState;
 
@@ -79,16 +78,16 @@ pub async fn token_provenance(
     State(state): State<AppState>,
     Path((net_id, token_id)): Path<(String, String)>,
     Query(params): Query<ProvenanceParams>,
-) -> impl IntoResponse {
+) -> Result<Json<ProvenanceResponse>, ApiError> {
     let depth = params.depth.min(50).max(1);
 
-    match run_provenance_cte(&state.db, &net_id, &token_id, depth).await {
-        Ok(resp) => Json(resp).into_response(),
-        Err(e) => {
+    let resp = run_provenance_cte(&state.db, &net_id, &token_id, depth)
+        .await
+        .map_err(|e| {
             tracing::error!("provenance query failed: {e}");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
-    }
+            ApiError::status_only(StatusCode::INTERNAL_SERVER_ERROR)
+        })?;
+    Ok(Json(resp))
 }
 
 #[derive(Debug, Serialize, FromRow, ToSchema)]
@@ -118,22 +117,19 @@ pub struct CrossLink {
 pub async fn cross_link(
     State(state): State<AppState>,
     Path(signal_key): Path<String>,
-) -> impl IntoResponse {
-    let result = sqlx::query_as::<_, CrossLink>(
+) -> Result<Json<CrossLink>, ApiError> {
+    let link = sqlx::query_as::<_, CrossLink>(
         "SELECT * FROM causality_cross_links WHERE signal_key = $1",
     )
     .bind(&signal_key)
     .fetch_optional(&state.db)
-    .await;
-
-    match result {
-        Ok(Some(link)) => Json(link).into_response(),
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => {
-            tracing::error!("cross-link query failed: {e}");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
-    }
+    .await
+    .map_err(|e| {
+        tracing::error!("cross-link query failed: {e}");
+        ApiError::status_only(StatusCode::INTERNAL_SERVER_ERROR)
+    })?
+    .ok_or_else(|| ApiError::status_only(StatusCode::NOT_FOUND))?;
+    Ok(Json(link))
 }
 
 // ── Provenance from artifact ──────────────────────────────────────────────
@@ -162,7 +158,7 @@ pub async fn provenance_from_artifact(
     State(state): State<AppState>,
     Path((execution_id, artifact_id)): Path<(String, String)>,
     Query(params): Query<ProvenanceParams>,
-) -> impl IntoResponse {
+) -> Result<Json<ProvenanceResponse>, ApiError> {
     let depth = params.depth.min(50).max(1);
 
     // Look up the catalogue entry by (execution_id, id) — unique key
@@ -176,15 +172,11 @@ pub async fn provenance_from_artifact(
     .await
     .unwrap_or(None);
 
-    let (source_net, signal_key, source_seq) = match entry {
-        Some(e) => e,
-        None => return StatusCode::NOT_FOUND.into_response(),
-    };
+    let (source_net, signal_key, source_seq) = entry
+        .ok_or_else(|| ApiError::status_only(StatusCode::NOT_FOUND))?;
 
-    let source_net = match source_net {
-        Some(n) => n,
-        None => return StatusCode::NOT_FOUND.into_response(),
-    };
+    let source_net = source_net
+        .ok_or_else(|| ApiError::status_only(StatusCode::NOT_FOUND))?;
 
     // Resolve to (net_id, token_id) for the provenance CTE
     let resolved: Option<(String, String)> = if let Some(seq) = source_seq {
@@ -219,22 +211,21 @@ pub async fn provenance_from_artifact(
         Some(r) => r,
         None => {
             // No causality data yet — return empty response
-            return Json(ProvenanceResponse {
+            return Ok(Json(ProvenanceResponse {
                 nodes: vec![],
                 cross_net_edges: vec![],
-            }).into_response();
+            }));
         }
     };
 
     // Run the standard provenance CTE
-    let result = run_provenance_cte(&state.db, &net_id, &token_id, depth).await;
-    match result {
-        Ok(resp) => Json(resp).into_response(),
-        Err(e) => {
+    let resp = run_provenance_cte(&state.db, &net_id, &token_id, depth)
+        .await
+        .map_err(|e| {
             tracing::error!("provenance from artifact failed: {e}");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
-    }
+            ApiError::status_only(StatusCode::INTERNAL_SERVER_ERROR)
+        })?;
+    Ok(Json(resp))
 }
 
 /// Shared provenance CTE query used by both `token_provenance` and
@@ -521,7 +512,7 @@ pub struct EventDetail {
 pub async fn event_detail(
     State(state): State<AppState>,
     Path((net_id, event_seq)): Path<(String, i64)>,
-) -> impl IntoResponse {
+) -> Result<Json<EventDetail>, ApiError> {
     let db = &state.db;
 
     // Fetch the event + new payload columns in one go.
@@ -553,10 +544,7 @@ pub async fn event_detail(
         effect_result,
         bridge_target_net,
         bridge_target_place,
-    ) = match event {
-        Some(e) => e,
-        None => return StatusCode::NOT_FOUND.into_response(),
-    };
+    ) = event.ok_or_else(|| ApiError::status_only(StatusCode::NOT_FOUND))?;
 
     let bridge = match (bridge_target_net, bridge_target_place) {
         (Some(n), Some(p)) => Some(BridgeTarget {
@@ -759,7 +747,7 @@ pub async fn event_detail(
         _ => {}
     }
 
-    Json(EventDetail {
+    Ok(Json(EventDetail {
         net_id,
         event_seq,
         event_type,
@@ -774,6 +762,5 @@ pub async fn event_detail(
         effect_result,
         bridge,
         signal_dispatch,
-    })
-    .into_response()
+    }))
 }

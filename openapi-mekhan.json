@@ -3136,14 +3136,9 @@
       "CreateInstanceRequest": {
         "type": "object",
         "required": [
-          "template_id",
-          "created_by"
+          "template_id"
         ],
         "properties": {
-          "created_by": {
-            "type": "string",
-            "format": "uuid"
-          },
           "metadata": {},
           "template_id": {
             "type": "string",
@@ -3154,14 +3149,9 @@
       "CreateTemplateRequest": {
         "type": "object",
         "required": [
-          "name",
-          "author_id"
+          "name"
         ],
         "properties": {
-          "author_id": {
-            "type": "string",
-            "format": "uuid"
-          },
           "description": {
             "type": [
               "string",

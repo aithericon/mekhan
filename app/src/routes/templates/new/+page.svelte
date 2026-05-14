@@ -40,8 +40,7 @@
 			const template = await createTemplate({
 				name: name.trim(),
 				description: description.trim(),
-				graph: defaultGraph,
-				author_id: '00000000-0000-0000-0000-000000000000'
+				graph: defaultGraph
 			});
 			goto(`/templates/${template.id}`);
 		} catch (err) {

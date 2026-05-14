@@ -6,7 +6,7 @@ use axum::{
 };
 
 use crate::catalogue::model::{CatalogueEntry, CatalogueStats, LineageResponse, NetStats};
-use crate::models::error::ErrorResponse;
+use crate::models::error::{ApiError, ErrorResponse};
 use crate::query::extractor::QueryParams;
 use crate::query::pagination::Paginated;
 use crate::AppState;
@@ -38,18 +38,14 @@ use crate::AppState;
 pub async fn list_entries(
     State(state): State<AppState>,
     params: QueryParams,
-) -> impl IntoResponse {
-    match state.catalogue_repo.list_entries(&params).await {
-        Ok(response) => Json(response).into_response(),
-        Err(e) => {
-            tracing::warn!("catalogue list: {e}");
-            (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": e.to_string() })),
-            )
-                .into_response()
-        }
-    }
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let response = state.catalogue_repo.list_entries(&params).await.map_err(|e| {
+        tracing::warn!("catalogue list: {e}");
+        ApiError::bad_request(e.to_string())
+    })?;
+    Ok(Json(
+        serde_json::to_value(response).unwrap_or(serde_json::json!({})),
+    ))
 }
 
 /// GET /api/catalogue/stats
@@ -68,18 +64,12 @@ pub async fn list_entries(
 pub async fn stats(
     State(state): State<AppState>,
     params: QueryParams,
-) -> impl IntoResponse {
-    match state.catalogue_repo.stats(&params).await {
-        Ok(stats) => Json(stats).into_response(),
-        Err(e) => {
-            tracing::warn!("catalogue stats: {e}");
-            (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": e.to_string() })),
-            )
-                .into_response()
-        }
-    }
+) -> Result<Json<CatalogueStats>, ApiError> {
+    let stats = state.catalogue_repo.stats(&params).await.map_err(|e| {
+        tracing::warn!("catalogue stats: {e}");
+        ApiError::bad_request(e.to_string())
+    })?;
+    Ok(Json(stats))
 }
 
 /// GET /api/catalogue/stats/by-net — per-net breakdown.
@@ -92,14 +82,14 @@ pub async fn stats(
     ),
     tag = "catalogue",
 )]
-pub async fn stats_by_net(State(state): State<AppState>) -> impl IntoResponse {
-    match state.catalogue_repo.stats_by_net().await {
-        Ok(stats) => Json(stats).into_response(),
-        Err(e) => {
-            tracing::error!("catalogue stats_by_net: {e}");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
-    }
+pub async fn stats_by_net(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<NetStats>>, ApiError> {
+    let stats = state.catalogue_repo.stats_by_net().await.map_err(|e| {
+        tracing::error!("catalogue stats_by_net: {e}");
+        ApiError::status_only(StatusCode::INTERNAL_SERVER_ERROR)
+    })?;
+    Ok(Json(stats))
 }
 
 /// GET /api/catalogue/lineage/{process_id} — all artifacts for a campaign, grouped by step.
@@ -116,14 +106,16 @@ pub async fn stats_by_net(State(state): State<AppState>) -> impl IntoResponse {
 pub async fn lineage(
     State(state): State<AppState>,
     Path(process_id): Path<String>,
-) -> impl IntoResponse {
-    match state.catalogue_repo.lineage_grouped(&process_id).await {
-        Ok(response) => Json(response).into_response(),
-        Err(e) => {
+) -> Result<Json<LineageResponse>, ApiError> {
+    let response = state
+        .catalogue_repo
+        .lineage_grouped(&process_id)
+        .await
+        .map_err(|e| {
             tracing::error!("catalogue lineage: {e}");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
-    }
+            ApiError::status_only(StatusCode::INTERNAL_SERVER_ERROR)
+        })?;
+    Ok(Json(response))
 }
 
 /// GET /api/catalogue/distinct/:column
@@ -145,18 +137,16 @@ pub async fn lineage(
 pub async fn distinct_values(
     State(state): State<AppState>,
     Path(column): Path<String>,
-) -> impl IntoResponse {
-    match state.catalogue_repo.distinct_values(&column).await {
-        Ok(values) => Json(values).into_response(),
-        Err(e) => {
+) -> Result<Json<Vec<String>>, ApiError> {
+    let values = state
+        .catalogue_repo
+        .distinct_values(&column)
+        .await
+        .map_err(|e| {
             tracing::warn!("catalogue distinct: {e}");
-            (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": e.to_string() })),
-            )
-                .into_response()
-        }
-    }
+            ApiError::bad_request(e.to_string())
+        })?;
+    Ok(Json(values))
 }
 
 /// GET /api/catalogue/distinct-jsonb/:column/:key
@@ -179,18 +169,16 @@ pub async fn distinct_values(
 pub async fn distinct_jsonb_values(
     State(state): State<AppState>,
     Path((column, key)): Path<(String, String)>,
-) -> impl IntoResponse {
-    match state.catalogue_repo.distinct_jsonb_values(&column, &key).await {
-        Ok(values) => Json(values).into_response(),
-        Err(e) => {
+) -> Result<Json<Vec<String>>, ApiError> {
+    let values = state
+        .catalogue_repo
+        .distinct_jsonb_values(&column, &key)
+        .await
+        .map_err(|e| {
             tracing::warn!("catalogue distinct-jsonb: {e}");
-            (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": e.to_string() })),
-            )
-                .into_response()
-        }
-    }
+            ApiError::bad_request(e.to_string())
+        })?;
+    Ok(Json(values))
 }
 
 /// GET /api/catalogue/download/{path} — download artifact bytes by storage path.
@@ -270,13 +258,15 @@ pub async fn download_artifact(
 pub async fn get_entry(
     State(state): State<AppState>,
     Path((execution_id, id)): Path<(String, String)>,
-) -> impl IntoResponse {
-    match state.catalogue_repo.get_entry(&execution_id, &id).await {
-        Ok(Some(entry)) => Json(entry).into_response(),
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => {
+) -> Result<Json<CatalogueEntry>, ApiError> {
+    let entry = state
+        .catalogue_repo
+        .get_entry(&execution_id, &id)
+        .await
+        .map_err(|e| {
             tracing::error!("catalogue get_entry: {e}");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
-    }
+            ApiError::status_only(StatusCode::INTERNAL_SERVER_ERROR)
+        })?
+        .ok_or_else(|| ApiError::status_only(StatusCode::NOT_FOUND))?;
+    Ok(Json(entry))
 }

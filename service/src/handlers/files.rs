@@ -8,7 +8,7 @@ use serde_json::json;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use crate::models::error::ErrorResponse;
+use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::responses::FileUploadResponse;
 use crate::AppState;
 
@@ -63,24 +63,12 @@ pub async fn upload_file(
     State(state): State<AppState>,
     Path((template_id, node_id)): Path<(Uuid, String)>,
     mut multipart: Multipart,
-) -> impl IntoResponse {
-    let field = match multipart.next_field().await {
-        Ok(Some(f)) => f,
-        Ok(None) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "error": "No file field in multipart body" })),
-            )
-                .into_response()
-        }
-        Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "error": format!("Invalid multipart: {e}") })),
-            )
-                .into_response()
-        }
-    };
+) -> Result<(StatusCode, Json<FileUploadResponse>), ApiError> {
+    let field = multipart
+        .next_field()
+        .await
+        .map_err(|e| ApiError::bad_request(format!("Invalid multipart: {e}")))?
+        .ok_or_else(|| ApiError::bad_request("No file field in multipart body"))?;
 
     let content_type = field
         .content_type()
@@ -88,11 +76,9 @@ pub async fn upload_file(
         .to_string();
 
     if !ALLOWED_TYPES.contains(&content_type.as_str()) {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": format!("Unsupported content type: {content_type}. Allowed: {ALLOWED_TYPES:?}") })),
-        )
-            .into_response();
+        return Err(ApiError::bad_request(format!(
+            "Unsupported content type: {content_type}. Allowed: {ALLOWED_TYPES:?}"
+        )));
     }
 
     let filename = field
@@ -100,38 +86,26 @@ pub async fn upload_file(
         .unwrap_or("upload.png")
         .to_string();
 
-    let bytes = match field.bytes().await {
-        Ok(b) => b,
-        Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "error": format!("Failed to read file: {e}") })),
-            )
-                .into_response()
-        }
-    };
+    let bytes = field
+        .bytes()
+        .await
+        .map_err(|e| ApiError::bad_request(format!("Failed to read file: {e}")))?;
 
-    match state
+    let key = state
         .s3
         .upload_blob(template_id, &node_id, &filename, &bytes, &content_type)
         .await
-    {
-        Ok(key) => (
-            StatusCode::CREATED,
-            Json(json!({
-                "key": key,
-                "filename": filename,
-                "content_type": content_type,
-                "size": bytes.len()
-            })),
-        )
-            .into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": format!("Upload failed: {e}") })),
-        )
-            .into_response(),
-    }
+        .map_err(|e| ApiError::internal(format!("Upload failed: {e}")))?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(FileUploadResponse {
+            key,
+            filename,
+            content_type,
+            size: bytes.len(),
+        }),
+    ))
 }
 
 /// GET /api/files/{key}

@@ -1,14 +1,13 @@
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
-    response::IntoResponse,
     Json,
 };
 use serde_json::json;
 use uuid::Uuid;
 
 use crate::auth::AuthUser;
-use crate::models::error::ErrorResponse;
+use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::instance::{
     CreateInstanceRequest, EngineStatus, InstanceListItem, InstanceStateResponse,
     ListInstancesQuery, WorkflowInstance,
@@ -37,7 +36,7 @@ pub async fn create_instance(
     State(state): State<AppState>,
     user: AuthUser,
     Json(req): Json<CreateInstanceRequest>,
-) -> impl IntoResponse {
+) -> Result<(StatusCode, Json<WorkflowInstance>), ApiError> {
     let created_by = user.subject_as_uuid();
     // Fetch the template (must be published)
     let template = sqlx::query_as::<_, WorkflowTemplate>(
@@ -45,27 +44,18 @@ pub async fn create_instance(
     )
     .bind(req.template_id)
     .fetch_optional(&state.db)
-    .await;
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .ok_or_else(|| ApiError::not_found("template not found"))?;
 
-    let template = match template {
-        Ok(Some(t)) if t.published => t,
-        Ok(Some(_)) => {
-            return (StatusCode::BAD_REQUEST, Json(json!({"error": "template is not published"}))).into_response();
-        }
-        Ok(None) => {
-            return (StatusCode::NOT_FOUND, Json(json!({"error": "template not found"}))).into_response();
-        }
-        Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response();
-        }
-    };
+    if !template.published {
+        return Err(ApiError::bad_request("template is not published"));
+    }
 
-    let air_json = match &template.air_json {
-        Some(air) => air.clone(),
-        None => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "published template has no AIR JSON"}))).into_response();
-        }
-    };
+    let air_json = template
+        .air_json
+        .clone()
+        .ok_or_else(|| ApiError::internal("published template has no AIR JSON"))?;
 
     let instance_id = Uuid::new_v4();
     let net_id = format!("mekhan-{instance_id}");
@@ -83,7 +73,7 @@ pub async fn create_instance(
 
     // Insert instance record FIRST so the lifecycle listener can find it
     // if the net completes before we return.
-    let instance = match sqlx::query_as::<_, WorkflowInstance>(
+    let instance = sqlx::query_as::<_, WorkflowInstance>(
         r#"
         INSERT INTO workflow_instances (id, template_id, template_version, net_id, status, created_by, started_at, metadata)
         VALUES ($1, $2, $3, $4, 'running', $5, NOW(), $6)
@@ -98,26 +88,27 @@ pub async fn create_instance(
     .bind(&metadata)
     .fetch_one(&state.db)
     .await
-    {
-        Ok(i) => i,
-        Err(e) => {
-            tracing::error!("failed to insert instance: {e}");
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response();
-        }
-    };
+    .map_err(|e| {
+        tracing::error!("failed to insert instance: {e}");
+        ApiError::internal(e.to_string())
+    })?;
 
-    // Deploy to petri-lab (DB row already exists for lifecycle listener)
+    // Deploy to petri-lab (DB row already exists for lifecycle listener).
+    // On failure we must clean up the DB row before bubbling the error — the
+    // listener would otherwise see a never-deployed instance forever.
     if let Err(e) = deploy_instance(&state.petri, &net_id, &parameterized_air).await {
         tracing::error!("failed to deploy instance to petri-lab: {e}");
-        // Clean up the DB row
         let _ = sqlx::query("DELETE FROM workflow_instances WHERE id = $1")
             .bind(instance_id)
             .execute(&state.db)
             .await;
-        return (StatusCode::BAD_GATEWAY, Json(json!({"error": format!("failed to deploy to engine: {e}")}))).into_response();
+        return Err(ApiError::new(
+            StatusCode::BAD_GATEWAY,
+            format!("failed to deploy to engine: {e}"),
+        ));
     }
 
-    (StatusCode::CREATED, Json(json!(instance))).into_response()
+    Ok((StatusCode::CREATED, Json(instance)))
 }
 
 /// GET /api/instances
@@ -133,7 +124,7 @@ pub async fn create_instance(
 pub async fn list_instances(
     State(state): State<AppState>,
     Query(params): Query<ListInstancesQuery>,
-) -> impl IntoResponse {
+) -> Json<PaginatedResponse<InstanceListItem>> {
     let offset = (params.page - 1) * params.per_page;
 
     // Build WHERE clause based on filter parameters
@@ -213,21 +204,17 @@ pub async fn list_instances(
 pub async fn get_instance(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-) -> impl IntoResponse {
-    let result = sqlx::query_as::<_, WorkflowInstance>(
+) -> Result<Json<WorkflowInstance>, ApiError> {
+    let instance = sqlx::query_as::<_, WorkflowInstance>(
         "SELECT * FROM workflow_instances WHERE id = $1",
     )
     .bind(id)
     .fetch_optional(&state.db)
-    .await;
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .ok_or_else(|| ApiError::not_found("instance not found"))?;
 
-    match result {
-        Ok(Some(instance)) => Json(json!(instance)).into_response(),
-        Ok(None) => (StatusCode::NOT_FOUND, Json(json!({"error": "instance not found"}))).into_response(),
-        Err(e) => {
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response()
-        }
-    }
+    Ok(Json(instance))
 }
 
 /// GET /api/instances/:id/state
@@ -248,32 +235,23 @@ pub async fn get_instance(
 pub async fn get_instance_state(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-) -> impl IntoResponse {
+) -> Result<Json<InstanceStateResponse>, ApiError> {
     let instance = sqlx::query_as::<_, WorkflowInstance>(
         "SELECT * FROM workflow_instances WHERE id = $1",
     )
     .bind(id)
     .fetch_optional(&state.db)
-    .await;
-
-    let instance = match instance {
-        Ok(Some(i)) => i,
-        Ok(None) => {
-            return (StatusCode::NOT_FOUND, Json(json!({"error": "instance not found"}))).into_response();
-        }
-        Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response();
-        }
-    };
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .ok_or_else(|| ApiError::not_found("instance not found"))?;
 
     // 1. Fetch events from JetStream (source of truth)
-    let events = match fetch_events(&state.nats, &instance.net_id).await {
-        Ok(e) => e,
-        Err(e) => {
+    let events = fetch_events(&state.nats, &instance.net_id)
+        .await
+        .map_err(|e| {
             tracing::error!("failed to fetch events from JetStream: {e}");
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("event fetch failed: {e}")}))).into_response();
-        }
-    };
+            ApiError::internal(format!("event fetch failed: {e}"))
+        })?;
 
     // 2. Project marking from events
     let marking = petri_domain::project_marking(&events);
@@ -311,7 +289,7 @@ pub async fn get_instance_state(
         ),
     };
 
-    Json(json!(InstanceStateResponse {
+    Ok(Json(InstanceStateResponse {
         instance_id: instance.id,
         net_id: instance.net_id,
         status: instance.status,
@@ -322,7 +300,6 @@ pub async fn get_instance_state(
         enabled_transitions,
         current_step: instance.current_step,
     }))
-    .into_response()
 }
 
 /// GET /api/instances/:id/events
@@ -342,31 +319,22 @@ pub async fn get_instance_state(
 pub async fn get_instance_events(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-) -> impl IntoResponse {
+) -> Result<Json<InstanceEventsResponse>, ApiError> {
     let instance = sqlx::query_as::<_, WorkflowInstance>(
         "SELECT * FROM workflow_instances WHERE id = $1",
     )
     .bind(id)
     .fetch_optional(&state.db)
-    .await;
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .ok_or_else(|| ApiError::not_found("instance not found"))?;
 
-    let instance = match instance {
-        Ok(Some(i)) => i,
-        Ok(None) => {
-            return (StatusCode::NOT_FOUND, Json(json!({"error": "instance not found"}))).into_response();
-        }
-        Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response();
-        }
-    };
-
-    let events = match fetch_events(&state.nats, &instance.net_id).await {
-        Ok(e) => e,
-        Err(e) => {
+    let events = fetch_events(&state.nats, &instance.net_id)
+        .await
+        .map_err(|e| {
             tracing::error!("failed to fetch events from JetStream: {e}");
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("event fetch failed: {e}")}))).into_response();
-        }
-    };
+            ApiError::internal(format!("event fetch failed: {e}"))
+        })?;
 
     let events_json: Vec<serde_json::Value> = events
         .iter()
@@ -374,12 +342,11 @@ pub async fn get_instance_events(
         .collect();
     let event_count = events_json.len();
 
-    Json(InstanceEventsResponse {
+    Ok(Json(InstanceEventsResponse {
         net_id: instance.net_id,
         events: events_json,
         event_count,
-    })
-    .into_response()
+    }))
 }
 
 /// DELETE /api/instances/:id
@@ -397,26 +364,21 @@ pub async fn get_instance_events(
 pub async fn cancel_instance(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-) -> impl IntoResponse {
+) -> Result<Json<WorkflowInstance>, ApiError> {
     let instance = sqlx::query_as::<_, WorkflowInstance>(
         "SELECT * FROM workflow_instances WHERE id = $1",
     )
     .bind(id)
     .fetch_optional(&state.db)
-    .await;
-
-    let instance = match instance {
-        Ok(Some(i)) => i,
-        Ok(None) => {
-            return (StatusCode::NOT_FOUND, Json(json!({"error": "instance not found"}))).into_response();
-        }
-        Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response();
-        }
-    };
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .ok_or_else(|| ApiError::not_found("instance not found"))?;
 
     if instance.status == "completed" || instance.status == "cancelled" {
-        return (StatusCode::CONFLICT, Json(json!({"error": format!("instance is already {}", instance.status)}))).into_response();
+        return Err(ApiError::conflict(format!(
+            "instance is already {}",
+            instance.status
+        )));
     }
 
     // Terminate the net in petri-lab (pause + delete)
@@ -425,7 +387,7 @@ pub async fn cancel_instance(
     }
 
     // Update instance status
-    let result = sqlx::query_as::<_, WorkflowInstance>(
+    let instance = sqlx::query_as::<_, WorkflowInstance>(
         r#"
         UPDATE workflow_instances
         SET status = 'cancelled', completed_at = NOW()
@@ -435,12 +397,8 @@ pub async fn cancel_instance(
     )
     .bind(id)
     .fetch_one(&state.db)
-    .await;
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    match result {
-        Ok(instance) => Json(json!(instance)).into_response(),
-        Err(e) => {
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response()
-        }
-    }
+    Ok(Json(instance))
 }

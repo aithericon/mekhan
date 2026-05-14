@@ -1,7 +1,6 @@
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
-    response::IntoResponse,
     Json,
 };
 use chrono::Utc;
@@ -9,7 +8,7 @@ use serde::Deserialize;
 use serde_json::{json, Value as JsonValue};
 
 use crate::catalogue::model::CatalogueEntry;
-use crate::models::error::ErrorResponse;
+use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::responses::TaskListResponse;
 use crate::query::extractor::QueryParams;
 use crate::query::pagination::Paginated;
@@ -89,18 +88,12 @@ fn to_human_task_json(task: &HpiTask) -> JsonValue {
 pub async fn list_processes(
     State(state): State<AppState>,
     params: QueryParams,
-) -> impl IntoResponse {
-    match queries::list_processes(&state.db, &params).await {
-        Ok(response) => Json(response).into_response(),
-        Err(e) => {
-            tracing::warn!("process list: {e}");
-            (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": e.to_string() })),
-            )
-                .into_response()
-        }
-    }
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let response = queries::list_processes(&state.db, &params).await.map_err(|e| {
+        tracing::warn!("process list: {e}");
+        ApiError::bad_request(e.to_string())
+    })?;
+    Ok(Json(serde_json::to_value(response).unwrap_or(json!({}))))
 }
 
 /// GET /api/processes/stats — aggregate process statistics.
@@ -113,14 +106,14 @@ pub async fn list_processes(
     ),
     tag = "processes",
 )]
-pub async fn process_stats(State(state): State<AppState>) -> impl IntoResponse {
-    match queries::process_stats(&state.db).await {
-        Ok(stats) => Json(stats).into_response(),
-        Err(e) => {
-            tracing::error!("process stats: {e}");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
-    }
+pub async fn process_stats(
+    State(state): State<AppState>,
+) -> Result<Json<ProcessStats>, ApiError> {
+    let stats = queries::process_stats(&state.db).await.map_err(|e| {
+        tracing::error!("process stats: {e}");
+        ApiError::status_only(StatusCode::INTERNAL_SERVER_ERROR)
+    })?;
+    Ok(Json(stats))
 }
 
 /// GET /api/processes/{process_id} — get process detail (with tasks, metrics, logs, artifact count).
@@ -138,15 +131,15 @@ pub async fn process_stats(State(state): State<AppState>) -> impl IntoResponse {
 pub async fn get_process(
     State(state): State<AppState>,
     Path(process_id): Path<String>,
-) -> impl IntoResponse {
-    match queries::get_process_detail(&state.db, &process_id).await {
-        Ok(Some(detail)) => Json(detail).into_response(),
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => {
+) -> Result<Json<ProcessDetail>, ApiError> {
+    let detail = queries::get_process_detail(&state.db, &process_id)
+        .await
+        .map_err(|e| {
             tracing::error!("process get: {e}");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
-    }
+            ApiError::status_only(StatusCode::INTERNAL_SERVER_ERROR)
+        })?
+        .ok_or_else(|| ApiError::status_only(StatusCode::NOT_FOUND))?;
+    Ok(Json(detail))
 }
 
 /// PUT /api/processes/{process_id} — partial update of a process.
@@ -166,15 +159,15 @@ pub async fn update_process(
     State(state): State<AppState>,
     Path(process_id): Path<String>,
     Json(body): Json<ProcessUpdateRequest>,
-) -> impl IntoResponse {
-    match queries::update_process(&state.db, &process_id, &body).await {
-        Ok(Some(process)) => Json(process).into_response(),
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => {
+) -> Result<Json<HpiProcess>, ApiError> {
+    let process = queries::update_process(&state.db, &process_id, &body)
+        .await
+        .map_err(|e| {
             tracing::error!("process update: {e}");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
-    }
+            ApiError::status_only(StatusCode::INTERNAL_SERVER_ERROR)
+        })?
+        .ok_or_else(|| ApiError::status_only(StatusCode::NOT_FOUND))?;
+    Ok(Json(process))
 }
 
 #[derive(Debug, Deserialize, utoipa::IntoParams)]
@@ -197,14 +190,14 @@ pub struct MetricQueryParams {
 pub async fn get_process_metrics_summary(
     State(state): State<AppState>,
     Path(process_id): Path<String>,
-) -> impl IntoResponse {
-    match queries::summarize_metrics(&state.db, &process_id).await {
-        Ok(summary) => Json(summary).into_response(),
-        Err(e) => {
+) -> Result<Json<Vec<HpiMetricSummary>>, ApiError> {
+    let summary = queries::summarize_metrics(&state.db, &process_id)
+        .await
+        .map_err(|e| {
             tracing::error!("process metrics summary: {e}");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
-    }
+            ApiError::status_only(StatusCode::INTERNAL_SERVER_ERROR)
+        })?;
+    Ok(Json(summary))
 }
 
 /// GET /api/processes/{process_id}/metrics — list metrics for a process.
@@ -225,15 +218,15 @@ pub async fn get_process_metrics(
     State(state): State<AppState>,
     Path(process_id): Path<String>,
     Query(params): Query<MetricQueryParams>,
-) -> impl IntoResponse {
+) -> Result<Json<Vec<HpiMetric>>, ApiError> {
     let limit = params.limit.unwrap_or(500);
-    match queries::list_metrics(&state.db, &process_id, params.key.as_deref(), limit).await {
-        Ok(metrics) => Json(metrics).into_response(),
-        Err(e) => {
+    let metrics = queries::list_metrics(&state.db, &process_id, params.key.as_deref(), limit)
+        .await
+        .map_err(|e| {
             tracing::error!("process metrics: {e}");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
-    }
+            ApiError::status_only(StatusCode::INTERNAL_SERVER_ERROR)
+        })?;
+    Ok(Json(metrics))
 }
 
 /// GET /api/processes/{process_id}/logs — list logs for a process with filter/pagination.
@@ -251,18 +244,14 @@ pub async fn get_process_logs(
     State(state): State<AppState>,
     Path(process_id): Path<String>,
     params: QueryParams,
-) -> impl IntoResponse {
-    match queries::list_logs(&state.db, &process_id, &params).await {
-        Ok(response) => Json(response).into_response(),
-        Err(e) => {
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let response = queries::list_logs(&state.db, &process_id, &params)
+        .await
+        .map_err(|e| {
             tracing::warn!("process logs: {e}");
-            (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": e.to_string() })),
-            )
-                .into_response()
-        }
-    }
+            ApiError::bad_request(e.to_string())
+        })?;
+    Ok(Json(serde_json::to_value(response).unwrap_or(json!({}))))
 }
 
 /// GET /api/processes/{process_id}/tasks — list tasks for a process.
@@ -279,17 +268,15 @@ pub async fn get_process_logs(
 pub async fn get_process_tasks(
     State(state): State<AppState>,
     Path(process_id): Path<String>,
-) -> impl IntoResponse {
-    match queries::list_process_tasks(&state.db, &process_id).await {
-        Ok(tasks) => {
-            let shaped: Vec<JsonValue> = tasks.iter().map(to_human_task_json).collect();
-            Json(shaped).into_response()
-        }
-        Err(e) => {
+) -> Result<Json<Vec<JsonValue>>, ApiError> {
+    let tasks = queries::list_process_tasks(&state.db, &process_id)
+        .await
+        .map_err(|e| {
             tracing::error!("process tasks: {e}");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
-    }
+            ApiError::status_only(StatusCode::INTERNAL_SERVER_ERROR)
+        })?;
+    let shaped: Vec<JsonValue> = tasks.iter().map(to_human_task_json).collect();
+    Ok(Json(shaped))
 }
 
 /// GET /api/processes/{process_id}/artifacts — list catalogue entries for a process.
@@ -307,18 +294,14 @@ pub async fn get_process_artifacts(
     State(state): State<AppState>,
     Path(process_id): Path<String>,
     params: QueryParams,
-) -> impl IntoResponse {
-    match queries::list_process_artifacts(&state.db, &process_id, &params).await {
-        Ok(response) => Json(response).into_response(),
-        Err(e) => {
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let response = queries::list_process_artifacts(&state.db, &process_id, &params)
+        .await
+        .map_err(|e| {
             tracing::warn!("process artifacts: {e}");
-            (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": e.to_string() })),
-            )
-                .into_response()
-        }
-    }
+            ApiError::bad_request(e.to_string())
+        })?;
+    Ok(Json(serde_json::to_value(response).unwrap_or(json!({}))))
 }
 
 /// GET /api/tasks — list all tasks with filter/sort/pagination.
@@ -339,31 +322,21 @@ pub async fn get_process_artifacts(
 pub async fn list_tasks(
     State(state): State<AppState>,
     params: QueryParams,
-) -> impl IntoResponse {
-    match queries::list_tasks(&state.db, &params).await {
-        Ok(response) => {
-            let tasks: Vec<JsonValue> =
-                response.items.iter().map(to_human_task_json).collect();
-            Json(TaskListResponse {
-                tasks,
-                total: response.total,
-                page: response.page,
-                page_size: response.page_size,
-                total_pages: response.total_pages,
-                has_next: response.has_next,
-                has_previous: response.has_previous,
-            })
-            .into_response()
-        }
-        Err(e) => {
-            tracing::warn!("task list: {e}");
-            (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "error": e.to_string() })),
-            )
-                .into_response()
-        }
-    }
+) -> Result<Json<TaskListResponse>, ApiError> {
+    let response = queries::list_tasks(&state.db, &params).await.map_err(|e| {
+        tracing::warn!("task list: {e}");
+        ApiError::bad_request(e.to_string())
+    })?;
+    let tasks: Vec<JsonValue> = response.items.iter().map(to_human_task_json).collect();
+    Ok(Json(TaskListResponse {
+        tasks,
+        total: response.total,
+        page: response.page,
+        page_size: response.page_size,
+        total_pages: response.total_pages,
+        has_next: response.has_next,
+        has_previous: response.has_previous,
+    }))
 }
 
 /// GET /api/tasks/:id — get a single task.
@@ -386,15 +359,15 @@ pub async fn list_tasks(
 pub async fn get_task(
     State(state): State<AppState>,
     Path(id): Path<String>,
-) -> impl IntoResponse {
-    match queries::get_task(&state.db, &id).await {
-        Ok(Some(task)) => Json(to_human_task_json(&task)).into_response(),
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => {
+) -> Result<Json<JsonValue>, ApiError> {
+    let task = queries::get_task(&state.db, &id)
+        .await
+        .map_err(|e| {
             tracing::error!("task get: {e}");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
-    }
+            ApiError::status_only(StatusCode::INTERNAL_SERVER_ERROR)
+        })?
+        .ok_or_else(|| ApiError::status_only(StatusCode::NOT_FOUND))?;
+    Ok(Json(to_human_task_json(&task)))
 }
 
 /// POST /api/tasks/{id}/complete — complete a task and publish NATS signal.
@@ -415,35 +388,32 @@ pub async fn complete_task(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Json(body): Json<serde_json::Value>,
-) -> impl IntoResponse {
+) -> Result<Json<JsonValue>, ApiError> {
     // First get the task to extract net_id and place from detail
-    let task = match queries::get_task(&state.db, &id).await {
-        Ok(Some(t)) => t,
-        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
-        Err(e) => {
+    let task = queries::get_task(&state.db, &id)
+        .await
+        .map_err(|e| {
             tracing::error!("task complete lookup: {e}");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-    };
+            ApiError::status_only(StatusCode::INTERNAL_SERVER_ERROR)
+        })?
+        .ok_or_else(|| ApiError::status_only(StatusCode::NOT_FOUND))?;
 
     if task.status != "pending" {
-        return (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({ "error": format!("task is already {}", task.status) })),
-        )
-            .into_response();
+        return Err(ApiError::conflict(format!(
+            "task is already {}",
+            task.status
+        )));
     }
 
     // Update task status in DB
-    let updated = match queries::update_task_status(&state.db, &id, "completed", Some(&body)).await
-    {
-        Ok(Some(t)) => t,
-        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
-        Err(e) => {
+    let updated = queries::update_task_status(&state.db, &id, "completed", Some(&body))
+        .await
+        .map_err(|e| {
             tracing::error!("task complete update: {e}");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-    };
+            ApiError::status_only(StatusCode::INTERNAL_SERVER_ERROR)
+        })?
+        .ok_or_else(|| ApiError::status_only(StatusCode::NOT_FOUND))?;
+
     // Publish NATS signal: human.completed.{net_id}.{place}
     // The engine's GlobalHumanResultListener expects HumanTaskCompletion shape:
     // { task_id, data, completed_at, corr_id? }
@@ -465,7 +435,7 @@ pub async fn complete_task(
         }
     }
 
-    Json(to_human_task_json(&updated)).into_response()
+    Ok(Json(to_human_task_json(&updated)))
 }
 
 /// POST /api/tasks/{id}/cancel — cancel a task and publish NATS signal.
@@ -486,35 +456,32 @@ pub async fn cancel_task(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Json(body): Json<serde_json::Value>,
-) -> impl IntoResponse {
+) -> Result<Json<JsonValue>, ApiError> {
     // First get the task to extract net_id and place from detail
-    let task = match queries::get_task(&state.db, &id).await {
-        Ok(Some(t)) => t,
-        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
-        Err(e) => {
+    let task = queries::get_task(&state.db, &id)
+        .await
+        .map_err(|e| {
             tracing::error!("task cancel lookup: {e}");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-    };
+            ApiError::status_only(StatusCode::INTERNAL_SERVER_ERROR)
+        })?
+        .ok_or_else(|| ApiError::status_only(StatusCode::NOT_FOUND))?;
 
     if task.status != "pending" {
-        return (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({ "error": format!("task is already {}", task.status) })),
-        )
-            .into_response();
+        return Err(ApiError::conflict(format!(
+            "task is already {}",
+            task.status
+        )));
     }
 
     // Update task status in DB
-    let updated = match queries::update_task_status(&state.db, &id, "cancelled", Some(&body)).await
-    {
-        Ok(Some(t)) => t,
-        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
-        Err(e) => {
+    let updated = queries::update_task_status(&state.db, &id, "cancelled", Some(&body))
+        .await
+        .map_err(|e| {
             tracing::error!("task cancel update: {e}");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-    };
+            ApiError::status_only(StatusCode::INTERNAL_SERVER_ERROR)
+        })?
+        .ok_or_else(|| ApiError::status_only(StatusCode::NOT_FOUND))?;
+
     // Publish NATS signal: human.cancelled.{net_id}.{place}
     // The engine's GlobalHumanResultListener expects HumanTaskCancellation shape:
     // { task_id, reason?, cancelled_at }
@@ -536,5 +503,5 @@ pub async fn cancel_task(
         }
     }
 
-    Json(to_human_task_json(&updated)).into_response()
+    Ok(Json(to_human_task_json(&updated)))
 }

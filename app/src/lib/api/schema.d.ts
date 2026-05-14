@@ -992,15 +992,11 @@ export interface components {
             name: string;
         };
         CreateInstanceRequest: {
-            /** Format: uuid */
-            created_by: string;
             metadata?: unknown;
             /** Format: uuid */
             template_id: string;
         };
         CreateTemplateRequest: {
-            /** Format: uuid */
-            author_id: string;
             description?: string | null;
             graph?: null | components["schemas"]["WorkflowGraph"];
             name: string;

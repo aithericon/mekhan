@@ -16,9 +16,7 @@ use std::time::Duration;
 
 use axum::{
     extract::{Path, Query, State},
-    http::StatusCode,
     response::sse::{Event, KeepAlive, Sse},
-    response::IntoResponse,
     Json,
 };
 use chrono::{DateTime, Utc};
@@ -28,7 +26,7 @@ use sqlx::Row;
 use utoipa::{IntoParams, ToSchema};
 
 use crate::causality::live::{LiveArtifactEvent, LiveLogEvent, LiveMetricEvent};
-use crate::models::error::ErrorResponse;
+use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::responses::{ArtifactsListResponse, LogsTailResponse};
 use crate::AppState;
 
@@ -102,7 +100,7 @@ pub async fn metrics_series(
     State(state): State<AppState>,
     Path(process_id): Path<String>,
     Query(q): Query<MetricsSeriesQuery>,
-) -> impl IntoResponse {
+) -> Result<Json<MetricsSeriesResponse>, ApiError> {
     let until = q.until.unwrap_or_else(Utc::now);
     let since = q.since.unwrap_or_else(|| until - chrono::Duration::hours(1));
     let keys: Vec<String> = q
@@ -183,28 +181,20 @@ pub async fn metrics_series(
         })
     };
 
-    let rows = match result {
-        Ok(rs) => rs,
-        Err(e) => {
-            tracing::warn!(process_id = %process_id, "metrics_series: {e}");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": e.to_string() })),
-            )
-                .into_response();
-        }
-    };
+    let rows = result.map_err(|e| {
+        tracing::warn!(process_id = %process_id, "metrics_series: {e}");
+        ApiError::internal(e.to_string())
+    })?;
 
     let mut series: std::collections::BTreeMap<String, Vec<MetricPoint>> = Default::default();
     for (key, t, v) in rows {
         series.entry(key).or_default().push(MetricPoint { t, v });
     }
 
-    Json(MetricsSeriesResponse {
+    Ok(Json(MetricsSeriesResponse {
         bucket_seconds,
         series,
-    })
-    .into_response()
+    }))
 }
 
 // ─── metrics/stream (SSE) ───────────────────────────────────────────────────
@@ -388,7 +378,7 @@ pub async fn logs_tail(
     State(state): State<AppState>,
     Path(process_id): Path<String>,
     Query(qp): Query<LogsTailQuery>,
-) -> impl IntoResponse {
+) -> Result<Json<LogsTailResponse>, ApiError> {
     let sql = "SELECT id, process_id, level, source, message, detail, timestamp, signal_key \
                FROM hpi_logs \
                WHERE process_id = $1 \
@@ -411,21 +401,14 @@ pub async fn logs_tail(
         .fetch_all(&state.db)
         .await;
 
-    match rows {
-        Ok(mut rs) => {
-            // Client wants ascending timeline for tail rendering.
-            rs.reverse();
-            Json(LogsTailResponse { logs: rs }).into_response()
-        }
-        Err(e) => {
-            tracing::warn!(process_id = %process_id, "logs_tail: {e}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": e.to_string() })),
-            )
-                .into_response()
-        }
-    }
+    let mut rs = rows.map_err(|e| {
+        tracing::warn!(process_id = %process_id, "logs_tail: {e}");
+        ApiError::internal(e.to_string())
+    })?;
+
+    // Client wants ascending timeline for tail rendering.
+    rs.reverse();
+    Ok(Json(LogsTailResponse { logs: rs }))
 }
 
 // ─── logs/stream (SSE) ──────────────────────────────────────────────────────
@@ -606,10 +589,10 @@ pub async fn artifacts_list(
     State(state): State<AppState>,
     Path(process_id): Path<String>,
     Query(qp): Query<ArtifactsListQuery>,
-) -> impl IntoResponse {
+) -> Result<Json<ArtifactsListResponse>, ApiError> {
     let categories = parse_csv(qp.categories.as_deref());
     let hints = parse_csv(qp.render_hints.as_deref());
-    match crate::catalogue::queries::lineage_filtered(
+    let entries = crate::catalogue::queries::lineage_filtered(
         &state.db,
         &process_id,
         &categories,
@@ -619,17 +602,11 @@ pub async fn artifacts_list(
         qp.limit,
     )
     .await
-    {
-        Ok(entries) => Json(ArtifactsListResponse { entries }).into_response(),
-        Err(e) => {
-            tracing::warn!(process_id = %process_id, "artifacts_list: {e}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": e.to_string() })),
-            )
-                .into_response()
-        }
-    }
+    .map_err(|e| {
+        tracing::warn!(process_id = %process_id, "artifacts_list: {e}");
+        ApiError::internal(e.to_string())
+    })?;
+    Ok(Json(ArtifactsListResponse { entries }))
 }
 
 // ─── artifacts/stream (SSE) ─────────────────────────────────────────────────

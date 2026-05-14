@@ -339,7 +339,6 @@ export async function findOrCreateShowcaseTemplate(): Promise<Template> {
 	return createTemplate({
 		name: SHOWCASE_TEMPLATE_NAME,
 		description: SHOWCASE_TEMPLATE_DESCRIPTION,
-		graph: showcaseGraph,
-		author_id: '00000000-0000-0000-0000-000000000000'
+		graph: showcaseGraph
 	});
 }

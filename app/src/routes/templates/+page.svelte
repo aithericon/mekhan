@@ -37,8 +37,7 @@
 		try {
 			const template = await createTemplate({
 				name: 'Untitled Workflow',
-				description: '',
-				author_id: '00000000-0000-0000-0000-000000000000'
+				description: ''
 			});
 			goto(`/templates/${template.id}`);
 		} catch (e) {
@@ -60,8 +59,7 @@
 	async function handleCreateInstance(templateId: string) {
 		try {
 			const instance = await createInstance({
-				template_id: templateId,
-				created_by: '00000000-0000-0000-0000-000000000000'
+				template_id: templateId
 			});
 			goto(`/instances/${instance.id}`);
 		} catch (e) {

@@ -20,20 +20,29 @@ impl ErrorResponse {
     }
 }
 
-/// Bundles a status code with an `ErrorResponse` body so handlers can return
-/// `Result<Json<T>, ApiError>` and let `?` propagate.
+/// Bundles a status code with an optional `ErrorResponse` body so handlers can
+/// return `Result<Json<T>, ApiError>` and let `?` propagate. When `body` is
+/// `None` the response is the bare status code with an empty body — used to
+/// preserve the existing wire format for handlers that historically returned
+/// e.g. `StatusCode::NOT_FOUND.into_response()` directly.
 #[derive(Debug)]
 pub struct ApiError {
     pub status: StatusCode,
-    pub body: ErrorResponse,
+    pub body: Option<ErrorResponse>,
 }
 
 impl ApiError {
     pub fn new(status: StatusCode, message: impl Into<String>) -> Self {
         Self {
             status,
-            body: ErrorResponse::new(message),
+            body: Some(ErrorResponse::new(message)),
         }
+    }
+
+    /// Returns a bare status code with no body — preserves wire format for the
+    /// pre-existing `StatusCode::X.into_response()` pattern.
+    pub fn status_only(status: StatusCode) -> Self {
+        Self { status, body: None }
     }
 
     pub fn internal(message: impl Into<String>) -> Self {
@@ -55,7 +64,10 @@ impl ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        (self.status, Json(self.body)).into_response()
+        match self.body {
+            Some(body) => (self.status, Json(body)).into_response(),
+            None => self.status.into_response(),
+        }
     }
 }
 
