@@ -411,12 +411,9 @@
 						<ul class="space-y-1">
 							{#each transitionDetails.inputArcs as arc (arc.place_id)}
 								<li>
-									<button
-										class="text-sm text-primary hover:underline"
-										onclick={() => onSelectPlace?.(arc.place_id)}
-									>
+									<Button variant="link" size="inline" class="text-sm" onclick={() => onSelectPlace?.(arc.place_id)}>
 										{getPlaceName?.(arc.place_id) ?? arc.place_name ?? arc.place_id}
-									</button>
+									</Button>
 									{#if arc.weight && arc.weight > 1}
 										<span class="text-xs text-muted-foreground">(weight: {arc.weight})</span>
 									{/if}
@@ -437,12 +434,9 @@
 						<ul class="space-y-1">
 							{#each transitionDetails.outputArcs as arc (arc.place_id)}
 								<li>
-									<button
-										class="text-sm text-primary hover:underline"
-										onclick={() => onSelectPlace?.(arc.place_id)}
-									>
+									<Button variant="link" size="inline" class="text-sm" onclick={() => onSelectPlace?.(arc.place_id)}>
 										{getPlaceName?.(arc.place_id) ?? arc.place_name ?? arc.place_id}
-									</button>
+									</Button>
 									{#if arc.weight && arc.weight > 1}
 										<span class="text-xs text-muted-foreground">(weight: {arc.weight})</span>
 									{/if}
@@ -464,8 +458,10 @@
 			<!-- Token Inspector -->
 			<div class="space-y-4">
 				<Card tone="muted">
-					<button
-						class="text-sm text-primary hover:underline mb-2"
+					<Button
+						variant="link"
+						size="inline"
+						class="text-sm mb-2"
 						onclick={() => {
 							if (previousSelection?.type === 'event') {
 								onSelectEvent?.(previousSelection.sequence);
@@ -475,7 +471,7 @@
 						}}
 					>
 						&larr; {previousSelection?.type === 'event' ? `Back to Event #${previousSelection.sequence}` : `Back to ${tokenDetails.placeName}`}
-					</button>
+					</Button>
 					<h3 class="text-lg font-medium text-foreground">Token</h3>
 					<p class="text-xs text-muted-foreground font-mono">{tokenDetails.token.id}</p>
 				</Card>
@@ -517,15 +513,12 @@
 				{#if eventDetails.eventTypeName === 'TransitionFired'}
 					<div>
 						<h4 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1">Transition</h4>
-						<button
-							class="text-sm text-primary hover:underline"
-							onclick={() => {
+						<Button variant="link" size="inline" class="text-sm" onclick={() => {
 								const e = eventDetails.event.event as any;
 								onSelectTransition?.(e.transition_id);
-							}}
-						>
+							}}>
 							{eventDetails.transitionName}
-						</button>
+						</Button>
 					</div>
 
 					{#if eventDetails.consumedTokens && eventDetails.consumedTokens.length > 0}
@@ -535,11 +528,8 @@
 								{#each eventDetails.consumedTokens as ct (ct.tokenId)}
 									<div class="flex items-center gap-2 text-xs">
 										<span class="text-destructive">-</span>
-										<button class="text-primary hover:underline" onclick={() => onSelectPlace?.(ct.placeId)}>{ct.placeName}</button>
-										<button
-											class="text-muted-foreground font-mono hover:text-primary hover:underline"
-											onclick={() => { onSelectToken?.(ct.placeId, ct.tokenId); onViewToken?.(); }}
-										>{ct.tokenId.slice(0, 8)}</button>
+										<Button variant="link" size="inline" onclick={() => onSelectPlace?.(ct.placeId)}>{ct.placeName}</Button>
+										<Button variant="link" size="inline" class="text-muted-foreground font-mono hover:text-primary" onclick={() => { onSelectToken?.(ct.placeId, ct.tokenId); onViewToken?.(); }}>{ct.tokenId.slice(0, 8)}</Button>
 									</div>
 								{/each}
 							</div>
@@ -553,11 +543,8 @@
 								{#each eventDetails.producedTokens as pt (pt.token.id)}
 									<div class="flex items-center gap-2 text-xs">
 										<span class="text-success">+</span>
-										<button class="text-primary hover:underline" onclick={() => onSelectPlace?.(pt.placeId)}>{pt.placeName}</button>
-										<button
-											class="text-muted-foreground font-mono hover:text-primary hover:underline"
-											onclick={() => { onSelectToken?.(pt.placeId, pt.token.id); onViewToken?.(); }}
-										>{pt.token.id.slice(0, 8)}</button>
+										<Button variant="link" size="inline" onclick={() => onSelectPlace?.(pt.placeId)}>{pt.placeName}</Button>
+										<Button variant="link" size="inline" class="text-muted-foreground font-mono hover:text-primary" onclick={() => { onSelectToken?.(pt.placeId, pt.token.id); onViewToken?.(); }}>{pt.token.id.slice(0, 8)}</Button>
 									</div>
 								{/each}
 							</div>
@@ -571,11 +558,8 @@
 								{#each eventDetails.readTokens as rt (rt.token.id)}
 									<div class="flex items-center gap-2 text-xs">
 										<span class="text-info">&cir;</span>
-										<button class="text-primary hover:underline" onclick={() => onSelectPlace?.(rt.placeId)}>{rt.placeName}</button>
-										<button
-											class="text-muted-foreground font-mono hover:text-primary hover:underline"
-											onclick={() => { onSelectToken?.(rt.placeId, rt.token.id); onViewToken?.(); }}
-										>{rt.token.id.slice(0, 8)}</button>
+										<Button variant="link" size="inline" onclick={() => onSelectPlace?.(rt.placeId)}>{rt.placeName}</Button>
+										<Button variant="link" size="inline" class="text-muted-foreground font-mono hover:text-primary" onclick={() => { onSelectToken?.(rt.placeId, rt.token.id); onViewToken?.(); }}>{rt.token.id.slice(0, 8)}</Button>
 									</div>
 								{/each}
 							</div>
@@ -585,15 +569,12 @@
 				{:else if eventDetails.eventTypeName === 'EffectCompleted'}
 					<div>
 						<h4 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1">Transition</h4>
-						<button
-							class="text-sm text-primary hover:underline"
-							onclick={() => {
+						<Button variant="link" size="inline" class="text-sm" onclick={() => {
 								const e = eventDetails.event.event as any;
 								onSelectTransition?.(e.transition_id);
-							}}
-						>
+							}}>
 							{eventDetails.transitionName}
-						</button>
+						</Button>
 					</div>
 
 					<div>
@@ -608,11 +589,8 @@
 								{#each eventDetails.consumedTokens as ct (ct.tokenId)}
 									<div class="flex items-center gap-2 text-xs">
 										<span class="text-destructive">-</span>
-										<button class="text-primary hover:underline" onclick={() => onSelectPlace?.(ct.placeId)}>{ct.placeName}</button>
-										<button
-											class="text-muted-foreground font-mono hover:text-primary hover:underline"
-											onclick={() => { onSelectToken?.(ct.placeId, ct.tokenId); onViewToken?.(); }}
-										>{ct.tokenId.slice(0, 8)}</button>
+										<Button variant="link" size="inline" onclick={() => onSelectPlace?.(ct.placeId)}>{ct.placeName}</Button>
+										<Button variant="link" size="inline" class="text-muted-foreground font-mono hover:text-primary" onclick={() => { onSelectToken?.(ct.placeId, ct.tokenId); onViewToken?.(); }}>{ct.tokenId.slice(0, 8)}</Button>
 									</div>
 								{/each}
 							</div>
@@ -626,11 +604,8 @@
 								{#each eventDetails.producedTokens as pt (pt.token.id)}
 									<div class="flex items-center gap-2 text-xs">
 										<span class="text-success">+</span>
-										<button class="text-primary hover:underline" onclick={() => onSelectPlace?.(pt.placeId)}>{pt.placeName}</button>
-										<button
-											class="text-muted-foreground font-mono hover:text-primary hover:underline"
-											onclick={() => { onSelectToken?.(pt.placeId, pt.token.id); onViewToken?.(); }}
-										>{pt.token.id.slice(0, 8)}</button>
+										<Button variant="link" size="inline" onclick={() => onSelectPlace?.(pt.placeId)}>{pt.placeName}</Button>
+										<Button variant="link" size="inline" class="text-muted-foreground font-mono hover:text-primary" onclick={() => { onSelectToken?.(pt.placeId, pt.token.id); onViewToken?.(); }}>{pt.token.id.slice(0, 8)}</Button>
 									</div>
 								{/each}
 							</div>
@@ -644,11 +619,8 @@
 								{#each eventDetails.readTokens as rt (rt.token.id)}
 									<div class="flex items-center gap-2 text-xs">
 										<span class="text-info">&cir;</span>
-										<button class="text-primary hover:underline" onclick={() => onSelectPlace?.(rt.placeId)}>{rt.placeName}</button>
-										<button
-											class="text-muted-foreground font-mono hover:text-primary hover:underline"
-											onclick={() => { onSelectToken?.(rt.placeId, rt.token.id); onViewToken?.(); }}
-										>{rt.token.id.slice(0, 8)}</button>
+										<Button variant="link" size="inline" onclick={() => onSelectPlace?.(rt.placeId)}>{rt.placeName}</Button>
+										<Button variant="link" size="inline" class="text-muted-foreground font-mono hover:text-primary" onclick={() => { onSelectToken?.(rt.placeId, rt.token.id); onViewToken?.(); }}>{rt.token.id.slice(0, 8)}</Button>
 									</div>
 								{/each}
 							</div>
@@ -658,15 +630,12 @@
 				{:else if eventDetails.eventTypeName === 'EffectFailed'}
 					<div>
 						<h4 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1">Transition</h4>
-						<button
-							class="text-sm text-primary hover:underline"
-							onclick={() => {
+						<Button variant="link" size="inline" class="text-sm" onclick={() => {
 								const e = eventDetails.event.event as any;
 								onSelectTransition?.(e.transition_id);
-							}}
-						>
+							}}>
 							{eventDetails.transitionName}
-						</button>
+						</Button>
 					</div>
 
 					<div>
@@ -700,11 +669,8 @@
 								{#each eventDetails.consumedTokens as ct (ct.tokenId)}
 									<div class="flex items-center gap-2 text-xs">
 										<span class="text-destructive">-</span>
-										<button class="text-primary hover:underline" onclick={() => onSelectPlace?.(ct.placeId)}>{ct.placeName}</button>
-										<button
-											class="text-muted-foreground font-mono hover:text-primary hover:underline"
-											onclick={() => { onSelectToken?.(ct.placeId, ct.tokenId); onViewToken?.(); }}
-										>{ct.tokenId.slice(0, 8)}</button>
+										<Button variant="link" size="inline" onclick={() => onSelectPlace?.(ct.placeId)}>{ct.placeName}</Button>
+										<Button variant="link" size="inline" class="text-muted-foreground font-mono hover:text-primary" onclick={() => { onSelectToken?.(ct.placeId, ct.tokenId); onViewToken?.(); }}>{ct.tokenId.slice(0, 8)}</Button>
 									</div>
 								{/each}
 							</div>
@@ -718,11 +684,8 @@
 								{#each eventDetails.producedTokens as pt (pt.token.id)}
 									<div class="flex items-center gap-2 text-xs">
 										<span class="text-success">+</span>
-										<button class="text-primary hover:underline" onclick={() => onSelectPlace?.(pt.placeId)}>{pt.placeName}</button>
-										<button
-											class="text-muted-foreground font-mono hover:text-primary hover:underline"
-											onclick={() => { onSelectToken?.(pt.placeId, pt.token.id); onViewToken?.(); }}
-										>{pt.token.id.slice(0, 8)}</button>
+										<Button variant="link" size="inline" onclick={() => onSelectPlace?.(pt.placeId)}>{pt.placeName}</Button>
+										<Button variant="link" size="inline" class="text-muted-foreground font-mono hover:text-primary" onclick={() => { onSelectToken?.(pt.placeId, pt.token.id); onViewToken?.(); }}>{pt.token.id.slice(0, 8)}</Button>
 									</div>
 								{/each}
 							</div>
@@ -732,15 +695,12 @@
 				{:else if eventDetails.eventTypeName === 'TokenCreated' && eventDetails.token}
 					<div>
 						<h4 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1">Place</h4>
-						<button
-							class="text-sm text-primary hover:underline"
-							onclick={() => {
+						<Button variant="link" size="inline" class="text-sm" onclick={() => {
 								const e = eventDetails.event.event as any;
 								onSelectPlace?.(e.place_id);
-							}}
-						>
+							}}>
 							{eventDetails.placeName}
-						</button>
+						</Button>
 					</div>
 
 					<div class="flex items-center gap-2">
@@ -769,42 +729,33 @@
 				{:else if eventDetails.eventTypeName === 'TokenConsumed'}
 					<div>
 						<h4 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1">From Place</h4>
-						<button
-							class="text-sm text-primary hover:underline"
-							onclick={() => {
+						<Button variant="link" size="inline" class="text-sm" onclick={() => {
 								const e = eventDetails.event.event as any;
 								onSelectPlace?.(e.place_id);
-							}}
-						>
+							}}>
 							{eventDetails.placeName}
-						</button>
+						</Button>
 					</div>
 
 				{:else if eventDetails.eventTypeName === 'TokenBridgedOut'}
 					<div>
 						<h4 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1">Transition</h4>
-						<button
-							class="text-sm text-primary hover:underline"
-							onclick={() => {
+						<Button variant="link" size="inline" class="text-sm" onclick={() => {
 								const e = eventDetails.event.event as any;
 								onSelectTransition?.(e.transition_id);
-							}}
-						>
+							}}>
 							{eventDetails.transitionName}
-						</button>
+						</Button>
 					</div>
 
 					<div>
 						<h4 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1">Source</h4>
-						<button
-							class="text-sm text-primary hover:underline"
-							onclick={() => {
+						<Button variant="link" size="inline" class="text-sm" onclick={() => {
 								const e = eventDetails.event.event as any;
 								onSelectPlace?.(e.source_place_id);
-							}}
-						>
+							}}>
 							{eventDetails.placeName}
-						</button>
+						</Button>
 					</div>
 
 					<div>
