@@ -680,8 +680,9 @@ export function createPetriStore(netId: string, baseUrl: string = PETRI_BASE) {
 				const decoder = new TextDecoder();
 				let buffer = '';
 
-				function processChunk(): Promise<void> {
-					return reader.read().then(({ done, value }) => {
+				async function processChunk(): Promise<void> {
+					while (true) {
+						const { done, value } = await reader.read();
 						if (done) {
 							// Stream ended — reconnect
 							scheduleSSERetry();
@@ -705,8 +706,7 @@ export function createPetriStore(netId: string, baseUrl: string = PETRI_BASE) {
 								eventData = '';
 							}
 						}
-						return processChunk();
-					});
+					}
 				}
 
 				return processChunk();

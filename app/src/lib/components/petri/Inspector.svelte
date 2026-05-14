@@ -533,10 +533,18 @@
 			<!-- Event Inspector -->
 			<div class="space-y-4">
 				<div class="bg-muted/50 rounded-lg p-3">
-					<h3 class="text-lg font-medium text-foreground">Event #{eventDetails.event.sequence}</h3>
-					<p class="text-xs text-muted-foreground">
-						{new Date(eventDetails.event.timestamp).toLocaleString()}
-					</p>
+					<div class="flex items-start justify-between gap-2">
+						<div class="min-w-0">
+							<h3 class="text-lg font-medium text-foreground">Event #{eventDetails.event.sequence}</h3>
+							<p class="text-xs text-muted-foreground">
+								{new Date(eventDetails.event.timestamp).toLocaleString()}
+							</p>
+						</div>
+						<CopyButton
+							text={JSON.stringify(eventDetails.event, null, 2)}
+							class="shrink-0"
+						/>
+					</div>
 				</div>
 
 				<!-- Event Type Badge -->
