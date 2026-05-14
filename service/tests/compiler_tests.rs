@@ -1824,3 +1824,189 @@ fn guard_unresolved_error_view_carries_node_id() {
     assert!(view.message.contains("ghost.field"));
     assert!(view.message.contains("s.approved"));
 }
+
+// ---------------------------------------------------------------------------
+// Phase 4: Derived ports per block kind
+// ---------------------------------------------------------------------------
+
+fn human_task_node_with_field(id: &str, field_name: &str, kind: TaskFieldKind) -> WorkflowNode {
+    WorkflowNode {
+        id: id.to_string(),
+        node_type: "human_task".to_string(),
+        position: pos(),
+        data: WorkflowNodeData::HumanTask {
+            label: "Review".to_string(),
+            description: None,
+            task_title: "Review".to_string(),
+            instructions_mdsvex: None,
+            steps: vec![TaskStepConfig {
+                id: "step1".to_string(),
+                title: "Form".to_string(),
+                description_mdsvex: None,
+                blocks: vec![TaskBlockConfig::Input {
+                    field: TaskFieldConfig {
+                        name: field_name.to_string(),
+                        label: field_name.to_string(),
+                        kind,
+                        required: Some(true),
+                        placeholder: None,
+                        options: None,
+                    },
+                }],
+            }],
+        },
+        parent_id: None,
+        width: None,
+        height: None,
+    }
+}
+
+#[test]
+fn human_task_output_port_matches_task_fields() {
+    use mekhan_service::models::template::FieldKind;
+
+    let node = human_task_node_with_field("ht", "approved", TaskFieldKind::Checkbox);
+    let ports = node.data.output_ports();
+    assert_eq!(ports.len(), 1, "HumanTask should expose one output port");
+    let port = &ports[0];
+    assert_eq!(port.id, "out");
+    assert_eq!(port.fields.len(), 1);
+    assert_eq!(port.fields[0].name, "approved");
+    // Checkbox maps to Bool in the typed-port superset.
+    assert_eq!(port.fields[0].kind, FieldKind::Bool);
+    assert!(port.fields[0].required);
+}
+
+#[test]
+fn human_task_output_dedupes_duplicate_field_names() {
+    // Two Input blocks with the same name → first-wins.
+    let mut node = human_task_node_with_field("ht", "approved", TaskFieldKind::Checkbox);
+    if let WorkflowNodeData::HumanTask { steps, .. } = &mut node.data {
+        steps[0].blocks.push(TaskBlockConfig::Input {
+            field: TaskFieldConfig {
+                name: "approved".to_string(),
+                label: "Different".to_string(),
+                kind: TaskFieldKind::Text,
+                required: Some(false),
+                placeholder: None,
+                options: None,
+            },
+        });
+    }
+    let ports = node.data.output_ports();
+    assert_eq!(ports[0].fields.len(), 1);
+    // First-wins: label/kind from the first block.
+    assert_eq!(ports[0].fields[0].label, "approved");
+}
+
+#[test]
+fn human_task_output_port_kinds_map_correctly() {
+    use mekhan_service::models::template::FieldKind;
+
+    for (task_kind, expected_field_kind) in [
+        (TaskFieldKind::Text, FieldKind::Text),
+        (TaskFieldKind::Textarea, FieldKind::Textarea),
+        (TaskFieldKind::Number, FieldKind::Number),
+        (TaskFieldKind::Select, FieldKind::Select),
+        (TaskFieldKind::Checkbox, FieldKind::Bool),
+        (TaskFieldKind::File, FieldKind::File),
+        (TaskFieldKind::Signature, FieldKind::Signature),
+    ] {
+        let node = human_task_node_with_field("ht", "f", task_kind);
+        let ports = node.data.output_ports();
+        assert_eq!(ports[0].fields[0].kind, expected_field_kind, "kind {task_kind:?}");
+    }
+}
+
+#[test]
+fn decision_output_ports_one_per_branch_plus_default() {
+    let node = WorkflowNode {
+        id: "d".to_string(),
+        node_type: "decision".to_string(),
+        position: pos(),
+        data: WorkflowNodeData::Decision {
+            label: "Route".to_string(),
+            description: None,
+            conditions: vec![
+                BranchCondition {
+                    edge_id: "high".to_string(),
+                    label: "High".to_string(),
+                    guard: "true".to_string(),
+                },
+                BranchCondition {
+                    edge_id: "low".to_string(),
+                    label: "Low".to_string(),
+                    guard: "false".to_string(),
+                },
+            ],
+            default_branch: Some("default1".to_string()),
+        },
+        parent_id: None,
+        width: None,
+        height: None,
+    };
+
+    let ports = node.data.output_ports();
+    assert_eq!(ports.len(), 3, "two branches + default");
+    let ids: Vec<&str> = ports.iter().map(|p| p.id.as_str()).collect();
+    assert!(ids.contains(&"high"));
+    assert!(ids.contains(&"low"));
+    assert!(ids.contains(&"default1"));
+    // Phase 4 stub: branches are pass-through.
+    assert!(ports.iter().all(|p| p.fields.is_empty()));
+}
+
+#[test]
+fn parallel_split_join_loop_scope_have_single_pass_through_output() {
+    use mekhan_service::models::template::WorkflowNodeData;
+
+    for data in [
+        WorkflowNodeData::ParallelSplit { label: "x".into(), description: None },
+        WorkflowNodeData::ParallelJoin { label: "x".into(), description: None },
+        WorkflowNodeData::Loop {
+            label: "x".into(),
+            description: None,
+            max_iterations: 5,
+            loop_condition: "true".into(),
+        },
+        WorkflowNodeData::Scope { label: "x".into(), description: None },
+    ] {
+        let ports = data.output_ports();
+        assert_eq!(ports.len(), 1);
+        assert_eq!(ports[0].id, "out");
+        assert!(
+            ports[0].fields.is_empty(),
+            "{:?} should be pass-through",
+            data.type_name()
+        );
+    }
+}
+
+#[test]
+fn guard_can_reference_human_task_derived_field() {
+    // s → ht → d → e. HumanTask declares `approved: Checkbox`. The
+    // Decision guard `ht.approved == true` must resolve via scope-walked
+    // derived ports.
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            human_task_node_with_field("ht", "approved", TaskFieldKind::Checkbox),
+            decision_with_guard("d", "ht.approved == true"),
+            end_node("ea"),
+            end_node("eb"),
+        ],
+        edges: vec![
+            edge("e_si", "s", "ht"),
+            edge("e_id", "ht", "d"),
+            edge_with_handle("e_yes", "d", "ea", "cond_yes"),
+            edge_with_handle("e_no", "d", "eb", "cond_no"),
+        ],
+        viewport: None,
+    };
+    let result = compile_to_air(&graph, "phase4-ht-scope", "", &std::collections::HashMap::new());
+    assert!(
+        result.is_ok(),
+        "guard should resolve against HumanTask's derived output: {:?}",
+        result.err()
+    );
+}

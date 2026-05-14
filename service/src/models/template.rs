@@ -215,28 +215,132 @@ impl WorkflowNodeData {
         }
     }
 
-    /// Typed input ports declared or derived for this node. Phase 2 fills in
-    /// `End` (`terminal`) and `AutomatedStep` (`input`). HumanTask, Decision,
-    /// ParallelSplit/Join, Loop, Scope return empty until Phase 4 wires their
-    /// derived shapes; consumers of `input_ports()` treat an empty list as
-    /// "single anonymous input" so existing edges with `target_handle: "in"`
-    /// still resolve.
-    pub fn input_ports(&self) -> Vec<&Port> {
+    /// Typed input ports declared or derived for this node. Returns owned
+    /// ports because some variants (HumanTask, Decision, ...) derive their
+    /// ports from inner config rather than carrying a stored `Port`. The
+    /// returned list is small (1-2 entries) so allocation is negligible.
+    ///
+    /// An empty list means "single anonymous input" — edges with
+    /// `target_handle: "in"` still resolve via the pass-through path in
+    /// `validate_edges_typed`.
+    pub fn input_ports(&self) -> Vec<Port> {
         match self {
             Self::Start { .. } => vec![],
-            Self::End { terminal, .. } => vec![terminal],
-            Self::AutomatedStep { input, .. } => vec![input],
-            _ => vec![],
+            Self::End { terminal, .. } => vec![terminal.clone()],
+            Self::AutomatedStep { input, .. } => vec![input.clone()],
+
+            // Phase 4: derived inputs. Each control-flow block accepts a
+            // single anonymous "in" port that's a Json pass-through — the
+            // typed-edge check treats empty target fields as compatible with
+            // anything, which matches the proposal §3.3 semantics for these
+            // blocks ("they don't transform the token, they route or fan it").
+            Self::HumanTask { .. }
+            | Self::Decision { .. }
+            | Self::ParallelSplit { .. }
+            | Self::ParallelJoin { .. }
+            | Self::Loop { .. }
+            | Self::Scope { .. } => vec![Port::empty_input()],
         }
     }
 
-    /// Typed output ports declared or derived for this node. Phase 1 declared
-    /// `Start`; Phase 2 adds `AutomatedStep.output`.
-    pub fn output_ports(&self) -> Vec<&Port> {
+    /// Typed output ports declared or derived for this node.
+    ///
+    /// Derived ports (Phase 4):
+    /// - `HumanTask` → single `out` port whose fields are the union of every
+    ///   Input block's `TaskFieldConfig` across all steps, mapped via
+    ///   `FieldKind::from(TaskFieldKind)`.
+    /// - `Decision` → one port per branch (id = `BranchCondition.edge_id`,
+    ///   label = branch label) plus a `default` port for the catch-all.
+    ///   Phase 4 stub: each branch port has empty fields (pass-through), so
+    ///   downstream type-checking flows through unchanged.
+    /// - `ParallelSplit` / `ParallelJoin` / `Loop` → single `out` port,
+    ///   empty fields (pass-through).
+    /// - `Scope` → single `out` port, empty fields (pass-through). The
+    ///   scope's *boundary* port editor lands separately.
+    pub fn output_ports(&self) -> Vec<Port> {
         match self {
-            Self::Start { initial, .. } => vec![initial],
-            Self::AutomatedStep { output, .. } => vec![output],
-            _ => vec![],
+            Self::Start { initial, .. } => vec![initial.clone()],
+            Self::AutomatedStep { output, .. } => vec![output.clone()],
+
+            Self::HumanTask { steps, .. } => vec![derive_human_task_output_port(steps)],
+
+            Self::Decision { conditions, default_branch, .. } => {
+                let mut out: Vec<Port> = conditions
+                    .iter()
+                    .map(|c| Port {
+                        id: c.edge_id.clone(),
+                        label: c.label.clone(),
+                        fields: vec![],
+                    })
+                    .collect();
+                if let Some(default_id) = default_branch {
+                    out.push(Port {
+                        id: default_id.clone(),
+                        label: "Default".to_string(),
+                        fields: vec![],
+                    });
+                }
+                out
+            }
+
+            Self::ParallelSplit { .. }
+            | Self::ParallelJoin { .. }
+            | Self::Loop { .. }
+            | Self::Scope { .. } => vec![Port {
+                id: "out".to_string(),
+                label: "Output".to_string(),
+                fields: vec![],
+            }],
+
+            // End has no output port — tokens terminate here.
+            Self::End { .. } => vec![],
+        }
+    }
+}
+
+/// Derive a HumanTask's output port from the union of Input fields across all
+/// task steps. Duplicate field names (first-wins) and non-input blocks are
+/// silently ignored — the editor enforces uniqueness during authoring, and
+/// the human-task form UI is the source of truth for behavior.
+fn derive_human_task_output_port(steps: &[TaskStepConfig]) -> Port {
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut fields: Vec<PortField> = Vec::new();
+    for step in steps {
+        for block in &step.blocks {
+            if let TaskBlockConfig::Input { field } = block {
+                if seen.insert(field.name.clone()) {
+                    fields.push(PortField {
+                        name: field.name.clone(),
+                        label: field.label.clone(),
+                        kind: FieldKind::from(field.kind),
+                        required: field.required.unwrap_or(false),
+                        options: field.options.clone(),
+                        description: None,
+                    });
+                }
+            }
+        }
+    }
+    Port {
+        id: "out".to_string(),
+        label: "Output".to_string(),
+        fields,
+    }
+}
+
+impl From<TaskFieldKind> for FieldKind {
+    fn from(k: TaskFieldKind) -> Self {
+        match k {
+            TaskFieldKind::Text => FieldKind::Text,
+            TaskFieldKind::Textarea => FieldKind::Textarea,
+            TaskFieldKind::Number => FieldKind::Number,
+            TaskFieldKind::Select => FieldKind::Select,
+            // Checkbox → Bool (the typed-ports superset). HumanTask form UI
+            // still renders a checkbox; the wire kind on the derived port is
+            // a proper Bool so guards can use `step.flag == true`.
+            TaskFieldKind::Checkbox => FieldKind::Bool,
+            TaskFieldKind::File => FieldKind::File,
+            TaskFieldKind::Signature => FieldKind::Signature,
         }
     }
 }

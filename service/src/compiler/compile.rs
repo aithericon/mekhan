@@ -493,20 +493,19 @@ fn validate_edges_typed(graph: &WorkflowGraph) -> Result<(), CompileError> {
         };
 
         // 3. Resolve source port. `source_handle: None` resolves to the
-        //    canonical single output port; some node kinds (Decision,
-        //    ParallelSplit) require an explicit handle and have no canonical
-        //    single output. Phase 4 will fill in output_ports() for those.
+        //    canonical single output port; node kinds with multiple outputs
+        //    (Decision branches) require an explicit handle.
+        //
+        //    Phase 4: every variant now returns at least one output port via
+        //    `output_ports()`, so the "empty list = pass-through" branch only
+        //    fires for `End` (which has no outgoing edges anyway).
         let src_ports = src_node.data.output_ports();
-        let src_port: Option<&Port> = match edge.source_handle.as_deref() {
-            Some(h) => src_ports.iter().copied().find(|p| p.id == h),
+        let src_port: Option<Port> = match edge.source_handle.as_deref() {
+            Some(h) => src_ports.iter().find(|p| p.id == h).cloned(),
             None => {
                 if src_ports.len() == 1 {
-                    Some(src_ports[0])
+                    Some(src_ports[0].clone())
                 } else if src_ports.is_empty() {
-                    // Node has no declared output ports yet (HumanTask/Decision/etc.
-                    // pre-Phase-4). Treat as "Json pass-through" — skip type check
-                    // for this edge. Once Phase 4 lands and these gain ports, this
-                    // path stops being reached.
                     None
                 } else {
                     return Err(CompileError::UnknownSourcePort {
@@ -530,7 +529,7 @@ fn validate_edges_typed(graph: &WorkflowGraph) -> Result<(), CompileError> {
         // 4. Resolve target port. Same fall-through for "no declared input
         //    ports yet" semantics; otherwise the target_handle must hit a port.
         let tgt_ports = tgt_node.data.input_ports();
-        let tgt_port: Option<&Port> = tgt_ports.iter().copied().find(|p| p.id == target_handle);
+        let tgt_port: Option<Port> = tgt_ports.iter().find(|p| p.id == target_handle).cloned();
         if tgt_port.is_none() && !tgt_ports.is_empty() {
             return Err(CompileError::UnknownTargetPort {
                 edge_id: edge.id.clone(),
@@ -540,15 +539,14 @@ fn validate_edges_typed(graph: &WorkflowGraph) -> Result<(), CompileError> {
         }
 
         // 5. Type-check field sets. Skip when either side is "no declared
-        //    ports yet" (Phase 4 will tighten these) or when the target port
-        //    has no fields (= Json pass-through).
+        //    ports" or when the target port has no fields (= Json pass-through).
         let (Some(src), Some(tgt)) = (src_port, tgt_port) else {
             continue;
         };
         if tgt.fields.is_empty() {
             continue;
         }
-        if !ports_type_compatible(src, tgt) {
+        if !ports_type_compatible(&src, &tgt) {
             let mut expected: Vec<String> = src
                 .fields
                 .iter()

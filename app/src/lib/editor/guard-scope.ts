@@ -128,9 +128,11 @@ export function computeScopes(graph: WorkflowGraph): Map<string, ScopeEntry[]> {
 }
 
 /**
- * Output ports declared for a node. Mirrors the Rust accessor for Start +
- * AutomatedStep; everything else returns an empty list until Phase 4 fills
- * in derived ports for HumanTask / Decision / etc.
+ * Output ports declared or derived for a node. Mirrors
+ * `service/src/models/template.rs::WorkflowNodeData::output_ports`. Phase 4
+ * derives ports for HumanTask (from its task fields) and produces pass-through
+ * stubs for control-flow blocks so they contribute *nothing* to downstream
+ * scope (matching the backend's empty-fields semantics).
  */
 function outputPorts(data: WorkflowNodeData): Port[] {
 	switch (data.type) {
@@ -138,8 +140,70 @@ function outputPorts(data: WorkflowNodeData): Port[] {
 			return data.initial ? [data.initial] : [];
 		case 'automated_step':
 			return data.output ? [data.output] : [];
+		case 'human_task':
+			return [deriveHumanTaskOutputPort(data)];
+		case 'decision':
+		case 'parallel_split':
+		case 'parallel_join':
+		case 'loop':
+		case 'scope':
+			// Phase 4 stub: pass-through. Contributes no fields to downstream
+			// scope; once a block carries real outputs the editor will pick
+			// them up here without further changes.
+			return [{ id: 'out', label: 'Output', fields: [] }];
 		default:
 			return [];
+	}
+}
+
+type HumanTaskNodeData = Extract<WorkflowNodeData, { type: 'human_task' }>;
+type TaskFieldKind = components['schemas']['TaskFieldKind'];
+
+/**
+ * Derive a HumanTask's output port from the union of `input` blocks across
+ * all steps. First-seen wins on duplicate field names — matches the Rust
+ * `derive_human_task_output_port` and the editor's own field-name uniqueness
+ * rule.
+ */
+function deriveHumanTaskOutputPort(data: HumanTaskNodeData): Port {
+	const seen = new Set<string>();
+	const fields: components['schemas']['PortField'][] = [];
+	for (const step of data.steps ?? []) {
+		for (const block of step.blocks ?? []) {
+			if (block.type !== 'input') continue;
+			const f = block.field;
+			if (seen.has(f.name)) continue;
+			seen.add(f.name);
+			fields.push({
+				name: f.name,
+				label: f.label,
+				kind: taskFieldKindToFieldKind(f.kind),
+				required: f.required ?? false,
+				options: f.options ?? undefined
+			});
+		}
+	}
+	return { id: 'out', label: 'Output', fields };
+}
+
+function taskFieldKindToFieldKind(k: TaskFieldKind): FieldKind {
+	switch (k) {
+		case 'text':
+			return 'text';
+		case 'textarea':
+			return 'textarea';
+		case 'number':
+			return 'number';
+		case 'select':
+			return 'select';
+		case 'checkbox':
+			return 'bool';
+		case 'file':
+			return 'file';
+		case 'signature':
+			return 'signature';
+		default:
+			return 'text';
 	}
 }
 

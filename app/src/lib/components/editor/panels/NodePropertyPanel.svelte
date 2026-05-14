@@ -11,7 +11,9 @@
 	import AutomatedStepSection from './property-sections/AutomatedStepSection.svelte';
 	import DecisionNodeSection from './property-sections/DecisionNodeSection.svelte';
 	import LoopNodeSection from './property-sections/LoopNodeSection.svelte';
+	import DerivedPortsSection from './property-sections/DerivedPortsSection.svelte';
 	import { computeScopes, type ScopeEntry } from '$lib/editor/guard-scope';
+	import { outputPortsFor } from '$lib/editor/derived-ports';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Textarea } from '$lib/components/ui/textarea';
@@ -175,6 +177,25 @@
 			<DecisionNodeSection {data} {readonly} {onchange} {scope} />
 		{:else if data.type === 'loop'}
 			<LoopNodeSection {data} {readonly} {onchange} {scope} />
+		{/if}
+
+		<!-- Phase 4: read-only derived port preview for variants whose outputs
+		     come from inner config rather than an editable PortsSection. Start
+		     and AutomatedStep already render an editable PortsSection inside
+		     their own section. End/Scope have no derived outputs to show
+		     until a port editor lands for them. -->
+		{#if data.type === 'human_task' || data.type === 'decision' || data.type === 'loop' || data.type === 'parallel_split' || data.type === 'parallel_join' || data.type === 'scope'}
+			<DerivedPortsSection
+				ports={outputPortsFor(data)}
+				title="Outputs"
+				derivedFrom={
+					data.type === 'human_task'
+						? 'from task fields'
+						: data.type === 'decision'
+							? 'from branches'
+							: 'pass-through'
+				}
+			/>
 		{/if}
 	</div>
 </div>
