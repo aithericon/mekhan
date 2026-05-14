@@ -141,11 +141,14 @@ up-executor:
 
     mkdir -p "{{work_dir}}/executor"
     # Write a fresh executor.toml each `up` so config drift can't accumulate.
+    # base_dir is absolute so the run dir + runner script paths don't compound
+    # with the executor's CWD when launching the subprocess.
+    exec_base="$PWD/{{work_dir}}/executor"
     cat > "{{work_dir}}/executor/executor.toml" <<EOF
     name        = "dev-executor"
     nats_url    = "{{nats_url}}"
     namespace   = "executor"
-    base_dir    = "."
+    base_dir    = "$exec_base"
     concurrency = 4
 
     [storage]
@@ -208,6 +211,7 @@ up-engine:
       NATS_URL="{{nats_url}}" \
       EXECUTOR_NATS_URL="{{nats_url}}" \
       EXECUTOR_ENABLED="true" \
+      EXECUTOR_NAMESPACE="executor" \
       PORT="3030" \
       "$PWD/engine/target/debug/core-engine" \
       > "{{log_dir}}/engine.log" 2>&1 &
