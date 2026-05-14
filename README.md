@@ -21,5 +21,5 @@ docker compose up -d
 cd service && cargo run
 
 # Start frontend (separate terminal)
-cd app && npm install && npm run dev
+cd app && pnpm install && pnpm run dev
 ```

@@ -108,7 +108,7 @@ openapi:
     echo "▶ dumping spec → openapi-mekhan.json"
     ./target/debug/mekhan openapi > openapi-mekhan.json
     echo "▶ regenerating app/src/lib/api/schema.d.ts"
-    (cd app && npm run openapi:generate)
+    (cd app && pnpm run openapi:generate)
     echo "✓ openapi spec + schema regenerated"
 
 # ── Infra ────────────────────────────────────────────────────────────────────
@@ -283,10 +283,10 @@ up-app:
     fi
     if [ ! -d app/node_modules ]; then
       echo "▶ installing app deps…"
-      (cd app && npm install)
+      (cd app && pnpm install)
     fi
     echo "▶ starting SvelteKit dev server on :5173…"
-    nohup bash -c 'cd "$PWD/app" && exec npm run dev -- --host 0.0.0.0 --port 5173' \
+    nohup bash -c 'cd "$PWD/app" && exec pnpm run dev -- --host 0.0.0.0 --port 5173' \
       > "{{log_dir}}/app.log" 2>&1 &
     echo $! > "{{pid_dir}}/app.pid"
     echo "  ✓ app (pid $(cat {{pid_dir}}/app.pid))  http://localhost:5173  log: {{log_dir}}/app.log"

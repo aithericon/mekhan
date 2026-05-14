@@ -41,8 +41,8 @@ quality-rust:
 quality-frontend:
     #!/usr/bin/env bash
     cd ../app
-    npm ci
-    npm run check
+    pnpm install --frozen-lockfile
+    pnpm run check
 
 # Regenerate the OpenAPI spec + TS schema and fail if they differ from
 # what's committed. Catches PRs that change a Rust DTO / handler but forget
@@ -59,7 +59,7 @@ openapi-drift:
       exit 1
     fi
     echo "▶ Rebuilding TS schema and diffing…"
-    (cd app && npm ci && npm run openapi:generate)
+    (cd app && pnpm install --frozen-lockfile && pnpm run openapi:generate)
     if ! git diff --exit-code app/src/lib/api/schema.d.ts; then
       echo "✗ app/src/lib/api/schema.d.ts is stale. Run \`just dev::openapi\` and commit." >&2
       exit 1
@@ -86,15 +86,15 @@ test-rust:
 test-frontend-unit:
     #!/usr/bin/env bash
     cd ../app
-    npm ci
-    npm test
+    pnpm install --frozen-lockfile
+    pnpm test
 
 # Playwright e2e (requires a pre-built + served app — caller's responsibility)
 test-frontend-e2e:
     #!/usr/bin/env bash
     cd ../app
-    npm ci
-    npx playwright test
+    pnpm install --frozen-lockfile
+    pnpm exec playwright test
 
 # ── Build (cross-compile + frontend bundle) ─────────────────────────────────
 
@@ -116,8 +116,8 @@ build-frontend:
     #!/usr/bin/env bash
     cd ../app
     echo "▶ Building SvelteKit static SPA"
-    npm ci
-    npm run build
+    pnpm install --frozen-lockfile
+    pnpm run build
     if [ ! -f build/index.html ]; then
       echo "✗ Frontend build failed — app/build/index.html not produced" >&2
       exit 1
