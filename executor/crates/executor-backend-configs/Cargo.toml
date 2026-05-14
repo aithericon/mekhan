@@ -12,3 +12,4 @@ description = "Lightweight config type definitions for executor backends (no hea
 serde.workspace = true
 serde_json.workspace = true
 aithericon-executor-domain.workspace = true
+aithericon-executor-storage-types.workspace = true

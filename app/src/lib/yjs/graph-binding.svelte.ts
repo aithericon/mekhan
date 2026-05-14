@@ -218,10 +218,17 @@ export class YjsGraphBinding {
 			this.writeDataToConfig(config, data);
 			yNode.set('config', config);
 
-			// Files map. Seed a starter entrypoint for automated_step so the
-			// node compiles before the user opens the IDE editor.
+			// Files map. Seed a starter entrypoint only for Python automated_steps
+			// so the node compiles before the user opens the IDE editor. Other
+			// backends start empty — the FileTree shows no files until the user
+			// adds them, which avoids stranded main.py files on Docker/HTTP/LLM
+			// nodes.
 			const files = new Y.Map<Y.Text>();
-			if (type === 'automated_step') {
+			if (
+				type === 'automated_step' &&
+				data.type === 'automated_step' &&
+				data.executionSpec.backendType === 'python'
+			) {
 				files.set('main.py', new Y.Text('# Write your script here.\n'));
 			}
 			yNode.set('files', files);

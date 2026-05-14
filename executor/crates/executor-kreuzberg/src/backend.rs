@@ -11,7 +11,9 @@ use aithericon_executor_domain::{
     LogEntry, LogLevel, LogSummary, MetricSummary, Progress, RunContext,
 };
 
-use crate::config::{ExtractionMode, KreuzbergConfig, ResolvedKreuzbergConfig};
+use crate::config::{
+    ExtractionMode, KreuzbergConfig, KreuzbergConfigExt, ResolvedKreuzbergConfig,
+};
 
 /// Backend that extracts text, metadata, and tables from documents via the
 /// kreuzberg library.

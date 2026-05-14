@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use crate::config::LlmConfig;
+pub use crate::config::{ResponseFormat, Role};
 
 /// Hexagonal port: the backend depends only on this trait, never on
 /// provider HTTP details or concrete adapters directly.
@@ -45,24 +46,6 @@ pub struct ImageData {
     pub base64: String,
     /// MIME type (e.g. "image/png", "image/jpeg").
     pub media_type: String,
-}
-
-/// Message role.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Role {
-    System,
-    User,
-    Assistant,
-}
-
-/// How to constrain the response format.
-#[derive(Debug)]
-pub enum ResponseFormat {
-    /// Free-form text (default).
-    Text,
-    /// Constrained JSON conforming to the given schema.
-    JsonSchema { schema: serde_json::Value },
 }
 
 /// Provider-agnostic completion response — full observability.
@@ -155,17 +138,6 @@ impl CompletionRequest {
             temperature: config.temperature,
             max_tokens: config.max_tokens,
             response_format,
-        }
-    }
-}
-
-impl Clone for ResponseFormat {
-    fn clone(&self) -> Self {
-        match self {
-            ResponseFormat::Text => ResponseFormat::Text,
-            ResponseFormat::JsonSchema { schema } => ResponseFormat::JsonSchema {
-                schema: schema.clone(),
-            },
         }
     }
 }
