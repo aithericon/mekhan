@@ -77,6 +77,23 @@ pub enum CompileError {
         expected: Vec<String>,
         found: Vec<String>,
     },
+
+    // --- Typed-ports guard errors (Phase 3). Decision/Loop guards are Rhai
+    //     expressions; we syntax-check them and resolve each
+    //     `<upstream_node>.<field>` reference against the topological scope at
+    //     that node. The editor consumes these via `to_view()` and highlights
+    //     the offending node.
+    #[error("guard on node '{node_id}' has a Rhai syntax error: {message}")]
+    GuardSyntax { node_id: String, message: String },
+
+    #[error(
+        "guard on node '{node_id}' references unknown identifier '{identifier}' (in-scope upstream identifiers: {available:?})"
+    )]
+    GuardUnresolved {
+        node_id: String,
+        identifier: String,
+        available: Vec<String>,
+    },
 }
 
 impl CompileError {
@@ -90,6 +107,8 @@ impl CompileError {
             Self::UnknownSourcePort { .. } => "unknown_source_port",
             Self::UnknownTargetPort { .. } => "unknown_target_port",
             Self::EdgeTypeMismatch { .. } => "edge_type_mismatch",
+            Self::GuardSyntax { .. } => "guard_syntax",
+            Self::GuardUnresolved { .. } => "guard_unresolved",
         }
     }
 
@@ -106,6 +125,9 @@ impl CompileError {
     pub fn node_id(&self) -> Option<&str> {
         match self {
             Self::UnknownSourcePort { node_id, .. } | Self::UnknownTargetPort { node_id, .. } => {
+                Some(node_id)
+            }
+            Self::GuardSyntax { node_id, .. } | Self::GuardUnresolved { node_id, .. } => {
                 Some(node_id)
             }
             _ => None,
@@ -254,6 +276,11 @@ pub fn compile_to_air(
     //     source/target ports must type-match (empty target port = Json
     //     pass-through, otherwise exact field-name + kind match).
     validate_edges_typed(graph)?;
+
+    // 2c. Typed-ports guard validation (Phase 3). Every Decision/Loop guard
+    //     parses as Rhai and every `<upstream>.<field>` reference resolves
+    //     against the topological scope at that node.
+    validate_guards(graph, &wg)?;
 
     // 3. Topological sort (on DAG — loop_back edges excluded)
     let sorted = topo_order(&wg)?;
@@ -569,6 +596,141 @@ fn validate_edges_typed(graph: &WorkflowGraph) -> Result<(), CompileError> {
         }
     }
 
+    Ok(())
+}
+
+// --- Guard scope resolution (Phase 3) ---
+
+/// In-scope identifier at a node: `<node_id>.<field>` plus its declared kind.
+/// Used to validate Rhai guards reference real upstream fields.
+type ScopeFields = std::collections::BTreeMap<(String, String), crate::models::template::FieldKind>;
+
+/// Build the scope visible at each node — the union of every upstream node's
+/// declared output port fields, reached via the DAG (loop_back edges excluded
+/// from scope walks, matching the topological order used for compilation).
+///
+/// The result is keyed by node id and only contains entries for nodes whose
+/// guards we actually validate (Decision, Loop), but is computed for every
+/// node anyway because cost is O(|edges|) and the editor reuses the per-node
+/// map for autocomplete.
+fn compute_scopes<'a>(
+    graph: &'a WorkflowGraph,
+    wg: &WorkflowDiGraph<'a>,
+) -> Result<HashMap<String, ScopeFields>, CompileError> {
+    let order = topo_order(wg)?;
+    let mut scopes: HashMap<String, ScopeFields> = HashMap::new();
+
+    for ni in &order {
+        let node = *wg.dag.node_weight(*ni).unwrap();
+        let mut scope: ScopeFields = ScopeFields::new();
+
+        // Inherit from every DAG predecessor.
+        for pred_ni in wg.dag.neighbors_directed(*ni, Direction::Incoming) {
+            let pred = *wg.dag.node_weight(pred_ni).unwrap();
+            if let Some(pred_scope) = scopes.get(&pred.id) {
+                for (k, v) in pred_scope {
+                    scope.insert(k.clone(), *v);
+                }
+            }
+            // Add the predecessor's own declared output port fields under its
+            // node id. Phase 4 will fill in derived ports for HumanTask/etc.;
+            // for now Start + AutomatedStep are the contributors.
+            for port in pred.data.output_ports() {
+                for f in &port.fields {
+                    scope.insert((pred.id.clone(), f.name.clone()), f.kind);
+                }
+            }
+        }
+
+        // Loop-locals: a Loop node exposes `<loop_id>.iteration` inside its
+        // body scope. Phase 3 stub — bodies aren't yet a first-class concept;
+        // we conservatively add the local to the Loop's own scope so the
+        // `loop_condition` itself can reference it.
+        if matches!(node.data, WorkflowNodeData::Loop { .. }) {
+            scope.insert(
+                (node.id.clone(), "iteration".to_string()),
+                crate::models::template::FieldKind::Number,
+            );
+        }
+
+        scopes.insert(node.id.clone(), scope);
+    }
+
+    // Nodes unreachable from Start won't appear in the topo order; give them
+    // an empty scope so the validation pass can still produce a clean error
+    // ("identifier not in scope" rather than panicking on a missing key).
+    for node in &graph.nodes {
+        scopes.entry(node.id.clone()).or_default();
+    }
+
+    Ok(scopes)
+}
+
+/// Validate Rhai guards on Decision and Loop nodes:
+/// 1. Syntax-check via `rhai::Engine::compile`.
+/// 2. Resolve every `<ident>.<field>` reference against the node's scope.
+///
+/// Type-kind checking (e.g. comparing a `Text` field against a number literal)
+/// is out of scope per the Phase 3 plan — full inference over Rhai expressions
+/// isn't worth the complexity for the level of safety it adds.
+fn validate_guards<'a>(
+    graph: &'a WorkflowGraph,
+    wg: &WorkflowDiGraph<'a>,
+) -> Result<(), CompileError> {
+    let scopes = compute_scopes(graph, wg)?;
+
+    for node in &graph.nodes {
+        match &node.data {
+            WorkflowNodeData::Decision { conditions, .. } => {
+                let scope = scopes.get(&node.id).cloned().unwrap_or_default();
+                for cond in conditions {
+                    if cond.guard.trim().is_empty() {
+                        continue;
+                    }
+                    validate_one_guard(&node.id, &cond.guard, &scope)?;
+                }
+            }
+            WorkflowNodeData::Loop { loop_condition, .. } => {
+                if loop_condition.trim().is_empty() {
+                    continue;
+                }
+                let scope = scopes.get(&node.id).cloned().unwrap_or_default();
+                validate_one_guard(&node.id, loop_condition, &scope)?;
+            }
+            _ => {}
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_one_guard(
+    node_id: &str,
+    source: &str,
+    scope: &ScopeFields,
+) -> Result<(), CompileError> {
+    use crate::compiler::rhai_scope;
+
+    rhai_scope::parse_guard(source).map_err(|message| CompileError::GuardSyntax {
+        node_id: node_id.to_string(),
+        message,
+    })?;
+
+    for r in rhai_scope::extract_qualified_refs(source) {
+        let key = (r.node_id.clone(), r.field.clone());
+        if !scope.contains_key(&key) {
+            let mut available: Vec<String> = scope
+                .keys()
+                .map(|(n, f)| format!("{}.{}", n, f))
+                .collect();
+            available.sort();
+            return Err(CompileError::GuardUnresolved {
+                node_id: node_id.to_string(),
+                identifier: format!("{}.{}", r.node_id, r.field),
+                available,
+            });
+        }
+    }
     Ok(())
 }
 
@@ -1375,7 +1537,11 @@ mod tests {
                             BranchCondition {
                                 edge_id: "cond1".to_string(),
                                 label: "Yes".to_string(),
-                                guard: "input.approved == true".to_string(),
+                                // Constant guard — this test verifies that a Decision
+                                // produces a branch transition with *some* guard, not the
+                                // semantics of the guard. Phase 3 scope validation rejects
+                                // unqualified `input.X`, so we use `true` here.
+                                guard: "true".to_string(),
                             },
                         ],
                         default_branch: Some("default1".to_string()),

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { LoopNodeData } from '$lib/types/editor';
-	import CodeEditor from '../shared/CodeEditor.svelte';
+	import type { ScopeEntry } from '$lib/editor/guard-scope';
+	import GuardEditor from './GuardEditor.svelte';
 	import { Input } from '$lib/components/ui/input';
 	import { FormField } from '$lib/components/ui/form-field';
 
@@ -8,9 +9,11 @@
 		data: LoopNodeData;
 		readonly?: boolean;
 		onchange: (data: LoopNodeData) => void;
+		/** Pre-computed scope at this node — includes `<id>.iteration`. */
+		scope?: ScopeEntry[];
 	};
 
-	let { data, readonly = false, onchange }: Props = $props();
+	let { data, readonly = false, onchange, scope = [] }: Props = $props();
 </script>
 
 <FormField label="Max Iterations" for="max-iterations">
@@ -28,14 +31,11 @@
 	/>
 </FormField>
 
-<div class="space-y-1.5">
-	<span class="text-xs font-medium text-muted-foreground">Loop Condition (Rhai)</span>
-	<CodeEditor
-		value={data.loopCondition}
-		language="rhai"
+<div>
+	<GuardEditor
+		guard={data.loopCondition}
+		{scope}
 		{readonly}
-		minHeight="40px"
-		maxHeight="120px"
 		onchange={(val) => onchange({ ...data, loopCondition: val })}
 	/>
 </div>

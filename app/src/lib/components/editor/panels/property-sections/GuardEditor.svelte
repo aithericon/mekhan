@@ -1,0 +1,243 @@
+<script lang="ts">
+	// Visual editor for a single Decision/Loop guard. Two modes:
+	//   • "simple": a single LHS-op-RHS row builder that produces Rhai like
+	//     `start.amount > 1000`. Covers ~80% of real-world guards and gives
+	//     non-developer authors a discoverable surface.
+	//   • "advanced": raw Rhai textbox (the existing CodeEditor), for guards
+	//     the row builder can't express (e.g. `start.x && start.y`).
+	//
+	// The simple form auto-collapses to advanced when the persisted guard
+	// doesn't parse back into a single comparison row — round-trippable on
+	// initial mount, sticky after the user toggles.
+
+	import type { ScopeEntry } from '$lib/editor/guard-scope';
+	import CodeEditor from '../shared/CodeEditor.svelte';
+	import { Input } from '$lib/components/ui/input';
+	import * as Select from '$lib/components/ui/select';
+	import Code from '@lucide/svelte/icons/code';
+	import Wrench from '@lucide/svelte/icons/wrench';
+	import type { components } from '$lib/api/schema';
+
+	type FieldKind = components['schemas']['FieldKind'];
+
+	type Props = {
+		guard: string;
+		scope: ScopeEntry[];
+		readonly?: boolean;
+		onchange: (guard: string) => void;
+	};
+
+	let { guard, scope, readonly = false, onchange }: Props = $props();
+
+	// Possible operators. Restricted to a Rhai-safe subset so the simple
+	// builder never round-trips broken syntax.
+	const operators = [
+		{ value: '==', label: '=' },
+		{ value: '!=', label: '≠' },
+		{ value: '>', label: '>' },
+		{ value: '>=', label: '≥' },
+		{ value: '<', label: '<' },
+		{ value: '<=', label: '≤' }
+	] as const;
+
+	type Parsed = { lhs: string; op: string; rhs: string } | null;
+
+	// Try to parse the current guard string into a single LHS-op-RHS row.
+	// Returns null if the guard is empty, contains boolean combinators, or
+	// can't be cleanly decomposed.
+	function tryParse(g: string): Parsed {
+		const trimmed = g.trim();
+		if (!trimmed) return null;
+		// Reject anything containing logical combinators / function calls /
+		// blocks — those can't survive the row form.
+		if (/&&|\|\||\(|\)|;|\{|\}|!|\bif\b|\blet\b/.test(trimmed)) return null;
+
+		// Match `<qualified> <op> <rest>`. The qualified LHS is `ident.ident`
+		// optionally with whitespace.
+		const re = /^([A-Za-z_][A-Za-z0-9_]*\s*\.\s*[A-Za-z_][A-Za-z0-9_]*)\s*(==|!=|>=|<=|>|<)\s*(.+?)\s*$/;
+		const m = trimmed.match(re);
+		if (!m) return null;
+		return {
+			lhs: m[1].replace(/\s+/g, ''),
+			op: m[2],
+			rhs: m[3]
+		};
+	}
+
+	let parsed = $derived(tryParse(guard));
+
+	// "advanced" mode tracks whether the user explicitly toggled into raw
+	// Rhai. Once raw, stay raw — the builder shouldn't recapture authored
+	// expressions and lose meaning.
+	let sticky_advanced = $state(false);
+	let advanced = $derived(sticky_advanced || (guard.trim().length > 0 && parsed === null));
+
+	// Bool fields don't need an RHS picker — they read as just the
+	// identifier ("approved"). When the user selects a Bool field and no
+	// RHS, default to `== true`.
+	function fieldKind(qualified: string): FieldKind | null {
+		const entry = scope.find((s) => s.qualified === qualified);
+		return entry?.kind ?? null;
+	}
+
+	function emit(lhs: string, op: string, rhs: string) {
+		const trimmedLhs = lhs.trim();
+		const trimmedRhs = rhs.trim();
+		if (!trimmedLhs) {
+			onchange('');
+			return;
+		}
+		if (!trimmedRhs) {
+			// Default: bool fields get `== true`, others stay incomplete (no
+			// emit) so the user sees the empty input rather than a broken
+			// guard.
+			if (fieldKind(trimmedLhs) === 'bool') {
+				onchange(`${trimmedLhs} == true`);
+			} else {
+				onchange(`${trimmedLhs} ${op}`.trim());
+			}
+			return;
+		}
+		onchange(`${trimmedLhs} ${op} ${trimmedRhs}`);
+	}
+
+	let pendingOp = $state('==');
+	$effect(() => {
+		if (parsed) pendingOp = parsed.op;
+	});
+
+	function setLhs(value: string) {
+		// Round-trip through `parsed` so we don't clobber an existing rhs.
+		const cur = parsed ?? { lhs: '', op: pendingOp, rhs: '' };
+		emit(value, cur.op, cur.rhs);
+	}
+
+	function setOp(value: string) {
+		pendingOp = value;
+		const cur = parsed ?? { lhs: '', op: value, rhs: '' };
+		emit(cur.lhs, value, cur.rhs);
+	}
+
+	function setRhs(value: string) {
+		const cur = parsed ?? { lhs: '', op: pendingOp, rhs: '' };
+		emit(cur.lhs, cur.op, value);
+	}
+</script>
+
+<div class="space-y-1.5">
+	<div class="flex items-center justify-between">
+		<span class="text-[9px] text-muted-foreground">Guard</span>
+		<button
+			type="button"
+			class="flex items-center gap-1 rounded px-1.5 py-0.5 text-[9px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+			onclick={() => (sticky_advanced = !advanced)}
+			disabled={readonly}
+			title={advanced ? 'Switch to simple builder' : 'Switch to raw Rhai'}
+		>
+			{#if advanced}
+				<Wrench class="size-3" />
+				Builder
+			{:else}
+				<Code class="size-3" />
+				Rhai
+			{/if}
+		</button>
+	</div>
+
+	{#if advanced}
+		<CodeEditor
+			value={guard}
+			language="rhai"
+			{readonly}
+			minHeight="40px"
+			maxHeight="100px"
+			onchange={(val) => onchange(val)}
+		/>
+		{#if scope.length > 0}
+			<div class="flex flex-wrap gap-1 pt-1">
+				<span class="text-[9px] text-muted-foreground">In scope:</span>
+				{#each scope as entry (entry.qualified)}
+					<button
+						type="button"
+						class="rounded bg-muted px-1.5 py-0.5 font-mono text-[9px] text-foreground transition-colors hover:bg-accent disabled:cursor-not-allowed"
+						disabled={readonly}
+						title={`${entry.nodeLabel} → ${entry.field} (${entry.kind})`}
+						onclick={() => onchange((guard ? guard + ' ' : '') + entry.qualified)}
+					>
+						{entry.qualified}
+					</button>
+				{/each}
+			</div>
+		{:else}
+			<div class="pt-1 text-[9px] text-muted-foreground italic">
+				No upstream fields in scope. Wire a Start or AutomatedStep upstream and declare its
+				output port to reference fields here.
+			</div>
+		{/if}
+	{:else}
+		<div class="flex items-center gap-1.5">
+			<!-- LHS: qualified field picker -->
+			<div class="flex-1 min-w-0">
+				<Select.Root
+					type="single"
+					value={parsed?.lhs ?? ''}
+					onValueChange={(v) => v && setLhs(v)}
+					disabled={readonly || scope.length === 0}
+				>
+					<Select.Trigger class="h-7 px-2 text-[11px]">
+						{#if parsed?.lhs}
+							<span class="font-mono">{parsed.lhs}</span>
+						{:else if scope.length === 0}
+							<span class="text-muted-foreground">No scope</span>
+						{:else}
+							<span class="text-muted-foreground">Pick field…</span>
+						{/if}
+					</Select.Trigger>
+					<Select.Content>
+						{#each scope as entry (entry.qualified)}
+							<Select.Item value={entry.qualified} label={entry.qualified}>
+								<span class="font-mono">{entry.qualified}</span>
+								<span class="ml-2 text-[10px] text-muted-foreground">{entry.kind}</span>
+							</Select.Item>
+						{/each}
+					</Select.Content>
+				</Select.Root>
+			</div>
+
+			<!-- Operator -->
+			<Select.Root
+				type="single"
+				value={parsed?.op ?? pendingOp}
+				onValueChange={(v) => v && setOp(v)}
+				disabled={readonly}
+			>
+				<Select.Trigger class="h-7 w-12 px-1 text-[11px]">
+					<span class="font-mono">{operators.find((o) => o.value === (parsed?.op ?? pendingOp))?.label ?? '='}</span>
+				</Select.Trigger>
+				<Select.Content>
+					{#each operators as op (op.value)}
+						<Select.Item value={op.value} label={op.label}>
+							<span class="font-mono">{op.label}</span>
+							<span class="ml-2 text-[10px] text-muted-foreground">{op.value}</span>
+						</Select.Item>
+					{/each}
+				</Select.Content>
+			</Select.Root>
+
+			<!-- RHS: free-text Rhai literal (string with quotes, number, true/false) -->
+			<Input
+				type="text"
+				value={parsed?.rhs ?? ''}
+				placeholder={parsed && fieldKind(parsed.lhs) === 'bool' ? 'true' : 'value'}
+				disabled={readonly}
+				oninput={(e) => setRhs((e.currentTarget as HTMLInputElement).value)}
+				class="h-7 flex-1 px-2 py-1 text-[11px] font-mono"
+			/>
+		</div>
+		{#if guard.trim().length > 0}
+			<div class="font-mono text-[10px] text-muted-foreground">
+				{guard}
+			</div>
+		{/if}
+	{/if}
+</div>

@@ -374,15 +374,19 @@ fn decision_produces_guard_transitions() {
                     label: "Check Amount".to_string(),
                     description: None,
                     conditions: vec![
+                        // Constant guards — these tests verify branch
+                        // wiring/topology, not guard semantics. Phase 3 scope
+                        // validation rejects the legacy `input.X` form;
+                        // dedicated tests below exercise qualified references.
                         BranchCondition {
                             edge_id: "cond_a".to_string(),
                             label: "High".to_string(),
-                            guard: "input.amount > 1000".to_string(),
+                            guard: "true".to_string(),
                         },
                         BranchCondition {
                             edge_id: "cond_b".to_string(),
                             label: "Low".to_string(),
-                            guard: "input.amount <= 1000".to_string(),
+                            guard: "false".to_string(),
                         },
                     ],
                     default_branch: None,
@@ -543,7 +547,10 @@ fn loop_produces_enter_continue_exit() {
                     label: "Retry Loop".to_string(),
                     description: None,
                     max_iterations: 5,
-                    loop_condition: "input.needs_retry == true".to_string(),
+                    // Reference the loop's own iteration counter, which Phase 3
+                    // exposes as `<loop_id>.iteration` in scope. Avoids the
+                    // legacy unqualified `input.X` form.
+                    loop_condition: "lp.iteration < 5".to_string(),
                 },
                 parent_id: None,
                 width: None,
@@ -739,7 +746,7 @@ fn decision_with_default_branch() {
                     conditions: vec![BranchCondition {
                         edge_id: "cond_yes".to_string(),
                         label: "Yes".to_string(),
-                        guard: "input.approved == true".to_string(),
+                        guard: "true".to_string(),
                     }],
                     default_branch: Some("cond_no".to_string()),
                 },
@@ -1219,7 +1226,7 @@ fn multi_input_non_join_retains_pass_through_transitions() {
                     conditions: vec![BranchCondition {
                         edge_id: "cond_yes".to_string(),
                         label: "Yes".to_string(),
-                        guard: "input.ok == true".to_string(),
+                        guard: "true".to_string(),
                     }],
                     default_branch: Some("cond_no".to_string()),
                 },
@@ -1507,4 +1514,313 @@ fn compile_error_view_carries_edge_id() {
     assert_eq!(view.kind, "missing_target_handle");
     assert_eq!(view.edge_id.as_deref(), Some("the-edge"));
     assert!(view.message.contains("the-edge"));
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3: Rhai guard scope validation
+// ---------------------------------------------------------------------------
+
+/// Build a Start node whose `initial` port carries the given Bool fields. Lets
+/// the Phase 3 guard tests construct a workflow where the Start really does
+/// expose `<start_id>.<field>` references in scope.
+fn start_node_with_bool_field(id: &str, field: &str) -> WorkflowNode {
+    use mekhan_service::models::template::{FieldKind, Port, PortField};
+    WorkflowNode {
+        id: id.to_string(),
+        node_type: "start".to_string(),
+        position: pos(),
+        data: WorkflowNodeData::Start {
+            label: "Start".to_string(),
+            description: None,
+            initial: Port {
+                id: "in".to_string(),
+                label: "Input".to_string(),
+                fields: vec![PortField {
+                    name: field.to_string(),
+                    label: field.to_string(),
+                    kind: FieldKind::Bool,
+                    required: true,
+                    options: None,
+                    description: None,
+                }],
+            },
+        },
+        parent_id: None,
+        width: None,
+        height: None,
+    }
+}
+
+fn decision_with_guard(id: &str, guard: &str) -> WorkflowNode {
+    WorkflowNode {
+        id: id.to_string(),
+        node_type: "decision".to_string(),
+        position: pos(),
+        data: WorkflowNodeData::Decision {
+            label: "Route".to_string(),
+            description: None,
+            conditions: vec![BranchCondition {
+                edge_id: "cond_yes".to_string(),
+                label: "Yes".to_string(),
+                guard: guard.to_string(),
+            }],
+            default_branch: Some("cond_no".to_string()),
+        },
+        parent_id: None,
+        width: None,
+        height: None,
+    }
+}
+
+#[test]
+fn guard_qualified_reference_resolves() {
+    // Start declares `approved: Bool`. Decision guard references
+    // `s.approved` — must resolve cleanly through Phase 3 scope walk.
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node_with_bool_field("s", "approved"),
+            decision_with_guard("d", "s.approved == true"),
+            end_node("ea"),
+            end_node("eb"),
+        ],
+        edges: vec![
+            edge("e_in", "s", "d"),
+            edge_with_handle("e_yes", "d", "ea", "cond_yes"),
+            edge_with_handle("e_no", "d", "eb", "cond_no"),
+        ],
+        viewport: None,
+    };
+    let result = compile_to_air(&graph, "phase3-resolves", "", &std::collections::HashMap::new());
+    assert!(result.is_ok(), "compile should succeed: {:?}", result.err());
+}
+
+#[test]
+fn guard_syntax_error_is_reported() {
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node_with_bool_field("s", "approved"),
+            decision_with_guard("d", "s.approved =="),
+            end_node("ea"),
+            end_node("eb"),
+        ],
+        edges: vec![
+            edge("e_in", "s", "d"),
+            edge_with_handle("e_yes", "d", "ea", "cond_yes"),
+            edge_with_handle("e_no", "d", "eb", "cond_no"),
+        ],
+        viewport: None,
+    };
+    let err = compile_to_air(&graph, "phase3-syntax", "", &std::collections::HashMap::new())
+        .expect_err("malformed Rhai should produce GuardSyntax");
+    match err {
+        mekhan_service::compiler::CompileError::GuardSyntax { node_id, .. } => {
+            assert_eq!(node_id, "d");
+        }
+        e => panic!("unexpected: {e:?}"),
+    }
+}
+
+#[test]
+fn guard_unresolved_identifier_is_reported() {
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node_with_bool_field("s", "approved"),
+            decision_with_guard("d", "ghost.field == true"),
+            end_node("ea"),
+            end_node("eb"),
+        ],
+        edges: vec![
+            edge("e_in", "s", "d"),
+            edge_with_handle("e_yes", "d", "ea", "cond_yes"),
+            edge_with_handle("e_no", "d", "eb", "cond_no"),
+        ],
+        viewport: None,
+    };
+    let err = compile_to_air(&graph, "phase3-unresolved", "", &std::collections::HashMap::new())
+        .expect_err("unknown identifier should produce GuardUnresolved");
+    match err {
+        mekhan_service::compiler::CompileError::GuardUnresolved {
+            node_id,
+            identifier,
+            available,
+        } => {
+            assert_eq!(node_id, "d");
+            assert_eq!(identifier, "ghost.field");
+            // `s.approved` should be in the "available" hint so the editor
+            // can surface it to the user.
+            assert!(
+                available.iter().any(|a| a == "s.approved"),
+                "available should include `s.approved`; got {:?}",
+                available
+            );
+        }
+        e => panic!("unexpected: {e:?}"),
+    }
+}
+
+#[test]
+fn guard_multi_hop_scope_walk() {
+    // s -> a -> d. The Decision's scope should include `s`'s output fields
+    // even though `s` is two hops upstream.
+    use mekhan_service::models::template::{FieldKind, Port, PortField};
+
+    let typed_start = start_node_with_bool_field("s", "ok");
+
+    // Pass-through automated step. Its output port is the http backend's
+    // default (`status_code`, `body`, `headers`), so the edge from start (a
+    // Bool field) won't satisfy the typed-edge check. To keep the test
+    // focused on guard scope, give the AutomatedStep an *empty* input port
+    // (back-compat pass-through) and a custom output declaring `pre.ok`-like
+    // field — wait, fields are scoped under the node id, so we just need any
+    // field on `a`. Use a Bool field with name `processed`.
+    // Docker backend doesn't require a node-files entry, so it's the
+    // cheapest way to slot an AutomatedStep into a unit test.
+    let automated_a = WorkflowNode {
+        id: "a".to_string(),
+        node_type: "automated_step".to_string(),
+        position: pos(),
+        data: WorkflowNodeData::AutomatedStep {
+            label: "A".to_string(),
+            description: None,
+            execution_spec: ExecutionSpecConfig {
+                backend_type: ExecutionBackendType::Docker,
+                entrypoint: None,
+                config: serde_json::json!({"image": "alpine:latest"}),
+            },
+            input: Port::empty_input(), // pass-through: accepts any token
+            output: Port {
+                id: "out".to_string(),
+                label: "Output".to_string(),
+                fields: vec![PortField {
+                    name: "processed".to_string(),
+                    label: "Processed".to_string(),
+                    kind: FieldKind::Bool,
+                    required: true,
+                    options: None,
+                    description: None,
+                }],
+            },
+        },
+        parent_id: None,
+        width: None,
+        height: None,
+    };
+
+    // Decision guard references the *upstream* start's field (`s.ok`) — must
+    // resolve via the multi-hop scope walk.
+    let decision = decision_with_guard("d", "s.ok && a.processed");
+
+    let graph = WorkflowGraph {
+        nodes: vec![typed_start, automated_a, decision, end_node("ea"), end_node("eb")],
+        edges: vec![
+            edge("e_sa", "s", "a"),
+            edge("e_ad", "a", "d"),
+            edge_with_handle("e_yes", "d", "ea", "cond_yes"),
+            edge_with_handle("e_no", "d", "eb", "cond_no"),
+        ],
+        viewport: None,
+    };
+    let result = compile_to_air(&graph, "phase3-multihop", "", &std::collections::HashMap::new());
+    assert!(
+        result.is_ok(),
+        "multi-hop scope walk should resolve s.ok and a.processed: {:?}",
+        result.err()
+    );
+}
+
+#[test]
+fn loop_condition_can_reference_iteration_local() {
+    // Loop body's `loop_condition` should be able to reference the loop's own
+    // `<id>.iteration` counter without the upstream Start declaring it.
+    use mekhan_service::models::template::{FieldKind, Port, PortField};
+
+    let loop_node = WorkflowNode {
+        id: "lp".to_string(),
+        node_type: "loop".to_string(),
+        position: pos(),
+        data: WorkflowNodeData::Loop {
+            label: "Retry".to_string(),
+            description: None,
+            max_iterations: 5,
+            loop_condition: "lp.iteration < 3".to_string(),
+        },
+        parent_id: None,
+        width: None,
+        height: None,
+    };
+
+    // Need a Start that flows into the loop and an End out the other side.
+    let typed_start = WorkflowNode {
+        id: "s".to_string(),
+        node_type: "start".to_string(),
+        position: pos(),
+        data: WorkflowNodeData::Start {
+            label: "Start".to_string(),
+            description: None,
+            initial: Port::empty_input(),
+        },
+        parent_id: None,
+        width: None,
+        height: None,
+    };
+
+    let _ = (FieldKind::Number, PortField {
+        name: "x".to_string(),
+        label: "x".to_string(),
+        kind: FieldKind::Number,
+        required: false,
+        options: None,
+        description: None,
+    }); // silence "unused import" if test layout shifts
+
+    let graph = WorkflowGraph {
+        nodes: vec![typed_start, loop_node, end_node("e")],
+        edges: vec![
+            edge("e_in", "s", "lp"),
+            edge("e_out", "lp", "e"),
+        ],
+        viewport: None,
+    };
+    let result = compile_to_air(&graph, "phase3-loop-iter", "", &std::collections::HashMap::new());
+    assert!(
+        result.is_ok(),
+        "loop_condition should be able to reference its own iteration counter: {:?}",
+        result.err()
+    );
+}
+
+#[test]
+fn empty_guard_is_skipped() {
+    // A whitespace-only guard should not trigger validation (matches the
+    // existing default-branch behavior — the default is the no-guard fallback).
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            decision_with_guard("d", "   "),
+            end_node("ea"),
+            end_node("eb"),
+        ],
+        edges: vec![
+            edge("e_in", "s", "d"),
+            edge_with_handle("e_yes", "d", "ea", "cond_yes"),
+            edge_with_handle("e_no", "d", "eb", "cond_no"),
+        ],
+        viewport: None,
+    };
+    let result = compile_to_air(&graph, "phase3-empty", "", &std::collections::HashMap::new());
+    assert!(result.is_ok(), "empty guard should compile: {:?}", result.err());
+}
+
+#[test]
+fn guard_unresolved_error_view_carries_node_id() {
+    let err = mekhan_service::compiler::CompileError::GuardUnresolved {
+        node_id: "d".to_string(),
+        identifier: "ghost.field".to_string(),
+        available: vec!["s.approved".to_string()],
+    };
+    let view = err.to_view();
+    assert_eq!(view.kind, "guard_unresolved");
+    assert_eq!(view.node_id.as_deref(), Some("d"));
+    assert!(view.message.contains("ghost.field"));
+    assert!(view.message.contains("s.approved"));
 }

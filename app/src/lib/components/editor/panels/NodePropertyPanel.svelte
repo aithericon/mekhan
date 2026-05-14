@@ -5,11 +5,13 @@
 	import Maximize2 from '@lucide/svelte/icons/maximize-2';
 	import Minimize2 from '@lucide/svelte/icons/minimize-2';
 	import Pencil from '@lucide/svelte/icons/pencil';
+	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import StartNodeSection from './property-sections/StartNodeSection.svelte';
 	import HumanTaskSection from './property-sections/HumanTaskSection.svelte';
 	import AutomatedStepSection from './property-sections/AutomatedStepSection.svelte';
 	import DecisionNodeSection from './property-sections/DecisionNodeSection.svelte';
 	import LoopNodeSection from './property-sections/LoopNodeSection.svelte';
+	import { computeScopes, type ScopeEntry } from '$lib/editor/guard-scope';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Textarea } from '$lib/components/ui/textarea';
@@ -23,6 +25,7 @@
 		onclose: () => void;
 		onexpand?: () => void;
 		oncollapse?: () => void;
+		ondelete?: () => void;
 		binding?: YjsGraphBinding;
 		nodeId?: string;
 		templateId?: string;
@@ -36,6 +39,7 @@
 		onclose,
 		onexpand,
 		oncollapse,
+		ondelete,
 		binding,
 		nodeId,
 		templateId
@@ -47,6 +51,16 @@
 	) {
 		onchange({ ...data, [key]: value } as WorkflowNodeData);
 	}
+
+	// Compute the in-scope identifiers at the currently-selected node so the
+	// Decision/Loop guard editors can offer typed pickers + autocomplete. We
+	// re-run on every change to `binding.graph` (cheap — O(nodes + edges) and
+	// the editor is already paying for full Y.Doc rerenders).
+	const scope: ScopeEntry[] = $derived.by(() => {
+		if (!binding || !nodeId) return [];
+		const all = computeScopes(binding.graph);
+		return all.get(nodeId) ?? [];
+	});
 </script>
 
 <div
@@ -78,6 +92,18 @@
 					title="Collapse panel"
 				>
 					<Minimize2 class="size-4" />
+				</button>
+			{/if}
+			{#if !readonly && ondelete}
+				<button
+					type="button"
+					class="rounded-md p-1 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+					data-testid="btn-delete-node"
+					onclick={ondelete}
+					title="Delete node"
+					aria-label="Delete node"
+				>
+					<Trash2 class="size-4" />
 				</button>
 			{/if}
 			<button
@@ -144,11 +170,11 @@
 				<HumanTaskSection {data} {readonly} {onchange} {onexpand} />
 			{/if}
 		{:else if data.type === 'automated_step'}
-			<AutomatedStepSection {data} {readonly} {onchange} {binding} {nodeId} />
+			<AutomatedStepSection {data} {readonly} {onchange} {binding} {nodeId} {templateId} />
 		{:else if data.type === 'decision'}
-			<DecisionNodeSection {data} {readonly} {onchange} />
+			<DecisionNodeSection {data} {readonly} {onchange} {scope} />
 		{:else if data.type === 'loop'}
-			<LoopNodeSection {data} {readonly} {onchange} />
+			<LoopNodeSection {data} {readonly} {onchange} {scope} />
 		{/if}
 	</div>
 </div>

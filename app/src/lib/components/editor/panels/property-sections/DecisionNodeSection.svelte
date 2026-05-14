@@ -1,16 +1,23 @@
 <script lang="ts">
 	import type { DecisionNodeData } from '$lib/types/editor';
+	import type { ScopeEntry } from '$lib/editor/guard-scope';
 	import Plus from '@lucide/svelte/icons/plus';
-	import CodeEditor from '../shared/CodeEditor.svelte';
+	import GuardEditor from './GuardEditor.svelte';
 	import { Input } from '$lib/components/ui/input';
 
 	type Props = {
 		data: DecisionNodeData;
 		readonly?: boolean;
 		onchange: (data: DecisionNodeData) => void;
+		/**
+		 * In-scope identifiers for guards on this node, precomputed by the
+		 * parent panel via `computeScopes(graph).get(nodeId)`. Empty if the
+		 * node is detached or has no typed-port upstreams.
+		 */
+		scope?: ScopeEntry[];
 	};
 
-	let { data, readonly = false, onchange }: Props = $props();
+	let { data, readonly = false, onchange, scope = [] }: Props = $props();
 
 	function addBranch() {
 		onchange({
@@ -65,17 +72,12 @@
 					oninput={(e) => updateConditionLabel(i, (e.currentTarget as HTMLInputElement).value)}
 					class="h-7 px-2 py-1 text-[11px]"
 				/>
-				<div class="space-y-0.5">
-					<span class="text-[9px] text-muted-foreground">Guard (Rhai)</span>
-					<CodeEditor
-						value={condition.guard}
-						language="rhai"
-						{readonly}
-						minHeight="40px"
-						maxHeight="100px"
-						onchange={(val) => updateConditionGuard(i, val)}
-					/>
-				</div>
+				<GuardEditor
+					guard={condition.guard}
+					{scope}
+					{readonly}
+					onchange={(val) => updateConditionGuard(i, val)}
+				/>
 			</div>
 		</div>
 	{/each}

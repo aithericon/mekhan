@@ -67,6 +67,11 @@ aithericon-sdk = { path = "../engine/sdk" }
 schemars = "0.8"
 petgraph = "0.6"
 
+# Rhai parser for guard scope validation (Phase 3 typed-ports). We only use the
+# parser surface — `Engine::compile` returns an AST we walk for identifier
+# resolution; we never evaluate guard scripts here.
+rhai = { version = "1.19", features = ["sync", "serde"] }
+
 # Petri-net domain types (events, marking, tokens)
 petri-domain = { path = "../engine/core-engine/crates/domain" }
 
