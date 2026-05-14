@@ -175,9 +175,22 @@ pub fn build_router(state: AppState) -> Router {
             "/api/yjs/{template_id}",
             get(handlers::yjs_sync::ws_handler),
         )
+        .with_state(state.clone());
+
+    // Webhook receivers (Phase 5e): public, unauth'd — auth is performed
+    // inside the handler based on the trigger's `WebhookAuth` policy.
+    let webhook_router: Router = Router::new()
+        .route(
+            "/api/triggers/webhook/{slug}",
+            axum::routing::post(handlers::triggers::webhook_receiver)
+                .get(handlers::triggers::webhook_receiver)
+                .put(handlers::triggers::webhook_receiver)
+                .patch(handlers::triggers::webhook_receiver)
+                .delete(handlers::triggers::webhook_receiver),
+        )
         .with_state(state);
 
-    let protected = protected.merge(ws_router);
+    let protected = protected.merge(ws_router).merge(webhook_router);
 
     let swagger = SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", api_spec);
 

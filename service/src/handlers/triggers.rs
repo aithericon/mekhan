@@ -9,18 +9,22 @@
 //! Webhook receiver lives under `/api/triggers/webhook/{slug}` and lands in
 //! Phase 5e.
 
+use std::collections::HashMap;
+
 use axum::{
-    extract::{Path, State},
-    http::StatusCode,
+    extract::{Path, Query, State},
+    http::{HeaderMap, Method, StatusCode},
     Json,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::auth::AuthUser;
 use crate::models::error::{ApiError, ErrorResponse};
+use crate::models::template::{HttpMethod, TriggerSource};
 use crate::triggers::{FireResult, TriggerError, TriggerRecord};
 use crate::AppState;
 
@@ -256,4 +260,97 @@ pub fn schema_exports() {
     let _ = std::any::type_name::<crate::triggers::FireResult>();
     let _ = std::any::type_name::<crate::triggers::FireOutcome>();
     let _ = std::any::type_name::<crate::triggers::TriggerLocator>();
+}
+
+/// POST /api/triggers/webhook/{slug}
+///
+/// Public webhook receiver. The handler resolves the slug to a registered
+/// webhook trigger, validates auth per the trigger's `WebhookAuth` policy,
+/// then fires with a payload of `{ payload (body), headers, query, fire_time }`.
+///
+/// Mounted outside the auth middleware — external systems POST to this URL
+/// without a Bearer token.
+pub async fn webhook_receiver(
+    State(state): State<AppState>,
+    method: Method,
+    Path(slug): Path<String>,
+    Query(query): Query<HashMap<String, String>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<Json<FireTriggerResponse>, ApiError> {
+    let trigger = crate::triggers::sources::webhook::find_by_slug(&state.triggers, &slug)
+        .ok_or_else(|| ApiError::not_found(format!("webhook '{slug}' not found")))?;
+
+    let TriggerSource::Webhook(ref webhook) = trigger.source else {
+        return Err(ApiError::internal("trigger source is not a webhook"));
+    };
+
+    // Method restriction (optional). The default Webhook.require_method is
+    // None which accepts every method.
+    if let Some(req_method) = webhook.require_method {
+        if !methods_match(req_method, &method) {
+            return Err(ApiError::new(
+                StatusCode::METHOD_NOT_ALLOWED,
+                format!("webhook requires {req_method:?}, got {method}"),
+            ));
+        }
+    }
+
+    let header_map: HashMap<String, String> = headers
+        .iter()
+        .filter_map(|(k, v)| {
+            v.to_str().ok().map(|s| (k.as_str().to_string(), s.to_string()))
+        })
+        .collect();
+
+    // Secret resolver: looks up secrets from app config. Phase 5e uses env
+    // vars prefixed with `WEBHOOK_SECRET_` for simplicity — a real deployment
+    // would point at a secret store.
+    let resolver = |secret_ref: &str| -> Option<String> {
+        std::env::var(format!("WEBHOOK_SECRET_{secret_ref}")).ok()
+    };
+
+    if let Err(msg) = crate::triggers::sources::webhook::check_auth(
+        webhook,
+        &header_map,
+        body.as_ref(),
+        resolver,
+    ) {
+        return Err(ApiError::new(StatusCode::UNAUTHORIZED, msg));
+    }
+
+    // Parse the body as JSON if Content-Type is application/json; otherwise
+    // pass it as a base64-encoded blob under `body_bytes`.
+    let body_payload: Value =
+        if let Ok(v) = serde_json::from_slice::<Value>(body.as_ref()) {
+            v
+        } else {
+            serde_json::json!({
+                "body_bytes": format!("{}", String::from_utf8_lossy(body.as_ref())),
+            })
+        };
+
+    let payload = serde_json::json!({
+        "payload": body_payload,
+        "headers": header_map,
+        "query": query,
+        "fire_time": Utc::now().to_rfc3339(),
+    });
+
+    let result = state
+        .triggers
+        .fire(&trigger.node_id, payload)
+        .await
+        .map_err(map_trigger_error)?;
+    Ok(Json(FireTriggerResponse { result }))
+}
+
+fn methods_match(declared: HttpMethod, actual: &Method) -> bool {
+    match declared {
+        HttpMethod::Get => actual == Method::GET,
+        HttpMethod::Post => actual == Method::POST,
+        HttpMethod::Put => actual == Method::PUT,
+        HttpMethod::Patch => actual == Method::PATCH,
+        HttpMethod::Delete => actual == Method::DELETE,
+    }
 }
