@@ -62,6 +62,17 @@ pub async fn create_template(
     // Initialize Y.Doc from the graph for real-time collaboration. Seed any
     // inline files the caller supplied so the template lands ready-to-publish
     // for Python and other file-bearing backends.
+    let file_summary: Vec<String> = req
+        .files
+        .iter()
+        .map(|(node_id, files)| format!("{node_id}=[{}]", files.keys().cloned().collect::<Vec<_>>().join(",")))
+        .collect();
+    tracing::info!(
+        template_id = %id,
+        name = %req.name,
+        files = %file_summary.join("; "),
+        "seeding template files into Y.Doc"
+    );
     if let Err(e) = state
         .yjs
         .persistence

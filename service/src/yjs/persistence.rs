@@ -206,12 +206,26 @@ impl YjsPersistence {
         template_id: Uuid,
         graph: &WorkflowGraph,
     ) -> Result<(), YjsPersistenceError> {
+        self.init_doc_from_graph_with_files(template_id, graph, &HashMap::new())
+            .await
+    }
+
+    /// Same as `init_doc_from_graph` but also seeds per-node files (filename →
+    /// inline contents). Used by `create_template` so seed templates
+    /// (showcase, GitOps imports) land ready-to-publish.
+    pub async fn init_doc_from_graph_with_files(
+        &self,
+        template_id: Uuid,
+        graph: &WorkflowGraph,
+        files: &HashMap<String, HashMap<String, String>>,
+    ) -> Result<(), YjsPersistenceError> {
         let graph = graph.clone();
+        let files = files.clone();
 
         // All yrs work in spawn_blocking (yrs types are !Send)
         let update =
             tokio::task::spawn_blocking(move || -> Result<Vec<u8>, YjsPersistenceError> {
-                let doc = doc_ops::graph_to_doc(&graph);
+                let doc = doc_ops::graph_to_doc_with_files(&graph, &files);
                 let txn = doc.transact();
                 Ok(txn.encode_state_as_update_v1(&StateVector::default()))
             })
