@@ -96,6 +96,7 @@
 <script lang="ts">
 	import { cn } from '$lib/utils';
 	import type { Component, Snippet } from 'svelte';
+	import { compileErrors } from '$lib/editor/compile-errors.svelte';
 
 	let {
 		kind,
@@ -105,6 +106,7 @@
 		body,
 		class: className,
 		'data-testid': dataTestid,
+		nodeId,
 	}: {
 		kind: WorkflowNodeKind;
 		icon: Component<{ class?: string }>;
@@ -113,13 +115,25 @@
 		body?: Snippet;
 		class?: string;
 		'data-testid'?: string;
+		/// xyflow-provided node id. When set, the card subscribes to the
+		/// compile-error store and adds a red ring if this node is flagged by
+		/// the latest publish attempt. Reading the store here (rather than
+		/// mutating the top-level nodes array from a canvas-level effect) keeps
+		/// the reactivity local to the offending card.
+		nodeId?: string;
 	} = $props();
 
 	const Icon = $derived(icon);
+	const compileError = $derived(nodeId ? compileErrors.byNodeId.get(nodeId) : undefined);
 </script>
 
 <div
-	class={cn(workflowNodeCardVariants({ kind, selected }), className)}
+	class={cn(
+		workflowNodeCardVariants({ kind, selected }),
+		className,
+		compileError && 'ring-2 ring-destructive ring-offset-2 ring-offset-background'
+	)}
+	title={compileError?.message}
 	data-testid={dataTestid}
 >
 	<div

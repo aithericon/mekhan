@@ -4,7 +4,7 @@
 	import Play from '@lucide/svelte/icons/play';
 	import WorkflowNodeCard, { workflowNodeHandleClass } from './WorkflowNodeCard.svelte';
 
-	let { data, selected }: { data: StartNodeData; selected?: boolean } = $props();
+	let { id, data, selected }: { id: string; data: StartNodeData; selected?: boolean } = $props();
 
 	// Phase 1 typed-ports: render declared `initial` port fields inline so the
 	// port editor's effect is visible on the canvas. When no fields are
@@ -28,6 +28,7 @@
 
 {#if hasFields}
 	<WorkflowNodeCard
+		nodeId={id}
 		kind="start"
 		icon={Play}
 		label={data.label}
@@ -38,6 +39,7 @@
 	/>
 {:else}
 	<WorkflowNodeCard
+		nodeId={id}
 		kind="start"
 		icon={Play}
 		label={data.label}

@@ -15,7 +15,6 @@
 	import { edgeTypes } from './edges';
 	import NodePalette from './NodePalette.svelte';
 	import DropHandler from './DropHandler.svelte';
-	import { compileErrors } from '$lib/editor/compile-errors.svelte';
 	import {
 		createDefaultNodeData,
 		type WorkflowNodeData,
@@ -61,8 +60,7 @@
 			data: n.data,
 			...(n.parentId ? { parentId: n.parentId, extent: 'parent' as const } : {}),
 			...(n.width != null ? { width: n.width } : {}),
-			...(n.height != null ? { height: n.height } : {}),
-			...(compileErrors.byNodeId.has(n.id) ? { className: 'workflow-node-error' } : {})
+			...(n.height != null ? { height: n.height } : {})
 		}));
 	}
 
@@ -76,13 +74,7 @@
 			label: e.label ?? undefined,
 			type: 'deletable' as const,
 			animated: e.type === 'loop_back',
-			deletable: !isReadonly,
-			...(compileErrors.byEdgeId.has(e.id)
-				? {
-						className: 'workflow-edge-error',
-						style: 'stroke: hsl(var(--destructive)); stroke-width: 2;'
-					}
-				: {})
+			deletable: !isReadonly
 		}));
 	}
 
@@ -112,33 +104,6 @@
 			});
 			edges = toFlowEdges(graph, readonly);
 		}
-	});
-
-	// Re-decorate nodes/edges when the compile-error store changes (e.g. after
-	// a failed publish or an explicit clear). We keep all other state (positions,
-	// selection, data) intact and just toggle the `className` / `style` fields.
-	$effect(() => {
-		const nodeErrors = compileErrors.byNodeId;
-		const edgeErrors = compileErrors.byEdgeId;
-		nodes = nodes.map((n) => {
-			const hasErr = nodeErrors.has(n.id);
-			const { className: _, ...rest } = n as Node & { className?: string };
-			return hasErr ? { ...rest, className: 'workflow-node-error' } : rest;
-		});
-		edges = edges.map((e) => {
-			const hasErr = edgeErrors.has(e.id);
-			const { className: _c, style: _s, ...rest } = e as Edge & {
-				className?: string;
-				style?: string;
-			};
-			return hasErr
-				? {
-						...rest,
-						className: 'workflow-edge-error',
-						style: 'stroke: hsl(var(--destructive)); stroke-width: 2;'
-					}
-				: rest;
-		});
 	});
 
 	function serializeAndEmit() {
@@ -327,17 +292,3 @@
 	</div>
 </div>
 
-<style>
-	/* Phase 2 publish-error highlighting: nodes / edges flagged by the
-	   compiler get a red ring + outline so the user can see exactly which
-	   element triggered the failure. Cleared on the next successful publish. */
-	:global(.svelte-flow__node.workflow-node-error) {
-		outline: 2px solid hsl(var(--destructive));
-		outline-offset: 4px;
-		border-radius: 12px;
-	}
-	:global(.svelte-flow__edge.workflow-edge-error path.svelte-flow__edge-path) {
-		stroke: hsl(var(--destructive));
-		stroke-width: 2.5;
-	}
-</style>

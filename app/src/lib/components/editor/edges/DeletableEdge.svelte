@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { BaseEdge, EdgeToolbar, getBezierPath, useSvelteFlow, type EdgeProps } from '@xyflow/svelte';
+	import { compileErrors } from '$lib/editor/compile-errors.svelte';
 
 	let {
 		id,
@@ -24,6 +25,16 @@
 		getBezierPath({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition })
 	);
 
+	// Phase 2 typed-ports: subscribe to the publish-error store and override
+	// the stroke when this edge's id is flagged. Read at render time — no top-
+	// level state mutation, so no feedback loop with xyflow's bind:edges.
+	const compileError = $derived(compileErrors.byEdgeId.get(id));
+	const effectiveStyle = $derived(
+		compileError
+			? `${style ?? ''}; stroke: hsl(var(--destructive)); stroke-width: 2.5;`
+			: style
+	);
+
 	function handleDelete(event: MouseEvent) {
 		event.stopPropagation();
 		deleteElements({ edges: [{ id }] });
@@ -36,11 +47,14 @@
 	labelY={pathResult[2]}
 	{label}
 	{labelStyle}
-	{style}
+	style={effectiveStyle}
 	{markerStart}
 	{markerEnd}
 	{interactionWidth}
 />
+{#if compileError}
+	<title>{compileError.message}</title>
+{/if}
 
 {#if deletable !== false}
 	<EdgeToolbar x={pathResult[1]} y={pathResult[2]} isVisible>

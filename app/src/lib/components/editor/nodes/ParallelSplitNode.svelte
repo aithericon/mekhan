@@ -4,11 +4,12 @@
 	import GitFork from '@lucide/svelte/icons/git-fork';
 	import WorkflowNodeCard, { workflowNodeHandleClass } from './WorkflowNodeCard.svelte';
 
-	let { data, selected }: { data: ParallelSplitNodeData; selected?: boolean } = $props();
+	let { id, data, selected }: { id: string; data: ParallelSplitNodeData; selected?: boolean } = $props();
 </script>
 
 <Handle id="in" type="target" position={Position.Left} class={workflowNodeHandleClass('parallel')} />
 <WorkflowNodeCard
+	nodeId={id}
 	kind="parallel"
 	icon={GitFork}
 	label={data.label}

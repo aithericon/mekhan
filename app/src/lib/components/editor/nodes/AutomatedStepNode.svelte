@@ -4,7 +4,7 @@
 	import Cpu from '@lucide/svelte/icons/cpu';
 	import WorkflowNodeCard, { workflowNodeHandleClass } from './WorkflowNodeCard.svelte';
 
-	let { data, selected }: { data: AutomatedStepNodeData; selected?: boolean } = $props();
+	let { id, data, selected }: { id: string; data: AutomatedStepNodeData; selected?: boolean } = $props();
 
 	// Phase 2 typed-ports: render declared `output` port fields inline so the
 	// port editor's effect is visible on the canvas. Falls back to the legacy
@@ -28,6 +28,7 @@
 
 <Handle id="in" type="target" position={Position.Left} class={workflowNodeHandleClass('automated')} />
 <WorkflowNodeCard
+	nodeId={id}
 	kind="automated"
 	icon={Cpu}
 	label={data.label}

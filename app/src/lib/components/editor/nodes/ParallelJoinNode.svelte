@@ -4,11 +4,12 @@
 	import GitMerge from '@lucide/svelte/icons/git-merge';
 	import WorkflowNodeCard, { workflowNodeHandleClass } from './WorkflowNodeCard.svelte';
 
-	let { data, selected }: { data: ParallelJoinNodeData; selected?: boolean } = $props();
+	let { id, data, selected }: { id: string; data: ParallelJoinNodeData; selected?: boolean } = $props();
 </script>
 
 <Handle id="in" type="target" position={Position.Left} class={workflowNodeHandleClass('parallel')} />
 <WorkflowNodeCard
+	nodeId={id}
 	kind="parallel"
 	icon={GitMerge}
 	label={data.label}

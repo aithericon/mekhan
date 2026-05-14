@@ -4,11 +4,12 @@
 	import Repeat from '@lucide/svelte/icons/repeat';
 	import WorkflowNodeCard, { workflowNodeHandleClass } from './WorkflowNodeCard.svelte';
 
-	let { data, selected }: { data: LoopNodeData; selected?: boolean } = $props();
+	let { id, data, selected }: { id: string; data: LoopNodeData; selected?: boolean } = $props();
 </script>
 
 <Handle id="in" type="target" position={Position.Left} class={workflowNodeHandleClass('loop')} />
 <WorkflowNodeCard
+	nodeId={id}
 	kind="loop"
 	icon={Repeat}
 	label={data.label}

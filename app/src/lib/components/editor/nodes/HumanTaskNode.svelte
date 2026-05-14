@@ -4,7 +4,7 @@
 	import User from '@lucide/svelte/icons/user';
 	import WorkflowNodeCard, { workflowNodeHandleClass } from './WorkflowNodeCard.svelte';
 
-	let { data, selected }: { data: HumanTaskNodeData; selected?: boolean } = $props();
+	let { id, data, selected }: { id: string; data: HumanTaskNodeData; selected?: boolean } = $props();
 
 	const stepCount = $derived(data.steps?.length ?? 0);
 	const fieldCount = $derived(
@@ -14,6 +14,7 @@
 
 <Handle id="in" type="target" position={Position.Left} class={workflowNodeHandleClass('human-task')} />
 <WorkflowNodeCard
+	nodeId={id}
 	kind="human-task"
 	icon={User}
 	label={data.label}

@@ -4,11 +4,12 @@
 	import Square from '@lucide/svelte/icons/square';
 	import WorkflowNodeCard, { workflowNodeHandleClass } from './WorkflowNodeCard.svelte';
 
-	let { data, selected }: { data: EndNodeData; selected?: boolean } = $props();
+	let { id, data, selected }: { id: string; data: EndNodeData; selected?: boolean } = $props();
 </script>
 
 <Handle id="in" type="target" position={Position.Left} class={workflowNodeHandleClass('end')} />
 <WorkflowNodeCard
+	nodeId={id}
 	kind="end"
 	icon={Square}
 	label={data.label}

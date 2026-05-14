@@ -4,13 +4,14 @@
 	import GitBranch from '@lucide/svelte/icons/git-branch';
 	import WorkflowNodeCard, { workflowNodeHandleClass } from './WorkflowNodeCard.svelte';
 
-	let { data, selected }: { data: DecisionNodeData; selected?: boolean } = $props();
+	let { id, data, selected }: { id: string; data: DecisionNodeData; selected?: boolean } = $props();
 
 	const branchCount = $derived((data.conditions?.length ?? 0) + 1); // +1 for default
 </script>
 
 <Handle id="in" type="target" position={Position.Left} class={workflowNodeHandleClass('decision')} />
 <WorkflowNodeCard
+	nodeId={id}
 	kind="decision"
 	icon={GitBranch}
 	label={data.label}
