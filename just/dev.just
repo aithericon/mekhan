@@ -207,6 +207,7 @@ up-engine:
       RUST_LOG="info,petri_application=debug,petri_api=debug" \
       NATS_URL="{{nats_url}}" \
       EXECUTOR_NATS_URL="{{nats_url}}" \
+      EXECUTOR_ENABLED="true" \
       PORT="3030" \
       "$PWD/engine/target/debug/core-engine" \
       > "{{log_dir}}/engine.log" 2>&1 &

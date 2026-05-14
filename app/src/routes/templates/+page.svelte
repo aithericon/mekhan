@@ -56,7 +56,7 @@
 		try {
 			const instance = await createInstance({
 				template_id: templateId,
-				created_by: 'default-user'
+				created_by: '00000000-0000-0000-0000-000000000000'
 			});
 			goto(`/instances/${instance.id}`);
 		} catch (e) {

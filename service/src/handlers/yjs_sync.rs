@@ -26,7 +26,8 @@ pub async fn ws_handler(
     Path(template_id): Path<Uuid>,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    // Verify the template exists and is not published
+    // Verify the template exists. Published templates connect read-only so the
+    // editor can render the frozen graph; writes are dropped in `handle_socket`.
     let existing = sqlx::query_as::<_, WorkflowTemplate>(
         "SELECT * FROM workflow_templates WHERE id = $1",
     )
@@ -34,17 +35,8 @@ pub async fn ws_handler(
     .fetch_optional(&state.db)
     .await;
 
-    match existing {
-        Ok(Some(t)) if t.published => {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(json!({"error": "cannot edit a published template"})),
-            )
-                .into_response();
-        }
-        Ok(Some(_)) => {
-            // Template exists and is not published — proceed with upgrade
-        }
+    let readonly = match existing {
+        Ok(Some(t)) => t.published,
         Ok(None) => {
             return (
                 StatusCode::NOT_FOUND,
@@ -60,12 +52,12 @@ pub async fn ws_handler(
             )
                 .into_response();
         }
-    }
+    };
 
-    ws.on_upgrade(move |socket| handle_socket(socket, template_id, state))
+    ws.on_upgrade(move |socket| handle_socket(socket, template_id, readonly, state))
 }
 
-async fn handle_socket(socket: WebSocket, template_id: Uuid, state: AppState) {
+async fn handle_socket(socket: WebSocket, template_id: Uuid, readonly: bool, state: AppState) {
     let client_id = NEXT_CLIENT_ID.fetch_add(1, Ordering::Relaxed);
 
     tracing::info!(
@@ -138,6 +130,12 @@ async fn handle_socket(socket: WebSocket, template_id: Uuid, state: AppState) {
                 break;
             }
         };
+
+        // Published templates: only the initial sync (SyncStep1) is honored.
+        // Updates from any client must not mutate the frozen Y.Doc.
+        if readonly && msg.first().copied().is_some_and(|t| t != 0) {
+            continue;
+        }
 
         match room.handle_message(client_id, msg).await {
             Ok(Some(response)) => {
