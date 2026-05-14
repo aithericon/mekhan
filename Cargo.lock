@@ -2437,6 +2437,7 @@ name = "mekhan-service"
 version = "0.1.0"
 dependencies = [
  "aithericon-executor-backend-configs",
+ "aithericon-executor-domain",
  "aithericon-sdk",
  "anyhow",
  "async-nats",

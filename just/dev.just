@@ -154,7 +154,9 @@ up-executor:
     [storage]
     backend  = "s3"
     endpoint = "{{s3_endpoint}}"
-    bucket   = "executor-artifacts"
+    # Must match mekhan-service's MEKHAN__S3__BUCKET so the executor can pull
+    # node files that mekhan uploaded at publish time. See mekhan.toml.
+    bucket   = "mekhan-artifacts"
     region   = "us-east-1"
 
     [storage.credentials]
@@ -238,12 +240,15 @@ up-mekhan:
 
     echo "▶ starting mekhan-service on :3100…"
     # mekhan.toml carries the localhost db / nats / s3 endpoints; env overrides
-    # win, so we make sure NATS + DB match the running infra.
+    # win, so we make sure NATS + DB + S3 match the running infra.
     nohup env \
       RUST_LOG="info,mekhan_service=debug" \
       MEKHAN__DATABASE_URL="{{database_url}}" \
       MEKHAN__NATS_URL="{{nats_url}}" \
       MEKHAN__PETRI_LAB_URL="http://localhost:3030" \
+      MEKHAN__S3__ENDPOINT="{{s3_endpoint}}" \
+      MEKHAN__S3__ACCESS_KEY="rustfsadmin" \
+      MEKHAN__S3__SECRET_KEY="rustfsadmin" \
       "$PWD/target/debug/mekhan-service" \
       > "{{log_dir}}/mekhan.log" 2>&1 &
     echo $! > "{{pid_dir}}/mekhan.pid"

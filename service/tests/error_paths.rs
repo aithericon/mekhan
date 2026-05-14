@@ -81,7 +81,7 @@ async fn insert_published_template(db: &sqlx::PgPool) -> Uuid {
     let template_id = Uuid::new_v4();
     let author_id = Uuid::new_v4();
     let graph = simple_graph();
-    let air = compile_to_air(&graph, "test-template", "").expect("compile AIR");
+    let air = compile_to_air(&graph, "test-template", "", &std::collections::HashMap::new()).expect("compile AIR");
 
     sqlx::query(
         r#"INSERT INTO workflow_templates

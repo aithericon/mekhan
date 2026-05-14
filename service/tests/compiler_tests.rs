@@ -121,7 +121,7 @@ fn start_to_end_produces_terminal_place() {
         viewport: None,
     };
 
-    let air = compile_to_air(&graph, "test", "desc").expect("should compile");
+    let air = compile_to_air(&graph, "test", "desc", &std::collections::HashMap::new()).expect("should compile");
 
     // End place merged into Start: single terminal place with initial tokens
     assert!(
@@ -143,7 +143,7 @@ fn start_to_end_has_correct_structure() {
         viewport: None,
     };
 
-    let air = compile_to_air(&graph, "my_workflow", "a test workflow").expect("should compile");
+    let air = compile_to_air(&graph, "my_workflow", "a test workflow", &std::collections::HashMap::new()).expect("should compile");
 
     assert_eq!(air["name"], "my_workflow");
     assert_eq!(air["description"], "a test workflow");
@@ -204,7 +204,7 @@ fn human_task_produces_group_signal_and_transitions() {
         viewport: None,
     };
 
-    let air = compile_to_air(&graph, "ht_test", "").expect("should compile");
+    let air = compile_to_air(&graph, "ht_test", "", &std::collections::HashMap::new()).expect("should compile");
 
     // Group exists
     assert!(has_group(&air, "grp_ht"), "expected human_task group");
@@ -266,7 +266,7 @@ fn automated_step_produces_executor_lifecycle() {
         viewport: None,
     };
 
-    let air = compile_to_air(&graph, "auto_test", "").expect("should compile");
+    let air = compile_to_air(&graph, "auto_test", "", &std::collections::HashMap::new()).expect("should compile");
 
     // Prepare transition (compiler-specific, prefixed with node id)
     assert!(
@@ -367,7 +367,7 @@ fn decision_produces_guard_transitions() {
     graph.nodes[2].id = "ea".to_string();
     graph.nodes[3].id = "eb".to_string();
 
-    let air = compile_to_air(&graph, "dec_test", "").expect("should compile");
+    let air = compile_to_air(&graph, "dec_test", "", &std::collections::HashMap::new()).expect("should compile");
 
     // One guard transition per condition
     assert!(
@@ -463,7 +463,7 @@ fn parallel_split_join_produces_fork_and_join() {
         viewport: None,
     };
 
-    let air = compile_to_air(&graph, "par_test", "").expect("should compile");
+    let air = compile_to_air(&graph, "par_test", "", &std::collections::HashMap::new()).expect("should compile");
 
     // Fork transition
     assert!(
@@ -515,7 +515,7 @@ fn loop_produces_enter_continue_exit() {
         viewport: None,
     };
 
-    let air = compile_to_air(&graph, "loop_test", "").expect("should compile");
+    let air = compile_to_air(&graph, "loop_test", "", &std::collections::HashMap::new()).expect("should compile");
 
     // Enter, continue, exit transitions
     assert!(
@@ -555,7 +555,7 @@ fn no_start_node_fails() {
         viewport: None,
     };
 
-    let err = compile_to_air(&graph, "test", "").expect_err("should fail without start node");
+    let err = compile_to_air(&graph, "test", "", &std::collections::HashMap::new()).expect_err("should fail without start node");
     let msg = err.to_string();
     assert!(
         msg.contains("Start") || msg.contains("start"),
@@ -571,7 +571,7 @@ fn no_end_node_fails() {
         viewport: None,
     };
 
-    let err = compile_to_air(&graph, "test", "").expect_err("should fail without end node");
+    let err = compile_to_air(&graph, "test", "", &std::collections::HashMap::new()).expect_err("should fail without end node");
     let msg = err.to_string();
     assert!(
         msg.contains("End") || msg.contains("end"),
@@ -605,7 +605,7 @@ fn unreachable_node_fails() {
         viewport: None,
     };
 
-    let err = compile_to_air(&graph, "test", "").expect_err("should fail with unreachable node");
+    let err = compile_to_air(&graph, "test", "", &std::collections::HashMap::new()).expect_err("should fail with unreachable node");
     let msg = err.to_string();
     assert!(
         msg.contains("unreachable") || msg.contains("orphan"),
@@ -638,7 +638,7 @@ fn loop_with_zero_iterations_fails() {
         viewport: None,
     };
 
-    let err = compile_to_air(&graph, "test", "").expect_err("should fail with max_iterations=0");
+    let err = compile_to_air(&graph, "test", "", &std::collections::HashMap::new()).expect_err("should fail with max_iterations=0");
     let msg = err.to_string();
     assert!(
         msg.contains("max_iterations"),
@@ -672,7 +672,7 @@ fn loop_with_empty_condition_fails() {
     };
 
     let err =
-        compile_to_air(&graph, "test", "").expect_err("should fail with empty loop condition");
+        compile_to_air(&graph, "test", "", &std::collections::HashMap::new()).expect_err("should fail with empty loop condition");
     let msg = err.to_string();
     assert!(
         msg.contains("condition"),
@@ -718,7 +718,7 @@ fn decision_with_default_branch() {
         viewport: None,
     };
 
-    let air = compile_to_air(&graph, "dec_default_test", "").expect("should compile");
+    let air = compile_to_air(&graph, "dec_default_test", "", &std::collections::HashMap::new()).expect("should compile");
 
     // Guard branch
     assert!(has_transition(&air, "t_dec_branch_0"));
@@ -785,7 +785,7 @@ fn cycle_in_non_loop_edges_fails() {
         viewport: None,
     };
 
-    let err = compile_to_air(&graph, "test", "").expect_err("should fail with cycle");
+    let err = compile_to_air(&graph, "test", "", &std::collections::HashMap::new()).expect_err("should fail with cycle");
     let msg = err.to_string();
     assert!(
         msg.contains("cycle"),
@@ -823,7 +823,7 @@ fn parallel_split_with_one_branch_fails() {
         viewport: None,
     };
 
-    let err = compile_to_air(&graph, "test", "").expect_err("should fail with 1 branch");
+    let err = compile_to_air(&graph, "test", "", &std::collections::HashMap::new()).expect_err("should fail with 1 branch");
     let msg = err.to_string();
     assert!(
         msg.contains("parallel split") || msg.contains("outgoing"),
@@ -862,7 +862,7 @@ fn automated_step_has_scoped_effect_errors() {
         viewport: None,
     };
 
-    let air = compile_to_air(&graph, "test", "").expect("should compile");
+    let air = compile_to_air(&graph, "test", "", &std::collections::HashMap::new()).expect("should compile");
 
     // Each AutomatedStep node gets its own lifecycle-scoped effect_errors place.
     assert!(
@@ -917,7 +917,7 @@ fn chain_merges_intermediate_pass_through_places() {
         viewport: None,
     };
 
-    let air = compile_to_air(&graph, "chain_test", "").expect("should compile");
+    let air = compile_to_air(&graph, "chain_test", "", &std::collections::HashMap::new()).expect("should compile");
 
     // No pass-through wiring transitions should exist
     let pass_throughs: Vec<_> = transitions(&air)
@@ -993,7 +993,7 @@ fn transitive_merge_chain_resolves_correctly() {
         viewport: None,
     };
 
-    let air = compile_to_air(&graph, "transitive_test", "").expect("should compile");
+    let air = compile_to_air(&graph, "transitive_test", "", &std::collections::HashMap::new()).expect("should compile");
 
     // Start place still exists with its initial token
     let start_place = places(&air)
@@ -1088,7 +1088,7 @@ fn parallel_join_merges_per_edge_input_places() {
         viewport: None,
     };
 
-    let air = compile_to_air(&graph, "join_merge_test", "").expect("should compile");
+    let air = compile_to_air(&graph, "join_merge_test", "", &std::collections::HashMap::new()).expect("should compile");
 
     // Join's per-edge input places should be merged away
     assert!(
@@ -1202,7 +1202,7 @@ fn multi_input_non_join_retains_pass_through_transitions() {
     graph.nodes[5].id = "ey".to_string();
     graph.nodes[6].id = "en".to_string();
 
-    let air = compile_to_air(&graph, "multi_input_test", "").expect("should compile");
+    let air = compile_to_air(&graph, "multi_input_test", "", &std::collections::HashMap::new()).expect("should compile");
 
     // Decision's input place (p_dec_input) should still exist — not merged
     assert!(
@@ -1267,7 +1267,7 @@ fn scope_creates_group_in_air() {
         viewport: None,
     };
 
-    let air = compile_to_air(&graph, "scope_test", "").expect("should compile");
+    let air = compile_to_air(&graph, "scope_test", "", &std::collections::HashMap::new()).expect("should compile");
 
     // Scope should produce a group
     let groups = air["groups"].as_array().expect("groups should be an array");
@@ -1323,7 +1323,7 @@ fn scope_without_children_compiles() {
         viewport: None,
     };
 
-    let air = compile_to_air(&graph, "empty_scope_test", "").expect("should compile");
+    let air = compile_to_air(&graph, "empty_scope_test", "", &std::collections::HashMap::new()).expect("should compile");
     let groups = air["groups"].as_array().expect("groups array");
     assert!(
         groups.iter().any(|g| g["id"] == "grp_empty_scope"),

@@ -111,7 +111,7 @@ fn ui_simple_start_end_deserializes_and_compiles() {
     assert_eq!(graph.nodes.len(), 2);
     assert_eq!(graph.edges.len(), 1);
 
-    let air = compile_to_air(&graph, "simple", "Simple workflow").expect("should compile");
+    let air = compile_to_air(&graph, "simple", "Simple workflow", &std::collections::HashMap::new()).expect("should compile");
 
     // After merge: 1 place (terminal + seeded), 0 transitions
     assert_eq!(places(&air).len(), 1);
@@ -131,7 +131,7 @@ fn ui_linear_human_task_deserializes_and_compiles() {
     assert_eq!(graph.nodes.len(), 3);
     assert_eq!(graph.edges.len(), 2);
 
-    let air = compile_to_air(&graph, "linear", "Linear workflow").expect("should compile");
+    let air = compile_to_air(&graph, "linear", "Linear workflow", &std::collections::HashMap::new()).expect("should compile");
 
     // HumanTask internal: input, active, signal, errors, output = 5 places
     // + Start place = 6 (End merged into HumanTask output)
@@ -176,7 +176,7 @@ fn ui_invoice_processing_deserializes_and_compiles() {
     assert_eq!(graph.edges.len(), 11);
 
     let air =
-        compile_to_air(&graph, "invoice_processing", "Invoice workflow").expect("should compile");
+        compile_to_air(&graph, "invoice_processing", "Invoice workflow", &std::collections::HashMap::new()).expect("should compile");
 
     // Structural invariants
     assert_all_transitions_wired(&air);

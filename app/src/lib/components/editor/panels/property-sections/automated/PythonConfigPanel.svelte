@@ -1,6 +1,4 @@
 <script lang="ts">
-	import CodeEditor from '../../shared/CodeEditor.svelte';
-	import CollabCodeEditor from '../../shared/CollabCodeEditor.svelte';
 	import KeyValueEditor from '../../shared/KeyValueEditor.svelte';
 	import StringListEditor from '../../shared/StringListEditor.svelte';
 	import type { YjsGraphBinding } from '$lib/yjs/graph-binding.svelte';
@@ -10,192 +8,132 @@
 
 	type Props = {
 		config: Record<string, unknown>;
+		entrypoint?: string;
 		readonly?: boolean;
 		onchange: (config: Record<string, unknown>) => void;
-		onexpand?: () => void;
+		onentrypointchange?: (entrypoint: string) => void;
 		binding?: YjsGraphBinding;
 		nodeId?: string;
 	};
 
-	let { config, readonly = false, onchange, onexpand, binding, nodeId }: Props = $props();
+	let {
+		config,
+		entrypoint = 'main.py',
+		readonly = false,
+		onchange,
+		onentrypointchange,
+		binding,
+		nodeId
+	}: Props = $props();
 
-	type ScriptMode = 'file' | 'inline' | 'node_file';
-
-	const scriptMode = $derived<ScriptMode>(
-		config.nodeFile ? 'node_file' : typeof config.scriptContent === 'string' ? 'inline' : 'file'
-	);
-
-	// Get files from binding when in node_file mode
-	const nodeFiles = $derived(
+	// Files for this node (collaborative). Empty Map when binding/nodeId aren't
+	// provided (e.g. in test harnesses); the panel still renders the rest of the
+	// config so other knobs work.
+	const nodeFiles: Map<string, Y.Text> = $derived(
 		binding && nodeId ? binding.getNodeFiles(nodeId) : new Map<string, Y.Text>()
 	);
 
-	let selectedFileName = $state<string | null>(null);
+	const filenames = $derived([...nodeFiles.keys()].sort());
 
-	const selectedYText = $derived(
-		selectedFileName ? nodeFiles.get(selectedFileName) ?? null : null
-	);
-
-	function setMode(mode: ScriptMode) {
-		if (mode === 'file') {
-			const { scriptContent: _1, nodeFile: _2, ...rest } = config;
-			onchange({ ...rest, script: config.script ?? '' });
-		} else if (mode === 'inline') {
-			const { script: _1, nodeFile: _2, ...rest } = config;
-			onchange({ ...rest, scriptContent: config.scriptContent ?? '' });
-			onexpand?.();
-		} else {
-			const { script: _1, scriptContent: _2, ...rest } = config;
-			onchange({ ...rest, nodeFile: selectedFileName ?? 'main.py' });
-			onexpand?.();
-		}
+	function handleEntrypoint(name: string) {
+		onentrypointchange?.(name);
 	}
 
 	function handleCreateFile() {
 		if (!binding || !nodeId) return;
-		const filename = 'main.py';
-		binding.createFile(nodeId, filename, '# New Python script\n');
-		selectedFileName = filename;
-		onchange({ ...config, nodeFile: filename });
+		const name = prompt('File name:', 'helper.py');
+		if (!name) return;
+		binding.createFile(nodeId, name, '');
+		// Don't auto-switch entrypoint — the user picks via the dropdown.
 	}
 
 	function handleDeleteFile(filename: string) {
 		if (!binding || !nodeId) return;
-		binding.deleteFile(nodeId, filename);
-		if (selectedFileName === filename) {
-			selectedFileName = null;
+		if (filename === entrypoint) {
+			alert(`Cannot delete the entrypoint (${filename}). Switch entrypoint first.`);
+			return;
 		}
-	}
-
-	function handleSelectFile(filename: string) {
-		selectedFileName = filename;
-		onchange({ ...config, nodeFile: filename });
+		if (!confirm(`Delete ${filename}?`)) return;
+		binding.deleteFile(nodeId, filename);
 	}
 </script>
 
-{#if !readonly}
-	<div class="space-y-1.5">
-		<span class="text-xs font-medium text-muted-foreground">Script Source</span>
-		<div class="flex gap-1">
+<div class="space-y-1.5">
+	<div class="flex items-center justify-between">
+		<span class="text-xs font-medium text-muted-foreground">Files</span>
+		{#if !readonly && binding && nodeId}
 			<button
 				type="button"
-				class="flex-1 rounded-md border px-2 py-1 text-[10px] font-medium transition-colors {scriptMode === 'file'
-					? 'border-primary bg-primary/10 text-primary'
-					: 'border-border text-muted-foreground hover:bg-accent'}"
-				onclick={() => setMode('file')}
+				class="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+				onclick={handleCreateFile}
 			>
-				File Reference
+				<Plus class="size-3" />
+				New file
 			</button>
-			<button
-				type="button"
-				class="flex-1 rounded-md border px-2 py-1 text-[10px] font-medium transition-colors {scriptMode === 'inline'
-					? 'border-primary bg-primary/10 text-primary'
-					: 'border-border text-muted-foreground hover:bg-accent'}"
-				onclick={() => setMode('inline')}
-			>
-				Inline Script
-			</button>
-			{#if binding && nodeId}
-				<button
-					type="button"
-					class="flex-1 rounded-md border px-2 py-1 text-[10px] font-medium transition-colors {scriptMode === 'node_file'
-						? 'border-primary bg-primary/10 text-primary'
-						: 'border-border text-muted-foreground hover:bg-accent'}"
-					onclick={() => setMode('node_file')}
-				>
-					Node File
-				</button>
-			{/if}
-		</div>
+		{/if}
 	</div>
-{/if}
 
-{#if scriptMode === 'file'}
-	<div class="space-y-1.5">
-		<label for="script-file" class="text-xs font-medium text-muted-foreground">Script File</label>
-		<input
-			id="script-file"
-			type="text"
-			value={(config.script as string) ?? ''}
-			placeholder="e.g. extract_invoice.py"
-			disabled={readonly}
-			oninput={(e) =>
-				onchange({ ...config, script: (e.currentTarget as HTMLInputElement).value })}
-			class="w-full rounded-md border border-input bg-background px-2.5 py-1.5 font-mono text-sm text-foreground focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70"
-		/>
-	</div>
-{:else if scriptMode === 'inline'}
-	<div class="space-y-1.5">
-		<span class="text-xs font-medium text-muted-foreground">Python Script</span>
-		<CodeEditor
-			value={(config.scriptContent as string) ?? ''}
-			language="python"
-			{readonly}
-			minHeight="150px"
-			maxHeight="400px"
-			onchange={(val) => onchange({ ...config, scriptContent: val })}
-		/>
-	</div>
-{:else if scriptMode === 'node_file' && binding && nodeId}
-	<div class="space-y-1.5">
-		<div class="flex items-center justify-between">
-			<span class="text-xs font-medium text-muted-foreground">Node Files</span>
-			{#if !readonly}
-				<button
-					type="button"
-					class="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-					onclick={handleCreateFile}
+	{#if filenames.length === 0}
+		<p class="text-[11px] italic text-muted-foreground">
+			No files yet. Add one (or open the IDE editor) — the entrypoint must exist.
+		</p>
+	{:else}
+		<div class="flex flex-col gap-0.5">
+			{#each filenames as filename (filename)}
+				<div
+					class="group flex items-center gap-1 rounded border px-2 py-1 text-xs transition-colors {filename ===
+					entrypoint
+						? 'border-primary bg-primary/5 text-foreground'
+						: 'border-border text-muted-foreground hover:bg-accent/30'}"
 				>
-					<Plus class="size-3" />
-					Create File
-				</button>
-			{/if}
-		</div>
-
-		{#if nodeFiles.size === 0}
-			<p class="text-xs text-muted-foreground italic">No files yet. Create one to start editing.</p>
-		{:else}
-			<div class="flex flex-col gap-1">
-				{#each [...nodeFiles.keys()] as filename}
-					<div
-						class="flex items-center justify-between rounded-md border px-2 py-1 text-xs transition-colors {selectedFileName === filename
-							? 'border-primary bg-primary/5 text-foreground'
-							: 'border-border text-muted-foreground hover:bg-accent cursor-pointer'}"
-					>
+					<span class="flex-1 truncate font-mono">{filename}</span>
+					{#if filename === entrypoint}
+						<span class="rounded bg-primary/10 px-1 py-px text-[9px] uppercase tracking-wider text-primary">
+							entry
+						</span>
+					{:else if !readonly}
 						<button
 							type="button"
-							class="flex-1 text-left font-mono"
-							onclick={() => handleSelectFile(filename)}
+							class="rounded px-1 py-px text-[9px] uppercase tracking-wider text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+							onclick={() => handleEntrypoint(filename)}
 						>
-							{filename}
+							set entry
 						</button>
-						{#if !readonly}
-							<button
-								type="button"
-								class="ml-1 rounded p-0.5 text-muted-foreground transition-colors hover:text-destructive"
-								onclick={() => handleDeleteFile(filename)}
-								title="Delete file"
-							>
-								<Trash2 class="size-3" />
-							</button>
-						{/if}
-					</div>
-				{/each}
-			</div>
-		{/if}
+					{/if}
+					{#if !readonly && binding && nodeId}
+						<button
+							type="button"
+							class="rounded p-0.5 text-muted-foreground opacity-0 transition-all group-hover:opacity-100 hover:text-destructive"
+							onclick={() => handleDeleteFile(filename)}
+							title="Delete file"
+						>
+							<Trash2 class="size-3" />
+						</button>
+					{/if}
+				</div>
+			{/each}
+		</div>
+	{/if}
+</div>
 
-		{#if selectedYText}
-			<CollabCodeEditor
-				ytext={selectedYText}
-				language="python"
-				{readonly}
-				awareness={binding ? undefined : undefined}
-				minHeight="150px"
-				maxHeight="400px"
-			/>
-		{/if}
-	</div>
-{/if}
+<div class="space-y-1.5">
+	<label for="entrypoint" class="text-xs font-medium text-muted-foreground">Entrypoint</label>
+	<input
+		id="entrypoint"
+		type="text"
+		value={entrypoint}
+		disabled={readonly}
+		oninput={(e) => handleEntrypoint((e.currentTarget as HTMLInputElement).value)}
+		placeholder="main.py"
+		class="w-full rounded-md border border-input bg-background px-2.5 py-1.5 font-mono text-sm text-foreground focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70"
+	/>
+	{#if filenames.length > 0 && !filenames.includes(entrypoint)}
+		<p class="text-[11px] text-amber-700">
+			Entrypoint <code class="font-mono">{entrypoint}</code> is not in the file list — publish
+			will fail.
+		</p>
+	{/if}
+</div>
 
 <div class="space-y-1.5">
 	<label for="python-bin" class="text-xs font-medium text-muted-foreground">Python Binary</label>
@@ -211,23 +149,6 @@
 </div>
 
 <div class="space-y-1.5">
-	<label for="timeout" class="text-xs font-medium text-muted-foreground">Timeout (seconds)</label>
-	<input
-		id="timeout"
-		type="number"
-		min={1}
-		value={(config.timeout_seconds as number) ?? 30}
-		disabled={readonly}
-		oninput={(e) =>
-			onchange({
-				...config,
-				timeout_seconds: parseInt((e.currentTarget as HTMLInputElement).value) || 30
-			})}
-		class="w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-sm text-foreground focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70"
-	/>
-</div>
-
-<div class="space-y-1.5">
 	<span class="text-xs font-medium text-muted-foreground">Pip Requirements</span>
 	<StringListEditor
 		items={(config.requirements as string[]) ?? []}
@@ -237,7 +158,7 @@
 	/>
 </div>
 
-<div class="flex items-center gap-2">
+<div class="flex flex-wrap items-center gap-3">
 	<label class="flex items-center gap-1.5 text-xs text-muted-foreground">
 		<input
 			type="checkbox"

@@ -108,6 +108,9 @@ export async function compileGraph(data: {
 	name: string;
 	description?: string;
 	graph: WorkflowGraph;
+	/** Per-node inline file contents — staged as Raw inputs in the preview AIR
+	 *  so the user sees the same staging shape that publish will emit. */
+	files?: Record<string, Record<string, string>>;
 }): Promise<object> {
 	return request('/compile', { method: 'POST', body: JSON.stringify(data) });
 }

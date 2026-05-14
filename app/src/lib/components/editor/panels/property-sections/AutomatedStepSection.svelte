@@ -14,15 +14,14 @@
 		data: AutomatedStepNodeData;
 		readonly?: boolean;
 		onchange: (data: AutomatedStepNodeData) => void;
-		onexpand?: () => void;
 		binding?: YjsGraphBinding;
 		nodeId?: string;
 	};
 
-	let { data, readonly = false, onchange, onexpand, binding, nodeId }: Props = $props();
+	let { data, readonly = false, onchange, binding, nodeId }: Props = $props();
 
 	const defaultConfigs: Record<ExecutionBackendType, Record<string, unknown>> = {
-		python: { script: '', timeout_seconds: 30 },
+		python: { python: 'python3', requirements: [], virtualenv: false, sdk: true, inherit_env: true, env: {} },
 		docker: { image: '', env: {} },
 		process: { command: '', args: [] },
 		http: { method: 'GET', url: '' },
@@ -46,6 +45,7 @@
 			...data,
 			executionSpec: {
 				backendType,
+				entrypoint: backendType === 'python' ? (data.executionSpec.entrypoint ?? 'main.py') : data.executionSpec.entrypoint,
 				config: defaultConfigs[backendType]
 			}
 		});
@@ -55,6 +55,13 @@
 		onchange({
 			...data,
 			executionSpec: { ...data.executionSpec, config }
+		});
+	}
+
+	function handleEntrypointChange(entrypoint: string) {
+		onchange({
+			...data,
+			executionSpec: { ...data.executionSpec, entrypoint }
 		});
 	}
 </script>
@@ -83,7 +90,15 @@
 </div>
 
 {#if data.executionSpec.backendType === 'python'}
-	<PythonConfigPanel config={data.executionSpec.config} {readonly} onchange={handleConfigChange} {onexpand} {binding} {nodeId} />
+	<PythonConfigPanel
+		config={data.executionSpec.config}
+		entrypoint={data.executionSpec.entrypoint ?? 'main.py'}
+		{readonly}
+		onchange={handleConfigChange}
+		onentrypointchange={handleEntrypointChange}
+		{binding}
+		{nodeId}
+	/>
 {:else if data.executionSpec.backendType === 'docker'}
 	<DockerConfigPanel config={data.executionSpec.config} {readonly} onchange={handleConfigChange} />
 {:else if data.executionSpec.backendType === 'process'}

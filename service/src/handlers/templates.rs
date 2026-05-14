@@ -11,11 +11,13 @@ use uuid::Uuid;
 
 use serde::Deserialize;
 
+use aithericon_executor_domain::InputSource;
+
 use crate::compiler::compile_to_air;
 use crate::lifecycle::cleanup_net;
 use crate::models::template::{
     CreateTemplateRequest, ListTemplatesQuery, PaginatedResponse, UpdateTemplateRequest,
-    WorkflowGraph, WorkflowNodeData, WorkflowTemplate,
+    WorkflowGraph, WorkflowTemplate,
 };
 use crate::AppState;
 
@@ -26,6 +28,11 @@ pub struct CompileRequest {
     #[serde(default)]
     pub description: Option<String>,
     pub graph: WorkflowGraph,
+    /// Per-node, per-filename inline file contents. The compiler emits
+    /// `InputSource::Raw` entries for these so the preview AIR shows the same
+    /// staging shape that publish produces (with `StoragePath` keys).
+    #[serde(default)]
+    pub files: HashMap<String, HashMap<String, String>>,
 }
 
 /// POST /api/templates
@@ -419,13 +426,19 @@ pub async fn publish_template(
         }
     };
 
-    // Upload node file contents to S3 (Y.Text files from Y.Doc + inline config files)
-    if let Err(e) = upload_node_files(&state, id, existing.version, &graph, &ydoc_files).await {
+    // Upload node file contents to S3 so the executor can stage them at runtime.
+    if let Err(e) = upload_node_files(&state, id, existing.version, &ydoc_files).await {
         tracing::warn!("S3 file upload failed (non-fatal): {e}");
     }
 
+    // Build the per-node input source map. Files have just been uploaded to S3
+    // under `templates/{tid}/v{ver}/{node_id}/{filename}`, so each one is a
+    // StoragePath input — the executor's worker downloads it via the global
+    // ArtifactStore at staging time.
+    let files = storage_path_files(id, existing.version, &ydoc_files);
+
     // Compile to AIR
-    let air_json = match compile_to_air(&graph, &existing.name, &existing.description) {
+    let air_json = match compile_to_air(&graph, &existing.name, &existing.description, &files) {
         Ok(air) => air,
         Err(e) => {
             return (StatusCode::BAD_REQUEST, Json(json!({"error": format!("compilation failed: {e}")}))).into_response();
@@ -501,20 +514,16 @@ async fn reconstruct_graph_from_ydoc(
 
 /// Upload file contents from nodes to S3 for archival.
 ///
-/// Uploads files from two sources:
-/// 1. Y.Text files extracted from the Y.Doc (`nodes[nodeId].files[filename]`)
-/// 2. Inline files embedded in `execution_spec.config.files` (legacy/fallback)
-///
-/// Y.Doc files take priority — if the same filename exists in both sources,
-/// the Y.Doc version is used.
+/// Upload each Y.Text file under the deterministic key
+/// `templates/{template_id}/v{version}/{node_id}/{filename}`. The compiler
+/// emits `InputSource::StoragePath` references that resolve back to these keys
+/// at execution time via the executor worker's global ArtifactStore.
 async fn upload_node_files(
     state: &AppState,
     template_id: Uuid,
     version: i32,
-    graph: &WorkflowGraph,
     ydoc_files: &HashMap<String, HashMap<String, String>>,
 ) -> Result<(), String> {
-    // Upload Y.Text files from Y.Doc (primary source)
     for (node_id, node_files) in ydoc_files {
         for (filename, content) in node_files {
             match state
@@ -536,53 +545,62 @@ async fn upload_node_files(
             }
         }
     }
-
-    // Also upload inline files from execution_spec.config.files (fallback for nodes
-    // that don't have Y.Text files, e.g. created via API without Y.Doc)
-    for node in &graph.nodes {
-        if let WorkflowNodeData::AutomatedStep { execution_spec, .. } = &node.data {
-            if let Some(files) = execution_spec.config.get("files") {
-                if let Some(files_obj) = files.as_object() {
-                    // Skip if this node already has Y.Doc files (avoid duplicates)
-                    let has_ydoc_files = ydoc_files.contains_key(&node.id);
-                    if has_ydoc_files {
-                        continue;
-                    }
-                    for (filename, content_val) in files_obj {
-                        if let Some(content) = content_val.as_str() {
-                            match state
-                                .s3
-                                .upload_file(
-                                    template_id,
-                                    version,
-                                    &node.id,
-                                    filename,
-                                    content.as_bytes(),
-                                )
-                                .await
-                            {
-                                Ok(key) => {
-                                    tracing::info!(
-                                        node_id = %node.id,
-                                        filename,
-                                        key = %key,
-                                        "uploaded inline config file to S3"
-                                    );
-                                }
-                                Err(e) => {
-                                    return Err(format!(
-                                        "upload {}/{}: {}",
-                                        node.id, filename, e
-                                    ));
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
     Ok(())
+}
+
+/// Build the per-node `name -> InputSource::StoragePath` map that the compiler
+/// uses to emit executor inputs. Mirrors the layout written by
+/// [`upload_node_files`].
+fn storage_path_files(
+    template_id: Uuid,
+    version: i32,
+    ydoc_files: &HashMap<String, HashMap<String, String>>,
+) -> HashMap<String, HashMap<String, InputSource>> {
+    ydoc_files
+        .iter()
+        .map(|(node_id, files)| {
+            let sources = files
+                .keys()
+                .map(|filename| {
+                    let path =
+                        format!("templates/{template_id}/v{version}/{node_id}/{filename}");
+                    (
+                        filename.clone(),
+                        InputSource::StoragePath {
+                            path,
+                            storage: None,
+                        },
+                    )
+                })
+                .collect();
+            (node_id.clone(), sources)
+        })
+        .collect()
+}
+
+/// Materialize a per-node `name -> InputSource::Raw` map straight from inline
+/// file contents. Used by the stateless preview compile, where files haven't
+/// been uploaded to S3 yet.
+fn inline_files(
+    inline: &HashMap<String, HashMap<String, String>>,
+) -> HashMap<String, HashMap<String, InputSource>> {
+    inline
+        .iter()
+        .map(|(node_id, files)| {
+            let sources = files
+                .iter()
+                .map(|(filename, content)| {
+                    (
+                        filename.clone(),
+                        InputSource::Raw {
+                            content: content.clone(),
+                        },
+                    )
+                })
+                .collect();
+            (node_id.clone(), sources)
+        })
+        .collect()
 }
 
 /// POST /api/templates/:id/new-version
@@ -776,7 +794,16 @@ pub async fn compile_preview(
         }
     };
 
-    match compile_to_air(&graph, &existing.name, &existing.description) {
+    // Try to pull files from the Y.Doc so the preview AIR matches what publish
+    // would emit. If the Y.Doc has nothing, the empty map yields a compile
+    // error for any automated_step (same as publish would, just earlier).
+    let ydoc_files = match reconstruct_graph_from_ydoc(&state, id).await {
+        Ok(Some((_, f))) => f,
+        _ => HashMap::new(),
+    };
+    let files = storage_path_files(id, existing.version, &ydoc_files);
+
+    match compile_to_air(&graph, &existing.name, &existing.description, &files) {
         Ok(air) => Json(air).into_response(),
         Err(e) => {
             (StatusCode::BAD_REQUEST, Json(json!({"error": format!("compilation failed: {e}")}))).into_response()
@@ -785,12 +812,15 @@ pub async fn compile_preview(
 }
 
 /// POST /api/compile
-/// Stateless compilation: accepts a graph and returns AIR JSON without database access.
+/// Stateless compilation: accepts a graph (and optional inline file contents)
+/// and returns AIR JSON without database access. Used by the editor's "Preview
+/// AIR" button before publish.
 pub async fn compile_graph(
     Json(body): Json<CompileRequest>,
 ) -> impl IntoResponse {
     let description = body.description.as_deref().unwrap_or("");
-    match compile_to_air(&body.graph, &body.name, description) {
+    let files = inline_files(&body.files);
+    match compile_to_air(&body.graph, &body.name, description, &files) {
         Ok(air) => Json(air).into_response(),
         Err(e) => {
             (StatusCode::BAD_REQUEST, Json(json!({"error": format!("compilation failed: {e}")}))).into_response()

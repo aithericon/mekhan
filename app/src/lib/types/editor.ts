@@ -120,6 +120,9 @@ export type ExecutionBackendType =
 
 export type ExecutionSpecConfig = {
 	backendType: ExecutionBackendType;
+	/** Filename of the entrypoint script within the node's files. Backends that
+	 *  don't run a user script (e.g. http) ignore this. */
+	entrypoint?: string;
 	config: Record<string, unknown>;
 };
 
@@ -256,6 +259,7 @@ export function createDefaultNodeData(type: WorkflowNodeType): WorkflowNodeData 
 				label: 'Automated Step',
 				executionSpec: {
 					backendType: 'python',
+					entrypoint: 'main.py',
 					config: {}
 				}
 			};

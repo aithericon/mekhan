@@ -72,6 +72,7 @@ petri-api-types = { path = "../engine/core-engine/crates/api-types" }
 
 # Executor backend config types (for compile-time validation of execution specs)
 aithericon-executor-backend-configs = { path = "../executor/crates/executor-backend-configs" }
+aithericon-executor-domain = { path = "../executor/crates/executor-domain" }
 
 # Yjs CRDT for real-time collaborative editing
 yrs = "0.21"

@@ -145,7 +145,7 @@
 				<HumanTaskSection {data} {readonly} {onchange} {onexpand} />
 			{/if}
 		{:else if data.type === 'automated_step'}
-			<AutomatedStepSection {data} {readonly} {onchange} {onexpand} {binding} {nodeId} />
+			<AutomatedStepSection {data} {readonly} {onchange} {binding} {nodeId} />
 		{:else if data.type === 'decision'}
 			<DecisionNodeSection {data} {readonly} {onchange} />
 		{:else if data.type === 'loop'}

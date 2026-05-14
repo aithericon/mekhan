@@ -1,6 +1,7 @@
 use crate::models::template::{
     WorkflowEdge, WorkflowGraph, WorkflowNode, WorkflowNodeData,
 };
+use aithericon_executor_domain::InputSource;
 use aithericon_sdk::components::executor_lifecycle::{executor_lifecycle, ExecutorBridges};
 use aithericon_sdk::scenario::{ScenarioDefinition, ScenarioGroup};
 use aithericon_sdk::{Context, DynamicToken, EffectError, ExecutorSubmitInput, HumanTaskAssigned, HumanTaskRequest, HumanTaskResponse, HumanTaskSubmit, PlaceHandle};
@@ -10,6 +11,12 @@ use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::Bfs;
 use petgraph::Direction;
 use std::collections::{HashMap, HashSet};
+
+/// Per-node, per-filename input source map. Built by the publish handler from
+/// the node's Y.Doc files (resolved to S3 keys via `InputSource::StoragePath`)
+/// or, for the stateless preview compile, materialized from inline content via
+/// `InputSource::Raw`.
+pub type NodeFiles = HashMap<String, HashMap<String, InputSource>>;
 
 /// Instruction to merge `dead` place into `survivor` place.
 /// All references to `dead` become references to `survivor`, then `dead` is removed.
@@ -146,6 +153,7 @@ pub fn compile_to_air(
     graph: &WorkflowGraph,
     name: &str,
     description: &str,
+    files: &NodeFiles,
 ) -> Result<Value, CompileError> {
     // 1. Build directed graph
     let wg = WorkflowDiGraph::build(graph)?;
@@ -171,11 +179,13 @@ pub fn compile_to_air(
         }
     }
 
+    let empty_files: HashMap<String, InputSource> = HashMap::new();
     for ni in &sorted {
         let node = *wg.full.node_weight(*ni).unwrap();
         let outgoing = wg.outgoing(&node.id);
         let incoming = wg.incoming(&node.id);
-        expand_node(node, &outgoing, &incoming, &mut ctx, &mut node_ports, &mut fixups)?;
+        let node_files = files.get(&node.id).unwrap_or(&empty_files);
+        expand_node(node, &outgoing, &incoming, &mut ctx, &mut node_ports, &mut fixups, node_files)?;
     }
 
     // 5. Wire edges (may record merges instead of creating transitions)
@@ -419,6 +429,7 @@ fn expand_node(
     ctx: &mut Context,
     ports: &mut HashMap<String, NodePorts>,
     fixups: &mut PostProcess,
+    node_files: &HashMap<String, InputSource>,
 ) -> Result<(), CompileError> {
     let id = &node.id;
 
@@ -517,6 +528,7 @@ fn expand_node(
                 crate::compiler::backend_configs::validate_and_transform(
                     backend_type,
                     &execution_spec.config,
+                    node_files,
                 )?;
             let config_rhai = json_to_rhai_literal(&validated_config);
             let inputs_rhai = json_to_rhai_literal(
@@ -1045,7 +1057,7 @@ mod tests {
             viewport: None,
         };
 
-        let result = compile_to_air(&graph, "test", "desc");
+        let result = compile_to_air(&graph, "test", "desc", &std::collections::HashMap::new());
         assert!(result.is_ok(), "compile failed: {:?}", result.err());
 
         let air = result.unwrap();
@@ -1091,7 +1103,7 @@ mod tests {
             viewport: None,
         };
 
-        let result = compile_to_air(&graph, "test", "desc");
+        let result = compile_to_air(&graph, "test", "desc", &std::collections::HashMap::new());
         assert!(result.is_ok(), "compile failed: {:?}", result.err());
 
         let air = result.unwrap();
@@ -1143,7 +1155,7 @@ mod tests {
             viewport: None,
         };
 
-        let result = compile_to_air(&graph, "test", "desc");
+        let result = compile_to_air(&graph, "test", "desc", &std::collections::HashMap::new());
         assert!(result.is_ok(), "compile failed: {:?}", result.err());
 
         let air = result.unwrap();
@@ -1187,7 +1199,7 @@ mod tests {
     fn test_full_showcase_graph_compiles() {
         // Use the default graph to verify basic compilation works
         let graph = WorkflowGraph::default_graph();
-        let result = compile_to_air(&graph, "showcase", "A test workflow");
+        let result = compile_to_air(&graph, "showcase", "A test workflow", &std::collections::HashMap::new());
         assert!(result.is_ok(), "showcase compile failed: {:?}", result.err());
     }
 }

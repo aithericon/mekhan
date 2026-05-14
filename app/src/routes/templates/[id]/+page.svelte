@@ -63,10 +63,23 @@
 
 	async function handlePreview() {
 		try {
+			// Snapshot per-node files so the preview AIR shows the same staging
+			// shape that publish would emit (inline as Raw vs. S3 StoragePath).
+			const files: Record<string, Record<string, string>> = {};
+			for (const node of binding.graph.nodes) {
+				const nodeFiles = binding.getNodeFiles(node.id);
+				if (nodeFiles.size === 0) continue;
+				const entries: Record<string, string> = {};
+				for (const [name, ytext] of nodeFiles) {
+					entries[name] = ytext.toString();
+				}
+				files[node.id] = entries;
+			}
 			airPreview = await compileGraph({
 				name: template?.name ?? 'Untitled',
 				description: template?.description,
-				graph: binding.graph
+				graph: binding.graph,
+				files
 			});
 			error = null;
 		} catch (e) {

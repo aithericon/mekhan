@@ -157,15 +157,18 @@ export class YjsGraphBinding {
 					instructionsMdsvex: config?.instructionsMdsvex as string | undefined,
 					steps: (config?.steps as WorkflowNodeData extends { steps: infer S } ? S : never) ?? []
 				};
-			case 'automated_step':
+			case 'automated_step': {
+				const spec = (config?.executionSpec as {
+					backendType: 'python';
+					entrypoint?: string;
+					config: Record<string, unknown>;
+				}) ?? { backendType: 'python', entrypoint: 'main.py', config: {} };
 				return {
 					...base,
 					type: 'automated_step',
-					executionSpec: (config?.executionSpec as {
-						backendType: 'python';
-						config: Record<string, unknown>;
-					}) ?? { backendType: 'python', config: {} }
+					executionSpec: { entrypoint: 'main.py', ...spec }
 				};
+			}
 			case 'decision':
 				return {
 					...base,
@@ -215,8 +218,13 @@ export class YjsGraphBinding {
 			this.writeDataToConfig(config, data);
 			yNode.set('config', config);
 
-			// Files map (empty initially)
-			yNode.set('files', new Y.Map<Y.Text>());
+			// Files map. Seed a starter entrypoint for automated_step so the
+			// node compiles before the user opens the IDE editor.
+			const files = new Y.Map<Y.Text>();
+			if (type === 'automated_step') {
+				files.set('main.py', new Y.Text('# Write your script here.\n'));
+			}
+			yNode.set('files', files);
 
 			this.yNodes.set(id, yNode);
 		});
