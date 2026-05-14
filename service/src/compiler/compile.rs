@@ -527,15 +527,11 @@ fn expand_node(
             let handles = ctx.scoped_prefix(id, label, |ctx| {
                 let exec_inbox = ctx.state::<ExecutorSubmitInput>("inbox", "Inbox");
 
-                // Stage the upstream token data as an inline input file so
-                // user scripts can access it via the executor runner's `inputs`
-                // dict (keyed by filename). Rhai's COW semantics mean `input`
-                // keeps its pre-mutation snapshot even after we mutate `d`.
                 ctx.transition("prepare", format!("{label} - Prepare"))
                     .auto_input("input", &p_input)
                     .auto_output("job", &exec_inbox)
                     .logic(format!(
-                        r#"let d = input; d.job_id = "{id}"; d.run = 0; d.retries = 0; d.max_retries = 3; let job_inputs = {inputs_rhai}; job_inputs.push(#{{ "name": "input.json", "source": #{{ "type": "inline", "value": input }} }}); d.spec = #{{ "backend": "{backend_type}", "inputs": job_inputs, "outputs": [], "config": {config_rhai} }}; #{{ job: d }}"#
+                        r#"let d = input; d.job_id = "{id}"; d.run = 0; d.retries = 0; d.max_retries = 3; d.spec = #{{ "backend": "{backend_type}", "inputs": {inputs_rhai}, "outputs": [], "config": {config_rhai} }}; #{{ job: d }}"#
                     ));
 
                 executor_lifecycle(ctx, ExecutorBridges {
