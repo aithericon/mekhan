@@ -3,6 +3,7 @@
 	import type { SelectedElement, Token, PersistedEvent, Port } from '$lib/types/petri';
 	import { Separator } from '$lib/components/ui/separator';
 	import { CopyButton } from '$lib/components/ui/copy-button';
+	import { Card } from '$lib/components/ui/card';
 
 	// ---------------------------------------------------------------------------
 	// Detail shape interfaces
@@ -281,7 +282,7 @@
 		{:else if selectedElement.type === 'place' && placeDetails}
 			<!-- Place Inspector -->
 			<div class="space-y-4">
-				<div class="bg-muted/50 rounded-lg p-3">
+				<Card tone="muted">
 					<h3 class="text-lg font-medium text-foreground">{placeDetails.place.name}</h3>
 					<p class="text-xs text-muted-foreground font-mono">{placeDetails.place.id}</p>
 					<div class="flex items-center gap-2 mt-2">
@@ -304,12 +305,12 @@
 							</span>
 						{/if}
 					</div>
-				</div>
+				</Card>
 
 				<Separator />
 
 				<!-- Tokens List -->
-				<div class="bg-muted/50 rounded-lg p-3">
+				<Card tone="muted">
 					<h4 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
 						Tokens ({placeDetails.tokens.length})
 					</h4>
@@ -348,7 +349,7 @@
 							{/each}
 						</div>
 					{/if}
-				</div>
+				</Card>
 
 				<Separator />
 
@@ -379,7 +380,7 @@
 		{:else if selectedElement.type === 'transition' && transitionDetails}
 			<!-- Transition Inspector -->
 			<div class="space-y-4">
-				<div class="bg-muted/50 rounded-lg p-3">
+				<Card tone="muted">
 					<h3 class="text-lg font-medium text-foreground">{transitionDetails.transition.name}</h3>
 					<p class="text-xs text-muted-foreground font-mono">{transitionDetails.transition.id}</p>
 					<div class="flex items-center gap-2 mt-2">
@@ -396,13 +397,13 @@
 							</span>
 						{/if}
 					</div>
-				</div>
+				</Card>
 
 				<Separator />
 
 				<!-- Effect Handler -->
 				{#if (transitionDetails.transition as any).effect_handler_id}
-					<div class="bg-muted/50 rounded-lg p-3">
+					<Card tone="muted">
 						<h4 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Effect Handler</h4>
 						<div class="px-3 py-2 rounded text-sm bg-purple-500/10 border border-purple-500/30 text-purple-700 dark:text-purple-400 font-mono">
 							{(transitionDetails.transition as any).effect_handler_id}
@@ -410,7 +411,7 @@
 						<p class="text-xs text-muted-foreground mt-2">
 							Runs a registered side-effect handler instead of a Rhai script.
 						</p>
-					</div>
+					</Card>
 
 					<Separator />
 				{/if}
@@ -418,7 +419,7 @@
 				<!-- Guard -->
 				{#if true}
 					{@const guardScript = (transitionDetails.transition as any).guard as string | null}
-					<div class="bg-muted/50 rounded-lg p-3">
+					<Card tone="muted">
 						<h4 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Guard Condition</h4>
 						<div
 							class="px-3 py-2 rounded text-sm font-mono {guardScript
@@ -427,13 +428,13 @@
 						>
 							{guardScript ?? 'None (always enabled)'}
 						</div>
-					</div>
+					</Card>
 				{/if}
 
 				<Separator />
 
 				<!-- Input Places -->
-				<div class="bg-muted/50 rounded-lg p-3">
+				<Card tone="muted">
 					<h4 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
 						Input Places ({transitionDetails.inputArcs.length})
 					</h4>
@@ -456,10 +457,10 @@
 							{/each}
 						</ul>
 					{/if}
-				</div>
+				</Card>
 
 				<!-- Output Places -->
-				<div class="bg-muted/50 rounded-lg p-3">
+				<Card tone="muted">
 					<h4 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
 						Output Places ({transitionDetails.outputArcs.length})
 					</h4>
@@ -482,7 +483,7 @@
 							{/each}
 						</ul>
 					{/if}
-				</div>
+				</Card>
 
 				<!-- Open Script/Effect Sheet -->
 				{#if onOpenScript}
@@ -498,7 +499,7 @@
 		{:else if selectedElement.type === 'token' && tokenDetails}
 			<!-- Token Inspector -->
 			<div class="space-y-4">
-				<div class="bg-muted/50 rounded-lg p-3">
+				<Card tone="muted">
 					<button
 						class="text-sm text-primary hover:underline mb-2"
 						onclick={() => {
@@ -513,7 +514,7 @@
 					</button>
 					<h3 class="text-lg font-medium text-foreground">Token</h3>
 					<p class="text-xs text-muted-foreground font-mono">{tokenDetails.token.id}</p>
-				</div>
+				</Card>
 
 				<div class="flex items-center gap-2">
 					{#if tokenDetails.token.color.type !== 'Unit'}
@@ -532,7 +533,7 @@
 		{:else if selectedElement.type === 'event' && eventDetails}
 			<!-- Event Inspector -->
 			<div class="space-y-4">
-				<div class="bg-muted/50 rounded-lg p-3">
+				<Card tone="muted">
 					<div class="flex items-start justify-between gap-2">
 						<div class="min-w-0">
 							<h3 class="text-lg font-medium text-foreground">Event #{eventDetails.event.sequence}</h3>
@@ -545,7 +546,7 @@
 							class="shrink-0"
 						/>
 					</div>
-				</div>
+				</Card>
 
 				<!-- Event Type Badge -->
 				<div>
@@ -926,7 +927,7 @@
 				<Separator />
 
 				<!-- Hash Chain -->
-				<div class="bg-muted/50 rounded-lg p-3">
+				<Card tone="muted">
 					<h4 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Hash Chain</h4>
 					<div class="text-xs font-mono space-y-1">
 						<div>
@@ -940,12 +941,12 @@
 							</div>
 						{/if}
 					</div>
-				</div>
+				</Card>
 			</div>
 		{:else if selectedElement.type === 'group' && groupDetails}
 			<!-- Group Inspector (collapsed meta-node) -->
 			<div class="space-y-4">
-				<div class="bg-muted/50 rounded-lg p-3">
+				<Card tone="muted">
 					<h3 class="text-lg font-medium text-foreground">{groupDetails.group.name}</h3>
 					<p class="text-xs text-muted-foreground font-mono">{groupDetails.group.id}</p>
 					<div class="flex items-center gap-2 mt-2">
@@ -956,11 +957,11 @@
 							{groupDetails.places.length} places · {groupDetails.transitions.length} transitions
 						</span>
 					</div>
-				</div>
+				</Card>
 
 				{#if groupDetails.childGroups.length > 0}
 					<Separator />
-					<div class="bg-muted/50 rounded-lg p-3">
+					<Card tone="muted">
 						<h4 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
 							Sub-groups ({groupDetails.childGroups.length})
 						</h4>
@@ -974,13 +975,13 @@
 								</button>
 							{/each}
 						</div>
-					</div>
+					</Card>
 				{/if}
 
 				<Separator />
 
 				<!-- Places in group -->
-				<div class="bg-muted/50 rounded-lg p-3">
+				<Card tone="muted">
 					<h4 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
 						Places ({groupDetails.places.length})
 					</h4>
@@ -1000,12 +1001,12 @@
 							</button>
 						{/each}
 					</div>
-				</div>
+				</Card>
 
 				<Separator />
 
 				<!-- Tokens across all places -->
-				<div class="bg-muted/50 rounded-lg p-3">
+				<Card tone="muted">
 					<h4 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
 						Tokens ({groupDetails.allTokens.length})
 					</h4>
@@ -1039,12 +1040,12 @@
 							{/each}
 						</div>
 					{/if}
-				</div>
+				</Card>
 
 				<Separator />
 
 				<!-- Transitions in group -->
-				<div class="bg-muted/50 rounded-lg p-3">
+				<Card tone="muted">
 					<h4 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
 						Transitions ({groupDetails.transitions.length})
 					</h4>
@@ -1061,13 +1062,13 @@
 							</button>
 						{/each}
 					</div>
-				</div>
+				</Card>
 			</div>
 		{:else if selectedElement.type === 'remotenet'}
 			{@const rn = selectedElement}
 			<!-- Remote Net Inspector -->
 			<div class="space-y-4">
-				<div class="bg-muted/50 rounded-lg p-3">
+				<Card tone="muted">
 					<h3 class="text-lg font-medium text-foreground">{rn.label}</h3>
 					<p class="text-xs text-muted-foreground font-mono">{rn.id}</p>
 					<div class="flex items-center gap-2 mt-2">
@@ -1080,13 +1081,13 @@
 							</span>
 						{/if}
 					</div>
-				</div>
+				</Card>
 
 				<Separator />
 
 				<!-- Bridge Ports -->
 				{#if rn.targets.length > 0}
-					<div class="bg-muted/50 rounded-lg p-3">
+					<Card tone="muted">
 						<h4 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
 							Outbound Ports ({rn.targets.length})
 						</h4>
@@ -1098,11 +1099,11 @@
 								</div>
 							{/each}
 						</div>
-					</div>
+					</Card>
 				{/if}
 
 				{#if rn.sources.length > 0}
-					<div class="bg-muted/50 rounded-lg p-3">
+					<Card tone="muted">
 						<h4 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
 							Inbound Ports ({rn.sources.length})
 						</h4>
@@ -1114,14 +1115,14 @@
 								</div>
 							{/each}
 						</div>
-					</div>
+					</Card>
 				{/if}
 
 				{#if rn.childNetIds.length > 0}
 					<Separator />
 
 					<!-- Child Net Instances -->
-					<div class="bg-muted/50 rounded-lg p-3">
+					<Card tone="muted">
 						<h4 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
 							Child Instances ({rn.childNetIds.length})
 						</h4>
@@ -1136,7 +1137,7 @@
 								</button>
 							{/each}
 						</div>
-					</div>
+					</Card>
 				{:else}
 					<Separator />
 					<div class="text-sm text-muted-foreground italic text-center py-2">
