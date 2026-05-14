@@ -97,8 +97,8 @@
 				/>
 			{:else if block.type === 'callout'}
 				<CalloutBlockEditor
-					severity={block.severity}
-					title={block.title}
+					severity={block.severity as 'warning' | 'info' | 'error' | 'success'}
+					title={block.title ?? undefined}
 					content={block.content}
 					{readonly}
 					onchange={(updated) =>
@@ -110,7 +110,7 @@
 			{:else if block.type === 'image'}
 				<ImageBlockEditor
 					filenames={block.filenames}
-					display={block.display}
+					display={block.display as 'single' | 'grid' | 'gallery'}
 					{binding}
 					{nodeId}
 					{readonly}
@@ -131,8 +131,8 @@
 			{:else if block.type === 'pdf'}
 				<PdfBlockEditor
 					filename={block.filename}
-					caption={block.caption}
-					height={block.height}
+					caption={block.caption ?? undefined}
+					height={block.height ?? undefined}
 					{binding}
 					{nodeId}
 					{readonly}

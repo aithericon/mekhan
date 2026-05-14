@@ -1,8 +1,12 @@
 <script lang="ts">
 	import { page } from '$app/stores';
-	import { getProvenanceFromArtifact, getCatalogueEntry } from '$lib/api/client';
-	import type { AncestryNode, CrossNetEdge } from '$lib/types/provenance';
-	import type { CatalogueEntry } from '$lib/types/catalogue';
+	import {
+		getProvenanceFromArtifact,
+		getCatalogueEntry,
+		type AncestryNode,
+		type CrossNetEdge,
+		type CatalogueEntry
+	} from '$lib/api/client';
 	import { ProvenanceCanvas } from '$lib/components/provenance';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';

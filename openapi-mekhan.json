@@ -3359,7 +3359,14 @@
           "backendType": {
             "type": "string"
           },
-          "config": {}
+          "config": {},
+          "entrypoint": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Filename of the entrypoint script within the node's staged files.\nBackends that don't run a user script (e.g. `http`) ignore this; the\neditor still surfaces it for python/process/docker."
+          }
         }
       },
       "FileUploadResponse": {
@@ -3758,6 +3765,163 @@
           },
           "step": {
             "type": "string"
+          }
+        }
+      },
+      "LiveArtifactEvent": {
+        "type": "object",
+        "description": "Emitted when a catalogue entry INSERT succeeds for a process-tagged\nartifact. The SSE handler filters by `process_id` and optionally by\n`category` / `user_metadata.render_hint` before forwarding to clients.",
+        "required": [
+          "seq",
+          "process_id",
+          "artifact_id",
+          "execution_id",
+          "name",
+          "category",
+          "filename",
+          "user_metadata",
+          "created_at"
+        ],
+        "properties": {
+          "artifact_id": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "execution_id": {
+            "type": "string"
+          },
+          "filename": {
+            "type": "string"
+          },
+          "mime_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "process_id": {
+            "type": "string"
+          },
+          "process_step": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "seq": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "signal_key": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "size_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "storage_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "user_metadata": {}
+        }
+      },
+      "LiveLogEvent": {
+        "type": "object",
+        "required": [
+          "seq",
+          "process_id",
+          "level",
+          "message",
+          "detail",
+          "timestamp"
+        ],
+        "properties": {
+          "detail": {},
+          "level": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "process_id": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "signal_key": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "LiveMetricEvent": {
+        "type": "object",
+        "required": [
+          "seq",
+          "process_id",
+          "key",
+          "value",
+          "timestamp"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "process_id": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "signal_key": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "value": {
+            "type": "number",
+            "format": "double"
           }
         }
       },
@@ -4328,6 +4492,37 @@
                 "type": "string",
                 "enum": [
                   "file"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Embedded PDF viewer (rendered inline in the task UI). `height` is a\nCSS length string, default ~\"400px\"; `caption` is rendered above the\nviewer. Added so the editor's PDF blocks round-trip through publish.",
+            "required": [
+              "filename",
+              "type"
+            ],
+            "properties": {
+              "caption": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "filename": {
+                "type": "string"
+              },
+              "height": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "pdf"
                 ]
               }
             }

@@ -1,7 +1,12 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
-	import { listTemplates, createTemplate, deleteTemplate, createInstance } from '$lib/api/client';
-	import type { TemplateSummary } from '$lib/types/api';
+	import {
+		listTemplates,
+		createTemplate,
+		deleteTemplate,
+		createInstance,
+		type TemplateSummary
+	} from '$lib/api/client';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import Plus from '@lucide/svelte/icons/plus';

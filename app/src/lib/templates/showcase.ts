@@ -1,5 +1,5 @@
 import type { WorkflowGraph } from '$lib/types/editor';
-import type { Template } from '$lib/types/api';
+import type { Template } from '$lib/api/client';
 import { listTemplates, getTemplate, createTemplate } from '$lib/api/client';
 
 export const SHOWCASE_TEMPLATE_NAME = 'Invoice Processing Demo';

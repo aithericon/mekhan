@@ -1,50 +1,21 @@
-export interface HpiProcess {
-	process_id: string;
-	name: string | null;
-	kind: string | null;
-	status: string;
-	owner: string | null;
-	config: Record<string, unknown>;
-	created_at: string;
-	updated_at: string;
-}
-
-export interface HpiTask {
-	id: string;
-	process_id: string;
-	title: string;
-	status: string;
-	assignee: string | null;
-	detail: Record<string, unknown>;
-	created_at: string;
-	completed_at: string | null;
-}
-
-export interface HpiMetric {
-	process_id: string;
-	key: string;
-	value: number;
-	timestamp: string;
-}
-
-export interface HpiMetricSummary {
-	key: string;
-	count: number;
-	min_value: number;
-	max_value: number;
-	avg_value: number;
-	last_value: number;
-	last_timestamp: string;
-}
-
-export interface HpiLog {
-	id: number;
-	process_id: string;
-	level: string;
-	source: string | null;
-	message: string;
-	detail: Record<string, unknown>;
-	timestamp: string;
+/**
+ * Frontend-only process shapes. The wire types (`HpiProcess`, `HpiTask`,
+ * `HpiMetric`, `HpiMetricSummary`, `HpiLog`, `ProcessDetail`, `ProcessStats`)
+ * are exported from `$lib/api/client` — import them from there.
+ *
+ * What lives here:
+ *   - Pagination envelope for the process/task/log/artifact list endpoints,
+ *     which use a custom DSL not modeled in the spec yet.
+ *   - Step-timeline shapes derived client-side from a process's history.
+ */
+export interface PaginatedProcessResponse<T> {
+	items: T[];
+	total: number;
+	page: number;
+	page_size: number;
+	total_pages: number;
+	has_next: boolean;
+	has_previous: boolean;
 }
 
 export interface StepDefinition {
@@ -69,30 +40,4 @@ export interface ProcessTimelineEntry {
 	duration_ms?: number;
 	iterations?: number;
 	completed_iterations?: number;
-}
-
-export interface ProcessDetail extends HpiProcess {
-	tasks: HpiTask[];
-	recent_metrics: HpiMetric[];
-	recent_logs: HpiLog[];
-	artifact_count: number;
-	steps?: StepDefinition[];
-	step_events?: StepEvent[];
-}
-
-export interface ProcessStats {
-	total: number;
-	active: number;
-	completed: number;
-	failed: number;
-}
-
-export interface PaginatedProcessResponse<T> {
-	items: T[];
-	total: number;
-	page: number;
-	page_size: number;
-	total_pages: number;
-	has_next: boolean;
-	has_previous: boolean;
 }

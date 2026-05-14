@@ -69,8 +69,8 @@
 			id: e.id,
 			source: e.source,
 			target: e.target,
-			sourceHandle: e.sourceHandle,
-			label: e.label,
+			sourceHandle: e.sourceHandle ?? undefined,
+			label: e.label ?? undefined,
 			type: 'deletable' as const,
 			animated: e.type === 'loop_back',
 			deletable: !isReadonly

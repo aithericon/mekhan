@@ -18,7 +18,7 @@
 <div class="space-y-1.5">
 	<span class="text-xs font-medium text-muted-foreground">Initial Data</span>
 	<KeyValueEditor
-		entries={data.initialData ?? {}}
+		entries={(data.initialData as Record<string, unknown> | undefined) ?? {}}
 		{readonly}
 		keyPlaceholder="Variable"
 		valuePlaceholder="Value"

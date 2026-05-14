@@ -8,7 +8,8 @@
 		type Edge
 	} from '@xyflow/svelte';
 	import '@xyflow/svelte/dist/style.css';
-	import type { AncestryNode, CrossNetEdge, ProvenanceGraphNode } from '$lib/types/provenance';
+	import type { AncestryNode, CrossNetEdge } from '$lib/api/client';
+	import type { ProvenanceGraphNode } from '$lib/types/provenance';
 	import { buildProvenanceGraph, layoutProvenanceGraph } from '$lib/utils/provenance-graph';
 	import CausalityNode from './CausalityNode.svelte';
 	import EventDetailSheet from './EventDetailSheet.svelte';

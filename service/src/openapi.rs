@@ -14,6 +14,16 @@ use utoipa::OpenApi;
                        collaborative editor's binary CRDT protocol and is intentionally not\
                        modeled here."
     ),
+    components(
+        // SSE event payload types — not referenced from any handler signature
+        // (the responses are `text/event-stream`), so we register them
+        // explicitly so frontend codegen picks them up.
+        schemas(
+            crate::causality::live::LiveMetricEvent,
+            crate::causality::live::LiveLogEvent,
+            crate::causality::live::LiveArtifactEvent,
+        ),
+    ),
     tags(
         (name = "templates", description = "Workflow template CRUD, versioning, publish, compile-to-AIR."),
         (name = "instances", description = "Running workflow instances deployed to the petri-lab engine."),

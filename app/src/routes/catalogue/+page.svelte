@@ -5,9 +5,10 @@
 		getCatalogueStats,
 		getCatalogueDistinct,
 		getCatalogueDistinctJsonb,
-		catalogueDownloadUrl
+		catalogueDownloadUrl,
+		type CatalogueEntry,
+		type CatalogueStats
 	} from '$lib/api/client';
-	import type { CatalogueEntry, CatalogueStats } from '$lib/types/catalogue';
 	import { ArtifactCard } from '$lib/components/catalogue';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';

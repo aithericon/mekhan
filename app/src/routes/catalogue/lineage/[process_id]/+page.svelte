@@ -1,7 +1,10 @@
 <script lang="ts">
 	import { page } from '$app/stores';
-	import { getCatalogueLineage, catalogueDownloadUrl } from '$lib/api/client';
-	import type { LineageResponse } from '$lib/types/catalogue';
+	import {
+		getCatalogueLineage,
+		catalogueDownloadUrl,
+		type LineageResponse
+	} from '$lib/api/client';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { Separator } from '$lib/components/ui/separator';

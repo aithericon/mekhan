@@ -6,10 +6,9 @@
 	import { Sheet, SheetContent, SheetTitle, SheetDescription } from '$lib/components/ui/sheet';
 	import { getSheetWidthClass } from '$lib/components/editor/panels/panel-width';
 	import EditorToolbar from '$lib/components/editor/toolbar/EditorToolbar.svelte';
-	import { getTemplate, publishTemplate, compileGraph } from '$lib/api/client';
+	import { getTemplate, publishTemplate, compileGraph, type Template } from '$lib/api/client';
 	import { getSession, releaseSession } from '$lib/yjs/session-store';
 	import { YjsGraphBinding } from '$lib/yjs/graph-binding.svelte';
-	import type { Template } from '$lib/types/api';
 	import type {
 		WorkflowNodeData,
 		WorkflowNodeType,

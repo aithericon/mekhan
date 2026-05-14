@@ -148,11 +148,11 @@ export function createProcessLiveStore(processId: string, opts: ProcessLiveOptio
 			id: -e.seq, // synthetic (DB rows have positive ids); negatives mark live rows
 			process_id: e.process_id,
 			level: e.level,
-			source: e.source,
+			source: e.source ?? null,
 			message: e.message,
-			detail: e.detail,
+			detail: (e.detail as Record<string, unknown> | null) ?? null,
 			timestamp: e.timestamp,
-			signal_key: e.signal_key
+			signal_key: e.signal_key ?? null
 		};
 		logs = [...logs, row];
 		if (logs.length > maxLogBuffer) {

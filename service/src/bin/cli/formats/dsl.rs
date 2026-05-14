@@ -339,6 +339,7 @@ fn step_to_node_data(
                 description: step.description.clone(),
                 execution_spec: ExecutionSpecConfig {
                     backend_type: exec.backend.clone(),
+                    entrypoint: None,
                     config,
                 },
             })

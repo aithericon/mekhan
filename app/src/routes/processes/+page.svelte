@@ -1,6 +1,10 @@
 <script lang="ts">
-	import { listProcesses, getProcessStats } from '$lib/api/client';
-	import type { HpiProcess, ProcessStats } from '$lib/types/process';
+	import {
+		listProcesses,
+		getProcessStats,
+		type HpiProcess,
+		type ProcessStats
+	} from '$lib/api/client';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';

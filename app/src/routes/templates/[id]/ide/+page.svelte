@@ -10,8 +10,7 @@
 	import HumanTaskFormEditor from '$lib/components/ide/HumanTaskFormEditor.svelte';
 	import { getSession, releaseSession } from '$lib/yjs/session-store';
 	import { YjsGraphBinding } from '$lib/yjs/graph-binding.svelte';
-	import { getTemplate, publishTemplate, uploadFile } from '$lib/api/client';
-	import type { Template } from '$lib/types/api';
+	import { getTemplate, publishTemplate, uploadFile, type Template } from '$lib/api/client';
 
 	const templateId = $derived(page.params.id!);
 

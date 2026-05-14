@@ -5,12 +5,8 @@
 	import CopyButton from '$lib/components/ui/copy-button/CopyButton.svelte';
 	import MonacoEditor from '$lib/components/petri/MonacoEditor.svelte';
 	import ArtifactCard from '$lib/components/catalogue/ArtifactCard.svelte';
-	import { getEventDetail } from '$lib/api/client';
-	import type {
-		EventDetail,
-		ProvenanceGraphNode,
-		TokenInfo
-	} from '$lib/types/provenance';
+	import { getEventDetail, type EventDetail, type TokenInfo } from '$lib/api/client';
+	import type { ProvenanceGraphNode } from '$lib/types/provenance';
 	import { getNodeColor } from '$lib/utils/provenance-graph';
 
 	interface Props {

@@ -1,8 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { onDestroy } from 'svelte';
-	import { getInstance, cancelInstance } from '$lib/api/client';
-	import type { WorkflowInstance } from '$lib/types/api';
+	import { getInstance, cancelInstance, type WorkflowInstance } from '$lib/api/client';
 	import { createPetriStore, type PetriStore } from '$lib/stores/petri.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
@@ -281,11 +280,11 @@
 							</div>
 							<div class="flex justify-between px-4 py-2.5">
 								<dt class="text-xs text-muted-foreground">Started</dt>
-								<dd class="text-xs text-foreground">{formatDate(instance.started_at)}</dd>
+								<dd class="text-xs text-foreground">{formatDate(instance.started_at ?? null)}</dd>
 							</div>
 							<div class="flex justify-between px-4 py-2.5">
 								<dt class="text-xs text-muted-foreground">Completed</dt>
-								<dd class="text-xs text-foreground">{formatDate(instance.completed_at)}</dd>
+								<dd class="text-xs text-foreground">{formatDate(instance.completed_at ?? null)}</dd>
 							</div>
 							{#if instance.current_step}
 								<div class="flex justify-between px-4 py-2.5">

@@ -75,7 +75,7 @@
 		disabled={readonly}
 	>
 		<Select.Trigger disabled={readonly}>
-			{backendLabels[data.executionSpec.backendType] ?? data.executionSpec.backendType}
+			{backendLabels[data.executionSpec.backendType as ExecutionBackendType] ?? data.executionSpec.backendType}
 		</Select.Trigger>
 		<Select.Content>
 			<Select.Item value="python" label="Python" />
@@ -91,7 +91,7 @@
 
 {#if data.executionSpec.backendType === 'python'}
 	<PythonConfigPanel
-		config={data.executionSpec.config}
+		config={data.executionSpec.config as Record<string, unknown>}
 		entrypoint={data.executionSpec.entrypoint ?? 'main.py'}
 		{readonly}
 		onchange={handleConfigChange}
@@ -100,15 +100,15 @@
 		{nodeId}
 	/>
 {:else if data.executionSpec.backendType === 'docker'}
-	<DockerConfigPanel config={data.executionSpec.config} {readonly} onchange={handleConfigChange} />
+	<DockerConfigPanel config={data.executionSpec.config as Record<string, unknown>} {readonly} onchange={handleConfigChange} />
 {:else if data.executionSpec.backendType === 'process'}
-	<ProcessConfigPanel config={data.executionSpec.config} {readonly} onchange={handleConfigChange} />
+	<ProcessConfigPanel config={data.executionSpec.config as Record<string, unknown>} {readonly} onchange={handleConfigChange} />
 {:else if data.executionSpec.backendType === 'http'}
-	<HttpConfigPanel config={data.executionSpec.config} {readonly} onchange={handleConfigChange} />
+	<HttpConfigPanel config={data.executionSpec.config as Record<string, unknown>} {readonly} onchange={handleConfigChange} />
 {:else if data.executionSpec.backendType === 'llm'}
-	<LlmConfigPanel config={data.executionSpec.config} {readonly} onchange={handleConfigChange} />
+	<LlmConfigPanel config={data.executionSpec.config as Record<string, unknown>} {readonly} onchange={handleConfigChange} />
 {:else if data.executionSpec.backendType === 'file_ops'}
-	<FileOpsConfigPanel config={data.executionSpec.config} {readonly} onchange={handleConfigChange} />
+	<FileOpsConfigPanel config={data.executionSpec.config as Record<string, unknown>} {readonly} onchange={handleConfigChange} />
 {:else if data.executionSpec.backendType === 'kreuzberg'}
-	<KreuzbergConfigPanel config={data.executionSpec.config} {readonly} onchange={handleConfigChange} />
+	<KreuzbergConfigPanel config={data.executionSpec.config as Record<string, unknown>} {readonly} onchange={handleConfigChange} />
 {/if}

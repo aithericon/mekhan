@@ -8,18 +8,20 @@
 		getProcessTasks,
 		getProcessArtifacts,
 		completeTask,
-		cancelTask
+		cancelTask,
+		type ProcessDetail,
+		type HpiTask,
+		type HpiMetricSummary,
+		type HpiLog,
+		type CatalogueEntry
 	} from '$lib/api/client';
 	import type {
-		ProcessDetail,
 		ProcessTimelineEntry,
-		HpiTask,
-		HpiMetricSummary,
-		HpiLog,
-		PaginatedProcessResponse
+		PaginatedProcessResponse,
+		StepDefinition,
+		StepEvent
 	} from '$lib/types/process';
 	import { ProcessTimeline } from '$lib/components/process-timeline';
-	import type { CatalogueEntry } from '$lib/types/catalogue';
 	import { ArtifactCard } from '$lib/components/catalogue';
 	import { MetricsPanel, LogsPanel, ArtifactsPanel } from '$lib/components/process-live';
 	import { createProcessLiveStore } from '$lib/stores/process-live.svelte';
@@ -152,9 +154,14 @@
 
 	// ── Timeline ──────────────────────────────────────────────────────────────
 	function buildTimeline(d: ProcessDetail): ProcessTimelineEntry[] {
+		// `steps` / `step_events` aren't part of the backend's ProcessDetail
+		// schema. They live under `config` (when projected by the engine) or
+		// occasionally on the response root for legacy rows. Cast through to
+		// the editor-side StepDefinition / StepEvent shapes.
 		const cfg = d.config as Record<string, unknown> | undefined;
-		const steps = (cfg?.steps ?? d.steps) as import('$lib/types/process').StepDefinition[] | undefined;
-		const events = (cfg?.step_events ?? d.step_events ?? []) as import('$lib/types/process').StepEvent[];
+		const dx = d as unknown as { steps?: StepDefinition[]; step_events?: StepEvent[] };
+		const steps = (cfg?.steps ?? dx.steps) as StepDefinition[] | undefined;
+		const events = (cfg?.step_events ?? dx.step_events ?? []) as StepEvent[];
 		if (!steps?.length) return [];
 		return steps.map((step) => {
 			let firstStarted: string | undefined;

@@ -229,6 +229,17 @@ pub enum TaskBlockConfig {
     },
     #[serde(rename = "file")]
     File { filename: String },
+    /// Embedded PDF viewer (rendered inline in the task UI). `height` is a
+    /// CSS length string, default ~"400px"; `caption` is rendered above the
+    /// viewer. Added so the editor's PDF blocks round-trip through publish.
+    #[serde(rename = "pdf")]
+    Pdf {
+        filename: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        caption: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        height: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -260,6 +271,11 @@ pub struct BranchCondition {
 #[serde(rename_all = "camelCase")]
 pub struct ExecutionSpecConfig {
     pub backend_type: String,
+    /// Filename of the entrypoint script within the node's staged files.
+    /// Backends that don't run a user script (e.g. `http`) ignore this; the
+    /// editor still surfaces it for python/process/docker.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entrypoint: Option<String>,
     pub config: serde_json::Value,
 }
 

@@ -5,12 +5,8 @@
 
 import dagre from '@dagrejs/dagre';
 import type { Node, Edge } from '@xyflow/svelte';
-import type {
-	AncestryNode,
-	CrossNetEdge,
-	ProvenanceGraphNode,
-	ProvenanceGraphEdge
-} from '$lib/types/provenance';
+import type { AncestryNode, CrossNetEdge } from '$lib/api/client';
+import type { ProvenanceGraphNode, ProvenanceGraphEdge } from '$lib/types/provenance';
 
 /** Node data stored in the XYFlow node. */
 export type ProvenanceNodeData = ProvenanceGraphNode;
@@ -179,12 +175,12 @@ export function buildProvenanceGraph(
 			eventMap.set(id, {
 				id,
 				event_type: node.event_type,
-				transition_name: node.transition_name,
-				effect_handler: node.effect_handler,
+				transition_name: node.transition_name ?? null,
+				effect_handler: node.effect_handler ?? null,
 				net_id: node.net_id,
 				event_seq: node.event_seq,
 				timestamp: node.timestamp,
-				place_name: node.place_name,
+				place_name: node.place_name ?? null,
 				tokens: []
 			});
 		}
@@ -192,7 +188,7 @@ export function buildProvenanceGraph(
 			token_id: node.token_id,
 			role: node.role,
 			place_id: node.place_id,
-			place_name: node.place_name
+			place_name: node.place_name ?? null
 		});
 	}
 

@@ -1,6 +1,5 @@
 <script lang="ts">
-	import type { CatalogueEntry } from '$lib/types/catalogue';
-	import { catalogueDownloadUrl } from '$lib/api/client';
+	import { catalogueDownloadUrl, type CatalogueEntry } from '$lib/api/client';
 	import { Badge } from '$lib/components/ui/badge';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import Download from '@lucide/svelte/icons/download';
@@ -54,14 +53,15 @@
 		return categoryColors[cat.toLowerCase()] ?? categoryColors.other;
 	}
 
-	const fm = $derived(entry.file_metadata as Record<string, unknown>);
+	const fm = $derived((entry.file_metadata ?? {}) as Record<string, unknown>);
+	const um = $derived((entry.user_metadata ?? {}) as Record<string, unknown>);
 	const schema = $derived(fm?.schema_fingerprint as { digest: string; version: number } | undefined);
 	const checksum = $derived(fm?.checksum as { algorithm: string; digest: string } | undefined);
 	const columns = $derived(fm?.columns as { name: string; data_type: unknown }[] | undefined);
 	const lineageTarget = $derived(entry.process_id ?? entry.job_id?.split(':')[0] ?? null);
 	const hasDetails = $derived(
 		(columns && columns.length > 0) ||
-		Object.keys(entry.user_metadata).length > 0 ||
+		Object.keys(um).length > 0 ||
 		schema || checksum
 	);
 </script>
@@ -89,7 +89,7 @@
 			<!-- Key info row -->
 			<div class="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-sm text-muted-foreground">
 				<span>{formatDate(entry.created_at)}</span>
-				<span class="font-medium tabular-nums text-foreground">{formatBytes(entry.size_bytes)}</span>
+				<span class="font-medium tabular-nums text-foreground">{formatBytes(entry.size_bytes ?? null)}</span>
 				{#if entry.source_net}
 					{#if onNetClick}
 						<button
@@ -180,8 +180,8 @@
 						Schema: {schema.digest}
 					</button>
 				{/if}
-				{#if entry.correlation_id}
-					<span>Correlation: <span class="font-mono">{entry.correlation_id}</span></span>
+				{#if entry.signal_key}
+					<span>Correlation: <span class="font-mono">{entry.signal_key}</span></span>
 				{/if}
 				{#if fm?.num_rows != null}
 					<span>{fm.num_rows} row{fm.num_rows === 1 ? '' : 's'} · {fm?.num_columns ?? '?'} col{(fm?.num_columns ?? 0) === 1 ? '' : 's'}</span>
@@ -213,12 +213,12 @@
 			{/if}
 
 			<!-- User metadata -->
-			{#if Object.keys(entry.user_metadata).length > 0}
+			{#if Object.keys(um).length > 0}
 				<div>
 					<p class="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
 						User metadata
 					</p>
-					<pre class="overflow-x-auto rounded-md bg-muted px-3 py-2 text-[11px] text-foreground">{JSON.stringify(entry.user_metadata, null, 2)}</pre>
+					<pre class="overflow-x-auto rounded-md bg-muted px-3 py-2 text-[11px] text-foreground">{JSON.stringify(um, null, 2)}</pre>
 				</div>
 			{/if}
 		</div>

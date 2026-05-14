@@ -1,114 +1,70 @@
-/** Base properties shared by all nodes */
-export type BaseNodeData = {
-	label: string;
-	description?: string;
-};
+/**
+ * Editor-side helpers around the schema-generated workflow graph types.
+ *
+ * Wire types (`WorkflowGraph`, `WorkflowNodeData`, `TaskBlockConfig`, ...) come
+ * from `$lib/api/client`, which re-exports `components['schemas']` from the
+ * generated `schema.d.ts`. This file keeps only frontend-only concerns:
+ *   - per-variant aliases (`StartNodeData`, `HumanTaskNodeData`, ...) derived
+ *     from the schema's discriminated union, so editor components stay terse
+ *   - the visual-editor palette + default-node factory
+ *
+ * If you find yourself adding a wire-shape type here, that's a signal the
+ * Rust DTO is missing something. Add it to `service/src/models/template.rs`
+ * and regenerate the spec instead of carrying a frontend-only override.
+ */
+import type {
+	WorkflowNodeData as SchemaWorkflowNodeData,
+	TaskBlockConfig as SchemaTaskBlockConfig
+} from '$lib/api/client';
 
-/** Start block - entry point of the workflow */
-export type StartNodeData = BaseNodeData & {
-	type: 'start';
-	initialData?: Record<string, unknown>;
-};
+export type {
+	WorkflowEdge,
+	WorkflowGraph,
+	WorkflowNodeData,
+	TaskStepConfig,
+	TaskBlockConfig,
+	TaskFieldConfig,
+	BranchCondition,
+	ExecutionSpecConfig
+} from '$lib/api/client';
 
-/** End block - terminal state */
-export type EndNodeData = BaseNodeData & {
-	type: 'end';
-};
+export type WorkflowNodeType = SchemaWorkflowNodeData['type'];
+export type WorkflowEdgeType = 'sequence' | 'conditional' | 'loop_back';
 
-/** Human Task block - creates a human-ui task */
-export type HumanTaskNodeData = BaseNodeData & {
-	type: 'human_task';
-	taskTitle: string;
-	instructionsMdsvex?: string;
-	steps: TaskStepConfig[];
-};
+// Per-variant aliases extracted from the schema's discriminated union.
+export type StartNodeData = Extract<SchemaWorkflowNodeData, { type: 'start' }>;
+export type EndNodeData = Extract<SchemaWorkflowNodeData, { type: 'end' }>;
+export type HumanTaskNodeData = Extract<SchemaWorkflowNodeData, { type: 'human_task' }>;
+export type AutomatedStepNodeData = Extract<SchemaWorkflowNodeData, { type: 'automated_step' }>;
+export type DecisionNodeData = Extract<SchemaWorkflowNodeData, { type: 'decision' }>;
+export type ParallelSplitNodeData = Extract<SchemaWorkflowNodeData, { type: 'parallel_split' }>;
+export type ParallelJoinNodeData = Extract<SchemaWorkflowNodeData, { type: 'parallel_join' }>;
+export type LoopNodeData = Extract<SchemaWorkflowNodeData, { type: 'loop' }>;
+export type ScopeNodeData = Extract<SchemaWorkflowNodeData, { type: 'scope' }>;
 
-/** Automated Step block - triggers executor */
-export type AutomatedStepNodeData = BaseNodeData & {
-	type: 'automated_step';
-	executionSpec: ExecutionSpecConfig;
-};
+// Convenience aliases for TaskBlockConfig variants used in editor pickers.
+export type InputBlock = Extract<SchemaTaskBlockConfig, { type: 'input' }>;
+export type MdsvexBlock = Extract<SchemaTaskBlockConfig, { type: 'mdsvex' }>;
+export type CalloutBlock = Extract<SchemaTaskBlockConfig, { type: 'callout' }>;
+export type DividerBlock = Extract<SchemaTaskBlockConfig, { type: 'divider' }>;
+export type ImageBlock = Extract<SchemaTaskBlockConfig, { type: 'image' }>;
+export type FileBlock = Extract<SchemaTaskBlockConfig, { type: 'file' }>;
+export type PdfBlock = Extract<SchemaTaskBlockConfig, { type: 'pdf' }>;
 
-/** Decision/Branch block - conditional routing */
-export type DecisionNodeData = BaseNodeData & {
-	type: 'decision';
-	conditions: BranchCondition[];
-	defaultBranch?: string;
-};
+// Backend's TaskFieldConfig.kind is a free-form string at the wire layer.
+// The editor only ever produces one of these — narrow the type here so the
+// UI components get autocomplete on the form-builder field kind.
+export type TaskFieldKind =
+	| 'text'
+	| 'textarea'
+	| 'number'
+	| 'select'
+	| 'checkbox'
+	| 'file'
+	| 'signature';
 
-/** Parallel Split block - fan out to concurrent paths */
-export type ParallelSplitNodeData = BaseNodeData & {
-	type: 'parallel_split';
-};
-
-/** Parallel Join block - synchronization point */
-export type ParallelJoinNodeData = BaseNodeData & {
-	type: 'parallel_join';
-};
-
-/** Loop block - retry or iterate */
-export type LoopNodeData = BaseNodeData & {
-	type: 'loop';
-	maxIterations: number;
-	loopCondition: string;
-};
-
-/** Scope block - visual container for grouping related nodes */
-export type ScopeNodeData = BaseNodeData & {
-	type: 'scope';
-};
-
-export type WorkflowNodeData =
-	| StartNodeData
-	| EndNodeData
-	| HumanTaskNodeData
-	| AutomatedStepNodeData
-	| DecisionNodeData
-	| ParallelSplitNodeData
-	| ParallelJoinNodeData
-	| LoopNodeData
-	| ScopeNodeData;
-
-export type WorkflowNodeType = WorkflowNodeData['type'];
-
-/** TaskStep configuration (maps to human-ui TaskStep) */
-export type TaskStepConfig = {
-	id: string;
-	title: string;
-	descriptionMdsvex?: string;
-	blocks: TaskBlockConfig[];
-};
-
-/** Block configuration within a task step */
-export type TaskBlockConfig =
-	| { type: 'input'; field: TaskFieldConfig }
-	| { type: 'mdsvex'; content: string }
-	| {
-			type: 'callout';
-			severity: 'info' | 'warning' | 'error' | 'success';
-			title?: string;
-			content: string;
-	  }
-	| { type: 'divider' }
-	| { type: 'image'; filenames: string[]; display: 'single' | 'grid' | 'gallery' }
-	| { type: 'file'; filename: string }
-	| { type: 'pdf'; filename: string; caption?: string; height?: string };
-
-export type TaskFieldConfig = {
-	name: string;
-	label: string;
-	kind: 'text' | 'textarea' | 'number' | 'select' | 'checkbox' | 'file' | 'signature';
-	required?: boolean;
-	placeholder?: string;
-	options?: string[];
-};
-
-export type BranchCondition = {
-	edgeId: string;
-	label: string;
-	guard: string;
-};
-
+// Backend's ExecutionSpecConfig.backend_type is also a free-form string at the
+// wire layer; same reasoning as TaskFieldKind.
 export type ExecutionBackendType =
 	| 'python'
 	| 'process'
@@ -118,45 +74,7 @@ export type ExecutionBackendType =
 	| 'file_ops'
 	| 'kreuzberg';
 
-export type ExecutionSpecConfig = {
-	backendType: ExecutionBackendType;
-	/** Filename of the entrypoint script within the node's files. Backends that
-	 *  don't run a user script (e.g. http) ignore this. */
-	entrypoint?: string;
-	config: Record<string, unknown>;
-};
-
-/** Edge types in the workflow editor */
-export type WorkflowEdgeType = 'sequence' | 'conditional' | 'loop_back';
-
-export type WorkflowEdge = {
-	id: string;
-	source: string;
-	target: string;
-	sourceHandle?: string;
-	label?: string;
-	type: WorkflowEdgeType;
-};
-
-/** The full workflow graph as stored in the database */
-export type WorkflowGraph = {
-	nodes: Array<{
-		id: string;
-		type: WorkflowNodeType;
-		position: { x: number; y: number };
-		data: WorkflowNodeData;
-		/** Parent scope node id — child positions are relative to the parent */
-		parentId?: string;
-		/** Explicit width (used by scope nodes) */
-		width?: number;
-		/** Explicit height (used by scope nodes) */
-		height?: number;
-	}>;
-	edges: WorkflowEdge[];
-	viewport?: { x: number; y: number; zoom: number };
-};
-
-/** Node type metadata for the sidebar palette */
+/** Node type metadata for the sidebar palette. */
 export type NodePaletteItem = {
 	type: WorkflowNodeType;
 	label: string;
@@ -233,8 +151,8 @@ export const NODE_PALETTE: NodePaletteItem[] = [
 	}
 ];
 
-/** Create default node data for a given type */
-export function createDefaultNodeData(type: WorkflowNodeType): WorkflowNodeData {
+/** Create default node data for a given type. */
+export function createDefaultNodeData(type: WorkflowNodeType): SchemaWorkflowNodeData {
 	switch (type) {
 		case 'start':
 			return { type: 'start', label: 'Start' };

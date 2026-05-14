@@ -1,11 +1,10 @@
 <script lang="ts">
-	import { listInstances, cancelInstance } from '$lib/api/client';
-	import type { WorkflowInstance } from '$lib/types/api';
+	import { listInstances, cancelInstance, type InstanceListItem } from '$lib/api/client';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import Activity from '@lucide/svelte/icons/activity';
 
-	let instances = $state<WorkflowInstance[]>([]);
+	let instances = $state<InstanceListItem[]>([]);
 	let loading = $state(true);
 	let error = $state<string | null>(null);
 
