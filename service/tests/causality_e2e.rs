@@ -337,7 +337,7 @@ async fn causality_full_pipeline() {
     let l_db = db.clone();
     let l_sub = sub_mgr.clone();
     let _lifecycle =
-        spawn_consumer(move || start_lifecycle_listener(l_nats, l_db, l_sub)).await;
+        spawn_consumer(move || start_lifecycle_listener(l_nats, l_db, l_sub, None)).await;
 
     // ── 3. Compile & deploy scenario ─────────────────────────────────────
 

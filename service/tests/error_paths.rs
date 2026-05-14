@@ -244,7 +244,7 @@ async fn lifecycle_listener_retries_then_succeeds() {
     let listener_nats = nats.clone();
     let listener_db = db.clone();
     tokio::spawn(async move {
-        start_lifecycle_listener(listener_nats, listener_db, sub_mgr).await;
+        start_lifecycle_listener(listener_nats, listener_db, sub_mgr, None).await;
     });
     tokio::time::sleep(Duration::from_millis(200)).await;
 

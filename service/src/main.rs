@@ -61,12 +61,8 @@ async fn main() -> anyhow::Result<()> {
         .expect("failed to start catalogue subscription watcher");
     tracing::info!("catalogue subscription manager ready");
 
-    // Spawn lifecycle event listener (updates DB on NetCompleted/NetCancelled)
-    tokio::spawn(lifecycle::start_lifecycle_listener(
-        mekhan_nats.clone(),
-        db.clone(),
-        subscription_manager.clone(),
-    ));
+    // Spawn lifecycle event listener (updates DB on NetCompleted/NetCancelled).
+    // Triggers are wired in later once the dispatcher is built — see below.
 
     // Spawn background cleanup sweep
     tokio::spawn(lifecycle::start_cleanup_sweep(
@@ -97,8 +93,9 @@ async fn main() -> anyhow::Result<()> {
     // Trigger dispatcher — hydrates from every published template's
     // graph_json on boot. Background sources (cron, catalog, lifecycle,
     // webhook) hang off the same dispatcher in subsequent sub-phases.
-    // Created before the causality ingest so we can hand it through; the
-    // ingest hook fires catalog triggers on new artifacts.
+    // Created before the lifecycle listener + causality ingest so we can
+    // hand it through; the ingest hook fires catalog triggers on new
+    // artifacts and the lifecycle hook fires net_completion triggers.
     let trigger_dispatcher = mekhan_service::triggers::start_trigger_dispatcher(
         db.clone(),
         petri.clone(),
@@ -106,6 +103,13 @@ async fn main() -> anyhow::Result<()> {
     )
     .await;
     tracing::info!("trigger dispatcher ready");
+
+    tokio::spawn(lifecycle::start_lifecycle_listener(
+        mekhan_nats.clone(),
+        db.clone(),
+        subscription_manager.clone(),
+        Some(trigger_dispatcher.clone()),
+    ));
 
     // Causality ingest (PETRI_GLOBAL domain events → causality tables)
     // Single projection path for processes, tasks, metrics, logs, and catalogue.

@@ -10,6 +10,7 @@ use crate::catalogue::subscriptions::SubscriptionManager;
 use crate::config::CleanupConfig;
 use crate::nats::MekhanNats;
 use crate::petri::client::PetriClient;
+use crate::triggers::TriggerDispatcher;
 
 /// Start the NATS lifecycle event listener.
 /// Subscribes to `petri.events.mekhan-*.net.>` and updates the DB
@@ -18,6 +19,7 @@ pub async fn start_lifecycle_listener(
     nats: MekhanNats,
     db: PgPool,
     subscription_manager: Arc<SubscriptionManager>,
+    triggers: Option<Arc<TriggerDispatcher>>,
 ) {
     let consumer = match nats.lifecycle_consumer().await {
         Ok(c) => c,
@@ -84,6 +86,12 @@ pub async fn start_lifecycle_listener(
                 }
 
                 subscription_manager.cleanup_net_subscriptions(net_id).await;
+
+                // Phase 5d: NetCompletion triggers fire on terminal status.
+                if let Some(ref disp) = triggers {
+                    crate::triggers::sources::net_completion::evaluate(disp, &db, net_id, "completed")
+                        .await;
+                }
             }
             "cancelled" => {
                 tracing::info!("net {net_id} cancelled");
@@ -109,6 +117,30 @@ pub async fn start_lifecycle_listener(
                 }
 
                 subscription_manager.cleanup_net_subscriptions(net_id).await;
+
+                if let Some(ref disp) = triggers {
+                    crate::triggers::sources::net_completion::evaluate(disp, &db, net_id, "cancelled")
+                        .await;
+                }
+            }
+            "failed" => {
+                tracing::info!("net {net_id} failed");
+                let result = sqlx::query(
+                    "UPDATE workflow_instances SET status = 'failed', completed_at = NOW() WHERE net_id = $1 AND status = 'running'"
+                )
+                .bind(net_id)
+                .execute(&db)
+                .await;
+                if let Err(e) = result {
+                    tracing::error!("failed to update instance status for {net_id}: {e}");
+                }
+
+                subscription_manager.cleanup_net_subscriptions(net_id).await;
+
+                if let Some(ref disp) = triggers {
+                    crate::triggers::sources::net_completion::evaluate(disp, &db, net_id, "failed")
+                        .await;
+                }
             }
             _ => {
                 // Ignore created, initialized, etc.

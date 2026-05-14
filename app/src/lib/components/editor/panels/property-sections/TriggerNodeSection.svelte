@@ -180,6 +180,37 @@
 				<span class="text-[11px]">Backfill on publish</span>
 			</label>
 		</div>
+	{:else if source?.kind === 'net_completion'}
+		<FormField label="Source template id">
+			<Input
+				type="text"
+				value={source.sourceTemplateId}
+				disabled={readonly}
+				placeholder="00000000-0000-0000-0000-000000000000"
+				oninput={(e) =>
+					update('source', {
+						...source,
+						sourceTemplateId: (e.currentTarget as HTMLInputElement).value
+					})}
+			/>
+		</FormField>
+		<FormField label="On status">
+			<select
+				class="w-full rounded-md border border-input bg-background px-2 py-1 text-sm"
+				disabled={readonly}
+				value={source.on}
+				onchange={(e) =>
+					update('source', {
+						...source,
+						on: e.currentTarget.value as 'success' | 'failure' | 'cancelled' | 'any'
+					})}
+			>
+				<option value="success">Success</option>
+				<option value="failure">Failure</option>
+				<option value="cancelled">Cancelled</option>
+				<option value="any">Any terminal status</option>
+			</select>
+		</FormField>
 	{:else if source?.kind === 'webhook'}
 		<FormField label="Slug" for="trigger-slug">
 			<Input
