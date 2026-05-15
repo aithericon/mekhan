@@ -1,12 +1,20 @@
 <script lang="ts">
+	import { page } from '$app/state';
 	import { listInstances, cancelInstance, type InstanceListItem } from '$lib/api/client';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import Activity from '@lucide/svelte/icons/activity';
+	import X from '@lucide/svelte/icons/x';
 
 	let instances = $state<InstanceListItem[]>([]);
 	let loading = $state(true);
 	let error = $state<string | null>(null);
+
+	const templateFilter = $derived(page.url.searchParams.get('template_id') ?? undefined);
+	const statusFilter = $derived(page.url.searchParams.get('status') ?? undefined);
+	const filteredTemplateName = $derived(
+		templateFilter ? (instances[0]?.template_name ?? 'this template') : null
+	);
 
 	const statusColors: Record<string, string> = {
 		created: 'bg-gray-100 text-gray-700',
@@ -20,7 +28,10 @@
 		loading = true;
 		error = null;
 		try {
-			const result = await listInstances();
+			const result = await listInstances({
+				templateId: templateFilter,
+				status: statusFilter
+			});
 			instances = result.items;
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load instances';
@@ -43,6 +54,9 @@
 	const formatDate = (s: string) => new Date(s).toLocaleString();
 
 	$effect(() => {
+		// Re-load when the URL filter (template_id / status) changes.
+		void templateFilter;
+		void statusFilter;
 		load();
 	});
 </script>
@@ -55,6 +69,24 @@
 				Running and completed workflow instances
 			</p>
 		</div>
+
+		{#if templateFilter}
+			<div
+				class="mb-4 flex items-center gap-2 rounded-lg border border-border bg-accent/40 px-3 py-2 text-sm"
+			>
+				<span class="text-muted-foreground">Runs of</span>
+				<span class="font-medium text-foreground">{filteredTemplateName}</span>
+				{#if statusFilter}
+					<Badge variant="secondary">{statusFilter}</Badge>
+				{/if}
+				<a
+					href="/instances"
+					class="ml-auto inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+				>
+					<X class="size-3" /> Clear
+				</a>
+			</div>
+		{/if}
 
 		{#if error}
 			<div class="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">

@@ -288,13 +288,22 @@ export async function getStepScopes(id: string): Promise<StepScopes> {
 
 // ── Instances ───────────────────────────────────────────────────────────────
 
-export async function listInstances(
-	page = 1,
-	perPage = 20
-): Promise<components['schemas']['PaginatedResponse_InstanceListItem']> {
+export async function listInstances(opts?: {
+	page?: number;
+	perPage?: number;
+	templateId?: string;
+	status?: string;
+}): Promise<components['schemas']['PaginatedResponse_InstanceListItem']> {
 	return unwrap(
 		await client.GET('/api/instances', {
-			params: { query: { page, per_page: perPage } }
+			params: {
+				query: {
+					page: opts?.page ?? 1,
+					per_page: opts?.perPage ?? 20,
+					template_id: opts?.templateId,
+					status: opts?.status
+				}
+			}
 		})
 	);
 }

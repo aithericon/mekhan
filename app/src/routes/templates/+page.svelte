@@ -7,6 +7,7 @@
 		updateTemplate,
 		createNewVersion,
 		createInstance,
+		listInstances,
 		type TemplateSummary
 	} from '$lib/api/client';
 	import { Button } from '$lib/components/ui/button';
@@ -25,6 +26,7 @@
 	import Rocket from '@lucide/svelte/icons/rocket';
 	import Pencil from '@lucide/svelte/icons/pencil';
 	import GitBranch from '@lucide/svelte/icons/git-branch';
+	import Activity from '@lucide/svelte/icons/activity';
 	import EllipsisVertical from '@lucide/svelte/icons/ellipsis-vertical';
 	import CreateInstanceDialog from '$lib/components/instances/CreateInstanceDialog.svelte';
 
@@ -33,6 +35,26 @@
 	let error = $state<string | null>(null);
 	let dialogOpen = $state(false);
 	let dialogTemplateId = $state<string | null>(null);
+	let runCounts = $state<Record<string, { running: number; completed: number }>>({});
+
+	// Per-template run tallies. Uses the paginated `total` from a perPage:1
+	// query so we never pull the full instance list just to count.
+	async function loadRunCounts(items: TemplateSummary[]) {
+		const entries = await Promise.all(
+			items.map(async (t) => {
+				try {
+					const [running, completed] = await Promise.all([
+						listInstances({ templateId: t.id, status: 'running', perPage: 1 }),
+						listInstances({ templateId: t.id, status: 'completed', perPage: 1 })
+					]);
+					return [t.id, { running: running.total, completed: completed.total }] as const;
+				} catch {
+					return [t.id, { running: 0, completed: 0 }] as const;
+				}
+			})
+		);
+		runCounts = Object.fromEntries(entries);
+	}
 
 	async function load() {
 		loading = true;
@@ -40,6 +62,7 @@
 		try {
 			const result = await listTemplates();
 			templates = result.items;
+			loadRunCounts(result.items);
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load templates';
 			// For now, show empty state when API is not available
@@ -230,6 +253,32 @@
 							<p class="mt-1 text-[10px] text-muted-foreground">
 								Updated {formatDate(template.updated_at)}
 							</p>
+							{#if runCounts[template.id]}
+								{@const c = runCounts[template.id]}
+								<button
+									type="button"
+									class="mt-1.5 inline-flex items-center gap-1.5 text-[11px] text-muted-foreground hover:text-foreground"
+									data-testid="btn-template-runs-{template.id}"
+									onclick={(e: MouseEvent) => {
+										e.preventDefault();
+										e.stopPropagation();
+										goto(`/instances?template_id=${template.id}`);
+									}}
+								>
+									<Activity class="size-3" />
+									{#if c.running > 0}
+										<span class="text-blue-600">{c.running} running</span>
+									{/if}
+									{#if c.running > 0 && c.completed > 0}<span>&middot;</span>{/if}
+									{#if c.completed > 0}
+										<span>{c.completed} completed</span>
+									{/if}
+									{#if c.running === 0 && c.completed === 0}
+										<span>No runs yet</span>
+									{/if}
+									<span class="underline">View runs</span>
+								</button>
+							{/if}
 						</div>
 						<div class="flex items-center gap-1">
 							{#if template.published}
