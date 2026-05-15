@@ -33,6 +33,7 @@ impl KreuzbergConfigExt for KreuzbergConfig {
                 None
             },
             output_format: None,
+            ..Default::default()
         });
 
         #[allow(unused_mut)]
