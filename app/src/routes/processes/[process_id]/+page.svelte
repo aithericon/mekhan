@@ -7,8 +7,10 @@
 		getProcessLogs,
 		getProcessTasks,
 		getProcessArtifacts,
+		getInstance,
 		completeTask,
 		cancelTask,
+		type WorkflowInstance,
 		type ProcessDetail,
 		type HpiTask,
 		type HpiMetricSummary,
@@ -46,6 +48,7 @@
 
 	// ── State ──────────────────────────────────────────────────────────────────
 	let detail = $state<ProcessDetail | null>(null);
+	let linkedInstance = $state<WorkflowInstance | null>(null);
 	let loading = $state(true);
 	let error = $state<string | null>(null);
 
@@ -216,6 +219,14 @@
 		error = null;
 		try {
 			detail = await getProcess(processId);
+			linkedInstance = null;
+			if (detail.instance_id) {
+				try {
+					linkedInstance = await getInstance(detail.instance_id);
+				} catch {
+					linkedInstance = null;
+				}
+			}
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load process';
 		} finally {
@@ -440,6 +451,29 @@
 				</div>
 
 				<p class="font-mono text-xs text-muted-foreground mb-1">{detail.process_id}</p>
+				{#if detail.instance_id}
+					<div class="mb-1 flex flex-wrap items-center gap-1.5 text-xs">
+						<span class="text-muted-foreground">Origin:</span>
+						<a
+							href="/instances/{detail.instance_id}"
+							class="inline-flex items-center gap-1 text-primary hover:underline"
+							data-testid="process-instance-link"
+						>
+							Instance
+							<ChevronRight class="size-3" />
+						</a>
+						{#if linkedInstance}
+							<a
+								href="/templates/{linkedInstance.template_id}"
+								class="inline-flex items-center gap-1 text-primary hover:underline"
+								data-testid="process-template-link"
+							>
+								Template v{linkedInstance.template_version}
+								<ChevronRight class="size-3" />
+							</a>
+						{/if}
+					</div>
+				{/if}
 				<div class="flex items-center gap-4 text-xs text-muted-foreground">
 					<span>Created {formatDate(detail.created_at)}</span>
 					<span>Updated {relativeTime(detail.updated_at)}</span>

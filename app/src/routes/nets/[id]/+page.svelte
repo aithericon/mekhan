@@ -16,6 +16,10 @@
 
 	const PETRI_URL = '/petri';
 	const netId = $derived($page.params.id as string);
+	// Engine nets launched from a mekhan instance are keyed "mekhan-{instanceId}".
+	const owningInstanceId = $derived(
+		netId.startsWith('mekhan-') ? netId.slice('mekhan-'.length) : null
+	);
 
 	async function handleDeleteNet(id: string) {
 		if (!confirm(`Delete net "${id}"?`)) return;
@@ -50,6 +54,11 @@
 				>
 					{api.store.runMode}
 				</Badge>
+			{/if}
+			{#if owningInstanceId}
+				<Button variant="ghost" size="sm" href="/instances/{owningInstanceId}">
+					Instance ▸
+				</Button>
 			{/if}
 		</div>
 		<div class="ml-auto flex items-center gap-1">

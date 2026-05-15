@@ -41,10 +41,20 @@
 			</Button>
 			<Button variant="ghost" size="sm" href="/templates" data-testid="nav-templates">Templates</Button>
 			<Button variant="ghost" size="sm" href="/instances" data-testid="nav-instances">Instances</Button>
-			<Button variant="ghost" size="sm" href="/tasks" data-testid="nav-tasks">Tasks</Button>
 			<Button variant="ghost" size="sm" href="/processes" data-testid="nav-processes">Processes</Button>
-			<Button variant="ghost" size="sm" href="/nets" data-testid="nav-nets">Nets</Button>
+			<Button variant="ghost" size="sm" href="/tasks" data-testid="nav-tasks">Tasks</Button>
 			<Button variant="ghost" size="sm" href="/catalogue" data-testid="nav-catalogue">Catalogue</Button>
+			<span class="ml-auto mr-1 h-4 w-px bg-border" aria-hidden="true"></span>
+			<Button
+				variant="ghost"
+				size="sm"
+				href="/nets"
+				data-testid="nav-nets"
+				class="text-muted-foreground"
+				title="Engine debug: raw petri nets"
+			>
+				Engine
+			</Button>
 		</nav>
 	</header>
 	<main class="flex-1 overflow-hidden">
