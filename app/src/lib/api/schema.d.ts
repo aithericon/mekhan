@@ -826,13 +826,14 @@ export interface paths {
         };
         /**
          * GET /api/templates/{id}/io-stubs
-         *     Generated `_aithericon_io.py` typed-input module per Python automated step,
-         *     derived from each node's input scope. An authoring aid: unlike compile it
-         *     does NOT require the graph to be publishable (missing entrypoints / dangling
-         *     edges are fine) — it only needs a DAG. The IDE surfaces these read-only so
-         *     step code gets typed `load_input()` before publish. Non-fatal by design: a
-         *     graph that can't be scoped yields an empty map, never an error, so the
-         *     editor never breaks on this.
+         *     Generated `_aithericon_io` pair (`.py` SDK delegate + typed `.pyi` overlay)
+         *     per Python automated step, derived from each node's input scope. An
+         *     authoring aid: unlike compile it does NOT require the graph to be
+         *     publishable (missing entrypoints / dangling edges are fine) — it only needs
+         *     a DAG. The IDE surfaces these read-only so step code gets typed
+         *     `load_input()` before publish. Non-fatal by design: a graph that can't be
+         *     scoped yields an empty map, never an error, so the editor never breaks on
+         *     this.
          */
         get: operations["io_stubs"];
         put?: never;
@@ -4143,7 +4144,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Per-node generated typed-input modules */
+            /** @description Per-node generated `_aithericon_io` files */
             200: {
                 headers: {
                     [name: string]: unknown;

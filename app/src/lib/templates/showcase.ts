@@ -303,6 +303,7 @@ export const showcaseGraph: WorkflowGraph = {
 			id: 'e-start-review',
 			source: 'start',
 			target: 'review',
+			targetHandle: 'in',
 			type: 'sequence'
 		},
 		// Review → Extract
@@ -310,6 +311,7 @@ export const showcaseGraph: WorkflowGraph = {
 			id: 'e-review-extract',
 			source: 'review',
 			target: 'extract',
+			targetHandle: 'in',
 			type: 'sequence'
 		},
 		// Extract → Decision
@@ -317,6 +319,7 @@ export const showcaseGraph: WorkflowGraph = {
 			id: 'e-extract-decision',
 			source: 'extract',
 			target: 'check-amount',
+			targetHandle: 'in',
 			type: 'sequence'
 		},
 
@@ -326,6 +329,7 @@ export const showcaseGraph: WorkflowGraph = {
 			source: 'check-amount',
 			target: 'split',
 			sourceHandle: 'branch-high',
+			targetHandle: 'in',
 			label: '> $5,000',
 			type: 'conditional'
 		},
@@ -335,6 +339,7 @@ export const showcaseGraph: WorkflowGraph = {
 			source: 'check-amount',
 			target: 'end-processed',
 			sourceHandle: 'default',
+			targetHandle: 'in',
 			label: '≤ $5,000',
 			type: 'conditional'
 		},
@@ -344,6 +349,7 @@ export const showcaseGraph: WorkflowGraph = {
 			id: 'e-split-manager',
 			source: 'split',
 			target: 'manager-approval',
+			targetHandle: 'in',
 			type: 'sequence'
 		},
 		// Split → Compliance
@@ -351,6 +357,7 @@ export const showcaseGraph: WorkflowGraph = {
 			id: 'e-split-compliance',
 			source: 'split',
 			target: 'compliance',
+			targetHandle: 'in',
 			type: 'sequence'
 		},
 
@@ -359,6 +366,7 @@ export const showcaseGraph: WorkflowGraph = {
 			id: 'e-manager-join',
 			source: 'manager-approval',
 			target: 'join',
+			targetHandle: 'in',
 			type: 'sequence'
 		},
 		// Compliance → Join
@@ -366,6 +374,7 @@ export const showcaseGraph: WorkflowGraph = {
 			id: 'e-compliance-join',
 			source: 'compliance',
 			target: 'join',
+			targetHandle: 'in',
 			type: 'sequence'
 		},
 
@@ -374,6 +383,7 @@ export const showcaseGraph: WorkflowGraph = {
 			id: 'e-join-end',
 			source: 'join',
 			target: 'end-approved',
+			targetHandle: 'in',
 			type: 'sequence'
 		}
 	]
@@ -398,8 +408,9 @@ const showcaseFiles: Record<string, Record<string, string>> = {
 	extract: {
 		'main.py': `# Extract Data — Aithericon Python backend.
 # 'set_output' and 'log_*' are provided by the SDK runner (no manual
-# init/shutdown). '_aithericon_io' is generated at publish from this node's
-# typed input scope, so 'token' is a typed dataclass with autocomplete.
+# init/shutdown). 'load_input()' returns the workflow token; the generated
+# _aithericon_io.pyi types this node's fields, so 'token.vendor_name' has
+# autocomplete and typos are flagged at author time.
 from _aithericon_io import load_input
 
 token = load_input()
@@ -418,8 +429,8 @@ log_info("extraction complete")
 	},
 	compliance: {
 		'main.py': `# Compliance Check — sanctions & fraud screening (Python backend).
-# 'token' is the typed view of the accumulated workflow token, generated
-# at publish from this node's input scope (upstream form + Extract output).
+# 'token' is the accumulated workflow token; its per-node field types come
+# from the generated _aithericon_io.pyi (upstream form + Extract output).
 from _aithericon_io import load_input
 
 token = load_input()

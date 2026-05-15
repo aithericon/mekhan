@@ -1,7 +1,7 @@
 """High-level ExecutionContext manager."""
 
 from aithericon._client import init, shutdown
-from aithericon._inputs import load_inputs
+from aithericon._inputs import load_inputs, _wrap
 from aithericon._outputs import set_output
 from aithericon._artifacts import log_artifact
 from aithericon._progress import update_progress, define_phases, update_phase
@@ -31,8 +31,12 @@ class ExecutionContext:
 
     @property
     def token(self):
-        """The workflow token (staged ``input.json``) as a dict."""
-        return self.inputs.get("input.json", {})
+        """The workflow token (staged ``input.json``) as a :class:`Token`.
+
+        Same value and attribute-access surface as :func:`aithericon.token`,
+        served from the inputs already loaded on ``__enter__`` (no re-scan).
+        """
+        return _wrap(self.inputs.get("input.json", {}))
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         exit_code = 0 if exc_type is None else 1

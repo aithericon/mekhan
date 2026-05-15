@@ -6,7 +6,7 @@ import tempfile
 
 import aithericon
 from aithericon._client import init, is_connected, _stub, _channel
-from aithericon._inputs import load_inputs
+from aithericon._inputs import load_inputs, token, Token
 from aithericon._outputs import set_output
 from aithericon._context import ExecutionContext
 
@@ -37,6 +37,55 @@ def test_load_inputs_empty_dir():
 def test_load_inputs_missing_dir():
     result = load_inputs(inputs_dir="/nonexistent_path_that_does_not_exist")
     assert result == {}
+
+
+# ── token() / Token ──────────────────────────────────────────────────
+
+def test_token_reads_input_json(monkeypatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        with open(os.path.join(tmp, "input.json"), "w") as f:
+            json.dump({"vendor": "ACME", "amount": 42}, f)
+        # An unrelated staged file must not leak into the token.
+        with open(os.path.join(tmp, "config.json"), "w") as f:
+            json.dump({"lr": 0.001}, f)
+        monkeypatch.setenv("AITHERICON_INPUTS_DIR", tmp)
+
+        t = token()
+
+    assert isinstance(t, Token)
+    assert t.vendor == "ACME"          # attribute access
+    assert t["amount"] == 42           # item access (dict)
+    assert t.get("amount") == 42
+    assert "lr" not in t               # only input.json, not the file map
+
+
+def test_token_missing_attr_is_none_but_item_raises():
+    t = Token({"present": 1})
+    assert t.present == 1
+    assert t.absent is None            # forgiving attribute access
+    assert t.get("absent") is None
+    try:
+        t["absent"]
+    except KeyError:
+        pass
+    else:
+        raise AssertionError("item access should raise KeyError when absent")
+
+
+def test_token_nested_wrapping():
+    t = Token({"address": {"city": "Berlin"}, "items": [{"sku": "x"}]})
+    assert t.address.city == "Berlin"          # nested dict wrapped
+    assert t["items"][0].sku == "x"            # dict elements in lists wrapped
+    assert isinstance(t.address, Token)
+
+
+def test_token_empty_when_no_input_json(monkeypatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        monkeypatch.setenv("AITHERICON_INPUTS_DIR", tmp)
+        t = token()
+    assert isinstance(t, Token)
+    assert t == {}
+    assert t.anything is None
 
 
 # ── set_output (file fallback) ───────────────────────────────────────
@@ -88,11 +137,15 @@ def test_context_manager_disconnected(monkeypatch):
     with tempfile.TemporaryDirectory() as tmp:
         with open(os.path.join(tmp, "params.json"), "w") as f:
             json.dump({"x": 10}, f)
+        with open(os.path.join(tmp, "input.json"), "w") as f:
+            json.dump({"vendor": "ACME"}, f)
 
         monkeypatch.setenv("AITHERICON_INPUTS_DIR", tmp)
 
         with ExecutionContext() as ctx:
             assert ctx.inputs.get("params.json") == {"x": 10}
+            assert isinstance(ctx.token, Token)
+            assert ctx.token.vendor == "ACME"      # same surface as token()
 
     # No crash on __exit__
 

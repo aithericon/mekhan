@@ -6,17 +6,28 @@
 	import AutomatedStepSection from '$lib/components/editor/panels/property-sections/AutomatedStepSection.svelte';
 	import DecisionNodeSection from '$lib/components/editor/panels/property-sections/DecisionNodeSection.svelte';
 	import LoopNodeSection from '$lib/components/editor/panels/property-sections/LoopNodeSection.svelte';
+	import StepReferencePanel from '$lib/components/ide/StepReferencePanel.svelte';
+	import type { StepScopeField } from '$lib/api/client';
 
 	type Props = {
 		binding: YjsGraphBinding;
 		nodeId: string;
 		readonly?: boolean;
+		/** This node's input scope (from getStepScopes); drives the reference panel. */
+		scopeFields?: StepScopeField[];
 	};
 
-	let { binding, nodeId, readonly = false }: Props = $props();
+	let { binding, nodeId, readonly = false, scopeFields = [] }: Props = $props();
 
 	const nodeData = $derived(
 		binding.graph.nodes.find((n) => n.id === nodeId)?.data ?? null
+	);
+
+	const isPythonStep = $derived(
+		nodeData?.type === 'automated_step' &&
+			// executionSpec exists on automated_step variants
+			(nodeData as Extract<WorkflowNodeData, { type: 'automated_step' }>).executionSpec
+				?.backendType === 'python'
 	);
 
 	function handleChange(data: WorkflowNodeData) {
@@ -79,6 +90,10 @@
 				<LoopNodeSection data={nodeData} {readonly} onchange={handleChange} />
 			{/if}
 		</div>
+
+		{#if isPythonStep}
+			<StepReferencePanel fields={scopeFields} />
+		{/if}
 	{:else}
 		<div class="flex flex-1 items-center justify-center text-sm text-muted-foreground">
 			Select a node from the file tree

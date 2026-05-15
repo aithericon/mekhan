@@ -5,11 +5,15 @@ use aithericon_executor_domain::ExecutorError;
 /// Write the Python runner template that wraps user code.
 ///
 /// The runner provides:
-/// 1. `inputs` dict — loaded from staged files in `AITHERICON_INPUTS_DIR`
-/// 2. `set_output(name, value)` — file-based output that writes JSON to `AITHERICON_OUTPUTS_DIR`
-/// 3. If the `aithericon` SDK is installed, upgrades to IPC-backed functions for outputs,
-///    artifacts, progress, logging, and metrics.
-/// 4. Executes the user code file with all helpers available in scope.
+/// 1. `token` — the accumulating workflow token, usable as `token.<field>`
+///    with no import (rich SDK `Token` when the SDK is present, plain dict
+///    otherwise). This is the primary input surface.
+/// 2. `inputs` dict — the raw staged-file map from `AITHERICON_INPUTS_DIR`
+///    (escape hatch for named / binary files).
+/// 3. `set_output(name, value)` — file-based output that writes JSON to `AITHERICON_OUTPUTS_DIR`
+/// 4. If the `aithericon` SDK is installed, upgrades `token`/`set_output` and
+///    adds IPC-backed artifacts, progress, logging, and metrics.
+/// 5. Executes the user code file with all helpers available in scope.
 pub async fn write_runner(
     runner_path: &Path,
     user_code_path: &Path,
@@ -59,6 +63,11 @@ def _load_inputs():
 
 inputs = _load_inputs()
 
+# The accumulating workflow token, ready to use as `token.<field>` with no
+# import (upgraded to the rich SDK Token below when the SDK is present).
+# Plain-dict fallback keeps `token` defined even without the SDK.
+token = inputs.get("input.json", {{}}) if isinstance(inputs, dict) else {{}}
+
 # --- Output helper (file-based fallback) ---
 def set_output(name, value):
     """Set a named output value. Writes JSON to the outputs directory."""
@@ -77,6 +86,7 @@ try:
     aithericon.init()
     print(f"[runner] SDK init ok, connected={{aithericon._client.is_connected()}}", file=_sys.stderr)
     inputs = aithericon.load_inputs() or inputs
+    token = aithericon.token()
     set_output = aithericon.set_output
     log_artifact = aithericon.log_artifact
     update_progress = aithericon.update_progress

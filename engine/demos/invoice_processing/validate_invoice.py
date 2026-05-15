@@ -5,8 +5,8 @@ Executed by the Python IPC executor. Validates OCR-extracted invoice data,
 checks totals, flags anomalies, and performs vendor verification using
 Vault-injected credentials.
 
-Input (via IPC 'inputs' dict):
-    invoice_data.json: {
+Input (the workflow token, via `aithericon.token()`):
+    {
         "vendor": "...",
         "invoice_number": "...",
         "date": "...",
@@ -325,10 +325,13 @@ def validate_invoice(data):
 
 
 # ---------------------------------------------------------------------------
-# Entry point — uses SDK-injected globals
+# Entry point — reads the accumulating workflow token; `set_output` / `log_*`
+# are SDK-injected globals (the runner auto-imports the SDK).
 # ---------------------------------------------------------------------------
 
-invoice_data = inputs.get("invoice_data.json", {})
+import aithericon
+
+invoice_data = aithericon.token()
 result = validate_invoice(invoice_data)
 set_output("result", result)
 log_info(

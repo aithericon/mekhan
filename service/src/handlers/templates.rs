@@ -10,7 +10,7 @@ use uuid::Uuid;
 use aithericon_executor_domain::InputSource;
 
 use crate::auth::AuthUser;
-use crate::compiler::{compile_to_air, generate_py_io_module, node_input_scopes};
+use crate::compiler::{compile_to_air, generate_py_io_files, node_input_scopes};
 use crate::lifecycle::cleanup_net;
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::template::{
@@ -455,9 +455,10 @@ pub async fn publish_template(
             }
         };
 
-    // Generate a typed `_aithericon_io.py` per Python automated step from the
+    // Generate the `_aithericon_io` pair per Python automated step from the
     // node's computed input scope (the same flat `input.<field>` model guards
-    // use). Staged with the step like any other node file so step code can do
+    // use): a thin `.py` delegate to the SDK plus a typed `.pyi` overlay.
+    // Staged with the step like any other node file so step code can do
     // `from _aithericon_io import load_input`. Skipped silently if the graph
     // can't be scoped — publish should still proceed and surface the real
     // compile error below.
@@ -466,10 +467,10 @@ pub async fn publish_template(
             if let WorkflowNodeData::AutomatedStep { execution_spec, .. } = &node.data {
                 if execution_spec.backend_type == ExecutionBackendType::Python {
                     if let Some(scope) = scopes.get(&node.id) {
-                        ydoc_files
-                            .entry(node.id.clone())
-                            .or_default()
-                            .insert("_aithericon_io.py".to_string(), generate_py_io_module(scope));
+                        let entry = ydoc_files.entry(node.id.clone()).or_default();
+                        for (filename, source) in generate_py_io_files(scope) {
+                            entry.insert(filename.to_string(), source);
+                        }
                     }
                 }
             }
@@ -872,19 +873,20 @@ pub async fn compile_preview(
     path = "/api/templates/{id}/io-stubs",
     params(("id" = Uuid, Path, description = "Template id")),
     responses(
-        (status = 200, description = "Per-node generated typed-input modules", body = serde_json::Value),
+        (status = 200, description = "Per-node generated `_aithericon_io` files", body = serde_json::Value),
         (status = 404, description = "Template not found", body = ErrorResponse),
         (status = 500, description = "Server error", body = ErrorResponse),
     ),
     tag = "templates",
 )]
-/// Generated `_aithericon_io.py` typed-input module per Python automated step,
-/// derived from each node's input scope. An authoring aid: unlike compile it
-/// does NOT require the graph to be publishable (missing entrypoints / dangling
-/// edges are fine) — it only needs a DAG. The IDE surfaces these read-only so
-/// step code gets typed `load_input()` before publish. Non-fatal by design: a
-/// graph that can't be scoped yields an empty map, never an error, so the
-/// editor never breaks on this.
+/// Generated `_aithericon_io` pair (`.py` SDK delegate + typed `.pyi` overlay)
+/// per Python automated step, derived from each node's input scope. An
+/// authoring aid: unlike compile it does NOT require the graph to be
+/// publishable (missing entrypoints / dangling edges are fine) — it only needs
+/// a DAG. The IDE surfaces these read-only so step code gets typed
+/// `load_input()` before publish. Non-fatal by design: a graph that can't be
+/// scoped yields an empty map, never an error, so the editor never breaks on
+/// this.
 pub async fn io_stubs(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
@@ -906,19 +908,30 @@ pub async fn io_stubs(
     };
 
     let mut generated: HashMap<String, HashMap<String, String>> = HashMap::new();
+    // Structured per-node input scope so the editor's reference panel can
+    // render `token.<field>` without parsing the generated `.pyi`. Ordered
+    // (BTreeMap) for stable display.
+    let mut scopes_out: HashMap<String, Vec<serde_json::Value>> = HashMap::new();
     if let Some(graph) = graph {
         if let Ok(scopes) = node_input_scopes(&graph) {
             for node in &graph.nodes {
                 if let WorkflowNodeData::AutomatedStep { execution_spec, .. } = &node.data {
                     if execution_spec.backend_type == ExecutionBackendType::Python {
                         if let Some(scope) = scopes.get(&node.id) {
-                            generated
-                                .entry(node.id.clone())
-                                .or_default()
-                                .insert(
-                                    "_aithericon_io.py".to_string(),
-                                    generate_py_io_module(scope),
-                                );
+                            let entry =
+                                generated.entry(node.id.clone()).or_default();
+                            for (filename, source) in generate_py_io_files(scope) {
+                                entry.insert(filename.to_string(), source);
+                            }
+                            scopes_out.insert(
+                                node.id.clone(),
+                                scope
+                                    .iter()
+                                    .map(|(name, kind)| {
+                                        serde_json::json!({ "name": name, "kind": kind })
+                                    })
+                                    .collect(),
+                            );
                         }
                     }
                 }
@@ -926,7 +939,9 @@ pub async fn io_stubs(
         }
     }
 
-    Ok(Json(serde_json::json!({ "generated": generated })))
+    Ok(Json(
+        serde_json::json!({ "generated": generated, "scopes": scopes_out }),
+    ))
 }
 
 /// POST /api/compile

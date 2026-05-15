@@ -244,10 +244,11 @@ export async function compileGraph(data: CompileRequest): Promise<object> {
 }
 
 /**
- * Generated typed-input modules (`_aithericon_io.py`) per Python automated
- * step, keyed `nodeId -> { filename -> source }`. Authoring aid: works on
- * non-publishable graphs and never errors (empty map if unscopable), so the
- * IDE can surface read-only typed `load_input()` stubs before publish.
+ * Generated `_aithericon_io` files per Python automated step, keyed
+ * `nodeId -> { filename -> source }` — a `.py` SDK delegate plus a typed
+ * `.pyi` overlay. Authoring aid: works on non-publishable graphs and never
+ * errors (empty map if unscopable), so the IDE can surface read-only typed
+ * `load_input()` stubs before publish.
  */
 export async function getIoStubs(
 	id: string
@@ -256,6 +257,24 @@ export async function getIoStubs(
 		await client.GET('/api/templates/{id}/io-stubs', { params: { path: { id } } })
 	) as { generated?: Record<string, Record<string, string>> };
 	return res.generated ?? {};
+}
+
+/** A field readable as `token.<name>` at a Python step (its input scope). */
+export type StepScopeField = { name: string; kind: string };
+
+/**
+ * Structured per-node input scope, keyed `nodeId -> [{ name, kind }]` —
+ * the same `input.<field>` set the generated `.pyi` types and decision
+ * guards see. Drives the IDE step reference panel. Never errors: an
+ * unscopable graph just yields an empty map.
+ */
+export async function getStepScopes(
+	id: string
+): Promise<Record<string, StepScopeField[]>> {
+	const res = unwrap(
+		await client.GET('/api/templates/{id}/io-stubs', { params: { path: { id } } })
+	) as { scopes?: Record<string, StepScopeField[]> };
+	return res.scopes ?? {};
 }
 
 // ── Instances ───────────────────────────────────────────────────────────────

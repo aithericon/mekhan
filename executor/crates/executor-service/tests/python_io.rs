@@ -88,6 +88,63 @@ mod python_io_tests {
         ctx.cleanup().await;
     }
 
+    /// Regression: the runner must inject `token` (the staged `input.json`
+    /// workflow token) as a global, usable with no import. Previously step
+    /// code referencing `token` died with `NameError: name 'token' is not
+    /// defined`. Asserts on item access so it holds with or without the SDK
+    /// (Token is a dict subclass; bare dict otherwise).
+    #[tokio::test]
+    async fn test_python_token_global_from_input_json() {
+        let _ = tracing_subscriber::fmt().with_test_writer().try_init();
+
+        let ctx = ExecutorTestContext::new().await;
+        let eid = format!("py-token-{}", Uuid::new_v4().simple());
+        let consumer = ctx.status_consumer("py-token", &eid).await;
+        let worker =
+            ctx.spawn_worker_custom(CleanupPolicy::Immediate, None, python_registry());
+
+        // The compiler's prepare transition stages the workflow token as a
+        // file literally named `input.json`.
+        let inputs = vec![InputDeclaration {
+            name: "input.json".into(),
+            source: InputSource::Inline {
+                value: serde_json::json!({"greeting": "hello world", "amount": 7}),
+            },
+            required: true,
+        }];
+
+        ctx.push_job(python_io_job(
+            &eid,
+            "print(token[\"greeting\"])\nset_output(\"amount\", token[\"amount\"])",
+            inputs,
+            vec![],
+        ))
+        .await;
+
+        let statuses = ctx
+            .collect_statuses(&consumer, Duration::from_secs(30))
+            .await;
+
+        assert_status_sequence(
+            &statuses,
+            &[
+                ExecutionStatus::Accepted,
+                ExecutionStatus::Running,
+                ExecutionStatus::Completed,
+            ],
+        );
+
+        let completed = statuses.last().unwrap();
+        let stdout = completed.detail["stdout_tail"].as_str().unwrap_or("");
+        assert!(
+            stdout.contains("hello world"),
+            "bare `token` global should resolve the staged input.json; got: {stdout:?}"
+        );
+
+        worker.abort();
+        ctx.cleanup().await;
+    }
+
     /// Verify: Python `set_output()` writes a file that the executor reads into terminal status.
     #[tokio::test]
     async fn test_python_set_output_in_terminal_status() {

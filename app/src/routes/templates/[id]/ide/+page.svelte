@@ -10,12 +10,31 @@
 	import HumanTaskFormEditor from '$lib/components/ide/HumanTaskFormEditor.svelte';
 	import { getSession, releaseSession } from '$lib/yjs/session-store';
 	import { YjsGraphBinding } from '$lib/yjs/graph-binding.svelte';
-	import { getTemplate, publishTemplate, uploadFile, type Template } from '$lib/api/client';
+	import {
+		getTemplate,
+		publishTemplate,
+		uploadFile,
+		getStepScopes,
+		type Template,
+		type StepScopeField
+	} from '$lib/api/client';
 
 	const templateId = $derived(page.params.id!);
 
 	let template = $state<Template | null>(null);
 	let error = $state<string | null>(null);
+
+	// Per-node input scope for the step reference panel. Derived server-side
+	// from the live Y.Doc graph; never errors (empty map if unscopable).
+	let stepScopes = $state<Record<string, StepScopeField[]>>({});
+	async function refreshScopes() {
+		try {
+			stepScopes = await getStepScopes(templateId);
+		} catch {
+			// Authoring aid only — a failure here must never block editing.
+			stepScopes = {};
+		}
+	}
 
 	// Yjs session
 	const session = getSession(templateId);
@@ -52,6 +71,7 @@
 		if (!template || template.published) return;
 		try {
 			template = await publishTemplate(template.id);
+			void refreshScopes();
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to publish';
 		}
@@ -179,6 +199,14 @@
 		load();
 	});
 
+	// Keep the step reference panel fresh: refetch when the focused node
+	// changes or the graph's node set shifts (covers initial sync + upstream
+	// edits that change scope). Cheap and non-blocking.
+	$effect(() => {
+		selectedNodeId;
+		if (binding.graph.nodes.length > 0) void refreshScopes();
+	});
+
 	onDestroy(() => {
 		binding.destroy();
 		releaseSession(templateId);
@@ -243,6 +271,7 @@
 					{binding}
 					nodeId={selectedNodeId}
 					readonly={template?.published ?? false}
+					scopeFields={stepScopes[selectedNodeId] ?? []}
 				/>
 			{:else}
 				<div class="flex h-full items-center justify-center border-l border-border bg-card text-sm text-muted-foreground">
