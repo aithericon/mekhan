@@ -82,36 +82,42 @@
 			"id": "e1",
 			"source": "start-1",
 			"target": "split-1",
+			"targetHandle": "in",
 			"type": "sequence"
 		},
 		{
 			"id": "e2",
 			"source": "split-1",
 			"target": "ht-a",
+			"targetHandle": "in",
 			"type": "sequence"
 		},
 		{
 			"id": "e3",
 			"source": "split-1",
 			"target": "ht-b",
+			"targetHandle": "in",
 			"type": "sequence"
 		},
 		{
 			"id": "e4",
 			"source": "ht-a",
 			"target": "join-1",
+			"targetHandle": "in",
 			"type": "sequence"
 		},
 		{
 			"id": "e5",
 			"source": "ht-b",
 			"target": "join-1",
+			"targetHandle": "in",
 			"type": "sequence"
 		},
 		{
 			"id": "e6",
 			"source": "join-1",
 			"target": "end-1",
+			"targetHandle": "in",
 			"type": "sequence"
 		}
 	]

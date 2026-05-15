@@ -79,8 +79,11 @@ fn assert_arcs_reference_existing_places(air: &Value) {
     }
 }
 
-/// Exactly one place should have initial_tokens.
-fn assert_single_seeded_place(air: &Value) {
+/// No place carries `initial_tokens` at compile time. Since the typed-ports
+/// work (Phase 1), Start places are emitted empty and seeded per-Start at
+/// instance creation by `parameterize_air` — compilation no longer bakes
+/// initial tokens into the AIR.
+fn assert_no_seeded_places(air: &Value) {
     let seeded: Vec<&str> = places(air)
         .iter()
         .filter(|p| {
@@ -91,10 +94,9 @@ fn assert_single_seeded_place(air: &Value) {
         })
         .map(|p| p["id"].as_str().unwrap())
         .collect();
-    assert_eq!(
-        seeded.len(),
-        1,
-        "expected exactly 1 seeded place, got {seeded:?}"
+    assert!(
+        seeded.is_empty(),
+        "expected no compile-time seeded places (seeding moved to instance time), got {seeded:?}"
     );
 }
 
@@ -111,11 +113,12 @@ fn ui_simple_start_end_deserializes_and_compiles() {
 
     let air = compile_to_air(&graph, "simple", "Simple workflow", &std::collections::HashMap::new()).expect("should compile");
 
-    // After merge: 1 place (terminal + seeded), 0 transitions
+    // After merge: 1 terminal place, 0 transitions. No compile-time seeding
+    // (initial tokens are injected per-Start at instance creation).
     assert_eq!(places(&air).len(), 1);
     assert!(transitions(&air).is_empty());
     assert!(has_place_of_type(&air, "terminal"));
-    assert_single_seeded_place(&air);
+    assert_no_seeded_places(&air);
 }
 
 // ---------------------------------------------------------------------------
@@ -136,7 +139,7 @@ fn ui_linear_human_task_deserializes_and_compiles() {
     assert_eq!(places(&air).len(), 6);
     assert!(has_place_of_type(&air, "terminal"));
     assert!(has_place_of_type(&air, "signal"));
-    assert_single_seeded_place(&air);
+    assert_no_seeded_places(&air);
 
     // HumanTask injection transition (Start→HumanTask needs data injection)
     assert!(
@@ -191,7 +194,7 @@ fn ui_invoice_processing_deserializes_and_compiles() {
     // Structural invariants
     assert_all_transitions_wired(&air);
     assert_arcs_reference_existing_places(&air);
-    assert_single_seeded_place(&air);
+    assert_no_seeded_places(&air);
 
     // Two End-node terminal places (end-approved, end-processed). The executor
     // lifecycle scaffolding emits additional terminals scoped to the node id
@@ -209,18 +212,10 @@ fn ui_invoice_processing_deserializes_and_compiles() {
         "expected 2 End-node terminal places, got {end_terminals:?}"
     );
 
-    // Initial token carries invoice_id
-    let seeded = places(&air)
-        .iter()
-        .find(|p| {
-            p.get("initial_tokens")
-                .and_then(|t| t.as_array())
-                .map(|a| !a.is_empty())
-                .unwrap_or(false)
-        })
-        .expect("should have a seeded place");
-    let token = &seeded["initial_tokens"][0];
-    assert_eq!(token["invoice_id"], "INV-2024-001");
+    // (Pre-typed-ports this asserted the compiled AIR carried the Start's
+    // `initialData` invoice_id. Phase 1 moved seeding to instance creation —
+    // `parameterize_air` injects per-Start tokens — so the compiled AIR has no
+    // initial tokens; see `assert_no_seeded_places` above.)
 
     // --- HumanTask: Review Invoice ---
     assert!(has_transition(&air, "t_review_request"), "Review request");

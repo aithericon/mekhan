@@ -45,12 +45,14 @@
 			"id": "edge-start-ht",
 			"source": "start-1",
 			"target": "ht-1",
+			"targetHandle": "in",
 			"type": "sequence"
 		},
 		{
 			"id": "edge-ht-end",
 			"source": "ht-1",
 			"target": "end-1",
+			"targetHandle": "in",
 			"type": "sequence"
 		}
 	]

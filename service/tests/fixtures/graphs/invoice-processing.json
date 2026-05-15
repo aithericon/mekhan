@@ -200,7 +200,7 @@
 				"label": "Auto-Validate",
 				"description": "Retry validation up to 3 times",
 				"maxIterations": 3,
-				"loopCondition": "input.validation_passed != true"
+				"loopCondition": "input.verified != true"
 			}
 		},
 		{
@@ -215,24 +215,28 @@
 			"id": "e-start-review",
 			"source": "start",
 			"target": "review",
+			"targetHandle": "in",
 			"type": "sequence"
 		},
 		{
 			"id": "e-review-extract",
 			"source": "review",
 			"target": "extract",
+			"targetHandle": "in",
 			"type": "sequence"
 		},
 		{
 			"id": "e-extract-decision",
 			"source": "extract",
 			"target": "check-amount",
+			"targetHandle": "in",
 			"type": "sequence"
 		},
 		{
 			"id": "e-decision-split",
 			"source": "check-amount",
 			"target": "split",
+			"targetHandle": "in",
 			"sourceHandle": "branch-high",
 			"label": "> $5,000",
 			"type": "sequence"
@@ -241,6 +245,7 @@
 			"id": "e-decision-loop",
 			"source": "check-amount",
 			"target": "auto-validate",
+			"targetHandle": "in",
 			"sourceHandle": "default",
 			"label": "≤ $5,000",
 			"type": "sequence"
@@ -249,36 +254,42 @@
 			"id": "e-split-manager",
 			"source": "split",
 			"target": "manager-approval",
+			"targetHandle": "in",
 			"type": "sequence"
 		},
 		{
 			"id": "e-split-compliance",
 			"source": "split",
 			"target": "compliance",
+			"targetHandle": "in",
 			"type": "sequence"
 		},
 		{
 			"id": "e-manager-join",
 			"source": "manager-approval",
 			"target": "join",
+			"targetHandle": "in",
 			"type": "sequence"
 		},
 		{
 			"id": "e-compliance-join",
 			"source": "compliance",
 			"target": "join",
+			"targetHandle": "in",
 			"type": "sequence"
 		},
 		{
 			"id": "e-join-end",
 			"source": "join",
 			"target": "end-approved",
+			"targetHandle": "in",
 			"type": "sequence"
 		},
 		{
 			"id": "e-loop-end",
 			"source": "auto-validate",
 			"target": "end-processed",
+			"targetHandle": "in",
 			"type": "sequence"
 		}
 	]

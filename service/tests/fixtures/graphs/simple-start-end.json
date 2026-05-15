@@ -18,6 +18,7 @@
 			"id": "edge-start-end",
 			"source": "start-1",
 			"target": "end-1",
+			"targetHandle": "in",
 			"type": "sequence"
 		}
 	]

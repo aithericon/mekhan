@@ -45,12 +45,14 @@
 			"id": "e1",
 			"source": "start-1",
 			"target": "dec-1",
+			"targetHandle": "in",
 			"type": "sequence"
 		},
 		{
 			"id": "e-a",
 			"source": "dec-1",
 			"target": "end-a",
+			"targetHandle": "in",
 			"sourceHandle": "branch-a",
 			"type": "sequence"
 		},
@@ -58,6 +60,7 @@
 			"id": "e-b",
 			"source": "dec-1",
 			"target": "end-b",
+			"targetHandle": "in",
 			"sourceHandle": "branch-b",
 			"type": "sequence"
 		}
