@@ -186,6 +186,13 @@ async fn main() {
         registry.set_timer_client(client);
     }
 
+    let hook_configs = engine_config
+        .load_pre_dispatch_hooks()
+        .expect("failed to load pre-dispatch hooks config");
+    registry
+        .set_pre_dispatch_chain_configs(hook_configs)
+        .expect("failed to set pre-dispatch chain configs at startup");
+
     // Human Task Integration
     #[cfg(feature = "human")]
     {
