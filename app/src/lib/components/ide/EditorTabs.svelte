@@ -1,6 +1,8 @@
 <script lang="ts">
+	import { onDestroy } from 'svelte';
 	import type { YjsGraphBinding } from '$lib/yjs/graph-binding.svelte';
 	import type { Awareness } from 'y-protocols/awareness';
+	import type { MekhanWsProvider } from '$lib/yjs/ws-provider';
 	import CollabCodeEditor from '$lib/components/editor/panels/shared/CollabCodeEditor.svelte';
 	import ImageViewer from './ImageViewer.svelte';
 	import X from '@lucide/svelte/icons/x';
@@ -16,11 +18,31 @@
 		activeTab: string | null;
 		binding: YjsGraphBinding;
 		awareness?: Awareness;
+		provider?: MekhanWsProvider;
 		onCloseTab: (key: string) => void;
 		onSelectTab: (key: string) => void;
 	};
 
-	let { tabs, activeTab, binding, awareness, onCloseTab, onSelectTab }: Props = $props();
+	let { tabs, activeTab, binding, awareness, provider, onCloseTab, onSelectTab }: Props =
+		$props();
+
+	// The collaborative editor must only bind to a Y.Text once the server's
+	// authoritative document has synced. Binding to a not-yet-synced shared
+	// text makes y-codemirror mirror the local initial content back into the
+	// doc, concatenating duplicate copies into the persisted file.
+	let synced = $state(provider ? provider.isSynced : true);
+	const handleSync = (s: boolean) => {
+		synced = s;
+	};
+	$effect(() => {
+		if (!provider) {
+			synced = true;
+			return;
+		}
+		provider.onSync(handleSync);
+		return () => provider.offSync(handleSync);
+	});
+	onDestroy(() => provider?.offSync(handleSync));
 
 	function tabKey(tab: TabInfo): string {
 		return `${tab.nodeId}:${tab.filename}`;
@@ -96,7 +118,7 @@
 				{#key activeTab}
 					<ImageViewer src={activeImageSrc} filename={activeTabInfo.filename} />
 				{/key}
-			{:else if activeYText && activeTabInfo}
+			{:else if activeYText && activeTabInfo && synced}
 				{#key activeTab}
 					<CollabCodeEditor
 						ytext={activeYText}
@@ -106,6 +128,12 @@
 						maxHeight="100%"
 					/>
 				{/key}
+			{:else if activeYText && activeTabInfo}
+				<div
+					class="flex h-full items-center justify-center text-sm text-muted-foreground"
+				>
+					Syncing…
+				</div>
 			{:else}
 				<div class="flex h-full items-center justify-center text-sm text-muted-foreground">
 					File not found

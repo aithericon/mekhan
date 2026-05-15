@@ -230,6 +230,7 @@
 					activeTab={activeTabKey}
 					{binding}
 					awareness={session.awareness}
+					provider={session.provider}
 					onCloseTab={handleCloseTab}
 					onSelectTab={handleSelectTab}
 				/>

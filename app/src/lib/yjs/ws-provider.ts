@@ -22,6 +22,7 @@ const RECONNECT_MAX_MS = 10_000;
 
 type StatusEvent = { status: 'connecting' | 'connected' | 'disconnected' };
 type StatusHandler = (event: StatusEvent) => void;
+type SyncHandler = (synced: boolean) => void;
 
 export class MekhanWsProvider {
 	doc: Y.Doc;
@@ -30,6 +31,7 @@ export class MekhanWsProvider {
 	private wsUrl: string;
 	private ws: WebSocket | null = null;
 	private listeners = new Map<string, Set<StatusHandler>>();
+	private syncHandlers = new Set<SyncHandler>();
 	private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 	private reconnectDelay = RECONNECT_BASE_MS;
 	private shouldConnect = true;
@@ -89,7 +91,7 @@ export class MekhanWsProvider {
 				case MSG_SYNC_STEP2:
 					// Server sends missing updates — apply them
 					Y.applyUpdate(this.doc, payload, this);
-					this.synced = true;
+					this.setSynced(true);
 					break;
 				case MSG_SYNC_UPDATE:
 					// Broadcast update from another client — apply it
@@ -102,7 +104,7 @@ export class MekhanWsProvider {
 
 		this.ws.onclose = () => {
 			this.ws = null;
-			this.synced = false;
+			this.setSynced(false);
 			this.setStatus('disconnected');
 			this.scheduleReconnect();
 		};
@@ -158,6 +160,34 @@ export class MekhanWsProvider {
 		this.listeners.get(event)?.forEach((handler) => handler(data));
 	}
 
+	/**
+	 * `true` once the server's authoritative document state has been applied
+	 * (initial SyncStep2). Resets to `false` on disconnect. Collaborative
+	 * editors must not bind to a Y.Text before this — binding to a
+	 * not-yet-synced (empty/partial) shared text makes y-codemirror mirror the
+	 * local initial content back into the doc as a fresh insert, concatenating
+	 * duplicates into the persisted text.
+	 */
+	get isSynced(): boolean {
+		return this.synced;
+	}
+
+	private setSynced(value: boolean) {
+		if (this.synced === value) return;
+		this.synced = value;
+		this.syncHandlers.forEach((handler) => handler(value));
+	}
+
+	onSync(handler: SyncHandler) {
+		this.syncHandlers.add(handler);
+		// Replay current value so late subscribers don't miss the transition.
+		handler(this.synced);
+	}
+
+	offSync(handler: SyncHandler) {
+		this.syncHandlers.delete(handler);
+	}
+
 	disconnect() {
 		this.shouldConnect = false;
 		if (this.reconnectTimer) {
@@ -175,5 +205,6 @@ export class MekhanWsProvider {
 		this.doc.off('update', this.handleDocUpdate);
 		this.awareness.destroy();
 		this.listeners.clear();
+		this.syncHandlers.clear();
 	}
 }
