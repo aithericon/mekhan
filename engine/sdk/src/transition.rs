@@ -792,10 +792,6 @@ impl<'ctx> TransitionBuilder<'ctx> {
     fn finalize(self) {
         let prefixed_id = self.ctx.prefixed_id(&self.id);
 
-        // Compute preambles before any partial moves of self
-        let global_preamble = self.ctx.rhai_preamble();
-        let local_preamble = self.local_rhai_preamble();
-
         let logic = self
             .logic
             .expect("Transition must have logic - call .logic(script) before .done()");
@@ -806,21 +802,15 @@ impl<'ctx> TransitionBuilder<'ctx> {
             None
         };
 
-        // Prepend Rhai constants/variables to guard (same preamble as script body)
-        let guard = self.guard.map(|g| match g {
-            TransitionGuard::Rhai { source } => {
-                let prefixed = match (global_preamble.is_empty(), local_preamble.is_empty()) {
-                    (true, true) => source,
-                    (false, true) => format!("{}\n{}", global_preamble, source),
-                    (true, false) => format!("{}\n{}", local_preamble, source),
-                    (false, false) => {
-                        format!("{}\n{}\n{}", global_preamble, local_preamble, source)
-                    }
-                };
-                TransitionGuard::Rhai { source: prefixed }
-            }
-            other => other,
-        });
+        // Guards are standalone boolean filter expressions over token data.
+        // Unlike logic bodies, they must NOT receive the rhai const/var
+        // preamble: prepending `let NAME = <value>;` (e.g. a multi-KB script
+        // blob registered via ctx.rhai_var()) ahead of every guard bloats the
+        // AIR and can break the engine's guard parse (a JSON-escaped string is
+        // not always a valid Rhai literal — e.g. JSON `\uXXXX` vs Rhai
+        // `\u{XXXX}`). The logic-body preamble is applied separately in
+        // `logic()`. Pass the guard through verbatim.
+        let guard = self.guard;
 
         let transition = ScenarioTransition {
             id: prefixed_id,
