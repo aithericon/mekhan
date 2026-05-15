@@ -4,6 +4,36 @@ Status: Proposal
 Author: handoff doc — continuation of [`05-typed-ports.md`](./05-typed-ports.md), unblocked now that Phases 1–4 of typed ports have landed.
 Related: `service/src/models/template.rs`, `service/src/handlers/instances.rs`, `service/src/petri/instance.rs`, `service/src/catalogue/subscriptions.rs`, `service/src/lifecycle.rs`
 
+---
+
+## Implementation Status (as of 2026-05-15)
+
+Phases 5a–5f shipped. The design below is mostly realized, **but several safety/correctness mechanisms are config-accepted yet not honored at fire time.** This table is the source of truth — the prose in §3.4, §4.4 etc. describes the *intended* design, not all of which is live.
+
+| Mechanism | Status | Notes |
+|---|---|---|
+| Typed-port invariant across the trigger boundary | **Enforced** | `Port::validate_token` (`template.rs:645`), strict reject (no coercion), both spawn & signal paths (`dispatcher.rs:350`). Compile-time `TriggerUnresolvedRef` / `TriggerEmptyMappingRequiredFields`. |
+| Per-source Rhai scopes (`fire_time`, `headers`, `catalogue_entry`, …) | **Enforced** | `triggers::scope`; webhook body un-nested to `payload`. `GET /api/triggers/source-scope` + editor "In scope:" hint. |
+| Fire history/metrics on type-contract violation | **Fixed** | Single `finalize` chokepoint in `fire()`; violations now surface as `Dropped`, no longer vanish. |
+| `ConcurrencyPolicy::Skip` | **Accepted, NOT enforced** | Parsed, shown in editor, inert at fire time. |
+| `ConcurrencyPolicy::Queue` | **Accepted, NOT enforced** | Same. Hardest to build (needs lifecycle coupling — see below). |
+| `ConcurrencyPolicy::DedupKey` | **Accepted, NOT enforced** | Same. This is the one the doc sold as the *idempotency* guarantee — currently a lie. |
+| Cron at-most-once across replicas | **NOT enforced** | Each replica fires independently; KV holds `last_fire` last-writer-wins, no CAS lease. Multi-replica ⇒ duplicate fires. |
+| `WebhookAuth::None` | **Accepted as valid** | Selectable; passes verification unconditionally on a public route. |
+| `WebhookAuth::SignedHmac` | **Stubbed, fail-closed** | Returns an error rather than allowing — safe, just not implemented. |
+
+**Recommended immediate move (≤0.5d):** fail-closed stopgap — reject `ConcurrencyPolicy != Allow` and `WebhookAuth::None` at compile/publish with explicit "not enforced yet" errors, until the real machinery lands. Converts every silent footgun into a loud wall.
+
+**Roadmap to make the knobs real (~3.5d, value order):** DedupKey → cron CAS lease → Skip → SignedHmac. Defer `Queue` (2–3d, least-requested).
+
+**Open design decision (settle before Skip/Queue work):** correct `Skip`/`Queue` need the dispatcher to learn when a *spawned instance completes* — i.e. coupling to the `lifecycle.rs` `net.completed` listener. That coupling is the one non-contained decision; everything else is fill-in at the single `fire()` chokepoint. Tracked in §9.
+
+**Loose ends from the 5-typed-input commit (don't lose these):**
+- `schema.d.ts` / `openapi-mekhan.json` intentionally **not regenerated** — regenerating pulled unrelated API drift from a large pre-existing dirty tree. Frontend compiles via ad-hoc typing. Regenerate cleanly once the tree settles.
+- That commit also carried adjacent in-flight `MergeStrategy`/`ParallelJoin` work in `template.rs`/`compile.rs`/`compiler_tests.rs` that couldn't be split non-interactively (disclosed in the commit message).
+
+---
+
 ## 1. Problem
 
 Workflows can only be instantiated by a human or external system calling `POST /api/instances`. Everything else either doesn't exist or is half-built:
@@ -119,6 +149,8 @@ pub enum ConcurrencyPolicy {
 ```
 
 `Skip` and `Queue` are operational guards (don't overwhelm a slow workflow). `DedupKey` is correctness (don't double-process the same catalog event on dispatcher restart) — catalog subscriptions already embed a `dedup_id` in their signal payloads, and this surfaces that contract to the trigger model.
+
+> **Status note:** the variants above are the intended design. As of 2026-05-15 *none* of `Skip`/`Queue`/`DedupKey` are honored at fire time — they parse and display but do nothing. See the Implementation Status table at the top of this doc and §9.7 for the enforcement roadmap and the one open design decision (`Skip`/`Queue` lifecycle coupling).
 
 ## 4. Trigger Sources
 
@@ -328,6 +360,7 @@ These are deferred decisions, not blockers. Flag them when an owner picks this u
 4. **Webhook slug rebinding on version supersede.** When a new template version supersedes the old, does the old version's webhook URL keep working? Recommendation: yes — slugs are template-scoped, not version-scoped. The dispatcher always routes to the latest published version's trigger config.
 5. **Backfill semantics for catalog spawn triggers.** Should `backfill: true` on a spawn trigger really spawn N instances retroactively when the trigger is first published, or should it only apply to in-flight targets? Recommendation: opt-in per trigger, with a hard limit (e.g. 100) to prevent accidental fan-out.
 6. **Pause vs. delete.** Need a "pause this trigger without unpublishing the template" affordance? The `enabled` field covers it, but the editor needs a place to toggle it without dragging the user into a full edit/publish cycle. Recommendation: pause = edit-publish a single-field change; if that's too heavy, add a separate `PATCH /api/triggers/{node_id}/enabled` that updates the live graph_json without bumping version (the only such fast-path on the template).
+7. **`Skip`/`Queue` ↔ lifecycle coupling (settle before that work starts).** Correct `Skip`/`Queue` require the dispatcher to know when a spawned instance *completes*, which means consuming the `lifecycle.rs` `net.completed`/`cancelled`/`failed` stream the lifecycle listener already owns. Options: (a) the dispatcher subscribes to the same JetStream consumer (shared offset, risk of one starving the other); (b) the lifecycle listener gains a hook that notifies the dispatcher in-process (tighter coupling, simpler delivery). Recommendation: (b) — an in-process callback from `lifecycle.rs` into `TriggerDispatcher::on_instance_terminal`, since both already live in the mekhan process and the dispatcher holds the in-flight set. This is the only non-contained decision in the enforcement roadmap; everything else is fill-in at the single `fire()` chokepoint.
 
 ## 10. Out of Scope (future work)
 
