@@ -1904,7 +1904,21 @@ fn build_retry_topology(
         .auto_output("f", &failure)
         .auto_output("log", &failure_log)
         .logic(
-            r#"#{ f: #{ job_id: e.job_id, run: e.run, retries: e.retries, max_retries: e.max_retries, spec: e.spec, reason: "failed" }, log: #{ level: "error", source: "executor", message: "Automated step failed", detail: #{ execution_id: e.execution_id, run: e.run, retries: e.retries, executor: e.detail } } }"#,
+            r#"
+            let d = e.detail;
+            let msg = "Automated step failed";
+            if type_of(d) == "map" {
+                if type_of(d.outcome) == "map" && d.outcome.keys().contains("exit_code") {
+                    msg = msg + " (exit code " + d.outcome.exit_code + ")";
+                }
+                if type_of(d.stderr_tail) == "string" && d.stderr_tail != "" {
+                    msg = msg + ": " + d.stderr_tail;
+                }
+            }
+            #{
+                f: #{ job_id: e.job_id, run: e.run, retries: e.retries, max_retries: e.max_retries, spec: e.spec, reason: "failed" },
+                log: #{ level: "error", source: "executor", message: msg, detail: #{ execution_id: e.execution_id, run: e.run, retries: e.retries, executor: d } }
+            }"#,
         );
     ctx.transition("on_timeout", "On Timeout")
         .auto_input("e", timed_out)
