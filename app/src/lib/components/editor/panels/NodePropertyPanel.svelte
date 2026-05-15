@@ -13,6 +13,9 @@
 	import LoopNodeSection from './property-sections/LoopNodeSection.svelte';
 	import DerivedPortsSection from './property-sections/DerivedPortsSection.svelte';
 	import TriggerNodeSection from './property-sections/TriggerNodeSection.svelte';
+	import ParallelSplitSection from './property-sections/ParallelSplitSection.svelte';
+	import ParallelJoinSection from './property-sections/ParallelJoinSection.svelte';
+	import ScopeSection from './property-sections/ScopeSection.svelte';
 	import { computeScopes, type ScopeEntry } from '$lib/editor/guard-scope';
 	import { outputPortsFor } from '$lib/editor/derived-ports';
 	import { Button } from '$lib/components/ui/button';
@@ -180,6 +183,12 @@
 			<LoopNodeSection {data} {readonly} {onchange} {scope} />
 		{:else if data.type === 'trigger'}
 			<TriggerNodeSection {data} {readonly} {onchange} {nodeId} />
+		{:else if data.type === 'parallel_split'}
+			<ParallelSplitSection {data} {binding} {nodeId} />
+		{:else if data.type === 'parallel_join'}
+			<ParallelJoinSection {data} {readonly} {onchange} {binding} {nodeId} />
+		{:else if data.type === 'scope'}
+			<ScopeSection {data} {binding} {nodeId} />
 		{/if}
 
 		<!-- Phase 4: read-only derived port preview for variants whose outputs

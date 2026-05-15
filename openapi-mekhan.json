@@ -2903,6 +2903,39 @@
         }
       }
     },
+    "/api/triggers/source-scope": {
+      "get": {
+        "tags": [
+          "triggers"
+        ],
+        "summary": "GET /api/triggers/source-scope?kind=cron",
+        "description": "The per-source scope contract, surfaced so the editor can show authors\nexactly which identifiers are in scope under each mapping expression\ninstead of leaving them to guess.",
+        "operationId": "trigger_source_scope",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "query",
+            "description": "Source kind: cron|catalog|net_completion|webhook|manual",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Available scope identifiers for the source kind",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceScopeResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/triggers/{node_id}/fire": {
       "post": {
         "tags": [
@@ -4047,7 +4080,7 @@
         "type": "object",
         "properties": {
           "payload": {
-            "description": "Free-form JSON payload made available to `payload_mapping` as `payload`.\nFor `Manual` triggers this is typically the form submission body; for\nother sources the dispatcher synthesizes the scope from the event."
+            "description": "JSON object whose top-level keys are bound as the trigger's scope\nidentifiers for `payload_mapping`. For `Manual` triggers supply the\nform values keyed by field name (matching `source_scope`); for other\nsources the dispatcher synthesizes this scope from the event itself."
           }
         }
       },
@@ -4704,6 +4737,14 @@
             "description": "Form schema for the \"Run with parameters\" dialog. Reuses the same\n`TaskFieldConfig` shape as human-task forms."
           }
         }
+      },
+      "MergeStrategy": {
+        "type": "string",
+        "description": "How a `ParallelJoin` merges the tokens arriving on its joined branches.\n\n`ShallowLastWins` is the historical behaviour (top-level keys overwrite,\nlast branch to arrive wins on a key collision). `DeepMerge` recursively\nmerges nested object values instead of overwriting them.",
+        "enum": [
+          "shallow_last_wins",
+          "deep_merge"
+        ]
       },
       "MetricPoint": {
         "type": "object",
@@ -5526,6 +5567,24 @@
           }
         }
       },
+      "ScopeVar": {
+        "type": "object",
+        "description": "One identifier available to a trigger's payload-mapping expressions.",
+        "required": [
+          "name",
+          "kind"
+        ],
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/FieldKind",
+            "description": "Declared kind. Advisory for the editor; the fire path validates the\nproduced token against the *target port*, not against this."
+          },
+          "name": {
+            "type": "string",
+            "description": "Rhai identifier the expression references (e.g. `fire_time`)."
+          }
+        }
+      },
       "SignalDispatch": {
         "type": "object",
         "required": [
@@ -5543,6 +5602,21 @@
           },
           "signal_key": {
             "type": "string"
+          }
+        }
+      },
+      "SourceScopeResponse": {
+        "type": "object",
+        "required": [
+          "scope"
+        ],
+        "properties": {
+          "scope": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScopeVar"
+            },
+            "description": "Identifiers a `payload_mapping` expression may reference for this source\nkind, with their declared kinds. `manual` returns empty — the editor\nderives that scope from the (client-side) form schema."
           }
         }
       },
@@ -6629,6 +6703,10 @@
               },
               "label": {
                 "type": "string"
+              },
+              "mergeStrategy": {
+                "$ref": "#/components/schemas/MergeStrategy",
+                "description": "How tokens arriving on the joined branches are merged into the\nsingle output token. `ShallowLastWins` (default) preserves the\nhistorical behaviour; `DeepMerge` recursively merges nested maps."
               },
               "type": {
                 "type": "string",

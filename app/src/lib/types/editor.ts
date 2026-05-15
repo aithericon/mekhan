@@ -185,7 +185,7 @@ export function createDefaultNodeData(type: WorkflowNodeType): SchemaWorkflowNod
 		case 'parallel_split':
 			return { type: 'parallel_split', label: 'Parallel Split' };
 		case 'parallel_join':
-			return { type: 'parallel_join', label: 'Parallel Join' };
+			return { type: 'parallel_join', label: 'Parallel Join', mergeStrategy: 'shallow_last_wins' };
 		case 'loop':
 			return {
 				type: 'loop',

@@ -400,6 +400,7 @@ fn step_to_node_data(
         "parallel_join" => Ok(WorkflowNodeData::ParallelJoin {
             label: label.to_string(),
             description: step.description.clone(),
+            merge_strategy: Default::default(),
         }),
         "loop" => {
             let max_iter = step.max_iterations.ok_or_else(|| {

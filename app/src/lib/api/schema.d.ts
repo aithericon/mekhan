@@ -945,6 +945,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/triggers/source-scope": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/triggers/source-scope?kind=cron
+         * @description The per-source scope contract, surfaced so the editor can show authors
+         *     exactly which identifiers are in scope under each mapping expression
+         *     instead of leaving them to guess.
+         */
+        get: operations["trigger_source_scope"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/triggers/{node_id}/fire": {
         parameters: {
             query?: never;
@@ -1362,9 +1384,10 @@ export interface components {
         };
         FireTriggerRequest: {
             /**
-             * @description Free-form JSON payload made available to `payload_mapping` as `payload`.
-             *     For `Manual` triggers this is typically the form submission body; for
-             *     other sources the dispatcher synthesizes the scope from the event.
+             * @description JSON object whose top-level keys are bound as the trigger's scope
+             *     identifiers for `payload_mapping`. For `Manual` triggers supply the
+             *     form values keyed by field name (matching `source_scope`); for other
+             *     sources the dispatcher synthesizes this scope from the event itself.
              */
             payload?: unknown;
         };
@@ -1575,6 +1598,15 @@ export interface components {
              */
             form?: components["schemas"]["TaskFieldConfig"][];
         };
+        /**
+         * @description How a `ParallelJoin` merges the tokens arriving on its joined branches.
+         *
+         *     `ShallowLastWins` is the historical behaviour (top-level keys overwrite,
+         *     last branch to arrive wins on a key collision). `DeepMerge` recursively
+         *     merges nested object values instead of overwriting them.
+         * @enum {string}
+         */
+        MergeStrategy: "shallow_last_wins" | "deep_merge";
         MetricPoint: {
             /** Format: date-time */
             t: string;
@@ -1836,11 +1868,29 @@ export interface components {
             cross_net_edges: components["schemas"]["CrossNetEdge"][];
             nodes: components["schemas"]["AncestryNode"][];
         };
+        /** @description One identifier available to a trigger's payload-mapping expressions. */
+        ScopeVar: {
+            /**
+             * @description Declared kind. Advisory for the editor; the fire path validates the
+             *     produced token against the *target port*, not against this.
+             */
+            kind: components["schemas"]["FieldKind"];
+            /** @description Rhai identifier the expression references (e.g. `fire_time`). */
+            name: string;
+        };
         SignalDispatch: {
             dispatch_net: string;
             /** Format: int64 */
             dispatch_seq: number;
             signal_key: string;
+        };
+        SourceScopeResponse: {
+            /**
+             * @description Identifiers a `payload_mapping` expression may reference for this source
+             *     kind, with their declared kinds. `manual` returns empty — the editor
+             *     derives that scope from the (client-side) form schema.
+             */
+            scope: components["schemas"]["ScopeVar"][];
         };
         /**
          * @description A typed token seed for a single `Start` block in the template. The token
@@ -2161,6 +2211,12 @@ export interface components {
         } | {
             description?: string | null;
             label: string;
+            /**
+             * @description How tokens arriving on the joined branches are merged into the
+             *     single output token. `ShallowLastWins` (default) preserves the
+             *     historical behaviour; `DeepMerge` recursively merges nested maps.
+             */
+            mergeStrategy?: components["schemas"]["MergeStrategy"];
             /** @enum {string} */
             type: "parallel_join";
         } | {
@@ -4244,6 +4300,29 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CronPreviewResponse"];
+                };
+            };
+        };
+    };
+    trigger_source_scope: {
+        parameters: {
+            query: {
+                /** @description Source kind: cron|catalog|net_completion|webhook|manual */
+                kind: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Available scope identifiers for the source kind */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourceScopeResponse"];
                 };
             };
         };
