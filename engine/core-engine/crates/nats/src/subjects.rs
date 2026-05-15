@@ -353,6 +353,9 @@ impl Subjects {
             DomainEvent::NetCreated { .. } => "net.created",
             DomainEvent::NetCompleted { .. } => "net.completed",
             DomainEvent::NetCancelled { .. } => "net.cancelled",
+            DomainEvent::PreDispatchEvaluated { .. } => "pre_dispatch.evaluated",
+            DomainEvent::PreDispatchRejected { .. } => "pre_dispatch.rejected",
+            DomainEvent::PreDispatchDeferred { .. } => "pre_dispatch.deferred",
         };
 
         match net_id {
@@ -378,6 +381,9 @@ impl Subjects {
             DomainEvent::NetCreated { .. } => "net.created",
             DomainEvent::NetCompleted { .. } => "net.completed",
             DomainEvent::NetCancelled { .. } => "net.cancelled",
+            DomainEvent::PreDispatchEvaluated { .. } => "pre_dispatch.evaluated",
+            DomainEvent::PreDispatchRejected { .. } => "pre_dispatch.rejected",
+            DomainEvent::PreDispatchDeferred { .. } => "pre_dispatch.deferred",
         }
     }
 }

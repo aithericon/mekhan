@@ -10,6 +10,7 @@ use aithericon_secrets::SecretStore;
 use crate::binding::find_valid_binding;
 use crate::effect::{EffectHandler, ExecutionMode};
 use crate::firing::fire_transition;
+use crate::pre_dispatch::PreDispatchRuntime;
 use crate::schema_registry::SchemaRegistry;
 use crate::{
     EventRepository, ServiceError, StateProjection, TopologyRepository, TransitionExecutor,
@@ -279,6 +280,7 @@ pub(crate) async fn evaluate_until_quiescent<
     schema_registry: Option<&SchemaRegistry>,
     secret_store: Option<&dyn SecretStore>,
     net_parameters: Option<&serde_json::Value>,
+    pre_dispatch: Option<&PreDispatchRuntime>,
 ) -> Result<EvaluateResult, ServiceError> {
     let mut steps_executed = 0;
     let mut transitions_fired = Vec::new();
@@ -318,6 +320,7 @@ pub(crate) async fn evaluate_until_quiescent<
                     schema_registry,
                     secret_store,
                     net_parameters,
+                    pre_dispatch,
                 )
                 .await;
 
@@ -334,17 +337,30 @@ pub(crate) async fn evaluate_until_quiescent<
                     ) => {
                         // Emit ErrorOccurred event so script/routing failures
                         // are visible in the event log and CLI
-                        let error_msg =
-                            format!("Transition {}: {}", transition_id, e);
+                        let error_msg = format!("Transition {}: {}", transition_id, e);
                         tracing::warn!("{}", error_msg);
                         let error_event = events
-                            .append(DomainEvent::ErrorOccurred {
-                                message: error_msg,
-                            })
+                            .append(DomainEvent::ErrorOccurred { message: error_msg })
                             .await?;
                         events_generated.push(error_event);
                         // Stop the eval loop — the transition is broken,
                         // retrying it would produce infinite errors
+                        return Ok(EvaluateResult {
+                            steps_executed,
+                            transitions_fired,
+                            final_state: EvaluateFinalState::Quiescent,
+                            events: events_generated,
+                            terminal_reached: None,
+                        });
+                    }
+                    // Pre-dispatch soft outcomes — marking unchanged, audit
+                    // events already emitted by `fire_effect_transition`.
+                    // Stop this evaluation pass; a future pass (triggered by
+                    // new tokens / timers / next eval-notify) can re-attempt.
+                    Err(
+                        ServiceError::PreDispatchRejected { .. }
+                        | ServiceError::PreDispatchDeferred { .. },
+                    ) => {
                         return Ok(EvaluateResult {
                             steps_executed,
                             transitions_fired,

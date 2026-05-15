@@ -1,7 +1,7 @@
 pub mod adapter_scheduler;
 pub mod analysis;
-pub mod bridge_validation;
 pub(crate) mod binding;
+pub mod bridge_validation;
 pub mod catalogue_handlers;
 pub mod effect;
 pub mod errors;
@@ -13,6 +13,7 @@ pub(crate) mod firing;
 pub mod human_handlers;
 pub(crate) mod idempotency_index;
 pub mod ports;
+pub mod pre_dispatch;
 pub mod process_handlers;
 pub mod process_log_handler;
 pub mod process_metric_handler;
@@ -43,7 +44,11 @@ pub use executor_handlers::*;
 pub use human_handlers::*;
 pub use petri_domain::{apply_event_to_marking, project_marking};
 pub use ports::*;
+pub use pre_dispatch::*;
 pub use process_handlers::*;
+
+#[cfg(test)]
+mod integration_tests;
 pub use process_log_handler::*;
 pub use process_metric_handler::*;
 pub use rhai_runtime::{json_to_token_color, token_color_to_json};

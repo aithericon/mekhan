@@ -1,6 +1,13 @@
 //! Top-level engine configuration from environment variables.
+//!
+//! Pre-dispatch hooks (see `engine/core-engine/docs/proposals/pre-dispatch-hook.md`
+//! § 5) are loaded from an optional TOML file at the path given by
+//! `PRE_DISPATCH_HOOKS_CONFIG`. The file format mirrors
+//! `PreDispatchHookConfig`'s serde-derived shape — see
+//! `EngineConfig::load_pre_dispatch_hooks_from_toml` below.
 
-use config::{Config, Environment};
+use config::{Config, Environment, File, FileFormat};
+use petri_api::PreDispatchHookConfig;
 use serde::Deserialize;
 use tracing::info;
 
@@ -63,6 +70,22 @@ pub struct EngineConfig {
     #[serde(default)]
     #[allow(dead_code)]
     pub human_org_id: Option<String>,
+
+    /// Optional path to a TOML file containing `[[pre_dispatch_hooks]]`
+    /// entries. See `pre-dispatch-hook.md` § 5 for the file format.
+    /// When unset (the common case for tests and minimal dev runs), the
+    /// engine boots with an empty hook chain.
+    #[serde(default)]
+    pub pre_dispatch_hooks_config: Option<String>,
+}
+
+/// Wrapper struct used purely to deserialize the `[[pre_dispatch_hooks]]`
+/// array from a TOML file. Kept private to `config.rs`.
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)] // exercised through `EngineConfig::load_pre_dispatch_hooks`
+struct PreDispatchHooksFile {
+    #[serde(default)]
+    pre_dispatch_hooks: Vec<PreDispatchHookConfig>,
 }
 
 mod defaults {
@@ -99,8 +122,38 @@ impl EngineConfig {
         config.executor_event_routes = config.executor_event_routes.filter(|s| !s.is_empty());
         config.executor_namespace = config.executor_namespace.filter(|s| !s.is_empty());
         config.human_org_id = config.human_org_id.filter(|s| !s.is_empty());
+        config.pre_dispatch_hooks_config =
+            config.pre_dispatch_hooks_config.filter(|s| !s.is_empty());
 
         config
+    }
+
+    /// Load the `[[pre_dispatch_hooks]]` entries from the TOML path on
+    /// `PRE_DISPATCH_HOOKS_CONFIG`, or return an empty Vec if the env var
+    /// is unset (the common case for dev / minimal runs).
+    ///
+    /// Errors are propagated so the caller can fail fast at startup — the
+    /// spec § 6 fail-fast posture (misconfiguration is a startup bug, not
+    /// a runtime degradation) extends naturally to TOML parse / IO errors.
+    ///
+    /// Wiring this into `main.rs` (calling it after `NetRegistry::new()`
+    /// and feeding the result into `registry.set_pre_dispatch_chain_configs`)
+    /// is a parent-integrator step — `main.rs` is outside B1's owned-files
+    /// scope.
+    #[allow(dead_code)]
+    pub fn load_pre_dispatch_hooks(
+        &self,
+    ) -> Result<Vec<PreDispatchHookConfig>, Box<dyn std::error::Error>> {
+        let path = match self.pre_dispatch_hooks_config.as_deref() {
+            Some(p) => p,
+            None => return Ok(Vec::new()),
+        };
+        info!(path = %path, "Loading pre-dispatch hook config from TOML");
+        let parsed: PreDispatchHooksFile = Config::builder()
+            .add_source(File::new(path, FileFormat::Toml))
+            .build()?
+            .try_deserialize()?;
+        Ok(parsed.pre_dispatch_hooks)
     }
 
     /// Convert the raw scheduler env vars into a `petri_api::SchedulerConfig`.
@@ -286,9 +339,7 @@ impl EngineConfig {
         println!("Digital Lab - Colored Petri Net Engine (Multi-Net)");
         println!("==================================================");
         println!();
-        println!(
-            "Engine starting empty - load scenarios via POST /api/nets/{{net_id}}/scenario"
-        );
+        println!("Engine starting empty - load scenarios via POST /api/nets/{{net_id}}/scenario");
         println!();
 
         println!("NATS Integration: CONNECTED");
@@ -464,5 +515,95 @@ mod tests {
 
         let routes = parse_signal_routes(Some(""));
         assert!(routes.is_empty());
+    }
+
+    // ========================================================================
+    // Pre-dispatch hook TOML loader (spec § 5).
+    // ========================================================================
+
+    #[test]
+    fn test_load_pre_dispatch_hooks_unset_returns_empty() {
+        let config = EngineConfig {
+            port: 3030,
+            net_id: None,
+            scheduler_backend: None,
+            scheduler_job_template: "default".to_string(),
+            scheduler_signal_place: "sig_compute".to_string(),
+            scheduler_signal_routes: None,
+            executor_enabled: None,
+            executor_signal_place: "sig_executor".to_string(),
+            executor_signal_routes: None,
+            executor_event_routes: None,
+            executor_namespace: None,
+            petri_validate_schemas: None,
+            human_org_id: None,
+            pre_dispatch_hooks_config: None,
+        };
+        let hooks = config.load_pre_dispatch_hooks().unwrap();
+        assert!(hooks.is_empty());
+    }
+
+    #[test]
+    fn test_load_pre_dispatch_hooks_from_toml_file() {
+        // Use process-id + nanos to keep the path stable-keyed within this
+        // test, so concurrent test runs don't collide on the same fixture.
+        // No global env mutation — env is NOT touched here.
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let pid = std::process::id();
+        let path = std::env::temp_dir().join(format!(
+            "petri-pre-dispatch-config-test-{}-{}.toml",
+            pid, nanos
+        ));
+        let toml_body = r#"
+[[pre_dispatch_hooks]]
+name = "test-model-a"
+transport = "builtin"
+fail_open = false
+timeout_ms = 200
+
+[[pre_dispatch_hooks]]
+name = "test-model-b"
+transport = "http"
+url = "http://127.0.0.1:7000/v1/routes/pick"
+timeout_ms = 500
+fail_open = false
+match_effect_handlers = ["executor_submit"]
+http_max_retries = 2
+"#;
+        std::fs::write(&path, toml_body).expect("write tmp toml");
+
+        let config = EngineConfig {
+            port: 3030,
+            net_id: None,
+            scheduler_backend: None,
+            scheduler_job_template: "default".to_string(),
+            scheduler_signal_place: "sig_compute".to_string(),
+            scheduler_signal_routes: None,
+            executor_enabled: None,
+            executor_signal_place: "sig_executor".to_string(),
+            executor_signal_routes: None,
+            executor_event_routes: None,
+            executor_namespace: None,
+            petri_validate_schemas: None,
+            human_org_id: None,
+            pre_dispatch_hooks_config: Some(path.to_string_lossy().to_string()),
+        };
+        let hooks = config.load_pre_dispatch_hooks().expect("loader ok");
+        assert_eq!(hooks.len(), 2);
+        // Placeholder model names per dispatch-prompt test discipline:
+        // `test-model-a` / `test-model-b`, never real model names.
+        assert_eq!(hooks[0].name, "test-model-a");
+        assert_eq!(hooks[1].name, "test-model-b");
+        assert_eq!(hooks[0].timeout_ms, 200);
+        assert_eq!(
+            hooks[1].url.as_deref(),
+            Some("http://127.0.0.1:7000/v1/routes/pick")
+        );
+        assert_eq!(hooks[1].http_max_retries, 2);
+        assert_eq!(hooks[1].match_effect_handlers, vec!["executor_submit"]);
+        let _ = std::fs::remove_file(&path);
     }
 }

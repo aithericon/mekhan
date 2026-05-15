@@ -1,17 +1,32 @@
 //! Multi-net registry: manages multiple isolated Petri net instances in a single process.
+//!
+//! Note on interior mutability asymmetry: most `set_*` configuration methods
+//! take `&mut self` and run during single-threaded setup, but
+//! `register_pre_dispatch_hook` takes `&self` so consumers (e.g. cloud-layer
+//! capability-routing) can register hooks from initialisation paths that
+//! already hold an `Arc<NetRegistry>`. The pre-dispatch hook table is guarded
+//! by its own `RwLock` + an `AtomicBool` frozen flag (see
+//! `pre-dispatch-hook.md` § 6 — registration MUST happen before the first
+//! `get_or_create` call; after that point the registry is frozen and
+//! `RegistrationError::RegistryFrozen` is returned).
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use parking_lot::RwLock;
 use tokio::sync::{broadcast, Notify};
 use tokio_util::sync::CancellationToken;
 
+use petri_application::pre_dispatch::{
+    HttpPreDispatchHook, PreDispatchChain, PreDispatchChainEntry, PreDispatchHook,
+    PreDispatchHookConfig, PreDispatchRuntime, PreDispatchTransport, RegistrationError,
+};
 use petri_application::{
     AdapterScheduler, EventRepository, MockSchedulerClient, PetriNetService,
-    ProcessCompleteHandler, ProcessLogMessageHandler, ProcessLogMetricHandler,
-    ProcessStartHandler, SchedulerCancelHandler, SchedulerSubmitHandler,
-    StateProjection, TimerCancelHandler, TimerScheduleHandler, TopologyRepository,
+    ProcessCompleteHandler, ProcessLogMessageHandler, ProcessLogMetricHandler, ProcessStartHandler,
+    SchedulerCancelHandler, SchedulerSubmitHandler, StateProjection, TimerCancelHandler,
+    TimerScheduleHandler, TopologyRepository,
 };
 #[cfg(feature = "catalogue")]
 use petri_application::{
@@ -248,6 +263,14 @@ where
     /// Optional external lookup so handlers can rehydrate hibernated nets
     /// after a cold engine boot (when `known_nets` is empty).
     metadata_lookup: Option<Arc<dyn MetadataLookup>>,
+    /// Registered builtin pre-dispatch hooks, keyed by their `name`.
+    /// Resolved against the TOML-config chain at net-instantiation time.
+    pre_dispatch_builtin_hooks: RwLock<HashMap<String, Arc<dyn PreDispatchHook>>>,
+    /// TOML-loaded `[[pre_dispatch_hooks]]` config entries (declaration order).
+    pre_dispatch_chain_configs: RwLock<Vec<PreDispatchHookConfig>>,
+    /// True once the first `get_or_create` runs — registration is rejected
+    /// after this point with `RegistrationError::RegistryFrozen`.
+    pre_dispatch_frozen: AtomicBool,
 }
 
 impl<E, T, S> NetRegistry<E, T, S>
@@ -272,7 +295,113 @@ where
             #[cfg(feature = "catalogue")]
             catalogue_config: None,
             metadata_lookup: None,
+            pre_dispatch_builtin_hooks: RwLock::new(HashMap::new()),
+            pre_dispatch_chain_configs: RwLock::new(Vec::new()),
+            pre_dispatch_frozen: AtomicBool::new(false),
         }
+    }
+
+    /// Install the TOML-loaded `[[pre_dispatch_hooks]]` chain config. Must
+    /// run before the first `get_or_create` — after that point the registry
+    /// is frozen.
+    pub fn set_pre_dispatch_chain_configs(
+        &self,
+        configs: Vec<PreDispatchHookConfig>,
+    ) -> Result<(), RegistrationError> {
+        if self.pre_dispatch_frozen.load(Ordering::SeqCst) {
+            return Err(RegistrationError::RegistryFrozen(
+                "<chain-config>".to_string(),
+            ));
+        }
+        *self.pre_dispatch_chain_configs.write() = configs;
+        Ok(())
+    }
+
+    /// Register a builtin pre-dispatch hook under the given name (see
+    /// `pre-dispatch-hook.md` § 6).
+    ///
+    /// Takes `&self` deliberately to support late-binding from caller-side
+    /// initialisation paths that hold the registry via `Arc<NetRegistry>` —
+    /// this is the only registry method that uses interior mutability for
+    /// configuration writes. Registration MUST happen before any
+    /// `get_or_create` call; after that point the registry is frozen and
+    /// this returns `RegistrationError::RegistryFrozen`.
+    pub fn register_pre_dispatch_hook(
+        &self,
+        name: impl Into<String>,
+        hook: Arc<dyn PreDispatchHook>,
+    ) -> Result<(), RegistrationError> {
+        let name = name.into();
+        if self.pre_dispatch_frozen.load(Ordering::SeqCst) {
+            return Err(RegistrationError::RegistryFrozen(name));
+        }
+        let mut hooks = self.pre_dispatch_builtin_hooks.write();
+        if hooks.contains_key(&name) {
+            return Err(RegistrationError::DuplicateName(name));
+        }
+        hooks.insert(name, hook);
+        Ok(())
+    }
+
+    /// Assemble the immutable chain for a single net by walking the TOML
+    /// config in declaration order, resolving each entry against (a) the
+    /// registered builtin map and (b) the engine's HTTP-transport factory.
+    ///
+    /// Spec § 6 fail-fast: a `transport = "builtin"` entry whose `name` is
+    /// not registered triggers a synthetic chain with that builtin missing
+    /// (logged warning) — startup-correctness is the caller's responsibility
+    /// (the engine init path SHOULD verify the chain assembles cleanly).
+    fn build_pre_dispatch_chain(&self) -> Arc<PreDispatchChain> {
+        let configs = self.pre_dispatch_chain_configs.read().clone();
+        let hooks = self.pre_dispatch_builtin_hooks.read();
+        let mut entries: Vec<PreDispatchChainEntry> = Vec::with_capacity(configs.len());
+        for cfg in &configs {
+            let hook: Arc<dyn PreDispatchHook> = match cfg.transport {
+                PreDispatchTransport::Builtin => {
+                    if let Some(h) = hooks.get(&cfg.name) {
+                        h.clone()
+                    } else {
+                        tracing::warn!(
+                            name = %cfg.name,
+                            "Pre-dispatch builtin hook configured but not registered — skipping"
+                        );
+                        continue;
+                    }
+                }
+                PreDispatchTransport::Http => {
+                    let url = match cfg.url.as_deref() {
+                        Some(u) => u.to_string(),
+                        None => {
+                            tracing::warn!(
+                                name = %cfg.name,
+                                "Pre-dispatch HTTP hook missing `url` field — skipping"
+                            );
+                            continue;
+                        }
+                    };
+                    let timeout = std::time::Duration::from_millis(cfg.timeout_ms);
+                    Arc::new(HttpPreDispatchHook::new(
+                        cfg.name.clone(),
+                        url,
+                        timeout,
+                        cfg.http_max_retries,
+                    ))
+                }
+            };
+            entries.push(PreDispatchChainEntry {
+                hook,
+                fail_open: cfg.fail_open,
+                timeout: std::time::Duration::from_millis(cfg.timeout_ms),
+                match_effect_handlers: cfg.match_effect_handlers.clone(),
+            });
+        }
+        Arc::new(PreDispatchChain { entries })
+    }
+
+    /// Read-only access to whether the pre-dispatch registry has been
+    /// frozen (i.e. at least one net has been instantiated).
+    pub fn pre_dispatch_is_frozen(&self) -> bool {
+        self.pre_dispatch_frozen.load(Ordering::SeqCst)
     }
 
     /// Configure an external metadata lookup so handlers can rehydrate
@@ -353,6 +482,11 @@ where
         if let Some(instance) = self.nets.read().get(net_id).cloned() {
             return instance;
         }
+
+        // Freeze the pre-dispatch registry BEFORE store factory + chain
+        // assembly — spec § 11 trip-wire 7: the flip must be ordered against
+        // hot-net creation so concurrent registration cannot slip through.
+        self.pre_dispatch_frozen.store(true, Ordering::SeqCst);
 
         // Call factory OUTSIDE any lock — this may block on hydration
         let (event_store, topology_store, projection, applied_rx) = (self.store_factory)(net_id);
@@ -454,11 +588,8 @@ where
 
             // Wire up secret wrapping if configured
             #[cfg(feature = "executor-vault-secrets")]
-            if let (Some(store), Some(wrapper)) =
-                (&ecfg.secret_store, &ecfg.secret_wrapper)
-            {
-                executor_nats_client
-                    .set_secret_wrapping(store.clone(), wrapper.clone());
+            if let (Some(store), Some(wrapper)) = (&ecfg.secret_store, &ecfg.secret_wrapper) {
+                executor_nats_client.set_secret_wrapping(store.clone(), wrapper.clone());
                 tracing::info!(net_id = %net_id, "Executor secret wrapping enabled");
             }
 
@@ -513,11 +644,13 @@ where
             service
                 .register_effect_handler(
                     effects::HUMAN_CANCEL.handler_id,
-                    Arc::new(petri_application::human_handlers::HumanTaskCancelHandler::new(
-                        human_client,
-                        effects::HUMAN_CANCEL.default_input_port,
-                        effects::HUMAN_CANCEL.default_output_port,
-                    )),
+                    Arc::new(
+                        petri_application::human_handlers::HumanTaskCancelHandler::new(
+                            human_client,
+                            effects::HUMAN_CANCEL.default_input_port,
+                            effects::HUMAN_CANCEL.default_output_port,
+                        ),
+                    ),
                 )
                 .expect("register human_cancel effect handler");
 
@@ -526,17 +659,11 @@ where
 
         // Register process lifecycle effect handlers (always — no tracker needed)
         service
-            .register_effect_handler(
-                "process_start",
-                Arc::new(ProcessStartHandler::new(net_id)),
-            )
+            .register_effect_handler("process_start", Arc::new(ProcessStartHandler::new(net_id)))
             .expect("register process_start effect handler");
 
         service
-            .register_effect_handler(
-                "process_complete",
-                Arc::new(ProcessCompleteHandler::new()),
-            )
+            .register_effect_handler("process_complete", Arc::new(ProcessCompleteHandler::new()))
             .expect("register process_complete effect handler");
 
         service
@@ -593,9 +720,8 @@ where
         // Register catalogue effect handler if configured
         #[cfg(feature = "catalogue")]
         if let Some(ref ccfg) = self.catalogue_config {
-            let client: Arc<dyn petri_domain::catalogue::CatalogueClient> = Arc::new(
-                NatsCatalogueClient::new(ccfg.nats_client.clone()),
-            );
+            let client: Arc<dyn petri_domain::catalogue::CatalogueClient> =
+                Arc::new(NatsCatalogueClient::new(ccfg.nats_client.clone()));
 
             service
                 .register_effect_handler(
@@ -642,6 +768,23 @@ where
                 .expect("register catalogue_unsubscribe effect handler");
 
             tracing::info!(net_id = %net_id, "Registered catalogue effect handlers");
+        }
+
+        // Bind pre-dispatch hook runtime (chain + defer budgets) to this
+        // service. The chain is assembled from the registered builtin map +
+        // TOML config snapshot taken at freeze-time. Per-(net_id,
+        // transition_id) defer budgets live on the runtime — global counter
+        // is explicitly disallowed (spec § 11 trip-wire 4).
+        let chain = self.build_pre_dispatch_chain();
+        let chain_len = chain.len();
+        let rt = Arc::new(PreDispatchRuntime::new(net_id, chain));
+        service.set_pre_dispatch_runtime(rt);
+        if chain_len > 0 {
+            tracing::info!(
+                net_id = %net_id,
+                chain_len,
+                "Bound pre-dispatch hook chain"
+            );
         }
 
         let eval_notify = Arc::new(Notify::new());
@@ -886,7 +1029,8 @@ fn spawn_net_evaluation_loop<E, T, S>(
                             let all_events = service.get_events().await;
                             for event in &all_events {
                                 if event.sequence > last_broadcast_seq {
-                                    let _ = event_tx.send(SseSignal::Event(Box::new(event.clone())));
+                                    let _ =
+                                        event_tx.send(SseSignal::Event(Box::new(event.clone())));
                                 }
                             }
 
@@ -995,12 +1139,17 @@ fn notify_adapters_in_eval_loop<E, T, S>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use petri_test_harness::doubles::{MockEventRepository, MockStateProjection, MockTopologyRepository};
+    use petri_application::pre_dispatch::PreDispatchContext;
+    use petri_test_harness::doubles::{
+        MockEventRepository, MockStateProjection, MockTopologyRepository,
+    };
     use std::sync::Arc;
 
-    type MockRegistry = NetRegistry<MockEventRepository, MockTopologyRepository, MockStateProjection>;
+    type MockRegistry =
+        NetRegistry<MockEventRepository, MockTopologyRepository, MockStateProjection>;
 
-    fn mock_store_factory() -> StoreFactory<MockEventRepository, MockTopologyRepository, MockStateProjection> {
+    fn mock_store_factory(
+    ) -> StoreFactory<MockEventRepository, MockTopologyRepository, MockStateProjection> {
         Arc::new(|_net_id: &str| {
             let (_tx, rx) = tokio::sync::watch::channel(0u64);
             (
@@ -1021,7 +1170,10 @@ mod tests {
         let registry = new_registry();
         let inst1 = registry.get_or_create("net-1");
         let inst2 = registry.get_or_create("net-1");
-        assert!(Arc::ptr_eq(&inst1, &inst2), "Same ID should return same Arc");
+        assert!(
+            Arc::ptr_eq(&inst1, &inst2),
+            "Same ID should return same Arc"
+        );
     }
 
     #[tokio::test]
@@ -1029,7 +1181,10 @@ mod tests {
         let registry = new_registry();
         let inst1 = registry.get_or_create("net-1");
         let inst2 = registry.get_or_create("net-2");
-        assert!(!Arc::ptr_eq(&inst1, &inst2), "Different IDs should return different instances");
+        assert!(
+            !Arc::ptr_eq(&inst1, &inst2),
+            "Different IDs should return different instances"
+        );
     }
 
     #[test]
@@ -1045,16 +1200,26 @@ mod tests {
         let cancel = inst.cancel_token.clone();
 
         assert!(!cancel.is_cancelled(), "Should not be cancelled initially");
-        registry.hibernate("net-1").expect("hibernate should succeed");
-        assert!(cancel.is_cancelled(), "Cancel token should be cancelled after hibernate");
+        registry
+            .hibernate("net-1")
+            .expect("hibernate should succeed");
+        assert!(
+            cancel.is_cancelled(),
+            "Cancel token should be cancelled after hibernate"
+        );
     }
 
     #[tokio::test]
     async fn test_hibernate_removes_from_registry() {
         let registry = new_registry();
         registry.get_or_create("net-1");
-        registry.hibernate("net-1").expect("hibernate should succeed");
-        assert!(registry.get("net-1").is_none(), "Net should be removed after hibernate");
+        registry
+            .hibernate("net-1")
+            .expect("hibernate should succeed");
+        assert!(
+            registry.get("net-1").is_none(),
+            "Net should be removed after hibernate"
+        );
     }
 
     #[test]
@@ -1175,25 +1340,29 @@ mod tests {
         loop {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             let events = inst.service.get_events().await;
-            let has_completed = events.iter().any(|e| {
-                matches!(&e.event, petri_domain::DomainEvent::NetCompleted { .. })
-            });
+            let has_completed = events
+                .iter()
+                .any(|e| matches!(&e.event, petri_domain::DomainEvent::NetCompleted { .. }));
             if has_completed {
                 break;
             }
             if tokio::time::Instant::now() > deadline {
                 panic!(
                     "Timed out waiting for NetCompleted event. Events: {:?}",
-                    events.iter().map(|e| format!("{:?}", e.event)).collect::<Vec<_>>()
+                    events
+                        .iter()
+                        .map(|e| format!("{:?}", e.event))
+                        .collect::<Vec<_>>()
                 );
             }
         }
 
         // Verify the NetCompleted event has correct fields
         let events = inst.service.get_events().await;
-        let completed = events.iter().find(|e| {
-            matches!(&e.event, petri_domain::DomainEvent::NetCompleted { .. })
-        }).expect("NetCompleted event should exist");
+        let completed = events
+            .iter()
+            .find(|e| matches!(&e.event, petri_domain::DomainEvent::NetCompleted { .. }))
+            .expect("NetCompleted event should exist");
 
         match &completed.event {
             petri_domain::DomainEvent::NetCompleted {
@@ -1238,7 +1407,10 @@ mod tests {
                 .expect("create token");
         }
 
-        assert!(!cancel.is_cancelled(), "Should not be cancelled before eval");
+        assert!(
+            !cancel.is_cancelled(),
+            "Should not be cancelled before eval"
+        );
 
         // Run eval
         *inst.run_mode.write() = RunMode::Running;
@@ -1256,7 +1428,10 @@ mod tests {
             }
         }
 
-        assert!(cancel.is_cancelled(), "Cancel token should be cancelled after terminal completion");
+        assert!(
+            cancel.is_cancelled(),
+            "Cancel token should be cancelled after terminal completion"
+        );
     }
 
     #[tokio::test]
@@ -1288,9 +1463,9 @@ mod tests {
 
         // Check no NetCompleted event
         let events = inst.service.get_events().await;
-        let has_completed = events.iter().any(|e| {
-            matches!(&e.event, petri_domain::DomainEvent::NetCompleted { .. })
-        });
+        let has_completed = events
+            .iter()
+            .any(|e| matches!(&e.event, petri_domain::DomainEvent::NetCompleted { .. }));
         assert!(
             !has_completed,
             "Should NOT emit NetCompleted for non-terminal scenario"
@@ -1358,7 +1533,11 @@ mod tests {
         net.add_place(input);
         net.add_place(output);
         net.add_transition(transition);
-        net.add_arc(PetriArc::input(input_id.clone(), transition_id.clone(), "inp"));
+        net.add_arc(PetriArc::input(
+            input_id.clone(),
+            transition_id.clone(),
+            "inp",
+        ));
         net.add_arc(PetriArc::output(transition_id, "out", output_id.clone()));
 
         // -- Set up registry + instance --
@@ -1377,7 +1556,10 @@ mod tests {
 
         // Seed ONE token
         inst.service
-            .create_token(input_id.clone(), TokenColor::Data(serde_json::json!({"job": 1})))
+            .create_token(
+                input_id.clone(),
+                TokenColor::Data(serde_json::json!({"job": 1})),
+            )
             .await
             .expect("create token");
 
@@ -1387,9 +1569,7 @@ mod tests {
         // -- Trigger the race: notify eval loop AND call evaluate concurrently --
         inst.eval_notify.notify_one();
         let svc = inst.service.clone();
-        let concurrent_eval = tokio::spawn(async move {
-            svc.evaluate_until_quiescent(100).await
-        });
+        let concurrent_eval = tokio::spawn(async move { svc.evaluate_until_quiescent(100).await });
 
         // Let both paths run
         let _ = concurrent_eval.await;
@@ -1408,12 +1588,7 @@ mod tests {
         let events = inst.service.get_events().await;
         let effect_completed_count = events
             .iter()
-            .filter(|e| {
-                matches!(
-                    &e.event,
-                    petri_domain::DomainEvent::EffectCompleted { .. }
-                )
-            })
+            .filter(|e| matches!(&e.event, petri_domain::DomainEvent::EffectCompleted { .. }))
             .count();
         assert_eq!(
             effect_completed_count, 1,
@@ -1474,7 +1649,11 @@ mod tests {
         net.add_place(input);
         net.add_place(output);
         net.add_transition(transition);
-        net.add_arc(PetriArc::input(input_id.clone(), transition_id.clone(), "inp"));
+        net.add_arc(PetriArc::input(
+            input_id.clone(),
+            transition_id.clone(),
+            "inp",
+        ));
         net.add_arc(PetriArc::output(transition_id, "out", output_id.clone()));
 
         let registry = new_registry();
@@ -1490,7 +1669,10 @@ mod tests {
             .expect("register handler");
         inst.service.initialize(net).await.expect("initialize");
         inst.service
-            .create_token(input_id.clone(), TokenColor::Data(serde_json::json!({"job": 1})))
+            .create_token(
+                input_id.clone(),
+                TokenColor::Data(serde_json::json!({"job": 1})),
+            )
             .await
             .expect("create token");
 
@@ -1500,9 +1682,7 @@ mod tests {
         // The service-level eval_lock should prevent double-firing.
         inst.eval_notify.notify_one();
         let svc = inst.service.clone();
-        let http_eval = tokio::spawn(async move {
-            svc.evaluate_until_quiescent(100).await
-        });
+        let http_eval = tokio::spawn(async move { svc.evaluate_until_quiescent(100).await });
 
         let _ = http_eval.await;
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
@@ -1513,6 +1693,129 @@ mod tests {
             "Eval lock should prevent double-firing. Effect fired {} times.",
             count
         );
+    }
+
+    // ========================================================================
+    // Pre-dispatch hook registry tests (spec § 6 / § 11 trip-wire 7).
+    // ========================================================================
+
+    struct NoopHook {
+        name: String,
+    }
+
+    impl NoopHook {
+        fn new(name: &str) -> Self {
+            Self {
+                name: name.to_string(),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl PreDispatchHook for NoopHook {
+        async fn pre_dispatch(
+            &self,
+            _ctx: &PreDispatchContext<'_>,
+        ) -> Result<
+            petri_application::pre_dispatch::PreDispatchOutcome,
+            petri_application::pre_dispatch::PreDispatchError,
+        > {
+            Ok(
+                petri_application::pre_dispatch::PreDispatchOutcome::Continue {
+                    enriched_effect_config: None,
+                },
+            )
+        }
+
+        fn name(&self) -> &str {
+            &self.name
+        }
+    }
+
+    #[tokio::test]
+    async fn test_register_pre_dispatch_hook_before_freeze_succeeds() {
+        let registry = new_registry();
+        assert!(!registry.pre_dispatch_is_frozen());
+        registry
+            .register_pre_dispatch_hook("noop", Arc::new(NoopHook::new("noop")))
+            .expect("registration before first net should succeed");
+    }
+
+    #[tokio::test]
+    async fn test_register_pre_dispatch_hook_after_freeze_errors() {
+        let registry = new_registry();
+        // Instantiate a net to flip the frozen flag.
+        let _inst = registry.get_or_create("net-frozen-1");
+        assert!(registry.pre_dispatch_is_frozen());
+        let result = registry.register_pre_dispatch_hook("noop", Arc::new(NoopHook::new("noop")));
+        match result {
+            Err(RegistrationError::RegistryFrozen(name)) => assert_eq!(name, "noop"),
+            other => panic!("expected RegistryFrozen, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_register_pre_dispatch_hook_duplicate_name_errors() {
+        let registry = new_registry();
+        registry
+            .register_pre_dispatch_hook("noop", Arc::new(NoopHook::new("noop")))
+            .expect("first registration should succeed");
+        let result = registry.register_pre_dispatch_hook("noop", Arc::new(NoopHook::new("noop")));
+        match result {
+            Err(RegistrationError::DuplicateName(name)) => assert_eq!(name, "noop"),
+            other => panic!("expected DuplicateName, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_set_chain_configs_after_freeze_errors() {
+        let registry = new_registry();
+        let _inst = registry.get_or_create("net-frozen-2");
+        let result = registry.set_pre_dispatch_chain_configs(vec![]);
+        assert!(matches!(result, Err(RegistrationError::RegistryFrozen(_))));
+    }
+
+    #[tokio::test]
+    async fn test_chain_assembled_in_declaration_order_with_builtin_resolution() {
+        let registry = new_registry();
+        registry
+            .register_pre_dispatch_hook("h1", Arc::new(NoopHook::new("h1")))
+            .unwrap();
+        registry
+            .register_pre_dispatch_hook("h2", Arc::new(NoopHook::new("h2")))
+            .unwrap();
+        registry
+            .set_pre_dispatch_chain_configs(vec![
+                PreDispatchHookConfig {
+                    name: "h1".to_string(),
+                    transport: PreDispatchTransport::Builtin,
+                    fail_open: false,
+                    timeout_ms: 500,
+                    url: None,
+                    match_effect_handlers: vec![],
+                    http_max_retries: 0,
+                },
+                PreDispatchHookConfig {
+                    name: "h2".to_string(),
+                    transport: PreDispatchTransport::Builtin,
+                    fail_open: true,
+                    timeout_ms: 500,
+                    url: None,
+                    match_effect_handlers: vec![],
+                    http_max_retries: 0,
+                },
+            ])
+            .unwrap();
+        let inst = registry.get_or_create("net-chain-asm");
+        let rt = inst
+            .service
+            .pre_dispatch_runtime()
+            .expect("net instance must have runtime bound");
+        assert_eq!(rt.chain.len(), 2);
+        assert_eq!(rt.chain.entries[0].hook.name(), "h1");
+        assert_eq!(rt.chain.entries[1].hook.name(), "h2");
+        assert!(!rt.chain.entries[0].fail_open);
+        assert!(rt.chain.entries[1].fail_open);
     }
 }
 
@@ -1559,9 +1862,7 @@ mod nats_catalogue_client {
 
             // The Mekhan responder wraps results in CatalogueResponse { data, error }
             let wrapper: serde_json::Value = serde_json::from_slice(&response.payload)
-                .map_err(|e| {
-                    CatalogueError::QueryFailed(format!("response parse failed: {e}"))
-                })?;
+                .map_err(|e| CatalogueError::QueryFailed(format!("response parse failed: {e}")))?;
 
             // Check for error field
             if let Some(err) = wrapper.get("error").and_then(|e| e.as_str()) {
@@ -1610,9 +1911,7 @@ mod nats_catalogue_client {
                 .and_then(|d| d.get("subscription_id"))
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| {
-                    CatalogueError::QueryFailed(
-                        "missing subscription_id in response".into(),
-                    )
+                    CatalogueError::QueryFailed("missing subscription_id in response".into())
                 })?
                 .to_string();
 
@@ -1629,16 +1928,12 @@ mod nats_catalogue_client {
                 .request("catalogue.unsubscribe", payload.into())
                 .await
                 .map_err(|e| {
-                    CatalogueError::QueryFailed(format!(
-                        "NATS unsubscribe request failed: {e}"
-                    ))
+                    CatalogueError::QueryFailed(format!("NATS unsubscribe request failed: {e}"))
                 })?;
 
             let wrapper: serde_json::Value =
                 serde_json::from_slice(&response.payload).map_err(|e| {
-                    CatalogueError::QueryFailed(format!(
-                        "unsubscribe response parse failed: {e}"
-                    ))
+                    CatalogueError::QueryFailed(format!("unsubscribe response parse failed: {e}"))
                 })?;
 
             if let Some(err) = wrapper.get("error").and_then(|e| e.as_str()) {

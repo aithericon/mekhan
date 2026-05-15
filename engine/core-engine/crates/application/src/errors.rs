@@ -81,6 +81,26 @@ pub enum ServiceError {
 
     #[error("Event store error: {0}")]
     EventStore(#[from] EventStoreError),
+
+    /// Pre-dispatch hook rejected the dispatch — marking unchanged, transition
+    /// will be retried on the next eval pass (see `pre-dispatch-hook.md` § 4).
+    #[error("Pre-dispatch rejected transition {transition_id} by hook '{hook_name}': {reason}")]
+    PreDispatchRejected {
+        transition_id: TransitionId,
+        hook_name: String,
+        reason: String,
+    },
+
+    /// Pre-dispatch hook deferred the dispatch — marking unchanged, transition
+    /// will be retried after `retry_after_ms` (subject to the defer budget).
+    #[error(
+        "Pre-dispatch deferred transition {transition_id} by hook '{hook_name}' for {retry_after_ms}ms"
+    )]
+    PreDispatchDeferred {
+        transition_id: TransitionId,
+        hook_name: String,
+        retry_after_ms: u64,
+    },
 }
 
 impl ServiceError {
@@ -102,6 +122,9 @@ impl ServiceError {
             | Self::BridgeReplyMissing { .. } => 400,
             // Conflict / precondition
             Self::NoTopology => 409,
+            // Pre-dispatch soft outcomes: 409 (conflict-style, non-destructive,
+            // retry-eligible) keeps them distinct from 4xx user-input errors.
+            Self::PreDispatchRejected { .. } | Self::PreDispatchDeferred { .. } => 409,
             // Internal server errors
             Self::EffectFailed { .. }
             | Self::SecretResolutionFailed { .. }

@@ -12,6 +12,9 @@ use aithericon_secrets::SecretStore;
 
 use crate::binding::find_valid_binding;
 use crate::effect::{EffectHandler, EffectInput, ExecutionMode};
+use crate::pre_dispatch::{
+    evaluate_chain, ChainEvalInputs, ChainEvalOutcome, PreDispatchMetadata, PreDispatchRuntime,
+};
 use crate::rhai_runtime::json_to_token_color;
 use crate::schema_registry::SchemaRegistry;
 use crate::{
@@ -59,10 +62,7 @@ fn resolve_param(
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
             .ok_or_else(|| {
-                ServiceError::Internal(format!(
-                    "Net parameter '{}' not found or not a string",
-                    key
-                ))
+                ServiceError::Internal(format!("Net parameter '{}' not found or not a string", key))
             })
     } else {
         Ok(field.to_string())
@@ -184,7 +184,8 @@ pub(crate) fn route_output_tokens(
                     ..
                 } => {
                     let resolved_net = resolve_param(target_net_id, net_parameters, effect_result)?;
-                    let resolved_place = resolve_param(target_place_name, net_parameters, effect_result)?;
+                    let resolved_place =
+                        resolve_param(target_place_name, net_parameters, effect_result)?;
                     bridge_out_tokens.push((
                         output_arc.place_id.clone(),
                         token,
@@ -275,6 +276,7 @@ pub(crate) async fn fire_transition<
     schema_registry: Option<&SchemaRegistry>,
     secret_store: Option<&dyn SecretStore>,
     net_parameters: Option<&JsonValue>,
+    pre_dispatch: Option<&PreDispatchRuntime>,
 ) -> Result<PersistedEvent, ServiceError> {
     let net = topology.get_topology().ok_or(ServiceError::NoTopology)?;
 
@@ -299,6 +301,7 @@ pub(crate) async fn fire_transition<
             schema_registry,
             secret_store,
             net_parameters,
+            pre_dispatch,
         )
         .await;
     }
@@ -332,7 +335,13 @@ pub(crate) async fn fire_transition<
         })
         .await?;
 
-    emit_bridge_out_events(events, &transition_id, bridge_out_tokens, Some(event.sequence)).await?;
+    emit_bridge_out_events(
+        events,
+        &transition_id,
+        bridge_out_tokens,
+        Some(event.sequence),
+    )
+    .await?;
 
     Ok(event)
 }
@@ -358,6 +367,7 @@ async fn fire_effect_transition<E: EventRepository, T: TopologyRepository, S: St
     schema_registry: Option<&SchemaRegistry>,
     secret_store: Option<&dyn SecretStore>,
     net_parameters: Option<&JsonValue>,
+    pre_dispatch: Option<&PreDispatchRuntime>,
 ) -> Result<PersistedEvent, ServiceError> {
     let transition_id = &transition.id;
     let handler_id = transition.effect_handler_id.as_ref().unwrap();
@@ -380,16 +390,14 @@ async fn fire_effect_transition<E: EventRepository, T: TopologyRepository, S: St
 
             // Resolve secrets in config (just-in-time, transient copy)
             let resolved_config = match (secret_store, &transition.effect_config) {
-                (Some(store), Some(config)) => {
-                    Some(
-                        aithericon_secrets::resolve_secrets(config, store)
-                            .await
-                            .map_err(|e| ServiceError::SecretResolutionFailed {
-                                transition_id: transition_id.clone(),
-                                message: e.to_string(),
-                            })?,
-                    )
-                }
+                (Some(store), Some(config)) => Some(
+                    aithericon_secrets::resolve_secrets(config, store)
+                        .await
+                        .map_err(|e| ServiceError::SecretResolutionFailed {
+                            transition_id: transition_id.clone(),
+                            message: e.to_string(),
+                        })?,
+                ),
                 (_, config) => config.clone(),
             };
 
@@ -410,10 +418,132 @@ async fn fire_effect_transition<E: EventRepository, T: TopologyRepository, S: St
                 .clone()
                 .or_else(|| transition.process_step_completed.clone());
 
+            // ============================================================
+            // Pre-dispatch hook chain (spec § 2-9). Live mode only.
+            // ============================================================
+            let mut final_config = resolved_config.clone();
+            if let Some(rt) = pre_dispatch {
+                if !rt.chain.is_empty() {
+                    let metadata_template = PreDispatchMetadata {
+                        scenario_id: None,
+                        tenant_id: None,
+                        correlation_id: None,
+                        process_step: process_step.clone(),
+                        hook_chain_index: 0,
+                    };
+                    let chain_inputs = ChainEvalInputs {
+                        net_id: rt.net_id.as_str(),
+                        transition_id,
+                        transition_name: transition.name.as_str(),
+                        effect_handler_id: Some(handler_id.as_str()),
+                        inputs: &binding.port_inputs,
+                        read_inputs: &read_inputs,
+                        effect_config: final_config.as_ref(),
+                        net_parameters,
+                        metadata_template,
+                    };
+                    let (outcome, trace) = evaluate_chain(&rt.chain, &chain_inputs).await;
+
+                    // Determine the kind for the PreDispatchEvaluated event.
+                    let final_kind = match &outcome {
+                        ChainEvalOutcome::Continue { .. } => {
+                            petri_domain::PreDispatchOutcomeKind::Continue
+                        }
+                        ChainEvalOutcome::Reject { .. } => {
+                            petri_domain::PreDispatchOutcomeKind::Reject
+                        }
+                        ChainEvalOutcome::Defer { .. } => {
+                            petri_domain::PreDispatchOutcomeKind::Defer
+                        }
+                    };
+
+                    // Always emit PreDispatchEvaluated.
+                    let _ = events
+                        .append(DomainEvent::PreDispatchEvaluated {
+                            transition_id: transition_id.clone(),
+                            transition_name: Some(transition.name.clone()),
+                            hook_chain: trace,
+                            final_outcome: final_kind,
+                            timestamp: chrono::Utc::now(),
+                        })
+                        .await?;
+
+                    match outcome {
+                        ChainEvalOutcome::Continue {
+                            enriched_effect_config,
+                        } => {
+                            rt.budgets.reset(&rt.net_id, transition_id);
+                            if let Some(enriched) = enriched_effect_config {
+                                final_config = Some(enriched);
+                            }
+                        }
+                        ChainEvalOutcome::Reject { hook_name, reason } => {
+                            let _ = events
+                                .append(DomainEvent::PreDispatchRejected {
+                                    transition_id: transition_id.clone(),
+                                    hook_name: hook_name.clone(),
+                                    reason: reason.clone(),
+                                    timestamp: chrono::Utc::now(),
+                                })
+                                .await?;
+                            rt.budgets.reset(&rt.net_id, transition_id);
+                            return Err(ServiceError::PreDispatchRejected {
+                                transition_id: transition_id.clone(),
+                                hook_name,
+                                reason,
+                            });
+                        }
+                        ChainEvalOutcome::Defer {
+                            hook_name,
+                            retry_after,
+                        } => {
+                            let count = rt.budgets.bump(&rt.net_id, transition_id);
+                            let _ = events
+                                .append(DomainEvent::PreDispatchDeferred {
+                                    transition_id: transition_id.clone(),
+                                    hook_name: hook_name.clone(),
+                                    retry_after_ms: retry_after.as_millis() as u64,
+                                    defer_count: count,
+                                    timestamp: chrono::Utc::now(),
+                                })
+                                .await?;
+
+                            if count > rt.budgets.max_defers() {
+                                // Escalate to Reject with synthetic reason.
+                                let reason = "defer-budget-exceeded".to_string();
+                                let _ = events
+                                    .append(DomainEvent::PreDispatchRejected {
+                                        transition_id: transition_id.clone(),
+                                        hook_name: hook_name.clone(),
+                                        reason: reason.clone(),
+                                        timestamp: chrono::Utc::now(),
+                                    })
+                                    .await?;
+                                rt.budgets.reset(&rt.net_id, transition_id);
+                                return Err(ServiceError::PreDispatchRejected {
+                                    transition_id: transition_id.clone(),
+                                    hook_name,
+                                    reason,
+                                });
+                            }
+
+                            return Err(ServiceError::PreDispatchDeferred {
+                                transition_id: transition_id.clone(),
+                                hook_name,
+                                retry_after_ms: retry_after.as_millis() as u64,
+                            });
+                        }
+                    }
+                }
+            }
+            // ============================================================
+            // End pre-dispatch hook chain.
+            // ============================================================
+
             let effect_input = EffectInput {
                 transition_id: transition_id.clone(),
                 inputs: binding.port_inputs.clone(),
-                config: resolved_config,
+                config: final_config,
                 read_inputs,
                 process_step,
             };
@@ -449,7 +579,13 @@ async fn fire_effect_transition<E: EventRepository, T: TopologyRepository, S: St
                         })
                         .await?;
 
-                    emit_bridge_out_events(events, transition_id, bridge_out_tokens, Some(event.sequence)).await?;
+                    emit_bridge_out_events(
+                        events,
+                        transition_id,
+                        bridge_out_tokens,
+                        Some(event.sequence),
+                    )
+                    .await?;
 
                     Ok(event)
                 }
@@ -494,7 +630,13 @@ async fn fire_effect_transition<E: EventRepository, T: TopologyRepository, S: St
                             })
                             .await?;
 
-                        emit_bridge_out_events(events, transition_id, bridge_out_tokens, Some(event.sequence)).await?;
+                        emit_bridge_out_events(
+                            events,
+                            transition_id,
+                            bridge_out_tokens,
+                            Some(event.sequence),
+                        )
+                        .await?;
                         Ok(event)
                     } else {
                         // No error port: audit event, tokens stay, return error

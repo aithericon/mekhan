@@ -85,7 +85,13 @@ pub fn apply_event_to_marking(marking: &mut Marking, event: &DomainEvent) {
         | DomainEvent::TokenBridgedOut { .. }
         | DomainEvent::NetCreated { .. }
         | DomainEvent::NetCompleted { .. }
-        | DomainEvent::NetCancelled { .. } => {}
+        | DomainEvent::NetCancelled { .. }
+        // Pre-dispatch hook events are audit-only — Reject/Defer outcomes
+        // are non-destructive w.r.t. marking, and Continue's marking
+        // effect is captured by the subsequent EffectCompleted event.
+        | DomainEvent::PreDispatchEvaluated { .. }
+        | DomainEvent::PreDispatchRejected { .. }
+        | DomainEvent::PreDispatchDeferred { .. } => {}
     }
 }
 
@@ -136,7 +142,6 @@ mod tests {
             tokens_consumed: true,
             input_data: None,
             retryable: true,
-
         };
 
         apply_event_to_marking(&mut marking, &event);
@@ -164,7 +169,6 @@ mod tests {
             tokens_consumed: false,
             input_data: None,
             retryable: true,
-
         };
 
         apply_event_to_marking(&mut marking, &event);
@@ -185,7 +189,6 @@ mod tests {
                 parameters: None,
                 created_by: None,
                 label: None,
-    
             },
             DomainEvent::NetCompleted {
                 net_id: "test".into(),

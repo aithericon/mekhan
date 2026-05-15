@@ -13,6 +13,7 @@ use aithericon_secrets::SecretStore;
 
 use crate::evaluation::{self, get_marking_cached, EvaluateResult, TransitionStatusDetail};
 use crate::firing;
+use crate::pre_dispatch::PreDispatchRuntime;
 use crate::schema_registry::SchemaRegistry;
 use crate::token_manager;
 use crate::{
@@ -80,6 +81,10 @@ where
     /// Catches listener-message redeliveries that land after the JetStream
     /// 120s dedup window expires. Lazy-seeded from the durable event log.
     dedup_index: crate::idempotency_index::DedupIndex,
+    /// Pre-dispatch hook runtime (chain + defer budgets). `None` until the
+    /// owning NetRegistry binds the chain at net-instantiation time. See
+    /// `pre-dispatch-hook.md` § 6 for the registration model.
+    pre_dispatch: RwLock<Option<Arc<PreDispatchRuntime>>>,
 }
 
 impl<E, T, S> PetriNetService<E, T, S>
@@ -106,7 +111,23 @@ where
             net_parameters: RwLock::new(None),
             eval_lock: tokio::sync::Mutex::new(()),
             dedup_index: crate::idempotency_index::DedupIndex::new(),
+            pre_dispatch: RwLock::new(None),
         }
+    }
+
+    /// Bind the pre-dispatch hook runtime (chain + defer budgets) to this
+    /// service. Called once by the `NetRegistry` at net-instantiation time
+    /// after the registry's hook chain is resolved from the TOML config +
+    /// builtin map. Re-binding silently overwrites — the registry is the
+    /// source of truth, and this method is `&self` to mirror the rest of
+    /// the service's interior-mutability setters.
+    pub fn set_pre_dispatch_runtime(&self, rt: Arc<PreDispatchRuntime>) {
+        *self.pre_dispatch.write().unwrap() = Some(rt);
+    }
+
+    /// Read-only access to the bound runtime, if any.
+    pub fn pre_dispatch_runtime(&self) -> Option<Arc<PreDispatchRuntime>> {
+        self.pre_dispatch.read().unwrap().clone()
     }
 
     // ========================================================================
@@ -338,7 +359,8 @@ where
         place_id: PlaceId,
         color: TokenColor,
     ) -> Result<PersistedEvent, ServiceError> {
-        self.create_token_with_meta(place_id, color, None, None, None).await
+        self.create_token_with_meta(place_id, color, None, None, None)
+            .await
     }
 
     /// Create a new token at a place, optionally attaching reply routing context,
@@ -480,6 +502,8 @@ where
         let secrets_ref = secrets.as_deref();
         let params = self.net_parameters();
         let params_ref = params.as_ref();
+        let rt = self.pre_dispatch_runtime();
+        let rt_ref = rt.as_deref();
         firing::fire_transition::<E, T, S>(
             self.events.as_ref(),
             self.topology.as_ref(),
@@ -493,6 +517,7 @@ where
             registry_ref,
             secrets_ref,
             params_ref,
+            rt_ref,
         )
         .await
     }
@@ -582,6 +607,8 @@ where
         let secrets_ref = secrets.as_deref();
         let params = self.net_parameters();
         let params_ref = params.as_ref();
+        let rt = self.pre_dispatch_runtime();
+        let rt_ref = rt.as_deref();
         evaluation::evaluate_until_quiescent(
             self.events.as_ref(),
             self.topology.as_ref(),
@@ -596,6 +623,7 @@ where
             registry_ref,
             secrets_ref,
             params_ref,
+            rt_ref,
         )
         .await
     }
@@ -734,7 +762,10 @@ mod tests {
 
     #[async_trait::async_trait]
     impl EventRepository for TestEventRepo {
-        async fn append(&self, event: DomainEvent) -> Result<PersistedEvent, crate::EventStoreError> {
+        async fn append(
+            &self,
+            event: DomainEvent,
+        ) -> Result<PersistedEvent, crate::EventStoreError> {
             let mut events = self.events.write().unwrap();
             let sequence = events.len() as u64;
             let previous_hash = events.last().map(|e| e.hash.clone());
@@ -2267,10 +2298,7 @@ mod tests {
             .unwrap();
         service.initialize(net).await.unwrap();
         service
-            .create_token(
-                input_id,
-                TokenColor::Data(serde_json::json!({"x": 1})),
-            )
+            .create_token(input_id, TokenColor::Data(serde_json::json!({"x": 1})))
             .await
             .unwrap();
 
@@ -2306,10 +2334,7 @@ mod tests {
             .unwrap();
         service.initialize(net).await.unwrap();
         service
-            .create_token(
-                input_id,
-                TokenColor::Data(serde_json::json!({"x": 1})),
-            )
+            .create_token(input_id, TokenColor::Data(serde_json::json!({"x": 1})))
             .await
             .unwrap();
 
@@ -2475,23 +2500,11 @@ mod tests {
         service.initialize(net).await.unwrap();
 
         service
-            .create_token_with_meta(
-                pid1,
-                TokenColor::Unit,
-                None,
-                None,
-                Some("dup".to_string()),
-            )
+            .create_token_with_meta(pid1, TokenColor::Unit, None, None, Some("dup".to_string()))
             .await
             .unwrap();
         service
-            .create_token_with_meta(
-                pid2,
-                TokenColor::Unit,
-                None,
-                None,
-                Some("dup".to_string()),
-            )
+            .create_token_with_meta(pid2, TokenColor::Unit, None, None, Some("dup".to_string()))
             .await
             .unwrap();
 

@@ -24,3 +24,5 @@ uuid.workspace = true
 jsonschema.workspace = true
 aithericon-secrets.workspace = true
 strsim.workspace = true
+# HTTP transport for `HttpPreDispatchHook` (spec § 7).
+reqwest.workspace = true

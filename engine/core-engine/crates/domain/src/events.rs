@@ -7,6 +7,32 @@ use std::collections::HashMap;
 
 use crate::{PetriNet, PlaceId, Token, TokenColor, TokenId, TransitionId};
 
+/// Coarse-grained outcome kind for pre-dispatch hook event-log records
+/// (see `pre-dispatch-hook.md` § 9). Lives in `domain` so the event log
+/// is self-describing without taking a dependency on `application` types.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PreDispatchOutcomeKind {
+    Continue,
+    Reject,
+    Defer,
+}
+
+/// Per-hook entry recorded in the `PreDispatchEvaluated` event so the audit
+/// trail captures the full chain trace, not just the terminal outcome.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct PreDispatchHookOutcome {
+    pub hook_name: String,
+    pub kind: PreDispatchOutcomeKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retry_after_ms: Option<u64>,
+    /// True if the hook errored and was treated as Continue under `fail_open`,
+    /// or as Reject under fail-closed.
+    pub fail_open_applied: bool,
+}
+
 /// Domain events representing all possible state changes in the Petri Net.
 /// These are the "facts" that get recorded in the event log.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
@@ -199,6 +225,42 @@ pub enum DomainEvent {
         reason: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         cancelled_by: Option<String>,
+    },
+
+    /// A pre-dispatch hook chain was evaluated for an effect transition
+    /// (see `pre-dispatch-hook.md` § 9). Emitted on every dispatch attempt
+    /// regardless of outcome — one event per attempted dispatch.
+    PreDispatchEvaluated {
+        transition_id: TransitionId,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        transition_name: Option<String>,
+        /// One entry per hook fired in the chain, in declaration order.
+        hook_chain: Vec<PreDispatchHookOutcome>,
+        /// Terminal outcome that determined whether dispatch proceeded.
+        final_outcome: PreDispatchOutcomeKind,
+        timestamp: DateTime<Utc>,
+    },
+
+    /// A pre-dispatch hook rejected the dispatch. Emitted IN ADDITION to
+    /// `PreDispatchEvaluated` so downstream consumers can subscribe to the
+    /// narrower rejection signal.
+    PreDispatchRejected {
+        transition_id: TransitionId,
+        hook_name: String,
+        reason: String,
+        timestamp: DateTime<Utc>,
+    },
+
+    /// A pre-dispatch hook deferred the dispatch. Emitted IN ADDITION to
+    /// `PreDispatchEvaluated`.
+    PreDispatchDeferred {
+        transition_id: TransitionId,
+        hook_name: String,
+        retry_after_ms: u64,
+        /// How many times this transition has been deferred (per-(net_id,
+        /// transition_id) counter — see `pre-dispatch-hook.md` § 11 trip-wire 4).
+        defer_count: u32,
+        timestamp: DateTime<Utc>,
     },
 }
 
@@ -623,7 +685,6 @@ mod tests {
                 parameters: None,
                 created_by: None,
                 label: None,
-
             },
             None,
         );
