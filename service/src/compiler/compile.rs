@@ -1394,11 +1394,17 @@ fn expand_node(
                 // staged-file name is an implementation detail. Rhai's
                 // copy-on-write semantics mean `input` here is the pre-mutation
                 // value even though `d` was aliased to it just above.
+                // `stream_events` opts the executor into emitting
+                // mid-execution metric/progress/phase/log events as NATS
+                // signals. Without it the executor builds no StreamContext and
+                // streams nothing, so the lifecycle's process_log_* effects
+                // (enabled via `process: true` below) would never fire and
+                // user metrics/logs would not reach hpi_metrics / hpi_logs.
                 ctx.transition("prepare", format!("{label} - Prepare"))
                     .auto_input("input", &p_input)
                     .auto_output("job", &exec_inbox)
                     .logic(format!(
-                        r#"let d = input; d.job_id = "{id}"; d.run = 0; d.retries = 0; d.max_retries = {max_retries}; let job_inputs = {inputs_rhai}; job_inputs.push(#{{ "name": "input.json", "source": #{{ "type": "inline", "value": input }} }}); d.spec = #{{ "backend": "{backend_type}", "inputs": job_inputs, "outputs": [], "config": {config_rhai} }}; #{{ job: d }}"#
+                        r#"let d = input; d.job_id = "{id}"; d.run = 0; d.retries = 0; d.max_retries = {max_retries}; let job_inputs = {inputs_rhai}; job_inputs.push(#{{ "name": "input.json", "source": #{{ "type": "inline", "value": input }} }}); d.spec = #{{ "backend": "{backend_type}", "inputs": job_inputs, "outputs": [], "config": {config_rhai}, "stream_events": ["metric", "progress", "phase", "log"] }}; #{{ job: d }}"#
                     ));
 
                 let lc = executor_lifecycle(ctx, ExecutorBridges {
@@ -1408,7 +1414,11 @@ fn expand_node(
                     process_id: None,
                     process_step: None,
                     catalogue: true,
-                    process: false,
+                    // Route streamed metric/log/phase/progress events through
+                    // process_log_metric / process_log_message so Mekhan's
+                    // causality consumer projects them into hpi_metrics /
+                    // hpi_logs against the causality-discovered process.
+                    process: true,
                 });
 
                 // Wire the lifecycle's failure/timeout outputs into a
