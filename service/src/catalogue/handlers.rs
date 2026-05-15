@@ -187,7 +187,7 @@ pub async fn distinct_jsonb_values(
 /// Example: GET /api/catalogue/download/artifacts/exec-123/gp_model/gp_model.json
 #[utoipa::path(
     get,
-    path = "/api/catalogue/download/{path}",
+    path = "/api/catalogue/download/{*path}",
     params(("path" = String, Path, description = "S3 storage path (may contain slashes)")),
     responses(
         (status = 200, description = "Artifact bytes with Content-Disposition: attachment", content_type = "application/octet-stream"),
