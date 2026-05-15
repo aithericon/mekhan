@@ -431,42 +431,113 @@ export const showcaseGraph: WorkflowGraph = {
  */
 const showcaseFiles: Record<string, Record<string, string>> = {
 	extract: {
-		'main.py': `# Extract Data — Aithericon Python backend.
-# 'set_output' and 'log_*' are provided by the SDK runner (no manual
-# init/shutdown). 'load_input()' returns the workflow token; the generated
-# _aithericon_io.pyi types this node's fields, so 'token.vendor_name' has
-# autocomplete and typos are flagged at author time.
+		'main.py': `# Extract Data — OCR + NLP extraction (Aithericon Python backend).
+#
+# The SDK runner injects these into scope (no import / init / shutdown):
+#   set_output, log_info/log_warn/log_error/log_debug, log_metric,
+#   define_phases, update_phase, update_progress.
+# 'define_phases' declares the process layout the user watches live; each
+# 'update_phase' / 'update_progress' / 'log_*' call streams to the process
+# view via the executor → causality → hpi_logs/hpi_metrics pipeline.
+# 'load_input()' returns the workflow token; the generated _aithericon_io.pyi
+# types this node's fields so 'token.vendor_name' autocompletes.
+import time
+
 from _aithericon_io import load_input
 
 token = load_input()
-
 vendor = token.vendor_name or ""
 amount = token.invoice_amount or 0
 
-log_info("extracting invoice data", vendor=vendor, amount=amount)
+# Process layout / definition surfaced to the user for this step.
+define_phases(["Load document", "OCR scan", "NLP extraction", "Validate", "Emit"])
 
+update_phase("Load document", "running")
+log_info("loading invoice token", vendor=vendor, amount=amount)
+update_progress(0.05, "Reading workflow token")
+time.sleep(0.4)  # demo pacing so the live phase/progress stream is visible
+update_phase("Load document", "completed")
+
+update_phase("OCR scan", "running")
+log_info("running OCR over the uploaded invoice image")
+update_progress(0.3, "OCR scan in progress")
+time.sleep(0.6)
+log_info("OCR finished", pages=1, confidence=0.97)
+log_metric("ocr_confidence", 0.97)
+update_phase("OCR scan", "completed")
+
+update_phase("NLP extraction", "running")
+log_info("extracting structured fields: vendor, amount, line items")
+update_progress(0.6, "NLP field extraction")
+time.sleep(0.6)
+update_phase("NLP extraction", "completed")
+
+update_phase("Validate", "running")
+if amount <= 0:
+    log_warn("extracted amount is non-positive — downstream review advised", amount=amount)
+else:
+    log_info("amount sanity check passed", amount=amount)
+update_progress(0.85, "Validating extracted fields")
+time.sleep(0.3)
+update_phase("Validate", "completed")
+
+update_phase("Emit", "running")
 set_output("vendor", vendor)
 set_output("amount", amount)
 set_output("extracted", True)
-
-log_info("extraction complete")
+log_metric("invoice_amount", float(amount))
+log_info("extraction complete", vendor=vendor, amount=amount)
+update_progress(1.0, "Extraction done")
+update_phase("Emit", "completed")
 `
 	},
 	compliance: {
 		'main.py': `# Compliance Check — sanctions & fraud screening (Python backend).
-# 'token' is the accumulated workflow token; its per-node field types come
-# from the generated _aithericon_io.pyi (upstream form + Extract output).
+#
+# Same injected SDK handler as Extract: define_phases declares the process
+# layout the user sees; update_phase/update_progress/log_*/log_metric stream
+# live to the process view. 'token' is the accumulated workflow token; its
+# per-node field types come from the generated _aithericon_io.pyi (upstream
+# form + Extract output).
+import time
+
 from _aithericon_io import load_input
 
 token = load_input()
 amount = token.amount if token.amount is not None else (token.invoice_amount or 0)
 
-risk_score = 0.12
-compliant = risk_score < 0.5
+# Process layout / definition surfaced to the user for this step.
+define_phases(["Load token", "Sanctions screening", "Fraud scoring", "Decision"])
 
-log_info("running compliance screening", amount=amount, risk_score=risk_score)
+update_phase("Load token", "running")
+log_info("starting compliance screening", amount=amount)
+update_progress(0.1, "Loading accumulated token")
+time.sleep(0.3)  # demo pacing so the live phase/progress stream is visible
+update_phase("Load token", "completed")
+
+update_phase("Sanctions screening", "running")
+log_info("checking vendor against sanctions / watch lists")
+update_progress(0.4, "Sanctions list lookup")
+time.sleep(0.6)
+log_info("no sanctions match found")
+update_phase("Sanctions screening", "completed")
+
+update_phase("Fraud scoring", "running")
+log_info("scoring fraud risk", model="rules-v2", amount=amount)
+update_progress(0.75, "Running fraud risk model")
+time.sleep(0.5)
+risk_score = 0.12
+log_metric("risk_score", risk_score)
+update_phase("Fraud scoring", "completed")
+
+update_phase("Decision", "running")
+compliant = risk_score < 0.5
 if not compliant:
-    log_warn("invoice flagged as high risk", risk_score=risk_score)
+    log_warn("invoice flagged as HIGH RISK — routing to manual review", risk_score=risk_score)
+else:
+    log_info("invoice cleared compliance", risk_score=risk_score)
+update_progress(1.0, "Compliance complete")
+update_phase("Decision", "completed")
 
 set_output("compliant", compliant)
 set_output("risk_score", risk_score)
