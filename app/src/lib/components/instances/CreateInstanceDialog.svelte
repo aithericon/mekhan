@@ -6,6 +6,7 @@
 	import { Label } from '$lib/components/ui/label';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import { FormField } from '$lib/components/ui/form-field';
+	import * as Select from '$lib/components/ui/select';
 	import X from '@lucide/svelte/icons/x';
 	import { getTemplate, createInstance } from '$lib/api/client';
 	import type { WorkflowGraph, WorkflowNodeData, StartNodeData } from '$lib/types/editor';
@@ -193,21 +194,24 @@
 														updateValue(start.id, field.name, v === true)}
 												/>
 											{:else if field.kind === 'select'}
-												<select
-													class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
-													value={String(values[start.id]?.[field.name] ?? '')}
-													onchange={(e) =>
-														updateValue(
-															start.id,
-															field.name,
-															(e.currentTarget as HTMLSelectElement).value
-														)}
+												{@const selected = String(
+													values[start.id]?.[field.name] ?? ''
+												)}
+												<Select.Root
+													type="single"
+													value={selected}
+													onValueChange={(v) =>
+														updateValue(start.id, field.name, v ?? '')}
 												>
-													<option value="">— select —</option>
-													{#each field.options ?? [] as opt (opt)}
-														<option value={opt}>{opt}</option>
-													{/each}
-												</select>
+													<Select.Trigger class="w-full">
+														{selected || '— select —'}
+													</Select.Trigger>
+													<Select.Content>
+														{#each field.options ?? [] as opt (opt)}
+															<Select.Item value={opt} label={opt} />
+														{/each}
+													</Select.Content>
+												</Select.Root>
 											{:else}
 												<Input
 													type="text"

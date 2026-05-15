@@ -5,6 +5,7 @@
 	import { Input } from '$lib/components/ui/input';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { Button } from '$lib/components/ui/button';
+	import * as Select from '$lib/components/ui/select';
 	import Plus from '@lucide/svelte/icons/plus';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import CronPreview from './CronPreview.svelte';
@@ -25,6 +26,20 @@
 	const sourceKind = $derived(source?.kind ?? 'manual');
 	const mappings = $derived(data.payloadMapping ?? []);
 	const enabled = $derived(data.enabled ?? false);
+
+	const sourceKindLabels: Record<string, string> = {
+		manual: 'Manual',
+		cron: 'Cron schedule',
+		catalog: 'Catalogue event',
+		net_completion: 'Workflow completion',
+		webhook: 'Webhook'
+	};
+	const onStatusLabels: Record<string, string> = {
+		success: 'Success',
+		failure: 'Failure',
+		cancelled: 'Cancelled',
+		any: 'Any terminal status'
+	};
 
 	// Scope identifiers a mapping expression may reference for the selected
 	// source kind. The backend is the single source of truth for the four
@@ -95,19 +110,25 @@
 
 <div class="space-y-3">
 	<FormField label="Source kind" for="trigger-source-kind">
-		<select
-			id="trigger-source-kind"
-			class="w-full rounded-md border border-input bg-background px-2 py-1 text-sm"
-			disabled={readonly}
+		<Select.Root
+			type="single"
 			value={sourceKind}
-			onchange={(e) => updateSourceKind(e.currentTarget.value as TriggerNodeData['source']['kind'])}
+			onValueChange={(v) => {
+				if (v) updateSourceKind(v as TriggerNodeData['source']['kind']);
+			}}
+			disabled={readonly}
 		>
-			<option value="manual">Manual</option>
-			<option value="cron">Cron schedule</option>
-			<option value="catalog">Catalogue event</option>
-			<option value="net_completion">Workflow completion</option>
-			<option value="webhook">Webhook</option>
-		</select>
+			<Select.Trigger id="trigger-source-kind" class="w-full" disabled={readonly}>
+				{sourceKindLabels[sourceKind] ?? 'Manual'}
+			</Select.Trigger>
+			<Select.Content>
+				<Select.Item value="manual" label="Manual" />
+				<Select.Item value="cron" label="Cron schedule" />
+				<Select.Item value="catalog" label="Catalogue event" />
+				<Select.Item value="net_completion" label="Workflow completion" />
+				<Select.Item value="webhook" label="Webhook" />
+			</Select.Content>
+		</Select.Root>
 	</FormField>
 
 	<!-- Source-specific config. Phase 5a keeps it minimal — each source kind
@@ -223,21 +244,28 @@
 			/>
 		</FormField>
 		<FormField label="On status">
-			<select
-				class="w-full rounded-md border border-input bg-background px-2 py-1 text-sm"
-				disabled={readonly}
+			<Select.Root
+				type="single"
 				value={source.on}
-				onchange={(e) =>
-					update('source', {
-						...source,
-						on: e.currentTarget.value as 'success' | 'failure' | 'cancelled' | 'any'
-					})}
+				onValueChange={(v) => {
+					if (v)
+						update('source', {
+							...source,
+							on: v as 'success' | 'failure' | 'cancelled' | 'any'
+						});
+				}}
+				disabled={readonly}
 			>
-				<option value="success">Success</option>
-				<option value="failure">Failure</option>
-				<option value="cancelled">Cancelled</option>
-				<option value="any">Any terminal status</option>
-			</select>
+				<Select.Trigger class="w-full" disabled={readonly}>
+					{onStatusLabels[source.on] ?? 'Success'}
+				</Select.Trigger>
+				<Select.Content>
+					<Select.Item value="success" label="Success" />
+					<Select.Item value="failure" label="Failure" />
+					<Select.Item value="cancelled" label="Cancelled" />
+					<Select.Item value="any" label="Any terminal status" />
+				</Select.Content>
+			</Select.Root>
 		</FormField>
 	{:else if source?.kind === 'webhook'}
 		<FormField label="Slug" for="trigger-slug">

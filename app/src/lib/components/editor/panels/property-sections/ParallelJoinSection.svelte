@@ -6,6 +6,12 @@
 	import type { ParallelJoinNodeData } from '$lib/types/editor';
 	import type { YjsGraphBinding } from '$lib/yjs/graph-binding.svelte';
 	import { FormField } from '$lib/components/ui/form-field';
+	import * as Select from '$lib/components/ui/select';
+
+	const strategyLabels: Record<string, string> = {
+		shallow_last_wins: 'Shallow — last branch wins',
+		deep_merge: 'Deep — recursively merge nested objects'
+	};
 
 	type Props = {
 		data: ParallelJoinNodeData;
@@ -52,23 +58,27 @@
 </div>
 
 <FormField label="Merge strategy" for="merge-strategy">
-	<select
-		id="merge-strategy"
-		class="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
-		disabled={readonly}
+	<Select.Root
+		type="single"
 		value={strategy}
-		data-testid="select-merge-strategy"
-		onchange={(e) =>
-			onchange({
-				...data,
-				mergeStrategy: (e.currentTarget as HTMLSelectElement).value as
-					| 'shallow_last_wins'
-					| 'deep_merge'
-			})}
+		onValueChange={(v) => {
+			if (v) onchange({ ...data, mergeStrategy: v as 'shallow_last_wins' | 'deep_merge' });
+		}}
+		disabled={readonly}
 	>
-		<option value="shallow_last_wins">Shallow — last branch wins</option>
-		<option value="deep_merge">Deep — recursively merge nested objects</option>
-	</select>
+		<Select.Trigger
+			id="merge-strategy"
+			class="w-full"
+			disabled={readonly}
+			data-testid="select-merge-strategy"
+		>
+			{strategyLabels[strategy] ?? strategyLabels.shallow_last_wins}
+		</Select.Trigger>
+		<Select.Content>
+			<Select.Item value="shallow_last_wins" label="Shallow — last branch wins" />
+			<Select.Item value="deep_merge" label="Deep — recursively merge nested objects" />
+		</Select.Content>
+	</Select.Root>
 </FormField>
 <p class="text-[10px] italic text-muted-foreground">
 	{strategy === 'deep_merge'

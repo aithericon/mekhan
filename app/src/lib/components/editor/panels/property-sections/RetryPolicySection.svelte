@@ -7,6 +7,13 @@
 	import type { AutomatedStepNodeData } from '$lib/types/editor';
 	import { Input } from '$lib/components/ui/input';
 	import { FormField } from '$lib/components/ui/form-field';
+	import * as Select from '$lib/components/ui/select';
+
+	const backoffLabels: Record<string, string> = {
+		immediate: 'Immediate',
+		fixed: 'Fixed delay',
+		exponential: 'Exponential backoff'
+	};
 
 	type Props = {
 		data: AutomatedStepNodeData;
@@ -47,24 +54,28 @@
 	</FormField>
 
 	<FormField label="Backoff" for="retry-backoff">
-		<select
-			id="retry-backoff"
-			class="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
-			disabled={readonly}
+		<Select.Root
+			type="single"
 			value={policy.backoff}
-			data-testid="select-retry-backoff"
-			onchange={(e) =>
-				patch({
-					backoff: (e.currentTarget as HTMLSelectElement).value as
-						| 'immediate'
-						| 'fixed'
-						| 'exponential'
-				})}
+			onValueChange={(v) => {
+				if (v) patch({ backoff: v as 'immediate' | 'fixed' | 'exponential' });
+			}}
+			disabled={readonly}
 		>
-			<option value="immediate">Immediate</option>
-			<option value="fixed">Fixed delay</option>
-			<option value="exponential">Exponential backoff</option>
-		</select>
+			<Select.Trigger
+				id="retry-backoff"
+				class="w-full"
+				disabled={readonly}
+				data-testid="select-retry-backoff"
+			>
+				{backoffLabels[policy.backoff ?? 'immediate'] ?? 'Immediate'}
+			</Select.Trigger>
+			<Select.Content>
+				<Select.Item value="immediate" label="Immediate" />
+				<Select.Item value="fixed" label="Fixed delay" />
+				<Select.Item value="exponential" label="Exponential backoff" />
+			</Select.Content>
+		</Select.Root>
 	</FormField>
 
 	{#if policy.backoff !== 'immediate'}
