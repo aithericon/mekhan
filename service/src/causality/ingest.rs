@@ -550,13 +550,28 @@ async fn process_domain_event(
                 .execute(db)
                 .await?;
 
+                // The seed token carries the instance it was parameterised
+                // for (injected in petri::instance). Record it so a process
+                // links back to its instance/net; backfill if the row already
+                // exists from an earlier re-ingest with no instance.
+                let instance_id = token_data
+                    .get("_instance_id")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string);
+                let proc_net_id = instance_id.as_ref().map(|i| format!("mekhan-{i}"));
+
                 sqlx::query(
-                    "INSERT INTO hpi_processes (process_id, status, created_at, updated_at) \
-                     VALUES ($1, 'active', $2, $2) \
-                     ON CONFLICT (process_id) DO NOTHING",
+                    "INSERT INTO hpi_processes \
+                         (process_id, status, instance_id, net_id, created_at, updated_at) \
+                     VALUES ($1, 'active', $3::uuid, $4, $2, $2) \
+                     ON CONFLICT (process_id) DO UPDATE \
+                     SET instance_id = COALESCE(hpi_processes.instance_id, EXCLUDED.instance_id), \
+                         net_id = COALESCE(hpi_processes.net_id, EXCLUDED.net_id)",
                 )
                 .bind(&token_id_str)
                 .bind(ts)
+                .bind(&instance_id)
+                .bind(&proc_net_id)
                 .execute(db)
                 .await?;
             }

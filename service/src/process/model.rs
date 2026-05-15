@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
+use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, ToSchema)]
 pub struct HpiProcess {
@@ -12,6 +13,11 @@ pub struct HpiProcess {
     pub config: serde_json::Value,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// Workflow instance that produced this process (NULL for petri-lab
+    /// scenarios created outside a mekhan instance, or unlinked legacy rows).
+    pub instance_id: Option<Uuid>,
+    /// Engine net id ("mekhan-{instance_id}") for the producing instance.
+    pub net_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, ToSchema)]
