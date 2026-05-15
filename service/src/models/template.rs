@@ -132,6 +132,11 @@ pub enum WorkflowNodeData {
         /// caller needs the canonical backend shape.
         #[serde(default = "default_automated_output_port")]
         output: Port,
+        /// Retry behaviour on execution failure/timeout. Defaults to 3
+        /// immediate retries (the historical hardcoded value), so existing
+        /// templates keep their prior semantics without re-authoring.
+        #[serde(rename = "retryPolicy", default)]
+        retry_policy: RetryPolicy,
     },
     #[serde(rename = "decision")]
     Decision {
@@ -475,6 +480,54 @@ pub enum MergeStrategy {
     #[default]
     ShallowLastWins,
     DeepMerge,
+}
+
+/// Delay applied between automated-step retry attempts.
+///
+/// `Immediate` re-dispatches at once. `Fixed` waits `base_delay_ms` before
+/// every attempt. `Exponential` waits `base_delay_ms * 2^attempt` (attempt is
+/// the zero-based retry index), capped by the engine's timer service.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum BackoffKind {
+    #[default]
+    Immediate,
+    Fixed,
+    Exponential,
+}
+
+/// Retry behaviour for an `AutomatedStep` whose execution fails or times out.
+///
+/// On failure the compiler re-dispatches the job (a fresh executor submit)
+/// while `retries < max_retries`, optionally after a `backoff` delay, then
+/// routes the exhausted token to the node's error output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct RetryPolicy {
+    /// Maximum number of retry attempts after the initial run. `0` disables
+    /// retries (a single failure routes straight to the error output).
+    #[serde(rename = "maxRetries", default = "default_max_retries")]
+    pub max_retries: u32,
+    /// Delay strategy between attempts.
+    #[serde(default)]
+    pub backoff: BackoffKind,
+    /// Base delay in milliseconds for `Fixed`/`Exponential`. Ignored for
+    /// `Immediate`.
+    #[serde(rename = "baseDelayMs", default)]
+    pub base_delay_ms: u64,
+}
+
+fn default_max_retries() -> u32 {
+    3
+}
+
+impl Default for RetryPolicy {
+    fn default() -> Self {
+        Self {
+            max_retries: default_max_retries(),
+            backoff: BackoffKind::Immediate,
+            base_delay_ms: 0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]

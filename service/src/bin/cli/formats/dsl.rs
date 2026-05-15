@@ -362,6 +362,7 @@ fn step_to_node_data(
                 },
                 input: Port::empty_input(),
                 output: mekhan_service::models::template::default_output_port(backend_type),
+                retry_policy: Default::default(),
             })
         }
         "decision" => {

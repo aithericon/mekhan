@@ -296,6 +296,7 @@ fn automated_step_produces_executor_lifecycle() {
                     output: mekhan_service::models::template::default_output_port(
                         mekhan_service::models::template::ExecutionBackendType::Docker,
                     ),
+                    retry_policy: Default::default(),
                 },
                 parent_id: None,
                 width: None,
@@ -904,6 +905,7 @@ fn automated_step_has_scoped_effect_errors() {
                     output: mekhan_service::models::template::default_output_port(
                         mekhan_service::models::template::ExecutionBackendType::Docker,
                     ),
+                    retry_policy: Default::default(),
                 },
                 parent_id: None,
                 width: None,
@@ -945,6 +947,7 @@ fn auto_node(id: &str, label: &str) -> WorkflowNode {
             output: mekhan_service::models::template::default_output_port(
                 mekhan_service::models::template::ExecutionBackendType::Docker,
             ),
+            retry_policy: Default::default(),
         },
         parent_id: None,
         width: None,
@@ -1702,6 +1705,7 @@ fn guard_multi_hop_scope_walk() {
                     description: None,
                 }],
             },
+            retry_policy: Default::default(),
         },
         parent_id: None,
         width: None,

@@ -1,10 +1,11 @@
 use crate::models::template::{
-    MergeStrategy, WorkflowEdge, WorkflowGraph, WorkflowNode, WorkflowNodeData,
+    BackoffKind, MergeStrategy, RetryPolicy, WorkflowEdge, WorkflowGraph, WorkflowNode,
+    WorkflowNodeData,
 };
 use aithericon_executor_domain::InputSource;
 use aithericon_sdk::components::executor_lifecycle::{executor_lifecycle, ExecutorBridges};
 use aithericon_sdk::scenario::{ScenarioDefinition, ScenarioGroup};
-use aithericon_sdk::{Context, DynamicToken, EffectError, ExecutorSubmitInput, HumanTaskAssigned, HumanTaskRequest, HumanTaskResponse, HumanTaskSubmit, PlaceHandle};
+use aithericon_sdk::{Context, DynamicToken, EffectError, ExecutorSubmitInput, HumanTaskAssigned, HumanTaskRequest, HumanTaskResponse, HumanTaskSubmit, PlaceHandle, TimerInput, TimerSchedule, TimerScheduled};
 use serde_json::{json, Value};
 use petgraph::algo::{is_cyclic_directed, toposort};
 use petgraph::graph::{DiGraph, NodeIndex};
@@ -1170,6 +1171,7 @@ fn expand_node(
         WorkflowNodeData::AutomatedStep {
             label,
             execution_spec,
+            retry_policy,
             ..
         } => {
             // Node interface places (outside prefix scope)
@@ -1193,9 +1195,14 @@ fn expand_node(
                 &serde_json::to_value(&staged_inputs).unwrap_or_default(),
             );
 
+            let max_retries = retry_policy.max_retries;
+
             // Scoped prefix: all lifecycle IDs become "{id}/submitted", "{id}/completed", etc.
             let handles = ctx.scoped_prefix(id, label, |ctx| {
                 let exec_inbox = ctx.state::<ExecutorSubmitInput>("inbox", "Inbox");
+                // Second handle to the same place so the retry path can
+                // re-inject a fresh submit after the lifecycle moves `inbox`.
+                let exec_inbox_retry = exec_inbox.clone();
 
                 // Snapshot the upstream token into `input.json` so user code
                 // can read prior-step data as `inputs["input.json"]`. Rhai's
@@ -1205,10 +1212,10 @@ fn expand_node(
                     .auto_input("input", &p_input)
                     .auto_output("job", &exec_inbox)
                     .logic(format!(
-                        r#"let d = input; d.job_id = "{id}"; d.run = 0; d.retries = 0; d.max_retries = 3; let job_inputs = {inputs_rhai}; job_inputs.push(#{{ "name": "input.json", "source": #{{ "type": "inline", "value": input }} }}); d.spec = #{{ "backend": "{backend_type}", "inputs": job_inputs, "outputs": [], "config": {config_rhai} }}; #{{ job: d }}"#
+                        r#"let d = input; d.job_id = "{id}"; d.run = 0; d.retries = 0; d.max_retries = {max_retries}; let job_inputs = {inputs_rhai}; job_inputs.push(#{{ "name": "input.json", "source": #{{ "type": "inline", "value": input }} }}); d.spec = #{{ "backend": "{backend_type}", "inputs": job_inputs, "outputs": [], "config": {config_rhai} }}; #{{ job: d }}"#
                     ));
 
-                executor_lifecycle(ctx, ExecutorBridges {
+                let lc = executor_lifecycle(ctx, ExecutorBridges {
                     inbox: exec_inbox,
                     result_out: None,
                     failure_out: None,
@@ -1216,7 +1223,23 @@ fn expand_node(
                     process_step: None,
                     catalogue: true,
                     process: false,
-                })
+                });
+
+                // Wire the lifecycle's failure/timeout outputs into a
+                // retry-then-error policy. Re-dispatch goes back through the
+                // lifecycle inbox (a fresh executor submit), which is valid
+                // for Mekhan's long-lived worker backends.
+                build_retry_topology(
+                    ctx,
+                    retry_policy,
+                    &lc.failed,
+                    &lc.timed_out,
+                    &exec_inbox_retry,
+                    &lc.effect_errors,
+                    &p_error,
+                );
+
+                lc
             });
 
             // Bridge lifecycle outputs to node interface
@@ -1225,6 +1248,9 @@ fn expand_node(
                 .auto_output("output", &p_output)
                 .logic(r#"#{ output: done }"#);
 
+            // Infra-level effect-handler errors (NATS/dispatch) still drain to
+            // the node error output; job-level failures are handled by the
+            // retry topology above.
             ctx.transition(format!("t_{id}_to_error"), format!("{label} - To Error"))
                 .auto_input("dead", &handles.dead_letter)
                 .auto_output("error", &p_error)
@@ -1628,6 +1654,103 @@ fn json_to_rhai_literal(value: &Value) -> String {
     }
 }
 
+/// Build the retry-then-error topology for an `AutomatedStep`, consuming the
+/// executor lifecycle's `failed`/`timed_out` outputs.
+///
+/// Both failure sources are normalised into a single `failure` place. While
+/// `retries < max_retries` the job is re-dispatched by producing a fresh
+/// submit token back into the lifecycle `inbox` (which re-fires `submit` — a
+/// new executor dispatch, valid for Mekhan's long-lived worker backends).
+/// `Immediate` re-dispatches at once; `Fixed`/`Exponential` route through the
+/// durable `timer_schedule` effect first (`delay = base` / `base << attempt`).
+/// Once retries are exhausted the token is routed to `p_error` (the node's
+/// error output), making failures observable / wirable into the graph.
+///
+/// Called inside the step's `scoped_prefix`, so every id here is namespaced
+/// per step and can't collide across automated steps.
+fn build_retry_topology(
+    ctx: &mut Context,
+    policy: &RetryPolicy,
+    failed: &PlaceHandle<DynamicToken>,
+    timed_out: &PlaceHandle<DynamicToken>,
+    exec_inbox: &PlaceHandle<ExecutorSubmitInput>,
+    effect_errors: &PlaceHandle<EffectError>,
+    p_error: &PlaceHandle<DynamicToken>,
+) {
+    let failure = ctx.state::<DynamicToken>("failure", "Failure");
+
+    // Normalise both lifecycle failure sources into one place. Timeouts carry
+    // no `detail`; we only need the resubmit-relevant fields.
+    ctx.transition("on_failed", "On Failed")
+        .auto_input("e", failed)
+        .auto_output("f", &failure)
+        .logic(
+            r#"#{ f: #{ job_id: e.job_id, run: e.run, retries: e.retries, max_retries: e.max_retries, spec: e.spec, reason: "failed" } }"#,
+        );
+    ctx.transition("on_timeout", "On Timeout")
+        .auto_input("e", timed_out)
+        .auto_output("f", &failure)
+        .logic(
+            r#"#{ f: #{ job_id: e.job_id, run: e.run, retries: e.retries, max_retries: e.max_retries, spec: e.spec, reason: "timed_out" } }"#,
+        );
+
+    // Rhai map for the re-dispatched submit token (bumps run + retries).
+    let resubmit = r#"#{ job_id: f.job_id, run: f.run + 1, retries: f.retries + 1, max_retries: f.max_retries, spec: f.spec }"#;
+
+    match policy.backoff {
+        BackoffKind::Immediate => {
+            ctx.transition("retry", "Retry")
+                .auto_input("f", &failure)
+                .auto_output("job", exec_inbox)
+                .guard_rhai("f.retries < f.max_retries")
+                .logic(format!("#{{ job: {resubmit} }}"));
+        }
+        BackoffKind::Fixed | BackoffKind::Exponential => {
+            let timer_in = ctx.state::<TimerInput>("retry_timer", "Retry Timer Input");
+            let timer_scheduled =
+                ctx.state::<TimerScheduled>("retry_timer_scheduled", "Retry Timer Scheduled");
+            let retry_signal = ctx.signal::<DynamicToken>("retry_fire", "Retry Fire");
+
+            let base = policy.base_delay_ms;
+            // `base << f.retries` == base * 2^retries (retries is small — the
+            // guard bounds it by max_retries).
+            let delay_expr = match policy.backoff {
+                BackoffKind::Exponential => format!("{base} << f.retries"),
+                _ => format!("{base}"),
+            };
+
+            ctx.transition("retry_arm", "Retry (arm timer)")
+                .auto_input("f", &failure)
+                .auto_output("timer", &timer_in)
+                .guard_rhai("f.retries < f.max_retries")
+                .logic(format!(
+                    r#"#{{ timer: #{{ delay_ms: {delay_expr}, target_place_id: "{sig}", payload: {resubmit} }} }}"#,
+                    sig = retry_signal.id(),
+                ));
+
+            ctx.transition("retry_schedule", "Retry (schedule)")
+                .timer_schedule_to(TimerSchedule {
+                    timer: &timer_in,
+                    scheduled: &timer_scheduled,
+                    errors: effect_errors,
+                    signal: &retry_signal,
+                });
+
+            ctx.transition("retry_reinject", "Retry (re-dispatch)")
+                .auto_input("j", &retry_signal)
+                .auto_output("job", exec_inbox)
+                .logic(r#"#{ job: j }"#);
+        }
+    }
+
+    // Retries exhausted (or max_retries == 0): surface as the node error.
+    ctx.transition("exhausted", "Retries Exhausted")
+        .auto_input("f", &failure)
+        .auto_output("err", p_error)
+        .guard_rhai("f.retries >= f.max_retries")
+        .logic(r#"#{ err: f }"#);
+}
+
 fn build_merge_logic(state_var: &str, signal_var: &str) -> String {
     format!(
         "let result = {state_var}; \
@@ -1968,5 +2091,92 @@ mod tests {
         let i1 = deep.find("__deep_merge(result, in_1)").unwrap();
         let i2 = deep.find("__deep_merge(result, in_2)").unwrap();
         assert!(i1 < i2, "in_1 must be folded before in_2");
+    }
+
+    fn automated_step_with_retry(id: &str, policy: RetryPolicy) -> WorkflowNode {
+        WorkflowNode {
+            id: id.to_string(),
+            node_type: "automated_step".to_string(),
+            position: Position { x: 0.0, y: 50.0 },
+            data: WorkflowNodeData::AutomatedStep {
+                label: "Run".to_string(),
+                description: None,
+                execution_spec: ExecutionSpecConfig {
+                    backend_type: ExecutionBackendType::Docker,
+                    entrypoint: None,
+                    config: serde_json::json!({"image": "alpine:latest"}),
+                },
+                input: Port::empty_input(),
+                output: default_output_port(ExecutionBackendType::Docker),
+                retry_policy: policy,
+            },
+            parent_id: None,
+            width: None,
+            height: None,
+        }
+    }
+
+    fn compile_retry_graph(policy: RetryPolicy) -> String {
+        let graph = WorkflowGraph {
+            nodes: vec![
+                start_node("s"),
+                automated_step_with_retry("a", policy),
+                end_node("e"),
+            ],
+            edges: vec![edge("e1", "s", "a"), edge("e2", "a", "e")],
+            viewport: None,
+        };
+        let air = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
+            .expect("retry graph should compile");
+        air.to_string()
+    }
+
+    #[test]
+    fn test_retry_immediate_no_timer() {
+        let s = compile_retry_graph(RetryPolicy {
+            max_retries: 2,
+            backoff: BackoffKind::Immediate,
+            base_delay_ms: 0,
+        });
+        // Immediate path: a direct Retry transition, no timer transitions.
+        assert!(s.contains("\"Retry\""), "missing immediate Retry transition");
+        assert!(!s.contains("Retry (arm timer)"), "immediate must not arm a timer");
+        assert!(!s.contains("Retry (schedule)"));
+        assert!(s.contains("Retries Exhausted"), "missing exhausted→error path");
+        assert!(s.contains("f.retries < f.max_retries"));
+        assert!(s.contains("f.retries >= f.max_retries"));
+    }
+
+    #[test]
+    fn test_retry_exponential_emits_timer() {
+        let s = compile_retry_graph(RetryPolicy {
+            max_retries: 3,
+            backoff: BackoffKind::Exponential,
+            base_delay_ms: 1000,
+        });
+        assert!(s.contains("Retry (arm timer)"), "missing timer-arm transition");
+        assert!(s.contains("Retry (schedule)"), "missing timer schedule effect");
+        assert!(s.contains("Retry (re-dispatch)"), "missing timer re-dispatch");
+        assert!(s.contains("Retries Exhausted"));
+        // Exponential delay = base << attempt.
+        assert!(s.contains("1000 << f.retries"), "expected exponential delay expr");
+    }
+
+    #[test]
+    fn test_retry_prepare_uses_configured_max_retries() {
+        let s = compile_retry_graph(RetryPolicy {
+            max_retries: 5,
+            backoff: BackoffKind::Immediate,
+            base_delay_ms: 0,
+        });
+        // Prepare seeds the configured ceiling, not the old hardcoded 3.
+        assert!(
+            s.contains("d.max_retries = 5"),
+            "prepare must use the configured max_retries"
+        );
+        assert!(
+            !s.contains("d.max_retries = 3"),
+            "the hardcoded max_retries=3 must be gone"
+        );
     }
 }

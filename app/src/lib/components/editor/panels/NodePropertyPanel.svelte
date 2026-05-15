@@ -13,6 +13,7 @@
 	import LoopNodeSection from './property-sections/LoopNodeSection.svelte';
 	import DerivedPortsSection from './property-sections/DerivedPortsSection.svelte';
 	import TriggerNodeSection from './property-sections/TriggerNodeSection.svelte';
+	import RetryPolicySection from './property-sections/RetryPolicySection.svelte';
 	import ParallelSplitSection from './property-sections/ParallelSplitSection.svelte';
 	import ParallelJoinSection from './property-sections/ParallelJoinSection.svelte';
 	import ScopeSection from './property-sections/ScopeSection.svelte';
@@ -177,6 +178,7 @@
 			{/if}
 		{:else if data.type === 'automated_step'}
 			<AutomatedStepSection {data} {readonly} {onchange} {binding} {nodeId} {templateId} />
+			<RetryPolicySection {data} {readonly} {onchange} />
 		{:else if data.type === 'decision'}
 			<DecisionNodeSection {data} {readonly} {onchange} {scope} />
 		{:else if data.type === 'loop'}

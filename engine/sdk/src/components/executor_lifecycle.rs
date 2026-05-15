@@ -59,6 +59,15 @@ pub struct ExecutorLifecycleHandles {
     pub dead_letter: PlaceHandle<DynamicToken>,
     /// Place where effect handler errors land.
     pub effect_errors: PlaceHandle<EffectError>,
+    /// Place holding tokens whose execution reported failure. The token
+    /// retains `{ job_id, execution_id, detail, retries, max_retries, run,
+    /// spec }` so a caller can build a retry/error policy on top (Mekhan's
+    /// compiler does this per AutomatedStep). Unconsumed by the lifecycle
+    /// itself unless `failure_out` is wired.
+    pub failed: PlaceHandle<DynamicToken>,
+    /// Place holding tokens whose execution timed out. Same shape as
+    /// `failed` minus `detail`; see `failed`.
+    pub timed_out: PlaceHandle<DynamicToken>,
 }
 
 /// Build the full executor lifecycle topology inside `ctx`.
@@ -425,5 +434,7 @@ pub fn executor_lifecycle(
         completed: completed,
         dead_letter,
         effect_errors,
+        failed,
+        timed_out,
     }
 }

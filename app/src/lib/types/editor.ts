@@ -174,7 +174,8 @@ export function createDefaultNodeData(type: WorkflowNodeType): SchemaWorkflowNod
 					backendType: 'python',
 					entrypoint: 'main.py',
 					config: {}
-				}
+				},
+				retryPolicy: { maxRetries: 3, backoff: 'immediate', baseDelayMs: 0 }
 			};
 		case 'decision':
 			return {

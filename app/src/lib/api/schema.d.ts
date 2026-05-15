@@ -1049,6 +1049,15 @@ export interface components {
         ArtifactsListResponse: {
             entries: components["schemas"]["CatalogueEntry"][];
         };
+        /**
+         * @description Delay applied between automated-step retry attempts.
+         *
+         *     `Immediate` re-dispatches at once. `Fixed` waits `base_delay_ms` before
+         *     every attempt. `Exponential` waits `base_delay_ms * 2^attempt` (attempt is
+         *     the zero-based retry index), capped by the engine's timer service.
+         * @enum {string}
+         */
+        BackoffKind: "immediate" | "fixed" | "exponential";
         BranchCondition: {
             edgeId: string;
             guard: string;
@@ -1868,6 +1877,29 @@ export interface components {
             cross_net_edges: components["schemas"]["CrossNetEdge"][];
             nodes: components["schemas"]["AncestryNode"][];
         };
+        /**
+         * @description Retry behaviour for an `AutomatedStep` whose execution fails or times out.
+         *
+         *     On failure the compiler re-dispatches the job (a fresh executor submit)
+         *     while `retries < max_retries`, optionally after a `backoff` delay, then
+         *     routes the exhausted token to the node's error output.
+         */
+        RetryPolicy: {
+            /** @description Delay strategy between attempts. */
+            backoff?: components["schemas"]["BackoffKind"];
+            /**
+             * Format: int64
+             * @description Base delay in milliseconds for `Fixed`/`Exponential`. Ignored for
+             *     `Immediate`.
+             */
+            baseDelayMs?: number;
+            /**
+             * Format: int32
+             * @description Maximum number of retry attempts after the initial run. `0` disables
+             *     retries (a single failure routes straight to the error output).
+             */
+            maxRetries?: number;
+        };
         /** @description One identifier available to a trigger's payload-mapping expressions. */
         ScopeVar: {
             /**
@@ -2194,6 +2226,12 @@ export interface components {
              *     caller needs the canonical backend shape.
              */
             output?: components["schemas"]["Port"];
+            /**
+             * @description Retry behaviour on execution failure/timeout. Defaults to 3
+             *     immediate retries (the historical hardcoded value), so existing
+             *     templates keep their prior semantics without re-authoring.
+             */
+            retryPolicy?: components["schemas"]["RetryPolicy"];
             /** @enum {string} */
             type: "automated_step";
         } | {

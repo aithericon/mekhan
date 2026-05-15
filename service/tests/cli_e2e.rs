@@ -526,6 +526,7 @@ async fn graph_topology_roundtrip() {
                     output: mekhan_service::models::template::default_output_port(
                         mekhan_service::models::template::ExecutionBackendType::Docker,
                     ),
+                    retry_policy: Default::default(),
                 },
                 parent_id: None,
                 width: None,
@@ -767,6 +768,7 @@ async fn yaml_format_roundtrip() {
                         output: mekhan_service::models::template::default_output_port(
                             mekhan_service::models::template::ExecutionBackendType::Docker,
                         ),
+                        retry_policy: Default::default(),
                     },
                     parent_id: None,
                     width: None,

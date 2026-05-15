@@ -3130,6 +3130,15 @@
           }
         }
       },
+      "BackoffKind": {
+        "type": "string",
+        "description": "Delay applied between automated-step retry attempts.\n\n`Immediate` re-dispatches at once. `Fixed` waits `base_delay_ms` before\nevery attempt. `Exponential` waits `base_delay_ms * 2^attempt` (attempt is\nthe zero-based retry index), capped by the engine's timer service.",
+        "enum": [
+          "immediate",
+          "fixed",
+          "exponential"
+        ]
+      },
       "BranchCondition": {
         "type": "object",
         "required": [
@@ -5567,6 +5576,28 @@
           }
         }
       },
+      "RetryPolicy": {
+        "type": "object",
+        "description": "Retry behaviour for an `AutomatedStep` whose execution fails or times out.\n\nOn failure the compiler re-dispatches the job (a fresh executor submit)\nwhile `retries < max_retries`, optionally after a `backoff` delay, then\nroutes the exhausted token to the node's error output.",
+        "properties": {
+          "backoff": {
+            "$ref": "#/components/schemas/BackoffKind",
+            "description": "Delay strategy between attempts."
+          },
+          "baseDelayMs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Base delay in milliseconds for `Fixed`/`Exponential`. Ignored for\n`Immediate`.",
+            "minimum": 0
+          },
+          "maxRetries": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Maximum number of retry attempts after the initial run. `0` disables\nretries (a single failure routes straight to the error output).",
+            "minimum": 0
+          }
+        }
+      },
       "ScopeVar": {
         "type": "object",
         "description": "One identifier available to a trigger's payload-mapping expressions.",
@@ -6618,6 +6649,10 @@
               "output": {
                 "$ref": "#/components/schemas/Port",
                 "description": "Declared output shape. Persisted as-is once authored; the bare\ndefault has no fields and should be re-derived from\n`execution_spec.backend_type` via `default_output_port` whenever a\ncaller needs the canonical backend shape."
+              },
+              "retryPolicy": {
+                "$ref": "#/components/schemas/RetryPolicy",
+                "description": "Retry behaviour on execution failure/timeout. Defaults to 3\nimmediate retries (the historical hardcoded value), so existing\ntemplates keep their prior semantics without re-authoring."
               },
               "type": {
                 "type": "string",

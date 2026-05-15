@@ -178,10 +178,16 @@ export class YjsGraphBinding {
 					entrypoint?: string;
 					config: Record<string, unknown>;
 				}) ?? { backendType: 'python', entrypoint: 'main.py', config: {} };
+				const retryPolicy = (config?.retryPolicy as {
+					maxRetries: number;
+					backoff: 'immediate' | 'fixed' | 'exponential';
+					baseDelayMs: number;
+				}) ?? { maxRetries: 3, backoff: 'immediate', baseDelayMs: 0 };
 				return {
 					...base,
 					type: 'automated_step',
-					executionSpec: { entrypoint: 'main.py', ...spec }
+					executionSpec: { entrypoint: 'main.py', ...spec },
+					retryPolicy
 				};
 			}
 			case 'decision':
@@ -441,6 +447,10 @@ export class YjsGraphBinding {
 				break;
 			case 'automated_step':
 				config.set('executionSpec', data.executionSpec);
+				config.set(
+					'retryPolicy',
+					data.retryPolicy ?? { maxRetries: 3, backoff: 'immediate', baseDelayMs: 0 }
+				);
 				break;
 			case 'decision':
 				config.set('conditions', data.conditions);
