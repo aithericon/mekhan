@@ -393,13 +393,15 @@ export async function listProcesses(params?: {
 }
 
 /** Processes produced by a given workflow instance (usually one, but a
- *  multi-start template can spawn several). Backed by the instance_id link
- *  added to hpi_processes. */
+ *  multi-start template can spawn several). Filters on the TEXT `net_id`
+ *  column (`mekhan-{instanceId}`, populated alongside `instance_id`) — the
+ *  generic query DSL binds values as text, so filtering the UUID
+ *  `instance_id` column directly errors with `uuid = text`. */
 export async function listProcessesByInstance(
 	instanceId: string
 ): Promise<import('$lib/types/process').PaginatedProcessResponse<HpiProcess>> {
 	const qs = new URLSearchParams();
-	qs.set('filter[instance_id][eq]', instanceId);
+	qs.set('filter[net_id][eq]', `mekhan-${instanceId}`);
 	qs.set('sort', '-created_at');
 	return rawJson(`/processes?${qs.toString()}`);
 }
