@@ -110,10 +110,17 @@ pub async fn upload_file(
 
 /// GET /api/files/{key}
 /// Serves a file from S3 with the correct content type.
+///
+/// `key` is a multi-segment S3 path (templates/{id}/v{ver}/{node}/{file}).
+/// utoipa-axum 0.2 forwards the path string verbatim to axum::Router, so a
+/// plain `{key}` only matches a single segment and every real key 404s before
+/// reaching the handler. Use axum's catch-all `{*key}`; `Path<String>` still
+/// extracts the full remaining path. (Same fix as the catalogue download
+/// route — see commit d61bccb.)
 #[utoipa::path(
     get,
-    path = "/api/files/{key}",
-    params(("key" = String, Path, description = "S3 object key (templates/{template_id}/v{ver}/{node_id}/{filename})")),
+    path = "/api/files/{*key}",
+    params(("key" = String, Path, description = "S3 object key, may contain slashes (templates/{template_id}/v{ver}/{node_id}/{filename})")),
     responses(
         (status = 200, description = "Binary file contents", content_type = "application/octet-stream"),
         (status = 404, description = "File not found", body = ErrorResponse),

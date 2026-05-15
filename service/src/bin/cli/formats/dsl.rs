@@ -876,7 +876,7 @@ flow:
             assert_eq!(steps[0].blocks.len(), 2);
 
             // Verify image block
-            if let TaskBlockConfig::Image { filenames, display } = &steps[0].blocks[0] {
+            if let TaskBlockConfig::Image { filenames, display, .. } = &steps[0].blocks[0] {
                 assert_eq!(filenames, &["photo1.png", "photo2.jpg"]);
                 assert_eq!(*display, mekhan_service::models::template::ImageDisplay::Grid);
             } else {
@@ -892,5 +892,187 @@ flow:
         } else {
             panic!("expected HumanTask");
         }
+    }
+
+    /// The DSL/HCL formatters convert task blocks via serde (`to_value` on
+    /// emit, `from_value` on parse), so the additive `url`/`alt`/`caption`
+    /// fields on image and the new `download` variant must survive a full
+    /// round-trip through both formats — including unresolved `{{ ... }}`
+    /// interpolation placeholders, which are just opaque strings to the CLI.
+    #[test]
+    fn url_image_and_download_blocks_roundtrip_dsl_and_hcl() {
+        use mekhan_service::models::template::{
+            DownloadItemConfig, ImageDisplay, TaskStepConfig,
+        };
+
+        let graph = WorkflowGraph {
+            nodes: vec![
+                WorkflowNode {
+                    id: "start".to_string(),
+                    node_type: "start".to_string(),
+                    position: Position { x: 0.0, y: 0.0 },
+                    data: WorkflowNodeData::Start {
+                        label: "Start".to_string(),
+                        description: None,
+                        initial: Port::empty_input(),
+                    },
+                    parent_id: None,
+                    width: None,
+                    height: None,
+                },
+                WorkflowNode {
+                    id: "review".to_string(),
+                    node_type: "human_task".to_string(),
+                    position: Position { x: 0.0, y: 0.0 },
+                    data: WorkflowNodeData::HumanTask {
+                        label: "Review".to_string(),
+                        description: None,
+                        task_title: "Review Invoice".to_string(),
+                        instructions_mdsvex: None,
+                        steps: vec![TaskStepConfig {
+                            id: "step-verify".to_string(),
+                            title: "Verify".to_string(),
+                            description_mdsvex: None,
+                            blocks: vec![
+                                TaskBlockConfig::Image {
+                                    filenames: vec![],
+                                    display: ImageDisplay::Single,
+                                    url: Some("{{ invoice_file.url }}".to_string()),
+                                    alt: Some("Uploaded invoice".to_string()),
+                                    caption: Some("Original document".to_string()),
+                                },
+                                TaskBlockConfig::Download {
+                                    downloads: vec![DownloadItemConfig {
+                                        url: "{{ invoice_file.url }}".to_string(),
+                                        filename: "{{ invoice_file.filename }}".to_string(),
+                                        size: None,
+                                        mime_type: Some(
+                                            "{{ invoice_file.content_type }}".to_string(),
+                                        ),
+                                        thumbnail_url: None,
+                                        description: Some("Original uploaded invoice".to_string()),
+                                    }],
+                                },
+                            ],
+                        }],
+                    },
+                    parent_id: None,
+                    width: None,
+                    height: None,
+                },
+                WorkflowNode {
+                    id: "done".to_string(),
+                    node_type: "end".to_string(),
+                    position: Position { x: 0.0, y: 0.0 },
+                    data: WorkflowNodeData::End {
+                        label: "Done".to_string(),
+                        description: None,
+                        terminal: mekhan_service::models::template::default_terminal_port(),
+                    },
+                    parent_id: None,
+                    width: None,
+                    height: None,
+                },
+            ],
+            edges: vec![
+                WorkflowEdge {
+                    id: "e1".to_string(),
+                    source: "start".to_string(),
+                    target: "review".to_string(),
+                    source_handle: None,
+                    target_handle: Some("in".to_string()),
+                    label: None,
+                    edge_type: "sequence".to_string(),
+                },
+                WorkflowEdge {
+                    id: "e2".to_string(),
+                    source: "review".to_string(),
+                    target: "done".to_string(),
+                    source_handle: None,
+                    target_handle: Some("in".to_string()),
+                    label: None,
+                    edge_type: "sequence".to_string(),
+                },
+            ],
+            viewport: None,
+        };
+
+        // Assert the url image + download blocks survived a round-trip,
+        // placeholders intact.
+        fn assert_blocks_intact(graph: &WorkflowGraph, via: &str) {
+            let review = graph
+                .nodes
+                .iter()
+                .find(|n| n.id == "review")
+                .unwrap_or_else(|| panic!("[{via}] review node missing after round-trip"));
+            let WorkflowNodeData::HumanTask { steps, .. } = &review.data else {
+                panic!("[{via}] expected HumanTask, got {:?}", review.data);
+            };
+            assert_eq!(steps.len(), 1, "[{via}] step count");
+            assert_eq!(steps[0].blocks.len(), 2, "[{via}] block count");
+
+            match &steps[0].blocks[0] {
+                TaskBlockConfig::Image {
+                    url, alt, caption, ..
+                } => {
+                    assert_eq!(
+                        url.as_deref(),
+                        Some("{{ invoice_file.url }}"),
+                        "[{via}] image url placeholder lost"
+                    );
+                    assert_eq!(alt.as_deref(), Some("Uploaded invoice"), "[{via}] image alt");
+                    assert_eq!(
+                        caption.as_deref(),
+                        Some("Original document"),
+                        "[{via}] image caption"
+                    );
+                }
+                other => panic!("[{via}] expected Image block, got {other:?}"),
+            }
+
+            match &steps[0].blocks[1] {
+                TaskBlockConfig::Download { downloads } => {
+                    assert_eq!(downloads.len(), 1, "[{via}] download item count");
+                    let d = &downloads[0];
+                    assert_eq!(d.url, "{{ invoice_file.url }}", "[{via}] download url");
+                    assert_eq!(
+                        d.filename, "{{ invoice_file.filename }}",
+                        "[{via}] download filename placeholder lost"
+                    );
+                    assert_eq!(
+                        d.mime_type.as_deref(),
+                        Some("{{ invoice_file.content_type }}"),
+                        "[{via}] download mime_type"
+                    );
+                    assert_eq!(
+                        d.description.as_deref(),
+                        Some("Original uploaded invoice"),
+                        "[{via}] download description"
+                    );
+                }
+                other => panic!("[{via}] expected Download block, got {other:?}"),
+            }
+        }
+
+        // DSL: graph -> DslWorkflow -> YAML string -> DslWorkflow -> graph
+        let dsl = DslWorkflow::from_workflow_graph(&graph);
+        let yaml = serde_yaml_ng::to_string(&dsl).expect("serialize dsl yaml");
+        assert!(
+            yaml.contains("{{ invoice_file.url }}"),
+            "DSL yaml should carry the raw placeholder, got:\n{yaml}"
+        );
+        let dsl_back: DslWorkflow =
+            serde_yaml_ng::from_str(&yaml).expect("parse dsl yaml back");
+        let graph_dsl = dsl_back.to_workflow_graph().expect("dsl -> graph");
+        assert_blocks_intact(&graph_dsl, "dsl");
+
+        // HCL: graph -> HCL string -> graph
+        let hcl_str = super::super::hcl::emit(&graph).expect("emit hcl");
+        assert!(
+            hcl_str.contains("{{ invoice_file.url }}"),
+            "HCL should carry the raw placeholder, got:\n{hcl_str}"
+        );
+        let graph_hcl = super::super::hcl::parse(&hcl_str).expect("parse hcl back");
+        assert_blocks_intact(&graph_hcl, "hcl");
     }
 }

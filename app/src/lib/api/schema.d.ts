@@ -216,7 +216,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/files/{key}": {
+    "/api/files/{*key}": {
         parameters: {
             query?: never;
             header?: never;
@@ -226,6 +226,12 @@ export interface paths {
         /**
          * GET /api/files/{key}
          *     Serves a file from S3 with the correct content type.
+         * @description `key` is a multi-segment S3 path (templates/{id}/v{ver}/{node}/{file}).
+         *     utoipa-axum 0.2 forwards the path string verbatim to axum::Router, so a
+         *     plain `{key}` only matches a single segment and every real key 404s before
+         *     reaching the handler. Use axum's catch-all `{*key}`; `Path<String>` still
+         *     extracts the full remaining path. (Same fix as the catalogue download
+         *     route — see commit d61bccb.)
          */
         get: operations["get_file"];
         put?: never;
@@ -1285,6 +1291,19 @@ export interface components {
             link_type: string;
             signal_key: string;
         };
+        /**
+         * @description One entry in a `download` task block. Mirrors the frontend `DownloadItem`
+         *     (`app/src/lib/hpi/types.ts`) field-for-field on the wire.
+         */
+        DownloadItemConfig: {
+            description?: string | null;
+            filename: string;
+            mime_type?: string | null;
+            /** Format: int64 */
+            size?: number | null;
+            thumbnail_url?: string | null;
+            url: string;
+        };
         EngineStatus: {
             available: boolean;
             run_mode?: string | null;
@@ -1879,6 +1898,14 @@ export interface components {
          *     key in the token; `label` is for display.
          */
         PortField: {
+            /**
+             * @description For `File` kind: accepted formats as an HTML input `accept` list
+             *     (comma-separated MIME types and/or extensions, e.g.
+             *     `"image/png,image/jpeg,.pdf"`). The instance-launch upload widget
+             *     uses this to filter the picker, reject mismatched files, and show
+             *     the expected formats. Ignored for non-file kinds.
+             */
+            accept?: string | null;
             description?: string | null;
             kind: components["schemas"]["FieldKind"];
             label: string;
@@ -1999,20 +2026,28 @@ export interface components {
             /** @enum {string} */
             type: "divider";
         } | {
-            display: components["schemas"]["ImageDisplay"];
-            filenames: string[];
+            alt?: string | null;
+            caption?: string | null;
+            display?: components["schemas"]["ImageDisplay"];
+            filenames?: string[];
             /** @enum {string} */
             type: "image";
+            url?: string | null;
         } | {
             filename: string;
             /** @enum {string} */
             type: "file";
         } | {
             caption?: string | null;
-            filename: string;
+            filename?: string | null;
             height?: string | null;
             /** @enum {string} */
             type: "pdf";
+            url?: string | null;
+        } | {
+            downloads: components["schemas"]["DownloadItemConfig"][];
+            /** @enum {string} */
+            type: "download";
         };
         TaskFieldConfig: {
             kind: components["schemas"]["TaskFieldKind"];
@@ -2717,7 +2752,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** @description S3 object key (templates/{template_id}/v{ver}/{node_id}/{filename}) */
+                /** @description S3 object key, may contain slashes (templates/{template_id}/v{ver}/{node_id}/{filename}) */
                 key: string;
             };
             cookie?: never;

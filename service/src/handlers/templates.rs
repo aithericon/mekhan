@@ -687,6 +687,33 @@ pub async fn new_version(
     let new_version = existing.version + 1;
     let base_id = existing.base_template_id.unwrap_or(existing.id);
 
+    // The authored workflow lives in the *source's Y.Doc*, not the `graph`
+    // column — publish/edit never write the column back, so copying
+    // `existing.graph` would fork a blank canvas. Reconstruct the real graph
+    // + per-node files from the Y.Doc (same source of truth publish uses),
+    // falling back to the column only for legacy templates with no Y.Doc.
+    let (graph, files): (WorkflowGraph, HashMap<String, HashMap<String, String>>) =
+        match reconstruct_graph_from_ydoc(&state, id).await {
+            Ok(Some((g, f))) => (g, f),
+            Ok(None) => (
+                serde_json::from_value(existing.graph.clone())
+                    .unwrap_or_else(|_| WorkflowGraph::default_graph()),
+                HashMap::new(),
+            ),
+            Err(e) => {
+                tracing::error!(
+                    "failed to load source Y.Doc for new version of {id}: {e}"
+                );
+                (
+                    serde_json::from_value(existing.graph.clone())
+                        .unwrap_or_else(|_| WorkflowGraph::default_graph()),
+                    HashMap::new(),
+                )
+            }
+        };
+    let graph_json =
+        serde_json::to_value(&graph).map_err(|e| ApiError::internal(e.to_string()))?;
+
     // Start a transaction
     let mut tx = state
         .db
@@ -715,7 +742,7 @@ pub async fn new_version(
     .bind(base_id)
     .bind(existing.id)
     .bind(new_version)
-    .bind(&existing.graph)
+    .bind(&graph_json)
     .bind(existing.author_id)
     .fetch_one(&mut *tx)
     .await
@@ -728,13 +755,12 @@ pub async fn new_version(
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    // Seed Y.Doc for the new version so WS collaboration works immediately
-    let graph: WorkflowGraph = serde_json::from_value(existing.graph.clone())
-        .unwrap_or_else(|_| WorkflowGraph::default_graph());
+    // Seed Y.Doc for the new version so WS collaboration works immediately,
+    // including the copied per-node files.
     if let Err(e) = state
         .yjs
         .persistence
-        .init_doc_from_graph(new_id, &graph)
+        .init_doc_from_graph_with_files(new_id, &graph, &files)
         .await
     {
         tracing::error!("failed to init Y.Doc for new version {new_id}: {e}");

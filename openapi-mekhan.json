@@ -465,18 +465,19 @@
         }
       }
     },
-    "/api/files/{key}": {
+    "/api/files/{*key}": {
       "get": {
         "tags": [
           "files"
         ],
         "summary": "GET /api/files/{key}\nServes a file from S3 with the correct content type.",
+        "description": "`key` is a multi-segment S3 path (templates/{id}/v{ver}/{node}/{file}).\nutoipa-axum 0.2 forwards the path string verbatim to axum::Router, so a\nplain `{key}` only matches a single segment and every real key 404s before\nreaching the handler. Use axum's catch-all `{*key}`; `Path<String>` still\nextracts the full remaining path. (Same fix as the catalogue download\nroute — see commit d61bccb.)",
         "operationId": "get_file",
         "parameters": [
           {
             "name": "key",
             "in": "path",
-            "description": "S3 object key (templates/{template_id}/v{ver}/{node_id}/{filename})",
+            "description": "S3 object key, may contain slashes (templates/{template_id}/v{ver}/{node_id}/{filename})",
             "required": true,
             "schema": {
               "type": "string"
@@ -3757,6 +3758,48 @@
           }
         }
       },
+      "DownloadItemConfig": {
+        "type": "object",
+        "description": "One entry in a `download` task block. Mirrors the frontend `DownloadItem`\n(`app/src/lib/hpi/types.ts`) field-for-field on the wire.",
+        "required": [
+          "url",
+          "filename"
+        ],
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "filename": {
+            "type": "string"
+          },
+          "mime_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "size": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "thumbnail_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "url": {
+            "type": "string"
+          }
+        }
+      },
       "EngineStatus": {
         "type": "object",
         "required": [
@@ -5493,6 +5536,13 @@
           "kind"
         ],
         "properties": {
+          "accept": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For `File` kind: accepted formats as an HTML input `accept` list\n(comma-separated MIME types and/or extensions, e.g.\n`\"image/png,image/jpeg,.pdf\"`). The instance-launch upload widget\nuses this to filter the picker, reject mismatched files, and show\nthe expected formats. Ignored for non-file kinds."
+          },
           "description": {
             "type": [
               "string",
@@ -5831,12 +5881,23 @@
           },
           {
             "type": "object",
+            "description": "`filenames` references compile-time staged assets; `url` is a direct\n(often `{{ token.path }}`-interpolated) source resolved at instance\ntime. When `url` is set the human-task UI renders it as the image\nsource (matching the frontend `{type:\"image\",url,alt?,caption?}`).",
             "required": [
-              "filenames",
-              "display",
               "type"
             ],
             "properties": {
+              "alt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "caption": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "display": {
                 "$ref": "#/components/schemas/ImageDisplay"
               },
@@ -5850,6 +5911,12 @@
                 "type": "string",
                 "enum": [
                   "image"
+                ]
+              },
+              "url": {
+                "type": [
+                  "string",
+                  "null"
                 ]
               }
             }
@@ -5874,9 +5941,8 @@
           },
           {
             "type": "object",
-            "description": "Embedded PDF viewer (rendered inline in the task UI). `height` is a\nCSS length string, default ~\"400px\"; `caption` is rendered above the\nviewer. Added so the editor's PDF blocks round-trip through publish.",
+            "description": "Embedded PDF viewer (rendered inline in the task UI). `height` is a\nCSS length string, default ~\"400px\"; `caption` is rendered above the\nviewer. `url`, when set (typically via `{{ token.path }}`\ninterpolation), is the direct PDF source.",
             "required": [
-              "filename",
               "type"
             ],
             "properties": {
@@ -5887,7 +5953,10 @@
                 ]
               },
               "filename": {
-                "type": "string"
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "height": {
                 "type": [
@@ -5899,6 +5968,34 @@
                 "type": "string",
                 "enum": [
                   "pdf"
+                ]
+              },
+              "url": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Downloadable artifact list. Serializes to the frontend\n`{type:\"download\",downloads:[{url,filename,...}]}` shape. `url` is\ntypically `{{ token.path }}`-interpolated to an uploaded file.",
+            "required": [
+              "downloads",
+              "type"
+            ],
+            "properties": {
+              "downloads": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/DownloadItemConfig"
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "download"
                 ]
               }
             }

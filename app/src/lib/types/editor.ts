@@ -57,6 +57,7 @@ export type DividerBlock = Extract<SchemaTaskBlockConfig, { type: 'divider' }>;
 export type ImageBlock = Extract<SchemaTaskBlockConfig, { type: 'image' }>;
 export type FileBlock = Extract<SchemaTaskBlockConfig, { type: 'file' }>;
 export type PdfBlock = Extract<SchemaTaskBlockConfig, { type: 'pdf' }>;
+export type DownloadBlock = Extract<SchemaTaskBlockConfig, { type: 'download' }>;
 
 /** Node type metadata for the sidebar palette. */
 export type NodePaletteItem = {

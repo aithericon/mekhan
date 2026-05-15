@@ -10,6 +10,8 @@ use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use tower::ServiceExt;
 use uuid::Uuid;
+use mekhan_service::yjs::persistence::YjsPersistence;
+use yrs::{Any, Map, Out, ReadTxn, StateVector, Transact, WriteTxn};
 
 async fn body_json(body: Body) -> Value {
     let bytes = body.collect().await.unwrap().to_bytes();
@@ -485,4 +487,107 @@ async fn get_air_for_unpublished_returns_409() {
         .unwrap();
 
     assert_eq!(resp.status(), StatusCode::CONFLICT);
+}
+
+// ---------------------------------------------------------------------------
+// Regression: new-version must fork the *source's authored Y.Doc*, not the
+// stale/blank `graph` DB column. Canvas edits + node files live only in the
+// Y.Doc (publish/edit never write the column back); before the fix,
+// new-version reseeded from the empty column → blank canvas.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn new_version_forks_authored_ydoc_graph() {
+    let (app, db) = common::test_app().await;
+    let author_id = Uuid::new_v4();
+
+    // Create template (also seeds Y.Doc with the default graph incl. "start").
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/templates")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({ "name": "Forkable", "author_id": author_id }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let created = body_json(resp.into_body()).await;
+    let v1_id: Uuid = serde_json::from_value(created["id"].clone()).unwrap();
+
+    // Author into the Y.Doc only (mirrors canvas editing — the `graph`
+    // column is never touched by normal authoring).
+    let persistence = YjsPersistence::new(db.clone());
+    let doc = persistence.load_doc(v1_id).await.unwrap();
+    let update = tokio::task::spawn_blocking(move || {
+        {
+            let mut txn = doc.transact_mut();
+            let nodes_map = txn.get_or_insert_map("nodes");
+            if let Some(Out::YMap(start_node)) = nodes_map.get(&txn, "start") {
+                start_node.insert(&mut txn, "label", "Authored In YDoc");
+            }
+        }
+        let txn = doc.transact();
+        txn.encode_state_as_update_v1(&StateVector::default())
+    })
+    .await
+    .unwrap();
+    persistence.store_update(v1_id, &update).await.unwrap();
+
+    // Publish v1 (reconstructs AIR from the Y.Doc but does not write the
+    // `graph` column back).
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(&format!("/api/templates/{v1_id}/publish"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // Fork a new version.
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(&format!("/api/templates/{v1_id}/new-version"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let v2 = body_json(resp.into_body()).await;
+    let v2_id: Uuid = serde_json::from_value(v2["id"].clone()).unwrap();
+
+    // The forked version's Y.Doc must carry the authored label — not a
+    // blank canvas reseeded from the empty `graph` column.
+    let doc2 = persistence.load_doc(v2_id).await.unwrap();
+    let label = tokio::task::spawn_blocking(move || {
+        let mut txn = doc2.transact_mut();
+        let nodes_map = txn.get_or_insert_map("nodes");
+        match nodes_map.get(&txn, "start") {
+            Some(Out::YMap(start_node)) => match start_node.get(&txn, "label") {
+                Some(Out::Any(Any::String(s))) => Some(s.to_string()),
+                _ => None,
+            },
+            _ => None,
+        }
+    })
+    .await
+    .unwrap();
+
+    assert_eq!(
+        label.as_deref(),
+        Some("Authored In YDoc"),
+        "new version must fork the source's authored Y.Doc graph, not a blank canvas"
+    );
 }

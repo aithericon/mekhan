@@ -11,6 +11,7 @@
 	import ImageBlockEditor from './ImageBlockEditor.svelte';
 	import FileBlockEditor from './FileBlockEditor.svelte';
 	import PdfBlockEditor from './PdfBlockEditor.svelte';
+	import DownloadBlockEditor from './DownloadBlockEditor.svelte';
 	import BlockTypePicker from './BlockTypePicker.svelte';
 
 	type Props = {
@@ -111,11 +112,12 @@
 				<ImageBlockEditor
 					filenames={block.filenames}
 					display={block.display}
+					url={block.url ?? undefined}
 					{binding}
 					{nodeId}
 					{readonly}
-					onchange={(filenames, display) =>
-						updateBlock(blockIdx, { type: 'image', filenames, display })}
+					onchange={(filenames, display, url) =>
+						updateBlock(blockIdx, { ...block, type: 'image', filenames, display, url })}
 					onremove={() => removeBlock(blockIdx)}
 				/>
 			{:else if block.type === 'file'}
@@ -130,14 +132,23 @@
 				/>
 			{:else if block.type === 'pdf'}
 				<PdfBlockEditor
-					filename={block.filename}
+					filename={block.filename ?? undefined}
 					caption={block.caption ?? undefined}
 					height={block.height ?? undefined}
+					url={block.url ?? undefined}
 					{binding}
 					{nodeId}
 					{readonly}
-					onchange={(filename, caption, height) =>
-						updateBlock(blockIdx, { type: 'pdf', filename, caption, height })}
+					onchange={(filename, caption, height, url) =>
+						updateBlock(blockIdx, { ...block, type: 'pdf', filename, caption, height, url })}
+					onremove={() => removeBlock(blockIdx)}
+				/>
+			{:else if block.type === 'download'}
+				<DownloadBlockEditor
+					downloads={block.downloads}
+					{readonly}
+					onchange={(downloads) =>
+						updateBlock(blockIdx, { type: 'download', downloads })}
 					onremove={() => removeBlock(blockIdx)}
 				/>
 			{/if}

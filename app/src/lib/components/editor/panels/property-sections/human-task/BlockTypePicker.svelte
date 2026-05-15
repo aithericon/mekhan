@@ -52,6 +52,11 @@
 		onadd({ type: 'pdf', filename: '', height: '400px' });
 		open = false;
 	}
+
+	function addDownload() {
+		onadd({ type: 'download', downloads: [{ url: '', filename: '' }] });
+		open = false;
+	}
 </script>
 
 <div class="relative">
@@ -136,6 +141,15 @@
 				<!-- ui-allow: block-type swatch — no theme token for pdf/rose identity -->
 				<span class="size-2.5 rounded-sm bg-rose-400"></span>
 				PDF
+			</button>
+			<button
+				type="button"
+				class="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-accent"
+				onclick={addDownload}
+			>
+				<!-- ui-allow: block-type swatch — no theme token for download/indigo identity -->
+				<span class="size-2.5 rounded-sm bg-indigo-400"></span>
+				Download
 			</button>
 		</div>
 	{/if}

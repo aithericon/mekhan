@@ -44,8 +44,15 @@ export const showcaseGraph: WorkflowGraph = {
 				label: 'Start',
 				initial: {
 					id: 'in',
-					label: 'Input',
+					label: 'Invoice Intake',
 					fields: [
+						{
+							name: 'invoice_file',
+							label: 'Invoice Image (PNG, JPG, or WebP)',
+							kind: 'file',
+							required: true,
+							accept: 'image/png,image/jpeg,image/webp'
+						},
 						{
 							name: 'invoice_id',
 							label: 'Invoice ID',
@@ -73,6 +80,24 @@ export const showcaseGraph: WorkflowGraph = {
 						id: 'step-verify',
 						title: 'Verify Details',
 						blocks: [
+							{
+								type: 'image',
+								url: '{{ invoice_file.url }}',
+								alt: 'Uploaded invoice',
+								caption: 'Original invoice document (uploaded at instance start)'
+							},
+							{
+								type: 'download',
+								downloads: [
+									{
+										url: '{{ invoice_file.url }}',
+										filename: '{{ invoice_file.filename }}',
+										mime_type: '{{ invoice_file.content_type }}',
+										description: 'Original uploaded invoice'
+									}
+								]
+							},
+							{ type: 'divider' },
 							{
 								type: 'input',
 								field: {

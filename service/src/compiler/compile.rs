@@ -1871,6 +1871,169 @@ fn json_to_rhai_literal(value: &Value) -> String {
     }
 }
 
+/// Escape a string for embedding inside a Rhai double-quoted literal.
+/// Mirrors the `Value::String` arm of [`json_to_rhai_literal`] exactly so
+/// non-interpolated content stays byte-for-byte identical.
+fn rhai_str_escape(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+}
+
+/// Validate a `{{ … }}` placeholder body and turn it into a safe Rhai
+/// accessor rooted at the workflow token (`input`).
+///
+/// Only dotted identifier paths with optional numeric indices are accepted —
+/// e.g. `invoice_file.url`, `items[0].amount`. This is deliberately *not* a
+/// Rhai expression evaluator: arbitrary expressions are rejected (returns
+/// `None`) so a template author can never inject executable Rhai through a
+/// task block string.
+fn placeholder_to_accessor(inner: &str) -> Option<String> {
+    let s = inner.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let bytes = s.as_bytes();
+    let mut i = 0;
+
+    fn ident(bytes: &[u8], i: &mut usize) -> bool {
+        let start = *i;
+        if *i < bytes.len() && (bytes[*i].is_ascii_alphabetic() || bytes[*i] == b'_') {
+            *i += 1;
+            while *i < bytes.len() && (bytes[*i].is_ascii_alphanumeric() || bytes[*i] == b'_') {
+                *i += 1;
+            }
+        }
+        *i > start
+    }
+
+    let mut out = String::from("input");
+    if !ident(bytes, &mut i) {
+        return None;
+    }
+    out.push('.');
+    out.push_str(&s[..i]);
+
+    while i < bytes.len() {
+        match bytes[i] {
+            b'.' => {
+                i += 1;
+                let seg_start = i;
+                if !ident(bytes, &mut i) {
+                    return None;
+                }
+                out.push('.');
+                out.push_str(&s[seg_start..i]);
+            }
+            b'[' => {
+                i += 1;
+                let num_start = i;
+                while i < bytes.len() && bytes[i].is_ascii_digit() {
+                    i += 1;
+                }
+                if i == num_start || i >= bytes.len() || bytes[i] != b']' {
+                    return None;
+                }
+                out.push('[');
+                out.push_str(&s[num_start..i]);
+                out.push(']');
+                i += 1; // consume ']'
+            }
+            _ => return None,
+        }
+    }
+    Some(out)
+}
+
+/// Turn a raw string that may contain `{{ path }}` placeholders into a Rhai
+/// *expression* (not a quoted literal). Strings with no valid placeholder are
+/// emitted exactly as [`json_to_rhai_literal`] would, so existing static
+/// content is unchanged. Strings with placeholders become a parenthesised
+/// concatenation seeded with `""` to force string context at runtime.
+fn interpolate_to_rhai_expr(raw: &str) -> String {
+    enum Piece {
+        Lit(String),
+        Expr(String),
+    }
+
+    let mut pieces: Vec<Piece> = Vec::new();
+    let mut lit = String::new();
+    let mut rest = raw;
+
+    while let Some(open) = rest.find("{{") {
+        let after = &rest[open + 2..];
+        if let Some(close_rel) = after.find("}}") {
+            let inner = &after[..close_rel];
+            if let Some(accessor) = placeholder_to_accessor(inner) {
+                lit.push_str(&rest[..open]);
+                if !lit.is_empty() {
+                    pieces.push(Piece::Lit(std::mem::take(&mut lit)));
+                }
+                pieces.push(Piece::Expr(accessor));
+                rest = &after[close_rel + 2..];
+                continue;
+            }
+            // Not a valid path — keep the literal braces and move past them.
+            lit.push_str(&rest[..open + 2]);
+            rest = after;
+        } else {
+            // No closing `}}` — the remainder is all literal.
+            break;
+        }
+    }
+    lit.push_str(rest);
+
+    if pieces.is_empty() {
+        return format!("\"{}\"", rhai_str_escape(raw));
+    }
+    if !lit.is_empty() {
+        pieces.push(Piece::Lit(lit));
+    }
+
+    let mut expr = String::from("(\"\"");
+    for p in pieces {
+        match p {
+            Piece::Lit(s) => {
+                expr.push_str(" + \"");
+                expr.push_str(&rhai_str_escape(&s));
+                expr.push('"');
+            }
+            Piece::Expr(acc) => {
+                expr.push_str(" + (");
+                expr.push_str(&acc);
+                expr.push(')');
+            }
+        }
+    }
+    expr.push(')');
+    expr
+}
+
+/// Like [`json_to_rhai_literal`] but every string is run through
+/// [`interpolate_to_rhai_expr`], so `{{ token.path }}` placeholders anywhere
+/// in a human task's steps resolve against the runtime token.
+fn json_to_rhai_interpolated(value: &Value) -> String {
+    match value {
+        Value::String(s) => interpolate_to_rhai_expr(s),
+        Value::Array(arr) => {
+            let items: Vec<String> = arr.iter().map(json_to_rhai_interpolated).collect();
+            format!("[{}]", items.join(", "))
+        }
+        Value::Object(obj) => {
+            let entries: Vec<String> = obj
+                .iter()
+                .map(|(k, v)| {
+                    let escaped_key = k.replace('\\', "\\\\").replace('"', "\\\"");
+                    format!("\"{}\": {}", escaped_key, json_to_rhai_interpolated(v))
+                })
+                .collect();
+            format!("#{{{}}}", entries.join(", "))
+        }
+        other => json_to_rhai_literal(other),
+    }
+}
+
 /// Build the retry-then-error topology for an `AutomatedStep`, consuming the
 /// executor lifecycle's `failed`/`timed_out` outputs.
 ///
@@ -2072,20 +2235,15 @@ fn build_human_task_injection_logic(target_node: &WorkflowNode) -> String {
     } = &target_node.data
     {
         let steps_value = serde_json::to_value(steps).unwrap_or_else(|_| json!([]));
-        let steps_rhai = json_to_rhai_literal(&steps_value);
-        let instructions = instructions_mdsvex
-            .as_deref()
-            .unwrap_or("")
-            .replace('\\', "\\\\")
-            .replace('"', "\\\"");
-        let title = task_title
-            .replace('\\', "\\\\")
-            .replace('"', "\\\"");
+        let steps_rhai = json_to_rhai_interpolated(&steps_value);
+        let instructions_expr =
+            interpolate_to_rhai_expr(instructions_mdsvex.as_deref().unwrap_or(""));
+        let title_expr = interpolate_to_rhai_expr(task_title);
 
         format!(
             "let d = input; \
-             d.title = \"{title}\"; \
-             d.instructions_mdsvex = \"{instructions}\"; \
+             d.title = {title_expr}; \
+             d.instructions_mdsvex = {instructions_expr}; \
              d.steps = {steps_rhai}; \
              #{{ output: d }}"
         )
@@ -2098,6 +2256,92 @@ fn build_human_task_injection_logic(target_node: &WorkflowNode) -> String {
 mod tests {
     use super::*;
     use crate::models::template::*;
+
+    #[test]
+    fn placeholder_paths_validate() {
+        assert_eq!(
+            placeholder_to_accessor("invoice_file.url").as_deref(),
+            Some("input.invoice_file.url")
+        );
+        assert_eq!(
+            placeholder_to_accessor("  items[0].amount  ").as_deref(),
+            Some("input.items[0].amount")
+        );
+        assert_eq!(placeholder_to_accessor("invoice_id").as_deref(), Some("input.invoice_id"));
+        // Rejected: arbitrary Rhai / unsafe content stays literal.
+        assert_eq!(placeholder_to_accessor("a + b").as_deref(), None);
+        assert_eq!(placeholder_to_accessor("system(\"rm\")").as_deref(), None);
+        assert_eq!(placeholder_to_accessor("1abc").as_deref(), None);
+        assert_eq!(placeholder_to_accessor("").as_deref(), None);
+        assert_eq!(placeholder_to_accessor("a[]").as_deref(), None);
+    }
+
+    #[test]
+    fn interpolation_preserves_static_strings() {
+        // No placeholder → byte-identical to json_to_rhai_literal.
+        let s = "Plain \"quoted\" text\nwith newline";
+        assert_eq!(
+            interpolate_to_rhai_expr(s),
+            json_to_rhai_literal(&Value::String(s.to_string()))
+        );
+        // Unbalanced / invalid braces are kept literal, not interpolated.
+        assert_eq!(interpolate_to_rhai_expr("{{ a + b }}"), "\"{{ a + b }}\"");
+        assert_eq!(interpolate_to_rhai_expr("a {{ unclosed"), "\"a {{ unclosed\"");
+    }
+
+    #[test]
+    fn interpolation_builds_concat_expr() {
+        assert_eq!(
+            interpolate_to_rhai_expr("{{ invoice_file.url }}"),
+            "(\"\" + (input.invoice_file.url))"
+        );
+        assert_eq!(
+            interpolate_to_rhai_expr("Invoice {{ invoice_id }} ready"),
+            "(\"\" + \"Invoice \" + (input.invoice_id) + \" ready\")"
+        );
+    }
+
+    #[test]
+    fn human_task_injection_interpolates_token() {
+        let node = WorkflowNode {
+            id: "review".to_string(),
+            node_type: "human_task".to_string(),
+            position: Position { x: 0.0, y: 0.0 },
+            data: WorkflowNodeData::HumanTask {
+                label: "Review".to_string(),
+                description: None,
+                task_title: "Invoice {{ invoice_id }}".to_string(),
+                instructions_mdsvex: Some("See {{ invoice_file.filename }}".to_string()),
+                steps: vec![TaskStepConfig {
+                    id: "s1".to_string(),
+                    title: "Doc".to_string(),
+                    description_mdsvex: None,
+                    blocks: vec![TaskBlockConfig::Mdsvex {
+                        content: "![invoice]({{ invoice_file.url }})".to_string(),
+                    }],
+                }],
+            },
+            parent_id: None,
+            width: None,
+            height: None,
+        };
+
+        let logic = build_human_task_injection_logic(&node);
+        assert!(
+            logic.contains("d.title = (\"\" + \"Invoice \" + (input.invoice_id))"),
+            "title not interpolated: {logic}"
+        );
+        assert!(
+            logic.contains("(input.invoice_file.filename)"),
+            "instructions not interpolated: {logic}"
+        );
+        assert!(
+            logic.contains("(input.invoice_file.url)"),
+            "step block string not interpolated: {logic}"
+        );
+        // Static block keys remain plain literals.
+        assert!(logic.contains("\"type\": \"mdsvex\""), "block shape changed: {logic}");
+    }
 
     fn start_node(id: &str) -> WorkflowNode {
         WorkflowNode {

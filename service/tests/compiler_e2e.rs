@@ -314,3 +314,50 @@ fn ui_invoice_processing_deserializes_and_compiles() {
         "expected exactly 2 injection edge transitions, got: {edge_transitions:?}"
     );
 }
+
+/// The Start node declares a `file` start-param (`invoice_file`) and the
+/// Review human task references it from an image + download block via
+/// `{{ invoice_file.url }}`. The compiled AIR must carry the *resolved* token
+/// accessor (`input.invoice_file.url`), not the raw placeholder.
+#[test]
+fn ui_invoice_processing_interpolates_start_file_param() {
+    let graph = load_graph("invoice-processing.json");
+
+    let mut files: HashMap<String, HashMap<String, InputSource>> = HashMap::new();
+    let mut extract_files = HashMap::new();
+    extract_files.insert(
+        "main.py".to_string(),
+        InputSource::Raw {
+            content: "# stub\n".to_string(),
+        },
+    );
+    files.insert("extract".to_string(), extract_files);
+
+    let air = compile_to_air(&graph, "invoice_processing", "Invoice workflow", &files)
+        .expect("should compile");
+    let air_str = serde_json::to_string(&air).unwrap();
+
+    // Placeholders were substituted with safe token accessors.
+    assert!(
+        air_str.contains("input.invoice_file.url"),
+        "image/download url placeholder not interpolated"
+    );
+    assert!(
+        air_str.contains("input.invoice_file.filename"),
+        "download filename placeholder not interpolated"
+    );
+    assert!(
+        air_str.contains("input.invoice_file.content_type"),
+        "download mime_type placeholder not interpolated"
+    );
+    // The raw placeholder must NOT survive into the compiled net.
+    assert!(
+        !air_str.contains("{{ invoice_file.url }}"),
+        "raw placeholder leaked into compiled AIR"
+    );
+    // Static block structure is untouched (download block type preserved).
+    assert!(
+        air_str.contains("\"download\""),
+        "download block type missing from injected steps"
+    );
+}

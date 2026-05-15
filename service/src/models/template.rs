@@ -381,6 +381,7 @@ fn derive_human_task_output_port(steps: &[TaskStepConfig]) -> Port {
                         required: field.required.unwrap_or(false),
                         options: field.options.clone(),
                         description: None,
+                        accept: None,
                     });
                 }
             }
@@ -438,24 +439,61 @@ pub enum TaskBlockConfig {
     },
     #[serde(rename = "divider")]
     Divider,
+    /// `filenames` references compile-time staged assets; `url` is a direct
+    /// (often `{{ token.path }}`-interpolated) source resolved at instance
+    /// time. When `url` is set the human-task UI renders it as the image
+    /// source (matching the frontend `{type:"image",url,alt?,caption?}`).
     #[serde(rename = "image")]
     Image {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
         filenames: Vec<String>,
+        #[serde(default)]
         display: ImageDisplay,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        url: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        alt: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        caption: Option<String>,
     },
     #[serde(rename = "file")]
     File { filename: String },
     /// Embedded PDF viewer (rendered inline in the task UI). `height` is a
     /// CSS length string, default ~"400px"; `caption` is rendered above the
-    /// viewer. Added so the editor's PDF blocks round-trip through publish.
+    /// viewer. `url`, when set (typically via `{{ token.path }}`
+    /// interpolation), is the direct PDF source.
     #[serde(rename = "pdf")]
     Pdf {
-        filename: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        filename: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        url: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         caption: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         height: Option<String>,
     },
+    /// Downloadable artifact list. Serializes to the frontend
+    /// `{type:"download",downloads:[{url,filename,...}]}` shape. `url` is
+    /// typically `{{ token.path }}`-interpolated to an uploaded file.
+    #[serde(rename = "download")]
+    Download { downloads: Vec<DownloadItemConfig> },
+}
+
+/// One entry in a `download` task block. Mirrors the frontend `DownloadItem`
+/// (`app/src/lib/hpi/types.ts`) field-for-field on the wire.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct DownloadItemConfig {
+    pub url: String,
+    pub filename: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mime_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thumbnail_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 /// Severity for callout blocks. Snake-case on the wire (`"info"`,
@@ -472,9 +510,10 @@ pub enum CalloutSeverity {
 
 /// Layout mode for image blocks. Snake-case wire values: `"single"`,
 /// `"grid"`, `"gallery"`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ImageDisplay {
+    #[default]
     Single,
     Grid,
     Gallery,
@@ -622,6 +661,13 @@ pub struct PortField {
     pub options: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// For `File` kind: accepted formats as an HTML input `accept` list
+    /// (comma-separated MIME types and/or extensions, e.g.
+    /// `"image/png,image/jpeg,.pdf"`). The instance-launch upload widget
+    /// uses this to filter the picker, reject mismatched files, and show
+    /// the expected formats. Ignored for non-file kinds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accept: Option<String>,
 }
 
 /// A named bundle of typed fields exchanged at a block boundary. Two ports
@@ -766,6 +812,7 @@ fn port_field(name: &str, label: &str, kind: FieldKind) -> PortField {
         required: false,
         options: None,
         description: None,
+        accept: None,
     }
 }
 
@@ -1158,6 +1205,7 @@ mod tests {
             required,
             options: None,
             description: None,
+            accept: None,
         }
     }
 
@@ -1305,20 +1353,63 @@ mod tests {
         let block = TaskBlockConfig::Image {
             filenames: vec!["photo.png".to_string(), "diagram.svg".to_string()],
             display: ImageDisplay::Grid,
+            url: None,
+            alt: None,
+            caption: None,
         };
         let json = serde_json::to_value(&block).unwrap();
         assert_eq!(json["type"], "image");
         assert_eq!(json["filenames"][0], "photo.png");
         assert_eq!(json["filenames"][1], "diagram.svg");
         assert_eq!(json["display"], "grid");
+        // Additive url/alt/caption stay absent from the wire when unset.
+        assert!(json.get("url").is_none());
 
         let back: TaskBlockConfig = serde_json::from_value(json).unwrap();
-        if let TaskBlockConfig::Image { filenames, display } = back {
+        if let TaskBlockConfig::Image { filenames, display, url, .. } = back {
             assert_eq!(filenames.len(), 2);
             assert_eq!(display, ImageDisplay::Grid);
+            assert_eq!(url, None);
         } else {
             panic!("expected Image variant");
         }
+    }
+
+    #[test]
+    fn url_image_and_download_blocks_match_frontend_shape() {
+        // url-driven image: filenames empty (omitted), url present.
+        let img = TaskBlockConfig::Image {
+            filenames: vec![],
+            display: ImageDisplay::Single,
+            url: Some("/api/files/k.png".to_string()),
+            alt: Some("Invoice".to_string()),
+            caption: None,
+        };
+        let j = serde_json::to_value(&img).unwrap();
+        assert_eq!(j["type"], "image");
+        assert_eq!(j["url"], "/api/files/k.png");
+        assert!(j.get("filenames").is_none(), "empty filenames omitted: {j}");
+        assert!(j.get("caption").is_none());
+
+        let dl = TaskBlockConfig::Download {
+            downloads: vec![DownloadItemConfig {
+                url: "/api/files/k.pdf".to_string(),
+                filename: "invoice.pdf".to_string(),
+                size: None,
+                mime_type: Some("application/pdf".to_string()),
+                thumbnail_url: None,
+                description: Some("Original invoice".to_string()),
+            }],
+        };
+        let j = serde_json::to_value(&dl).unwrap();
+        assert_eq!(j["type"], "download");
+        assert_eq!(j["downloads"][0]["url"], "/api/files/k.pdf");
+        assert_eq!(j["downloads"][0]["mime_type"], "application/pdf");
+        assert!(j["downloads"][0].get("size").is_none());
+
+        // Round-trips back to the same variants.
+        let back: TaskBlockConfig = serde_json::from_value(j).unwrap();
+        assert!(matches!(back, TaskBlockConfig::Download { .. }));
     }
 
     /// Canary: each newly-enumified field must serialize to the same wire

@@ -7,19 +7,35 @@
 	import GalleryHorizontal from '@lucide/svelte/icons/gallery-horizontal';
 	import Square from '@lucide/svelte/icons/square';
 
+	import { Input } from '$lib/components/ui/input';
+	import InterpolationHint from './InterpolationHint.svelte';
+
 	type DisplayMode = 'single' | 'grid' | 'gallery';
 
 	type Props = {
-		filenames: string[];
-		display: DisplayMode;
+		filenames?: string[];
+		display?: DisplayMode;
+		url?: string;
 		binding?: YjsGraphBinding;
 		nodeId?: string;
 		readonly?: boolean;
-		onchange: (filenames: string[], display: DisplayMode) => void;
+		onchange: (filenames: string[], display: DisplayMode, url?: string) => void;
 		onremove: () => void;
 	};
 
-	let { filenames, display, binding, nodeId, readonly = false, onchange, onremove }: Props = $props();
+	let {
+		filenames: filenamesProp,
+		display: displayProp,
+		url,
+		binding,
+		nodeId,
+		readonly = false,
+		onchange,
+		onremove
+	}: Props = $props();
+
+	const filenames = $derived(filenamesProp ?? []);
+	const display = $derived<DisplayMode>(displayProp ?? 'single');
 
 	const IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg'];
 
@@ -45,15 +61,19 @@
 	}
 
 	function addFile(name: string) {
-		onchange([...filenames, name], display);
+		onchange([...filenames, name], display, url);
 	}
 
 	function removeFile(name: string) {
-		onchange(filenames.filter((f) => f !== name), display);
+		onchange(filenames.filter((f) => f !== name), display, url);
 	}
 
 	function setDisplay(mode: DisplayMode) {
-		onchange(filenames, mode);
+		onchange(filenames, mode, url);
+	}
+
+	function setUrl(value: string) {
+		onchange(filenames, display, value || undefined);
 	}
 
 	const displayModes: { mode: DisplayMode; label: string }[] = [
@@ -104,10 +124,28 @@
 		</div>
 	</div>
 
+	<!-- Dynamic source (URL / interpolated) -->
+	<div class="mb-3 space-y-1">
+		<Input
+			type="text"
+			value={url ?? ''}
+			placeholder={'Dynamic source URL — e.g. {{ invoice_file.url }}'}
+			disabled={readonly}
+			oninput={(e) => setUrl((e.currentTarget as HTMLInputElement).value)}
+			class="font-mono text-xs"
+		/>
+		<InterpolationHint example="invoice_file.url" />
+		{#if url}
+			<p class="text-[11px] text-muted-foreground">
+				A dynamic source is set — it takes precedence over uploaded files when the task renders.
+			</p>
+		{/if}
+	</div>
+
 	{#if imageFiles.length === 0}
 		<div class="flex items-center gap-2 rounded-md border border-dashed border-border p-4 text-sm text-muted-foreground">
 			<ImageIcon class="size-4 shrink-0" />
-			<span>No images uploaded yet. Use the upload button in the file tree.</span>
+			<span>No images uploaded yet. Add a dynamic source above, or upload via the file tree.</span>
 		</div>
 	{:else}
 		<div class="space-y-3">

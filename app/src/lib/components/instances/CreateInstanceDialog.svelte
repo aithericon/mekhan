@@ -7,14 +7,26 @@
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import { FormField } from '$lib/components/ui/form-field';
 	import * as Select from '$lib/components/ui/select';
+	import * as FileDropZone from '$lib/components/ui/file-drop-zone';
 	import X from '@lucide/svelte/icons/x';
-	import { getTemplate, createInstance } from '$lib/api/client';
+	import { getTemplate, createInstance, uploadFile } from '$lib/api/client';
 	import type { WorkflowGraph, WorkflowNodeData, StartNodeData } from '$lib/types/editor';
 	import type { components } from '$lib/api/schema';
 
 	type Port = components['schemas']['Port'];
 	type PortField = components['schemas']['PortField'];
 	type StartToken = components['schemas']['StartToken'];
+
+	/** Shape stored in the start token for a `file` field. `url` is the
+	 *  relative download path so a template author can reference it directly
+	 *  from an image/pdf/download block in a downstream human task. */
+	type StartFileValue = {
+		key: string;
+		url: string;
+		filename: string;
+		content_type: string;
+		size: number;
+	};
 
 	type Props = {
 		open: boolean;
@@ -89,6 +101,8 @@
 				return 0;
 			case 'bool':
 				return false;
+			case 'file':
+				return null;
 			default:
 				return '';
 		}
@@ -99,6 +113,70 @@
 			...values,
 			[startId]: { ...(values[startId] ?? {}), [fieldName]: v }
 		};
+	}
+
+	// Per-field upload state, keyed by `${startId}:${fieldName}`.
+	let uploadError = $state<Record<string, string>>({});
+
+	async function handleFileUpload(startId: string, fieldName: string, files: File[]) {
+		const file = files[0];
+		if (!file || !templateId) return;
+		const errKey = `${startId}:${fieldName}`;
+		try {
+			// The Start node id doubles as the upload's node scope, so the S3
+			// key lands under this template/node like any other staged asset.
+			const resp = await uploadFile(templateId, startId, file);
+			const value: StartFileValue = {
+				key: resp.key,
+				url: `/api/files/${resp.key}`,
+				filename: resp.filename,
+				content_type: resp.content_type,
+				size: resp.size
+			};
+			updateValue(startId, fieldName, value);
+			const { [errKey]: _, ...rest } = uploadError;
+			uploadError = rest;
+		} catch (e) {
+			uploadError = {
+				...uploadError,
+				[errKey]: e instanceof Error ? e.message : 'Upload failed'
+			};
+		}
+	}
+
+	function clearFile(startId: string, fieldName: string) {
+		updateValue(startId, fieldName, null);
+	}
+
+	// Fallback when a `file` field doesn't declare `accept`.
+	const DEFAULT_FILE_ACCEPT =
+		'image/*,application/pdf,.csv,.json,.txt,.zip,.docx,.xlsx,.pptx';
+
+	// Turn an HTML `accept` list into a short human label, e.g.
+	// "image/png,image/jpeg,.pdf" -> "PNG, JPG, PDF".
+	function formatAccept(accept: string): string {
+		const seen = new Set<string>();
+		const labels: string[] = [];
+		for (const raw of accept.split(',')) {
+			const t = raw.trim().toLowerCase();
+			if (!t) continue;
+			let label: string;
+			if (t === 'image/*') label = 'images';
+			else if (t === 'video/*') label = 'video';
+			else if (t === 'audio/*') label = 'audio';
+			else if (t.includes('/')) {
+				const sub = t.split('/')[1] ?? t;
+				label = sub === 'jpeg' ? 'JPG' : sub.split('+')[0].toUpperCase();
+			} else {
+				const ext = t.replace(/^\./, '');
+				label = ext === 'jpeg' ? 'JPG' : ext.toUpperCase();
+			}
+			const key = label.toLowerCase();
+			if (seen.has(key)) continue;
+			seen.add(key);
+			labels.push(label);
+		}
+		return labels.join(', ');
 	}
 
 	function buildStartTokens(): StartToken[] {
@@ -212,6 +290,46 @@
 														{/each}
 													</Select.Content>
 												</Select.Root>
+											{:else if field.kind === 'file'}
+												{@const fileVal = (values[start.id]?.[field.name] ??
+													null) as StartFileValue | null}
+												{@const errKey = `${start.id}:${field.name}`}
+												{@const acceptSpec = field.accept || DEFAULT_FILE_ACCEPT}
+												<FileDropZone.Root
+													accept={acceptSpec}
+													maxFiles={1}
+													fileCount={fileVal ? 1 : 0}
+													onUpload={(files) =>
+														handleFileUpload(start.id, field.name, files)}
+													onFileRejected={({ reason }) =>
+														(uploadError = { ...uploadError, [errKey]: reason })}
+												>
+													<FileDropZone.Trigger />
+												</FileDropZone.Root>
+												<p class="mt-1 text-xs text-muted-foreground">
+													Accepted formats: {formatAccept(acceptSpec)}
+												</p>
+												{#if fileVal}
+													<div
+														class="mt-2 flex items-center gap-2 text-sm text-muted-foreground"
+													>
+														<span class="truncate">{fileVal.filename}</span>
+														<Button
+															variant="ghost"
+															size="sm"
+															type="button"
+															class="h-auto px-1 py-0 text-xs text-destructive hover:text-destructive hover:underline"
+															onclick={() => clearFile(start.id, field.name)}
+														>
+															remove
+														</Button>
+													</div>
+												{/if}
+												{#if uploadError[errKey]}
+													<p class="mt-1 text-xs text-destructive">
+														{uploadError[errKey]}
+													</p>
+												{/if}
 											{:else}
 												<Input
 													type="text"

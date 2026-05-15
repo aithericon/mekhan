@@ -1443,6 +1443,7 @@ fn edge_type_mismatch_fails_when_target_port_has_required_fields() {
                     required: true,
                     options: None,
                     description: None,
+                    accept: None,
                 }],
             },
         },
@@ -1489,6 +1490,7 @@ fn edge_empty_target_port_accepts_anything() {
                     required: true,
                     options: None,
                     description: None,
+                    accept: None,
                 }],
             },
         },
@@ -1547,6 +1549,7 @@ fn start_node_with_bool_field(id: &str, field: &str) -> WorkflowNode {
                     required: true,
                     options: None,
                     description: None,
+                    accept: None,
                 }],
             },
         },
@@ -1739,6 +1742,7 @@ fn guard_multi_hop_scope_walk() {
                     required: true,
                     options: None,
                     description: None,
+                    accept: None,
                 }],
             },
             retry_policy: Default::default(),
@@ -1813,6 +1817,7 @@ fn loop_condition_can_reference_iteration_local() {
         required: false,
         options: None,
         description: None,
+        accept: None,
     }); // silence "unused import" if test layout shifts
 
     let graph = WorkflowGraph {
@@ -2113,6 +2118,7 @@ fn start_with_field(id: &str, field: &str, required: bool) -> WorkflowNode {
                 required,
                 options: None,
                 description: None,
+                accept: None,
             }],
         };
     }
@@ -2342,6 +2348,7 @@ fn trigger_payload_mapping_rejects_unknown_field() {
             required: true,
             options: None,
             description: None,
+            accept: None,
         }],
     };
     let mut start = start_node("s");

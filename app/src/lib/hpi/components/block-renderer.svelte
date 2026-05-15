@@ -75,4 +75,11 @@
 	</div>
 {:else if block.type === 'divider'}
 	<hr class="my-4 border-border/50" data-testid="step-block-divider" />
+{:else}
+	<div
+		data-testid="step-block-unknown"
+		class="rounded-xl border border-dashed border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive"
+	>
+		Unsupported block type: <code class="font-mono">{(block as { type?: string }).type ?? 'unknown'}</code>
+	</div>
 {/if}

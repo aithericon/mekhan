@@ -1,6 +1,8 @@
 <script lang="ts">
 	import Upload from '@lucide/svelte/icons/upload';
 	import LayoutGrid from '@lucide/svelte/icons/layout-grid';
+	import GitBranch from '@lucide/svelte/icons/git-branch';
+	import Rocket from '@lucide/svelte/icons/rocket';
 	import Pencil from '@lucide/svelte/icons/pencil';
 	import type { Awareness } from 'y-protocols/awareness';
 	import type { MekhanWsProvider } from '$lib/yjs/ws-provider';
@@ -17,12 +19,25 @@
 		awareness?: Awareness;
 		provider?: MekhanWsProvider;
 		onPublish: () => void;
+		/** Fork a published template into a fresh editable draft version. */
+		onNewVersion?: () => void;
+		/** Start a run of a published template (opens the instance dialog). */
+		onRun?: () => void;
 		/** Commit a new template name (parent does the API call + state). */
 		onRename?: (name: string) => void;
 	};
 
-	let { templateName, templateId, published, awareness, provider, onPublish, onRename }: Props =
-		$props();
+	let {
+		templateName,
+		templateId,
+		published,
+		awareness,
+		provider,
+		onPublish,
+		onNewVersion,
+		onRun,
+		onRename
+	}: Props = $props();
 
 	// Inline rename. Published templates are locked (server returns 409), so
 	// editing is only offered on drafts.
@@ -106,9 +121,23 @@
 			Canvas Mode
 		</Button>
 
-		<Button size="sm" disabled={published} onclick={onPublish}>
-			<Upload class="size-3.5" />
-			Publish
-		</Button>
+		{#if published && onRun}
+			<Button size="sm" data-testid="btn-run-template" onclick={onRun}>
+				<Rocket class="size-3.5" />
+				Run
+			</Button>
+		{/if}
+
+		{#if published && onNewVersion}
+			<Button size="sm" data-testid="btn-new-version" onclick={onNewVersion}>
+				<GitBranch class="size-3.5" />
+				New Version
+			</Button>
+		{:else}
+			<Button size="sm" data-testid="btn-publish" disabled={published} onclick={onPublish}>
+				<Upload class="size-3.5" />
+				Publish
+			</Button>
+		{/if}
 	</div>
 </div>

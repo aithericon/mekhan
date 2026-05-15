@@ -67,6 +67,37 @@ test.describe('Template CRUD', () => {
 		await expect(page.getByTestId('node-palette')).toBeVisible();
 	});
 
+	test('published template editor exposes a Run button (no list round-trip)', async ({
+		page
+	}) => {
+		await page.route('**/api/templates/pub-tpl', async (route) => {
+			await route.fulfill({
+				status: 200,
+				contentType: 'application/json',
+				body: JSON.stringify({
+					id: 'pub-tpl',
+					name: 'Shipped Flow',
+					description: '',
+					version: 1,
+					is_latest: true,
+					published: true,
+					published_at: '2025-01-02T00:00:00Z',
+					created_at: '2025-01-01T00:00:00Z',
+					updated_at: '2025-01-02T00:00:00Z'
+				})
+			});
+		});
+
+		await page.goto('/templates/pub-tpl');
+		await expect(page.getByTestId('editor-toolbar')).toBeVisible();
+
+		// A published template can be started in-place: Run (primary) is
+		// shown alongside New Version; Publish is gone (already published).
+		await expect(page.getByTestId('btn-run-template')).toBeVisible();
+		await expect(page.getByTestId('btn-new-version')).toBeVisible();
+		await expect(page.getByTestId('btn-publish')).toHaveCount(0);
+	});
+
 	test('template list shows items when API returns data', async ({ page }) => {
 		// Mock the templates list API
 		await page.route('**/api/templates?*', async (route) => {
@@ -149,5 +180,65 @@ test.describe('Template CRUD', () => {
 		await page.getByTestId('btn-template-menu-tpl-del').click();
 		const deleteBtn = page.getByTestId('btn-delete-template-tpl-del');
 		await expect(deleteBtn).toBeVisible();
+	});
+
+	test('published template offers New Version which forks a draft', async ({ page }) => {
+		await page.route('**/api/templates?*', async (route) => {
+			await route.fulfill({
+				status: 200,
+				contentType: 'application/json',
+				body: JSON.stringify({
+					items: [
+						{
+							id: 'tpl-pub',
+							name: 'Shipped Flow',
+							description: '',
+							version: 1,
+							is_latest: true,
+							published: true,
+							published_at: '2025-01-02T00:00:00Z',
+							created_at: '2025-01-01T00:00:00Z',
+							updated_at: '2025-01-02T00:00:00Z'
+						}
+					],
+					total: 1,
+					page: 1,
+					per_page: 20
+				})
+			});
+		});
+
+		// new-version forks a fresh draft with a new id; the UI should then
+		// navigate into that draft's editor.
+		await page.route('**/api/templates/tpl-pub/new-version', async (route) => {
+			expect(route.request().method()).toBe('POST');
+			await route.fulfill({
+				status: 201,
+				contentType: 'application/json',
+				body: JSON.stringify({
+					id: 'tpl-pub-v2',
+					name: 'Shipped Flow',
+					description: '',
+					version: 2,
+					is_latest: true,
+					published: false,
+					published_at: null,
+					created_at: '2025-01-03T00:00:00Z',
+					updated_at: '2025-01-03T00:00:00Z'
+				})
+			});
+		});
+
+		await page.goto('/templates');
+		await expect(page.getByTestId('template-item-tpl-pub')).toBeVisible();
+
+		// A published row exposes "New Version" in the kebab menu (no Rename,
+		// since published templates are server-locked).
+		await page.getByTestId('btn-template-menu-tpl-pub').click();
+		const newVersionBtn = page.getByTestId('btn-new-version-template-tpl-pub');
+		await expect(newVersionBtn).toBeVisible();
+
+		await newVersionBtn.click();
+		await expect(page).toHaveURL(/\/templates\/tpl-pub-v2/);
 	});
 });

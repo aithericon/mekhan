@@ -4,19 +4,33 @@
 	import FileText from '@lucide/svelte/icons/file-text';
 	import * as Select from '$lib/components/ui/select';
 	import { Input } from '$lib/components/ui/input';
+	import InterpolationHint from './InterpolationHint.svelte';
 
 	type Props = {
-		filename: string;
+		filename?: string;
 		caption?: string;
 		height?: string;
+		url?: string;
 		binding?: YjsGraphBinding;
 		nodeId?: string;
 		readonly?: boolean;
-		onchange: (filename: string, caption?: string, height?: string) => void;
+		onchange: (filename: string, caption?: string, height?: string, url?: string) => void;
 		onremove: () => void;
 	};
 
-	let { filename, caption, height, binding, nodeId, readonly = false, onchange, onremove }: Props = $props();
+	let {
+		filename: filenameProp,
+		caption,
+		height,
+		url,
+		binding,
+		nodeId,
+		readonly = false,
+		onchange,
+		onremove
+	}: Props = $props();
+
+	const filename = $derived(filenameProp ?? '');
 
 	const pdfFiles = $derived.by(() => {
 		if (!binding || !nodeId) return [];
@@ -24,9 +38,11 @@
 		return [...files.keys()].filter((name) => name.toLowerCase().endsWith('.pdf'));
 	});
 
-	const previewUrl = $derived(
-		filename ? `/api/files/${filename}` : ''
-	);
+	const previewUrl = $derived(filename ? `/api/files/${filename}` : '');
+
+	function setUrl(value: string) {
+		onchange(filename, caption, height, value || undefined);
+	}
 </script>
 
 <!-- ui-allow: block-type accent — no theme token for pdf/rose identity -->
@@ -47,17 +63,35 @@
 		{/if}
 	</div>
 
+	<!-- Dynamic source (URL / interpolated) -->
+	<div class="mb-3 space-y-1">
+		<Input
+			type="text"
+			value={url ?? ''}
+			placeholder={'Dynamic source URL — e.g. {{ invoice_file.url }}'}
+			disabled={readonly}
+			oninput={(e) => setUrl((e.currentTarget as HTMLInputElement).value)}
+			class="font-mono text-xs"
+		/>
+		<InterpolationHint example="invoice_file.url" />
+		{#if url}
+			<p class="text-[11px] text-muted-foreground">
+				A dynamic source is set — it takes precedence over an uploaded file when the task renders.
+			</p>
+		{/if}
+	</div>
+
 	{#if pdfFiles.length === 0}
 		<div class="flex items-center gap-2 rounded-md border border-dashed border-border p-4 text-sm text-muted-foreground">
 			<FileText class="size-4 shrink-0" />
-			<span>No PDF files uploaded yet. Use the upload button in the file tree.</span>
+			<span>No PDF files uploaded yet. Add a dynamic source above, or upload via the file tree.</span>
 		</div>
 	{:else}
 		<div class="space-y-3">
 			<Select.Root
 				type="single"
 				value={filename}
-				onValueChange={(v) => { if (v) onchange(v, caption, height); }}
+				onValueChange={(v) => { if (v) onchange(v, caption, height, url); }}
 				disabled={readonly}
 			>
 				<Select.Trigger disabled={readonly} class="h-9 px-2 text-sm">
@@ -92,14 +126,14 @@
 					value={caption ?? ''}
 					placeholder="Caption (optional)"
 					disabled={readonly}
-					oninput={(e) => onchange(filename, (e.currentTarget as HTMLInputElement).value || undefined, height)}
+					oninput={(e) => onchange(filename, (e.currentTarget as HTMLInputElement).value || undefined, height, url)}
 				/>
 				<Input
 					type="text"
 					value={height ?? '400px'}
 					placeholder="Height (e.g. 400px)"
 					disabled={readonly}
-					oninput={(e) => onchange(filename, caption, (e.currentTarget as HTMLInputElement).value || undefined)}
+					oninput={(e) => onchange(filename, caption, (e.currentTarget as HTMLInputElement).value || undefined, url)}
 				/>
 			</div>
 		</div>

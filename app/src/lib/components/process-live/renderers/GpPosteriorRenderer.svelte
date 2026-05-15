@@ -2,6 +2,7 @@
 	import { onMount, onDestroy } from 'svelte';
 	import * as echarts from 'echarts';
 	import { catalogueDownloadUrl } from '$lib/api/client';
+	import { authFetch } from '$lib/auth/fetch';
 	import type { LiveArtifactEntry } from '$lib/api/client';
 
 	/**
@@ -90,7 +91,7 @@
 		}
 		fetching = true;
 		const controller = new AbortController();
-		fetch(catalogueDownloadUrl(entry.storage_path), { signal: controller.signal })
+		authFetch(catalogueDownloadUrl(entry.storage_path), { signal: controller.signal })
 			.then((r) => {
 				if (!r.ok) throw new Error(`fetch failed: ${r.status}`);
 				return r.json();

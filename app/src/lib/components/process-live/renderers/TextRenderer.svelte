@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { catalogueDownloadUrl } from '$lib/api/client';
+	import { authFetch } from '$lib/auth/fetch';
 	import type { LiveArtifactEntry } from '$lib/api/client';
 
 	interface Props {
@@ -25,7 +26,7 @@
 		}
 		const url = catalogueDownloadUrl(entry.storage_path);
 		const controller = new AbortController();
-		fetch(url, { signal: controller.signal })
+		authFetch(url, { signal: controller.signal })
 			.then((r) => {
 				if (!r.ok) throw new Error(`fetch failed: ${r.status}`);
 				return r.text();

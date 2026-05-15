@@ -533,3 +533,258 @@ async fn causality_full_pipeline() {
 
     eprintln!("  ✓ causality_full_pipeline passed");
 }
+
+/// Clean-slate the projection consumers/streams so a fresh consumer doesn't
+/// replay accumulated history against a long-lived `just dev` stack.
+async fn clean_slate(nats: &MekhanNats) {
+    for (stream_name, consumer_name) in [
+        ("PETRI_GLOBAL", "mekhan-causality-ingest"),
+        ("PETRI_GLOBAL", "mekhan-lifecycle"),
+        ("HUMAN_REQUESTS", "mekhan-human-task-ingest"),
+        ("PROCESS", "mekhan-process-event-ingest"),
+    ] {
+        if let Ok(stream) = nats.jetstream().get_stream(stream_name).await {
+            let _ = stream.delete_consumer(consumer_name).await;
+        }
+    }
+    for stream_name in ["PETRI_GLOBAL", "HUMAN_REQUESTS", "PROCESS"] {
+        if let Ok(stream) = nats.jetstream().get_stream(stream_name).await {
+            let _ = stream.purge().await;
+        }
+    }
+    tokio::time::sleep(Duration::from_millis(200)).await;
+}
+
+/// Runtime proof of the `{{ token.path }}` human-task interpolation:
+///
+/// Start declares a `file` start-param (`invoice_file`); the Review task's
+/// image + download blocks and its instructions reference it via
+/// `{{ invoice_file.url }}` / `{{ invoice_id }}`. Going through the real
+/// template → publish → `parameterize_air` (seeds the start token) → engine
+/// (evaluates the injected Rhai) → causality consumer (`to_human_task_json`)
+/// path, the projected task must carry the *resolved* values, never the raw
+/// placeholder.
+#[tokio::test]
+async fn interpolated_human_task_resolves_start_file_param() {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "mekhan_service=info".into()),
+        )
+        .try_init();
+
+    if !engine_available().await {
+        eprintln!(
+            "SKIP: engine not available at http://localhost:3030\n\
+             Start the full local stack with: just dev up"
+        );
+        return;
+    }
+
+    let engine_nats = engine_nats_url();
+    let (app, db) = common::test_app_with_petri_url(&engine_nats, &engine_url()).await;
+
+    let nats = MekhanNats::connect(&engine_nats, None)
+        .await
+        .expect("connect to NATS");
+    clean_slate(&nats).await;
+
+    let kv = nats
+        .ensure_catalogue_subscriptions_kv()
+        .await
+        .expect("create KV");
+    let sub_mgr = Arc::new(SubscriptionManager::new(kv, nats.jetstream().clone()));
+
+    let c_nats = nats.clone();
+    let c_db = db.clone();
+    let c_sub = sub_mgr.clone();
+    let c_live = LiveBroadcasts::new();
+    let _causality =
+        spawn_consumer(move || start_causality_ingest(c_nats, c_db, c_sub, c_live, None)).await;
+
+    let l_nats = nats.clone();
+    let l_db = db.clone();
+    let l_sub = sub_mgr.clone();
+    let _lifecycle =
+        spawn_consumer(move || start_lifecycle_listener(l_nats, l_db, l_sub, None)).await;
+
+    // Minimal Start(file param) → Review(interpolated blocks) → End graph.
+    let graph = json!({
+        "nodes": [
+            {
+                "id": "start",
+                "type": "start",
+                "position": { "x": 0, "y": 0 },
+                "data": {
+                    "type": "start",
+                    "label": "Start",
+                    "initial": {
+                        "id": "in",
+                        "label": "Invoice Intake",
+                        "fields": [
+                            { "name": "invoice_file", "label": "Invoice Document",
+                              "kind": "file", "required": true },
+                            { "name": "invoice_id", "label": "Invoice ID",
+                              "kind": "text", "required": false }
+                        ]
+                    }
+                }
+            },
+            {
+                "id": "review",
+                "type": "human_task",
+                "position": { "x": 240, "y": 0 },
+                "data": {
+                    "type": "human_task",
+                    "label": "Review Invoice",
+                    "taskTitle": "Review {{ invoice_id }}",
+                    "instructionsMdsvex": "Verify invoice {{ invoice_id }} below.",
+                    "steps": [
+                        {
+                            "id": "step-verify",
+                            "title": "Verify Details",
+                            "blocks": [
+                                { "type": "image", "url": "{{ invoice_file.url }}",
+                                  "alt": "Uploaded invoice",
+                                  "caption": "Original invoice" },
+                                { "type": "download", "downloads": [
+                                    { "url": "{{ invoice_file.url }}",
+                                      "filename": "{{ invoice_file.filename }}",
+                                      "mime_type": "{{ invoice_file.content_type }}",
+                                      "description": "Original uploaded invoice" }
+                                ] },
+                                { "type": "input", "field": {
+                                    "name": "approved", "label": "Approved",
+                                    "kind": "checkbox", "required": true } }
+                            ]
+                        }
+                    ]
+                }
+            },
+            {
+                "id": "end",
+                "type": "end",
+                "position": { "x": 480, "y": 0 },
+                "data": { "type": "end", "label": "Done" }
+            }
+        ],
+        "edges": [
+            { "id": "e-start-review", "source": "start", "target": "review",
+              "targetHandle": "in", "type": "sequence" },
+            { "id": "e-review-end", "source": "review", "target": "end",
+              "targetHandle": "in", "type": "sequence" }
+        ]
+    });
+
+    // 1. Create template
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/templates")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&json!({
+                        "name": "Interpolation E2E",
+                        "graph": graph,
+                        "author_id": Uuid::new_v4(),
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED, "create template");
+    let template = body_json(resp.into_body()).await;
+    let template_id = template["id"].as_str().unwrap().to_string();
+
+    // 2. Publish (compiles graph → AIR; interpolation is baked into injection)
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/templates/{template_id}/publish"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "publish template");
+
+    // 3. Create instance with a file start-param (parameterize_air seeds it)
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/instances")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&json!({
+                        "template_id": template_id,
+                        "created_by": Uuid::new_v4(),
+                        "metadata": {},
+                        "start_tokens": [{
+                            "start_block_id": "start",
+                            "token": {
+                                "invoice_id": "RE42",
+                                "invoice_file": {
+                                    "key": "templates/x/v1/start/inv-RE42.pdf",
+                                    "url": "https://example.test/inv-RE42.pdf",
+                                    "filename": "inv-RE42.pdf",
+                                    "content_type": "application/pdf",
+                                    "size": 1234
+                                }
+                            }
+                        }]
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED, "create instance");
+    let instance = body_json(resp.into_body()).await;
+    let net_id = instance["net_id"].as_str().expect("net_id").to_string();
+    assert_eq!(instance["status"], "running");
+
+    // 4. Engine runs Start→Review; HumanTaskRequest → HUMAN_REQUESTS →
+    //    causality consumer projects the rendered task into hpi_tasks.
+    let (task_id, _process_id) =
+        wait_for_task_by_net(&db, &net_id, Duration::from_secs(20)).await;
+
+    let (detail, title): (Value, String) =
+        sqlx::query_as("SELECT detail, title FROM hpi_tasks WHERE id = $1")
+            .bind(&task_id)
+            .fetch_one(&db)
+            .await
+            .expect("fetch task detail");
+    let detail_str = serde_json::to_string(&detail).unwrap();
+    eprintln!("  task title: {title}\n  task detail: {detail_str}");
+
+    // Placeholders were resolved at runtime against the seeded start token.
+    assert!(
+        detail_str.contains("https://example.test/inv-RE42.pdf"),
+        "image/download url not resolved from start token: {detail_str}"
+    );
+    assert!(
+        detail_str.contains("inv-RE42.pdf"),
+        "download filename not resolved: {detail_str}"
+    );
+    assert!(
+        !detail_str.contains("{{"),
+        "raw placeholder leaked into rendered task: {detail_str}"
+    );
+    // Title/instructions interpolation resolved too.
+    assert_eq!(title, "Review RE42", "task title not interpolated");
+    assert!(
+        detail_str.contains("Verify invoice RE42 below."),
+        "instructions not interpolated: {detail_str}"
+    );
+
+    eprintln!("  ✓ interpolated_human_task_resolves_start_file_param passed");
+}

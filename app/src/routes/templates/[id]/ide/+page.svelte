@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { page } from '$app/state';
-	import { replaceState } from '$app/navigation';
+	import { replaceState, goto } from '$app/navigation';
 	import { resolveRoute } from '$app/paths';
 	import { onDestroy } from 'svelte';
 	import IdeToolbar from '$lib/components/ide/IdeToolbar.svelte';
@@ -8,11 +8,13 @@
 	import EditorTabs from '$lib/components/ide/EditorTabs.svelte';
 	import NodeConfigPanel from '$lib/components/ide/NodeConfigPanel.svelte';
 	import HumanTaskFormEditor from '$lib/components/ide/HumanTaskFormEditor.svelte';
+	import CreateInstanceDialog from '$lib/components/instances/CreateInstanceDialog.svelte';
 	import { getSession, releaseSession } from '$lib/yjs/session-store';
 	import { YjsGraphBinding } from '$lib/yjs/graph-binding.svelte';
 	import {
 		getTemplate,
 		publishTemplate,
+		createNewVersion,
 		uploadFile,
 		updateTemplate,
 		getStepScopes,
@@ -24,6 +26,7 @@
 
 	let template = $state<Template | null>(null);
 	let error = $state<string | null>(null);
+	let runDialogOpen = $state(false);
 
 	// Per-node input scope for the step reference panel, plus a diagnostic so
 	// an empty panel can explain itself. Derived server-side from the live
@@ -81,6 +84,26 @@
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to publish';
 		}
+	}
+
+	async function handleNewVersion() {
+		if (!template || !template.published) return;
+		try {
+			const next = await createNewVersion(template.id);
+			goto(`/templates/${next.id}/ide`);
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Failed to create new version';
+		}
+	}
+
+	function handleRun() {
+		if (!template?.published) return;
+		runDialogOpen = true;
+	}
+
+	function onInstanceCreated(instanceId: string) {
+		runDialogOpen = false;
+		goto(`/instances/${instanceId}`);
 	}
 
 	async function handleRename(name: string) {
@@ -252,6 +275,8 @@
 		awareness={session.awareness}
 		provider={session.provider}
 		onPublish={handlePublish}
+		onNewVersion={handleNewVersion}
+		onRun={handleRun}
 		onRename={handleRename}
 	/>
 
@@ -316,3 +341,9 @@
 		</div>
 	</div>
 </div>
+
+<CreateInstanceDialog
+	bind:open={runDialogOpen}
+	templateId={template?.id ?? null}
+	oncreated={onInstanceCreated}
+/>

@@ -1,6 +1,8 @@
 <script lang="ts">
 	import Save from '@lucide/svelte/icons/save';
 	import Upload from '@lucide/svelte/icons/upload';
+	import GitBranch from '@lucide/svelte/icons/git-branch';
+	import Rocket from '@lucide/svelte/icons/rocket';
 	import Eye from '@lucide/svelte/icons/eye';
 	import Code from '@lucide/svelte/icons/code';
 	import Pencil from '@lucide/svelte/icons/pencil';
@@ -22,6 +24,10 @@
 		onsave?: () => void;
 		onpublish: () => void;
 		onpreview: () => void;
+		/** Fork a published template into a fresh editable draft version. */
+		onnewversion?: () => void;
+		/** Start a run of a published template (opens the instance dialog). */
+		onrun?: () => void;
 		/** Commit a new template name (parent does the API call + state). */
 		onrename?: (name: string) => void;
 	};
@@ -36,6 +42,8 @@
 		onsave,
 		onpublish,
 		onpreview,
+		onnewversion,
+		onrun,
 		onrename
 	}: Props = $props();
 
@@ -153,14 +161,36 @@
 			</Button>
 		{/if}
 
-		<Button
-			size="sm"
-			data-testid="btn-publish"
-			disabled={published}
-			onclick={onpublish}
-		>
-			<Upload class="size-3.5" />
-			Publish
-		</Button>
+		{#if published && onrun}
+			<Button
+				size="sm"
+				data-testid="btn-run-template"
+				onclick={onrun}
+			>
+				<Rocket class="size-3.5" />
+				Run
+			</Button>
+		{/if}
+
+		{#if published && onnewversion}
+			<Button
+				size="sm"
+				data-testid="btn-new-version"
+				onclick={onnewversion}
+			>
+				<GitBranch class="size-3.5" />
+				New Version
+			</Button>
+		{:else}
+			<Button
+				size="sm"
+				data-testid="btn-publish"
+				disabled={published}
+				onclick={onpublish}
+			>
+				<Upload class="size-3.5" />
+				Publish
+			</Button>
+		{/if}
 	</div>
 </div>

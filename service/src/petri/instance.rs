@@ -310,6 +310,7 @@ mod tests {
                 required: true,
                 options: None,
                 description: None,
+                accept: None,
             }],
         };
         let graph = graph_with_start(port);
@@ -336,6 +337,7 @@ mod tests {
                 required: true,
                 options: None,
                 description: None,
+                accept: None,
             }],
         };
         let graph = graph_with_start(port);
@@ -375,6 +377,7 @@ mod tests {
                 required: true,
                 options: None,
                 description: None,
+                accept: None,
             }],
         };
         let graph = graph_with_start(port);
@@ -408,6 +411,7 @@ mod tests {
                 required: true,
                 options: None,
                 description: None,
+                accept: None,
             }],
         };
         let graph = graph_with_start(port);

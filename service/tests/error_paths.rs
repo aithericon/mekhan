@@ -405,6 +405,7 @@ async fn insert_published_template_with_required_start_field(db: &sqlx::PgPool) 
                             required: true,
                             options: None,
                             description: None,
+                            accept: None,
                         }],
                     },
                 },

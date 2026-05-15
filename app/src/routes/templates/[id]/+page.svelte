@@ -1,15 +1,18 @@
 <script lang="ts">
 	import { page } from '$app/state';
+	import { goto } from '$app/navigation';
 	import { onDestroy } from 'svelte';
 	import WorkflowCanvas from '$lib/components/editor/WorkflowCanvas.svelte';
 	import NodePropertyPanel from '$lib/components/editor/panels/NodePropertyPanel.svelte';
 	import { Sheet, SheetContent, SheetTitle, SheetDescription } from '$lib/components/ui/sheet';
 	import { getSheetWidthClass } from '$lib/components/editor/panels/panel-width';
 	import EditorToolbar from '$lib/components/editor/toolbar/EditorToolbar.svelte';
+	import CreateInstanceDialog from '$lib/components/instances/CreateInstanceDialog.svelte';
 	import {
 		getTemplate,
 		publishTemplate,
 		updateTemplate,
+		createNewVersion,
 		compileGraph,
 		CompileApiError,
 		type Template
@@ -32,6 +35,7 @@
 	let selectedNodeId = $state<string | null>(null);
 	let panelExpanded = $state(false);
 	let airPreview = $state<object | null>(null);
+	let runDialogOpen = $state(false);
 
 	// Yjs session + binding
 	const session = getSession(templateId);
@@ -72,6 +76,28 @@
 		} finally {
 			saving = false;
 		}
+	}
+
+	async function handleNewVersion() {
+		if (!template || !template.published || saving) return;
+		try {
+			saving = true;
+			const next = await createNewVersion(template.id);
+			goto(`/templates/${next.id}`);
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Failed to create new version';
+			saving = false;
+		}
+	}
+
+	function handleRun() {
+		if (!template?.published) return;
+		runDialogOpen = true;
+	}
+
+	function onInstanceCreated(instanceId: string) {
+		runDialogOpen = false;
+		goto(`/instances/${instanceId}`);
 	}
 
 	async function handleRename(name: string) {
@@ -204,6 +230,8 @@
 			provider={session.provider}
 			onpublish={handlePublish}
 			onpreview={handlePreview}
+			onnewversion={handleNewVersion}
+			onrun={handleRun}
 			onrename={handleRename}
 		/>
 
@@ -286,3 +314,9 @@
 		{/if}
 	</div>
 {/if}
+
+<CreateInstanceDialog
+	bind:open={runDialogOpen}
+	templateId={template?.id ?? null}
+	oncreated={onInstanceCreated}
+/>
