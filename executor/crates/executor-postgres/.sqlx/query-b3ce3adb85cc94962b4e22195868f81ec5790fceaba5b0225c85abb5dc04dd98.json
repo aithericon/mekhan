@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        CREATE TABLE executor_postgres_test.things (\n            id         uuid PRIMARY KEY,\n            tenant_id  uuid NOT NULL,\n            label      text UNIQUE NOT NULL,\n            value      int8 NOT NULL,\n            jdata      jsonb,\n            created_at timestamptz NOT NULL DEFAULT NOW()\n        )\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "b3ce3adb85cc94962b4e22195868f81ec5790fceaba5b0225c85abb5dc04dd98"
+}

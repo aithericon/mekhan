@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "GRANT USAGE ON SCHEMA executor_postgres_test TO executor_test_app",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "589123c22243673e3f9d0f9be9cc336bebebf7698b927e6d6a59fa7821be3607"
+}

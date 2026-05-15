@@ -1,0 +1,39 @@
+[package]
+name = "aithericon-executor-postgres"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+aithericon-executor-domain = { workspace = true }
+aithericon-executor-backend = { workspace = true }
+
+# Async
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+async-trait = { workspace = true }
+
+# Serde
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Errors / observability
+thiserror = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }
+
+# Postgres driver. Features mirror the clinic's sqlx surface so a single
+# workspace-wide sqlx resolves cleanly when the crates ever share a process.
+sqlx = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+tempfile = "3"

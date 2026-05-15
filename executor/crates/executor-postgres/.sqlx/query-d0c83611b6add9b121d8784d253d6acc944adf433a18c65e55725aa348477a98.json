@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DROP SCHEMA IF EXISTS executor_postgres_test CASCADE",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "d0c83611b6add9b121d8784d253d6acc944adf433a18c65e55725aa348477a98"
+}
