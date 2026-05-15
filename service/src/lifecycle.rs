@@ -12,6 +12,16 @@ use crate::nats::MekhanNats;
 use crate::petri::client::PetriClient;
 use crate::triggers::TriggerDispatcher;
 
+/// A terminal net event can legitimately arrive before the instance row is
+/// written (the create-instance API and the net's first events race). We NAK
+/// such events for redelivery — but a net that will *never* have a Mekhan
+/// instance row (test-harness nets, instances deleted out from under a running
+/// net) would otherwise be NAK'd forever, pinning the consumer and DB in a
+/// 1-second poison loop. After this many deliveries we give up and ack-drop
+/// the orphan event. 10s comfortably covers the real race (the row is written
+/// synchronously before the net is deployed).
+const MAX_ORPHAN_EVENT_DELIVERIES: i64 = 10;
+
 /// Start the NATS lifecycle event listener.
 /// Subscribes to `petri.events.mekhan-*.net.>` and updates the DB
 /// when NetCompleted or NetCancelled events arrive.
@@ -73,7 +83,19 @@ pub async fn start_lifecycle_listener(
 
                 match result {
                     Ok(r) if r.rows_affected() == 0 => {
-                        tracing::warn!("no running instance found for {net_id}, will retry");
+                        let delivered = msg.info().map(|i| i.delivered).unwrap_or(0);
+                        if delivered >= MAX_ORPHAN_EVENT_DELIVERIES {
+                            tracing::warn!(
+                                "no instance for {net_id} after {delivered} deliveries; \
+                                 dropping orphan lifecycle event"
+                            );
+                            let _ = msg.ack().await;
+                            continue;
+                        }
+                        tracing::warn!(
+                            "no running instance found for {net_id}, will retry \
+                             (delivery {delivered})"
+                        );
                         let _ = msg.ack_with(AckKind::Nak(Some(Duration::from_secs(1)))).await;
                         continue;
                     }
@@ -104,7 +126,19 @@ pub async fn start_lifecycle_listener(
 
                 match result {
                     Ok(r) if r.rows_affected() == 0 => {
-                        tracing::warn!("no running instance found for {net_id}, will retry");
+                        let delivered = msg.info().map(|i| i.delivered).unwrap_or(0);
+                        if delivered >= MAX_ORPHAN_EVENT_DELIVERIES {
+                            tracing::warn!(
+                                "no instance for {net_id} after {delivered} deliveries; \
+                                 dropping orphan lifecycle event"
+                            );
+                            let _ = msg.ack().await;
+                            continue;
+                        }
+                        tracing::warn!(
+                            "no running instance found for {net_id}, will retry \
+                             (delivery {delivered})"
+                        );
                         let _ = msg.ack_with(AckKind::Nak(Some(Duration::from_secs(1)))).await;
                         continue;
                     }
