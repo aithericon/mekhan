@@ -3,13 +3,13 @@
 //! Tests the full pipeline: create template → publish → spawn instance →
 //! engine runs net → net completes → lifecycle listener updates DB.
 //!
-//! Requires:
-//! - `just -f aithericon-test-infra/justfile up` (Postgres + NATS)
-//! - petri-lab engine running on localhost:3030 connected to the SAME NATS
+//! Requires the full local stack running:
+//!   just dev up   # Postgres + NATS + S3 + executor + engine + mekhan
 //!
-//! The engine must be connected to the dev NATS (port 4222) which is also where
-//! Mekhan's lifecycle listener subscribes. If you're using the test NATS (4322),
-//! set TEST_NATS_URL and start the engine with NATS_URL pointing to the same instance.
+//! The lifecycle listener and the engine must share a NATS broker. Both the
+//! harness default and the `just dev` engine use the dev broker
+//! (`docker-compose.yml` maps `4333:4222`). Override with `ENGINE_NATS_URL`
+//! only if the engine was started against a non-default NATS.
 
 mod common;
 
@@ -120,15 +120,15 @@ async fn wait_for_status(db: &sqlx::PgPool, instance_id: Uuid, target: &str, tim
 async fn full_instance_lifecycle() {
     if !engine_available().await {
         panic!(
-            "petri-lab engine not available at {}\n\
-             Start with: cd engine && cargo run -p core-engine --features executor,catalogue,human",
+            "engine not available at {}\n\
+             Start the full local stack with: just dev up",
             engine_url()
         );
     }
 
     // E2E test must use the SAME NATS as the running engine.
-    // Default to the test NATS (4322); override via ENGINE_NATS_URL if the
-    // engine is on a different broker.
+    // Defaults to the dev-stack broker (common::nats_url()); override via
+    // ENGINE_NATS_URL if the engine is on a different broker.
     let engine_nats_url = std::env::var("ENGINE_NATS_URL")
         .unwrap_or_else(|_| common::nats_url());
     let engine_http_url = engine_url();

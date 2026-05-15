@@ -4,13 +4,17 @@
 //! catalogue artifacts → Mekhan causality consumer → provenance queries →
 //! human task lifecycle → process tracking.
 //!
-//! Requires all three services running:
-//!   1. `just -f aithericon-test-infra/justfile up` (Postgres + NATS + S3)
-//!   2. `cd petri-lab && NATS_URL=nats://localhost:4322 cargo run -p core-engine`
-//!   3. `cd aithericon-executor && EXECUTOR_NATS_URL=nats://localhost:4322 cargo run -p aithericon-executor-service --features python`
+//! Requires the full local stack running:
+//!   just dev up   # Postgres + NATS + S3 + executor + engine + mekhan
+//!
+//! The engine/executor connect to the dev NATS broker (`docker-compose.yml`
+//! maps `4333:4222`); the test harness defaults to that same broker.
 //!
 //! Run with:
-//!   ENGINE_NATS_URL=nats://localhost:4322 cargo test --test causality_e2e -- --test-threads=1 --nocapture
+//!   cargo test --test causality_e2e -- --test-threads=1 --nocapture
+//!
+//! Override the broker via `ENGINE_NATS_URL` only if the engine was started
+//! against a non-default NATS.
 
 mod common;
 
@@ -33,7 +37,7 @@ use mekhan_service::nats::MekhanNats;
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 fn engine_nats_url() -> String {
-    std::env::var("ENGINE_NATS_URL").unwrap_or_else(|_| "nats://localhost:4322".to_string())
+    std::env::var("ENGINE_NATS_URL").unwrap_or_else(|_| common::nats_url())
 }
 
 fn engine_url() -> String {
@@ -255,8 +259,8 @@ async fn causality_full_pipeline() {
     // ── 1. Prerequisites ─────────────────────────────────────────────────
     if !engine_available().await {
         eprintln!(
-            "SKIP: petri-lab engine not available at http://localhost:3030\n\
-             Start with: cd petri-lab && NATS_URL=nats://localhost:4322 cargo run -p core-engine"
+            "SKIP: engine not available at http://localhost:3030\n\
+             Start the full local stack with: just dev up"
         );
         return;
     }
@@ -311,7 +315,18 @@ async fn causality_full_pipeline() {
             let _ = stream.delete_consumer(consumer_name).await;
         }
     }
-    // Brief settle for deletions
+    // Purge the streams too. The projection consumers use DeliverPolicy::All,
+    // so against a long-lived `just dev` stack a fresh consumer would replay
+    // the entire accumulated history and never reach this run's events within
+    // the 15s timeout. The engine is the source of truth and republishes on
+    // deploy, so these projection/transport streams are safe to purge between
+    // e2e runs. Mirrors the clean-slate setup in causality_ingest.rs.
+    for stream_name in ["PETRI_GLOBAL", "HUMAN_REQUESTS", "PROCESS"] {
+        if let Ok(stream) = nats.jetstream().get_stream(stream_name).await {
+            let _ = stream.purge().await;
+        }
+    }
+    // Brief settle for deletions + purges
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     // Subscription manager (needed by both causality ingest and lifecycle listener)
