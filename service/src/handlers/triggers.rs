@@ -69,9 +69,10 @@ pub struct TriggerListResponse {
 
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct FireTriggerRequest {
-    /// Free-form JSON payload made available to `payload_mapping` as `payload`.
-    /// For `Manual` triggers this is typically the form submission body; for
-    /// other sources the dispatcher synthesizes the scope from the event.
+    /// JSON object whose top-level keys are bound as the trigger's scope
+    /// identifiers for `payload_mapping`. For `Manual` triggers supply the
+    /// form values keyed by field name (matching `source_scope`); for other
+    /// sources the dispatcher synthesizes this scope from the event itself.
     #[serde(default)]
     pub payload: serde_json::Value,
 }
@@ -266,6 +267,40 @@ pub async fn preview_cron(Json(req): Json<CronPreviewRequest>) -> Json<CronPrevi
     }
 }
 
+#[derive(Debug, Deserialize)]
+pub struct SourceScopeQuery {
+    /// Source kind: `cron` | `catalog` | `net_completion` | `webhook` | `manual`.
+    pub kind: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SourceScopeResponse {
+    /// Identifiers a `payload_mapping` expression may reference for this source
+    /// kind, with their declared kinds. `manual` returns empty — the editor
+    /// derives that scope from the (client-side) form schema.
+    pub scope: Vec<crate::triggers::ScopeVar>,
+}
+
+/// GET /api/triggers/source-scope?kind=cron
+///
+/// The per-source scope contract, surfaced so the editor can show authors
+/// exactly which identifiers are in scope under each mapping expression
+/// instead of leaving them to guess.
+#[utoipa::path(
+    get,
+    path = "/api/triggers/source-scope",
+    params(("kind" = String, Query, description = "Source kind: cron|catalog|net_completion|webhook|manual")),
+    responses(
+        (status = 200, description = "Available scope identifiers for the source kind", body = SourceScopeResponse),
+    ),
+    tag = "triggers",
+)]
+pub async fn trigger_source_scope(Query(q): Query<SourceScopeQuery>) -> Json<SourceScopeResponse> {
+    Json(SourceScopeResponse {
+        scope: crate::triggers::scope_for_kind(&q.kind),
+    })
+}
+
 fn map_trigger_error(e: TriggerError) -> ApiError {
     match e {
         TriggerError::NotFound(_) => ApiError::not_found(e.to_string()),
@@ -324,7 +359,9 @@ pub async fn webhook_receiver(
     let header_map: HashMap<String, String> = headers
         .iter()
         .filter_map(|(k, v)| {
-            v.to_str().ok().map(|s| (k.as_str().to_string(), s.to_string()))
+            v.to_str()
+                .ok()
+                .map(|s| (k.as_str().to_string(), s.to_string()))
         })
         .collect();
 
@@ -335,25 +372,21 @@ pub async fn webhook_receiver(
         std::env::var(format!("WEBHOOK_SECRET_{secret_ref}")).ok()
     };
 
-    if let Err(msg) = crate::triggers::sources::webhook::check_auth(
-        webhook,
-        &header_map,
-        body.as_ref(),
-        resolver,
-    ) {
+    if let Err(msg) =
+        crate::triggers::sources::webhook::check_auth(webhook, &header_map, body.as_ref(), resolver)
+    {
         return Err(ApiError::new(StatusCode::UNAUTHORIZED, msg));
     }
 
     // Parse the body as JSON if Content-Type is application/json; otherwise
     // pass it as a base64-encoded blob under `body_bytes`.
-    let body_payload: Value =
-        if let Ok(v) = serde_json::from_slice::<Value>(body.as_ref()) {
-            v
-        } else {
-            serde_json::json!({
-                "body_bytes": format!("{}", String::from_utf8_lossy(body.as_ref())),
-            })
-        };
+    let body_payload: Value = if let Ok(v) = serde_json::from_slice::<Value>(body.as_ref()) {
+        v
+    } else {
+        serde_json::json!({
+            "body_bytes": format!("{}", String::from_utf8_lossy(body.as_ref())),
+        })
+    };
 
     let payload = serde_json::json!({
         "payload": body_payload,

@@ -489,6 +489,7 @@ fn parallel_split_join_produces_fork_and_join() {
                 data: WorkflowNodeData::ParallelJoin {
                     label: "Join".to_string(),
                     description: None,
+                    merge_strategy: Default::default(),
                 },
                 parent_id: None,
                 width: None,
@@ -1121,6 +1122,7 @@ fn parallel_join_merges_per_edge_input_places() {
                 data: WorkflowNodeData::ParallelJoin {
                     label: "Join".to_string(),
                     description: None,
+                    merge_strategy: Default::default(),
                 },
                 parent_id: None,
                 width: None,
@@ -1962,7 +1964,7 @@ fn parallel_split_join_loop_scope_have_single_pass_through_output() {
 
     for data in [
         WorkflowNodeData::ParallelSplit { label: "x".into(), description: None },
-        WorkflowNodeData::ParallelJoin { label: "x".into(), description: None },
+        WorkflowNodeData::ParallelJoin { label: "x".into(), description: None, merge_strategy: Default::default() },
         WorkflowNodeData::Loop {
             label: "x".into(),
             description: None,
@@ -2037,6 +2039,44 @@ fn trigger_node(id: &str, source: mekhan_service::models::template::TriggerSourc
 fn manual_source() -> mekhan_service::models::template::TriggerSource {
     use mekhan_service::models::template::{ManualTrigger, TriggerSource};
     TriggerSource::Manual(ManualTrigger { form: vec![] })
+}
+
+fn cron_source() -> mekhan_service::models::template::TriggerSource {
+    use mekhan_service::models::template::{CronCatchup, CronTrigger, TriggerSource};
+    TriggerSource::Cron(CronTrigger {
+        schedule: "0 0 9 * * *".to_string(),
+        timezone: "UTC".to_string(),
+        jitter_secs: 0,
+        catchup: CronCatchup::SkipMissed,
+    })
+}
+
+fn catalog_source() -> mekhan_service::models::template::TriggerSource {
+    use mekhan_service::models::template::{CatalogTrigger, TriggerSource};
+    TriggerSource::Catalog(CatalogTrigger {
+        filters: Default::default(),
+        backfill: false,
+    })
+}
+
+fn start_with_field(id: &str, field: &str, required: bool) -> WorkflowNode {
+    use mekhan_service::models::template::{FieldKind, PortField};
+    let mut start = start_node(id);
+    if let WorkflowNodeData::Start { ref mut initial, .. } = start.data {
+        *initial = Port {
+            id: "in".to_string(),
+            label: "Input".to_string(),
+            fields: vec![PortField {
+                name: field.to_string(),
+                label: field.to_string(),
+                kind: FieldKind::Text,
+                required,
+                options: None,
+                description: None,
+            }],
+        };
+    }
+    start
 }
 
 #[test]
@@ -2130,26 +2170,12 @@ fn trigger_cannot_be_edge_target() {
 
 #[test]
 fn trigger_payload_mapping_references_known_fields() {
-    // Start declares a `customer_id` field; trigger payload_mapping references
-    // it — should compile.
-    use mekhan_service::models::template::{FieldKind, FieldMapping, PortField};
-    let start_port = Port {
-        id: "in".to_string(),
-        label: "Input".to_string(),
-        fields: vec![PortField {
-            name: "customer_id".to_string(),
-            label: "Customer".to_string(),
-            kind: FieldKind::Text,
-            required: true,
-            options: None,
-            description: None,
-        }],
-    };
-    let mut start = start_node("s");
-    if let WorkflowNodeData::Start { ref mut initial, .. } = start.data {
-        *initial = start_port;
-    }
-    let mut trig = trigger_node("t", manual_source());
+    // Start declares a required `customer_id`; a cron trigger maps the in-scope
+    // `fire_time` identifier into it — should compile (kind-checking is fire
+    // time, not compile time, per the chosen identifier-resolution-only bar).
+    use mekhan_service::models::template::FieldMapping;
+    let start = start_with_field("s", "customer_id", true);
+    let mut trig = trigger_node("t", cron_source());
     if let WorkflowNodeData::Trigger {
         ref mut payload_mapping,
         ..
@@ -2157,7 +2183,7 @@ fn trigger_payload_mapping_references_known_fields() {
     {
         *payload_mapping = vec![FieldMapping {
             target_field: "customer_id".to_string(),
-            expression: "payload.cid".to_string(),
+            expression: "fire_time".to_string(),
         }];
     }
     let graph = WorkflowGraph {
@@ -2170,6 +2196,97 @@ fn trigger_payload_mapping_references_known_fields() {
     };
     compile_to_air(&graph, "", "", &Default::default())
         .expect("valid payload_mapping should compile");
+}
+
+#[test]
+fn trigger_payload_mapping_resolves_in_scope_qualified_ref() {
+    // Positive resolution: a catalog trigger references `catalogue_entry.<f>`;
+    // `catalogue_entry` is a declared scope var for the catalog source.
+    use mekhan_service::models::template::FieldMapping;
+    let start = start_with_field("s", "customer_id", true);
+    let mut trig = trigger_node("t", catalog_source());
+    if let WorkflowNodeData::Trigger {
+        ref mut payload_mapping,
+        ..
+    } = trig.data
+    {
+        *payload_mapping = vec![FieldMapping {
+            target_field: "customer_id".to_string(),
+            expression: "catalogue_entry.category".to_string(),
+        }];
+    }
+    let graph = WorkflowGraph {
+        nodes: vec![start, end_node("e"), trig],
+        edges: vec![edge("e1", "s", "e"), edge_with_handle("te", "t", "s", "in")],
+        viewport: None,
+    };
+    compile_to_air(&graph, "", "", &Default::default())
+        .expect("qualified ref resolving in the source scope should compile");
+}
+
+#[test]
+fn trigger_payload_mapping_rejects_out_of_scope_identifier() {
+    // A cron trigger (scope: fire_time, scheduled_time) references
+    // `catalogue_entry.category` — root `catalogue_entry` is not in cron's
+    // scope, so it must fail at compile, like a Phase 3 guard unresolved ref.
+    use mekhan_service::models::template::FieldMapping;
+    let start = start_with_field("s", "customer_id", true);
+    let mut trig = trigger_node("t", cron_source());
+    if let WorkflowNodeData::Trigger {
+        ref mut payload_mapping,
+        ..
+    } = trig.data
+    {
+        *payload_mapping = vec![FieldMapping {
+            target_field: "customer_id".to_string(),
+            expression: "catalogue_entry.category".to_string(),
+        }];
+    }
+    let graph = WorkflowGraph {
+        nodes: vec![start, end_node("e"), trig],
+        edges: vec![edge("e1", "s", "e"), edge_with_handle("te", "t", "s", "in")],
+        viewport: None,
+    };
+    let err = compile_to_air(&graph, "", "", &Default::default())
+        .expect_err("out-of-scope identifier should fail");
+    assert!(
+        err.to_string().contains("unknown identifier"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn trigger_empty_mapping_into_required_port_fails() {
+    // Empty payload_mapping forwards the source payload verbatim, which can't
+    // satisfy a required typed field — must fail at publish, not first fire.
+    let start = start_with_field("s", "customer_id", true);
+    let trig = trigger_node("t", cron_source()); // default payload_mapping = []
+    let graph = WorkflowGraph {
+        nodes: vec![start, end_node("e"), trig],
+        edges: vec![edge("e1", "s", "e"), edge_with_handle("te", "t", "s", "in")],
+        viewport: None,
+    };
+    let err = compile_to_air(&graph, "", "", &Default::default())
+        .expect_err("empty mapping into required port should fail");
+    assert!(
+        err.to_string().contains("empty payload mapping")
+            && err.to_string().contains("customer_id"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn trigger_empty_mapping_into_optional_port_compiles() {
+    // No required fields → an empty mapping is allowed (all-optional port).
+    let start = start_with_field("s", "note", false);
+    let trig = trigger_node("t", cron_source());
+    let graph = WorkflowGraph {
+        nodes: vec![start, end_node("e"), trig],
+        edges: vec![edge("e1", "s", "e"), edge_with_handle("te", "t", "s", "in")],
+        viewport: None,
+    };
+    compile_to_air(&graph, "", "", &Default::default())
+        .expect("empty mapping into an all-optional port should compile");
 }
 
 #[test]

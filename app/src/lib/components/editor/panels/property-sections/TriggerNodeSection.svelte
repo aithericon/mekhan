@@ -26,6 +26,32 @@
 	const mappings = $derived(data.payloadMapping ?? []);
 	const enabled = $derived(data.enabled ?? false);
 
+	// Scope identifiers a mapping expression may reference for the selected
+	// source kind. The backend is the single source of truth for the four
+	// static kinds; `manual`'s scope is its form, derived client-side.
+	let scopeVars = $state<{ name: string; kind: string }[]>([]);
+
+	$effect(() => {
+		const kind = sourceKind;
+		if (kind === 'manual') {
+			const form = (source && source.kind === 'manual' ? source.form : []) ?? [];
+			scopeVars = form.map((f) => ({ name: f.name, kind: f.kind }));
+			return;
+		}
+		let cancelled = false;
+		fetch(`/api/triggers/source-scope?kind=${encodeURIComponent(kind)}`)
+			.then((r) => (r.ok ? r.json() : { scope: [] }))
+			.then((body) => {
+				if (!cancelled) scopeVars = body.scope ?? [];
+			})
+			.catch(() => {
+				if (!cancelled) scopeVars = [];
+			});
+		return () => {
+			cancelled = true;
+		};
+	});
+
 	function update<K extends keyof TriggerNodeData>(key: K, value: TriggerNodeData[K]) {
 		onchange({ ...data, [key]: value });
 	}
@@ -242,6 +268,15 @@
 				</Button>
 			{/if}
 		</div>
+		{#if scopeVars.length > 0}
+			<p class="rounded-md bg-muted/30 p-2 text-[11px] text-muted-foreground">
+				<span class="font-medium">In scope:</span>
+				{#each scopeVars as v, i (v.name)}<code
+						class="text-foreground">{v.name}</code><span class="text-muted-foreground/70"
+					> ({v.kind})</span
+					>{#if i < scopeVars.length - 1}, {/if}{/each}
+			</p>
+		{/if}
 		{#if mappings.length === 0}
 			<p class="rounded-md border border-dashed border-border/50 p-2 text-[11px] text-muted-foreground">
 				No mappings. Without entries the trigger forwards <code>payload</code> verbatim.

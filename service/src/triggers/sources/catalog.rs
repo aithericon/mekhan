@@ -19,7 +19,7 @@
 
 use std::collections::HashMap;
 
-use serde_json::json;
+use serde_json::{json, Value};
 
 use crate::catalogue::model::CatalogueEntry;
 use crate::models::template::TriggerSource;
@@ -39,17 +39,20 @@ pub async fn evaluate(dispatcher: &TriggerDispatcher, entry: &CatalogueEntry) {
             continue;
         }
 
-        // Payload scope: `payload.catalogue_entry` plus a hoisted `payload.category`
-        // for the common case where authors just want to map the kind into a
-        // typed field. The mapping expression can access any field of the
-        // entry via `payload.catalogue_entry.<field>`.
-        let payload = json!({
-            "catalogue_entry": entry,
-            "category": entry.category,
-            "name": entry.name,
-            "filename": entry.filename,
-            "fire_time": chrono::Utc::now().to_rfc3339(),
-        });
+        // Flat scope map keyed by `triggers::scope::source_scope(Catalog)`:
+        // every `CatalogueEntry` column hoisted to the top level (so authors
+        // write `category`, `filename`, … directly), plus `catalogue_entry`
+        // as a `Json` escape hatch and the dispatch `fire_time`.
+        let mut scope = match serde_json::to_value(entry) {
+            Ok(Value::Object(m)) => m,
+            _ => serde_json::Map::new(),
+        };
+        scope.insert("catalogue_entry".to_string(), json!(entry));
+        scope.insert(
+            "fire_time".to_string(),
+            json!(chrono::Utc::now().to_rfc3339()),
+        );
+        let payload = Value::Object(scope);
 
         match dispatcher.fire(&rec.node_id, payload).await {
             Ok(result) => {

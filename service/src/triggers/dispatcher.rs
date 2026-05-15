@@ -122,15 +122,14 @@ impl TriggerDispatcher {
         // First clear any prior records for this template/version so that
         // editing a trigger in place doesn't leak the old config.
         self.triggers.retain(|_, rec| {
-            !(rec.template_id == template.id && rec.template_version == template.template_version_or_zero())
+            !(rec.template_id == template.id
+                && rec.template_version == template.template_version_or_zero())
         });
 
         let mut registered = 0;
         for node in &graph.nodes {
             let WorkflowNodeData::Trigger {
-                source,
-                enabled,
-                ..
+                source, enabled, ..
             } = &node.data
             else {
                 continue;
@@ -199,10 +198,7 @@ impl TriggerDispatcher {
     /// Snapshot of all currently-registered triggers. Used by the list
     /// endpoints. Cheap (clones the DashMap entries).
     pub fn list_all(&self) -> Vec<TriggerRecord> {
-        self.triggers
-            .iter()
-            .map(|r| r.value().clone())
-            .collect()
+        self.triggers.iter().map(|r| r.value().clone()).collect()
     }
 
     pub fn list_for_template(&self, template_id: Uuid) -> Vec<TriggerRecord> {
@@ -252,11 +248,9 @@ impl TriggerDispatcher {
         .fetch_optional(&self.db)
         .await
         .map_err(|e| TriggerError::Database(e.to_string()))?
-        .ok_or_else(|| {
-            TriggerError::TargetMissing {
-                node_id: node_id.to_string(),
-                target: "template row missing".to_string(),
-            }
+        .ok_or_else(|| TriggerError::TargetMissing {
+            node_id: node_id.to_string(),
+            target: "template row missing".to_string(),
         })?;
 
         let graph: WorkflowGraph = serde_json::from_value(template.graph.clone())
@@ -280,36 +274,107 @@ impl TriggerDispatcher {
             });
         };
 
-        // Build the token by evaluating each mapping expression against the
-        // event_payload scope. Phase 5a uses a simple Rhai engine with
-        // `payload` bound to the input — sources can extend the scope later
-        // (e.g. `fire_time` for cron, `catalogue_entry` for catalog).
-        let token = evaluate_mapping(payload_mapping, &event_payload)?;
+        // Resolve the port the trigger feeds. For a Start target the workflow's
+        // input shape is the Start's declared `initial` (stored under
+        // `output_ports` because Start *emits* it); every other target uses its
+        // input port. Same resolution the compiler does in `validate_triggers`.
+        let target_node = graph
+            .nodes
+            .iter()
+            .find(|n| n.id == record.target_node_id)
+            .ok_or_else(|| TriggerError::TargetMissing {
+                node_id: node_id.to_string(),
+                target: format!("target node '{}' missing in graph", record.target_node_id),
+            })?;
+        let target_port = match &target_node.data {
+            WorkflowNodeData::Start { .. } => target_node.data.output_ports(),
+            _ => target_node.data.input_ports(),
+        }
+        .into_iter()
+        .find(|p| p.id == record.target_handle)
+        .ok_or_else(|| TriggerError::TargetMissing {
+            node_id: node_id.to_string(),
+            target: format!(
+                "target port '{}' missing on node '{}'",
+                record.target_handle, record.target_node_id
+            ),
+        })?;
 
         let source_kind = record.source.kind().to_string();
+        let locator = TriggerLocator {
+            template_id: record.template_id,
+            template_version: record.template_version,
+            node_id: record.node_id.clone(),
+        };
+
+        // Record a terminal outcome (metrics + history) and hand back the
+        // result. Every non-infra exit goes through here so type-contract
+        // violations show up in the history tab instead of vanishing.
+        let finalize = |outcome: FireOutcome, errored: bool| -> FireResult {
+            self.record_metric(&source_kind, &outcome, errored);
+            let result = FireResult {
+                locator: locator.clone(),
+                fired_at: Utc::now(),
+                source_kind: source_kind.clone(),
+                outcome,
+            };
+            self.record_history(&record.node_id, result.clone());
+            result
+        };
+
+        // Build the token: bind each source-scope identifier as its own Rhai
+        // variable and evaluate the mappings. A failed mapping is a trigger
+        // *config* problem, not infra — record it as a dropped fire (200, but
+        // visible), don't surface a 5xx.
+        let token = match evaluate_mapping(
+            payload_mapping,
+            &event_payload,
+            target_port.fields.is_empty(),
+        ) {
+            Ok(t) => t,
+            Err(e) => {
+                return Ok(finalize(
+                    FireOutcome::Dropped {
+                        reason: format!("payload mapping failed: {e}"),
+                    },
+                    false,
+                ));
+            }
+        };
+
+        // Single typed-ports gate, identical for spawn and signal — the
+        // invariant the 05 typed-ports work exists to enforce, now extended
+        // across the trigger boundary. Strict reject, no coercion (matches
+        // `parameterize_air`). Spawn's `parameterize_air` re-checks the same
+        // Start port; redundant but keeps its other duties intact.
+        if let Err(ve) = target_port.validate_token(&token) {
+            return Ok(finalize(
+                FireOutcome::Dropped {
+                    reason: format!("token rejected by target port '{}': {ve}", target_port.id),
+                },
+                false,
+            ));
+        }
+
         let outcome_result = match record.kind {
             TriggerKind::Spawn => self.fire_spawn(&record, &template, &graph, token).await,
             TriggerKind::Signal => self.fire_signal(&record, token).await,
         };
-        let outcome = match &outcome_result {
-            Ok(o) => o.clone(),
-            Err(_) => FireOutcome::NoTargets, // sentinel for metric path
-        };
-        self.record_metric(&source_kind, &outcome, outcome_result.is_err());
-        let outcome = outcome_result?;
-
-        let result = FireResult {
-            locator: TriggerLocator {
-                template_id: record.template_id,
-                template_version: record.template_version,
-                node_id: record.node_id.clone(),
-            },
-            fired_at: Utc::now(),
-            source_kind,
-            outcome,
-        };
-        self.record_history(&record.node_id, result.clone());
-        Ok(result)
+        match outcome_result {
+            Ok(outcome) => Ok(finalize(outcome, false)),
+            Err(e) => {
+                // Genuine infra failure (DB / deploy / NATS). Record it so it's
+                // visible in history and counted as an error (not the old
+                // `NoTargets` mislabel), then surface to the caller.
+                let _ = finalize(
+                    FireOutcome::Dropped {
+                        reason: format!("fire failed: {e}"),
+                    },
+                    true,
+                );
+                Err(e)
+            }
+        }
     }
 
     async fn fire_spawn(
@@ -521,35 +586,58 @@ fn synthetic_principal_for_trigger(node_id: &str) -> Uuid {
     // Use the well-known DNS namespace UUID as a stable seed so the value is
     // reproducible across restarts. The exact namespace doesn't matter — we
     // just need a fixed UUID to v5-hash against.
-    Uuid::new_v5(&Uuid::NAMESPACE_DNS, format!("trigger:{node_id}").as_bytes())
+    Uuid::new_v5(
+        &Uuid::NAMESPACE_DNS,
+        format!("trigger:{node_id}").as_bytes(),
+    )
 }
 
-/// Evaluate each `FieldMapping.expression` against the event scope and
-/// assemble the resulting JSON object. The Rhai engine here is fresh per fire
-/// — short scripts, no shared state, safe to throw away.
+/// Evaluate each `FieldMapping.expression` against the source's named event
+/// scope and assemble the resulting JSON object.
+///
+/// `scope_obj` is the flat scope map the source emits — its top-level keys are
+/// bound as individual Rhai identifiers (e.g. `fire_time`, `catalogue_entry`,
+/// `payload`), matching `triggers::scope::source_scope`. This is what makes the
+/// webhook body reachable as `payload` rather than `payload.payload`.
+///
+/// Empty mapping: forward the source scope verbatim only when the target port
+/// is a genuine pass-through (no declared fields). For a typed port an empty
+/// mapping yields `{}` — the compiler already rejects an empty mapping into a
+/// port with *required* fields, so `{}` here is only ever an all-optional port.
+/// The Rhai engine is fresh per fire — short scripts, no shared state.
 fn evaluate_mapping(
     mappings: &[crate::models::template::FieldMapping],
-    event_payload: &Value,
+    scope_obj: &Value,
+    passthrough_ok: bool,
 ) -> Result<Value, TriggerError> {
     use rhai::{Dynamic, Engine, Scope};
 
-    // No mappings → pass through the payload itself. Useful for the empty-port
-    // case where the trigger just forwards whatever the source delivered.
     if mappings.is_empty() {
-        return Ok(event_payload.clone());
+        return Ok(if passthrough_ok {
+            scope_obj.clone()
+        } else {
+            Value::Object(serde_json::Map::new())
+        });
     }
+
+    let scope_map = match scope_obj {
+        Value::Object(m) => m.clone(),
+        _ => serde_json::Map::new(),
+    };
 
     let engine = Engine::new();
     let mut out = serde_json::Map::new();
     for m in mappings {
         let mut scope = Scope::new();
-        let payload_dyn: Dynamic = rhai::serde::to_dynamic(event_payload.clone()).map_err(|e| {
-            TriggerError::PayloadMappingFailed {
-                field: m.target_field.clone(),
-                message: format!("payload→Dynamic: {e}"),
-            }
-        })?;
-        scope.push_dynamic("payload", payload_dyn);
+        for (k, v) in &scope_map {
+            let dyn_v: Dynamic = rhai::serde::to_dynamic(v.clone()).map_err(|e| {
+                TriggerError::PayloadMappingFailed {
+                    field: m.target_field.clone(),
+                    message: format!("{k}→Dynamic: {e}"),
+                }
+            })?;
+            scope.push_dynamic(k.as_str(), dyn_v);
+        }
 
         let result: Dynamic = engine
             .eval_expression_with_scope::<Dynamic>(&mut scope, &m.expression)
@@ -584,31 +672,45 @@ mod tests {
     use super::*;
 
     #[test]
-    fn evaluate_mapping_passes_payload_through_when_empty() {
-        let result = evaluate_mapping(&[], &json!({ "x": 1 })).unwrap();
+    fn empty_mapping_passes_scope_through_only_for_passthrough_port() {
+        // Fieldless target port → forward the source scope verbatim.
+        let result = evaluate_mapping(&[], &json!({ "x": 1 }), true).unwrap();
         assert_eq!(result, json!({ "x": 1 }));
+        // Typed target port → empty token (compiler already rejected the
+        // empty-mapping-into-required-fields case, so this is all-optional).
+        let result = evaluate_mapping(&[], &json!({ "x": 1 }), false).unwrap();
+        assert_eq!(result, json!({}));
     }
 
     #[test]
-    fn evaluate_mapping_projects_fields() {
+    fn scope_identifiers_bind_individually() {
         use crate::models::template::FieldMapping;
+        // Each top-level scope key is its own Rhai variable — no `payload.`
+        // prefix. This is the un-nesting that makes the webhook body reachable
+        // as `payload` and cron's `fire_time` reachable directly.
         let mappings = vec![
             FieldMapping {
-                target_field: "name".to_string(),
-                expression: r#"payload.name"#.to_string(),
+                target_field: "who".to_string(),
+                expression: r#"name"#.to_string(),
             },
             FieldMapping {
                 target_field: "doubled".to_string(),
-                expression: r#"payload.n * 2"#.to_string(),
+                expression: r#"n * 2"#.to_string(),
+            },
+            FieldMapping {
+                target_field: "body_field".to_string(),
+                expression: r#"payload.inner"#.to_string(),
             },
         ];
         let result = evaluate_mapping(
             &mappings,
-            &json!({ "name": "alice", "n": 21 }),
+            &json!({ "name": "alice", "n": 21, "payload": { "inner": "v" } }),
+            false,
         )
         .unwrap();
-        assert_eq!(result["name"], "alice");
+        assert_eq!(result["who"], "alice");
         assert_eq!(result["doubled"], 42);
+        assert_eq!(result["body_field"], "v");
     }
 
     #[test]
@@ -618,7 +720,7 @@ mod tests {
             target_field: "bad".to_string(),
             expression: r#"this won't parse"#.to_string(),
         }];
-        let err = evaluate_mapping(&mappings, &json!({})).unwrap_err();
+        let err = evaluate_mapping(&mappings, &json!({}), false).unwrap_err();
         match err {
             TriggerError::PayloadMappingFailed { field, .. } => {
                 assert_eq!(field, "bad");

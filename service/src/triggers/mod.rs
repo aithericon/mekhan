@@ -21,9 +21,11 @@
 
 pub mod dispatcher;
 pub mod model;
+pub mod scope;
 pub mod sources;
 
 pub use dispatcher::{start_trigger_dispatcher, TriggerDispatcher};
 pub use model::{
     FireOutcome, FireResult, TriggerError, TriggerKind, TriggerLocator, TriggerRecord,
 };
+pub use scope::{scope_for_kind, source_scope, ScopeVar};

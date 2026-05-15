@@ -148,6 +148,7 @@ fn build_openapi_router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::triggers::trigger_history))
         .routes(routes!(handlers::triggers::preview_cron))
         .routes(routes!(handlers::triggers::trigger_metrics))
+        .routes(routes!(handlers::triggers::trigger_source_scope))
 }
 
 pub fn build_router(state: AppState) -> Router {
@@ -212,7 +213,14 @@ pub fn build_router(state: AppState) -> Router {
 /// Authorization header. When no origins are configured, falls back to
 /// `Any` (dev-only — paired with `auth.mode = "dev_noop"`).
 fn build_cors_layer(cfg: &AppConfig) -> CorsLayer {
-    let methods = [Method::GET, Method::POST, Method::PUT, Method::PATCH, Method::DELETE, Method::OPTIONS];
+    let methods = [
+        Method::GET,
+        Method::POST,
+        Method::PUT,
+        Method::PATCH,
+        Method::DELETE,
+        Method::OPTIONS,
+    ];
     let headers = [header::AUTHORIZATION, header::CONTENT_TYPE];
 
     if cfg.auth.cors_origins.is_empty() {

@@ -153,6 +153,11 @@ pub enum WorkflowNodeData {
         label: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         description: Option<String>,
+        /// How tokens arriving on the joined branches are merged into the
+        /// single output token. `ShallowLastWins` (default) preserves the
+        /// historical behaviour; `DeepMerge` recursively merges nested maps.
+        #[serde(rename = "mergeStrategy", default)]
+        merge_strategy: MergeStrategy,
     },
     #[serde(rename = "loop")]
     Loop {
@@ -459,6 +464,19 @@ pub enum ImageDisplay {
     Gallery,
 }
 
+/// How a `ParallelJoin` merges the tokens arriving on its joined branches.
+///
+/// `ShallowLastWins` is the historical behaviour (top-level keys overwrite,
+/// last branch to arrive wins on a key collision). `DeepMerge` recursively
+/// merges nested object values instead of overwriting them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MergeStrategy {
+    #[default]
+    ShallowLastWins,
+    DeepMerge,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct TaskFieldConfig {
     pub name: String,
@@ -561,6 +579,63 @@ impl Port {
     pub fn empty_input() -> Self {
         Self { id: "in".to_string(), label: "Input".to_string(), fields: vec![] }
     }
+
+    /// Validate a candidate token against this port's declared fields.
+    ///
+    /// Validation only — never coerces. `Json`/`File` kinds are permissive
+    /// escape hatches (see [`FieldKind::accepts`]). A port with no `fields`
+    /// accepts any object (pass-through ports). This is the *single* rule
+    /// enforced for every token entering any port: a Start block's `initial`
+    /// port (via `petri::instance::parameterize_air`) and in-flight signal
+    /// ports (via the trigger dispatcher's signal path). Keeping one
+    /// implementation guarantees the spawn and signal paths can't diverge.
+    pub fn validate_token(&self, token: &serde_json::Value) -> Result<(), PortValidationError> {
+        let obj = token
+            .as_object()
+            .ok_or(PortValidationError::NotObject)?;
+        for field in &self.fields {
+            match obj.get(&field.name) {
+                None if field.required => {
+                    return Err(PortValidationError::MissingRequiredField {
+                        field: field.name.clone(),
+                    });
+                }
+                None => {} // optional and absent — fine
+                Some(v) if v.is_null() && field.required => {
+                    return Err(PortValidationError::MissingRequiredField {
+                        field: field.name.clone(),
+                    });
+                }
+                Some(v) if v.is_null() => {} // optional null — fine
+                Some(v) if !field.kind.accepts(v) => {
+                    return Err(PortValidationError::FieldKindMismatch {
+                        field: field.name.clone(),
+                        kind: field.kind,
+                    });
+                }
+                Some(_) => {}
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Why a token failed [`Port::validate_token`]. Context-free by design — the
+/// caller adds the block / trigger identity (`parameterize_air` maps these into
+/// its `ParameterizeError`; the dispatcher maps them into a dropped-fire
+/// reason).
+#[derive(Debug, thiserror::Error)]
+pub enum PortValidationError {
+    /// Token isn't a JSON object — every port is field-keyed.
+    #[error("token must be a JSON object")]
+    NotObject,
+    /// A required field is absent (or explicitly null).
+    #[error("field '{field}' is required but missing")]
+    MissingRequiredField { field: String },
+    /// A field is present but its JSON kind doesn't match the declared
+    /// `FieldKind` (e.g. a string supplied for a `Number` field).
+    #[error("field '{field}' has wrong type for kind {kind:?}")]
+    FieldKindMismatch { field: String, kind: FieldKind },
 }
 
 pub fn default_initial_port() -> Port {
@@ -1010,6 +1085,69 @@ impl WorkflowGraph {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn pf(name: &str, kind: FieldKind, required: bool) -> PortField {
+        PortField {
+            name: name.to_string(),
+            label: name.to_string(),
+            kind,
+            required,
+            options: None,
+            description: None,
+        }
+    }
+
+    #[test]
+    fn validate_token_accepts_well_typed_object() {
+        let port = Port {
+            id: "in".into(),
+            label: "In".into(),
+            fields: vec![
+                pf("name", FieldKind::Text, true),
+                pf("count", FieldKind::Number, false),
+                pf("blob", FieldKind::Json, false),
+            ],
+        };
+        let ok = serde_json::json!({ "name": "a", "count": 3, "blob": [1, 2] });
+        assert!(port.validate_token(&ok).is_ok());
+        let ok2 = serde_json::json!({ "name": "a" });
+        assert!(port.validate_token(&ok2).is_ok());
+    }
+
+    #[test]
+    fn validate_token_rejects_missing_required_and_kind_mismatch() {
+        let port = Port {
+            id: "in".into(),
+            label: "In".into(),
+            fields: vec![pf("name", FieldKind::Text, true), pf("n", FieldKind::Number, false)],
+        };
+        match port.validate_token(&serde_json::json!({ "n": 1 })) {
+            Err(PortValidationError::MissingRequiredField { field }) => assert_eq!(field, "name"),
+            other => panic!("expected MissingRequiredField, got {other:?}"),
+        }
+        match port.validate_token(&serde_json::json!({ "name": "a", "n": "5" })) {
+            Err(PortValidationError::FieldKindMismatch { field, kind }) => {
+                assert_eq!(field, "n");
+                assert!(matches!(kind, FieldKind::Number));
+            }
+            other => panic!("expected FieldKindMismatch, got {other:?}"),
+        }
+        assert!(matches!(
+            port.validate_token(&serde_json::json!([1, 2])),
+            Err(PortValidationError::NotObject)
+        ));
+    }
+
+    #[test]
+    fn validate_token_fieldless_port_accepts_any_object() {
+        let port = Port::empty_input();
+        assert!(port.validate_token(&serde_json::json!({ "anything": 1 })).is_ok());
+        assert!(port.validate_token(&serde_json::json!({})).is_ok());
+        assert!(matches!(
+            port.validate_token(&serde_json::json!("nope")),
+            Err(PortValidationError::NotObject)
+        ));
+    }
 
     #[test]
     fn scope_node_data_roundtrip() {

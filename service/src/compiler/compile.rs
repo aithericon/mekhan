@@ -1,5 +1,5 @@
 use crate::models::template::{
-    WorkflowEdge, WorkflowGraph, WorkflowNode, WorkflowNodeData,
+    MergeStrategy, WorkflowEdge, WorkflowGraph, WorkflowNode, WorkflowNodeData,
 };
 use aithericon_executor_domain::InputSource;
 use aithericon_sdk::components::executor_lifecycle::{executor_lifecycle, ExecutorBridges};
@@ -129,6 +129,32 @@ pub enum CompileError {
     /// Phase 5b: invalid cron schedule (bad cron string or unknown IANA tz).
     #[error("trigger '{node_id}': invalid cron schedule: {message}")]
     TriggerCronInvalid { node_id: String, message: String },
+
+    /// A payload-mapping expression references a `<root>.<field>` whose root
+    /// isn't a declared scope identifier for the trigger's source kind (e.g.
+    /// referencing `catalogue_entry` from a cron trigger). Mirrors
+    /// `GuardUnresolved`; identifier-resolution only (no kind inference).
+    #[error(
+        "trigger '{node_id}': payload mapping for field '{field}' references unknown identifier '{identifier}' (in-scope for this source: {available:?})"
+    )]
+    TriggerUnresolvedRef {
+        node_id: String,
+        field: String,
+        identifier: String,
+        available: Vec<String>,
+    },
+
+    /// The trigger has an empty `payload_mapping` but its resolved target port
+    /// declares required field(s). An empty mapping forwards the source payload
+    /// verbatim, which can't satisfy a typed port — fail at publish, not at
+    /// first fire.
+    #[error(
+        "trigger '{node_id}': empty payload mapping but the target port requires field(s): {missing:?}"
+    )]
+    TriggerEmptyMappingRequiredFields {
+        node_id: String,
+        missing: Vec<String>,
+    },
 }
 
 impl CompileError {
@@ -149,6 +175,10 @@ impl CompileError {
             Self::TriggerUnknownTargetField { .. } => "trigger_unknown_target_field",
             Self::TriggerMappingSyntax { .. } => "trigger_mapping_syntax",
             Self::TriggerCronInvalid { .. } => "trigger_cron_invalid",
+            Self::TriggerUnresolvedRef { .. } => "trigger_unresolved_ref",
+            Self::TriggerEmptyMappingRequiredFields { .. } => {
+                "trigger_empty_mapping_required_fields"
+            }
         }
     }
 
@@ -175,7 +205,9 @@ impl CompileError {
             | Self::TriggerIsEdgeTarget { node_id, .. }
             | Self::TriggerUnknownTargetField { node_id, .. }
             | Self::TriggerMappingSyntax { node_id, .. }
-            | Self::TriggerCronInvalid { node_id, .. } => Some(node_id),
+            | Self::TriggerCronInvalid { node_id, .. }
+            | Self::TriggerUnresolvedRef { node_id, .. }
+            | Self::TriggerEmptyMappingRequiredFields { node_id, .. } => Some(node_id),
             _ => None,
         }
     }
@@ -886,6 +918,41 @@ fn validate_triggers(graph: &WorkflowGraph) -> Result<(), CompileError> {
         let available: Vec<String> =
             tgt_port.fields.iter().map(|f| f.name.clone()).collect();
 
+        // Empty mapping forwards the source payload verbatim — fine for a
+        // pass-through (fieldless) port, but it can't satisfy required typed
+        // fields. Fail at publish rather than at first fire.
+        if payload_mapping.is_empty() {
+            let missing: Vec<String> = tgt_port
+                .fields
+                .iter()
+                .filter(|f| f.required)
+                .map(|f| f.name.clone())
+                .collect();
+            if !missing.is_empty() {
+                return Err(CompileError::TriggerEmptyMappingRequiredFields {
+                    node_id: node.id.clone(),
+                    missing,
+                });
+            }
+        }
+
+        // Identifier-resolution against the source's declared scope (matches
+        // the Phase 3 guard bar — no Rhai kind inference). `extract_qualified_refs`
+        // yields the *root* of every `<root>.<field>` access; the root must be
+        // a declared scope var for this source kind. Bare identifiers and
+        // index access aren't captured here — same limitation guards have;
+        // those mistakes surface loudly at fire time as a dropped fire.
+        let scope_names: std::collections::HashSet<String> =
+            crate::triggers::scope::source_scope(source)
+                .into_iter()
+                .map(|v| v.name)
+                .collect();
+        let scope_available: Vec<String> = {
+            let mut v: Vec<String> = scope_names.iter().cloned().collect();
+            v.sort();
+            v
+        };
+
         for mapping in payload_mapping {
             // Target-field membership: skip for pass-through targets (empty
             // `fields`) which accept anything, but still validate syntax below.
@@ -910,6 +977,19 @@ fn validate_triggers(graph: &WorkflowGraph) -> Result<(), CompileError> {
                     field: mapping.target_field.clone(),
                     message: msg,
                 });
+            }
+
+            // Every qualified-reference root must be a declared scope var.
+            for r in crate::compiler::rhai_scope::extract_qualified_refs(&mapping.expression)
+            {
+                if !scope_names.contains(&r.node_id) {
+                    return Err(CompileError::TriggerUnresolvedRef {
+                        node_id: node.id.clone(),
+                        field: mapping.target_field.clone(),
+                        identifier: r.node_id,
+                        available: scope_available.clone(),
+                    });
+                }
             }
         }
     }
@@ -1250,7 +1330,7 @@ fn expand_node(
             );
         }
 
-        WorkflowNodeData::ParallelJoin { label, .. } => {
+        WorkflowNodeData::ParallelJoin { label, merge_strategy, .. } => {
             let p_output: PlaceHandle<DynamicToken> =
                 ctx.state(format!("p_{id}_output"), format!("{label} - Output"));
 
@@ -1278,15 +1358,7 @@ fn expand_node(
             let port_names: Vec<String> = (0..incoming_edges.len())
                 .map(|i| format!("in_{i}"))
                 .collect();
-            let rhai_source = if port_names.len() == 1 {
-                format!("#{{ output: {} }}", port_names[0])
-            } else {
-                let mut merge = port_names[0].clone();
-                for name in &port_names[1..] {
-                    merge = format!("merge_maps({merge}, {name})");
-                }
-                format!("#{{ output: {merge} }}")
-            };
+            let rhai_source = build_join_merge_logic(&port_names, *merge_strategy);
 
             tb.logic_rhai(rhai_source).done();
 
@@ -1565,6 +1637,57 @@ fn build_merge_logic(state_var: &str, signal_var: &str) -> String {
     )
 }
 
+/// Rhai for a `ParallelJoin` that folds the tokens arriving on `port_names`
+/// (`in_0`, `in_1`, …) into a single `output` token.
+///
+/// One input → straight pass-through. `ShallowLastWins` copies top-level keys
+/// left-to-right so the last branch wins on a collision (the historical
+/// intent — the old code emitted an unregistered `merge_maps`, so this also
+/// fixes a latent runtime bug). `DeepMerge` recursively merges nested object
+/// values via a script-local helper.
+fn build_join_merge_logic(port_names: &[String], strategy: MergeStrategy) -> String {
+    if port_names.len() == 1 {
+        return format!("#{{ output: {} }}", port_names[0]);
+    }
+
+    let first = &port_names[0];
+    let rest = &port_names[1..];
+
+    match strategy {
+        MergeStrategy::ShallowLastWins => {
+            let mut s = format!("let result = {first}; ");
+            for name in rest {
+                s.push_str(&format!(
+                    "for k in {name}.keys() {{ result[k] = {name}[k]; }} "
+                ));
+            }
+            s.push_str("#{ output: result }");
+            s
+        }
+        MergeStrategy::DeepMerge => {
+            let mut s = String::from(
+                "fn __deep_merge(a, b) { \
+                   let out = a; \
+                   for k in b.keys() { \
+                     if out.keys().contains(k) && type_of(out[k]) == \"map\" && type_of(b[k]) == \"map\" { \
+                       out[k] = __deep_merge(out[k], b[k]); \
+                     } else { \
+                       out[k] = b[k]; \
+                     } \
+                   } \
+                   out \
+                 } ",
+            );
+            s.push_str(&format!("let result = {first}; "));
+            for name in rest {
+                s.push_str(&format!("result = __deep_merge(result, {name}); "));
+            }
+            s.push_str("#{ output: result }");
+            s
+        }
+    }
+}
+
 fn build_human_task_injection_logic(target_node: &WorkflowNode) -> String {
     if let WorkflowNodeData::HumanTask {
         task_title,
@@ -1804,5 +1927,46 @@ mod tests {
         let graph = WorkflowGraph::default_graph();
         let result = compile_to_air(&graph, "showcase", "A test workflow", &std::collections::HashMap::new());
         assert!(result.is_ok(), "showcase compile failed: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_join_merge_single_input_is_passthrough() {
+        let ports = vec!["in_0".to_string()];
+        let shallow = build_join_merge_logic(&ports, MergeStrategy::ShallowLastWins);
+        let deep = build_join_merge_logic(&ports, MergeStrategy::DeepMerge);
+        // One branch never merges — both strategies collapse to pass-through.
+        assert_eq!(shallow, "#{ output: in_0 }");
+        assert_eq!(deep, "#{ output: in_0 }");
+    }
+
+    #[test]
+    fn test_join_merge_strategies_differ() {
+        let ports = vec!["in_0".to_string(), "in_1".to_string()];
+        let shallow = build_join_merge_logic(&ports, MergeStrategy::ShallowLastWins);
+        let deep = build_join_merge_logic(&ports, MergeStrategy::DeepMerge);
+
+        assert_ne!(shallow, deep, "strategies must emit different Rhai");
+
+        // ShallowLastWins: top-level key copy, no recursion helper, and crucially
+        // no unregistered `merge_maps` call (the old latent bug).
+        assert!(shallow.contains("for k in in_1.keys()"));
+        assert!(shallow.contains("result[k] = in_1[k];"));
+        assert!(!shallow.contains("merge_maps"));
+        assert!(!shallow.contains("__deep_merge"));
+
+        // DeepMerge: defines and folds through the recursive helper.
+        assert!(deep.contains("fn __deep_merge(a, b)"));
+        assert!(deep.contains("result = __deep_merge(result, in_1);"));
+        assert!(deep.trim_end().ends_with("#{ output: result }"));
+    }
+
+    #[test]
+    fn test_join_merge_three_inputs_fold_left() {
+        let ports = vec!["in_0".to_string(), "in_1".to_string(), "in_2".to_string()];
+        let deep = build_join_merge_logic(&ports, MergeStrategy::DeepMerge);
+        // Folds in arrival order so the last branch wins on scalar collisions.
+        let i1 = deep.find("__deep_merge(result, in_1)").unwrap();
+        let i2 = deep.find("__deep_merge(result, in_2)").unwrap();
+        assert!(i1 < i2, "in_1 must be folded before in_2");
     }
 }

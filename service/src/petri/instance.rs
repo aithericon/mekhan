@@ -5,7 +5,9 @@ use serde_json::{json, Map, Value};
 use uuid::Uuid;
 
 use crate::models::instance::StartToken;
-use crate::models::template::{FieldKind, Port, WorkflowGraph, WorkflowNodeData};
+use crate::models::template::{
+    FieldKind, Port, PortValidationError, WorkflowGraph, WorkflowNodeData,
+};
 use crate::petri::client::{PetriClient, PetriError};
 
 /// Errors returned by `parameterize_air` when the supplied `start_tokens`
@@ -40,9 +42,7 @@ pub enum ParameterizeError {
     /// A field is present but its JSON kind doesn't match the declared
     /// `FieldKind` (e.g. a string supplied for a `Number` field). `Json` and
     /// `File` are permissive escape hatches that don't trip this.
-    #[error(
-        "token for start block '{block}': field '{field}' has wrong type for kind {kind:?}"
-    )]
+    #[error("token for start block '{block}': field '{field}' has wrong type for kind {kind:?}")]
     FieldKindMismatch {
         block: String,
         field: String,
@@ -102,10 +102,14 @@ pub fn parameterize_air(
     let mut seen: HashSet<&str> = HashSet::new();
     for st in start_tokens {
         if !starts.contains_key(st.start_block_id.as_str()) {
-            return Err(ParameterizeError::UnknownStartBlock(st.start_block_id.clone()));
+            return Err(ParameterizeError::UnknownStartBlock(
+                st.start_block_id.clone(),
+            ));
         }
         if !seen.insert(st.start_block_id.as_str()) {
-            return Err(ParameterizeError::DuplicateStartToken(st.start_block_id.clone()));
+            return Err(ParameterizeError::DuplicateStartToken(
+                st.start_block_id.clone(),
+            ));
         }
     }
 
@@ -137,33 +141,28 @@ pub fn parameterize_air(
             continue;
         }
 
-        // Per-field validation when an entry was supplied.
-        for field in &port.fields {
-            match obj.get(&field.name) {
-                None if field.required => {
-                    return Err(ParameterizeError::MissingRequiredField {
-                        block: (*start_id).to_string(),
-                        field: field.name.clone(),
-                    });
-                }
-                None => {} // optional and absent — fine
-                Some(v) if v.is_null() && field.required => {
-                    return Err(ParameterizeError::MissingRequiredField {
-                        block: (*start_id).to_string(),
-                        field: field.name.clone(),
-                    });
-                }
-                Some(v) if v.is_null() => {} // optional null — fine
-                Some(v) if !field.kind.accepts(v) => {
-                    return Err(ParameterizeError::FieldKindMismatch {
-                        block: (*start_id).to_string(),
-                        field: field.name.clone(),
-                        kind: field.kind,
-                    });
-                }
-                Some(_) => {}
+        // Per-field validation when an entry was supplied. Delegates to the
+        // shared `Port::validate_token` so spawn (here) and in-flight signal
+        // (trigger dispatcher) enforce byte-identical rules; we only re-attach
+        // the offending block id to the error.
+        port.validate_token(raw).map_err(|e| match e {
+            PortValidationError::NotObject => {
+                ParameterizeError::TokenNotObject((*start_id).to_string())
             }
-        }
+            PortValidationError::MissingRequiredField { field } => {
+                ParameterizeError::MissingRequiredField {
+                    block: (*start_id).to_string(),
+                    field,
+                }
+            }
+            PortValidationError::FieldKindMismatch { field, kind } => {
+                ParameterizeError::FieldKindMismatch {
+                    block: (*start_id).to_string(),
+                    field,
+                    kind,
+                }
+            }
+        })?;
 
         // Clone token + inject system fields.
         let mut token = obj.clone();
@@ -186,10 +185,7 @@ pub fn parameterize_air(
     //    parameterize doesn't touch those.
     if let Some(places) = air.get_mut("places").and_then(|p| p.as_array_mut()) {
         for place in places {
-            let place_id = place
-                .get("id")
-                .and_then(|v| v.as_str())
-                .map(str::to_string);
+            let place_id = place.get("id").and_then(|v| v.as_str()).map(str::to_string);
             let Some(place_id) = place_id else { continue };
             let Some(start_id) = place_id
                 .strip_prefix("p_")
@@ -222,7 +218,9 @@ pub async fn deploy_instance(
     client.deploy_scenario(net_id, air_json).await?;
 
     // Start execution
-    client.set_run_mode(net_id, petri_api_types::RunMode::Running).await?;
+    client
+        .set_run_mode(net_id, petri_api_types::RunMode::Running)
+        .await?;
 
     Ok(())
 }
@@ -257,7 +255,7 @@ mod tests {
                     data: WorkflowNodeData::End {
                         label: "End".to_string(),
                         description: None,
-                    terminal: crate::models::template::default_terminal_port(),
+                        terminal: crate::models::template::default_terminal_port(),
                     },
                     parent_id: None,
                     width: None,
@@ -290,16 +288,8 @@ mod tests {
     fn seeds_empty_start_with_default_token() {
         let graph = graph_with_start(Port::empty_input());
         let air = air_with_start_place();
-        let result = parameterize_air(
-            &air,
-            Uuid::nil(),
-            Uuid::nil(),
-            1,
-            Uuid::nil(),
-            &graph,
-            &[],
-        )
-        .expect("simple Start with empty initial port should seed default token");
+        let result = parameterize_air(&air, Uuid::nil(), Uuid::nil(), 1, Uuid::nil(), &graph, &[])
+            .expect("simple Start with empty initial port should seed default token");
 
         let tokens = &result["places"][0]["initial_tokens"];
         assert_eq!(tokens.as_array().expect("array").len(), 1);
@@ -324,16 +314,8 @@ mod tests {
         };
         let graph = graph_with_start(port);
         let air = air_with_start_place();
-        let err = parameterize_air(
-            &air,
-            Uuid::nil(),
-            Uuid::nil(),
-            1,
-            Uuid::nil(),
-            &graph,
-            &[],
-        )
-        .expect_err("should reject missing tokens for a port with fields");
+        let err = parameterize_air(&air, Uuid::nil(), Uuid::nil(), 1, Uuid::nil(), &graph, &[])
+            .expect_err("should reject missing tokens for a port with fields");
         match err {
             ParameterizeError::MissingStartTokens(ids) => {
                 assert_eq!(ids, vec!["n_start".to_string()]);
@@ -485,16 +467,8 @@ mod tests {
                 token: json!({}),
             },
         ];
-        let err = parameterize_air(
-            &air,
-            Uuid::nil(),
-            Uuid::nil(),
-            1,
-            Uuid::nil(),
-            &graph,
-            &dup,
-        )
-        .expect_err("duplicate start_block_id should fail");
+        let err = parameterize_air(&air, Uuid::nil(), Uuid::nil(), 1, Uuid::nil(), &graph, &dup)
+            .expect_err("duplicate start_block_id should fail");
         assert!(matches!(err, ParameterizeError::DuplicateStartToken(_)));
     }
 }
