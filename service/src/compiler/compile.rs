@@ -5,7 +5,7 @@ use crate::models::template::{
 use aithericon_executor_domain::InputSource;
 use aithericon_sdk::components::executor_lifecycle::{executor_lifecycle, ExecutorBridges};
 use aithericon_sdk::scenario::{ScenarioDefinition, ScenarioGroup};
-use aithericon_sdk::{Context, DynamicToken, EffectError, ExecutorSubmitInput, HumanTaskAssigned, HumanTaskRequest, HumanTaskResponse, HumanTaskSubmit, PlaceHandle, TimerInput, TimerSchedule, TimerScheduled};
+use aithericon_sdk::{effects, Context, DynamicToken, EffectError, ExecutorSubmitInput, HumanTaskAssigned, HumanTaskRequest, HumanTaskResponse, HumanTaskSubmit, PlaceHandle, TimerInput, TimerSchedule, TimerScheduled};
 use serde_json::{json, Value};
 use petgraph::algo::{is_cyclic_directed, toposort};
 use petgraph::graph::{DiGraph, NodeIndex};
@@ -1862,20 +1862,41 @@ fn build_retry_topology(
 ) {
     let failure = ctx.state::<DynamicToken>("failure", "Failure");
 
+    // Surface every executor failure/timeout as an `error` log on the process
+    // via the existing `process_log_message` effect handler. `on_failed` /
+    // `on_timeout` fan out: `f` drives the retry/exhaust policy as before, and
+    // a parallel `log` carries a {level,source,message,detail} entry. The
+    // detail nests the executor run detail (exit code, stdout/stderr tails)
+    // under `executor` so the operator sees why the step failed — the failing
+    // step crashed and can't log this itself. `failure_logged` is a sink (no
+    // consumer), matching the lifecycle's other log places.
+    let failure_log = ctx.state::<DynamicToken>("failure_log", "Failure Log Input");
+    let failure_logged = ctx.state::<DynamicToken>("failure_logged", "Failure Logged");
+
     // Normalise both lifecycle failure sources into one place. Timeouts carry
     // no `detail`; we only need the resubmit-relevant fields.
     ctx.transition("on_failed", "On Failed")
         .auto_input("e", failed)
         .auto_output("f", &failure)
+        .auto_output("log", &failure_log)
         .logic(
-            r#"#{ f: #{ job_id: e.job_id, run: e.run, retries: e.retries, max_retries: e.max_retries, spec: e.spec, reason: "failed" } }"#,
+            r#"#{ f: #{ job_id: e.job_id, run: e.run, retries: e.retries, max_retries: e.max_retries, spec: e.spec, reason: "failed" }, log: #{ level: "error", source: "executor", message: "Automated step failed", detail: #{ execution_id: e.execution_id, run: e.run, retries: e.retries, executor: e.detail } } }"#,
         );
     ctx.transition("on_timeout", "On Timeout")
         .auto_input("e", timed_out)
         .auto_output("f", &failure)
+        .auto_output("log", &failure_log)
         .logic(
-            r#"#{ f: #{ job_id: e.job_id, run: e.run, retries: e.retries, max_retries: e.max_retries, spec: e.spec, reason: "timed_out" } }"#,
+            r#"#{ f: #{ job_id: e.job_id, run: e.run, retries: e.retries, max_retries: e.max_retries, spec: e.spec, reason: "timed_out" }, log: #{ level: "error", source: "executor", message: "Automated step timed out", detail: #{ execution_id: e.execution_id, run: e.run, retries: e.retries } } }"#,
         );
+
+    // Project the failure entry through the process log effect handler. Its
+    // EffectCompleted is consumed by the causality projector's existing
+    // `process_log_message` branch → hpi_logs (no special-casing there).
+    ctx.transition("log_failure", "Log Failure")
+        .auto_input("message", &failure_log)
+        .auto_output("logged", &failure_logged)
+        .builtin_effect(&effects::PROCESS_LOG_MESSAGE);
 
     // Rhai map for the re-dispatched submit token (bumps run + retries).
     let resubmit = r#"#{ job_id: f.job_id, run: f.run + 1, retries: f.retries + 1, max_retries: f.max_retries, spec: f.spec }"#;
