@@ -690,7 +690,16 @@ fn validate_edges_typed(graph: &WorkflowGraph) -> Result<(), CompileError> {
 
 /// In-scope identifier at a node: `<node_id>.<field>` plus its declared kind.
 /// Used to validate Rhai guards reference real upstream fields.
-type ScopeFields = std::collections::BTreeMap<(String, String), crate::models::template::FieldKind>;
+/// Flat guard scope: upstream output-port field name → its declared kind.
+///
+/// Guards/loop-conditions are evaluated by the engine with a single `input`
+/// token in scope (the compiler wires every Decision/Loop transition as
+/// `.auto_input("input", …)`), so the only valid reference form is
+/// `input.<field>`. The scope is therefore the flat union of every reachable
+/// upstream field name; same-named fields from different upstreams collapse
+/// (last writer wins in the accumulating token — a `tracing::warn!` notes the
+/// collision).
+type ScopeFields = std::collections::BTreeMap<String, crate::models::template::FieldKind>;
 
 /// Build the scope visible at each node — the union of every upstream node's
 /// declared output port fields, reached via the DAG (loop_back edges excluded
@@ -719,23 +728,31 @@ fn compute_scopes<'a>(
                     scope.insert(k.clone(), *v);
                 }
             }
-            // Add the predecessor's own declared output port fields under its
-            // node id. Phase 4 will fill in derived ports for HumanTask/etc.;
-            // for now Start + AutomatedStep are the contributors.
+            // Add the predecessor's declared output-port fields as flat names
+            // (everything funnels through the single `input` token at runtime).
+            // A clashing name from a different upstream is last-writer-wins;
+            // note it so authors aren't silently surprised.
             for port in pred.data.output_ports() {
                 for f in &port.fields {
-                    scope.insert((pred.id.clone(), f.name.clone()), f.kind);
+                    if let Some(prev) = scope.get(&f.name) {
+                        if *prev != f.kind {
+                            tracing::warn!(
+                                node = %node.id,
+                                field = %f.name,
+                                "guard scope field name collides across upstream outputs with differing kinds; last writer wins"
+                            );
+                        }
+                    }
+                    scope.insert(f.name.clone(), f.kind);
                 }
             }
         }
 
-        // Loop-locals: a Loop node exposes `<loop_id>.iteration` inside its
-        // body scope. Phase 3 stub — bodies aren't yet a first-class concept;
-        // we conservatively add the local to the Loop's own scope so the
-        // `loop_condition` itself can reference it.
+        // A Loop exposes its own `iteration` counter to its `loop_condition`
+        // (referenced as `input.iteration`).
         if matches!(node.data, WorkflowNodeData::Loop { .. }) {
             scope.insert(
-                (node.id.clone(), "iteration".to_string()),
+                "iteration".to_string(),
                 crate::models::template::FieldKind::Number,
             );
         }
@@ -803,13 +820,14 @@ fn validate_one_guard(
         message,
     })?;
 
+    // Canonical model: the only in-scope root is the reserved `input` token;
+    // a reference is valid iff it's `input.<field>` and `<field>` is a
+    // reachable upstream output-port field (or a Loop's `iteration`).
     for r in rhai_scope::extract_qualified_refs(source) {
-        let key = (r.node_id.clone(), r.field.clone());
-        if !scope.contains_key(&key) {
-            let mut available: Vec<String> = scope
-                .keys()
-                .map(|(n, f)| format!("{}.{}", n, f))
-                .collect();
+        let resolved = r.node_id == "input" && scope.contains_key(&r.field);
+        if !resolved {
+            let mut available: Vec<String> =
+                scope.keys().map(|f| format!("input.{}", f)).collect();
             available.sort();
             return Err(CompileError::GuardUnresolved {
                 node_id: node_id.to_string(),

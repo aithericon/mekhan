@@ -6,7 +6,9 @@
 
 	let { id, data, selected }: { id: string; data: DecisionNodeData; selected?: boolean } = $props();
 
-	const branchCount = $derived((data.conditions?.length ?? 0) + 1); // +1 for default
+	const branchCount = $derived(
+		(data.conditions?.length ?? 0) + (data.defaultBranch ? 1 : 0)
+	);
 </script>
 
 <Handle id="in" type="target" position={Position.Left} class={workflowNodeHandleClass('decision')} />
@@ -23,12 +25,14 @@
 {#snippet branchBody()}
 	{branchCount} branch{branchCount !== 1 ? 'es' : ''}
 {/snippet}
-<Handle
-	type="source"
-	position={Position.Right}
-	id="default"
-	class={workflowNodeHandleClass('decision')}
-/>
+{#if data.defaultBranch}
+	<Handle
+		type="source"
+		position={Position.Right}
+		id="default"
+		class={workflowNodeHandleClass('decision')}
+	/>
+{/if}
 {#each data.conditions ?? [] as condition, i (condition.edgeId)}
 	<Handle
 		type="source"

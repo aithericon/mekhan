@@ -93,7 +93,12 @@ export function computeScopes(graph: WorkflowGraph): Map<string, ScopeEntry[]> {
 			if (pred) {
 				for (const port of outputPorts(pred.data)) {
 					for (const f of port.fields ?? []) {
-						const qualified = `${pred.id}.${f.name}`;
+						// Canonical model: guards run against the single `input`
+						// token, so every reachable upstream field is addressed
+						// as `input.<field>`. Same-named fields from different
+						// upstreams collapse (last writer wins), matching the
+						// backend's flat scope.
+						const qualified = `input.${f.name}`;
 						scope.set(qualified, {
 							nodeId: pred.id,
 							nodeLabel: nodeLabel(pred),
@@ -109,7 +114,7 @@ export function computeScopes(graph: WorkflowGraph): Map<string, ScopeEntry[]> {
 		// Loop's own iteration counter.
 		const self = nodes.get(id);
 		if (self && self.data.type === 'loop') {
-			const qualified = `${id}.iteration`;
+			const qualified = `input.iteration`;
 			scope.set(qualified, {
 				nodeId: id,
 				nodeLabel: nodeLabel(self),

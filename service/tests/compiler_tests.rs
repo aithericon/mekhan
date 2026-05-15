@@ -552,7 +552,7 @@ fn loop_produces_enter_continue_exit() {
                     // Reference the loop's own iteration counter, which Phase 3
                     // exposes as `<loop_id>.iteration` in scope. Avoids the
                     // legacy unqualified `input.X` form.
-                    loop_condition: "lp.iteration < 5".to_string(),
+                    loop_condition: "input.iteration < 5".to_string(),
                 },
                 parent_id: None,
                 width: None,
@@ -1579,12 +1579,12 @@ fn decision_with_guard(id: &str, guard: &str) -> WorkflowNode {
 
 #[test]
 fn guard_qualified_reference_resolves() {
-    // Start declares `approved: Bool`. Decision guard references
-    // `s.approved` — must resolve cleanly through Phase 3 scope walk.
+    // Start declares `approved: Bool`. Decision guard references it via the
+    // canonical `input.<field>` form — must resolve through the scope walk.
     let graph = WorkflowGraph {
         nodes: vec![
             start_node_with_bool_field("s", "approved"),
-            decision_with_guard("d", "s.approved == true"),
+            decision_with_guard("d", "input.approved == true"),
             end_node("ea"),
             end_node("eb"),
         ],
@@ -1604,7 +1604,7 @@ fn guard_syntax_error_is_reported() {
     let graph = WorkflowGraph {
         nodes: vec![
             start_node_with_bool_field("s", "approved"),
-            decision_with_guard("d", "s.approved =="),
+            decision_with_guard("d", "input.approved =="),
             end_node("ea"),
             end_node("eb"),
         ],
@@ -1651,13 +1651,49 @@ fn guard_unresolved_identifier_is_reported() {
         } => {
             assert_eq!(node_id, "d");
             assert_eq!(identifier, "ghost.field");
-            // `s.approved` should be in the "available" hint so the editor
-            // can surface it to the user.
+            // The hint lists the canonical `input.<field>` identifiers so the
+            // editor can steer the author to the correct form.
             assert!(
-                available.iter().any(|a| a == "s.approved"),
-                "available should include `s.approved`; got {:?}",
+                available.iter().any(|a| a == "input.approved"),
+                "available should include `input.approved`; got {:?}",
                 available
             );
+        }
+        e => panic!("unexpected: {e:?}"),
+    }
+}
+
+#[test]
+fn guard_input_unknown_field_is_rejected() {
+    // `input` is the reserved root, but the field must be a real upstream
+    // output. `input.bogus` resolves the root yet not the field → unresolved,
+    // with the available hint listing the canonical `input.<field>` ids.
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node_with_bool_field("s", "approved"),
+            decision_with_guard("d", "input.bogus == true"),
+            end_node("ea"),
+            end_node("eb"),
+        ],
+        edges: vec![
+            edge("e_in", "s", "d"),
+            edge_with_handle("e_yes", "d", "ea", "cond_yes"),
+            edge_with_handle("e_no", "d", "eb", "cond_no"),
+        ],
+        viewport: None,
+    };
+    let err = compile_to_air(&graph, "phase-d-unknown", "", &std::collections::HashMap::new())
+        .expect_err("unknown input field should be unresolved");
+    match err {
+        mekhan_service::compiler::CompileError::GuardUnresolved {
+            identifier, available, ..
+        } => {
+            assert_eq!(identifier, "input.bogus");
+            assert!(
+                available.iter().all(|a| a.starts_with("input.")),
+                "available hint must use the input.<field> form; got {available:?}"
+            );
+            assert!(available.iter().any(|a| a == "input.approved"));
         }
         e => panic!("unexpected: {e:?}"),
     }
@@ -1714,7 +1750,7 @@ fn guard_multi_hop_scope_walk() {
 
     // Decision guard references the *upstream* start's field (`s.ok`) — must
     // resolve via the multi-hop scope walk.
-    let decision = decision_with_guard("d", "s.ok && a.processed");
+    let decision = decision_with_guard("d", "input.ok && input.processed");
 
     let graph = WorkflowGraph {
         nodes: vec![typed_start, automated_a, decision, end_node("ea"), end_node("eb")],
@@ -1729,7 +1765,7 @@ fn guard_multi_hop_scope_walk() {
     let result = compile_to_air(&graph, "phase3-multihop", "", &std::collections::HashMap::new());
     assert!(
         result.is_ok(),
-        "multi-hop scope walk should resolve s.ok and a.processed: {:?}",
+        "multi-hop scope walk should resolve input.ok and input.processed: {:?}",
         result.err()
     );
 }
@@ -1748,7 +1784,7 @@ fn loop_condition_can_reference_iteration_local() {
             label: "Retry".to_string(),
             description: None,
             max_iterations: 5,
-            loop_condition: "lp.iteration < 3".to_string(),
+            loop_condition: "input.iteration < 3".to_string(),
         },
         parent_id: None,
         width: None,
@@ -1997,7 +2033,7 @@ fn guard_can_reference_human_task_derived_field() {
         nodes: vec![
             start_node("s"),
             human_task_node_with_field("ht", "approved", TaskFieldKind::Checkbox),
-            decision_with_guard("d", "ht.approved == true"),
+            decision_with_guard("d", "input.approved == true"),
             end_node("ea"),
             end_node("eb"),
         ],

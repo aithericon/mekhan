@@ -44,6 +44,14 @@
 		updated[index] = { ...updated[index], guard };
 		onchange({ ...data, conditions: updated });
 	}
+
+	// The default (else) branch handle id is the literal "default" — it must
+	// match DecisionNode's `<Handle id="default">` and the compiler's default
+	// output place so a drawn edge wires.
+	const DEFAULT_BRANCH_ID = 'default';
+	function toggleDefault(enabled: boolean) {
+		onchange({ ...data, defaultBranch: enabled ? DEFAULT_BRANCH_ID : undefined });
+	}
 </script>
 
 <div class="space-y-2">
@@ -82,9 +90,19 @@
 		</div>
 	{/each}
 
-	<div
-		class="rounded-lg border border-dashed border-border p-2 text-[11px] text-muted-foreground"
+	<label
+		class="flex items-center gap-2 rounded-lg border border-dashed border-border p-2 text-[11px] text-muted-foreground"
 	>
-		Default branch (no guard) is always present
-	</div>
+		<input
+			type="checkbox"
+			checked={!!data.defaultBranch}
+			disabled={readonly}
+			data-testid="checkbox-default-branch"
+			onchange={(e) => toggleDefault((e.currentTarget as HTMLInputElement).checked)}
+		/>
+		<span>
+			Add default (else) branch — taken when no guard matches. Wire its
+			handle to a fallback path.
+		</span>
+	</label>
 </div>
