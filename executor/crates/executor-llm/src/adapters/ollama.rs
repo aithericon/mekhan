@@ -3,12 +3,35 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
+use crate::ollama_subprocess::OllamaSubprocess;
 use crate::port::{
     CompletionPort, CompletionRequest, CompletionResponse, FinishReason, LlmError, ResponseFormat,
     Role, TokenUsage,
 };
 
+/// HTTP-only adapter against an Ollama HTTP endpoint.
+///
+/// The endpoint may be (a) an externally-managed Ollama (e.g. a daemon
+/// installed via the system package manager, surfaced through env var
+/// `OLLAMA_API_BASE_URL`) or (b) a process-internal managed subprocess
+/// supplied by [`OllamaSubprocess`]. The adapter itself is agnostic to
+/// which one — it issues `POST /api/chat` against `OLLAMA_API_BASE_URL`
+/// in either case. Callers that want the latter shape should set
+/// `OLLAMA_API_BASE_URL = subprocess.base_url()` in `env` before invoking
+/// `complete()`; see [`base_url_for_subprocess`] for the convenience helper.
 pub struct OllamaAdapter;
+
+/// Convenience helper: derives the `OLLAMA_API_BASE_URL` value that
+/// targets a managed [`OllamaSubprocess`]. Callers can splice this into
+/// the env map they pass to [`CompletionPort::complete`].
+///
+/// Surgical insertion point per slice B3: the adapter's request path is
+/// unchanged; this helper exists so caller code (the executor's worker
+/// crate, eventually) doesn't have to know the `OLLAMA_API_BASE_URL` env
+/// key name to wire a subprocess to the adapter.
+pub fn base_url_for_subprocess(subprocess: &OllamaSubprocess) -> (String, String) {
+    ("OLLAMA_API_BASE_URL".to_string(), subprocess.base_url())
+}
 
 #[async_trait]
 impl CompletionPort for OllamaAdapter {
