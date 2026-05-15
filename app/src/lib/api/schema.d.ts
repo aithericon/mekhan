@@ -80,7 +80,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/catalogue/download/{path}": {
+    "/api/catalogue/download/{*path}": {
         parameters: {
             query?: never;
             header?: never;
@@ -1473,8 +1473,16 @@ export interface components {
             config: unknown;
             /** Format: date-time */
             created_at: string;
+            /**
+             * Format: uuid
+             * @description Workflow instance that produced this process (NULL for petri-lab
+             *     scenarios created outside a mekhan instance, or unlinked legacy rows).
+             */
+            instance_id?: string | null;
             kind?: string | null;
             name?: string | null;
+            /** @description Engine net id ("mekhan-{instance_id}") for the producing instance. */
+            net_id?: string | null;
             owner?: string | null;
             process_id: string;
             status: string;
@@ -1830,8 +1838,16 @@ export interface components {
                 config: unknown;
                 /** Format: date-time */
                 created_at: string;
+                /**
+                 * Format: uuid
+                 * @description Workflow instance that produced this process (NULL for petri-lab
+                 *     scenarios created outside a mekhan instance, or unlinked legacy rows).
+                 */
+                instance_id?: string | null;
                 kind?: string | null;
                 name?: string | null;
+                /** @description Engine net id ("mekhan-{instance_id}") for the producing instance. */
+                net_id?: string | null;
                 owner?: string | null;
                 process_id: string;
                 status: string;

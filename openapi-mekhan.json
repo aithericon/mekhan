@@ -142,7 +142,7 @@
         }
       }
     },
-    "/api/catalogue/download/{path}": {
+    "/api/catalogue/download/{*path}": {
       "get": {
         "tags": [
           "catalogue"
@@ -4292,6 +4292,14 @@
             "type": "string",
             "format": "date-time"
           },
+          "instance_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Workflow instance that produced this process (NULL for petri-lab\nscenarios created outside a mekhan instance, or unlinked legacy rows)."
+          },
           "kind": {
             "type": [
               "string",
@@ -4303,6 +4311,13 @@
               "string",
               "null"
             ]
+          },
+          "net_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Engine net id (\"mekhan-{instance_id}\") for the producing instance."
           },
           "owner": {
             "type": [
@@ -5382,6 +5397,14 @@
                   "type": "string",
                   "format": "date-time"
                 },
+                "instance_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid",
+                  "description": "Workflow instance that produced this process (NULL for petri-lab\nscenarios created outside a mekhan instance, or unlinked legacy rows)."
+                },
                 "kind": {
                   "type": [
                     "string",
@@ -5393,6 +5416,13 @@
                     "string",
                     "null"
                   ]
+                },
+                "net_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "Engine net id (\"mekhan-{instance_id}\") for the producing instance."
                 },
                 "owner": {
                   "type": [
