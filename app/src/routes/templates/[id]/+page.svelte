@@ -9,6 +9,7 @@
 	import {
 		getTemplate,
 		publishTemplate,
+		updateTemplate,
 		compileGraph,
 		CompileApiError,
 		type Template
@@ -70,6 +71,18 @@
 			}
 		} finally {
 			saving = false;
+		}
+	}
+
+	async function handleRename(name: string) {
+		if (!template) return;
+		const prev = template;
+		template = { ...template, name }; // optimistic
+		try {
+			template = await updateTemplate(templateId, { name });
+		} catch (e) {
+			template = prev;
+			error = e instanceof Error ? e.message : 'Rename failed';
 		}
 	}
 
@@ -191,6 +204,7 @@
 			provider={session.provider}
 			onpublish={handlePublish}
 			onpreview={handlePreview}
+			onrename={handleRename}
 		/>
 
 		{#if error}

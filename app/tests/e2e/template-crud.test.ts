@@ -144,8 +144,10 @@ test.describe('Template CRUD', () => {
 		await page.goto('/templates');
 		await expect(page.getByTestId('template-item-tpl-del')).toBeVisible();
 
-		// The delete button should exist (visible on hover via CSS)
+		// Delete now lives in the per-row actions menu (kebab). Open it, then
+		// the Delete item should be available.
+		await page.getByTestId('btn-template-menu-tpl-del').click();
 		const deleteBtn = page.getByTestId('btn-delete-template-tpl-del');
-		await expect(deleteBtn).toBeAttached();
+		await expect(deleteBtn).toBeVisible();
 	});
 });

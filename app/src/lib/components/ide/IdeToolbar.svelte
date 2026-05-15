@@ -8,6 +8,7 @@
 	import ConnectionStatus from '$lib/components/editor/ConnectionStatus.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
+	import { Input } from '$lib/components/ui/input';
 
 	type Props = {
 		templateName: string;
@@ -27,7 +28,7 @@
 	// editing is only offered on drafts.
 	let editing = $state(false);
 	let draft = $state('');
-	let inputEl = $state<HTMLInputElement | undefined>();
+	let inputEl = $state<HTMLInputElement | null>(null);
 
 	function startEdit() {
 		if (published || !onRename) return;
@@ -60,14 +61,14 @@
 <div class="flex h-10 items-center justify-between border-b border-border bg-card px-3">
 	<div class="flex items-center gap-3">
 		{#if editing}
-			<input
-				bind:this={inputEl}
+			<Input
+				bind:ref={inputEl}
 				bind:value={draft}
 				onkeydown={onKeydown}
 				onblur={commit}
 				onfocus={(e) => (e.currentTarget as HTMLInputElement).select()}
 				aria-label="Template name"
-				class="w-56 rounded-md border border-input bg-background px-2 py-1 text-sm font-medium text-foreground focus:border-ring focus:outline-none"
+				class="h-7 w-56 text-sm font-medium"
 			/>
 		{:else if !published && onRename}
 			<button
