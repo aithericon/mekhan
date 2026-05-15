@@ -17,7 +17,12 @@ export function outputPortsFor(data: WorkflowNodeData): Port[] {
 		case 'start':
 			return data.initial ? [data.initial] : [];
 		case 'automated_step':
-			return data.output ? [data.output] : [];
+			// Success output + the always-present "error" output (retries
+			// exhausted / infra failure). Mirrors the compiler's NodePorts.
+			return [
+				...(data.output ? [data.output] : []),
+				{ id: 'error', label: 'On error', fields: [] }
+			];
 		case 'human_task':
 			return [deriveHumanTaskOutputPort(data)];
 		case 'decision':

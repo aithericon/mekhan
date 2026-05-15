@@ -76,3 +76,13 @@
 	position={Position.Right}
 	class={workflowNodeHandleClass('automated')}
 />
+<!-- Error output: wire this to a handler (notification, human task, End)
+     to route failures (retries exhausted) back into the graph. Unconnected
+     = the step dead-ends on failure. -->
+<Handle
+	id="error"
+	type="source"
+	position={Position.Bottom}
+	style="background:#ef4444;border-color:#b91c1c;"
+	title="On error (retries exhausted)"
+/>

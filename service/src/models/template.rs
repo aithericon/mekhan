@@ -302,7 +302,18 @@ impl WorkflowNodeData {
     pub fn output_ports(&self) -> Vec<Port> {
         match self {
             Self::Start { initial, .. } => vec![initial.clone()],
-            Self::AutomatedStep { output, .. } => vec![output.clone()],
+            // Declared success output + an always-present "error" output
+            // (retries exhausted / infra failure). Empty fields ⇒ pass-through
+            // so wiring it to any handler/End type-checks. The compiler maps
+            // this to the node's `p_{id}_error` place.
+            Self::AutomatedStep { output, .. } => vec![
+                output.clone(),
+                Port {
+                    id: "error".to_string(),
+                    label: "On error".to_string(),
+                    fields: vec![],
+                },
+            ],
 
             Self::HumanTask { steps, .. } => vec![derive_human_task_output_port(steps)],
 

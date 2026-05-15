@@ -589,9 +589,13 @@ fn validate_edges_typed(graph: &WorkflowGraph) -> Result<(), CompileError> {
             continue;
         }
 
-        // 3. Resolve source port. `source_handle: None` resolves to the
-        //    canonical single output port; node kinds with multiple outputs
-        //    (Decision branches) require an explicit handle.
+        // 3. Resolve source port. A missing `source_handle` falls back to the
+        //    node's primary (first) output port, matching codegen's
+        //    `find_output_place`. This keeps handle-less success edges valid
+        //    even for nodes that also expose auxiliary outputs (e.g. an
+        //    AutomatedStep's "error" port). Multi-branch nodes (Decision)
+        //    always carry an explicit handle from the editor; a handle-less
+        //    edge there resolves to the first branch, as codegen already does.
         //
         //    Phase 4: every variant now returns at least one output port via
         //    `output_ports()`, so the "empty list = pass-through" branch only
@@ -599,19 +603,7 @@ fn validate_edges_typed(graph: &WorkflowGraph) -> Result<(), CompileError> {
         let src_ports = src_node.data.output_ports();
         let src_port: Option<Port> = match edge.source_handle.as_deref() {
             Some(h) => src_ports.iter().find(|p| p.id == h).cloned(),
-            None => {
-                if src_ports.len() == 1 {
-                    Some(src_ports[0].clone())
-                } else if src_ports.is_empty() {
-                    None
-                } else {
-                    return Err(CompileError::UnknownSourcePort {
-                        edge_id: edge.id.clone(),
-                        node_id: edge.source.clone(),
-                        handle: "<missing>".to_string(),
-                    });
-                }
-            }
+            None => src_ports.first().cloned(),
         };
         if let Some(h) = edge.source_handle.as_deref() {
             if src_port.is_none() && !src_ports.is_empty() {
@@ -1260,7 +1252,15 @@ fn expand_node(
                 id.clone(),
                 NodePorts {
                     input_place: p_input,
-                    output_places: vec![(None, p_output)],
+                    // Default success output + a named "error" output. An edge
+                    // drawn from the node's error handle (source_handle ==
+                    // "error") wires to `p_error` via `find_output_place`; if
+                    // no error edge exists `p_error` simply has no consumer
+                    // (the prior dead-end-on-failure behaviour).
+                    output_places: vec![
+                        (None, p_output),
+                        (Some("error".to_string()), p_error),
+                    ],
                     input_places: HashMap::new(),
                 },
             );
@@ -2177,6 +2177,51 @@ mod tests {
         assert!(
             !s.contains("d.max_retries = 3"),
             "the hardcoded max_retries=3 must be gone"
+        );
+    }
+
+    #[test]
+    fn test_automated_step_error_edge_wires() {
+        // An edge drawn from the automated step's "error" handle must resolve
+        // (it would previously fail "no output place for source_handle
+        // 'error'"). Success path goes to e1, failure path to e2.
+        let graph = WorkflowGraph {
+            nodes: vec![
+                start_node("s"),
+                automated_step_with_retry("a", RetryPolicy::default()),
+                end_node("e1"),
+                end_node_with_id("e2"),
+            ],
+            edges: vec![
+                edge("e0", "s", "a"),
+                edge("esucc", "a", "e1"),
+                edge_with_handle("eerr", "a", "e2", "error"),
+            ],
+            viewport: None,
+        };
+        let air = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
+            .expect("error-handle edge should wire");
+        let s = air.to_string();
+        // The error place must feed the error-handler branch.
+        assert!(s.contains("p_a_error"), "error output place missing");
+    }
+
+    #[test]
+    fn test_automated_step_without_error_edge_still_compiles() {
+        // Default (no error edge): p_a_error has no consumer — the prior
+        // dead-end-on-failure behaviour is preserved, compilation succeeds.
+        let graph = WorkflowGraph {
+            nodes: vec![
+                start_node("s"),
+                automated_step_with_retry("a", RetryPolicy::default()),
+                end_node("e"),
+            ],
+            edges: vec![edge("e0", "s", "a"), edge("e1", "a", "e")],
+            viewport: None,
+        };
+        assert!(
+            compile_to_air(&graph, "t", "d", &std::collections::HashMap::new()).is_ok(),
+            "step without an error edge must still compile"
         );
     }
 }
