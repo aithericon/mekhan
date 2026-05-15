@@ -30,3 +30,14 @@ def load_inputs(inputs_dir=None):
         except (json.JSONDecodeError, ValueError):
             result[entry] = content
     return result
+
+
+def token(inputs_dir=None):
+    """Return the workflow token: the staged ``input.json``.
+
+    This is the single accumulating token the compiler's prepare transition
+    snapshots for the step. Prefer this over ``load_inputs()["input.json"]``
+    — the file-map shape is an implementation detail. Returns ``{}`` when no
+    token was staged.
+    """
+    return load_inputs(inputs_dir).get("input.json", {})

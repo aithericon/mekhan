@@ -143,6 +143,22 @@ export const showcaseGraph: WorkflowGraph = {
 						inherit_env: true,
 						env: {}
 					}
+				},
+				// Declared data contract so the inspector shows what this step
+				// emits. `input` is left pass-through (empty fields) — the edge
+				// from Review carries the full form token, more fields than the
+				// step reads, which an explicit subset would reject at compile.
+				// `output` mirrors the keys main.py prints; downstream the
+				// Decision branches on `input.invoice_amount`, which still
+				// resolves transitively from the Review human task's output.
+				output: {
+					id: 'out',
+					label: 'Extracted',
+					fields: [
+						{ name: 'vendor', label: 'Vendor', kind: 'text', required: true },
+						{ name: 'amount', label: 'Amount', kind: 'number', required: true },
+						{ name: 'extracted', label: 'Extracted', kind: 'bool', required: true }
+					]
 				}
 			}
 		},
@@ -244,6 +260,16 @@ export const showcaseGraph: WorkflowGraph = {
 						inherit_env: true,
 						env: {}
 					}
+				},
+				// Matches the set_output() calls in this node's main.py.
+				output: {
+					id: 'out',
+					label: 'Screening result',
+					fields: [
+						{ name: 'compliant', label: 'Compliant', kind: 'bool', required: true },
+						{ name: 'risk_score', label: 'Risk Score', kind: 'number', required: true },
+						{ name: 'checked_at', label: 'Checked At', kind: 'text', required: true }
+					]
 				}
 			}
 		},
@@ -358,37 +384,58 @@ export const showcaseGraph: WorkflowGraph = {
  * Y.Doc at template creation so the demo lands publishable without the user
  * having to open the IDE and type a script first.
  *
- * The runner reads upstream token data from `inputs["input.json"]` (see
- * `engine/sdk/...` and the prepare-transition snapshot in the compiler).
+ * These use the Aithericon Python SDK the way the runner intends: the runner
+ * (executor PythonBackend) auto-imports the SDK, calls `aithericon.init()`
+ * before the user code and `aithericon.shutdown()` after, and injects
+ * `inputs`, `set_output`, and `log_*` into scope. Step code therefore just
+ * calls those helpers directly — it must NOT re-run init / ExecutionContext,
+ * which would double the IPC lifecycle. The upstream token is the staged
+ * `input.json` (the compiler's prepare-transition snapshot); each emitted
+ * `set_output(name, value)` becomes a field on the node's declared output
+ * port.
  */
 const showcaseFiles: Record<string, Record<string, string>> = {
 	extract: {
-		'main.py':
-			'import json, os\n' +
-			'\n' +
-			'with open(os.path.join(os.environ["AITHERICON_INPUTS_DIR"], "input.json")) as f:\n' +
-			'    data = json.load(f)\n' +
-			'\n' +
-			'result = {\n' +
-			'    "vendor": data.get("vendor_name", ""),\n' +
-			'    "amount": data.get("invoice_amount", 0),\n' +
-			'    "extracted": True,\n' +
-			'}\n' +
-			'print(json.dumps(result))\n'
+		'main.py': `# Extract Data — Aithericon Python backend.
+# 'set_output' and 'log_*' are provided by the SDK runner (no manual
+# init/shutdown). '_aithericon_io' is generated at publish from this node's
+# typed input scope, so 'token' is a typed dataclass with autocomplete.
+from _aithericon_io import load_input
+
+token = load_input()
+
+vendor = token.vendor_name or ""
+amount = token.invoice_amount or 0
+
+log_info("extracting invoice data", vendor=vendor, amount=amount)
+
+set_output("vendor", vendor)
+set_output("amount", amount)
+set_output("extracted", True)
+
+log_info("extraction complete")
+`
 	},
 	compliance: {
-		'main.py':
-			'import json, os\n' +
-			'\n' +
-			'with open(os.path.join(os.environ["AITHERICON_INPUTS_DIR"], "input.json")) as f:\n' +
-			'    data = json.load(f)\n' +
-			'\n' +
-			'result = {\n' +
-			'    "compliant": True,\n' +
-			'    "risk_score": 0.12,\n' +
-			'    "checked_at": "2024-01-01",\n' +
-			'}\n' +
-			'print(json.dumps(result))\n'
+		'main.py': `# Compliance Check — sanctions & fraud screening (Python backend).
+# 'token' is the typed view of the accumulated workflow token, generated
+# at publish from this node's input scope (upstream form + Extract output).
+from _aithericon_io import load_input
+
+token = load_input()
+amount = token.amount if token.amount is not None else (token.invoice_amount or 0)
+
+risk_score = 0.12
+compliant = risk_score < 0.5
+
+log_info("running compliance screening", amount=amount, risk_score=risk_score)
+if not compliant:
+    log_warn("invoice flagged as high risk", risk_score=risk_score)
+
+set_output("compliant", compliant)
+set_output("risk_score", risk_score)
+set_output("checked_at", "2024-01-01")
+`
 	}
 };
 

@@ -29,6 +29,11 @@ class ExecutionContext:
         self.inputs = load_inputs()
         return self
 
+    @property
+    def token(self):
+        """The workflow token (staged ``input.json``) as a dict."""
+        return self.inputs.get("input.json", {})
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         exit_code = 0 if exc_type is None else 1
         shutdown(exit_code)

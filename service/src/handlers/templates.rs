@@ -10,12 +10,12 @@ use uuid::Uuid;
 use aithericon_executor_domain::InputSource;
 
 use crate::auth::AuthUser;
-use crate::compiler::compile_to_air;
+use crate::compiler::{compile_to_air, generate_py_io_module, node_input_scopes};
 use crate::lifecycle::cleanup_net;
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::template::{
-    CompileRequest, CreateTemplateRequest, ListTemplatesQuery, PaginatedResponse,
-    UpdateTemplateRequest, WorkflowGraph, WorkflowTemplate,
+    CompileRequest, CreateTemplateRequest, ExecutionBackendType, ListTemplatesQuery,
+    PaginatedResponse, UpdateTemplateRequest, WorkflowGraph, WorkflowNodeData, WorkflowTemplate,
 };
 use crate::AppState;
 
@@ -437,7 +437,7 @@ pub async fn publish_template(
 
     // Try to reconstruct graph + files from Y.Doc first (collaborative editing source of truth),
     // falling back to the DB graph column for legacy templates.
-    let (graph, ydoc_files): (WorkflowGraph, HashMap<String, HashMap<String, String>>) =
+    let (graph, mut ydoc_files): (WorkflowGraph, HashMap<String, HashMap<String, String>>) =
         match reconstruct_graph_from_ydoc(&state, id).await {
             Ok(Some((g, f))) => (g, f),
             Ok(None) => {
@@ -454,6 +454,27 @@ pub async fn publish_template(
                 (g, HashMap::new())
             }
         };
+
+    // Generate a typed `_aithericon_io.py` per Python automated step from the
+    // node's computed input scope (the same flat `input.<field>` model guards
+    // use). Staged with the step like any other node file so step code can do
+    // `from _aithericon_io import load_input`. Skipped silently if the graph
+    // can't be scoped — publish should still proceed and surface the real
+    // compile error below.
+    if let Ok(scopes) = node_input_scopes(&graph) {
+        for node in &graph.nodes {
+            if let WorkflowNodeData::AutomatedStep { execution_spec, .. } = &node.data {
+                if execution_spec.backend_type == ExecutionBackendType::Python {
+                    if let Some(scope) = scopes.get(&node.id) {
+                        ydoc_files
+                            .entry(node.id.clone())
+                            .or_default()
+                            .insert("_aithericon_io.py".to_string(), generate_py_io_module(scope));
+                    }
+                }
+            }
+        }
+    }
 
     // Upload node file contents to S3 so the executor can stage them at runtime.
     if let Err(e) = upload_node_files(&state, id, existing.version, &ydoc_files).await {
@@ -843,6 +864,69 @@ pub async fn compile_preview(
         })?;
 
     Ok(Json(air))
+}
+
+/// GET /api/templates/{id}/io-stubs
+#[utoipa::path(
+    get,
+    path = "/api/templates/{id}/io-stubs",
+    params(("id" = Uuid, Path, description = "Template id")),
+    responses(
+        (status = 200, description = "Per-node generated typed-input modules", body = serde_json::Value),
+        (status = 404, description = "Template not found", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse),
+    ),
+    tag = "templates",
+)]
+/// Generated `_aithericon_io.py` typed-input module per Python automated step,
+/// derived from each node's input scope. An authoring aid: unlike compile it
+/// does NOT require the graph to be publishable (missing entrypoints / dangling
+/// edges are fine) — it only needs a DAG. The IDE surfaces these read-only so
+/// step code gets typed `load_input()` before publish. Non-fatal by design: a
+/// graph that can't be scoped yields an empty map, never an error, so the
+/// editor never breaks on this.
+pub async fn io_stubs(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let existing = sqlx::query_as::<_, WorkflowTemplate>(
+        "SELECT * FROM workflow_templates WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .ok_or_else(|| ApiError::not_found("template not found"))?;
+
+    // Prefer the Y.Doc graph (live collaborative state); fall back to the DB
+    // graph column. Either failing just yields no stubs — never a hard error.
+    let graph: Option<WorkflowGraph> = match reconstruct_graph_from_ydoc(&state, id).await {
+        Ok(Some((g, _))) => Some(g),
+        _ => serde_json::from_value(existing.graph).ok(),
+    };
+
+    let mut generated: HashMap<String, HashMap<String, String>> = HashMap::new();
+    if let Some(graph) = graph {
+        if let Ok(scopes) = node_input_scopes(&graph) {
+            for node in &graph.nodes {
+                if let WorkflowNodeData::AutomatedStep { execution_spec, .. } = &node.data {
+                    if execution_spec.backend_type == ExecutionBackendType::Python {
+                        if let Some(scope) = scopes.get(&node.id) {
+                            generated
+                                .entry(node.id.clone())
+                                .or_default()
+                                .insert(
+                                    "_aithericon_io.py".to_string(),
+                                    generate_py_io_module(scope),
+                                );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(Json(serde_json::json!({ "generated": generated })))
 }
 
 /// POST /api/compile

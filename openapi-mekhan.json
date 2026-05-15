@@ -2603,6 +2603,57 @@
         }
       }
     },
+    "/api/templates/{id}/io-stubs": {
+      "get": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "GET /api/templates/{id}/io-stubs\nGenerated `_aithericon_io.py` typed-input module per Python automated step,\nderived from each node's input scope. An authoring aid: unlike compile it\ndoes NOT require the graph to be publishable (missing entrypoints / dangling\nedges are fine) — it only needs a DAG. The IDE surfaces these read-only so\nstep code gets typed `load_input()` before publish. Non-fatal by design: a\ngraph that can't be scoped yields an empty map, never an error, so the\neditor never breaks on this.",
+        "operationId": "io_stubs",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Template id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Per-node generated typed-input modules",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "404": {
+            "description": "Template not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/templates/{id}/new-version": {
       "post": {
         "tags": [

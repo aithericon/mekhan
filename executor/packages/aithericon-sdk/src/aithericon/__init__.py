@@ -23,7 +23,7 @@ Context manager usage::
 from aithericon._client import init, shutdown, is_connected
 
 # Inputs
-from aithericon._inputs import load_inputs
+from aithericon._inputs import load_inputs, token
 
 # Outputs
 from aithericon._outputs import set_output
@@ -48,6 +48,7 @@ __all__ = [
     "shutdown",
     "is_connected",
     "load_inputs",
+    "token",
     "set_output",
     "log_artifact",
     "update_progress",

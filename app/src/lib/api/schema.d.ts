@@ -817,6 +817,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/templates/{id}/io-stubs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/templates/{id}/io-stubs
+         *     Generated `_aithericon_io.py` typed-input module per Python automated step,
+         *     derived from each node's input scope. An authoring aid: unlike compile it
+         *     does NOT require the graph to be publishable (missing entrypoints / dangling
+         *     edges are fine) — it only needs a DAG. The IDE surfaces these read-only so
+         *     step code gets typed `load_input()` before publish. Non-fatal by design: a
+         *     graph that can't be scoped yields an empty map, never an error, so the
+         *     editor never breaks on this.
+         */
+        get: operations["io_stubs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/templates/{id}/new-version": {
         parameters: {
             query?: never;
@@ -4083,6 +4109,47 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Template not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    io_stubs: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Template id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Per-node generated typed-input modules */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Template not found */

@@ -243,6 +243,21 @@ export async function compileGraph(data: CompileRequest): Promise<object> {
 	return unwrap(await client.POST('/api/compile', { body: data })) as unknown as object;
 }
 
+/**
+ * Generated typed-input modules (`_aithericon_io.py`) per Python automated
+ * step, keyed `nodeId -> { filename -> source }`. Authoring aid: works on
+ * non-publishable graphs and never errors (empty map if unscopable), so the
+ * IDE can surface read-only typed `load_input()` stubs before publish.
+ */
+export async function getIoStubs(
+	id: string
+): Promise<Record<string, Record<string, string>>> {
+	const res = unwrap(
+		await client.GET('/api/templates/{id}/io-stubs', { params: { path: { id } } })
+	) as { generated?: Record<string, Record<string, string>> };
+	return res.generated ?? {};
+}
+
 // ── Instances ───────────────────────────────────────────────────────────────
 
 export async function listInstances(
