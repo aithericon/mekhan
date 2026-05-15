@@ -10,6 +10,10 @@ app/.output/
 app/.svelte-kit/
 app/build/
 
+# Python
+__pycache__/
+*.py[cod]
+
 # IDE / OS
 .DS_Store
 Thumbs.db
