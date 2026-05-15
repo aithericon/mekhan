@@ -293,11 +293,25 @@ pub fn json_value_to_any(value: &serde_json::Value) -> Any {
 }
 
 /// Convert yrs Any → serde_json::Value for reconstruction.
+/// Yjs has a single numeric type (IEEE-754 double): an integer written by the
+/// editor (e.g. `retryPolicy.baseDelayMs = 0`) round-trips through yrs as
+/// `Any::Number(0.0)`. `serde_json` will not deserialize a float literal into
+/// an integer model field (`u32`/`u64`/…), so a whole-valued double must be
+/// emitted as a JSON integer. Deserializing an integer into an `f64` field
+/// (positions, zoom) is lossless, so this coercion is safe in both directions.
+fn json_number_from_f64(n: f64) -> serde_json::Value {
+    if n.is_finite() && n.fract() == 0.0 && n >= i64::MIN as f64 && n <= i64::MAX as f64 {
+        serde_json::Value::Number((n as i64).into())
+    } else {
+        serde_json::json!(n)
+    }
+}
+
 pub fn any_to_json_value(value: &Any) -> serde_json::Value {
     match value {
         Any::Null | Any::Undefined => serde_json::Value::Null,
         Any::Bool(b) => serde_json::Value::Bool(*b),
-        Any::Number(n) => serde_json::json!(*n),
+        Any::Number(n) => json_number_from_f64(*n),
         Any::BigInt(n) => serde_json::json!(*n),
         Any::String(s) => serde_json::Value::String(s.to_string()),
         Any::Buffer(_) => serde_json::Value::Null,
@@ -329,5 +343,42 @@ pub fn yrs_value_to_json(value: &yrs::Out, txn: &impl ReadTxn) -> serde_json::Va
             serde_json::Value::Array(arr.iter(txn).map(|v| yrs_value_to_json(&v, txn)).collect())
         }
         _ => serde_json::Value::Null,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::template::{BackoffKind, RetryPolicy};
+
+    #[test]
+    fn json_number_from_f64_coerces_whole_values() {
+        assert_eq!(json_number_from_f64(0.0), serde_json::json!(0));
+        assert_eq!(json_number_from_f64(3.0), serde_json::json!(3));
+        assert_eq!(json_number_from_f64(-2.0), serde_json::json!(-2));
+        // Fractional values stay floats.
+        assert_eq!(json_number_from_f64(1.5), serde_json::json!(1.5));
+    }
+
+    /// Regression: Yjs stores every number as an IEEE-754 double, so an
+    /// integer model field round-trips as `Any::Number(0.0)`. Before the
+    /// coercion this failed reconstruction with
+    /// "invalid type: floating point `0.0`, expected u64", causing
+    /// `publish_template` to silently fall back to the stale DB graph.
+    #[test]
+    fn retry_policy_deserializes_through_yjs_number_roundtrip() {
+        let original = RetryPolicy {
+            max_retries: 2,
+            backoff: BackoffKind::Exponential,
+            base_delay_ms: 1000,
+        };
+        // graph → JSON → Any (Yjs storage: ints become f64) → JSON → model,
+        // exactly the path `doc_to_graph` takes for a node's `config`.
+        let as_json = serde_json::to_value(original).unwrap();
+        let as_any = json_value_to_any(&as_json);
+        let back = any_to_json_value(&as_any);
+        let restored: RetryPolicy =
+            serde_json::from_value(back).expect("must deserialize from Yjs float numbers");
+        assert_eq!(restored, original);
     }
 }
