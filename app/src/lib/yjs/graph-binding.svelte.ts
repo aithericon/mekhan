@@ -268,7 +268,24 @@ export class YjsGraphBinding {
 				data.type === 'automated_step' &&
 				data.executionSpec.backendType === 'python'
 			) {
-				files.set('main.py', new Y.Text('# Write your script here.\n'));
+				files.set(
+					'main.py',
+					new Y.Text(
+						[
+							'# Python step — runs on the Aithericon executor.',
+							'# `token`, `set_output` and `log_*` are injected by the runner',
+							'# (no imports, no init/shutdown). `token` is the workflow token;',
+							'# see the Reference panel for the fields you can read here.',
+							'',
+							'log_info("step started")',
+							'',
+							'# Each set_output(name, value) adds a field to this node’s output',
+							'# port, readable as token.<name> by downstream steps.',
+							'# set_output("result", token.some_field)',
+							''
+						].join('\n')
+					)
+				);
 			}
 			yNode.set('files', files);
 
@@ -308,6 +325,32 @@ export class YjsGraphBinding {
 				yNode.set('config', config);
 			}
 			this.writeDataToConfig(config as Y.Map<unknown>, data as WorkflowNodeData);
+
+			// A decision node's output handles are derived from its branch
+			// conditions (+ the optional default). Removing a branch deletes
+			// its handle, so any edge still wired to that handle would compile
+			// to CompileError::UnknownSourcePort at publish. Prune them here so
+			// the graph stays consistent with the node's handle set.
+			if (data.type === 'decision' && 'conditions' in data) {
+				const validHandles = new Set<string>(
+					(data.conditions ?? []).map((c) => c.edgeId)
+				);
+				if (data.defaultBranch) validHandles.add(data.defaultBranch);
+
+				const toRemove: number[] = [];
+				this.yEdges.forEach((edge, i) => {
+					if (
+						edge.source === nodeId &&
+						typeof edge.sourceHandle === 'string' &&
+						!validHandles.has(edge.sourceHandle)
+					) {
+						toRemove.push(i);
+					}
+				});
+				for (let i = toRemove.length - 1; i >= 0; i--) {
+					this.yEdges.delete(toRemove[i], 1);
+				}
+			}
 		});
 	}
 

@@ -82,6 +82,96 @@ describe('YjsGraphBinding', () => {
 		}
 	});
 
+	it('updateNodeData prunes decision edges wired to removed branch handles', () => {
+		const decisionData = {
+			...createDefaultNodeData('decision'),
+			conditions: [
+				{ edgeId: 'branch-a', label: 'A', guard: 'true' },
+				{ edgeId: 'branch-b', label: 'B', guard: 'false' }
+			],
+			defaultBranch: 'default'
+		} as WorkflowNodeData;
+
+		binding.addNode('d1', 'decision', { x: 0, y: 0 }, decisionData);
+		binding.addNode('s1', 'start', { x: -100, y: 0 }, createDefaultNodeData('start'));
+		binding.addNode('t1', 'end', { x: 100, y: 0 }, createDefaultNodeData('end'));
+		binding.addNode('t2', 'end', { x: 100, y: 100 }, createDefaultNodeData('end'));
+		binding.addNode('t3', 'end', { x: 100, y: 200 }, createDefaultNodeData('end'));
+
+		binding.addEdge({
+			id: 'ea',
+			source: 'd1',
+			target: 't1',
+			type: 'conditional',
+			sourceHandle: 'branch-a'
+		});
+		binding.addEdge({
+			id: 'eb',
+			source: 'd1',
+			target: 't2',
+			type: 'conditional',
+			sourceHandle: 'branch-b'
+		});
+		binding.addEdge({
+			id: 'edef',
+			source: 'd1',
+			target: 't3',
+			type: 'conditional',
+			sourceHandle: 'default'
+		});
+		// No sourceHandle: compiler falls back to the first port, so keep it.
+		binding.addEdge({ id: 'enoh', source: 'd1', target: 't1', type: 'conditional' });
+		// Edge into the decision node is unrelated to its output handles.
+		binding.addEdge({ id: 'ein', source: 's1', target: 'd1', type: 'sequence' });
+
+		binding.updateNodeData('d1', {
+			type: 'decision',
+			conditions: [{ edgeId: 'branch-a', label: 'A', guard: 'true' }],
+			defaultBranch: 'default'
+		} as WorkflowNodeData);
+
+		expect(binding.graph.edges.map((e) => e.id).sort()).toEqual([
+			'ea',
+			'edef',
+			'ein',
+			'enoh'
+		]);
+	});
+
+	it('updateNodeData prunes the default-branch edge when defaultBranch is disabled', () => {
+		const decisionData = {
+			...createDefaultNodeData('decision'),
+			conditions: [{ edgeId: 'branch-a', label: 'A', guard: 'true' }],
+			defaultBranch: 'default'
+		} as WorkflowNodeData;
+
+		binding.addNode('d1', 'decision', { x: 0, y: 0 }, decisionData);
+		binding.addNode('t1', 'end', { x: 100, y: 0 }, createDefaultNodeData('end'));
+		binding.addNode('t2', 'end', { x: 100, y: 100 }, createDefaultNodeData('end'));
+
+		binding.addEdge({
+			id: 'ea',
+			source: 'd1',
+			target: 't1',
+			type: 'conditional',
+			sourceHandle: 'branch-a'
+		});
+		binding.addEdge({
+			id: 'edef',
+			source: 'd1',
+			target: 't2',
+			type: 'conditional',
+			sourceHandle: 'default'
+		});
+
+		binding.updateNodeData('d1', {
+			type: 'decision',
+			conditions: [{ edgeId: 'branch-a', label: 'A', guard: 'true' }]
+		} as WorkflowNodeData);
+
+		expect(binding.graph.edges.map((e) => e.id)).toEqual(['ea']);
+	});
+
 	it('updateNodePosition changes position', () => {
 		const data = createDefaultNodeData('start');
 		binding.addNode('n1', 'start', { x: 0, y: 0 }, data);

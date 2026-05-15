@@ -2,8 +2,10 @@
 	import type { DecisionNodeData } from '$lib/types/editor';
 	import type { ScopeEntry } from '$lib/editor/guard-scope';
 	import Plus from '@lucide/svelte/icons/plus';
+	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import GuardEditor from './GuardEditor.svelte';
 	import { Input } from '$lib/components/ui/input';
+	import { Button } from '$lib/components/ui/button';
 
 	type Props = {
 		data: DecisionNodeData;
@@ -30,6 +32,13 @@
 					guard: ''
 				}
 			]
+		});
+	}
+
+	function removeBranch(index: number) {
+		onchange({
+			...data,
+			conditions: data.conditions.filter((_, i) => i !== index)
 		});
 	}
 
@@ -72,14 +81,26 @@
 	{#each data.conditions as condition, i (condition.edgeId)}
 		<div class="rounded-lg border border-border bg-muted/30 p-2 text-[11px]">
 			<div class="space-y-1.5">
-				<Input
-					type="text"
-					value={condition.label}
-					placeholder="Branch label"
-					disabled={readonly}
-					oninput={(e) => updateConditionLabel(i, (e.currentTarget as HTMLInputElement).value)}
-					class="h-7 px-2 py-1 text-[11px]"
-				/>
+				<div class="flex items-center gap-2">
+					<Input
+						type="text"
+						value={condition.label}
+						placeholder="Branch label"
+						disabled={readonly}
+						oninput={(e) => updateConditionLabel(i, (e.currentTarget as HTMLInputElement).value)}
+						class="h-7 px-2 py-1 text-[11px]"
+					/>
+					{#if !readonly}
+						<Button
+							variant="ghost"
+							size="sm"
+							onclick={() => removeBranch(i)}
+							aria-label="Remove branch"
+						>
+							<Trash2 class="size-3.5" />
+						</Button>
+					{/if}
+				</div>
 				<GuardEditor
 					guard={condition.guard}
 					{scope}
