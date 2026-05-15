@@ -14,6 +14,8 @@ const PROCESS_FILTER_FIELDS: &[&str] = &[
     "owner",
     "name",
     "process_id",
+    "instance_id",
+    "net_id",
     "created_at",
     "updated_at",
 ];

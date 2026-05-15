@@ -383,6 +383,18 @@ export async function listProcesses(params?: {
 	return rawJson(`/processes${query ? `?${query}` : ''}`);
 }
 
+/** Processes produced by a given workflow instance (usually one, but a
+ *  multi-start template can spawn several). Backed by the instance_id link
+ *  added to hpi_processes. */
+export async function listProcessesByInstance(
+	instanceId: string
+): Promise<import('$lib/types/process').PaginatedProcessResponse<HpiProcess>> {
+	const qs = new URLSearchParams();
+	qs.set('filter[instance_id][eq]', instanceId);
+	qs.set('sort', '-created_at');
+	return rawJson(`/processes?${qs.toString()}`);
+}
+
 export async function getProcessStats(): Promise<ProcessStats> {
 	return unwrap(await client.GET('/api/processes/stats', {}));
 }
