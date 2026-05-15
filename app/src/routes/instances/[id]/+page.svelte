@@ -9,10 +9,11 @@
 	} from '$lib/api/client';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
+	import { ProcessView } from '$lib/components/processes';
 	import { NetWorkbench } from '$lib/components/petri';
-	import type { WorkbenchApi } from '$lib/components/petri/NetWorkbench.svelte';
 	import FileText from '@lucide/svelte/icons/file-text';
-	import GitBranch from '@lucide/svelte/icons/git-branch';
+	import LayoutDashboard from '@lucide/svelte/icons/layout-dashboard';
+	import Network from '@lucide/svelte/icons/network';
 
 	const instanceId = $derived(page.params.id!);
 
@@ -20,6 +21,12 @@
 	let processes = $state<HpiProcess[]>([]);
 	let loading = $state(true);
 	let error = $state<string | null>(null);
+
+	let mode = $state<'process' | 'petri'>('process');
+	let selectedProcessId = $state<string | null>(null);
+	// The Petri workbench is heavy; only mount it once the user opens it, then
+	// keep it alive (hidden) so toggling back doesn't re-init the store.
+	let petriMounted = $state(false);
 
 	const statusColors: Record<string, string> = {
 		created: 'bg-gray-100 text-gray-700',
@@ -31,10 +38,19 @@
 
 	const formatDate = (s: string | null) => (s ? new Date(s).toLocaleString() : '-');
 
-	const hasNet = $derived(
-		!!instance && instance.status !== 'created' && !!instance.net_id
-	);
+	const hasNet = $derived(!!instance && instance.status !== 'created' && !!instance.net_id);
 	const primaryProcess = $derived(processes[0] ?? null);
+
+	// Keep a valid selected process as the list resolves / changes.
+	$effect(() => {
+		if (processes.length === 0) {
+			selectedProcessId = null;
+			return;
+		}
+		if (!selectedProcessId || !processes.some((p) => p.process_id === selectedProcessId)) {
+			selectedProcessId = processes[0].process_id;
+		}
+	});
 
 	async function load() {
 		loading = true;
@@ -63,6 +79,11 @@
 		}
 	}
 
+	function openPetri() {
+		petriMounted = true;
+		mode = 'petri';
+	}
+
 	$effect(() => {
 		load();
 	});
@@ -86,16 +107,6 @@
 						<FileText class="size-3.5" />
 						Template v{instance.template_version}
 					</Button>
-					{#if primaryProcess}
-						<Button
-							variant="ghost"
-							size="sm"
-							href="/processes/{primaryProcess.process_id}"
-						>
-							<GitBranch class="size-3.5" />
-							{processes.length > 1 ? `Processes (${processes.length})` : 'Process'}
-						</Button>
-					{/if}
 					{#if instance.status === 'running' || instance.status === 'created'}
 						<Button
 							variant="outline"
@@ -120,10 +131,6 @@
 	{/if}
 {/snippet}
 
-{#snippet header(_api: WorkbenchApi)}
-	{@render lineage()}
-{/snippet}
-
 <div class="flex h-full flex-col" data-testid="instance-page">
 	{#if loading}
 		<div class="flex items-center justify-center py-16 text-sm text-muted-foreground">
@@ -136,10 +143,87 @@
 			{error}
 		</div>
 	{:else if instance}
-		{#if hasNet}
-			<NetWorkbench netId={instance.net_id} {header} />
+		{@render lineage()}
+
+		{#if primaryProcess || hasNet}
+			<!-- Mode switch: Process is primary; the Petri net is secondary/debug. -->
+			<div
+				class="flex items-center gap-1 border-b border-border bg-card px-3 py-1 shrink-0"
+			>
+				<button
+					class="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors
+						{mode === 'process'
+						? 'bg-primary text-primary-foreground'
+						: 'text-muted-foreground hover:bg-accent hover:text-foreground'}"
+					onclick={() => (mode = 'process')}
+				>
+					<LayoutDashboard class="size-3.5" />
+					Process
+				</button>
+				{#if hasNet}
+					<button
+						class="ml-auto inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs transition-colors
+							{mode === 'petri'
+							? 'bg-accent text-foreground'
+							: 'text-muted-foreground/70 hover:bg-accent hover:text-foreground'}"
+						onclick={openPetri}
+						title="Engine debug: the raw Petri net for this run"
+					>
+						<Network class="size-3.5" />
+						Petri net
+					</button>
+				{/if}
+			</div>
+
+			<div class="relative flex-1 min-h-0">
+				<!-- Process (primary) -->
+				<div
+					class="absolute inset-0 overflow-y-auto"
+					class:hidden={mode !== 'process'}
+				>
+					{#if primaryProcess && selectedProcessId}
+						<div class="mx-auto w-full px-6 py-6">
+							{#if processes.length > 1}
+								<div class="mb-3 flex flex-wrap items-center gap-1.5 text-xs">
+									<span class="text-muted-foreground">Processes:</span>
+									{#each processes as p (p.process_id)}
+										<button
+											class="rounded-md px-2 py-0.5 transition-colors
+												{selectedProcessId === p.process_id
+												? 'bg-primary text-primary-foreground'
+												: 'bg-accent text-muted-foreground hover:text-foreground'}"
+											onclick={() => (selectedProcessId = p.process_id)}
+										>
+											{p.name ?? p.process_id.slice(0, 8)}
+										</button>
+									{/each}
+								</div>
+							{/if}
+							<ProcessView processId={selectedProcessId} />
+						</div>
+					{:else}
+						<div
+							class="flex h-full flex-col items-center justify-center gap-2 py-16 text-sm text-muted-foreground"
+						>
+							<LayoutDashboard class="size-8 text-muted-foreground/40" />
+							<p>No process for this run yet.</p>
+							{#if hasNet}
+								<button class="text-xs underline hover:text-foreground" onclick={openPetri}>
+									Inspect the Petri net
+								</button>
+							{/if}
+						</div>
+					{/if}
+				</div>
+
+				<!-- Petri net (secondary, lazy + kept alive once opened) -->
+				{#if petriMounted && instance.net_id}
+					<div class="absolute inset-0" class:hidden={mode !== 'petri'}>
+						<NetWorkbench netId={instance.net_id} />
+					</div>
+				{/if}
+			</div>
 		{:else}
-			{@render lineage()}
 			<div
 				class="flex flex-1 items-center justify-center py-16 text-sm text-muted-foreground"
 			>
