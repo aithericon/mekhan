@@ -900,12 +900,24 @@ pub async fn io_stubs(
     .map_err(|e| ApiError::internal(e.to_string()))?
     .ok_or_else(|| ApiError::not_found("template not found"))?;
 
-    // Prefer the Y.Doc graph (live collaborative state); fall back to the DB
-    // graph column. Either failing just yields no stubs — never a hard error.
-    let graph: Option<WorkflowGraph> = match reconstruct_graph_from_ydoc(&state, id).await {
-        Ok(Some((g, _))) => Some(g),
-        _ => serde_json::from_value(existing.graph).ok(),
-    };
+    // Prefer the live Y.Doc graph (what the author sees in the IDE). `diagnostic`
+    // is surfaced to the editor so an empty scope explains itself instead of
+    // looking broken. Crucially: if the Y.Doc exists but won't reconstruct we do
+    // NOT silently serve the stale DB graph — that showed pre-edit scopes and is
+    // exactly why "I added a field but it doesn't show up" happened. Honest-empty
+    // beats confidently-wrong for an authoring aid.
+    let (graph, mut diagnostic): (Option<WorkflowGraph>, String) =
+        match reconstruct_graph_from_ydoc(&state, id).await {
+            Ok(Some((g, _))) => (Some(g), "ok".to_string()),
+            Ok(None) => (
+                serde_json::from_value(existing.graph).ok(),
+                "no_ydoc_using_saved_graph".to_string(),
+            ),
+            Err(e) => {
+                tracing::warn!(template = %id, error = %e, "io_stubs: Y.Doc unreadable");
+                (None, format!("ydoc_unreadable: {e}"))
+            }
+        };
 
     let mut generated: HashMap<String, HashMap<String, String>> = HashMap::new();
     // Structured per-node input scope so the editor's reference panel can
@@ -913,35 +925,44 @@ pub async fn io_stubs(
     // (BTreeMap) for stable display.
     let mut scopes_out: HashMap<String, Vec<serde_json::Value>> = HashMap::new();
     if let Some(graph) = graph {
-        if let Ok(scopes) = node_input_scopes(&graph) {
-            for node in &graph.nodes {
-                if let WorkflowNodeData::AutomatedStep { execution_spec, .. } = &node.data {
-                    if execution_spec.backend_type == ExecutionBackendType::Python {
-                        if let Some(scope) = scopes.get(&node.id) {
-                            let entry =
-                                generated.entry(node.id.clone()).or_default();
-                            for (filename, source) in generate_py_io_files(scope) {
-                                entry.insert(filename.to_string(), source);
+        match node_input_scopes(&graph) {
+            Ok(scopes) => {
+                for node in &graph.nodes {
+                    if let WorkflowNodeData::AutomatedStep { execution_spec, .. } = &node.data {
+                        if execution_spec.backend_type == ExecutionBackendType::Python {
+                            if let Some(scope) = scopes.get(&node.id) {
+                                let entry = generated.entry(node.id.clone()).or_default();
+                                for (filename, source) in generate_py_io_files(scope) {
+                                    entry.insert(filename.to_string(), source);
+                                }
+                                scopes_out.insert(
+                                    node.id.clone(),
+                                    scope
+                                        .iter()
+                                        .map(|(name, kind)| {
+                                            serde_json::json!({ "name": name, "kind": kind })
+                                        })
+                                        .collect(),
+                                );
                             }
-                            scopes_out.insert(
-                                node.id.clone(),
-                                scope
-                                    .iter()
-                                    .map(|(name, kind)| {
-                                        serde_json::json!({ "name": name, "kind": kind })
-                                    })
-                                    .collect(),
-                            );
                         }
                     }
                 }
             }
+            // A mid-authoring graph that isn't yet a clean DAG (no Start, a
+            // cycle, dangling edges) can't be scoped — say so rather than
+            // showing a misleading empty panel.
+            Err(e) => {
+                diagnostic = format!("graph_not_scopable: {e}");
+            }
         }
     }
 
-    Ok(Json(
-        serde_json::json!({ "generated": generated, "scopes": scopes_out }),
-    ))
+    Ok(Json(serde_json::json!({
+        "generated": generated,
+        "scopes": scopes_out,
+        "diagnostic": diagnostic,
+    })))
 }
 
 /// POST /api/compile

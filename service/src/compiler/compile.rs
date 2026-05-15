@@ -549,6 +549,30 @@ fn validate(graph: &WorkflowGraph, wg: &WorkflowDiGraph) -> Result<(), CompileEr
         }
     }
 
+    // Unmerged fan-in: a work node (Automated/Human) with >1 incoming edge
+    // isn't a synchronizing join — its single input place has multiple
+    // producers, so the step *fires once per arriving token* with only that
+    // token's data, not a merge. This is legal Petri, rarely the intent.
+    // Warn (don't fail — existing graphs rely on it); the editor surfaces the
+    // same caveat per-node in the step reference panel.
+    for node in &graph.nodes {
+        if matches!(
+            node.data,
+            WorkflowNodeData::AutomatedStep { .. } | WorkflowNodeData::HumanTask { .. }
+        ) {
+            let idx = wg.indices[node.id.as_str()];
+            let in_count = wg.full.edges_directed(idx, Direction::Incoming).count();
+            if in_count > 1 {
+                tracing::warn!(
+                    node = %node.id,
+                    incoming = in_count,
+                    "unmerged fan-in: '{}' has {in_count} incoming edges and is not a Parallel Join; it will run once per upstream token (no merge). Insert a Parallel Join to combine inputs.",
+                    node.id
+                );
+            }
+        }
+    }
+
     Ok(())
 }
 

@@ -15,9 +15,21 @@
 		readonly?: boolean;
 		/** This node's input scope (from getStepScopes); drives the reference panel. */
 		scopeFields?: StepScopeField[];
+		/** Why the scope is what it is (lets an empty panel explain itself). */
+		scopeDiagnostic?: string;
+		scopeBusy?: boolean;
+		onRefreshScope?: () => void;
 	};
 
-	let { binding, nodeId, readonly = false, scopeFields = [] }: Props = $props();
+	let {
+		binding,
+		nodeId,
+		readonly = false,
+		scopeFields = [],
+		scopeDiagnostic = 'ok',
+		scopeBusy = false,
+		onRefreshScope
+	}: Props = $props();
 
 	const nodeData = $derived(
 		binding.graph.nodes.find((n) => n.id === nodeId)?.data ?? null
@@ -28,6 +40,13 @@
 			// executionSpec exists on automated_step variants
 			(nodeData as Extract<WorkflowNodeData, { type: 'automated_step' }>).executionSpec
 				?.backendType === 'python'
+	);
+
+	// Unmerged fan-in: >1 edge into a non-Join step means it runs once per
+	// upstream token (no merge) and the scope below is the union across
+	// branches, not one run's data. Pure graph topology — compute live.
+	const incomingCount = $derived(
+		binding.graph.edges.filter((e) => e.target === nodeId).length
 	);
 
 	function handleChange(data: WorkflowNodeData) {
@@ -92,7 +111,13 @@
 		</div>
 
 		{#if isPythonStep}
-			<StepReferencePanel fields={scopeFields} />
+			<StepReferencePanel
+				fields={scopeFields}
+				diagnostic={scopeDiagnostic}
+				busy={scopeBusy}
+				{incomingCount}
+				onRefresh={onRefreshScope}
+			/>
 		{/if}
 	{:else}
 		<div class="flex flex-1 items-center justify-center text-sm text-muted-foreground">

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import Upload from '@lucide/svelte/icons/upload';
 	import LayoutGrid from '@lucide/svelte/icons/layout-grid';
+	import Pencil from '@lucide/svelte/icons/pencil';
 	import type { Awareness } from 'y-protocols/awareness';
 	import type { MekhanWsProvider } from '$lib/yjs/ws-provider';
 	import AwarenessBar from '$lib/components/editor/AwarenessBar.svelte';
@@ -15,14 +16,72 @@
 		awareness?: Awareness;
 		provider?: MekhanWsProvider;
 		onPublish: () => void;
+		/** Commit a new template name (parent does the API call + state). */
+		onRename?: (name: string) => void;
 	};
 
-	let { templateName, templateId, published, awareness, provider, onPublish }: Props = $props();
+	let { templateName, templateId, published, awareness, provider, onPublish, onRename }: Props =
+		$props();
+
+	// Inline rename. Published templates are locked (server returns 409), so
+	// editing is only offered on drafts.
+	let editing = $state(false);
+	let draft = $state('');
+	let inputEl = $state<HTMLInputElement | undefined>();
+
+	function startEdit() {
+		if (published || !onRename) return;
+		draft = templateName;
+		editing = true;
+	}
+
+	function commit() {
+		if (!editing) return;
+		editing = false;
+		const next = draft.trim();
+		if (next && next !== templateName) onRename?.(next);
+	}
+
+	function onKeydown(e: KeyboardEvent) {
+		if (e.key === 'Enter') {
+			e.preventDefault();
+			commit();
+		} else if (e.key === 'Escape') {
+			e.preventDefault();
+			editing = false;
+		}
+	}
+
+	$effect(() => {
+		if (editing) inputEl?.focus();
+	});
 </script>
 
 <div class="flex h-10 items-center justify-between border-b border-border bg-card px-3">
 	<div class="flex items-center gap-3">
-		<span class="text-sm font-medium text-foreground">{templateName}</span>
+		{#if editing}
+			<input
+				bind:this={inputEl}
+				bind:value={draft}
+				onkeydown={onKeydown}
+				onblur={commit}
+				onfocus={(e) => (e.currentTarget as HTMLInputElement).select()}
+				aria-label="Template name"
+				class="w-56 rounded-md border border-input bg-background px-2 py-1 text-sm font-medium text-foreground focus:border-ring focus:outline-none"
+			/>
+		{:else if !published && onRename}
+			<button
+				type="button"
+				onclick={startEdit}
+				title="Rename template"
+				class="group flex items-center gap-1.5 rounded-md px-1 py-0.5 text-sm font-medium text-foreground hover:bg-accent"
+			>
+				<span>{templateName}</span>
+				<Pencil class="size-3 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+			</button>
+		{:else}
+			<span class="text-sm font-medium text-foreground">{templateName}</span>
+		{/if}
 		{#if published}
 			<Badge class="bg-green-100 text-green-700" variant="secondary">
 				Published

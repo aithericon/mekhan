@@ -263,18 +263,27 @@ export async function getIoStubs(
 export type StepScopeField = { name: string; kind: string };
 
 /**
- * Structured per-node input scope, keyed `nodeId -> [{ name, kind }]` —
- * the same `input.<field>` set the generated `.pyi` types and decision
- * guards see. Drives the IDE step reference panel. Never errors: an
- * unscopable graph just yields an empty map.
+ * Per-node input scope plus a `diagnostic` explaining the result so an empty
+ * panel can say *why* (live graph unreadable, graph not yet a DAG, or simply
+ * no upstream) instead of looking broken. `scopes` is keyed
+ * `nodeId -> [{ name, kind }]` — the same `input.<field>` set the generated
+ * `.pyi` types and decision guards see. Never throws: failures degrade to an
+ * empty map with a diagnostic.
  */
-export async function getStepScopes(
-	id: string
-): Promise<Record<string, StepScopeField[]>> {
-	const res = unwrap(
-		await client.GET('/api/templates/{id}/io-stubs', { params: { path: { id } } })
-	) as { scopes?: Record<string, StepScopeField[]> };
-	return res.scopes ?? {};
+export type StepScopes = {
+	scopes: Record<string, StepScopeField[]>;
+	diagnostic: string;
+};
+
+export async function getStepScopes(id: string): Promise<StepScopes> {
+	try {
+		const res = unwrap(
+			await client.GET('/api/templates/{id}/io-stubs', { params: { path: { id } } })
+		) as { scopes?: Record<string, StepScopeField[]>; diagnostic?: string };
+		return { scopes: res.scopes ?? {}, diagnostic: res.diagnostic ?? 'ok' };
+	} catch (e) {
+		return { scopes: {}, diagnostic: `request_failed: ${e instanceof Error ? e.message : e}` };
+	}
 }
 
 // ── Instances ───────────────────────────────────────────────────────────────

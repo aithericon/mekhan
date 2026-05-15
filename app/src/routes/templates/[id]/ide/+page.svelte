@@ -14,6 +14,7 @@
 		getTemplate,
 		publishTemplate,
 		uploadFile,
+		updateTemplate,
 		getStepScopes,
 		type Template,
 		type StepScopeField
@@ -24,15 +25,20 @@
 	let template = $state<Template | null>(null);
 	let error = $state<string | null>(null);
 
-	// Per-node input scope for the step reference panel. Derived server-side
-	// from the live Y.Doc graph; never errors (empty map if unscopable).
+	// Per-node input scope for the step reference panel, plus a diagnostic so
+	// an empty panel can explain itself. Derived server-side from the live
+	// Y.Doc graph; getStepScopes never throws.
 	let stepScopes = $state<Record<string, StepScopeField[]>>({});
+	let scopeDiagnostic = $state<string>('ok');
+	let scopeBusy = $state(false);
 	async function refreshScopes() {
+		scopeBusy = true;
 		try {
-			stepScopes = await getStepScopes(templateId);
-		} catch {
-			// Authoring aid only — a failure here must never block editing.
-			stepScopes = {};
+			const res = await getStepScopes(templateId);
+			stepScopes = res.scopes;
+			scopeDiagnostic = res.diagnostic;
+		} finally {
+			scopeBusy = false;
 		}
 	}
 
@@ -74,6 +80,19 @@
 			void refreshScopes();
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to publish';
+		}
+	}
+
+	async function handleRename(name: string) {
+		if (!template) return;
+		const prev = template;
+		// Optimistic: reflect immediately, roll back on failure.
+		template = { ...template, name };
+		try {
+			template = await updateTemplate(templateId, { name });
+		} catch (e) {
+			template = prev;
+			error = e instanceof Error ? e.message : 'Rename failed';
 		}
 	}
 
@@ -199,12 +218,24 @@
 		load();
 	});
 
-	// Keep the step reference panel fresh: refetch when the focused node
-	// changes or the graph's node set shifts (covers initial sync + upstream
-	// edits that change scope). Cheap and non-blocking.
+	// Keep the step reference panel fresh. io-stubs derives scope from the
+	// live Y.Doc, so *any* edit — including adding a port field on another
+	// node — can change a step's scope. Refetch debounced after edits settle
+	// (not just on node switch, which is why a freshly added field looked
+	// like it "didn't show up"). The first post-sync update also corrects the
+	// initial fetch if it raced ahead of the doc.
+	let scopeTimer: ReturnType<typeof setTimeout> | undefined;
+	function scheduleScopeRefresh() {
+		clearTimeout(scopeTimer);
+		scopeTimer = setTimeout(() => void refreshScopes(), 500);
+	}
 	$effect(() => {
-		selectedNodeId;
-		if (binding.graph.nodes.length > 0) void refreshScopes();
+		void refreshScopes();
+		session.doc.on('update', scheduleScopeRefresh);
+		return () => {
+			session.doc.off('update', scheduleScopeRefresh);
+			clearTimeout(scopeTimer);
+		};
 	});
 
 	onDestroy(() => {
@@ -221,6 +252,7 @@
 		awareness={session.awareness}
 		provider={session.provider}
 		onPublish={handlePublish}
+		onRename={handleRename}
 	/>
 
 	{#if error}
@@ -272,6 +304,9 @@
 					nodeId={selectedNodeId}
 					readonly={template?.published ?? false}
 					scopeFields={stepScopes[selectedNodeId] ?? []}
+					{scopeDiagnostic}
+					scopeBusy={scopeBusy}
+					onRefreshScope={refreshScopes}
 				/>
 			{:else}
 				<div class="flex h-full items-center justify-center border-l border-border bg-card text-sm text-muted-foreground">

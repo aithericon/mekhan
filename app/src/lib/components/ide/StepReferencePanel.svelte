@@ -8,9 +8,38 @@
 	type Props = {
 		/** This node's input scope: fields readable as `token.<name>`. */
 		fields: StepScopeField[];
+		/** Server diagnostic, so an empty list explains itself. */
+		diagnostic?: string;
+		busy?: boolean;
+		/** Edges into this step. >1 (non-Join) ⇒ unmerged fan-in. */
+		incomingCount?: number;
+		onRefresh?: () => void;
 	};
 
-	let { fields }: Props = $props();
+	let {
+		fields,
+		diagnostic = 'ok',
+		busy = false,
+		incomingCount = 0,
+		onRefresh
+	}: Props = $props();
+
+	const unmergedFanIn = $derived(incomingCount > 1);
+
+	// Turn the raw server diagnostic into a one-liner for the empty state.
+	const emptyReason = $derived.by(() => {
+		if (fields.length > 0) return null;
+		if (diagnostic.startsWith('ydoc_unreadable'))
+			return "Couldn't read the live graph — your edits aren't lost; try Refresh in a moment.";
+		if (diagnostic.startsWith('graph_not_scopable'))
+			return 'The graph isn’t a complete flow yet (missing Start, a cycle, or a dangling edge). Wire this step to an upstream node, then Refresh.';
+		if (diagnostic.startsWith('request_failed'))
+			return 'Scope request failed. Try Refresh.';
+		if (diagnostic === 'no_ydoc_using_saved_graph')
+			return 'Showing the last saved graph. Open/edit this template in the editor so the live scope can be computed.';
+		// diagnostic === 'ok' (or unknown): genuinely no upstream fields.
+		return 'No upstream fields reach this step yet. Connect it after a Start/step that emits fields (or use token["x"] for dynamic data).';
+	});
 
 	// The runner auto-imports the SDK and injects these into step scope
 	// (executor PythonBackend runner template). Everything else is reachable
@@ -45,9 +74,34 @@
 	</summary>
 
 	<div class="max-h-[45vh] space-y-4 overflow-y-auto px-3 pb-3">
+		{#if unmergedFanIn}
+			<div
+				class="rounded-md border border-amber-300 bg-amber-50 px-2.5 py-2 text-[11px] leading-snug text-amber-900"
+			>
+				<span class="font-semibold">⚠ Unmerged fan-in ({incomingCount} inputs).</span>
+				This step isn't a Parallel Join, so it <strong>runs once per upstream
+				token</strong> — each run sees only that branch's data. The fields below
+				are the <em>union across all branches</em>, not what's present in a
+				single run. Insert a <strong>Parallel Join</strong> upstream to combine
+				inputs into one token.
+			</div>
+		{/if}
 		<div class="space-y-1.5">
-			<div class="text-xs font-medium text-foreground">
-				Token fields <span class="font-normal text-muted-foreground">— read via <code class="font-mono">token.&lt;name&gt;</code></span>
+			<div class="flex items-center justify-between gap-2">
+				<div class="text-xs font-medium text-foreground">
+					Token fields <span class="font-normal text-muted-foreground">— read via <code class="font-mono">token.&lt;name&gt;</code></span>
+				</div>
+				{#if onRefresh}
+					<button
+						type="button"
+						class="shrink-0 rounded px-1.5 py-0.5 text-[10px] text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50"
+						disabled={busy}
+						onclick={() => onRefresh?.()}
+						title="Recompute scope from the live graph"
+					>
+						{busy ? 'Refreshing…' : 'Refresh'}
+					</button>
+				{/if}
 			</div>
 			{#if fields.length > 0}
 				<ul class="space-y-0.5">
@@ -59,9 +113,9 @@
 					{/each}
 				</ul>
 			{:else}
-				<p class="text-xs text-muted-foreground">
-					No typed upstream fields — this step's token is pass-through. Use
-					<code class="font-mono">token["field"]</code> for dynamic access.
+				<p class="text-xs text-muted-foreground">{emptyReason}</p>
+				<p class="text-[10px] text-muted-foreground/70">
+					Dynamic access always works: <code class="font-mono">token["field"]</code>.
 				</p>
 			{/if}
 		</div>
