@@ -9,17 +9,26 @@ use crate::traits::{ArtifactStore, StorageError, StoragePath, UploadOptions};
 
 /// Enrich an artifact with file metadata extracted from the local file.
 ///
-/// Extracts format-specific metadata and computes a SHA-256 checksum via `fmeta`.
-/// Silently skips unsupported formats.
+/// Extracts format-specific metadata and computes a SHA-256 checksum via `fmeta`,
+/// then promotes the commonly-queried scalars (`mime_type`, `size_bytes`) onto the
+/// artifact itself so the API, live renderers, and download Content-Type don't have
+/// to reach into the `file_metadata` JSON blob. The full extracted metadata is
+/// always stored in `artifact.file_metadata`. Silently skips unsupported formats.
 pub async fn enrich_artifact_metadata(artifact: &mut Artifact, local_path: &Path) {
     match aithericon_file_metadata::extract_metadata_async(local_path).await {
         Ok(meta) => {
+            // Backfill scalars fmeta detected, but never clobber a value the
+            // producer set explicitly (e.g. an SDK-supplied mime_type).
+            if artifact.mime_type.is_none() {
+                artifact.mime_type = meta.mime_type.clone();
+            }
             if artifact.size_bytes.is_none() {
                 artifact.size_bytes = meta.file_size_bytes;
             }
             debug!(
                 artifact_id = %artifact.id,
                 format = ?meta.format,
+                mime_type = ?artifact.mime_type,
                 checksum = ?meta.checksum,
                 "file metadata extracted"
             );
