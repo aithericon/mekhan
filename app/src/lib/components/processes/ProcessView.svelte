@@ -13,7 +13,13 @@
 		type HpiLog,
 		type CatalogueEntry
 	} from '$lib/api/client';
-	import type { ProcessTimelineEntry, StepDefinition, StepEvent } from '$lib/types/process';
+	import type {
+		ProcessTimelineEntry,
+		StepDefinition,
+		StepEvent,
+		Phase,
+		Progress
+	} from '$lib/types/process';
 	import { ProcessTimeline } from '$lib/components/process-timeline';
 	import { ArtifactCard } from '$lib/components/catalogue';
 	import { MetricsPanel, LogsPanel, ArtifactsPanel } from '$lib/components/process-live';
@@ -115,7 +121,34 @@
 	}
 
 	// ── Timeline ──────────────────────────────────────────────────────────────
+	function progressOf(d: ProcessDetail | null): Progress | undefined {
+		const cfg = d?.config as Record<string, unknown> | undefined;
+		return cfg?.progress as Progress | undefined;
+	}
+
+	function phasesToTimeline(phases: Phase[]): ProcessTimelineEntry[] {
+		return phases.map((p) => {
+			let duration_ms: number | undefined;
+			if (p.started_at && p.ended_at) {
+				duration_ms = new Date(p.ended_at).getTime() - new Date(p.started_at).getTime();
+			}
+			return {
+				step: p.name,
+				label: p.name,
+				status: p.status,
+				human: false,
+				started_at: p.started_at ?? undefined,
+				completed_at: p.ended_at ?? undefined,
+				duration_ms
+			};
+		});
+	}
+
 	function buildTimeline(d: ProcessDetail): ProcessTimelineEntry[] {
+		// Canonical executor-domain model first; legacy Petri step_events fallback.
+		const canonical = progressOf(d);
+		if (canonical?.phases?.length) return phasesToTimeline(canonical.phases);
+
 		const cfg = d.config as Record<string, unknown> | undefined;
 		const dx = d as unknown as { steps?: StepDefinition[]; step_events?: StepEvent[] };
 		const steps = (cfg?.steps ?? dx.steps) as StepDefinition[] | undefined;
@@ -166,6 +199,10 @@
 	}
 
 	let timelineEntries = $derived(detail ? buildTimeline(detail) : []);
+	let progress = $derived(progressOf(detail));
+	let progressPct = $derived(
+		progress ? Math.round(Math.min(1, Math.max(0, progress.fraction)) * 100) : 0
+	);
 
 	// ── Data loading ───────────────────────────────────────────────────────────
 	async function loadDetail() {
@@ -347,6 +384,27 @@
 	<!-- ── Overview Tab ───────────────────────────────────────── -->
 	{#if activeTab === 'overview'}
 		<div class="space-y-4">
+			{#if progress}
+				<div class="rounded-lg border border-border bg-card p-4">
+					<div class="mb-2 flex items-baseline justify-between gap-3">
+						<h3 class="text-sm font-medium text-foreground">Progress</h3>
+						<span class="text-xs tabular-nums text-muted-foreground">
+							{progressPct}%{#if progress.total_steps > 0}
+								· step {progress.current_step}/{progress.total_steps}{/if}
+						</span>
+					</div>
+					<div class="h-2 w-full overflow-hidden rounded-full bg-muted/50">
+						<div
+							class="h-full rounded-full bg-cyan-500 transition-all duration-300"
+							style="width: {progressPct}%"
+						></div>
+					</div>
+					{#if progress.message}
+						<p class="mt-1.5 text-xs text-muted-foreground">{progress.message}</p>
+					{/if}
+				</div>
+			{/if}
+
 			{#if timelineEntries.length > 0}
 				<div class="rounded-lg border border-border bg-card p-4">
 					<h3 class="mb-3 text-sm font-medium text-foreground">Timeline</h3>

@@ -110,6 +110,19 @@
 							/>
 						</svg>
 					</div>
+				{:else if entry.status === 'skipped'}
+					<div
+						class="flex size-[22px] items-center justify-center rounded-full border-2 border-dashed border-muted-foreground/40 bg-card text-muted-foreground"
+					>
+						<svg class="size-3" viewBox="0 0 12 12" fill="none">
+							<path
+								d="M3 6h6"
+								stroke="currentColor"
+								stroke-width="1.5"
+								stroke-linecap="round"
+							/>
+						</svg>
+					</div>
 				{:else}
 					<div
 						class="flex size-[22px] items-center justify-center rounded-full border-2 border-border bg-card"
