@@ -98,13 +98,13 @@
 		<div class="border-b border-border bg-card px-4 py-2 shrink-0">
 			<div class="flex items-center justify-between gap-3">
 				<div class="flex items-center gap-3 min-w-0">
-					<h1 class="shrink-0 text-sm font-semibold text-foreground">
+					<h1 class="shrink-0 text-base font-semibold text-foreground">
 						{processName ?? 'Run'}
 					</h1>
 					<Badge class={statusColors[instance.status] ?? ''} variant="secondary">
 						{instance.status}
 					</Badge>
-					<span class="font-mono text-[11px] text-muted-foreground truncate">
+					<span class="font-mono text-xs text-muted-foreground truncate">
 						{instance.net_id}
 					</span>
 				</div>
@@ -125,7 +125,7 @@
 					{/if}
 				</div>
 			</div>
-			<div class="mt-1 flex flex-wrap gap-x-4 gap-y-0.5 text-[11px] text-muted-foreground">
+			<div class="mt-1 flex flex-wrap gap-x-4 gap-y-0.5 text-xs text-muted-foreground">
 				<span>created {formatDate(instance.created_at)}</span>
 				<span>started {formatDate(instance.started_at ?? null)}</span>
 				<span>completed {formatDate(instance.completed_at ?? null)}</span>

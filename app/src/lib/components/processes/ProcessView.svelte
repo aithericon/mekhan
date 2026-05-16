@@ -403,7 +403,7 @@
 			{#if progress}
 				<div class="rounded-lg border border-border bg-card p-4">
 					<div class="mb-2 flex items-baseline justify-between gap-3">
-						<h3 class="text-sm font-medium text-foreground">Progress</h3>
+						<h3 class="text-sm font-semibold text-foreground">Progress</h3>
 						<span class="text-xs tabular-nums text-muted-foreground">
 							{progressPct}%{#if progress.total_steps > 0}
 								· step {progress.current_step}/{progress.total_steps}{/if}
@@ -423,14 +423,14 @@
 
 			{#if timelineEntries.length > 0}
 				<div class="rounded-lg border border-border bg-card p-4">
-					<h3 class="mb-3 text-sm font-medium text-foreground">Timeline</h3>
+					<h3 class="mb-3 text-sm font-semibold text-foreground">Timeline</h3>
 					<ProcessTimeline entries={timelineEntries} />
 				</div>
 			{/if}
 
 			{#if openTasks.length > 0}
 				<div class="rounded-lg border border-border bg-card p-4">
-					<h3 class="mb-3 flex items-center gap-2 text-sm font-medium text-foreground">
+					<h3 class="mb-3 flex items-center gap-2 text-sm font-semibold text-foreground">
 						<ListChecks class="size-4 text-muted-foreground" />
 						Open tasks
 						<Badge variant="secondary">{openTasks.length}</Badge>
@@ -492,7 +492,7 @@
 						<FileBox class="size-4" />
 						<span class="text-xs font-medium uppercase tracking-wide">Artifacts</span>
 					</div>
-					<p class="mt-1 text-2xl font-semibold tabular-nums text-foreground">
+					<p class="mt-1 text-xl font-semibold tabular-nums text-foreground">
 						{detail.artifact_count}
 					</p>
 				</div>
@@ -501,7 +501,7 @@
 						<ListChecks class="size-4" />
 						<span class="text-xs font-medium uppercase tracking-wide">Tasks</span>
 					</div>
-					<p class="mt-1 text-2xl font-semibold tabular-nums text-foreground">
+					<p class="mt-1 text-xl font-semibold tabular-nums text-foreground">
 						{detail.tasks.length}
 					</p>
 				</div>
@@ -510,7 +510,7 @@
 						<BarChart3 class="size-4" />
 						<span class="text-xs font-medium uppercase tracking-wide">Metrics</span>
 					</div>
-					<p class="mt-1 text-2xl font-semibold tabular-nums text-foreground">
+					<p class="mt-1 text-xl font-semibold tabular-nums text-foreground">
 						{detail.recent_metrics.length}
 					</p>
 				</div>
@@ -518,7 +518,7 @@
 
 			{#if detail.recent_logs.length > 0}
 				<div class="rounded-lg border border-border bg-card p-4">
-					<h3 class="mb-2 text-sm font-medium text-foreground">Recent Activity</h3>
+					<h3 class="mb-2 text-sm font-semibold text-foreground">Recent Activity</h3>
 					<div class="space-y-1">
 						{#each detail.recent_logs.slice(0, 5) as log}
 							<div class="flex items-start gap-2 text-xs">
@@ -692,7 +692,7 @@
 		{/if}
 	{:else if activeTab === 'config'}
 		<div class="rounded-lg border border-border bg-card p-4">
-			<h3 class="mb-2 text-sm font-medium text-foreground">Configuration</h3>
+			<h3 class="mb-2 text-sm font-semibold text-foreground">Configuration</h3>
 			{#if detail.config && Object.keys(detail.config).length > 0}
 				<pre
 					class="overflow-x-auto rounded-md bg-muted px-3 py-2 text-xs text-foreground">{JSON.stringify(

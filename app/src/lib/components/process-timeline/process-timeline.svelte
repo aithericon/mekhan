@@ -136,7 +136,7 @@
 			<div class="min-w-0 flex-1 pb-4">
 				<div class="flex items-center gap-2">
 					<span
-						class={`text-base font-medium ${entry.status === 'pending' ? 'text-muted-foreground' : 'text-foreground'}`}
+						class={`text-sm font-medium ${entry.status === 'pending' ? 'text-muted-foreground' : 'text-foreground'}`}
 					>
 						{entry.label}
 					</span>
@@ -150,7 +150,7 @@
 				</div>
 
 				{#if entry.duration_ms || entry.iterations}
-					<p class="mt-0.5 text-sm text-muted-foreground">
+					<p class="mt-0.5 text-xs text-muted-foreground">
 						{#if entry.iterations}
 							{entry.completed_iterations ?? 0}/{entry.iterations} iterations
 							{#if entry.duration_ms} · {formatDuration(entry.duration_ms)}{/if}
