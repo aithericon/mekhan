@@ -217,7 +217,9 @@ describe('YjsGraphBinding', () => {
 			'parallel_split',
 			'parallel_join',
 			'loop',
-			'scope'
+			'scope',
+			'phase_update',
+			'progress_update'
 		];
 
 		for (const type of allTypes) {
@@ -259,6 +261,50 @@ describe('YjsGraphBinding', () => {
 		if (decisionNode?.data.type === 'decision') {
 			expect(decisionNode.data.conditions).toEqual([]);
 		}
+
+		const phaseNode = binding.graph.nodes.find((n) => n.data.type === 'phase_update');
+		expect(phaseNode).toBeDefined();
+		if (phaseNode?.data.type === 'phase_update') {
+			expect(phaseNode.data.phaseName).toBe('New phase');
+			expect(phaseNode.data.status).toBe('running');
+		}
+
+		const progressNode = binding.graph.nodes.find((n) => n.data.type === 'progress_update');
+		expect(progressNode).toBeDefined();
+		if (progressNode?.data.type === 'progress_update') {
+			expect(progressNode.data.fraction).toBe(0);
+		}
+	});
+
+	it('automated_step output port survives the updateNodeData round-trip', () => {
+		// Regression: the editor "Add field" on an automated step (Python is the
+		// default backend) calls updateNodeData with the new `output` port. The
+		// Yjs binding must persist AND re-materialize `output`, otherwise the
+		// added field is dropped on write and the panel snaps back to empty —
+		// i.e. "I can't add outputs" on the Python automated node.
+		const data = createDefaultNodeData('automated_step');
+		binding.addNode('n1', 'automated_step', { x: 0, y: 0 }, data);
+
+		const node = binding.graph.nodes.find((n) => n.id === 'n1');
+		expect(node?.data.type).toBe('automated_step');
+		if (node?.data.type !== 'automated_step') return;
+
+		binding.updateNodeData('n1', {
+			...node.data,
+			output: {
+				id: 'out',
+				label: 'Output',
+				fields: [{ name: 'result', label: 'Result', kind: 'json', required: false }]
+			}
+		} as Extract<WorkflowNodeData, { type: 'automated_step' }>);
+
+		const after = binding.graph.nodes.find((n) => n.id === 'n1');
+		expect(after?.data.type).toBe('automated_step');
+		if (after?.data.type !== 'automated_step') return;
+		expect(after.data.output).toBeDefined();
+		expect(after.data.output?.fields).toEqual([
+			{ name: 'result', label: 'Result', kind: 'json', required: false }
+		]);
 	});
 
 	it('createFile + getNodeFiles + getFileText', () => {
@@ -367,5 +413,81 @@ describe('YjsGraphBinding', () => {
 		expect(materialized.sourceHandle).toBe('branch-a');
 		expect(materialized.label).toBe('Yes');
 		expect(materialized.type).toBe('conditional');
+	});
+
+	it('phase_update config survives the updateNodeData round-trip', () => {
+		// Exercises materializeNodeData ⇄ writeDataToConfig for the new control
+		// node: phaseName/status/message must persist into the Yjs config map
+		// and re-materialize, and clearing an optional message must delete the
+		// key (not leave a stale value).
+		binding.addNode('p1', 'phase_update', { x: 0, y: 0 }, createDefaultNodeData('phase_update'));
+
+		const node = binding.graph.nodes.find((n) => n.id === 'p1');
+		expect(node?.data.type).toBe('phase_update');
+		if (node?.data.type !== 'phase_update') return;
+
+		binding.updateNodeData('p1', {
+			...node.data,
+			phaseName: 'Validation',
+			status: 'completed',
+			message: 'done {{ invoice_id }}'
+		} as Extract<WorkflowNodeData, { type: 'phase_update' }>);
+
+		let after = binding.graph.nodes.find((n) => n.id === 'p1');
+		expect(after?.data.type).toBe('phase_update');
+		if (after?.data.type !== 'phase_update') return;
+		expect(after.data.phaseName).toBe('Validation');
+		expect(after.data.status).toBe('completed');
+		expect(after.data.message).toBe('done {{ invoice_id }}');
+
+		binding.updateNodeData('p1', {
+			...after.data,
+			message: undefined
+		} as Extract<WorkflowNodeData, { type: 'phase_update' }>);
+		after = binding.graph.nodes.find((n) => n.id === 'p1');
+		if (after?.data.type !== 'phase_update') return;
+		expect(after.data.message).toBeUndefined();
+	});
+
+	it('progress_update config survives the updateNodeData round-trip', () => {
+		binding.addNode(
+			'g1',
+			'progress_update',
+			{ x: 0, y: 0 },
+			createDefaultNodeData('progress_update')
+		);
+
+		const node = binding.graph.nodes.find((n) => n.id === 'g1');
+		expect(node?.data.type).toBe('progress_update');
+		if (node?.data.type !== 'progress_update') return;
+
+		binding.updateNodeData('g1', {
+			...node.data,
+			fraction: 0.5,
+			message: 'processed {{ count }}',
+			currentStep: 2,
+			totalSteps: 5
+		} as Extract<WorkflowNodeData, { type: 'progress_update' }>);
+
+		let after = binding.graph.nodes.find((n) => n.id === 'g1');
+		expect(after?.data.type).toBe('progress_update');
+		if (after?.data.type !== 'progress_update') return;
+		expect(after.data.fraction).toBe(0.5);
+		expect(after.data.message).toBe('processed {{ count }}');
+		expect(after.data.currentStep).toBe(2);
+		expect(after.data.totalSteps).toBe(5);
+
+		binding.updateNodeData('g1', {
+			...after.data,
+			currentStep: undefined,
+			totalSteps: undefined,
+			message: undefined
+		} as Extract<WorkflowNodeData, { type: 'progress_update' }>);
+		after = binding.graph.nodes.find((n) => n.id === 'g1');
+		if (after?.data.type !== 'progress_update') return;
+		expect(after.data.currentStep).toBeUndefined();
+		expect(after.data.totalSteps).toBeUndefined();
+		expect(after.data.message).toBeUndefined();
+		expect(after.data.fraction).toBe(0.5);
 	});
 });

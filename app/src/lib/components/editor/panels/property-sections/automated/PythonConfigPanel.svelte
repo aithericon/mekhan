@@ -204,6 +204,7 @@
 			onCheckedChange={(checked) => onchange({ ...config, inherit_env: checked === true })}
 		/>
 		Inherit Env
+	</label>
 </div>
 
 <div class="space-y-1.5">
