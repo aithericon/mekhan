@@ -5,7 +5,6 @@
 		getProcessLogs,
 		getProcessTasks,
 		getProcessArtifacts,
-		completeTask,
 		cancelTask,
 		type ProcessDetail,
 		type HpiTask,
@@ -34,7 +33,6 @@
 	import ScrollText from '@lucide/svelte/icons/scroll-text';
 	import ListChecks from '@lucide/svelte/icons/list-checks';
 	import LayoutDashboard from '@lucide/svelte/icons/layout-dashboard';
-	import Check from '@lucide/svelte/icons/check';
 	import X from '@lucide/svelte/icons/x';
 	import ChevronLeft from '@lucide/svelte/icons/chevron-left';
 	import ChevronRight from '@lucide/svelte/icons/chevron-right';
@@ -299,15 +297,6 @@
 		};
 	}
 
-	async function handleCompleteTask(taskId: string) {
-		try {
-			await completeTask(taskId, {});
-			await loadTasks();
-		} catch {
-			/* ignore */
-		}
-	}
-
 	async function handleCancelTask(taskId: string) {
 		try {
 			await cancelTask(taskId, 'Cancelled from UI');
@@ -454,8 +443,6 @@
 								steps?: unknown[];
 							}}
 							{@const taskId = anyTask.task_id ?? anyTask.id}
-							{@const hasSteps =
-								Array.isArray(anyTask.steps) && anyTask.steps.length > 0}
 							<div
 								class="flex items-start justify-between gap-4 rounded-md border border-border/60 bg-background px-3 py-2"
 							>
@@ -480,32 +467,18 @@
 										<ExternalLink class="size-3.5 mr-1" />
 										Open
 									</Button>
-									{#if !hasSteps}
-										<Button
-											variant="ghost"
-											size="sm"
-											class="text-green-700 hover:text-green-800 hover:bg-green-100 dark:text-green-400 dark:hover:bg-green-900"
-											onclick={async () => {
-												await handleCompleteTask(taskId);
-												dropOpenTask(taskId, 'completed');
-											}}
-										>
-											<Check class="size-3.5 mr-1" />
-											Complete
-										</Button>
-										<Button
-											variant="ghost"
-											size="sm"
-											class="text-red-700 hover:text-red-800 hover:bg-red-100 dark:text-red-400 dark:hover:bg-red-900"
-											onclick={async () => {
-												await handleCancelTask(taskId);
-												dropOpenTask(taskId, 'cancelled');
-											}}
-										>
-											<X class="size-3.5 mr-1" />
-											Cancel
-										</Button>
-									{/if}
+									<Button
+										variant="ghost"
+										size="sm"
+										class="text-red-700 hover:text-red-800 hover:bg-red-100 dark:text-red-400 dark:hover:bg-red-900"
+										onclick={async () => {
+											await handleCancelTask(taskId);
+											dropOpenTask(taskId, 'cancelled');
+										}}
+									>
+										<X class="size-3.5 mr-1" />
+										Cancel
+									</Button>
 								</div>
 							</div>
 						{/each}
@@ -668,7 +641,6 @@
 						steps?: unknown[];
 					}}
 					{@const taskId = anyTask.task_id ?? anyTask.id}
-					{@const hasSteps = Array.isArray(anyTask.steps) && anyTask.steps.length > 0}
 					<div class="rounded-lg border border-border bg-card p-4">
 						<div class="flex items-start justify-between gap-4">
 							<div class="min-w-0 flex-1">
@@ -701,16 +673,7 @@
 									<ExternalLink class="size-3.5 mr-1" />
 									Open
 								</Button>
-								{#if task.status === 'pending' && !hasSteps}
-									<Button
-										variant="ghost"
-										size="sm"
-										class="text-green-700 hover:text-green-800 hover:bg-green-100 dark:text-green-400 dark:hover:bg-green-900"
-										onclick={() => handleCompleteTask(taskId)}
-									>
-										<Check class="size-3.5 mr-1" />
-										Complete
-									</Button>
+								{#if task.status === 'pending'}
 									<Button
 										variant="ghost"
 										size="sm"
