@@ -20,6 +20,7 @@
 		Phase,
 		Progress
 	} from '$lib/types/process';
+	import { page } from '$app/state';
 	import { ProcessTimeline } from '$lib/components/process-timeline';
 	import { ArtifactCard } from '$lib/components/catalogue';
 	import { MetricsPanel, LogsPanel, ArtifactsPanel } from '$lib/components/process-live';
@@ -279,6 +280,14 @@
 
 	// After an inline action on the Overview "Open tasks" card, drop the task
 	// from the (detail-derived) open list so it doesn't linger as pending.
+	// Link to a task while remembering where we came from, so the task page's
+	// back button can return here (the instance/process run) instead of the
+	// global /tasks list.
+	function taskHref(taskId: string): string {
+		const from = page.url.pathname + page.url.search;
+		return `/tasks/${taskId}?from=${encodeURIComponent(from)}`;
+	}
+
 	function dropOpenTask(id: string, status: string) {
 		if (!detail) return;
 		detail = {
@@ -465,7 +474,7 @@
 									<Button
 										variant="ghost"
 										size="sm"
-										href="/tasks/{taskId}"
+										href={taskHref(taskId)}
 										class="text-muted-foreground hover:text-foreground"
 									>
 										<ExternalLink class="size-3.5 mr-1" />
@@ -686,7 +695,7 @@
 								<Button
 									variant="ghost"
 									size="sm"
-									href="/tasks/{taskId}"
+									href={taskHref(taskId)}
 									class="text-muted-foreground hover:text-foreground"
 								>
 									<ExternalLink class="size-3.5 mr-1" />

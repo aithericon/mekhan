@@ -16,6 +16,25 @@
 
 	const taskId = $derived($page.params.id as string);
 
+	// Where to send the user when they leave this task. ProcessView links here
+	// with ?from=<instance/process page> so "back" returns to the run they were
+	// working in rather than the global task list. Only same-origin absolute
+	// paths are honoured (guards against open-redirect via a crafted ?from).
+	const backHref = $derived.by(() => {
+		const from = $page.url.searchParams.get('from');
+		if (!from || !from.startsWith('/') || from.startsWith('//') || from.startsWith('/\\')) {
+			return '/tasks';
+		}
+		return from;
+	});
+	const backLabel = $derived(
+		backHref.startsWith('/instances/')
+			? 'Back to run'
+			: backHref.startsWith('/processes/')
+				? 'Back to process'
+				: 'Back to tasks'
+	);
+
 	async function load() {
 		loading = true;
 		error = null;
@@ -70,11 +89,11 @@
 </script>
 
 <div class="h-full overflow-y-auto">
-	<div class="mx-auto max-w-3xl px-6 py-8 animate-rise">
+	<div class="mx-auto max-w-5xl px-6 py-8 animate-rise">
 		<div class="mb-4 flex items-center gap-2">
-			<Button variant="ghost" size="sm" href="/tasks" class="gap-1 text-muted-foreground">
+			<Button variant="ghost" size="sm" href={backHref} class="gap-1 text-muted-foreground">
 				<ArrowLeft class="size-4" />
-				Back to tasks
+				{backLabel}
 			</Button>
 			{#if task?.process_id && process}
 				<Button variant="ghost" size="sm" href="/processes/{process.process_id}" class="text-muted-foreground">
