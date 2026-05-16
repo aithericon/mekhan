@@ -404,7 +404,7 @@
 				<div class="rounded-lg border border-border bg-card p-4">
 					<div class="mb-2 flex items-baseline justify-between gap-3">
 						<h3 class="text-sm font-semibold text-foreground">Progress</h3>
-						<span class="text-xs tabular-nums text-muted-foreground">
+						<span class="text-sm tabular-nums text-muted-foreground">
 							{progressPct}%{#if progress.total_steps > 0}
 								· step {progress.current_step}/{progress.total_steps}{/if}
 						</span>
@@ -416,7 +416,7 @@
 						></div>
 					</div>
 					{#if progress.message}
-						<p class="mt-1.5 text-xs text-muted-foreground">{progress.message}</p>
+						<p class="mt-1.5 text-sm text-muted-foreground">{progress.message}</p>
 					{/if}
 				</div>
 			{/if}
@@ -450,10 +450,10 @@
 									<div class="flex flex-wrap items-center gap-1.5">
 										<span class="text-sm font-medium text-foreground">{task.title}</span>
 										{#if task.assignee}
-											<span class="text-xs text-muted-foreground">· {task.assignee}</span>
+											<span class="text-sm text-muted-foreground">· {task.assignee}</span>
 										{/if}
 									</div>
-									<p class="mt-0.5 text-xs text-muted-foreground">
+									<p class="mt-0.5 text-sm text-muted-foreground">
 										Created {relativeTime(task.created_at)}
 									</p>
 								</div>
@@ -490,7 +490,7 @@
 				<div class="rounded-lg border border-border bg-card px-4 py-3">
 					<div class="flex items-center gap-2 text-muted-foreground">
 						<FileBox class="size-4" />
-						<span class="text-xs font-medium uppercase tracking-wide">Artifacts</span>
+						<span class="text-sm font-medium uppercase tracking-wide">Artifacts</span>
 					</div>
 					<p class="mt-1 text-xl font-semibold tabular-nums text-foreground">
 						{detail.artifact_count}
@@ -499,7 +499,7 @@
 				<div class="rounded-lg border border-border bg-card px-4 py-3">
 					<div class="flex items-center gap-2 text-muted-foreground">
 						<ListChecks class="size-4" />
-						<span class="text-xs font-medium uppercase tracking-wide">Tasks</span>
+						<span class="text-sm font-medium uppercase tracking-wide">Tasks</span>
 					</div>
 					<p class="mt-1 text-xl font-semibold tabular-nums text-foreground">
 						{detail.tasks.length}
@@ -508,7 +508,7 @@
 				<div class="rounded-lg border border-border bg-card px-4 py-3">
 					<div class="flex items-center gap-2 text-muted-foreground">
 						<BarChart3 class="size-4" />
-						<span class="text-xs font-medium uppercase tracking-wide">Metrics</span>
+						<span class="text-sm font-medium uppercase tracking-wide">Metrics</span>
 					</div>
 					<p class="mt-1 text-xl font-semibold tabular-nums text-foreground">
 						{detail.recent_metrics.length}
@@ -521,7 +521,7 @@
 					<h3 class="mb-2 text-sm font-semibold text-foreground">Recent Activity</h3>
 					<div class="space-y-1">
 						{#each detail.recent_logs.slice(0, 5) as log}
-							<div class="flex items-start gap-2 text-xs">
+							<div class="flex items-start gap-2 text-sm">
 								<span class="shrink-0 tabular-nums text-muted-foreground">
 									{formatTimestamp(log.timestamp)}
 								</span>
@@ -571,7 +571,7 @@
 
 			{#if artifactsTotalPages > 1}
 				<div class="mt-4 flex items-center justify-between">
-					<p class="text-xs text-muted-foreground">
+					<p class="text-sm text-muted-foreground">
 						{artifactsTotal} artifact{artifactsTotal === 1 ? '' : 's'}
 					</p>
 					<div class="flex items-center gap-1">
@@ -583,7 +583,7 @@
 						>
 							<ChevronLeft class="size-4" />
 						</Button>
-						<span class="px-2 text-xs tabular-nums text-muted-foreground">
+						<span class="px-2 text-sm tabular-nums text-muted-foreground">
 							{artifactsPage + 1} / {artifactsTotalPages}
 						</span>
 						<Button
@@ -651,7 +651,7 @@
 									</Badge>
 								</div>
 								<div
-									class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground"
+									class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-sm text-muted-foreground"
 								>
 									{#if task.assignee}
 										<span>Assignee: {task.assignee}</span>
@@ -695,7 +695,7 @@
 			<h3 class="mb-2 text-sm font-semibold text-foreground">Configuration</h3>
 			{#if detail.config && Object.keys(detail.config).length > 0}
 				<pre
-					class="overflow-x-auto rounded-md bg-muted px-3 py-2 text-xs text-foreground">{JSON.stringify(
+					class="overflow-x-auto rounded-md bg-muted px-3 py-2 text-sm text-foreground">{JSON.stringify(
 						detail.config,
 						null,
 						2

@@ -64,7 +64,7 @@
 				{#if ts}
 					<Tooltip.Root>
 						<Tooltip.Trigger
-							class="cursor-default text-xs tabular-nums text-muted-foreground"
+							class="cursor-default text-sm tabular-nums text-muted-foreground"
 						>
 							{formatTimestamp(ts)}
 						</Tooltip.Trigger>
@@ -142,7 +142,7 @@
 					</span>
 					{#if entry.human}
 						<span
-							class="rounded-full bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900 dark:text-amber-200"
+							class="rounded-full bg-amber-100 px-1.5 py-0.5 text-sm font-medium text-amber-700 dark:bg-amber-900 dark:text-amber-200"
 						>
 							human
 						</span>
@@ -150,7 +150,7 @@
 				</div>
 
 				{#if entry.duration_ms || entry.iterations}
-					<p class="mt-0.5 text-xs text-muted-foreground">
+					<p class="mt-0.5 text-sm text-muted-foreground">
 						{#if entry.iterations}
 							{entry.completed_iterations ?? 0}/{entry.iterations} iterations
 							{#if entry.duration_ms} · {formatDuration(entry.duration_ms)}{/if}
