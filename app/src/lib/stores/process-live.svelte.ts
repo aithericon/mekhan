@@ -82,12 +82,14 @@ export function createProcessLiveStore(processId: string, opts: ProcessLiveOptio
 	let artifactCategories = [...(opts.artifactCategories ?? [])];
 	let artifactRenderHints = [...(opts.artifactRenderHints ?? [])];
 
-	// Epoch-ms cutoff: the `until` of the most recent metrics backfill. The
-	// SSE stream opens at since_seq=0 and the server replays its ring-buffer
-	// snapshot, which overlaps the DB backfill — so points at/before this
-	// cutoff are already shown (downsampled) and must be dropped to avoid
-	// duplicating every metric. 0 = no backfill yet (accept everything).
-	let metricsBackfillUntil = 0;
+	// Per-key epoch-ms high-water mark from the most recent metrics backfill.
+	// The SSE stream opens at since_seq=0 and the server replays its
+	// ring-buffer snapshot, which overlaps the DB backfill — a streamed point
+	// at/before its key's backfilled max is already shown (downsampled) and
+	// must be dropped to avoid duplication. A key absent here was NOT
+	// backfilled (e.g. older than the window), so its stream points are the
+	// only source and must be kept.
+	let metricsBackfillMax: Record<string, number> = {};
 
 	// Highest metric/log/artifact seq observed (drives reconnect resume).
 	let lastMetricSeq = 0;
@@ -113,9 +115,11 @@ export function createProcessLiveStore(processId: string, opts: ProcessLiveOptio
 		if (signalKey && e.signal_key !== signalKey) return;
 		lastEventTime = Date.now();
 		lastMetricSeq = Math.max(lastMetricSeq, e.seq);
-		// Already represented by the DB backfill (downsampled) for this window —
+		// Already represented by the DB backfill (downsampled) for this key —
 		// the stream's initial snapshot replays it; skip to avoid duplication.
-		if (metricsBackfillUntil && new Date(e.timestamp).getTime() <= metricsBackfillUntil) {
+		// Keys not in the backfill (older than the window) fall through.
+		const cap = metricsBackfillMax[e.key];
+		if (cap !== undefined && new Date(e.timestamp).getTime() <= cap) {
 			return;
 		}
 		const arr = metrics.series[e.key] ?? [];
@@ -185,8 +189,18 @@ export function createProcessLiveStore(processId: string, opts: ProcessLiveOptio
 				max_points: 2000
 			});
 			metrics = { bucketSeconds: resp.bucket_seconds, series: resp.series };
-			// Stream points up to this instant are covered by the backfill above.
-			metricsBackfillUntil = now.getTime();
+			// Record the newest backfilled instant per key; the stream snapshot
+			// replays everything ≤ this, which we then drop as duplicates.
+			const nextMax: Record<string, number> = {};
+			for (const [k, pts] of Object.entries(resp.series)) {
+				let m = 0;
+				for (const p of pts) {
+					const t = new Date(p.t).getTime();
+					if (t > m) m = t;
+				}
+				if (m > 0) nextMax[k] = m;
+			}
+			metricsBackfillMax = nextMax;
 			errorMessage = null;
 		} catch (e) {
 			errorMessage = e instanceof Error ? e.message : String(e);
