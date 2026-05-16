@@ -272,6 +272,7 @@
 		templateName={template?.name ?? 'Loading...'}
 		{templateId}
 		published={template?.published ?? false}
+		version={template?.version}
 		awareness={session.awareness}
 		provider={session.provider}
 		onPublish={handlePublish}

@@ -226,6 +226,7 @@
 			published={template?.published ?? false}
 			{saving}
 			{templateId}
+			version={template?.version}
 			awareness={session.awareness}
 			provider={session.provider}
 			onpublish={handlePublish}
