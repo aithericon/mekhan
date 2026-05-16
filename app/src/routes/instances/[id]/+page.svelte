@@ -40,6 +40,10 @@
 
 	const hasNet = $derived(!!instance && instance.status !== 'created' && !!instance.net_id);
 	const primaryProcess = $derived(processes[0] ?? null);
+	const selectedProcess = $derived(
+		processes.find((p) => p.process_id === selectedProcessId) ?? primaryProcess
+	);
+	const processName = $derived(selectedProcess?.name ?? null);
 
 	// Keep a valid selected process as the list resolves / changes.
 	$effect(() => {
@@ -94,7 +98,9 @@
 		<div class="border-b border-border bg-card px-4 py-2 shrink-0">
 			<div class="flex items-center justify-between gap-3">
 				<div class="flex items-center gap-3 min-w-0">
-					<h1 class="text-sm font-semibold text-foreground">Run</h1>
+					<h1 class="shrink-0 text-sm font-semibold text-foreground">
+						{processName ?? 'Run'}
+					</h1>
 					<Badge class={statusColors[instance.status] ?? ''} variant="secondary">
 						{instance.status}
 					</Badge>
@@ -162,7 +168,7 @@
 				</button>
 				{#if hasNet}
 					<button
-						class="ml-auto inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs transition-colors
+						class="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs transition-colors
 							{mode === 'petri'
 							? 'bg-accent text-foreground'
 							: 'text-muted-foreground/70 hover:bg-accent hover:text-foreground'}"
