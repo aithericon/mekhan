@@ -38,6 +38,7 @@
 	import ChevronLeft from '@lucide/svelte/icons/chevron-left';
 	import ChevronRight from '@lucide/svelte/icons/chevron-right';
 	import ExternalLink from '@lucide/svelte/icons/external-link';
+	import Settings from '@lucide/svelte/icons/settings';
 
 	let {
 		processId,
@@ -48,7 +49,7 @@
 	let loading = $state(true);
 	let error = $state<string | null>(null);
 
-	type Tab = 'overview' | 'artifacts' | 'metrics' | 'logs' | 'tasks';
+	type Tab = 'overview' | 'artifacts' | 'metrics' | 'logs' | 'tasks' | 'config';
 	let activeTab = $state<Tab>('overview');
 
 	// Artifacts tab
@@ -200,6 +201,9 @@
 
 	let timelineEntries = $derived(detail ? buildTimeline(detail) : []);
 	let progress = $derived(progressOf(detail));
+	let openTasks = $derived(
+		detail ? detail.tasks.filter((t) => t.status === 'pending') : []
+	);
 	let progressPct = $derived(
 		progress ? Math.round(Math.min(1, Math.max(0, progress.fraction)) * 100) : 0
 	);
@@ -271,6 +275,19 @@
 		} finally {
 			tasksLoading = false;
 		}
+	}
+
+	// After an inline action on the Overview "Open tasks" card, drop the task
+	// from the (detail-derived) open list so it doesn't linger as pending.
+	function dropOpenTask(id: string, status: string) {
+		if (!detail) return;
+		detail = {
+			...detail,
+			tasks: detail.tasks.map((t) => {
+				const a = t as unknown as { task_id?: string; id: string };
+				return (a.task_id ?? a.id) === id ? { ...t, status } : t;
+			})
+		};
 	}
 
 	async function handleCompleteTask(taskId: string) {
@@ -349,7 +366,8 @@
 		{ key: 'artifacts', label: 'Artifacts', icon: FileBox },
 		{ key: 'metrics', label: 'Metrics', icon: BarChart3 },
 		{ key: 'logs', label: 'Logs', icon: ScrollText },
-		{ key: 'tasks', label: 'Tasks', icon: ListChecks }
+		{ key: 'tasks', label: 'Tasks', icon: ListChecks },
+		{ key: 'config', label: 'Configuration', icon: Settings }
 	];
 </script>
 
@@ -412,6 +430,80 @@
 				</div>
 			{/if}
 
+			{#if openTasks.length > 0}
+				<div class="rounded-lg border border-border bg-card p-4">
+					<h3 class="mb-3 flex items-center gap-2 text-sm font-medium text-foreground">
+						<ListChecks class="size-4 text-muted-foreground" />
+						Open tasks
+						<Badge variant="secondary">{openTasks.length}</Badge>
+					</h3>
+					<div class="space-y-2">
+						{#each openTasks as task (task.id)}
+							{@const anyTask = task as unknown as {
+								task_id?: string;
+								id: string;
+								steps?: unknown[];
+							}}
+							{@const taskId = anyTask.task_id ?? anyTask.id}
+							{@const hasSteps =
+								Array.isArray(anyTask.steps) && anyTask.steps.length > 0}
+							<div
+								class="flex items-start justify-between gap-4 rounded-md border border-border/60 bg-background px-3 py-2"
+							>
+								<div class="min-w-0 flex-1">
+									<div class="flex flex-wrap items-center gap-1.5">
+										<span class="text-sm font-medium text-foreground">{task.title}</span>
+										{#if task.assignee}
+											<span class="text-xs text-muted-foreground">· {task.assignee}</span>
+										{/if}
+									</div>
+									<p class="mt-0.5 text-xs text-muted-foreground">
+										Created {relativeTime(task.created_at)}
+									</p>
+								</div>
+								<div class="flex shrink-0 items-center gap-1">
+									<Button
+										variant="ghost"
+										size="sm"
+										href="/tasks/{taskId}"
+										class="text-muted-foreground hover:text-foreground"
+									>
+										<ExternalLink class="size-3.5 mr-1" />
+										Open
+									</Button>
+									{#if !hasSteps}
+										<Button
+											variant="ghost"
+											size="sm"
+											class="text-green-700 hover:text-green-800 hover:bg-green-100 dark:text-green-400 dark:hover:bg-green-900"
+											onclick={async () => {
+												await handleCompleteTask(taskId);
+												dropOpenTask(taskId, 'completed');
+											}}
+										>
+											<Check class="size-3.5 mr-1" />
+											Complete
+										</Button>
+										<Button
+											variant="ghost"
+											size="sm"
+											class="text-red-700 hover:text-red-800 hover:bg-red-100 dark:text-red-400 dark:hover:bg-red-900"
+											onclick={async () => {
+												await handleCancelTask(taskId);
+												dropOpenTask(taskId, 'cancelled');
+											}}
+										>
+											<X class="size-3.5 mr-1" />
+											Cancel
+										</Button>
+									{/if}
+								</div>
+							</div>
+						{/each}
+					</div>
+				</div>
+			{/if}
+
 			<div class="grid grid-cols-3 gap-3">
 				<div class="rounded-lg border border-border bg-card px-4 py-3">
 					<div class="flex items-center gap-2 text-muted-foreground">
@@ -441,18 +533,6 @@
 					</p>
 				</div>
 			</div>
-
-			{#if detail.config && Object.keys(detail.config).length > 0}
-				<div class="rounded-lg border border-border bg-card p-4">
-					<h3 class="mb-2 text-sm font-medium text-foreground">Configuration</h3>
-					<pre
-						class="overflow-x-auto rounded-md bg-muted px-3 py-2 text-xs text-foreground">{JSON.stringify(
-							detail.config,
-							null,
-							2
-						)}</pre>
-				</div>
-			{/if}
 
 			{#if detail.recent_logs.length > 0}
 				<div class="rounded-lg border border-border bg-card p-4">
@@ -638,6 +718,20 @@
 				{/each}
 			</div>
 		{/if}
+	{:else if activeTab === 'config'}
+		<div class="rounded-lg border border-border bg-card p-4">
+			<h3 class="mb-2 text-sm font-medium text-foreground">Configuration</h3>
+			{#if detail.config && Object.keys(detail.config).length > 0}
+				<pre
+					class="overflow-x-auto rounded-md bg-muted px-3 py-2 text-xs text-foreground">{JSON.stringify(
+						detail.config,
+						null,
+						2
+					)}</pre>
+			{:else}
+				<p class="text-sm text-muted-foreground">No configuration for this process.</p>
+			{/if}
+		</div>
 	{/if}
 {:else}
 	<div class="flex items-center justify-center py-16 text-sm text-muted-foreground">
