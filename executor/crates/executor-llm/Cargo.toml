@@ -39,10 +39,71 @@ uuid = { workspace = true }
 # (`/v1/healthz`) — see pool_listener.rs. C7 only; the inference path
 # still flows over NATS.
 axum = { workspace = true }
+# tempfile is used by the kreuzberg-feature-gated ocr_handler to stage
+# request-body bytes onto disk for `kreuzberg::extract_file` (which is
+# path-based, not byte-based). Promoted from dev-dep since the prod
+# handler now needs it. Available unconditionally to keep the crate
+# graph simple; the gating happens on the kreuzberg dep + handler module.
+tempfile = "3"
+
+# OCR-framing Wave 2: kreuzberg as an OPTIONAL dep, mirroring the dep
+# shape of the sibling `aithericon-executor-kreuzberg` wrapper crate.
+# Enabling the `kreuzberg` feature on THIS crate adds the
+# `POST /v1/ocr/extract` endpoint to the pool_url surface (see
+# pool_listener.rs + ocr_handler.rs). The feature is purely additive —
+# default-feature consumers see byte-identical behaviour to pre-Wave-2.
+#
+# Operator deployment matrix:
+#
+#   - `cargo build --features kreuzberg` AND
+#     `AITHERICON_EXECUTOR_KREUZBERG_ENABLED=true` (Wave 1a env gate)
+#     → pool advertises Capability::Ocr AND serves the endpoint. ✅
+#   - feature on, env off → endpoint compiled in but pool doesn't
+#     advertise Ocr; cap-routing never routes OCR to this pool.
+#   - feature off, env on → pool advertises Ocr but `/v1/ocr/extract`
+#     returns 404; misconfiguration that the cap-routing health check
+#     would surface (no /v1/ocr/extract liveness on a pool advertising
+#     Ocr). Operator should turn BOTH on or BOTH off.
+#
+# The two gates are intentionally distinct: the feature flag is a
+# compile-time / bin-flavor concern (kreuzberg pulls bundled-pdfium +
+# ~hundreds of MB of deps); the env var is a runtime opt-in inside a
+# kreuzberg-compiled binary.
+kreuzberg = { version = "4", default-features = false, features = ["tokio-runtime"], optional = true }
+
+[features]
+default = []
+# Compiles the /v1/ocr/extract HTTP endpoint into the pool_listener
+# surface. Sub-phase 2.2's D1 cert specifies PaddleOCR PP-StructureV3
+# as the OCR backend (supervisor disposition 2026-05-16), so this
+# feature engages kreuzberg's `paddle-ocr` + `layout-detection` stack —
+# NOT generic `ocr` (which would default to Tesseract). PDF parsing is
+# covered separately via `pdf` + `bundled-pdfium` for a self-contained
+# binary (no system pdfium dependency).
+#
+# **`kreuzberg/ocr` (Tesseract) is intentionally NOT enabled.** Reasons:
+#   (1) The cert wants PaddleOCR specifically.
+#   (2) `kreuzberg/ocr` pulls in `kreuzberg-tesseract`, whose build
+#       script compiles leptonica + tesseract from source via `cmake`,
+#       which is not in the Aithericon dev shell.
+# Operators who want Tesseract alongside PaddleOCR can opt in with
+# `cargo build --features "kreuzberg kreuzberg/ocr"` after provisioning
+# `cmake` themselves.
+#
+# Surya is a separate sub-phase 2.2b slice — out of scope for this
+# wave. PaddleOCR and Surya will both advertise `Capability::Ocr` once
+# 2.2b lands; cap-routing picks between them per tenant default and
+# per-pool advertisement.
+kreuzberg = [
+    "dep:kreuzberg",
+    "kreuzberg/paddle-ocr",
+    "kreuzberg/layout-detection",
+    "kreuzberg/pdf",
+    "kreuzberg/bundled-pdfium",
+]
 
 [dev-dependencies]
 aithericon-executor-test-harness = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 serde_json = { workspace = true }
-tempfile = "3"

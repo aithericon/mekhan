@@ -3,6 +3,8 @@ pub mod backend;
 pub mod config;
 pub mod hardware_probe;
 pub mod heartbeat;
+#[cfg(feature = "kreuzberg")]
+pub mod ocr_handler;
 pub mod ollama_subprocess;
 pub mod pool_boot;
 pub mod pool_listener;

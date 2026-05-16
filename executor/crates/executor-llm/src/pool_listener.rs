@@ -4,7 +4,7 @@
 //! `pool_url` that operators and tooling probe for liveness. The legacy
 //! `cloud-layer-pool-ollama` bin exposed `POST /v1/inference/run` here;
 //! the executor uses NATS for per-job dispatch, so the pool_url surface
-//! is reduced to a single endpoint:
+//! is normally reduced to a single endpoint:
 //!
 //! - `GET /v1/healthz` — returns `{ "status": "ok", "service":
 //!   "aithericon-executor" }` when the executor is alive. Operators use
@@ -13,6 +13,19 @@
 //! Inference still flows over NATS via the executor's existing apalis-nats
 //! worker. The `/v1/inference/run` HTTP surface is intentionally NOT
 //! re-introduced; a future slice can add an HTTP-bridge if needed.
+//!
+//! ## OCR-framing Wave 2 (`kreuzberg` feature)
+//!
+//! When this crate is built with `--features kreuzberg`, the listener
+//! additionally serves:
+//!
+//! - `POST /v1/ocr/extract` — wraps `kreuzberg::extract_file` for the
+//!   D1 cert harness "out-of-band cap-routing verification" path. See
+//!   [`crate::ocr_handler`] for request/response shape, error mapping,
+//!   and the feature-vs-env-gate alignment notes.
+//!
+//! The route addition is purely additive: with the kreuzberg feature OFF,
+//! the listener's route table is byte-identical to pre-Wave-2.
 
 use std::net::SocketAddr;
 
@@ -21,9 +34,10 @@ use axum::Json;
 use axum::Router;
 use tokio_util::sync::CancellationToken;
 
-/// Spawn a minimal axum listener on `bind_addr` serving `/v1/healthz`.
-/// Returns the actual bound address (useful when `bind_addr` requested
-/// port 0). Shutdown via the cancellation token.
+/// Spawn a minimal axum listener on `bind_addr` serving `/v1/healthz`
+/// (and, when compiled with `--features kreuzberg`, also
+/// `POST /v1/ocr/extract`). Returns the actual bound address (useful when
+/// `bind_addr` requested port 0). Shutdown via the cancellation token.
 pub async fn spawn_pool_listener(
     bind_addr: SocketAddr,
     shutdown: CancellationToken,
@@ -36,6 +50,15 @@ pub async fn spawn_pool_listener(
                 "service": "aithericon-executor",
             }))
         }),
+    );
+
+    // OCR-framing Wave 2: feature-gated /v1/ocr/extract route. The block
+    // is additive — when the kreuzberg feature is OFF, the router above is
+    // the only surface served (byte-identical to pre-Wave-2 behaviour).
+    #[cfg(feature = "kreuzberg")]
+    let router = router.route(
+        "/v1/ocr/extract",
+        axum::routing::post(crate::ocr_handler::ocr_extract),
     );
 
     let listener = tokio::net::TcpListener::bind(bind_addr).await?;
