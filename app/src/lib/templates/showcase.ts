@@ -42,6 +42,9 @@ export const showcaseGraph: WorkflowGraph = {
 			data: {
 				type: 'start',
 				label: 'Start',
+				// Registers a named HPI process per instance — the process list
+				// shows "Invoice <id>" instead of an unnamed/auto-discovered row.
+				processName: 'Invoice {{ invoice_id }}',
 				initial: {
 					id: 'in',
 					label: 'Invoice Intake',

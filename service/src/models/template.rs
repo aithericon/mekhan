@@ -90,6 +90,18 @@ pub enum WorkflowNodeData {
         /// `start_tokens` field of `CreateInstanceRequest`.
         #[serde(default = "default_initial_port")]
         initial: Port,
+        /// Optional process-name template. When set, the Start compiles an
+        /// extra `process_start` effect so the instance registers a named
+        /// HPI process. Supports `{{ field }}` placeholders resolved against
+        /// the Start input token at run time, e.g. `"Invoice {{ invoice_id }}"`.
+        /// Unset (the default) keeps the original single-place Start with no
+        /// process registration.
+        #[serde(
+            rename = "processName",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
+        process_name: Option<String>,
     },
     #[serde(rename = "end")]
     End {
@@ -1160,6 +1172,7 @@ impl WorkflowGraph {
                         label: "Start".to_string(),
                         description: None,
                         initial: Port::empty_input(),
+                        process_name: None,
                     },
                     parent_id: None,
                     width: None,

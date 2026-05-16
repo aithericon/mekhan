@@ -243,6 +243,7 @@ mod tests {
                         label: "Start".to_string(),
                         description: None,
                         initial,
+                        process_name: None,
                     },
                     parent_id: None,
                     width: None,

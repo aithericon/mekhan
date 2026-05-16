@@ -2265,6 +2265,15 @@ export interface components {
              */
             initial?: components["schemas"]["Port"];
             label: string;
+            /**
+             * @description Optional process-name template. When set, the Start compiles an
+             *     extra `process_start` effect so the instance registers a named
+             *     HPI process. Supports `{{ field }}` placeholders resolved against
+             *     the Start input token at run time, e.g. `"Invoice {{ invoice_id }}"`.
+             *     Unset (the default) keeps the original single-place Start with no
+             *     process registration.
+             */
+            processName?: string | null;
             /** @enum {string} */
             type: "start";
         } | {

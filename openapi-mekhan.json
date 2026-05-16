@@ -6723,6 +6723,13 @@
               "label": {
                 "type": "string"
               },
+              "processName": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Optional process-name template. When set, the Start compiles an\nextra `process_start` effect so the instance registers a named\nHPI process. Supports `{{ field }}` placeholders resolved against\nthe Start input token at run time, e.g. `\"Invoice {{ invoice_id }}\"`.\nUnset (the default) keeps the original single-place Start with no\nprocess registration."
+              },
               "type": {
                 "type": "string",
                 "enum": [

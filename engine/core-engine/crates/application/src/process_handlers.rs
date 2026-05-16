@@ -23,6 +23,7 @@ use crate::effect::{EffectError, EffectHandler, EffectInput, EffectOutput};
 /// ```json
 /// {
 ///   "name": "Invoice Processing",
+///   "name_field": "_process_name",
 ///   "description": "End-to-end workflow",
 ///   "process_id_field": "invoice_id",
 ///   "process_id_prefix": "inv-",
@@ -80,11 +81,28 @@ impl EffectHandler for ProcessStartHandler {
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         let process_id = format!("{}{}", prefix, id_suffix);
 
+        // `name_field`, when set, resolves the process name from the trigger
+        // token at run time (mirrors `process_id_field`). Compiled graphs put
+        // a Rhai-derived name into a token field and point `name_field` at it,
+        // so the process can be named per-instance ("Invoice RE42") without
+        // the name being baked statically into the AIR. Falls back to the
+        // static `name`.
         let name = config
-            .get("name")
+            .get("name_field")
             .and_then(|v| v.as_str())
-            .unwrap_or("Process")
-            .to_string();
+            .and_then(|f| trigger.get(f))
+            .map(|v| match v {
+                JsonValue::String(s) => s.clone(),
+                other => other.to_string().trim_matches('"').to_string(),
+            })
+            .filter(|s| !s.is_empty())
+            .or_else(|| {
+                config
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            })
+            .unwrap_or_else(|| "Process".to_string());
         let description = config
             .get("description")
             .and_then(|v| v.as_str())
@@ -221,5 +239,56 @@ mod tests {
     fn test_process_complete_handler_no_port_schemas() {
         let handler = ProcessCompleteHandler::new();
         assert!(handler.port_schemas().is_none());
+    }
+
+    use petri_domain::TransitionId;
+
+    fn input_with(config: serde_json::Value, trigger: serde_json::Value) -> EffectInput {
+        let mut inputs = HashMap::new();
+        inputs.insert("trigger".to_string(), trigger);
+        EffectInput {
+            transition_id: TransitionId::named("t_start_process"),
+            inputs,
+            config: Some(config),
+            read_inputs: HashMap::new(),
+            process_step: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn name_field_resolves_name_from_trigger() {
+        let handler = ProcessStartHandler::new("mekhan-ns");
+        let out = handler
+            .execute(input_with(
+                serde_json::json!({
+                    "name": "Invoice Processing",
+                    "name_field": "_process_name",
+                    "process_id_field": "invoice_id",
+                    "process_id_prefix": "inv-",
+                }),
+                serde_json::json!({ "_process_name": "Invoice RE42", "invoice_id": "RE42" }),
+            ))
+            .await
+            .expect("handler ok");
+        // The Mekhan projector reads effect_result.name → hpi_processes.name.
+        assert_eq!(out.result["name"], "Invoice RE42");
+        assert_eq!(out.result["process_id"], "inv-RE42");
+    }
+
+    #[tokio::test]
+    async fn name_field_absent_falls_back_to_static_name() {
+        let handler = ProcessStartHandler::new("mekhan-ns");
+        // name_field points at a missing/blank field → static `name` wins.
+        let out = handler
+            .execute(input_with(
+                serde_json::json!({
+                    "name": "Invoice Processing",
+                    "name_field": "_process_name",
+                }),
+                serde_json::json!({ "invoice_id": "RE42" }),
+            ))
+            .await
+            .expect("handler ok");
+        assert_eq!(out.result["name"], "Invoice Processing");
     }
 }

@@ -278,6 +278,8 @@ fn step_to_node_data(
             // through DSL is lossy for typed Start ports until the DSL format
             // gains a `initial` schema.
             initial: Port::empty_input(),
+            // DSL doesn't express the process-name template either.
+            process_name: None,
         }),
         "end" => Ok(WorkflowNodeData::End {
             label: label.to_string(),
@@ -759,6 +761,7 @@ flow:
                         label: "Start".to_string(),
                         description: None,
                         initial: Port::empty_input(),
+                        process_name: None,
                     },
                     parent_id: None,
                     width: None,
@@ -915,6 +918,7 @@ flow:
                         label: "Start".to_string(),
                         description: None,
                         initial: Port::empty_input(),
+                        process_name: None,
                     },
                     parent_id: None,
                     width: None,

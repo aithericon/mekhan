@@ -430,8 +430,14 @@ impl ProcessStepDef {
 /// ```
 #[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema)]
 pub struct ProcessStartConfig {
-    /// Human-readable process name.
+    /// Human-readable process name (static fallback).
     pub name: String,
+    /// Field name in the trigger token to read the process name from at run
+    /// time. When set and present, it wins over the static `name` — lets a
+    /// compiled net derive a per-instance name (e.g. via a Rhai transition)
+    /// without baking it into the AIR. Mirrors `process_id_field`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name_field: Option<String>,
     /// Optional description of the process.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
@@ -459,6 +465,9 @@ impl ProcessStartConfig {
     }
     pub fn process_id_field(mut self, field: impl Into<String>) -> Self {
         self.process_id_field = Some(field.into()); self
+    }
+    pub fn name_field(mut self, field: impl Into<String>) -> Self {
+        self.name_field = Some(field.into()); self
     }
     pub fn process_id_prefix(mut self, prefix: impl Into<String>) -> Self {
         self.process_id_prefix = Some(prefix.into()); self

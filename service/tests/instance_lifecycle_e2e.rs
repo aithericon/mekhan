@@ -53,6 +53,7 @@ fn simple_graph() -> WorkflowGraph {
                     label: "Start".to_string(),
                     description: None,
                     initial: Port::empty_input(),
+                    process_name: None,
                 },
                 parent_id: None,
                 width: None,

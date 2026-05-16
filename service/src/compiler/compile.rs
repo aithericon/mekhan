@@ -38,6 +38,12 @@ struct PostProcess {
     /// Maps node_id → group_id for scope children.
     /// Used to tag places/transitions with the correct group after build().
     scope_groups: HashMap<String, String>,
+    /// Set by the Start arm when the opt-in `process_name` registered an HPI
+    /// process: the place holding the `ProcessStarted` token (`process_id`).
+    /// End nodes read it (non-consuming) to wire a `process_complete` effect
+    /// before their terminal place, so the process is marked complete. `None`
+    /// = no process registered → End stays a bare terminal (unchanged).
+    process_token_place: Option<PlaceHandle<DynamicToken>>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -1274,34 +1280,136 @@ fn expand_node(
     let id = &node.id;
 
     match &node.data {
-        WorkflowNodeData::Start { label, .. } => {
+        WorkflowNodeData::Start { label, process_name, .. } => {
             // Initial tokens are seeded per-Start at instance creation time by
-            // `parameterize_air` based on the request's `start_tokens` (typed
-            // against the Start's declared `initial` port). Compile-time emits
-            // an unseeded place; the instance API replaces `initial_tokens` at
-            // deploy time.
+            // `parameterize_air` into `p_{id}_ready` (it strips the `_ready`
+            // suffix to find the place). That place id must stay stable.
             let place_id = format!("p_{id}_ready");
-            let place: PlaceHandle<DynamicToken> = ctx.state(&place_id, label);
+            let ready: PlaceHandle<DynamicToken> = ctx.state(&place_id, label);
 
-            ports.insert(
-                id.clone(),
-                NodePorts {
-                    input_place: place.clone(),
-                    output_places: vec![(None, place)],
-                    input_places: HashMap::new(),
-                },
-            );
+            match process_name
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                // Default: single-place Start, no process registration.
+                None => {
+                    ports.insert(
+                        id.clone(),
+                        NodePorts {
+                            input_place: ready.clone(),
+                            output_places: vec![(None, ready)],
+                            input_places: HashMap::new(),
+                        },
+                    );
+                }
+                // Opt-in: derive a per-instance process name from the Start
+                // inputs and register a named HPI process via the
+                // `process_start` effect. The causality projector
+                // (`enrich_processes_from_start_event`) maps the effect
+                // result's `name` onto the auto-discovered process row.
+                Some(tpl) => {
+                    // 1. Rhai: copy the seed token, add `_process_name` from
+                    //    the `{{ field }}` template (resolved at run time
+                    //    against the token, same safe accessor infra as
+                    //    human-task interpolation).
+                    let named: PlaceHandle<DynamicToken> =
+                        ctx.state(format!("p_{id}_named"), format!("{label} - Named"));
+                    let name_expr = interpolate_to_rhai_expr(tpl);
+                    ctx.transition(
+                        format!("t_{id}_proc_name"),
+                        format!("{label} - Derive Process Name"),
+                    )
+                    .auto_input("input", &ready)
+                    .auto_output("output", &named)
+                    .logic(format!(
+                        "let d = input; d._process_name = {name_expr}; #{{ output: d }}"
+                    ));
+
+                    // 2. process_start effect: register the process. The
+                    //    handler reads the name from `_process_name`
+                    //    (`name_field`) and forwards the full token onward
+                    //    via `forward_ports: ["main"]` so the workflow
+                    //    continues with its data intact. The small `process`
+                    //    token is parked in an internal place (Mekhan's
+                    //    projector uses causality tags + the effect result,
+                    //    not this token).
+                    let proc_out: PlaceHandle<DynamicToken> = ctx
+                        .state(format!("p_{id}_ready_out"), format!("{label} - Output"));
+                    let proc_sink: PlaceHandle<DynamicToken> = ctx
+                        .state(format!("p_{id}_process"), format!("{label} - Process"));
+                    ctx.transition(
+                        format!("t_{id}_proc_start"),
+                        format!("{label} - Register Process"),
+                    )
+                    .auto_input("trigger", &named)
+                    .auto_output("process", &proc_sink)
+                    .auto_output("main", &proc_out)
+                    .process_start(json!({
+                        "name": label,
+                        "name_field": "_process_name",
+                        "forward_ports": ["main"],
+                    }));
+
+                    // Hand the ProcessStarted token place to the End arm so
+                    // it can complete the same process (read-arc, non-consuming
+                    // → every End node can complete it independently).
+                    fixups.process_token_place = Some(proc_sink.clone());
+
+                    ports.insert(
+                        id.clone(),
+                        NodePorts {
+                            input_place: ready,
+                            output_places: vec![(None, proc_out)],
+                            input_places: HashMap::new(),
+                        },
+                    );
+                }
+            }
         }
 
         WorkflowNodeData::End { label, .. } => {
-            let place_id = format!("p_{id}_done");
-            let place: PlaceHandle<DynamicToken> = ctx.state(&place_id, label);
-            fixups.terminal_place_ids.push(place_id);
+            // Incoming edges always land in `p_{id}_done` — keep that id
+            // stable (edge wiring + pass-through merges key off the End's
+            // input_place).
+            let done_id = format!("p_{id}_done");
+            let done: PlaceHandle<DynamicToken> = ctx.state(&done_id, label);
+
+            match fixups.process_token_place.clone() {
+                // No process was registered by the Start (opt-in unused) —
+                // the End is a bare terminal, unchanged behavior.
+                None => {
+                    fixups.terminal_place_ids.push(done_id);
+                }
+                // A Start registered a process — mirror the Start pattern:
+                // insert a `process_complete` effect between the (stable)
+                // incoming place and a new terminal. The handler reads
+                // `process_id` from the parked `ProcessStarted` token via a
+                // read-arc (non-consuming, so multiple End nodes each
+                // complete), passes the workflow token through, and the
+                // causality projector picks up `completed: true`.
+                Some(proc_place) => {
+                    let completed: PlaceHandle<DynamicToken> = ctx.state(
+                        format!("p_{id}_completed"),
+                        format!("{label} - Completed"),
+                    );
+                    ctx.transition(
+                        format!("t_{id}_proc_complete"),
+                        format!("{label} - Complete Process"),
+                    )
+                    .read_input("process", &proc_place)
+                    .auto_input("done", &done)
+                    .auto_output("completed", &completed)
+                    .process_complete();
+
+                    fixups.terminal_place_ids.push(format!("p_{id}_completed"));
+                }
+            }
 
             ports.insert(
                 id.clone(),
                 NodePorts {
-                    input_place: place,
+                    input_place: done,
                     output_places: vec![],
                     input_places: HashMap::new(),
                 },
@@ -2352,6 +2460,7 @@ mod tests {
                 label: "Start".to_string(),
                 description: None,
                 initial: Port::empty_input(),
+                process_name: None,
             },
             parent_id: None,
             width: None,
@@ -2411,6 +2520,120 @@ mod tests {
         // instance creation. Just verify the place is terminal-typed here.
         let start_place = places.iter().find(|p| p["id"] == "p_s_ready").unwrap();
         assert_eq!(start_place["type"], "terminal");
+    }
+
+    #[test]
+    fn start_process_name_emits_rhai_and_process_start() {
+        let mut s = start_node("s");
+        if let WorkflowNodeData::Start {
+            ref mut process_name,
+            ..
+        } = s.data
+        {
+            *process_name = Some("Invoice {{ invoice_id }}".to_string());
+        }
+        let graph = WorkflowGraph {
+            nodes: vec![s, end_node("e")],
+            edges: vec![edge("e1", "s", "e")],
+            viewport: None,
+        };
+
+        let air = compile_to_air(&graph, "test", "desc", &std::collections::HashMap::new())
+            .expect("compile ok");
+        let transitions = air["transitions"].as_array().unwrap();
+
+        // 1. Rhai name-derivation transition with the interpolated accessor.
+        let proc_name = transitions
+            .iter()
+            .find(|t| t["id"] == "t_s_proc_name")
+            .expect("t_s_proc_name transition");
+        let logic = proc_name["logic"]["source"].as_str().unwrap_or_default();
+        assert!(
+            logic.contains(r#"d._process_name = ("" + "Invoice " + (input.invoice_id))"#),
+            "name expr not interpolated: {logic}"
+        );
+
+        // 2. process_start effect transition, name resolved from the token.
+        let proc_start = transitions
+            .iter()
+            .find(|t| t["id"] == "t_s_proc_start")
+            .expect("t_s_proc_start transition");
+        let ps = serde_json::to_string(proc_start).unwrap();
+        assert!(ps.contains("process_start"), "not a process_start effect: {ps}");
+        assert!(ps.contains("\"name_field\""), "missing name_field: {ps}");
+        assert!(ps.contains("_process_name"), "missing _process_name: {ps}");
+        assert!(ps.contains("forward_ports"), "missing forward_ports: {ps}");
+
+        // Pipeline places exist; the seeded place id is unchanged.
+        let places = air["places"].as_array().unwrap();
+        for pid in ["p_s_ready", "p_s_named", "p_s_ready_out", "p_s_process"] {
+            assert!(
+                places.iter().any(|p| p["id"] == pid),
+                "missing place {pid}"
+            );
+        }
+    }
+
+    #[test]
+    fn end_completes_process_when_start_registers() {
+        let mut s = start_node("s");
+        if let WorkflowNodeData::Start {
+            ref mut process_name,
+            ..
+        } = s.data
+        {
+            *process_name = Some("Invoice {{ invoice_id }}".to_string());
+        }
+        let graph = WorkflowGraph {
+            nodes: vec![s, end_node("e")],
+            edges: vec![edge("e1", "s", "e")],
+            viewport: None,
+        };
+
+        let air = compile_to_air(&graph, "test", "desc", &std::collections::HashMap::new())
+            .expect("compile ok");
+        let transitions = air["transitions"].as_array().unwrap();
+
+        // End emits a `process_complete` effect that read-arcs the Start's
+        // parked ProcessStarted token (`p_s_process`, non-consuming).
+        let proc_complete = transitions
+            .iter()
+            .find(|t| t["id"] == "t_e_proc_complete")
+            .expect("t_e_proc_complete transition");
+        let pc = serde_json::to_string(proc_complete).unwrap();
+        assert!(pc.contains("process_complete"), "not a process_complete effect: {pc}");
+        assert!(pc.contains("\"read\":true"), "process token must be read-arc: {pc}");
+        assert!(pc.contains("p_s_process"), "must read the Start's process place: {pc}");
+        assert!(pc.contains("\"completed\""), "missing completed output port: {pc}");
+
+        // The terminal moves to `p_e_completed` (post-completion sink).
+        let places = air["places"].as_array().unwrap();
+        let completed = places
+            .iter()
+            .find(|p| p["id"] == "p_e_completed")
+            .expect("p_e_completed place");
+        assert_eq!(completed["type"], "terminal");
+    }
+
+    #[test]
+    fn end_stays_bare_terminal_without_process() {
+        // No `process_name` on the Start → no process registered → the End
+        // must NOT emit a `process_complete` effect (opt-in preserved).
+        let graph = WorkflowGraph {
+            nodes: vec![start_node("s"), end_node("e")],
+            edges: vec![edge("e1", "s", "e")],
+            viewport: None,
+        };
+
+        let air = compile_to_air(&graph, "test", "desc", &std::collections::HashMap::new())
+            .expect("compile ok");
+        let transitions = air["transitions"].as_array().unwrap();
+        assert!(
+            !transitions
+                .iter()
+                .any(|t| t["id"] == "t_e_proc_complete"),
+            "End must not complete a process when none was registered"
+        );
     }
 
     #[test]
