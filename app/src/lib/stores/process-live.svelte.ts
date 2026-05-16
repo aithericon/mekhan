@@ -82,6 +82,13 @@ export function createProcessLiveStore(processId: string, opts: ProcessLiveOptio
 	let artifactCategories = [...(opts.artifactCategories ?? [])];
 	let artifactRenderHints = [...(opts.artifactRenderHints ?? [])];
 
+	// Epoch-ms cutoff: the `until` of the most recent metrics backfill. The
+	// SSE stream opens at since_seq=0 and the server replays its ring-buffer
+	// snapshot, which overlaps the DB backfill — so points at/before this
+	// cutoff are already shown (downsampled) and must be dropped to avoid
+	// duplicating every metric. 0 = no backfill yet (accept everything).
+	let metricsBackfillUntil = 0;
+
 	// Highest metric/log/artifact seq observed (drives reconnect resume).
 	let lastMetricSeq = 0;
 	let lastLogSeq = 0;
@@ -106,6 +113,11 @@ export function createProcessLiveStore(processId: string, opts: ProcessLiveOptio
 		if (signalKey && e.signal_key !== signalKey) return;
 		lastEventTime = Date.now();
 		lastMetricSeq = Math.max(lastMetricSeq, e.seq);
+		// Already represented by the DB backfill (downsampled) for this window —
+		// the stream's initial snapshot replays it; skip to avoid duplication.
+		if (metricsBackfillUntil && new Date(e.timestamp).getTime() <= metricsBackfillUntil) {
+			return;
+		}
 		const arr = metrics.series[e.key] ?? [];
 		arr.push({ t: e.timestamp, v: e.value });
 		if (arr.length > maxPointsPerSeries) {
@@ -173,6 +185,8 @@ export function createProcessLiveStore(processId: string, opts: ProcessLiveOptio
 				max_points: 2000
 			});
 			metrics = { bucketSeconds: resp.bucket_seconds, series: resp.series };
+			// Stream points up to this instant are covered by the backfill above.
+			metricsBackfillUntil = now.getTime();
 			errorMessage = null;
 		} catch (e) {
 			errorMessage = e instanceof Error ? e.message : String(e);
