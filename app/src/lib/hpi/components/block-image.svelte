@@ -1,10 +1,43 @@
 <script lang="ts">
+	import { authFetch } from '$lib/auth/fetch';
+
 	let { url, alt, caption }: { url: string; alt?: string; caption?: string } = $props();
 
-	// A blank URL or a failed load (404 / auth / missing artifact) must be
-	// surfaced — a silently broken <img> reads as "the workflow forgot the
-	// document" to a reviewer.
+	// An <img> tag can't carry an Authorization header, so a protected
+	// /api/files/... URL 401s under auth (works under dev_noop, breaks in
+	// every real deployment). Fetch the bytes via authFetch and hand the tag
+	// an object URL instead — same approach as ImageRenderer — revoking it on
+	// url change / teardown. A blank URL or a failed load must be surfaced:
+	// a silently broken <img> reads as "the workflow forgot the document".
+	let src = $state<string | null>(null);
 	let failed = $state(false);
+
+	$effect(() => {
+		const u = url;
+		src = null;
+		failed = false;
+		if (!u) return;
+		const controller = new AbortController();
+		let objectUrl: string | null = null;
+		authFetch(u, { signal: controller.signal })
+			.then((r) => {
+				if (!r.ok) throw new Error(`fetch failed: ${r.status}`);
+				return r.blob();
+			})
+			.then((b) => {
+				objectUrl = URL.createObjectURL(b);
+				src = objectUrl;
+			})
+			.catch(() => {
+				if (controller.signal.aborted) return;
+				failed = true;
+			});
+		return () => {
+			controller.abort();
+			if (objectUrl) URL.revokeObjectURL(objectUrl);
+		};
+	});
+
 	const missing = $derived(!url || failed);
 </script>
 
@@ -19,14 +52,21 @@
 				{url ? 'The file could not be loaded (missing, moved, or access denied).' : 'No file was provided for this block.'}
 			</span>
 		</div>
-	{:else}
+	{:else if src}
 		<img
-			src={url}
+			{src}
 			alt={alt ?? ''}
 			loading="lazy"
 			class="max-w-full rounded-lg"
 			onerror={() => (failed = true)}
 		/>
+	{:else}
+		<div
+			data-testid="block-image-loading"
+			class="flex items-center justify-center px-4 py-8 text-xs text-muted-foreground"
+		>
+			Loading…
+		</div>
 	{/if}
 	{#if caption || alt}
 		<figcaption class="mt-2 text-center text-sm text-muted-foreground">
