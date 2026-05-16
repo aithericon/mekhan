@@ -204,7 +204,7 @@ export function createDefaultNodeData(type: WorkflowNodeType): SchemaWorkflowNod
 				source: { kind: 'manual', form: [] },
 				concurrency: 'allow',
 				payloadMapping: [],
-				enabled: false
+				enabled: true
 			};
 	}
 }

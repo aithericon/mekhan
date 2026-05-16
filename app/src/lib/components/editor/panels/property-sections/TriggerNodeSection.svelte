@@ -58,6 +58,54 @@
 		}
 	}
 
+	// Rhai keywords/literals that lex as identifiers but aren't scope reads.
+	const RHAI_RESERVED = new Set([
+		'true',
+		'false',
+		'null',
+		'let',
+		'const',
+		'if',
+		'else',
+		'for',
+		'in',
+		'while',
+		'loop',
+		'fn',
+		'return',
+		'switch',
+		'this',
+		'break',
+		'continue',
+		'throw',
+		'try',
+		'catch'
+	]);
+
+	// Root scope identifiers a mapping expression reads. At fire time the POSTed
+	// `payload`'s top-level keys bind as bare Rhai variables, so the root of each
+	// reference chain (before the first `.`/`[`) is a body key the caller must
+	// send. Heuristic — covers the bare-ident / member-access shapes mappings
+	// use, not a full Rhai parser.
+	function rootRefs(expr: string): string[] {
+		// Blank out string/char literals so identifiers inside them don't count.
+		const stripped = expr.replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g, '""');
+		const out: string[] = [];
+		const re = /[A-Za-z_$][A-Za-z0-9_$]*/g;
+		let m: RegExpExecArray | null;
+		while ((m = re.exec(stripped))) {
+			const id = m[0];
+			const before = stripped.slice(0, m.index).trimEnd();
+			const after = stripped.slice(re.lastIndex).trimStart();
+			if (before.endsWith('.')) continue; // property access, not a scope var
+			if (after.startsWith('(')) continue; // function call name
+			if (after.startsWith(':') && !after.startsWith('::')) continue; // map key
+			if (RHAI_RESERVED.has(id)) continue;
+			out.push(id);
+		}
+		return out;
+	}
+
 	const targetStartFields = $derived.by((): PortField[] => {
 		if (!binding || !nodeId) return [];
 		const g = binding.graph;
@@ -75,8 +123,19 @@
 	// (FireTriggerRequest.payload) — not the bare object. File fields can't go
 	// in JSON; they're uploaded as multipart parts and the server injects a
 	// reference object, so they're excluded from the JSON `payload`.
-	const samplePayload = $derived(
-		Object.fromEntries(nonFileFields.map((f) => [f.name, sampleValue(f)]))
+	// With a payload mapping the body the caller must POST is keyed by the
+	// identifiers the expressions read (the mapping's input) — not the target
+	// Start fields (its output). Without a mapping the trigger forwards
+	// `payload` verbatim, so mirror the Start schema.
+	const mappedInputKeys = $derived.by(() => {
+		const keys = new Set<string>();
+		for (const m of mappings) for (const id of rootRefs(m.expression)) keys.add(id);
+		return [...keys];
+	});
+	const samplePayload = $derived.by(() =>
+		mappings.length > 0
+			? Object.fromEntries(mappedInputKeys.map((k) => [k, 'example']))
+			: Object.fromEntries(nonFileFields.map((f) => [f.name, sampleValue(f)]))
 	);
 
 	function fileMime(f: PortField): string {
@@ -415,10 +474,10 @@
 				</p>
 			{/if}
 			{#if hasMapping}
-				<p class="rounded-md bg-amber-50 p-2 text-[11px] text-amber-800">
-					This trigger remaps the payload, so the real body is whatever your
-					mapping expressions read. The sample above mirrors the Start schema
-					and is only accurate with no payload mapping.
+				<p class="text-[11px] text-muted-foreground">
+					Body keys are the identifiers your mapping expressions read; the
+					values shown are placeholders. The expressions project them onto the
+					target Start fields.
 				</p>
 			{/if}
 		</div>
