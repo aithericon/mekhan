@@ -8,6 +8,7 @@ Migration planning from the legacy web-platform SOP system to the new petri-lab 
 |------|-------------|
 | [01-legacy-sop-requirements.md](./01-legacy-sop-requirements.md) | Comprehensive requirements capture of the legacy SOP system (templates, instances, phases, steps, batch controller, business rules, API surface) |
 | [02-migration-strategy.md](./02-migration-strategy.md) | Unified migration strategy with feature mapping, gap analysis, phased migration plan, risk assessment, and open questions |
+| [08-multi-start-nodes.md](./08-multi-start-nodes.md) | Design handoff: enabling multiple Start nodes — blocked only by the compiler's start-count guard / single-root analysis; wire, instance API, and UI are already plural-Start-aware |
 
 ## Key Concepts
 

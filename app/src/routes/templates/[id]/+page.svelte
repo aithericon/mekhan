@@ -269,6 +269,7 @@
 					{binding}
 					nodeId={selectedNodeId ?? undefined}
 					{templateId}
+					onselectnode={handleNodeSelect}
 				/>
 			{/if}
 
@@ -291,6 +292,7 @@
 							{binding}
 							nodeId={selectedNodeId ?? undefined}
 							{templateId}
+							onselectnode={handleNodeSelect}
 						/>
 					</SheetContent>
 				</Sheet.Root>

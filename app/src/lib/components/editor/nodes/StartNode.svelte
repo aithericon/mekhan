@@ -26,6 +26,19 @@
 	};
 </script>
 
+<!-- Trigger entrypoints (cron/catalog/webhook/...) fire the workflow by
+     connecting their single outgoing edge into the Start's `initial` port.
+     This target handle is what xyflow drops that edge onto; its id must equal
+     the initial port id so the backend resolves it via Start's output_ports()
+     (see validate_triggers / triggers::dispatcher). Without it the editor has
+     nowhere to land a Trigger→Start edge. -->
+<Handle
+	id={data.initial?.id ?? 'in'}
+	type="target"
+	position={Position.Left}
+	class={workflowNodeHandleClass('start')}
+/>
+
 {#if hasFields}
 	<WorkflowNodeCard
 		nodeId={id}

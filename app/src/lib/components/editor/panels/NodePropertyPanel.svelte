@@ -36,6 +36,10 @@
 		binding?: YjsGraphBinding;
 		nodeId?: string;
 		templateId?: string;
+		/// Select a different node by id (swaps the property panel to it).
+		/// Used by the Start section's "Add trigger" affordance to jump to
+		/// the freshly-created Trigger node.
+		onselectnode?: (id: string) => void;
 	};
 
 	let {
@@ -49,7 +53,8 @@
 		ondelete,
 		binding,
 		nodeId,
-		templateId
+		templateId,
+		onselectnode
 	}: Props = $props();
 
 	function updateField<K extends keyof WorkflowNodeData>(
@@ -151,7 +156,7 @@
 
 		<!-- Type-specific sections -->
 		{#if data.type === 'start'}
-			<StartNodeSection {data} {readonly} {onchange} />
+			<StartNodeSection {data} {readonly} {onchange} {binding} {nodeId} {onselectnode} />
 		{:else if data.type === 'human_task'}
 			{#if templateId && nodeId}
 				<div class="space-y-3">
