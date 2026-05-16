@@ -40,7 +40,7 @@
 <div class="flex h-screen flex-col">
 	<header class="flex h-12 shrink-0 items-center border-b border-border bg-card px-4" data-testid="app-header">
 		<a href="/" class="text-sm font-semibold tracking-tight text-foreground" data-testid="nav-home">Mekhan</a>
-		<nav class="ml-8 flex items-center gap-1 text-sm" data-testid="nav-bar">
+		<nav class="ml-8 flex flex-1 items-center gap-1 text-sm" data-testid="nav-bar">
 			<Button variant="ghost" size="sm" data-testid="nav-demo" disabled={openingDemo} onclick={openDemo}>
 				{openingDemo ? 'Opening…' : 'Demo'}
 			</Button>
@@ -49,7 +49,7 @@
 			<Button variant="ghost" size="sm" href="/processes" data-testid="nav-processes">Processes</Button>
 			<Button variant="ghost" size="sm" href="/tasks" data-testid="nav-tasks">Tasks</Button>
 			<Button variant="ghost" size="sm" href="/catalogue" data-testid="nav-catalogue">Catalogue</Button>
-			<span class="ml-auto mr-1 h-4 w-px bg-border" aria-hidden="true"></span>
+			<span class="mx-1 h-4 w-px bg-border" aria-hidden="true"></span>
 			<Button
 				variant="ghost"
 				size="sm"
@@ -61,7 +61,7 @@
 				Engine
 			</Button>
 			{#if auth.isAuthenticated}
-				<span class="ml-2 h-4 w-px bg-border" aria-hidden="true"></span>
+				<span class="ml-auto h-4 w-px bg-border" aria-hidden="true"></span>
 				<Button
 					variant="ghost"
 					size="sm"
