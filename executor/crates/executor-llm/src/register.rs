@@ -166,10 +166,20 @@ pub fn mint_register_jwt(
 /// a local copy here (rather than adding `cloud-layer-capability-routing`
 /// as a runtime dep) preserves the cross-repo isolation per A4 § 5.2 trip-
 /// wire and Q6=A.
+///
+/// `control_url` (workstream #74): URL exposing /v1/healthz. Distinct from
+/// `pool_url` (inference dispatch target) — for the executor pool the two
+/// happen to be equal because `pool_listener` serves /v1/healthz on
+/// pool_url itself. `#[serde(skip_serializing_if = "Option::is_none")]`
+/// preserves byte-identical wire-shape with pre-#74 cap-routing
+/// instances (which #[serde(default)] the field): when None, the JSON
+/// body omits the key entirely.
 #[derive(Debug, Serialize)]
 pub struct RegisterRequest {
     pub pool_name: String,
     pub pool_url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub control_url: Option<String>,
     pub hardware: serde_json::Value,
     pub gpus: Vec<serde_json::Value>,
     pub engines: serde_json::Value,
@@ -281,9 +291,17 @@ pub fn build_register_request(
             );
         }
     }
+    // workstream #74: executor's pool_listener serves /v1/healthz on
+    // pool_url itself (see `pool_listener::spawn_pool_listener`). So the
+    // executor's control_url is just pool_url — no separate listener needed.
+    // Compute-agent-style pools (cloud-layer-compute-agent) advertise a
+    // distinct control_url because their pool_url points at an upstream
+    // Ollama instead.
+    let control_url = Some(pool_url.clone());
     RegisterRequest {
         pool_name,
         pool_url,
+        control_url,
         hardware: serde_json::to_value(hardware).expect("hardware serialisation"),
         gpus: vec![],
         engines: build_engines_advertisement(engine_capabilities),
@@ -386,6 +404,14 @@ mod tests {
         assert!(
             models.is_empty(),
             "Vanilla-ambiguity workaround: services.ollama.models_loaded MUST default empty at fresh boot"
+        );
+        // workstream #74: executor advertises control_url=pool_url because
+        // pool_listener serves /v1/healthz on pool_url. The harness probes
+        // control_url for health; pool_url stays the inference-dispatch URL.
+        assert_eq!(
+            req.control_url.as_deref(),
+            Some("http://127.0.0.1:3301"),
+            "executor's control_url defaults to pool_url"
         );
     }
 
