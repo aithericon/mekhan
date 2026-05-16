@@ -12,8 +12,8 @@
 use std::collections::HashMap;
 
 use axum::{
-    extract::{Path, Query, State},
-    http::{HeaderMap, Method, StatusCode},
+    extract::{FromRequest, Multipart, Path, Query, Request, State},
+    http::{header, HeaderMap, Method, StatusCode},
     Json,
 };
 use chrono::{DateTime, Utc};
@@ -157,6 +157,14 @@ pub async fn list_template_triggers(
 }
 
 /// POST /api/triggers/{node_id}/fire
+///
+/// Accepts either `application/json` (`{ "payload": { ... } }` — the scope
+/// keys for `payload_mapping`) or `multipart/form-data` for file entrypoints:
+/// an optional JSON `payload` part plus one binary part per file field. Each
+/// file part is uploaded to blob storage (scoped to the trigger's template +
+/// target node) and injected into the payload under the part name as a
+/// `{ key, url, filename, content_type, size }` reference object — the same
+/// shape the create-instance dialog produces, which `FieldKind::File` accepts.
 #[utoipa::path(
     post,
     path = "/api/triggers/{node_id}/fire",
@@ -173,12 +181,130 @@ pub async fn fire_trigger(
     State(state): State<AppState>,
     _user: AuthUser,
     Path(node_id): Path<String>,
-    Json(req): Json<FireTriggerRequest>,
+    request: Request,
 ) -> Result<Json<FireTriggerResponse>, ApiError> {
-    let result = crate::triggers::sources::manual::fire(&state.triggers, &node_id, req.payload)
+    let content_type = request
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+
+    let payload = if content_type.starts_with("multipart/form-data") {
+        build_multipart_payload(&state, &node_id, request).await?
+    } else {
+        let bytes = axum::body::to_bytes(request.into_body(), 4 * 1024 * 1024)
+            .await
+            .map_err(|e| ApiError::bad_request(format!("failed to read body: {e}")))?;
+        if bytes.is_empty() {
+            Value::Null
+        } else {
+            serde_json::from_slice::<FireTriggerRequest>(&bytes)
+                .map_err(|e| ApiError::bad_request(format!("invalid JSON body: {e}")))?
+                .payload
+        }
+    };
+
+    let result = crate::triggers::sources::manual::fire(&state.triggers, &node_id, payload)
         .await
         .map_err(map_trigger_error)?;
     Ok(Json(FireTriggerResponse { result }))
+}
+
+/// Build the fire payload from a `multipart/form-data` body: merge the JSON
+/// `payload` part with one uploaded-file reference per remaining part. Files
+/// land in blob storage scoped to the trigger's template + target node so
+/// they're retrievable via `/api/files/{key}` exactly like create-instance
+/// uploads, and the injected reference object is accepted as-is by a `file`
+/// port field (`FieldKind::File` accepts an object).
+async fn build_multipart_payload(
+    state: &AppState,
+    node_id: &str,
+    request: Request,
+) -> Result<Value, ApiError> {
+    let record = state.triggers.get(node_id).ok_or_else(|| {
+        ApiError::not_found(format!(
+            "trigger '{node_id}' not found in any published template"
+        ))
+    })?;
+
+    let mut multipart = Multipart::from_request(request, state)
+        .await
+        .map_err(|e| ApiError::bad_request(format!("invalid multipart body: {e}")))?;
+
+    let mut payload = serde_json::Map::new();
+
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| ApiError::bad_request(format!("invalid multipart field: {e}")))?
+    {
+        let Some(name) = field.name().map(str::to_string) else {
+            continue;
+        };
+        if name.is_empty() {
+            continue;
+        }
+
+        // The `payload` part carries the non-file scope keys as a JSON object.
+        if name == "payload" {
+            let text = field
+                .text()
+                .await
+                .map_err(|e| ApiError::bad_request(format!("'payload' part: {e}")))?;
+            if text.trim().is_empty() {
+                continue;
+            }
+            match serde_json::from_str::<Value>(&text)
+                .map_err(|e| ApiError::bad_request(format!("'payload' part is not JSON: {e}")))?
+            {
+                Value::Object(m) => payload.extend(m),
+                _ => {
+                    return Err(ApiError::bad_request(
+                        "'payload' part must be a JSON object",
+                    ))
+                }
+            }
+            continue;
+        }
+
+        // Every other part is an uploaded file → store it and inject a
+        // reference object under the part name.
+        let content_type = field
+            .content_type()
+            .unwrap_or("application/octet-stream")
+            .to_string();
+        let filename = field.file_name().unwrap_or("upload.bin").to_string();
+        let bytes = field
+            .bytes()
+            .await
+            .map_err(|e| ApiError::bad_request(format!("file part '{name}': {e}")))?;
+        let size = bytes.len();
+        let key = state
+            .s3
+            .upload_blob(
+                record.template_id,
+                &record.target_node_id,
+                &filename,
+                &bytes,
+                &content_type,
+            )
+            .await
+            .map_err(|e| ApiError::internal(format!("upload failed: {e}")))?;
+
+        payload.insert(
+            name,
+            serde_json::json!({
+                "key": key,
+                "url": format!("/api/files/{key}"),
+                "filename": filename,
+                "content_type": content_type,
+                "size": size,
+            }),
+        );
+    }
+
+    Ok(Value::Object(payload))
 }
 
 /// GET /api/triggers/{node_id}/history

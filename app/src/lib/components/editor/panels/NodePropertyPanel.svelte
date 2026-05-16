@@ -189,7 +189,7 @@
 		{:else if data.type === 'loop'}
 			<LoopNodeSection {data} {readonly} {onchange} {scope} />
 		{:else if data.type === 'trigger'}
-			<TriggerNodeSection {data} {readonly} {onchange} {nodeId} />
+			<TriggerNodeSection {data} {readonly} {onchange} {nodeId} {binding} />
 		{:else if data.type === 'parallel_split'}
 			<ParallelSplitSection {data} {binding} {nodeId} />
 		{:else if data.type === 'parallel_join'}

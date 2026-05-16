@@ -10,25 +10,104 @@
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import CronPreview from './CronPreview.svelte';
 	import TriggerHistory from './TriggerHistory.svelte';
+	import { CopyButton } from '$lib/components/ui/copy-button';
+	import { browser } from '$app/environment';
+	import type { YjsGraphBinding } from '$lib/yjs/graph-binding.svelte';
 
 	type FieldMapping = components['schemas']['FieldMapping'];
+	type PortField = components['schemas']['PortField'];
 
 	type Props = {
 		data: TriggerNodeData;
 		readonly?: boolean;
 		onchange: (data: TriggerNodeData) => void;
 		nodeId?: string;
+		binding?: YjsGraphBinding;
 	};
 
-	let { data, readonly = false, onchange, nodeId }: Props = $props();
+	let { data, readonly = false, onchange, nodeId, binding }: Props = $props();
 
 	const source = $derived(data.source);
 	const sourceKind = $derived(source?.kind ?? 'manual');
 	const mappings = $derived(data.payloadMapping ?? []);
 	const enabled = $derived(data.enabled ?? false);
 
+	// Sample-request scaffolding for the API-call (manual) source. The body a
+	// caller should POST mirrors the target Start's `initial` schema — but only
+	// when there's no payload mapping (mapping rewrites the body, so we warn).
+	function sampleValue(f: PortField): unknown {
+		switch (f.kind) {
+			case 'number':
+				return 0;
+			case 'bool':
+				return false;
+			case 'json':
+				return {};
+			case 'timestamp':
+				return '2026-01-01T00:00:00Z';
+			case 'select':
+				return f.options?.[0] ?? 'option';
+			case 'file':
+				return 'file-reference';
+			case 'signature':
+				return 'signature-data';
+			case 'textarea':
+				return 'example text';
+			default:
+				return 'example';
+		}
+	}
+
+	const targetStartFields = $derived.by((): PortField[] => {
+		if (!binding || !nodeId) return [];
+		const g = binding.graph;
+		const edge = g.edges.find((e) => e.source === nodeId);
+		if (!edge) return [];
+		const tgt = g.nodes.find((n) => n.id === edge.target);
+		if (!tgt || tgt.data.type !== 'start') return [];
+		return tgt.data.initial?.fields ?? [];
+	});
+
+	const fileFields = $derived(targetStartFields.filter((f) => f.kind === 'file'));
+	const nonFileFields = $derived(targetStartFields.filter((f) => f.kind !== 'file'));
+
+	// The fire endpoint's JSON contract is `{ "payload": { ...scope keys } }`
+	// (FireTriggerRequest.payload) — not the bare object. File fields can't go
+	// in JSON; they're uploaded as multipart parts and the server injects a
+	// reference object, so they're excluded from the JSON `payload`.
+	const samplePayload = $derived(
+		Object.fromEntries(nonFileFields.map((f) => [f.name, sampleValue(f)]))
+	);
+
+	function fileMime(f: PortField): string {
+		const first = (f.accept ?? '').split(',')[0]?.trim();
+		return first && first.includes('/') ? first : 'application/octet-stream';
+	}
+
+	const origin = $derived(browser ? window.location.origin : 'https://YOUR_HOST');
+	const fireUrl = $derived(`${origin}/api/triggers/${nodeId ?? '{node_id}'}/fire`);
+
+	// With file fields, fire as multipart/form-data: one `-F` per file part +
+	// a `payload` part for the rest. Otherwise a plain JSON body.
+	const curlCommand = $derived.by(() => {
+		if (fileFields.length > 0) {
+			const lines = [`curl -X POST '${fireUrl}'`];
+			for (const f of fileFields) {
+				lines.push(`  -F '${f.name}=@/path/to/${f.name};type=${fileMime(f)}'`);
+			}
+			lines.push(`  -F 'payload=${JSON.stringify(samplePayload)};type=application/json'`);
+			return lines.join(' \\\n');
+		}
+		return [
+			`curl -X POST '${fireUrl}'`,
+			`  -H 'Content-Type: application/json'`,
+			`  -d '${JSON.stringify({ payload: samplePayload })}'`
+		].join(' \\\n');
+	});
+	const hasMapping = $derived((data.payloadMapping ?? []).length > 0);
+
 	const sourceKindLabels: Record<string, string> = {
-		manual: 'Manual',
+		manual: 'API call',
 		cron: 'Cron schedule',
 		catalog: 'Catalogue event',
 		net_completion: 'Workflow completion',
@@ -95,6 +174,28 @@
 		update('payloadMapping', [...mappings, { targetField: '', expression: 'payload' }]);
 	}
 
+	// Identity-map every target Start field so a typed Start is publishable
+	// without hand-writing rename-only mappings. The expression form depends
+	// on where the field lands in the fire-time scope:
+	//  - API call (manual): POST-body top-level keys bind as scope vars, so a
+	//    bare identifier resolves (bare idents are also not compile-scoped).
+	//  - webhook: the body sits under `payload` → `payload.<name>`.
+	//  - cron/catalog/net_completion: best-effort bare name; the user edits
+	//    against the fixed source scope (listed above) where it differs.
+	function autoMapExpression(fieldName: string): string {
+		return sourceKind === 'webhook' ? `payload.${fieldName}` : fieldName;
+	}
+
+	function autoMapFromStart() {
+		update(
+			'payloadMapping',
+			targetStartFields.map((f) => ({
+				targetField: f.name,
+				expression: autoMapExpression(f.name)
+			}))
+		);
+	}
+
 	function updateMapping(idx: number, patch: Partial<FieldMapping>) {
 		const next = mappings.map((m, i) => (i === idx ? { ...m, ...patch } : m));
 		update('payloadMapping', next);
@@ -119,10 +220,10 @@
 			disabled={readonly}
 		>
 			<Select.Trigger id="trigger-source-kind" class="w-full" disabled={readonly}>
-				{sourceKindLabels[sourceKind] ?? 'Manual'}
+				{sourceKindLabels[sourceKind] ?? 'API call'}
 			</Select.Trigger>
 			<Select.Content>
-				<Select.Item value="manual" label="Manual" />
+				<Select.Item value="manual" label="API call" />
 				<Select.Item value="cron" label="Cron schedule" />
 				<Select.Item value="catalog" label="Catalogue event" />
 				<Select.Item value="net_completion" label="Workflow completion" />
@@ -280,9 +381,47 @@
 			/>
 		</FormField>
 	{:else if source?.kind === 'manual'}
-		<p class="text-xs text-muted-foreground">
-			Manual triggers fire via <code>POST /api/triggers/{'{node_id}'}/fire</code>.
-		</p>
+		<div class="space-y-2">
+			<p class="text-xs text-muted-foreground">
+				Fires when something <code>POST</code>s to this endpoint — a script, a
+				cron job, another service. Add an <code>Authorization</code> header if
+				your deployment enforces auth.
+			</p>
+			<div class="space-y-1.5 rounded-md border border-border/60 bg-muted/20 p-2">
+				<div class="flex items-center justify-between gap-2">
+					<span class="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+						Sample request
+					</span>
+					<CopyButton text={curlCommand} />
+				</div>
+				<pre class="overflow-x-auto whitespace-pre-wrap break-all font-mono text-[10px] leading-relaxed text-foreground">{curlCommand}</pre>
+			</div>
+			{#if fileFields.length > 0}
+				<p class="text-[11px] text-muted-foreground">
+					Replace <code>/path/to/…</code> with your file(s). Each is uploaded to
+					storage and passed to the Start as a file reference — no need to
+					pre-upload.
+				</p>
+			{/if}
+			{#if targetStartFields.length === 0}
+				<p class="text-[11px] text-muted-foreground">
+					{#if !binding || !nodeId}
+						Wire this trigger into a Start node to auto-fill the request body
+						from its schema.
+					{:else}
+						The target Start declares no fields — an empty object
+						<code>{'{}'}</code> is a valid body.
+					{/if}
+				</p>
+			{/if}
+			{#if hasMapping}
+				<p class="rounded-md bg-amber-50 p-2 text-[11px] text-amber-800">
+					This trigger remaps the payload, so the real body is whatever your
+					mapping expressions read. The sample above mirrors the Start schema
+					and is only accurate with no payload mapping.
+				</p>
+			{/if}
+		</div>
 	{/if}
 
 	<!-- Payload mapping — each row projects one target-port field. -->
@@ -306,9 +445,31 @@
 			</p>
 		{/if}
 		{#if mappings.length === 0}
-			<p class="rounded-md border border-dashed border-border/50 p-2 text-[11px] text-muted-foreground">
-				No mappings. Without entries the trigger forwards <code>payload</code> verbatim.
-			</p>
+			{#if targetStartFields.length > 0}
+				<div class="space-y-1.5 rounded-md border border-dashed border-border/50 p-2">
+					<p class="text-[11px] text-muted-foreground">
+						The target Start declares typed fields, so the payload can't be
+						forwarded verbatim — each field needs a mapping. Auto-map adds an
+						identity mapping per field; rename or edit them afterward.
+					</p>
+					{#if !readonly}
+						<Button
+							variant="outline"
+							size="sm"
+							onclick={autoMapFromStart}
+							data-testid="btn-automap"
+						>
+							<Plus class="size-3.5" />
+							Auto-map from Start schema
+						</Button>
+					{/if}
+				</div>
+			{:else}
+				<p class="rounded-md border border-dashed border-border/50 p-2 text-[11px] text-muted-foreground">
+					No mappings. Without entries the trigger forwards <code>payload</code>
+					verbatim — only valid when the target port has no declared fields.
+				</p>
+			{/if}
 		{:else}
 			{#each mappings as mapping, i (i)}
 				<div class="rounded-md border border-border/60 bg-muted/20 p-2 space-y-1.5">

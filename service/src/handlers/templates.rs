@@ -512,6 +512,29 @@ pub async fn publish_template(
         ApiError::internal(e.to_string())
     })?;
 
+    // Make the just-published template's triggers live immediately. The
+    // dispatcher's in-memory registry is otherwise only filled by `hydrate()`
+    // at service startup, so without this a freshly-published trigger 404s
+    // ("not found in any published template") until the next restart.
+    //
+    // Register from the Y.Doc-reconstructed `graph` we actually compiled, not
+    // `template.graph`: the publish UPDATE doesn't write the graph column, so
+    // it can be stale relative to what was just published.
+    match serde_json::to_value(&graph) {
+        Ok(graph_json) => {
+            let mut t = template.clone();
+            t.graph = graph_json;
+            let registered = state.triggers.register_template(&t).await;
+            if registered > 0 {
+                tracing::info!(template_id = %id, registered, "registered triggers on publish");
+            }
+        }
+        Err(e) => tracing::warn!(
+            template_id = %id,
+            "skipped trigger registration on publish: graph serialize failed: {e}"
+        ),
+    }
+
     Ok(Json(template))
 }
 

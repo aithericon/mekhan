@@ -38,7 +38,7 @@
 	}
 
 	const sourceKindLabels: Record<string, string> = {
-		manual: 'Manual',
+		manual: 'API call',
 		cron: 'Cron schedule',
 		catalog: 'Catalogue event',
 		net_completion: 'On workflow completion',

@@ -15,7 +15,7 @@
 		catalog: 'Catalog',
 		net_completion: 'On Completion',
 		webhook: 'Webhook',
-		manual: 'Manual'
+		manual: 'API call'
 	};
 	const subtitle = $derived(sourceLabel[sourceKind] ?? sourceKind);
 	const enabled = $derived(data.enabled ?? false);
