@@ -82,6 +82,40 @@ pub fn default_requester_role() -> String {
         .unwrap_or_else(|_| "platform_admin".to_string())
 }
 
+/// Pure parser for the kreuzberg-ocr-enabled env value. Split from the
+/// env-reading wrapper [`default_kreuzberg_ocr_enabled`] so unit tests
+/// can assert the truthy-value matrix without mutating process env
+/// (and therefore without racing parallel test threads).
+///
+/// Accepts: literal `"true"` or `"1"` (case-sensitive). Everything else
+/// (including `None`, `Some("TRUE")`, `Some("yes")`) → false.
+pub fn parse_kreuzberg_ocr_enabled(value: Option<&str>) -> bool {
+    matches!(value, Some("true") | Some("1"))
+}
+
+/// Phase-1a OCR-framing gate: opt-in env flag controlling whether the
+/// executor pool advertises the `kreuzberg` services-block in its
+/// register + heartbeat payloads. When true, cap-routing's resolver will
+/// grant the pool `Capability::Ocr` (via a parallel cap-routing branch
+/// landed as Wave 1b). When false (the default), the executor pool
+/// payload preserves byte-for-byte parity with pre-OCR deployments —
+/// the `services.kreuzberg` field is OMITTED entirely (not `null`) so
+/// older cap-routing deserialisers don't trip on an unknown key.
+///
+/// Accepted truthy values: literal `"true"` and `"1"` (case-sensitive).
+/// Everything else (including unset) → false.
+///
+/// Phase 2 will swap this env-var gate for a Cargo feature flag + a
+/// kreuzberg-loaded executor bin variant; the env-var is the dev-cycle
+/// mechanism for the multi-day OCR-framing realisation slice.
+pub fn default_kreuzberg_ocr_enabled() -> bool {
+    parse_kreuzberg_ocr_enabled(
+        std::env::var("AITHERICON_EXECUTOR_KREUZBERG_ENABLED")
+            .ok()
+            .as_deref(),
+    )
+}
+
 /// Build the engine-advertisement Vec used in BOTH register + heartbeat.
 /// Extracted as a shared helper so the two code paths can never drift on
 /// what engine versions/caps are advertised. The "0.x" version placeholder
@@ -214,6 +248,14 @@ pub fn engine_caps_for_hardware(hw: &HardwareAdvertisement) -> Vec<String> {
 /// the executor pool does NOT compete with synthetic `vanilla-synth` for
 /// `Vanilla` routes during 2.1a cert. Once operators pre-warm a model,
 /// heartbeat probes will start surfacing it.
+///
+/// `kreuzberg_enabled` controls the Phase-1a OCR-framing advertisement
+/// (see [`default_kreuzberg_ocr_enabled`]): when `true`, the wire body's
+/// `services` object gets a `kreuzberg: { healthy: true }` block so the
+/// cap-routing resolver can grant `Capability::Ocr`. When `false`, the
+/// block is OMITTED entirely from `services` (not emitted as `null`) so
+/// deployments without the feature get a byte-identical wire body to
+/// the pre-OCR shape.
 pub fn build_register_request(
     pool_name: String,
     pool_url: String,
@@ -221,13 +263,24 @@ pub fn build_register_request(
     engine_capabilities: &[String],
     ollama_url: String,
     loaded_models: Vec<String>,
+    kreuzberg_enabled: bool,
 ) -> RegisterRequest {
-    let services = serde_json::json!({
+    let mut services = serde_json::json!({
         "ollama": {
             "url": ollama_url,
             "models_loaded": loaded_models,
         }
     });
+    if kreuzberg_enabled {
+        // Insert via the typed Map API rather than re-allocating the JSON
+        // literal; keeps the omit-when-false path emit-zero-extra-keys.
+        if let Some(obj) = services.as_object_mut() {
+            obj.insert(
+                "kreuzberg".to_string(),
+                serde_json::json!({ "healthy": true }),
+            );
+        }
+    }
     RegisterRequest {
         pool_name,
         pool_url,
@@ -313,6 +366,7 @@ mod tests {
             &["GgufQuantization".to_string(), "Streaming".to_string()],
             "http://127.0.0.1:11436".to_string(),
             vec![], // empty — boot honesty
+            false,  // kreuzberg_enabled — unrelated to Vanilla-ambiguity assertion
         );
         // Top-level loaded_models stays empty regardless of caller intent —
         // the field is dropped from the wire body because capability-routing
@@ -335,6 +389,88 @@ mod tests {
         );
     }
 
+    /// When `kreuzberg_enabled = true`, the wire body's `services` object
+    /// gains a `kreuzberg` block that cap-routing's resolver consumes to
+    /// grant `Capability::Ocr`. The `healthy: true` value is the dev-cycle
+    /// placeholder; Phase 2 swaps in a real probe.
+    #[test]
+    fn build_register_request_emits_kreuzberg_block_when_enabled() {
+        let hw = HardwareAdvertisement::Metal {
+            unified_memory_gb: 128,
+        };
+        let req = build_register_request(
+            "test-host-executor".to_string(),
+            "http://127.0.0.1:3301".to_string(),
+            &hw,
+            &["GgufQuantization".to_string()],
+            "http://127.0.0.1:11436".to_string(),
+            vec![],
+            true, // kreuzberg_enabled
+        );
+        assert_eq!(
+            req.services["kreuzberg"]["healthy"], true,
+            "kreuzberg block must report healthy=true when enabled"
+        );
+        // ollama block remains present alongside — both features coexist
+        // in the services map, not mutually exclusive.
+        assert!(
+            req.services.get("ollama").is_some(),
+            "ollama block survives kreuzberg enablement"
+        );
+    }
+
+    /// Honest-absence: when `kreuzberg_enabled = false`, the wire body's
+    /// `services` object MUST NOT contain a `kreuzberg` key (not even
+    /// `null`) — preserves byte-identical parity with pre-OCR
+    /// deployments and prevents older cap-routing deserialisers from
+    /// tripping on an unknown key.
+    #[test]
+    fn build_register_request_omits_kreuzberg_block_when_disabled() {
+        let hw = HardwareAdvertisement::Cpu { cores: 4 };
+        let req = build_register_request(
+            "test-host-executor".to_string(),
+            "http://127.0.0.1:3301".to_string(),
+            &hw,
+            &["Streaming".to_string()],
+            "http://127.0.0.1:11436".to_string(),
+            vec![],
+            false, // kreuzberg_enabled
+        );
+        assert!(
+            req.services.get("kreuzberg").is_none(),
+            "kreuzberg block MUST be omitted (not null) when disabled — got {:?}",
+            req.services.get("kreuzberg")
+        );
+    }
+
+    /// Truthy values accepted (`"true"`, `"1"` — case-sensitive);
+    /// everything else (incl. `None`, `"TRUE"`, `"yes"`) → false.
+    /// Driven through the pure parser [`parse_kreuzberg_ocr_enabled`]
+    /// so this test is env-free (no race against parallel test threads
+    /// that mutate `AITHERICON_EXECUTOR_KREUZBERG_ENABLED`).
+    #[test]
+    fn parse_kreuzberg_ocr_enabled_truthy_matrix() {
+        assert!(!parse_kreuzberg_ocr_enabled(None), "None → false (default)");
+        assert!(parse_kreuzberg_ocr_enabled(Some("true")), "'true' → true");
+        assert!(parse_kreuzberg_ocr_enabled(Some("1")), "'1' → true");
+        assert!(
+            !parse_kreuzberg_ocr_enabled(Some("TRUE")),
+            "case-sensitive — 'TRUE' → false"
+        );
+        assert!(
+            !parse_kreuzberg_ocr_enabled(Some("yes")),
+            "non-canonical 'yes' → false"
+        );
+        assert!(
+            !parse_kreuzberg_ocr_enabled(Some("false")),
+            "'false' → false"
+        );
+        assert!(
+            !parse_kreuzberg_ocr_enabled(Some("")),
+            "empty string → false"
+        );
+    }
+
     #[tokio::test]
     async fn register_on_boot_network_failure_surfaces_as_err() {
         // Unbound port; fail-closed expectation.
@@ -351,6 +487,7 @@ mod tests {
             &["Streaming".to_string()],
             "http://127.0.0.1:11436".to_string(),
             vec![],
+            false, // kreuzberg_enabled — unrelated to network-failure assertion
         );
         let err = register_on_boot(&format!("http://{addr}"), "fake-jwt", &req)
             .await
