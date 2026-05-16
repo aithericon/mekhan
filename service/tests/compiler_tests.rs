@@ -2538,11 +2538,27 @@ fn start_file_field_emits_catalogue_chain() {
     let air = compile_to_air(&graph, "cat", "", &std::collections::HashMap::new())
         .expect("should compile");
 
+    // Topology: shape → submit → (executor lifecycle) → fold/degrade → reg.
     assert!(has_transition(&air, "t_s_cat_shape_0"), "missing shape transition");
+    assert!(has_transition(&air, "t_s_fmeta_submit_0"), "missing fmeta submit");
+    assert!(has_transition(&air, "t_s_fmeta_fold_0"), "missing fmeta fold");
+    assert!(has_transition(&air, "t_s_fmeta_degrade_0"), "missing fmeta degrade");
+    assert!(has_transition(&air, "t_s_fmeta_dl_0"), "missing fmeta dead-letter");
     assert!(has_transition(&air, "t_s_cat_reg_0"), "missing register transition");
+    // The executor lifecycle is reused and scoped under "s_fmeta_0".
+    assert!(
+        has_transition(&air, "s_fmeta_0/submit"),
+        "missing scoped executor lifecycle (s_fmeta_0/submit)"
+    );
+
+    assert!(has_place(&air, "p_s_cat_desc_0"), "missing descriptor place");
     assert!(has_place(&air, "p_s_cat_art_0"), "missing artifact place");
     assert!(has_place(&air, "p_s_cat_out_0"), "missing pass-through place");
     assert!(has_place(&air, "p_s_cat_done_0"), "missing parked output place");
+    assert!(has_place(&air, "p_s_fmeta_inbox_0"), "missing fmeta inbox place");
+    assert!(has_place(&air, "p_s_fmeta_result_0"), "missing fmeta result place");
+    assert!(has_place(&air, "p_s_fmeta_fail_0"), "missing fmeta failure place");
+    assert!(has_place(&air, "p_s_fmeta_park_0"), "missing fmeta park place");
 
     let reg = serde_json::to_string(get_transition(&air, "t_s_cat_reg_0").unwrap()).unwrap();
     assert!(
@@ -2550,13 +2566,40 @@ fn start_file_field_emits_catalogue_chain() {
         "register transition is not a catalogue_register effect: {reg}"
     );
 
+    // Shape now emits a flat descriptor (no nested `detail`, no `category`);
+    // those move to the fold/degrade folds.
     let shape = serde_json::to_string(get_transition(&air, "t_s_cat_shape_0").unwrap()).unwrap();
-    for needle in ["doc", "artifact_id", "storage_path", "_instance_id", "input"] {
+    for needle in ["doc", "artifact_id", "storage_path", "_instance_id"] {
         assert!(
             shape.contains(needle),
             "shape logic missing {needle:?}: {shape}"
         );
     }
+
+    // Submit builds a FileOps `probe` job (no inline storage → executor
+    // default store).
+    let submit = serde_json::to_string(get_transition(&air, "t_s_fmeta_submit_0").unwrap()).unwrap();
+    for needle in ["file_ops", "probe", "storage_path", "execution_id"] {
+        assert!(submit.contains(needle), "submit logic missing {needle:?}: {submit}");
+    }
+
+    // Success fold merges the extracted metadata; degrade does not.
+    let fold = serde_json::to_string(get_transition(&air, "t_s_fmeta_fold_0").unwrap()).unwrap();
+    assert!(
+        fold.contains("file_metadata") && fold.contains("res.detail.outputs.metadata"),
+        "fold should merge fmeta into file_metadata: {fold}"
+    );
+    let degrade =
+        serde_json::to_string(get_transition(&air, "t_s_fmeta_degrade_0").unwrap()).unwrap();
+    assert!(
+        !degrade.contains("file_metadata"),
+        "degrade must register WITHOUT file_metadata: {degrade}"
+    );
+    // Both folds correlate the parked descriptor by job_id.
+    assert!(
+        fold.contains("job_id") && degrade.contains("job_id"),
+        "fold/degrade must correlate on job_id"
+    );
 }
 
 #[test]
@@ -2589,6 +2632,11 @@ fn start_multiple_file_fields_chain_in_order() {
         shape1.contains("p_s_cat_out_0"),
         "second shape should consume p_s_cat_out_0: {shape1}"
     );
+
+    // Each segment gets its own scoped, non-colliding executor lifecycle.
+    assert!(has_transition(&air, "s_fmeta_0/submit"), "missing lifecycle 0");
+    assert!(has_transition(&air, "s_fmeta_1/submit"), "missing lifecycle 1");
+    assert!(has_place(&air, "p_s_fmeta_park_0") && has_place(&air, "p_s_fmeta_park_1"));
 }
 
 #[test]

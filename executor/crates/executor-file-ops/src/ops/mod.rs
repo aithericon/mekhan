@@ -77,10 +77,24 @@ fn build_op(config: &StorageConfig) -> Result<(Operator, String), FileOpsError> 
 /// Operators are built on-the-fly from the inline StorageConfig in each
 /// operation config. For copy/move, separate source and destination
 /// operators may be constructed for cross-backend transfers.
-pub async fn dispatch(config: &FileOpsConfig, run_dir: &Path) -> FileOpsResult {
+pub async fn dispatch(
+    config: &FileOpsConfig,
+    run_dir: &Path,
+    default_storage: Option<&StorageConfig>,
+) -> FileOpsResult {
     match config {
         FileOpsConfig::Probe(c) => {
-            let (op, pfx) = build_op(&c.storage)?;
+            // Probe storage is optional: a compiler-injected probe against
+            // the platform's own object store omits it and relies on the
+            // executor's globally-configured default storage.
+            let storage = c.storage.as_ref().or(default_storage).ok_or_else(|| {
+                FileOpsError::Config(
+                    "probe: no storage config — operation omitted 'storage' and \
+                     the executor has no default storage configured"
+                        .into(),
+                )
+            })?;
+            let (op, pfx) = build_op(storage)?;
             probe::execute(c, &op, &pfx, run_dir).await
         }
         FileOpsConfig::Copy(c) => {
@@ -121,7 +135,11 @@ pub fn validate(config: &FileOpsConfig) -> Result<(), String> {
             if c.path.is_empty() {
                 return Err("probe: path must not be empty".into());
             }
-            validate_storage(&c.storage, "probe.storage")?;
+            // Storage is optional; when omitted the default store is used and
+            // dispatch surfaces a clear error if none is configured.
+            if let Some(ref s) = c.storage {
+                validate_storage(s, "probe.storage")?;
+            }
         }
         FileOpsConfig::Copy(c) => {
             if c.source.is_empty() {
@@ -614,7 +632,7 @@ mod tests {
         let config = ProbeConfig {
             path: "data/people.csv".into(),
             include_statistics: false,
-            storage: dummy_storage(),
+            storage: Some(dummy_storage()),
         };
         let result = probe::execute(&config, &op, "", &tmp_dir).await.unwrap();
 
@@ -638,7 +656,7 @@ mod tests {
         let config = ProbeConfig {
             path: "nonexistent.csv".into(),
             include_statistics: false,
-            storage: dummy_storage(),
+            storage: Some(dummy_storage()),
         };
         let result = probe::execute(&config, &op, "", &tmp_dir).await;
         assert!(matches!(result, Err(FileOpsError::NotFound(_))));

@@ -1376,9 +1376,22 @@ fn expand_node(
             } else {
                 let mut prev = head;
                 for (i, &fname) in file_fields.iter().enumerate() {
+                    // ── Places ──────────────────────────────────────────────
+                    // `cat_out`  : workflow token continues here immediately.
+                    // `cat_desc` : per-file descriptor (S3 key + catalogue
+                    //              identity), produced only when the file is
+                    //              actually present.
+                    // `cat_art`  : the `catalogue_register` input shape; fed
+                    //              by the fmeta fold (success) or the degraded
+                    //              fold (extraction failure).
+                    // `cat_done` : parked effect output.
                     let cat_out: PlaceHandle<DynamicToken> = ctx.state(
                         format!("p_{id}_cat_out_{i}"),
                         format!("{label} - After Artifact {i}"),
+                    );
+                    let cat_desc: PlaceHandle<DynamicToken> = ctx.state(
+                        format!("p_{id}_cat_desc_{i}"),
+                        format!("{label} - Artifact {i} Descriptor"),
                     );
                     let cat_art: PlaceHandle<DynamicToken> = ctx.state(
                         format!("p_{id}_cat_art_{i}"),
@@ -1388,24 +1401,41 @@ fn expand_node(
                         format!("p_{id}_cat_done_{i}"),
                         format!("{label} - Artifact {i} Catalogued"),
                     );
+                    // fmeta branch plumbing (created outside the lifecycle
+                    // scope so their ids stay stable and the fold/degrade
+                    // transitions can reference them).
+                    let fmeta_inbox: PlaceHandle<ExecutorSubmitInput> = ctx.state(
+                        format!("p_{id}_fmeta_inbox_{i}"),
+                        format!("{label} - fmeta {i} Inbox"),
+                    );
+                    let fmeta_result: PlaceHandle<DynamicToken> = ctx.state(
+                        format!("p_{id}_fmeta_result_{i}"),
+                        format!("{label} - fmeta {i} Result"),
+                    );
+                    let fmeta_fail: PlaceHandle<DynamicToken> = ctx.state(
+                        format!("p_{id}_fmeta_fail_{i}"),
+                        format!("{label} - fmeta {i} Failure"),
+                    );
+                    let fmeta_park: PlaceHandle<DynamicToken> = ctx.state(
+                        format!("p_{id}_fmeta_park_{i}"),
+                        format!("{label} - fmeta {i} Descriptor (parked)"),
+                    );
 
                     // Split: `pass` always carries the unchanged workflow
-                    // token onward; `artifact` is the `catalogue_register`
-                    // input shape (execution_id + detail{}). Mekhan's
-                    // `register_catalogue_entry` fills provenance from the
-                    // causality graph, so we only supply identity + file
-                    // facts. `_instance_id` (injected into every Start token)
-                    // keys the per-run dedup id. Omitting `artifact` when the
-                    // file is absent/null produces no token for that port
-                    // (route_output_tokens only emits produced ports), so an
-                    // optional file simply isn't registered.
+                    // token onward (the workflow never waits for fmeta);
+                    // `artifact` is a flat descriptor emitted only when the
+                    // file is present. `_instance_id` (injected into every
+                    // Start token) keys the per-run dedup id. Omitting
+                    // `artifact` when the file is absent/null produces no
+                    // token for that port (route_output_tokens only emits
+                    // produced ports), so an optional file isn't registered.
                     ctx.transition(
                         format!("t_{id}_cat_shape_{i}"),
                         format!("{label} - Shape Artifact {i}"),
                     )
                     .auto_input("tok", &prev)
                     .auto_output("pass", &cat_out)
-                    .auto_output("artifact", &cat_art)
+                    .auto_output("artifact", &cat_desc)
                     .logic(format!(
                         r#"let d = tok;
 let fv = d["{fname}"];
@@ -1414,14 +1444,11 @@ if type_of(fv) == "map" && fv.key != () {{
     pass: d,
     artifact: #{{
       execution_id: d._instance_id,
-      detail: #{{
-        artifact_id: "start-" + d._instance_id + "-{fname}",
-        name: fv.filename,
-        category: "input",
-        mime_type: fv.content_type,
-        size_bytes: fv.size,
-        storage_path: fv.key
-      }}
+      artifact_id: "start-" + d._instance_id + "-{fname}",
+      name: fv.filename,
+      mime_type: fv.content_type,
+      size_bytes: fv.size,
+      storage_path: fv.key
     }}
   }}
 }} else {{
@@ -1429,6 +1456,149 @@ if type_of(fv) == "map" && fv.key != () {{
 }}"#
                     ));
 
+                    // Build the FileOps `probe` job (runs fmeta against the
+                    // uploaded blob; `storage` is omitted so the executor
+                    // uses its globally-configured default store). The job
+                    // id == artifact_id, unique per instance per field — the
+                    // correlation key that re-joins the parked descriptor
+                    // with the executor result. The descriptor is parked so
+                    // the upload's authoritative name/mime/size/path survive
+                    // the round-trip (the lifecycle drops everything except
+                    // job_id/run/detail).
+                    ctx.transition(
+                        format!("t_{id}_fmeta_submit_{i}"),
+                        format!("{label} - fmeta {i} Submit"),
+                    )
+                    .auto_input("desc", &cat_desc)
+                    .auto_output("job", &fmeta_inbox)
+                    .auto_output("keep", &fmeta_park)
+                    .logic(
+                        r#"let dd = desc;
+let eid = dd.artifact_id;
+#{
+  job: #{
+    job_id: eid,
+    run: 0,
+    retries: 0,
+    max_retries: 0,
+    execution_id: eid,
+    spec: #{
+      backend: "file_ops",
+      inputs: [],
+      outputs: [],
+      config: #{ operation: "probe", path: dd.storage_path }
+    }
+  },
+  keep: #{
+    job_id: eid,
+    execution_id: dd.execution_id,
+    artifact_id: dd.artifact_id,
+    name: dd.name,
+    mime_type: dd.mime_type,
+    size_bytes: dd.size_bytes,
+    storage_path: dd.storage_path
+  }
+}"#,
+                    );
+
+                    // Reuse the full executor lifecycle (submit → status →
+                    // result/failure forwarding) for the probe. Scoped so
+                    // its fixed internal ids don't collide across fields or
+                    // with AutomatedStep lifecycles.
+                    let dead_letter = ctx.scoped_prefix(
+                        format!("{id}_fmeta_{i}"),
+                        format!("{label} - fmeta {i}"),
+                        |ctx| {
+                            executor_lifecycle(
+                                ctx,
+                                ExecutorBridges {
+                                    inbox: fmeta_inbox.clone(),
+                                    result_out: Some(fmeta_result.clone()),
+                                    failure_out: Some(fmeta_fail.clone()),
+                                    process_id: None,
+                                    process_step: None,
+                                    catalogue: false,
+                                    process: false,
+                                },
+                            )
+                            .dead_letter
+                        },
+                    );
+
+                    // Effect/infra errors land in the lifecycle's dead-letter
+                    // terminal. Reshape them onto the failure place so the
+                    // artifact is still catalogued (degraded, no
+                    // file_metadata) rather than lost.
+                    ctx.transition(
+                        format!("t_{id}_fmeta_dl_{i}"),
+                        format!("{label} - fmeta {i} Dead Letter"),
+                    )
+                    .auto_input("dead", &dead_letter)
+                    .auto_output("out", &fmeta_fail)
+                    .logic(
+                        r#"#{ out: #{ job_id: dead.job_id, reason: if dead.reason != () { dead.reason } else { "dead_letter" } } }"#,
+                    );
+
+                    // Success: merge the extracted fmeta JSON into
+                    // `detail.file_metadata` and emit the fully-annotated
+                    // `catalogue_register` input. Correlate the parked
+                    // descriptor with the executor result by job_id.
+                    ctx.transition(
+                        format!("t_{id}_fmeta_fold_{i}"),
+                        format!("{label} - fmeta {i} Fold"),
+                    )
+                    .auto_input("res", &fmeta_result)
+                    .auto_input("kept", &fmeta_park)
+                    .correlate("res", "kept", "job_id")
+                    .auto_output("artifact", &cat_art)
+                    .logic(
+                        r#"#{
+  artifact: #{
+    execution_id: kept.execution_id,
+    detail: #{
+      artifact_id: kept.artifact_id,
+      name: kept.name,
+      category: "input",
+      mime_type: kept.mime_type,
+      size_bytes: kept.size_bytes,
+      storage_path: kept.storage_path,
+      file_metadata: res.detail.outputs.metadata
+    }
+  }
+}"#,
+                    );
+
+                    // Failure/timeout/dead-letter: register the artifact
+                    // anyway, without file_metadata. Still a single INSERT,
+                    // so catalogue subscriptions/triggers stay sane.
+                    ctx.transition(
+                        format!("t_{id}_fmeta_degrade_{i}"),
+                        format!("{label} - fmeta {i} Degrade"),
+                    )
+                    .auto_input("fail", &fmeta_fail)
+                    .auto_input("kept", &fmeta_park)
+                    .correlate("fail", "kept", "job_id")
+                    .auto_output("artifact", &cat_art)
+                    .logic(
+                        r#"#{
+  artifact: #{
+    execution_id: kept.execution_id,
+    detail: #{
+      artifact_id: kept.artifact_id,
+      name: kept.name,
+      category: "input",
+      mime_type: kept.mime_type,
+      size_bytes: kept.size_bytes,
+      storage_path: kept.storage_path
+    }
+  }
+}"#,
+                    );
+
+                    // Unchanged from Phase 1: the INSERT-only catalogue
+                    // effect, now deferred to the tail of the artifact
+                    // branch (the net is the staging ground — only annotated
+                    // entries reach the catalogue on the happy path).
                     ctx.transition(
                         format!("t_{id}_cat_reg_{i}"),
                         format!("{label} - Register Artifact {i}"),
