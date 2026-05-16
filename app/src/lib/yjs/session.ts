@@ -1,5 +1,4 @@
 import * as Y from 'yjs';
-import { auth } from '$lib/auth/store.svelte';
 import { MekhanWsProvider } from './ws-provider';
 
 export type YjsSession = {
@@ -28,7 +27,10 @@ export function createYjsSession(templateId: string): YjsSession {
 		wsUrl = 'ws://localhost:3100/api/yjs';
 	}
 
-	const provider = new MekhanWsProvider(wsUrl, templateId, doc, auth.getAccessToken());
+	// BFF model: no token in the URL. Same-origin (prod) the `mekhan_session`
+	// HttpOnly cookie rides the WS upgrade automatically; in dev the WS hits
+	// the backend directly under dev_noop, which authenticates every request.
+	const provider = new MekhanWsProvider(wsUrl, templateId, doc);
 	const awareness = provider.awareness;
 
 	// Expose Y.Doc for E2E test assertions (dev only, tree-shaken in prod)

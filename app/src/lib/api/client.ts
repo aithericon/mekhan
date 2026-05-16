@@ -12,30 +12,39 @@
  * automatically.
  */
 import createClient, { type Middleware } from 'openapi-fetch';
-import { auth } from '$lib/auth/store.svelte';
 import { authFetch } from '$lib/auth/fetch';
 import type { components, paths } from './schema';
 
 const API_BASE = '/api';
 
 /**
- * openapi-fetch middleware that injects the active Bearer token on every
- * request. Sourced from the auth store so silent renew and sign-out are
- * picked up automatically. In dev-noop mode the token is empty — the
- * backend's `NoopTokenVerifier` accepts that.
+ * BFF model: the `mekhan_session` HttpOnly cookie is sent automatically on
+ * every same-origin request, so there is no Bearer to inject. This middleware
+ * only handles the unauthenticated case: a 401 from any API call means the
+ * session is gone — bounce (full-page) to the server-side login so Zitadel
+ * can re-establish it. The `/api/auth/*` endpoints are exempt (they 401 *by
+ * design* as the signed-out probe).
  */
-const authMiddleware: Middleware = {
-	async onRequest({ request }) {
-		const token = auth.getAccessToken();
-		if (token) {
-			request.headers.set('Authorization', `Bearer ${token}`);
+const sessionExpiryMiddleware: Middleware = {
+	async onResponse({ response, request }) {
+		if (
+			response.status === 401 &&
+			typeof window !== 'undefined' &&
+			!new URL(request.url).pathname.startsWith('/api/auth/')
+		) {
+			const here = window.location.pathname + window.location.search;
+			window.location.assign(`/api/auth/login?return_to=${encodeURIComponent(here)}`);
 		}
-		return request;
+		return response;
 	}
 };
 
-const client = createClient<paths>({ baseUrl: '' });
-client.use(authMiddleware);
+const client = createClient<paths>({
+	baseUrl: '',
+	// Send the session cookie on same-origin API calls.
+	credentials: 'same-origin'
+});
+client.use(sessionExpiryMiddleware);
 
 // ── Type aliases (schema-driven) ───────────────────────────────────────────
 

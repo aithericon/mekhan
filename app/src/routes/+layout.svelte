@@ -2,7 +2,6 @@
 	import './layout.css';
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
-	import { page } from '$app/state';
 	import { Button } from '$lib/components/ui/button';
 	import { TooltipProvider } from '$lib/components/ui/tooltip';
 	import { findOrCreateShowcaseTemplate } from '$lib/templates/showcase';
@@ -13,11 +12,16 @@
 	let openingDemo = $state(false);
 
 	onMount(async () => {
+		// BFF: the backend owns the OIDC callback (302s straight to the SPA),
+		// so there is no client `/auth/*` route to exempt. A single session
+		// probe gates every route; dev_noop always passes.
 		await ensureAuthInitialized();
-		// The /auth/callback route runs the redirect handshake — never gate it.
-		if (page.url.pathname.startsWith('/auth/')) return;
 		await requireSession();
 	});
+
+	async function signOut() {
+		await auth.signOut();
+	}
 
 	async function openDemo() {
 		if (openingDemo) return;
@@ -55,6 +59,23 @@
 			>
 				Engine
 			</Button>
+			{#if auth.isAuthenticated}
+				<span class="ml-2 h-4 w-px bg-border" aria-hidden="true"></span>
+				{#if auth.session?.user.displayName || auth.session?.user.email}
+					<span class="ml-1 text-xs text-muted-foreground" data-testid="nav-user">
+						{auth.session?.user.displayName ?? auth.session?.user.email}
+					</span>
+				{/if}
+				<Button
+					variant="ghost"
+					size="sm"
+					data-testid="nav-logout"
+					class="text-muted-foreground"
+					onclick={signOut}
+				>
+					Sign out
+				</Button>
+			{/if}
 		</nav>
 	</header>
 	<main class="flex-1 overflow-hidden">

@@ -1,20 +1,13 @@
 /**
- * Auth-aware `fetch` for the few call sites that can't route through the
- * `openapi-fetch` client (SSE streams, multipart uploads, ad-hoc URLs).
+ * `fetch` for the few call sites that can't route through the `openapi-fetch`
+ * client (SSE streams, multipart uploads, ad-hoc URLs).
  *
- * Sources the access token from the same auth store that the
- * `openapi-fetch` middleware uses, so dev-noop + Zitadel modes both work
- * without the call site caring which one is active.
+ * BFF model: there is no token to attach — the `mekhan_session` HttpOnly
+ * cookie is sent automatically on same-origin requests (including
+ * `EventSource`/SSE, which can't set headers but does carry cookies). This
+ * thin wrapper just guarantees `credentials: 'same-origin'` so it works
+ * identically whether the caller is dev_noop or behind Zitadel.
  */
-import { auth } from './store.svelte';
-
 export function authFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-	const token = auth.getAccessToken();
-	if (!token) return fetch(input, init);
-
-	const headers = new Headers(init?.headers);
-	if (!headers.has('Authorization')) {
-		headers.set('Authorization', `Bearer ${token}`);
-	}
-	return fetch(input, { ...init, headers });
+	return fetch(input, { credentials: 'same-origin', ...init });
 }

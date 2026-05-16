@@ -1,10 +1,11 @@
 /**
  * Route-guard helper. Call once at the top of `+layout.svelte` to make sure
  * the auth store is initialized before any protected UI renders, and to
- * redirect anonymous visitors to the IdP.
+ * redirect anonymous visitors to the server-side login.
  *
- * Routes that should remain anonymous (`/auth/callback`) opt out by checking
- * `auth.ready` and not awaiting `requireSession()`.
+ * In `dev_noop` the session probe always succeeds, so `requireSession()` is a
+ * no-op and the app runs offline. In `bff` mode an unauthenticated visitor is
+ * sent (full-page) to `/api/auth/login`, which 302s to Zitadel.
  */
 import { auth } from './store.svelte';
 
@@ -18,6 +19,8 @@ export function ensureAuthInitialized(): Promise<void> {
 export async function requireSession(): Promise<void> {
 	await ensureAuthInitialized();
 	if (!auth.isAuthenticated) {
-		await auth.signIn();
+		// Full-page navigation — the Zitadel redirect must be a top-level
+		// request, not a fetch (CORS + cookie + the IdP login UI).
+		auth.signIn();
 	}
 }

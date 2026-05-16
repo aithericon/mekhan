@@ -37,6 +37,9 @@ use utoipa::OpenApi;
 use utoipa_axum::{router::OpenApiRouter, routes};
 use utoipa_swagger_ui::SwaggerUi;
 
+use crate::auth::authenticator::Authenticator;
+use crate::auth::bff::oidc::OidcClient;
+use crate::auth::bff::session::SessionStore;
 use crate::auth::{PrincipalResolver, TokenVerifier};
 use crate::catalogue::repository::CatalogueRepository;
 use crate::causality::live::LiveBroadcasts;
@@ -59,7 +62,16 @@ pub struct AppState {
     pub artifact_s3: Option<Arc<ArtifactStore>>,
     pub catalogue_repo: Arc<dyn CatalogueRepository>,
     pub live: Arc<LiveBroadcasts>,
+    /// Per-request authn seam (cookie → `AuthUser`). `bff` or `dev_noop`.
+    pub authenticator: Arc<dyn Authenticator>,
+    /// Server-side session custody (token set + in-flight PKCE flows).
+    pub session_store: Arc<dyn SessionStore>,
+    /// Server-side OIDC client. `None` in `dev_noop` (no IdP to talk to).
+    pub oidc: Option<Arc<OidcClient>>,
+    /// JWT verifier — still used, but only internally by the BFF callback to
+    /// verify the token the IdP returns before caching the `AuthUser`.
     pub token_verifier: Arc<dyn TokenVerifier>,
+    /// Claims → `AuthUser` mapper. Reused unchanged by the BFF callback.
     pub principal_resolver: Arc<dyn PrincipalResolver>,
     pub triggers: Arc<TriggerDispatcher>,
 }
@@ -163,9 +175,9 @@ pub fn build_router(state: AppState) -> Router {
     let (api_router, api_spec) = build_openapi_router().split_for_parts();
 
     // The auth middleware gates every JSON API route. The WS endpoint is
-    // mounted OUTSIDE this layer because browsers can't send Authorization
-    // headers on WS upgrades — `ws_handler` validates a `?token=…` query
-    // param against the same `TokenVerifier` port.
+    // mounted OUTSIDE this layer because it isn't OpenAPI-modeled — it
+    // authenticates inside the handler via the same `mekhan_session` cookie
+    // (which rides the same-origin WS upgrade) through the `Authenticator`.
     let protected: Router = api_router
         .layer(DefaultBodyLimit::max(50 * 1024 * 1024))
         .layer(axum::middleware::from_fn_with_state(
@@ -178,6 +190,28 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/yjs/{template_id}",
             get(handlers::yjs_sync::ws_handler),
+        )
+        .with_state(state.clone());
+
+    // BFF auth endpoints — UNAUTHENTICATED (they establish the very session
+    // the protected router requires). Same `/api/auth/*` prefix so the Vite
+    // dev proxy and prod same-origin SPA serving work with no new rules.
+    let auth_router: Router = Router::new()
+        .route(
+            "/api/auth/login",
+            get(auth::bff::handlers::login),
+        )
+        .route(
+            "/api/auth/callback",
+            get(auth::bff::handlers::callback),
+        )
+        .route(
+            "/api/auth/session",
+            get(auth::bff::handlers::session),
+        )
+        .route(
+            "/api/auth/logout",
+            axum::routing::post(auth::bff::handlers::logout),
         )
         .with_state(state.clone());
 
@@ -194,7 +228,10 @@ pub fn build_router(state: AppState) -> Router {
         )
         .with_state(state);
 
-    let protected = protected.merge(ws_router).merge(webhook_router);
+    let protected = protected
+        .merge(ws_router)
+        .merge(webhook_router)
+        .merge(auth_router);
 
     let swagger = SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", api_spec);
 

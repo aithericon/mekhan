@@ -15,6 +15,8 @@ async-stream = "0.3"
 tokio-stream = "0.1"
 tower-http = { version = "0.6", features = ["cors", "trace", "fs"] }
 tokio = { version = "1", features = ["full"] }
+# Typed cookie jar extractor for the BFF session cookie
+axum-extra = { version = "0.10", features = ["cookie"] }
 
 # Database
 sqlx = { version = "0.8", features = [
@@ -47,6 +49,12 @@ config = "0.15"
 # IDs and time
 uuid = { version = "1", features = ["v4", "v5", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
+
+# BFF OIDC: CSPRNG for session ids / PKCE verifier / state / nonce,
+# SHA-256 for the PKCE S256 challenge, base64url for opaque ids.
+rand = "0.8"
+sha2 = "0.10"
+base64 = "0.22"
 
 # JWT validation (Zitadel adapter)
 jsonwebtoken = "9"

@@ -1,6 +1,11 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use mekhan_service::auth::authenticator::{
+    Authenticator, BffAuthenticator, NoopAuthenticator,
+};
+use mekhan_service::auth::bff::oidc::{OidcClient, OidcConfig};
+use mekhan_service::auth::bff::session::{PgSessionStore, SessionStore};
 use mekhan_service::auth::dev::NoopTokenVerifier;
 use mekhan_service::auth::resolver::StaticPrincipalResolver;
 use mekhan_service::auth::zitadel::{ZitadelConfig, ZitadelTokenVerifier};
@@ -131,9 +136,35 @@ async fn main() -> anyhow::Result<()> {
     ));
 
     // Auth adapters — composition root chooses the implementation by config.
+    // `TokenVerifier`/`PrincipalResolver` are reused unchanged: the BFF
+    // callback verifies the IdP's token with them, then caches the resolved
+    // `AuthUser`. The per-request hot path goes through the `Authenticator`.
     let token_verifier = build_token_verifier(&config).await?;
     let principal_resolver: Arc<dyn PrincipalResolver> =
         Arc::new(StaticPrincipalResolver);
+
+    let session_store: Arc<dyn SessionStore> = Arc::new(PgSessionStore::new(db.clone()));
+    let (authenticator, oidc) =
+        build_authenticator(&config, session_store.clone()).await?;
+
+    // Background sweep of expired sessions + stale login flows.
+    {
+        let store = session_store.clone();
+        let ttl = config.auth.session_ttl_secs;
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(3600));
+            loop {
+                tick.tick().await;
+                match store.sweep_expired(ttl).await {
+                    Ok(n) if n > 0 => {
+                        tracing::info!("auth: swept {n} expired session/login rows")
+                    }
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!("auth: session sweep failed: {e}"),
+                }
+            }
+        });
+    }
 
     let state = AppState {
         db,
@@ -145,6 +176,9 @@ async fn main() -> anyhow::Result<()> {
         artifact_s3,
         catalogue_repo,
         live,
+        authenticator,
+        session_store,
+        oidc,
         token_verifier,
         principal_resolver,
         triggers: trigger_dispatcher,
@@ -161,37 +195,98 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Build the `TokenVerifier` the BFF callback uses to verify the access token
+/// the IdP returns (before caching the resolved `AuthUser`). In `dev_noop`
+/// there is no IdP, so the noop verifier stands in.
 async fn build_token_verifier(config: &AppConfig) -> anyhow::Result<Arc<dyn TokenVerifier>> {
     match config.auth.mode {
-        AuthMode::Zitadel => {
+        AuthMode::Bff => {
             let issuer_url = config
                 .auth
                 .issuer_url
                 .clone()
-                .ok_or_else(|| anyhow::anyhow!("auth.mode=zitadel requires auth.issuer_url"))?;
+                .ok_or_else(|| anyhow::anyhow!("auth.mode=bff requires auth.issuer_url"))?;
             let audience = config
                 .auth
                 .audience
                 .clone()
-                .ok_or_else(|| anyhow::anyhow!("auth.mode=zitadel requires auth.audience"))?;
+                .ok_or_else(|| anyhow::anyhow!("auth.mode=bff requires auth.audience"))?;
             let verifier = ZitadelTokenVerifier::new(&ZitadelConfig {
                 issuer_url,
                 audience,
             })
             .await
             .map_err(|e| anyhow::anyhow!("zitadel verifier init: {e}"))?;
-            tracing::info!("auth: Zitadel verifier ready");
+            tracing::info!("auth: Zitadel token verifier ready (BFF callback)");
             Ok(Arc::new(verifier))
         }
         AuthMode::DevNoop => {
-            let prod = std::env::var("MEKHAN_ENV")
-                .map(|v| v.eq_ignore_ascii_case("prod") || v.eq_ignore_ascii_case("production"))
-                .unwrap_or(false);
-            if prod {
-                anyhow::bail!("auth.mode=dev_noop is forbidden when MEKHAN_ENV=prod");
-            }
+            guard_dev_noop()?;
             tracing::warn!("auth: NoopTokenVerifier active — every request becomes the dev user");
             Ok(Arc::new(NoopTokenVerifier::default()))
         }
     }
+}
+
+/// Build the per-request authenticator and (in `bff`) the OIDC client. Fails
+/// fast on discovery just like `ZitadelTokenVerifier::new`.
+async fn build_authenticator(
+    config: &AppConfig,
+    session_store: Arc<dyn SessionStore>,
+) -> anyhow::Result<(Arc<dyn Authenticator>, Option<Arc<OidcClient>>)> {
+    match config.auth.mode {
+        AuthMode::Bff => {
+            let issuer_url = config
+                .auth
+                .issuer_url
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("auth.mode=bff requires auth.issuer_url"))?;
+            let client_id = config
+                .auth
+                .client_id
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("auth.mode=bff requires auth.client_id"))?;
+            // The IdP redirect URI is fixed to the same-origin callback. The
+            // SPA proxies /api to the backend in dev and is same-origin in
+            // prod, so this is host-relative to the public origin — but the
+            // IdP needs an absolute value. Take it from config-derived bootstrap
+            // (written by deploy/zitadel/bootstrap.sh) via the post-login
+            // origin if present, else assume same-origin localhost dev.
+            let redirect_uri = std::env::var("MEKHAN__AUTH__REDIRECT_URI")
+                .ok()
+                .unwrap_or_else(|| "http://localhost:5173/api/auth/callback".to_string());
+
+            let oidc = OidcClient::discover(OidcConfig {
+                issuer_url,
+                client_id,
+                client_secret: config.auth.client_secret.clone(),
+                redirect_uri,
+                scopes: config.auth.scopes.clone(),
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("oidc discovery init: {e}"))?;
+            let oidc = Arc::new(oidc);
+            tracing::info!("auth: BFF authenticator ready (server-side OIDC)");
+            Ok((
+                Arc::new(BffAuthenticator::new(session_store, oidc.clone())),
+                Some(oidc),
+            ))
+        }
+        AuthMode::DevNoop => {
+            guard_dev_noop()?;
+            tracing::warn!("auth: NoopAuthenticator active — every request is the dev user");
+            Ok((Arc::new(NoopAuthenticator::default()), None))
+        }
+    }
+}
+
+/// Refuse to boot a dev-mode credential bypass in production.
+fn guard_dev_noop() -> anyhow::Result<()> {
+    let prod = std::env::var("MEKHAN_ENV")
+        .map(|v| v.eq_ignore_ascii_case("prod") || v.eq_ignore_ascii_case("production"))
+        .unwrap_or(false);
+    if prod {
+        anyhow::bail!("auth.mode=dev_noop is forbidden when MEKHAN_ENV=prod");
+    }
+    Ok(())
 }

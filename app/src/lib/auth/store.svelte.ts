@@ -1,50 +1,37 @@
 /**
- * Svelte 5 rune-based auth store. Composes the configured `AuthProvider`
- * adapter; the rest of the app reads `auth.session` reactively and never
- * imports the Zitadel adapter directly.
+ * Svelte 5 rune-based auth store — BFF model.
  *
- * Dev mode: when `VITE_AUTH_MODE=dev_noop`, no provider is constructed. The
- * store hands out a synthetic `dev` session and `getAccessToken()` returns
- * an empty string, which the backend's `NoopTokenVerifier` accepts.
+ * The browser no longer runs the OIDC flow or holds any token. Auth state is
+ * a single server probe: `GET /api/auth/session` returns the resolved
+ * `AuthUser` (200) when the HttpOnly `mekhan_session` cookie is valid, or 401
+ * when it isn't. In `dev_noop` the backend always returns the fixed dev user,
+ * so the SPA runs fully offline with no redirect.
+ *
+ * The `auth` rune store shape is kept so existing callers
+ * (`auth.session`, `auth.isAuthenticated`, `auth.ready`) are untouched.
  */
-import { ZitadelAuthProvider, type ZitadelAdapterConfig } from './zitadel-adapter';
-import type { AuthProvider, AuthSession } from './port';
+import type { AuthSession, AuthUser } from './port';
 
-const DEV_NOOP_SESSION: AuthSession = {
-	accessToken: '',
-	expiresAt: Number.MAX_SAFE_INTEGER,
-	user: {
-		subject: 'dev-user',
-		email: 'dev@local',
-		displayName: 'Dev User',
-		roles: []
-	}
-};
+/** Wire shape of `GET /api/auth/session` — the backend's `AuthUser`. */
+interface SessionUserDto {
+	subject: string;
+	email?: string | null;
+	display_name?: string | null;
+	roles?: string[];
+	org_id?: string | null;
+}
 
-function readConfig(): { mode: 'zitadel' | 'dev_noop'; zitadel?: ZitadelAdapterConfig } {
-	const mode = (import.meta.env.VITE_AUTH_MODE as string) ?? 'dev_noop';
-	if (mode === 'zitadel') {
-		return {
-			mode,
-			zitadel: {
-				authority: import.meta.env.VITE_AUTH_ISSUER_URL as string,
-				clientId: import.meta.env.VITE_AUTH_CLIENT_ID as string,
-				redirectUri:
-					(import.meta.env.VITE_AUTH_REDIRECT_URI as string) ??
-					`${window.location.origin}/auth/callback`,
-				postLogoutRedirectUri:
-					(import.meta.env.VITE_AUTH_POST_LOGOUT_URI as string) ??
-					window.location.origin,
-				scope: import.meta.env.VITE_AUTH_SCOPE as string | undefined
-			}
-		};
-	}
-	return { mode: 'dev_noop' };
+function toUser(dto: SessionUserDto): AuthUser {
+	return {
+		subject: dto.subject,
+		email: dto.email ?? undefined,
+		displayName: dto.display_name ?? undefined,
+		roles: dto.roles ?? []
+	};
 }
 
 class AuthStore {
 	#session = $state<AuthSession | null>(null);
-	#provider: AuthProvider | null = null;
 	#ready = $state(false);
 
 	get session(): AuthSession | null {
@@ -59,37 +46,65 @@ class AuthStore {
 		return this.#session != null;
 	}
 
-	getAccessToken(): string {
-		return this.#session?.accessToken ?? '';
-	}
-
+	/**
+	 * Probe the server for the current session. Idempotent — safe to call
+	 * from the layout guard on every navigation; the cookie does the work.
+	 */
 	async init(): Promise<void> {
-		const cfg = readConfig();
-		if (cfg.mode === 'dev_noop') {
-			this.#session = DEV_NOOP_SESSION;
+		try {
+			const res = await fetch('/api/auth/session', {
+				headers: { Accept: 'application/json' },
+				credentials: 'same-origin'
+			});
+			if (res.ok) {
+				const dto = (await res.json()) as SessionUserDto;
+				this.#session = {
+					// No token ever reaches the browser in the BFF model. The
+					// `accessToken` field is retained for the `AuthSession`
+					// shape but is intentionally empty.
+					accessToken: '',
+					expiresAt: Number.MAX_SAFE_INTEGER,
+					user: toUser(dto)
+				};
+			} else {
+				this.#session = null;
+			}
+		} catch {
+			// Network failure → treat as signed out; the guard will redirect.
+			this.#session = null;
+		} finally {
 			this.#ready = true;
-			return;
 		}
-		const provider = new ZitadelAuthProvider(cfg.zitadel!);
-		this.#provider = provider;
-		provider.subscribe((s) => {
-			this.#session = s;
-		});
-		await provider.restore();
-		this.#ready = true;
 	}
 
-	async signIn(): Promise<void> {
-		if (this.#provider) await this.#provider.signIn();
+	/**
+	 * Full-page navigation to the server-side login. Must be a navigation
+	 * (not fetch) so the subsequent Zitadel redirect is a top-level request.
+	 */
+	signIn(returnTo?: string): void {
+		const target = returnTo ?? window.location.pathname + window.location.search;
+		window.location.assign(`/api/auth/login?return_to=${encodeURIComponent(target)}`);
 	}
 
-	async completeSignIn(): Promise<void> {
-		if (this.#provider) await this.#provider.completeSignIn();
-	}
-
+	/**
+	 * Kill the server session, then navigate to the IdP end-session URL (if
+	 * the backend provides one) or home.
+	 */
 	async signOut(): Promise<void> {
-		if (this.#provider) await this.#provider.signOut();
-		this.#session = null;
+		try {
+			const res = await fetch('/api/auth/logout', {
+				method: 'POST',
+				credentials: 'same-origin'
+			});
+			this.#session = null;
+			const body = (await res.json().catch(() => ({}))) as {
+				end_session_url?: string | null;
+			};
+			window.location.assign(body.end_session_url ?? '/');
+		} catch {
+			this.#session = null;
+			window.location.assign('/');
+		}
 	}
 }
 
