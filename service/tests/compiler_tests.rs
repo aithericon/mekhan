@@ -2480,3 +2480,164 @@ fn trigger_cron_invalid_timezone_fails() {
         "unexpected error: {err}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Start file-upload inputs → injected catalogue-registration chain
+// ---------------------------------------------------------------------------
+
+/// Build a Start whose `initial` port carries the given fields (kind chosen by
+/// caller) and an optional process-name template.
+fn start_node_with_fields(
+    id: &str,
+    fields: &[(&str, mekhan_service::models::template::FieldKind)],
+    process_name: Option<&str>,
+) -> WorkflowNode {
+    use mekhan_service::models::template::PortField;
+    WorkflowNode {
+        id: id.to_string(),
+        node_type: "start".to_string(),
+        position: pos(),
+        data: WorkflowNodeData::Start {
+            label: "Start".to_string(),
+            description: None,
+            initial: Port {
+                id: "in".to_string(),
+                label: "Input".to_string(),
+                fields: fields
+                    .iter()
+                    .map(|(name, kind)| PortField {
+                        name: name.to_string(),
+                        label: name.to_string(),
+                        kind: *kind,
+                        required: true,
+                        options: None,
+                        description: None,
+                        accept: None,
+                    })
+                    .collect(),
+            },
+            process_name: process_name.map(str::to_string),
+        },
+        parent_id: None,
+        width: None,
+        height: None,
+    }
+}
+
+#[test]
+fn start_file_field_emits_catalogue_chain() {
+    use mekhan_service::models::template::FieldKind;
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node_with_fields("s", &[("doc", FieldKind::File)], None),
+            end_node("e"),
+        ],
+        edges: vec![edge("e1", "s", "e")],
+        viewport: None,
+    };
+    let air = compile_to_air(&graph, "cat", "", &std::collections::HashMap::new())
+        .expect("should compile");
+
+    assert!(has_transition(&air, "t_s_cat_shape_0"), "missing shape transition");
+    assert!(has_transition(&air, "t_s_cat_reg_0"), "missing register transition");
+    assert!(has_place(&air, "p_s_cat_art_0"), "missing artifact place");
+    assert!(has_place(&air, "p_s_cat_out_0"), "missing pass-through place");
+    assert!(has_place(&air, "p_s_cat_done_0"), "missing parked output place");
+
+    let reg = serde_json::to_string(get_transition(&air, "t_s_cat_reg_0").unwrap()).unwrap();
+    assert!(
+        reg.contains("catalogue_register"),
+        "register transition is not a catalogue_register effect: {reg}"
+    );
+
+    let shape = serde_json::to_string(get_transition(&air, "t_s_cat_shape_0").unwrap()).unwrap();
+    for needle in ["doc", "artifact_id", "storage_path", "_instance_id", "input"] {
+        assert!(
+            shape.contains(needle),
+            "shape logic missing {needle:?}: {shape}"
+        );
+    }
+}
+
+#[test]
+fn start_multiple_file_fields_chain_in_order() {
+    use mekhan_service::models::template::FieldKind;
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node_with_fields(
+                "s",
+                &[("a", FieldKind::File), ("b", FieldKind::File)],
+                None,
+            ),
+            end_node("e"),
+        ],
+        edges: vec![edge("e1", "s", "e")],
+        viewport: None,
+    };
+    let air = compile_to_air(&graph, "cat2", "", &std::collections::HashMap::new())
+        .expect("should compile");
+
+    assert!(has_transition(&air, "t_s_cat_reg_0"));
+    assert!(has_transition(&air, "t_s_cat_reg_1"));
+    assert!(has_transition(&air, "t_s_cat_shape_1"));
+    assert!(has_place(&air, "p_s_cat_out_0"));
+
+    // The second segment's shape transition consumes the first segment's
+    // pass-through place — i.e. the segments are chained in order.
+    let shape1 = serde_json::to_string(get_transition(&air, "t_s_cat_shape_1").unwrap()).unwrap();
+    assert!(
+        shape1.contains("p_s_cat_out_0"),
+        "second shape should consume p_s_cat_out_0: {shape1}"
+    );
+}
+
+#[test]
+fn start_file_field_with_process_name_chains_after_process_start() {
+    use mekhan_service::models::template::FieldKind;
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node_with_fields("s", &[("doc", FieldKind::File)], Some("Run")),
+            end_node("e"),
+        ],
+        edges: vec![edge("e1", "s", "e")],
+        viewport: None,
+    };
+    let air = compile_to_air(&graph, "catpn", "", &std::collections::HashMap::new())
+        .expect("should compile");
+
+    // Both the process-start chain and the catalogue chain exist…
+    assert!(has_transition(&air, "t_s_proc_start"), "missing process_start");
+    assert!(has_transition(&air, "t_s_cat_shape_0"), "missing catalogue chain");
+
+    // …and the catalogue chain sits *after* process_start: its shape
+    // transition consumes the process chain's output place, not p_s_ready.
+    let shape = serde_json::to_string(get_transition(&air, "t_s_cat_shape_0").unwrap()).unwrap();
+    assert!(
+        shape.contains("p_s_ready_out"),
+        "catalogue chain should consume the process-start output place: {shape}"
+    );
+}
+
+#[test]
+fn start_no_file_fields_leaves_compiled_output_unchanged() {
+    use mekhan_service::models::template::FieldKind;
+    // A non-file Start declares typed inputs but no file uploads → no
+    // synthetic catalogue nodes, and the Start→End pass-through still merges
+    // to a single terminal place with zero transitions (identical to the
+    // baseline `start_to_end_produces_terminal_place`).
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node_with_fields("s", &[("note", FieldKind::Text)], None),
+            end_node("e"),
+        ],
+        edges: vec![edge("e1", "s", "e")],
+        viewport: None,
+    };
+    let air = compile_to_air(&graph, "nofile", "", &std::collections::HashMap::new())
+        .expect("should compile");
+
+    assert!(!has_transition(&air, "t_s_cat_shape_0"), "unexpected catalogue chain");
+    assert!(!has_place(&air, "p_s_cat_art_0"), "unexpected artifact place");
+    assert_eq!(places(&air).len(), 1, "expected 1 place after merge");
+    assert!(transitions(&air).is_empty(), "expected no transitions after merge");
+}

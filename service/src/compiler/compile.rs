@@ -1280,29 +1280,23 @@ fn expand_node(
     let id = &node.id;
 
     match &node.data {
-        WorkflowNodeData::Start { label, process_name, .. } => {
+        WorkflowNodeData::Start { label, process_name, initial, .. } => {
             // Initial tokens are seeded per-Start at instance creation time by
             // `parameterize_air` into `p_{id}_ready` (it strips the `_ready`
             // suffix to find the place). That place id must stay stable.
             let place_id = format!("p_{id}_ready");
             let ready: PlaceHandle<DynamicToken> = ctx.state(&place_id, label);
 
-            match process_name
+            // Head of the Start's output chain *before* any artifact
+            // registration: the bare ready place, or the tail of the optional
+            // process-registration chain.
+            let head: PlaceHandle<DynamicToken> = match process_name
                 .as_deref()
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
             {
                 // Default: single-place Start, no process registration.
-                None => {
-                    ports.insert(
-                        id.clone(),
-                        NodePorts {
-                            input_place: ready.clone(),
-                            output_places: vec![(None, ready)],
-                            input_places: HashMap::new(),
-                        },
-                    );
-                }
+                None => ready.clone(),
                 // Opt-in: derive a per-instance process name from the Start
                 // inputs and register a named HPI process via the
                 // `process_start` effect. The causality projector
@@ -1356,16 +1350,106 @@ fn expand_node(
                     // → every End node can complete it independently).
                     fixups.process_token_place = Some(proc_sink.clone());
 
-                    ports.insert(
-                        id.clone(),
-                        NodePorts {
-                            input_place: ready,
-                            output_places: vec![(None, proc_out)],
-                            input_places: HashMap::new(),
-                        },
-                    );
+                    proc_out
                 }
-            }
+            };
+
+            // Artifact registration: iff the Start declares ≥1 file-upload
+            // input, insert a synthetic chain between the Start (post
+            // process-start) and the rest of the graph that registers each
+            // uploaded file into the catalogue. One segment per file field;
+            // a Rhai "shape" transition passes the workflow token through
+            // unchanged on `pass` and emits a per-file artifact token on
+            // `artifact` (only when the file is actually present), which a
+            // reused `catalogue_register` effect consumes (its output is
+            // parked, like the process_start `process` sink). With no file
+            // inputs nothing is emitted and the compiled output is identical.
+            let file_fields: Vec<&str> = initial
+                .fields
+                .iter()
+                .filter(|f| f.kind == crate::models::template::FieldKind::File)
+                .map(|f| f.name.as_str())
+                .collect();
+
+            let tail: PlaceHandle<DynamicToken> = if file_fields.is_empty() {
+                head
+            } else {
+                let mut prev = head;
+                for (i, &fname) in file_fields.iter().enumerate() {
+                    let cat_out: PlaceHandle<DynamicToken> = ctx.state(
+                        format!("p_{id}_cat_out_{i}"),
+                        format!("{label} - After Artifact {i}"),
+                    );
+                    let cat_art: PlaceHandle<DynamicToken> = ctx.state(
+                        format!("p_{id}_cat_art_{i}"),
+                        format!("{label} - Artifact {i}"),
+                    );
+                    let cat_done: PlaceHandle<DynamicToken> = ctx.state(
+                        format!("p_{id}_cat_done_{i}"),
+                        format!("{label} - Artifact {i} Catalogued"),
+                    );
+
+                    // Split: `pass` always carries the unchanged workflow
+                    // token onward; `artifact` is the `catalogue_register`
+                    // input shape (execution_id + detail{}). Mekhan's
+                    // `register_catalogue_entry` fills provenance from the
+                    // causality graph, so we only supply identity + file
+                    // facts. `_instance_id` (injected into every Start token)
+                    // keys the per-run dedup id. Omitting `artifact` when the
+                    // file is absent/null produces no token for that port
+                    // (route_output_tokens only emits produced ports), so an
+                    // optional file simply isn't registered.
+                    ctx.transition(
+                        format!("t_{id}_cat_shape_{i}"),
+                        format!("{label} - Shape Artifact {i}"),
+                    )
+                    .auto_input("tok", &prev)
+                    .auto_output("pass", &cat_out)
+                    .auto_output("artifact", &cat_art)
+                    .logic(format!(
+                        r#"let d = tok;
+let fv = d["{fname}"];
+if type_of(fv) == "map" && fv.key != () {{
+  #{{
+    pass: d,
+    artifact: #{{
+      execution_id: d._instance_id,
+      detail: #{{
+        artifact_id: "start-" + d._instance_id + "-{fname}",
+        name: fv.filename,
+        category: "input",
+        mime_type: fv.content_type,
+        size_bytes: fv.size,
+        storage_path: fv.key
+      }}
+    }}
+  }}
+}} else {{
+  #{{ pass: d }}
+}}"#
+                    ));
+
+                    ctx.transition(
+                        format!("t_{id}_cat_reg_{i}"),
+                        format!("{label} - Register Artifact {i}"),
+                    )
+                    .auto_input("artifacts", &cat_art)
+                    .auto_output("catalogued", &cat_done)
+                    .builtin_effect(&effects::CATALOGUE_REGISTER);
+
+                    prev = cat_out;
+                }
+                prev
+            };
+
+            ports.insert(
+                id.clone(),
+                NodePorts {
+                    input_place: ready,
+                    output_places: vec![(None, tail)],
+                    input_places: HashMap::new(),
+                },
+            );
         }
 
         WorkflowNodeData::End { label, .. } => {
