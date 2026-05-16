@@ -2,8 +2,6 @@
 	import type { WorkflowNodeData } from '$lib/types/editor';
 	import type { YjsGraphBinding } from '$lib/yjs/graph-binding.svelte';
 	import X from '@lucide/svelte/icons/x';
-	import Maximize2 from '@lucide/svelte/icons/maximize-2';
-	import Minimize2 from '@lucide/svelte/icons/minimize-2';
 	import Pencil from '@lucide/svelte/icons/pencil';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import StartNodeSection from './property-sections/StartNodeSection.svelte';
@@ -27,11 +25,8 @@
 	type Props = {
 		data: WorkflowNodeData;
 		readonly?: boolean;
-		expanded?: boolean;
 		onchange: (data: WorkflowNodeData) => void;
 		onclose: () => void;
-		onexpand?: () => void;
-		oncollapse?: () => void;
 		ondelete?: () => void;
 		binding?: YjsGraphBinding;
 		nodeId?: string;
@@ -45,11 +40,8 @@
 	let {
 		data,
 		readonly = false,
-		expanded = false,
 		onchange,
 		onclose,
-		onexpand,
-		oncollapse,
 		ondelete,
 		binding,
 		nodeId,
@@ -76,7 +68,7 @@
 </script>
 
 <div
-	class="flex flex-col border-l border-border bg-card {expanded ? 'h-full w-full' : 'w-80'}"
+	class="flex w-[480px] shrink-0 flex-col border-l border-border bg-card"
 	data-testid="node-property-panel"
 >
 	<div class="flex items-center justify-between border-b border-border px-3 py-2.5">
@@ -84,28 +76,6 @@
 			{readonly ? 'Inspector' : 'Properties'}
 		</h2>
 		<div class="flex items-center gap-0.5">
-			{#if !expanded && onexpand}
-				<button
-					type="button"
-					class="rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-					data-testid="btn-expand-properties"
-					onclick={onexpand}
-					title="Expand panel"
-				>
-					<Maximize2 class="size-4" />
-				</button>
-			{/if}
-			{#if expanded && oncollapse}
-				<button
-					type="button"
-					class="rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-					data-testid="btn-collapse-properties"
-					onclick={oncollapse}
-					title="Collapse panel"
-				>
-					<Minimize2 class="size-4" />
-				</button>
-			{/if}
 			{#if !readonly && ondelete}
 				<button
 					type="button"
@@ -179,7 +149,7 @@
 					</Button>
 				</div>
 			{:else}
-				<HumanTaskSection {data} {readonly} {onchange} {onexpand} />
+				<HumanTaskSection {data} {readonly} {onchange} />
 			{/if}
 		{:else if data.type === 'automated_step'}
 			<AutomatedStepSection {data} {readonly} {onchange} {binding} {nodeId} {templateId} />
