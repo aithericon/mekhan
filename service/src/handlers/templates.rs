@@ -495,16 +495,27 @@ pub async fn publish_template(
             ApiError::compile(format!("compilation failed: {e}"), vec![view])
         })?;
 
+    // Persist the Y.Doc-reconstructed graph we just compiled into the `graph`
+    // column. Publish previously wrote only `air_json`, leaving `graph` stale:
+    // every consumer that reads `template.graph` — the trigger dispatcher
+    // (`hydrate`, `register_template`, and `fire`, which reloads the graph to
+    // read a trigger's `payload_mapping`) and the create-instance dialog —
+    // would otherwise operate on a pre-Y.Doc graph that lacks newly-authored
+    // nodes (a published trigger fired with "trigger node missing in graph").
+    let graph_json = serde_json::to_value(&graph)
+        .map_err(|e| ApiError::internal(format!("serialize graph: {e}")))?;
+
     let template = sqlx::query_as::<_, WorkflowTemplate>(
         r#"
         UPDATE workflow_templates
-        SET published = TRUE, published_at = NOW(), air_json = $2, updated_at = NOW()
+        SET published = TRUE, published_at = NOW(), air_json = $2, graph = $3, updated_at = NOW()
         WHERE id = $1
         RETURNING *
         "#,
     )
     .bind(id)
     .bind(&air_json)
+    .bind(&graph_json)
     .fetch_one(&state.db)
     .await
     .map_err(|e| {
@@ -516,23 +527,10 @@ pub async fn publish_template(
     // dispatcher's in-memory registry is otherwise only filled by `hydrate()`
     // at service startup, so without this a freshly-published trigger 404s
     // ("not found in any published template") until the next restart.
-    //
-    // Register from the Y.Doc-reconstructed `graph` we actually compiled, not
-    // `template.graph`: the publish UPDATE doesn't write the graph column, so
-    // it can be stale relative to what was just published.
-    match serde_json::to_value(&graph) {
-        Ok(graph_json) => {
-            let mut t = template.clone();
-            t.graph = graph_json;
-            let registered = state.triggers.register_template(&t).await;
-            if registered > 0 {
-                tracing::info!(template_id = %id, registered, "registered triggers on publish");
-            }
-        }
-        Err(e) => tracing::warn!(
-            template_id = %id,
-            "skipped trigger registration on publish: graph serialize failed: {e}"
-        ),
+    // `template.graph` is now the freshly-persisted compiled graph.
+    let registered = state.triggers.register_template(&template).await;
+    if registered > 0 {
+        tracing::info!(template_id = %id, registered, "registered triggers on publish");
     }
 
     Ok(Json(template))
