@@ -5,6 +5,7 @@ use futures::StreamExt;
 use serde::Deserialize;
 use sqlx::PgPool;
 
+use aithericon_executor_domain::{Phase, PhaseStatus, Progress};
 use petri_domain::{DomainEvent, PersistedEvent};
 
 use crate::catalogue::model::CatalogueRegisterCommand;
@@ -313,11 +314,30 @@ async fn process_domain_event(
             // Breadcrumb: log metric effect → write to hpi_metrics
             if effect_handler_id == "process_log_metric" {
                 record_metric_event(db, &consumed_ids, &read_ids, effect_result, ts, live).await?;
+                // Canonical projection: executor ProgressUpdated arrives reshaped
+                // as a metric keyed "progress_fraction" — fold it into the
+                // typed config.progress alongside (not instead of) the metric.
+                if effect_result.get("key").and_then(|v| v.as_str()) == Some("progress_fraction") {
+                    record_progress_event(db, &consumed_ids, &read_ids, effect_result, ts).await?;
+                }
             }
 
             // Breadcrumb: log message effect → write to hpi_logs
             if effect_handler_id == "process_log_message" {
                 record_log_event(db, &consumed_ids, &read_ids, effect_result, ts, live).await?;
+                // Canonical projection: executor PhaseChanged arrives reshaped
+                // as a log (source "executor-phase"); fold it into the typed
+                // config.progress.phases alongside (not instead of) the log.
+                let is_phase = effect_result.get("source").and_then(|v| v.as_str())
+                    == Some("executor-phase")
+                    || effect_result
+                        .get("detail")
+                        .and_then(|d| d.get("event_type"))
+                        .and_then(|v| v.as_str())
+                        == Some("phase_changed");
+                if is_phase {
+                    record_phase_event(db, &consumed_ids, &read_ids, effect_result, ts).await?;
+                }
             }
 
             // Breadcrumb: human task effect → write to hpi_tasks
@@ -871,6 +891,181 @@ async fn record_step_event(
         .bind(ts)
         .execute(db)
         .await?;
+    }
+    Ok(())
+}
+
+/// Load the canonical `Progress` from a process's `config.progress`, or a
+/// fresh empty one. `config.progress` is serialized exactly as
+/// `aithericon_executor_domain::Progress` — the single reconciled model.
+async fn load_progress(
+    db: &PgPool,
+    process_id: &str,
+    ts: chrono::DateTime<chrono::Utc>,
+) -> Result<Progress, sqlx::Error> {
+    let raw: Option<Option<serde_json::Value>> = sqlx::query_scalar(
+        "SELECT config -> 'progress' FROM hpi_processes WHERE process_id = $1",
+    )
+    .bind(process_id)
+    .fetch_optional(db)
+    .await?;
+    Ok(raw
+        .flatten()
+        .and_then(|v| serde_json::from_value::<Progress>(v).ok())
+        .unwrap_or(Progress {
+            fraction: 0.0,
+            message: None,
+            current_step: 0,
+            total_steps: 0,
+            phases: Vec::new(),
+            updated_at: ts,
+        }))
+}
+
+/// Persist the canonical `Progress` back into `config.progress` (create the
+/// key if missing), mirroring `record_step_event`'s jsonb_set pattern.
+async fn write_progress(
+    db: &PgPool,
+    process_id: &str,
+    progress: &Progress,
+    ts: chrono::DateTime<chrono::Utc>,
+) -> Result<(), sqlx::Error> {
+    let value = serde_json::to_value(progress).unwrap_or_else(|_| serde_json::json!({}));
+    sqlx::query(
+        "UPDATE hpi_processes SET \
+           config = jsonb_set(COALESCE(config, '{}'::jsonb), '{progress}', $2::jsonb, true), \
+           updated_at = $3 \
+         WHERE process_id = $1",
+    )
+    .bind(process_id)
+    .bind(&value)
+    .bind(ts)
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
+/// Project an executor `PhaseChanged` event (reshaped into a
+/// `process_log_message` whose `detail` is the serialized
+/// `StatusDetail::PhaseChanged`) into `config.progress.phases`. Upserts the
+/// phase by name, preserving first-seen order; sets `started_at` on first
+/// transition to `running` and `ended_at` on a terminal status.
+async fn record_phase_event(
+    db: &PgPool,
+    consumed_ids: &[String],
+    read_ids: &[String],
+    effect_result: &serde_json::Value,
+    ts: chrono::DateTime<chrono::Utc>,
+) -> Result<(), sqlx::Error> {
+    let detail = effect_result
+        .get("detail")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let phase_name = detail
+        .get("phase_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if phase_name.is_empty() {
+        return Ok(());
+    }
+    let status: PhaseStatus = detail
+        .get("status")
+        .cloned()
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or(PhaseStatus::Running);
+    let message = detail
+        .get("message")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let terminal = matches!(
+        status,
+        PhaseStatus::Completed | PhaseStatus::Failed | PhaseStatus::Skipped
+    );
+
+    let process_ids = resolve_process_ids(db, consumed_ids, read_ids).await?;
+    if process_ids.is_empty() {
+        return Ok(());
+    }
+
+    for pid in &process_ids {
+        let mut progress = load_progress(db, pid, ts).await?;
+        match progress.phases.iter_mut().find(|p| p.name == phase_name) {
+            Some(ph) => {
+                ph.status = status;
+                if message.is_some() {
+                    ph.message = message.clone();
+                }
+                if status == PhaseStatus::Running && ph.started_at.is_none() {
+                    ph.started_at = Some(ts);
+                }
+                if terminal {
+                    ph.ended_at = Some(ts);
+                }
+            }
+            None => progress.phases.push(Phase {
+                name: phase_name.to_string(),
+                status,
+                message: message.clone(),
+                started_at: if status == PhaseStatus::Running {
+                    Some(ts)
+                } else {
+                    None
+                },
+                ended_at: if terminal { Some(ts) } else { None },
+            }),
+        }
+        progress.updated_at = ts;
+        write_progress(db, pid, &progress, ts).await?;
+    }
+    Ok(())
+}
+
+/// Project an executor `ProgressUpdated` event (reshaped into a
+/// `process_log_metric` keyed `progress_fraction`, with current/total/message
+/// in `detail`) into `config.progress`, leaving `phases` untouched.
+async fn record_progress_event(
+    db: &PgPool,
+    consumed_ids: &[String],
+    read_ids: &[String],
+    effect_result: &serde_json::Value,
+    ts: chrono::DateTime<chrono::Utc>,
+) -> Result<(), sqlx::Error> {
+    let fraction = effect_result
+        .get("value")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+    let detail = effect_result
+        .get("detail")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let message = detail
+        .get("message")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let current_step = detail
+        .get("current_step")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let total_steps = detail
+        .get("total_steps")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+
+    let process_ids = resolve_process_ids(db, consumed_ids, read_ids).await?;
+    if process_ids.is_empty() {
+        return Ok(());
+    }
+
+    for pid in &process_ids {
+        let mut progress = load_progress(db, pid, ts).await?;
+        progress.fraction = fraction;
+        if message.is_some() {
+            progress.message = message.clone();
+        }
+        progress.current_step = current_step;
+        progress.total_steps = total_steps;
+        progress.updated_at = ts;
+        write_progress(db, pid, &progress, ts).await?;
     }
     Ok(())
 }
