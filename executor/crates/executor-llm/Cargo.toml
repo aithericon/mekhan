@@ -7,6 +7,12 @@ authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
 
+# Dedicated register-as-pool binary (sub-phase 2.2 C7 canonical
+# replacement for the deleted cloud-layer-pool-ollama bin).
+[[bin]]
+name = "aithericon-executor-pool"
+path = "src/bin/executor_pool.rs"
+
 [dependencies]
 aithericon-executor-domain = { workspace = true }
 aithericon-executor-backend = { workspace = true }
@@ -21,6 +27,18 @@ tracing = { workspace = true }
 chrono = { workspace = true }
 reqwest = { workspace = true }
 base64 = "0.22"
+# tracing-subscriber for the executor-pool bin (lib code uses just tracing).
+tracing-subscriber = { workspace = true }
+# Pool register-as-pool wiring (sub-phase 2.2 C7) — port from legacy
+# cloud-layer-pool-ollama register + heartbeat flow.
+anyhow = { workspace = true }
+jsonwebtoken = { workspace = true }
+gethostname = { workspace = true }
+uuid = { workspace = true }
+# Minimal axum listener for the executor's pool_url surface
+# (`/v1/healthz`) — see pool_listener.rs. C7 only; the inference path
+# still flows over NATS.
+axum = { workspace = true }
 
 [dev-dependencies]
 aithericon-executor-test-harness = { workspace = true }

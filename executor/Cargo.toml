@@ -76,7 +76,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "serd
 humantime-serde = "1"
 
 # Testing
-uuid = { version = "1", features = ["v4"] }
+uuid = { version = "1", features = ["v4", "serde"] }
 testcontainers = "0.26"
 testcontainers-modules = { version = "0.14", features = ["nats"] }
 
@@ -125,3 +125,8 @@ async-compression = { version = "0.4", features = ["futures-io", "gzip", "zstd"]
 bytes = "1"
 futures = "0.3"
 tower = { version = "0.5", features = ["util"] }
+
+# Pool register-as-pool wiring (sub-phase 2.2 C7).
+anyhow = "1"
+jsonwebtoken = "9"
+gethostname = "0.5"
