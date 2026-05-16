@@ -17,6 +17,7 @@ members = [
     "crates/executor-postgres",
     "crates/executor-storage-types",
     "crates/executor-backend-configs",
+    "crates/executor-surya",
 ]
 
 [workspace.package]
@@ -44,6 +45,7 @@ aithericon-executor-llm = { path = "crates/executor-llm" }
 aithericon-executor-file-ops = { path = "crates/executor-file-ops" }
 aithericon-executor-kreuzberg = { path = "crates/executor-kreuzberg" }
 aithericon-executor-postgres = { path = "crates/executor-postgres" }
+aithericon-executor-surya = { path = "crates/executor-surya" }
 aithericon-secrets = { path = "../shared/secrets" }
 
 # Apalis (forked with NATS backend) — use local path for development, switch to git for CI/deploy
