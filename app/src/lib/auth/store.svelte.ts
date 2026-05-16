@@ -26,7 +26,8 @@ function toUser(dto: SessionUserDto): AuthUser {
 		subject: dto.subject,
 		email: dto.email ?? undefined,
 		displayName: dto.display_name ?? undefined,
-		roles: dto.roles ?? []
+		roles: dto.roles ?? [],
+		orgId: dto.org_id ?? undefined
 	};
 }
 

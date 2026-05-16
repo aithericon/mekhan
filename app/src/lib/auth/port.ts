@@ -13,6 +13,8 @@ export interface AuthUser {
 	email?: string;
 	displayName?: string;
 	roles: string[];
+	/** Zitadel org the principal belongs to, when the IdP asserts one. */
+	orgId?: string;
 }
 
 export interface AuthSession {

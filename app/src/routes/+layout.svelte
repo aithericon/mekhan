@@ -4,6 +4,7 @@
 	import { goto } from '$app/navigation';
 	import { Button } from '$lib/components/ui/button';
 	import { TooltipProvider } from '$lib/components/ui/tooltip';
+	import User from '@lucide/svelte/icons/user';
 	import { findOrCreateShowcaseTemplate } from '$lib/templates/showcase';
 	import { auth } from '$lib/auth/store.svelte';
 	import { ensureAuthInitialized, requireSession } from '$lib/auth/guard';
@@ -61,11 +62,17 @@
 			</Button>
 			{#if auth.isAuthenticated}
 				<span class="ml-2 h-4 w-px bg-border" aria-hidden="true"></span>
-				{#if auth.session?.user.displayName || auth.session?.user.email}
-					<span class="ml-1 text-xs text-muted-foreground" data-testid="nav-user">
-						{auth.session?.user.displayName ?? auth.session?.user.email}
-					</span>
-				{/if}
+				<Button
+					variant="ghost"
+					size="sm"
+					href="/profile"
+					data-testid="nav-user"
+					class="gap-1.5 text-muted-foreground"
+					title="View profile"
+				>
+					<User class="size-3.5" />
+					{auth.session?.user.displayName ?? auth.session?.user.email ?? 'Profile'}
+				</Button>
 				<Button
 					variant="ghost"
 					size="sm"
