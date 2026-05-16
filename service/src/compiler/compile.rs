@@ -1310,15 +1310,26 @@ fn expand_node(
                     let named: PlaceHandle<DynamicToken> =
                         ctx.state(format!("p_{id}_named"), format!("{label} - Named"));
                     let name_expr = interpolate_to_rhai_expr(tpl);
+                    let prelude = if name_expr.contains("__pluck(") {
+                        PLUCK_HELPER
+                    } else {
+                        ""
+                    };
                     ctx.transition(
                         format!("t_{id}_proc_name"),
                         format!("{label} - Derive Process Name"),
                     )
                     .auto_input("input", &ready)
                     .auto_output("output", &named)
-                    .logic(format!(
-                        "let d = input; d._process_name = {name_expr}; #{{ output: d }}"
-                    ));
+                    // `.logic_rhai` (not `.logic`): the builder's inline
+                    // validator doesn't model `fn` parameters, so the
+                    // `__pluck` helper's params read as undefined. Same path
+                    // `wire_edge`/ParallelJoin already use for helper-fn
+                    // scripts; the engine still parses it at scenario load.
+                    .logic_rhai(format!(
+                        "{prelude}let d = input; d._process_name = {name_expr}; #{{ output: d }}"
+                    ))
+                    .done();
 
                     // 2. process_start effect: register the process. The
                     //    handler reads the name from `_process_name`
@@ -2243,14 +2254,37 @@ fn rhai_str_escape(s: &str) -> String {
         .replace('\r', "\\r")
 }
 
-/// Validate a `{{ … }}` placeholder body and turn it into a safe Rhai
-/// accessor rooted at the workflow token (`input`).
+/// Null-safe path walker prepended to any generated script that contains a
+/// `{{ … }}` interpolation. Walks string/int segments; the moment the current
+/// value isn't a traversable map/array (or the key/index is absent) it yields
+/// `()` instead of raising a Rhai error.
+///
+/// Rationale: a `{{ a.b }}` placeholder used to compile to the raw accessor
+/// `input.a.b`. When `a` is a plain string (e.g. a file field supplied as a
+/// bare storage key instead of an upload object), `string.b` is a *hard* Rhai
+/// error — unlike a missing map key, which already yields `()`. A hard error
+/// in a pure edge transition means its input token is never consumed, so the
+/// per-net eval loop retries the transition every cycle forever (observed: one
+/// bad `{{ invoice_file.url }}` produced 50k+ `ErrorOccurred` events and wedged
+/// net cancellation). Routing every placeholder through `__pluck` makes the
+/// whole class degrade to an empty string instead.
+const PLUCK_HELPER: &str = "fn __pluck(__r, __segs) { \
+for __s in __segs { \
+let __t = type_of(__r); \
+if __t == \"map\" && type_of(__s) == \"string\" { __r = __r[__s]; continue; } \
+if __t == \"array\" && type_of(__s) == \"i64\" && __s >= 0 && __s < __r.len() { __r = __r[__s]; continue; } \
+return (); \
+} __r } ";
+
+/// Validate a `{{ … }}` placeholder body and turn it into a safe, null-safe
+/// Rhai accessor rooted at the workflow token (`input`).
 ///
 /// Only dotted identifier paths with optional numeric indices are accepted —
 /// e.g. `invoice_file.url`, `items[0].amount`. This is deliberately *not* a
 /// Rhai expression evaluator: arbitrary expressions are rejected (returns
 /// `None`) so a template author can never inject executable Rhai through a
-/// task block string.
+/// task block string. The accepted path is emitted as a [`PLUCK_HELPER`]
+/// call so a misaimed placeholder degrades to `()` rather than hard-erroring.
 fn placeholder_to_accessor(inner: &str) -> Option<String> {
     let s = inner.trim();
     if s.is_empty() {
@@ -2270,12 +2304,15 @@ fn placeholder_to_accessor(inner: &str) -> Option<String> {
         *i > start
     }
 
-    let mut out = String::from("input");
+    // Collect path segments as Rhai literals: identifiers (validated to
+    // `[A-Za-z0-9_]`, so safe unquoted-escaped) become quoted string keys,
+    // `[n]` becomes a bare integer index. Emitted as `__pluck(input, [..])`.
+    let mut segs: Vec<String> = Vec::new();
+    let first = i;
     if !ident(bytes, &mut i) {
         return None;
     }
-    out.push('.');
-    out.push_str(&s[..i]);
+    segs.push(format!("\"{}\"", &s[first..i]));
 
     while i < bytes.len() {
         match bytes[i] {
@@ -2285,8 +2322,7 @@ fn placeholder_to_accessor(inner: &str) -> Option<String> {
                 if !ident(bytes, &mut i) {
                     return None;
                 }
-                out.push('.');
-                out.push_str(&s[seg_start..i]);
+                segs.push(format!("\"{}\"", &s[seg_start..i]));
             }
             b'[' => {
                 i += 1;
@@ -2297,15 +2333,13 @@ fn placeholder_to_accessor(inner: &str) -> Option<String> {
                 if i == num_start || i >= bytes.len() || bytes[i] != b']' {
                     return None;
                 }
-                out.push('[');
-                out.push_str(&s[num_start..i]);
-                out.push(']');
+                segs.push(s[num_start..i].to_string());
                 i += 1; // consume ']'
             }
             _ => return None,
         }
     }
-    Some(out)
+    Some(format!("__pluck(input, [{}])", segs.join(", ")))
 }
 
 /// Turn a raw string that may contain `{{ path }}` placeholders into a Rhai
@@ -2602,8 +2636,18 @@ fn build_human_task_injection_logic(target_node: &WorkflowNode) -> String {
             interpolate_to_rhai_expr(instructions_mdsvex.as_deref().unwrap_or(""));
         let title_expr = interpolate_to_rhai_expr(task_title);
 
+        // Only prepend the helper when an interpolation actually emitted a
+        // `__pluck(` call, so placeholder-free human tasks stay byte-identical.
+        let prelude = if title_expr.contains("__pluck(")
+            || instructions_expr.contains("__pluck(")
+            || steps_rhai.contains("__pluck(")
+        {
+            PLUCK_HELPER
+        } else {
+            ""
+        };
         format!(
-            "let d = input; \
+            "{prelude}let d = input; \
              d.title = {title_expr}; \
              d.instructions_mdsvex = {instructions_expr}; \
              d.steps = {steps_rhai}; \
@@ -2623,13 +2667,16 @@ mod tests {
     fn placeholder_paths_validate() {
         assert_eq!(
             placeholder_to_accessor("invoice_file.url").as_deref(),
-            Some("input.invoice_file.url")
+            Some("__pluck(input, [\"invoice_file\", \"url\"])")
         );
         assert_eq!(
             placeholder_to_accessor("  items[0].amount  ").as_deref(),
-            Some("input.items[0].amount")
+            Some("__pluck(input, [\"items\", 0, \"amount\"])")
         );
-        assert_eq!(placeholder_to_accessor("invoice_id").as_deref(), Some("input.invoice_id"));
+        assert_eq!(
+            placeholder_to_accessor("invoice_id").as_deref(),
+            Some("__pluck(input, [\"invoice_id\"])")
+        );
         // Rejected: arbitrary Rhai / unsafe content stays literal.
         assert_eq!(placeholder_to_accessor("a + b").as_deref(), None);
         assert_eq!(placeholder_to_accessor("system(\"rm\")").as_deref(), None);
@@ -2655,12 +2702,45 @@ mod tests {
     fn interpolation_builds_concat_expr() {
         assert_eq!(
             interpolate_to_rhai_expr("{{ invoice_file.url }}"),
-            "(\"\" + (input.invoice_file.url))"
+            "(\"\" + (__pluck(input, [\"invoice_file\", \"url\"])))"
         );
         assert_eq!(
             interpolate_to_rhai_expr("Invoice {{ invoice_id }} ready"),
-            "(\"\" + \"Invoice \" + (input.invoice_id) + \" ready\")"
+            "(\"\" + \"Invoice \" + (__pluck(input, [\"invoice_id\"])) + \" ready\")"
         );
+    }
+
+    /// Regression: the exact scenario that wedged a live net. A
+    /// `{{ invoice_file.url }}` placeholder where `invoice_file` is a bare
+    /// string (not an upload object) must degrade to an empty string, never
+    /// raise a hard Rhai error (which a pure edge transition would retry
+    /// forever).
+    #[test]
+    fn interpolation_is_null_safe_on_non_map_field() {
+        let engine = rhai::Engine::new();
+        let expr = interpolate_to_rhai_expr("img: {{ invoice_file.url }}");
+
+        // invoice_file is a string -> .url is a hard error without __pluck.
+        let s: String = engine
+            .eval::<String>(&format!(
+                "{PLUCK_HELPER}let input = #{{ invoice_file: \"example\" }}; {expr}"
+            ))
+            .expect("must not hard-error on a string-typed field");
+        assert_eq!(s, "img: ");
+
+        // Missing entirely -> still empty, no error.
+        let s2: String = engine
+            .eval::<String>(&format!("{PLUCK_HELPER}let input = #{{}}; {expr}"))
+            .expect("must not hard-error on a missing field");
+        assert_eq!(s2, "img: ");
+
+        // Proper upload object -> the value resolves.
+        let s3: String = engine
+            .eval::<String>(&format!(
+                "{PLUCK_HELPER}let input = #{{ invoice_file: #{{ url: \"http://x/y\" }} }}; {expr}"
+            ))
+            .expect("resolves");
+        assert_eq!(s3, "img: http://x/y");
     }
 
     #[test]
@@ -2689,16 +2769,18 @@ mod tests {
         };
 
         let logic = build_human_task_injection_logic(&node);
+        // Null-safe accessor + helper prelude (it has interpolations).
+        assert!(logic.starts_with("fn __pluck("), "helper prelude missing: {logic}");
         assert!(
-            logic.contains("d.title = (\"\" + \"Invoice \" + (input.invoice_id))"),
+            logic.contains("d.title = (\"\" + \"Invoice \" + (__pluck(input, [\"invoice_id\"])))"),
             "title not interpolated: {logic}"
         );
         assert!(
-            logic.contains("(input.invoice_file.filename)"),
+            logic.contains("(__pluck(input, [\"invoice_file\", \"filename\"]))"),
             "instructions not interpolated: {logic}"
         );
         assert!(
-            logic.contains("(input.invoice_file.url)"),
+            logic.contains("(__pluck(input, [\"invoice_file\", \"url\"]))"),
             "step block string not interpolated: {logic}"
         );
         // Static block keys remain plain literals.
@@ -2803,9 +2885,12 @@ mod tests {
             .expect("t_s_proc_name transition");
         let logic = proc_name["logic"]["source"].as_str().unwrap_or_default();
         assert!(
-            logic.contains(r#"d._process_name = ("" + "Invoice " + (input.invoice_id))"#),
+            logic.contains(
+                r#"d._process_name = ("" + "Invoice " + (__pluck(input, ["invoice_id"])))"#
+            ),
             "name expr not interpolated: {logic}"
         );
+        assert!(logic.starts_with("fn __pluck("), "helper prelude missing: {logic}");
 
         // 2. process_start effect transition, name resolved from the token.
         let proc_start = transitions

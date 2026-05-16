@@ -85,7 +85,7 @@ export const showcaseGraph: WorkflowGraph = {
 						blocks: [
 							{
 								type: 'image',
-								url: '{{ invoice_file.url }}',
+								url: '/api/files/{{ invoice_file.key }}',
 								alt: 'Uploaded invoice',
 								caption: 'Original invoice document (uploaded at instance start)'
 							},
@@ -93,7 +93,7 @@ export const showcaseGraph: WorkflowGraph = {
 								type: 'download',
 								downloads: [
 									{
-										url: '{{ invoice_file.url }}',
+										url: '/api/files/{{ invoice_file.key }}',
 										filename: '{{ invoice_file.filename }}',
 										mime_type: '{{ invoice_file.content_type }}',
 										description: 'Original uploaded invoice'
