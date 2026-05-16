@@ -12,6 +12,7 @@
 	import TriggerHistory from './TriggerHistory.svelte';
 	import { CopyButton } from '$lib/components/ui/copy-button';
 	import { browser } from '$app/environment';
+	import { onMount } from 'svelte';
 	import type { YjsGraphBinding } from '$lib/yjs/graph-binding.svelte';
 
 	type FieldMapping = components['schemas']['FieldMapping'];
@@ -31,6 +32,64 @@
 	const sourceKind = $derived(source?.kind ?? 'manual');
 	const mappings = $derived(data.payloadMapping ?? []);
 	const enabled = $derived(data.enabled ?? false);
+
+	// A trigger's *armed* state is the inverse of every other field here: it is
+	// operational state of the published template, not a draft setting. In a
+	// draft this is read-only (it ships armed by default); on the published
+	// template it is the one live control and writes through the API, not Yjs
+	// (the editor binding is frozen for published templates).
+	let liveEnabled = $state<boolean | null>(null);
+	let toggling = $state(false);
+	let toggleError = $state<string | null>(null);
+
+	const displayEnabled = $derived(readonly ? (liveEnabled ?? enabled) : enabled);
+
+	async function refreshLiveEnabled() {
+		if (!readonly || !nodeId) return;
+		try {
+			const res = await fetch('/api/triggers');
+			if (!res.ok) return;
+			const body = await res.json();
+			const t = (body.triggers ?? []).find(
+				(x: { node_id: string }) => x.node_id === nodeId
+			);
+			if (t) liveEnabled = t.enabled;
+		} catch {
+			// Leave liveEnabled null → fall back to the graph value.
+		}
+	}
+
+	async function toggleEnabled(next: boolean) {
+		// Draft: not an editable setting (inverse of normal freeze).
+		if (!readonly || !nodeId) return;
+		toggling = true;
+		toggleError = null;
+		const prev = liveEnabled ?? enabled;
+		liveEnabled = next; // optimistic
+		try {
+			const res = await fetch(`/api/triggers/${encodeURIComponent(nodeId)}/enabled`, {
+				method: 'PATCH',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ enabled: next })
+			});
+			if (!res.ok) {
+				liveEnabled = prev;
+				toggleError = `Failed to ${next ? 'enable' : 'disable'} (${res.status})`;
+				return;
+			}
+			const body = await res.json();
+			if (typeof body.enabled === 'boolean') liveEnabled = body.enabled;
+		} catch (e) {
+			liveEnabled = prev;
+			toggleError = String(e);
+		} finally {
+			toggling = false;
+		}
+	}
+
+	onMount(() => {
+		void refreshLiveEnabled();
+	});
 
 	// Sample-request scaffolding for the API-call (manual) source. The body a
 	// caller should POST mirrors the target Start's `initial` schema — but only
@@ -569,19 +628,33 @@
 		{/if}
 	</div>
 
-	<!-- Enabled toggle. -->
+	<!-- Enabled. Inverse of every other field: armed state is operational
+	     state of the *published* template, not a draft setting. Read-only in
+	     draft (ships armed); the one live control once published. -->
 	<label class="flex items-center gap-2">
 		<input
 			type="checkbox"
-			checked={enabled}
-			disabled={readonly}
-			onchange={(e) => update('enabled', (e.currentTarget as HTMLInputElement).checked)}
+			checked={displayEnabled}
+			disabled={!readonly || toggling}
+			onchange={(e) => toggleEnabled((e.currentTarget as HTMLInputElement).checked)}
 		/>
 		<span class="text-sm">Enabled</span>
+		{#if toggling}<span class="text-[10px] text-muted-foreground">…</span>{/if}
 	</label>
-	<p class="text-[11px] text-muted-foreground">
-		Disabled triggers are stored with the template but the dispatcher ignores them.
-	</p>
+	{#if readonly}
+		<p class="text-[11px] text-muted-foreground">
+			Arm or pause this trigger on the published template — takes effect immediately,
+			no new version required.
+		</p>
+	{:else}
+		<p class="text-[11px] text-muted-foreground">
+			Triggers ship enabled. Arming and pausing is done on the published template,
+			not here — it isn’t a draft setting.
+		</p>
+	{/if}
+	{#if toggleError}
+		<p class="text-[11px] text-destructive">{toggleError}</p>
+	{/if}
 
 	{#if nodeId}
 		<TriggerHistory {nodeId} />

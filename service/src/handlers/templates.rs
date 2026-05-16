@@ -391,6 +391,16 @@ pub async fn delete_template(
         }
     }
 
+    // Capture every version id in the chain before the delete so we can drop
+    // their triggers from the in-memory dispatcher afterwards (otherwise a
+    // deleted template's triggers keep firing until the next restart).
+    let version_ids: Vec<(uuid::Uuid,)> =
+        sqlx::query_as("SELECT id FROM workflow_templates WHERE base_template_id = $1")
+            .bind(base_id)
+            .fetch_all(&state.db)
+            .await
+            .unwrap_or_default();
+
     // Delete all versions in the template chain
     sqlx::query("DELETE FROM workflow_templates WHERE base_template_id = $1")
         .bind(base_id)
@@ -400,6 +410,10 @@ pub async fn delete_template(
             tracing::error!("failed to delete template: {e}");
             ApiError::internal(e.to_string())
         })?;
+
+    for (vid,) in version_ids {
+        state.triggers.forget_template(vid);
+    }
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -775,6 +789,12 @@ pub async fn new_version(
     tx.commit()
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    // The previous version is now superseded (is_latest = FALSE). Its triggers
+    // must stop firing immediately, not linger in the in-memory dispatcher
+    // until the next restart — `hydrate()` already excludes non-latest
+    // versions, so this just makes the running process match restart state.
+    state.triggers.forget_template(existing.id);
 
     // Seed Y.Doc for the new version so WS collaboration works immediately,
     // including the copied per-node files.
