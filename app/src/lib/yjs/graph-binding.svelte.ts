@@ -148,6 +148,7 @@ export class YjsGraphBinding {
 				const initial = (config?.initial as
 					| { id: string; label: string; fields?: unknown[] }
 					| undefined) ?? { id: 'in', label: 'Input', fields: [] };
+				const processName = config?.processName as string | undefined;
 				return {
 					...base,
 					type: 'start',
@@ -159,7 +160,8 @@ export class YjsGraphBinding {
 						}
 							? F
 							: never
-					}
+					},
+					...(processName ? { processName } : {})
 				};
 			}
 			case 'end':
@@ -480,6 +482,14 @@ export class YjsGraphBinding {
 				// multiplayer per-field edits but require richer cell wiring
 				// (TODO when concurrent port editing becomes a real workflow).
 				config.set('initial', data.initial);
+				// Opt-in per-instance process name template. Delete the key when
+				// cleared so it round-trips as "opt out" (publish reconstructs
+				// the graph from this Y.Doc — an unset key must stay unset).
+				if (data.processName != null && data.processName !== '') {
+					config.set('processName', data.processName);
+				} else {
+					config.delete('processName');
+				}
 				break;
 			case 'end':
 				break;

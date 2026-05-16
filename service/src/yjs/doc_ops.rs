@@ -328,10 +328,16 @@ pub fn write_node_config(
     data: &WorkflowNodeData,
 ) {
     match data {
-        WorkflowNodeData::Start { initial, .. } => {
+        WorkflowNodeData::Start { initial, process_name, .. } => {
             let initial_val =
                 serde_json::to_value(initial).unwrap_or(serde_json::Value::Object(Default::default()));
             config.insert(txn, "initial", json_value_to_any(&initial_val));
+            // Opt-in per-instance process name template. Persist it so the
+            // graph→Y.Doc seed path (createTemplate) and publish's Y.Doc
+            // reconstruction don't silently drop it.
+            if let Some(pn) = process_name.as_deref().filter(|s| !s.is_empty()) {
+                config.insert(txn, "processName", pn.to_string());
+            }
         }
         WorkflowNodeData::End { .. } => {}
         WorkflowNodeData::HumanTask {
@@ -469,6 +475,54 @@ mod tests {
         let start = roundtripped.nodes.iter().find(|n| n.node_type == "start").unwrap();
         assert_eq!(start.parent_id, None);
         assert_eq!(start.width, None);
+    }
+
+    #[test]
+    fn start_process_name_survives_ydoc_roundtrip() {
+        fn start_with(process_name: Option<&str>) -> WorkflowGraph {
+            WorkflowGraph {
+                nodes: vec![WorkflowNode {
+                    id: "s".to_string(),
+                    node_type: "start".to_string(),
+                    position: Position { x: 0.0, y: 0.0 },
+                    data: WorkflowNodeData::Start {
+                        label: "Start".to_string(),
+                        description: None,
+                        initial: Port {
+                            id: "in".to_string(),
+                            label: "Input".to_string(),
+                            fields: vec![],
+                        },
+                        process_name: process_name.map(str::to_string),
+                    },
+                    parent_id: None,
+                    width: None,
+                    height: None,
+                }],
+                edges: vec![],
+                viewport: None,
+            }
+        }
+
+        // Set → preserved through graph→Y.Doc→graph (the publish path).
+        let rt = doc_to_graph(&graph_to_doc(&start_with(Some("Invoice {{ invoice_id }}"))))
+            .expect("parse Y.Doc");
+        match &rt.nodes[0].data {
+            WorkflowNodeData::Start { process_name, .. } => {
+                assert_eq!(process_name.as_deref(), Some("Invoice {{ invoice_id }}"));
+            }
+            other => panic!("expected Start, got {other:?}"),
+        }
+
+        // None → stays None (opt-out: no stray key written/read back).
+        let rt_none =
+            doc_to_graph(&graph_to_doc(&start_with(None))).expect("parse Y.Doc");
+        match &rt_none.nodes[0].data {
+            WorkflowNodeData::Start { process_name, .. } => {
+                assert_eq!(process_name.as_deref(), None);
+            }
+            other => panic!("expected Start, got {other:?}"),
+        }
     }
 
     /// Verifies inline files at template creation make it into the Y.Doc as
