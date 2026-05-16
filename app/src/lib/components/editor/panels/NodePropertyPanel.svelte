@@ -17,6 +17,7 @@
 	import ScopeSection from './property-sections/ScopeSection.svelte';
 	import PhaseUpdateNodeSection from './property-sections/PhaseUpdateNodeSection.svelte';
 	import ProgressUpdateNodeSection from './property-sections/ProgressUpdateNodeSection.svelte';
+	import FailureNodeSection from './property-sections/FailureNodeSection.svelte';
 	import { computeScopes, type ScopeEntry } from '$lib/editor/guard-scope';
 	import { outputPortsFor } from '$lib/editor/derived-ports';
 	import { Button } from '$lib/components/ui/button';
@@ -172,6 +173,8 @@
 			<PhaseUpdateNodeSection {data} {readonly} {onchange} />
 		{:else if data.type === 'progress_update'}
 			<ProgressUpdateNodeSection {data} {readonly} {onchange} />
+		{:else if data.type === 'failure'}
+			<FailureNodeSection {data} {readonly} {onchange} />
 		{/if}
 
 		<!-- Phase 4: read-only derived port preview for variants whose outputs
@@ -179,7 +182,7 @@
 		     and AutomatedStep already render an editable PortsSection inside
 		     their own section. End/Scope have no derived outputs to show
 		     until a port editor lands for them. -->
-		{#if data.type === 'human_task' || data.type === 'decision' || data.type === 'loop' || data.type === 'parallel_split' || data.type === 'parallel_join' || data.type === 'scope' || data.type === 'phase_update' || data.type === 'progress_update'}
+		{#if data.type === 'human_task' || data.type === 'decision' || data.type === 'loop' || data.type === 'parallel_split' || data.type === 'parallel_join' || data.type === 'scope' || data.type === 'phase_update' || data.type === 'progress_update' || data.type === 'failure'}
 			<DerivedPortsSection
 				ports={outputPortsFor(data)}
 				title="Outputs"

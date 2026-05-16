@@ -7335,6 +7335,38 @@
           },
           {
             "type": "object",
+            "description": "Pass-through control node that marks the owning HPI process `failed`\nwith a templated message. Compiles to a shape transition (forwards the\nworkflow token unchanged + emits a `#{ reason }` breadcrumb) followed\nby the `process_fail` builtin effect. The net keeps running to its\nnormal End — this is a process-level marker, not a net kill-switch.\nEffective only within a named process (`processName` on an upstream\nStart); otherwise a silent no-op.",
+            "required": [
+              "label",
+              "type"
+            ],
+            "properties": {
+              "description": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "failureMessage": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Failure message. Supports `{{ field }}` placeholders resolved\nagainst the inbound token at run time."
+              },
+              "label": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "failure"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
             "description": "Trigger node (Phase 5). Lives at the template level and connects to a\ntarget input port via a single outgoing edge. Triggers are never edge\ntargets; they are *inputs to the workflow*, not part of it. AIR\ncompilation skips trigger nodes — they are a pre-compile concern owned\nby the dispatcher (`service::triggers`).",
             "required": [
               "label",

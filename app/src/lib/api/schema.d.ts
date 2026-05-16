@@ -2498,6 +2498,16 @@ export interface components {
             /** @enum {string} */
             type: "progress_update";
         } | {
+            description?: string | null;
+            /**
+             * @description Failure message. Supports `{{ field }}` placeholders resolved
+             *     against the inbound token at run time.
+             */
+            failureMessage?: string | null;
+            label: string;
+            /** @enum {string} */
+            type: "failure";
+        } | {
             /** @description Concurrency / dedup policy applied by the dispatcher. */
             concurrency?: components["schemas"]["ConcurrencyPolicy"];
             description?: string | null;

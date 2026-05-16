@@ -2985,3 +2985,116 @@ fn progress_update_defaults_steps_to_zero() {
     assert!(!src.contains("message:"), "no message key expected: {src}");
     assert!(!src.contains("__pluck("), "no interpolation expected: {src}");
 }
+
+fn failure_node(id: &str, message: Option<&str>) -> WorkflowNode {
+    WorkflowNode {
+        id: id.to_string(),
+        node_type: "failure".to_string(),
+        position: pos(),
+        data: WorkflowNodeData::Failure {
+            label: "Failure".to_string(),
+            description: None,
+            failure_message: message.map(str::to_string),
+        },
+        parent_id: None,
+        width: None,
+        height: None,
+    }
+}
+
+#[test]
+fn failure_emits_process_fail_passthrough() {
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            failure_node("f", Some("boom")),
+            end_node("e"),
+        ],
+        edges: vec![edge("e1", "s", "f"), edge("e2", "f", "e")],
+        viewport: None,
+    };
+    let air = compile_to_air(&graph, "fail_test", "", &std::collections::HashMap::new())
+        .expect("should compile");
+
+    assert!(has_transition(&air, "t_f_fail_shape"), "expected shape transition");
+    assert!(has_transition(&air, "t_f_fail_emit"), "expected effect transition");
+    assert!(has_place(&air, "p_f_fail_out"), "expected pass-through output place");
+    assert!(has_place(&air, "p_f_fail_sig"), "expected breadcrumb place");
+    assert!(has_place(&air, "p_f_fail_done"), "expected failed sink place");
+
+    let t_emit = get_transition(&air, "t_f_fail_emit").unwrap();
+    assert_eq!(t_emit["logic"]["handler_id"], "process_fail");
+
+    let shape = get_transition(&air, "t_f_fail_shape").unwrap();
+    let src = shape["logic"]["source"].as_str().unwrap();
+    assert!(src.contains("out: input"), "token pass-through: {src}");
+    assert!(src.contains("fail: #{ reason:"), "reason breadcrumb: {src}");
+    assert!(src.contains("boom"), "message literal: {src}");
+    assert!(!src.contains("__pluck("), "no interpolation expected: {src}");
+}
+
+#[test]
+fn failure_interpolates_message_null_safe() {
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            failure_node("f", Some("failed at {{ stage }}")),
+            end_node("e"),
+        ],
+        edges: vec![edge("e1", "s", "f"), edge("e2", "f", "e")],
+        viewport: None,
+    };
+    let air = compile_to_air(&graph, "fail_interp", "", &std::collections::HashMap::new())
+        .expect("should compile");
+    let shape = get_transition(&air, "t_f_fail_shape").unwrap();
+    let src = shape["logic"]["source"].as_str().unwrap();
+    assert!(src.contains("fn __pluck("), "PLUCK_HELPER prelude expected: {src}");
+    assert!(
+        src.contains("__pluck(input, [\"stage\"])"),
+        "message placeholder accessor: {src}"
+    );
+    assert!(src.contains("reason: __fm"), "reason bound to message local: {src}");
+}
+
+#[test]
+fn failure_omits_reason_when_unset() {
+    // No failureMessage ⇒ empty string literal reason, no helper prelude.
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            failure_node("f", None),
+            end_node("e"),
+        ],
+        edges: vec![edge("e1", "s", "f"), edge("e2", "f", "e")],
+        viewport: None,
+    };
+    let air = compile_to_air(&graph, "fail_nomsg", "", &std::collections::HashMap::new())
+        .expect("should compile");
+    let shape = get_transition(&air, "t_f_fail_shape").unwrap();
+    let src = shape["logic"]["source"].as_str().unwrap();
+    assert!(src.contains("reason: \"\""), "empty reason literal: {src}");
+    assert!(!src.contains("__fm"), "no message local when unset: {src}");
+    assert!(!src.contains("__pluck("), "no interpolation expected: {src}");
+}
+
+#[test]
+fn failure_passes_token_through_to_end() {
+    // Core design guarantee: a Failure node is pass-through, NOT terminal —
+    // the net still reaches its End after marking the process failed.
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            failure_node("f", Some("nope")),
+            end_node("e"),
+        ],
+        edges: vec![edge("e1", "s", "f"), edge("e2", "f", "e")],
+        viewport: None,
+    };
+    let air = compile_to_air(&graph, "fail_chain", "", &std::collections::HashMap::new())
+        .expect("should compile");
+    assert!(has_transition(&air, "t_f_fail_shape"));
+    assert!(
+        has_place_of_type(&air, "terminal"),
+        "chain with a Failure node should still reach a terminal place"
+    );
+}

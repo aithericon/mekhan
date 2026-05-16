@@ -10,6 +10,7 @@
 	import Repeat from '@lucide/svelte/icons/repeat';
 	import Flag from '@lucide/svelte/icons/flag';
 	import Gauge from '@lucide/svelte/icons/gauge';
+	import OctagonX from '@lucide/svelte/icons/octagon-x';
 
 	const iconMap: Record<string, typeof Play> = {
 		play: Play,
@@ -21,7 +22,8 @@
 		'git-merge': GitMerge,
 		repeat: Repeat,
 		flag: Flag,
-		gauge: Gauge
+		gauge: Gauge,
+		'octagon-x': OctagonX
 	};
 
 	function onDragStart(event: DragEvent, nodeType: WorkflowNodeType) {

@@ -2224,6 +2224,76 @@ let eid = dd.artifact_id;
             );
         }
 
+        WorkflowNodeData::Failure {
+            label,
+            failure_message,
+            ..
+        } => {
+            // Pass-through: shape transition forwards the workflow token
+            // unchanged on `out` (the net continues to its normal End) and
+            // emits a `#{ reason }` breadcrumb on `fail`; the effect
+            // transition runs the tolerant `process_fail` builtin. The
+            // causality consumer resolves the owning process by tag
+            // propagation from the consumed (process-tagged) token — no
+            // read-arc; outside a named process this is a no-op.
+            let p_input: PlaceHandle<DynamicToken> =
+                ctx.state(format!("p_{id}_input"), format!("{label} - Input"));
+            let p_out: PlaceHandle<DynamicToken> =
+                ctx.state(format!("p_{id}_fail_out"), format!("{label} - Output"));
+            let p_sig: PlaceHandle<DynamicToken> = ctx.state(
+                format!("p_{id}_fail_sig"),
+                format!("{label} - Failure Breadcrumb"),
+            );
+            let p_done: PlaceHandle<DynamicToken> =
+                ctx.state(format!("p_{id}_fail_done"), format!("{label} - Failed"));
+
+            // Bind the interpolation to a local so the map literal stays
+            // shallow (debug-build Rhai expr-depth limit) — same shape as the
+            // PhaseUpdate / ProgressUpdate arms.
+            let (msg_let, reason_val) = match failure_message
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                Some(m) => {
+                    let e = interpolate_to_rhai_expr(m);
+                    (format!("let __fm = {e}; "), "__fm".to_string())
+                }
+                None => (String::new(), "\"\"".to_string()),
+            };
+            let logic = format!(
+                "{msg_let}#{{ out: input, fail: #{{ reason: {reason_val} }} }}"
+            );
+            let prelude = if logic.contains("__pluck(") {
+                PLUCK_HELPER
+            } else {
+                ""
+            };
+            ctx.transition(format!("t_{id}_fail_shape"), format!("{label} - Failure"))
+                .auto_input("input", &p_input)
+                .auto_output("out", &p_out)
+                .auto_output("fail", &p_sig)
+                .logic_rhai(format!("{prelude}{logic}"))
+                .done();
+
+            ctx.transition(
+                format!("t_{id}_fail_emit"),
+                format!("{label} - Fail Process"),
+            )
+            .auto_input("failure", &p_sig)
+            .auto_output("failed", &p_done)
+            .builtin_effect(&effects::PROCESS_FAIL);
+
+            ports.insert(
+                id.clone(),
+                NodePorts {
+                    input_place: p_input,
+                    output_places: vec![(None, p_out)],
+                    input_places: HashMap::new(),
+                },
+            );
+        }
+
         WorkflowNodeData::Trigger { .. } => {
             // Trigger nodes are NOT compiled into AIR — they are a pre-compile
             // concern owned by the trigger dispatcher (`service::triggers`).

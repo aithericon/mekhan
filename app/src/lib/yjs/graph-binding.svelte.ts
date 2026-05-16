@@ -247,6 +247,14 @@ export class YjsGraphBinding {
 						? { totalSteps: config.totalSteps as number }
 						: {})
 				};
+			case 'failure':
+				return {
+					...base,
+					type: 'failure',
+					...(config?.failureMessage
+						? { failureMessage: config.failureMessage as string }
+						: {})
+				};
 			case 'trigger':
 				return {
 					...base,
@@ -577,6 +585,13 @@ export class YjsGraphBinding {
 					config.set('totalSteps', data.totalSteps);
 				} else {
 					config.delete('totalSteps');
+				}
+				break;
+			case 'failure':
+				if (data.failureMessage != null && data.failureMessage !== '') {
+					config.set('failureMessage', data.failureMessage);
+				} else {
+					config.delete('failureMessage');
 				}
 				break;
 			case 'trigger':

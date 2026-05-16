@@ -219,7 +219,8 @@ describe('YjsGraphBinding', () => {
 			'loop',
 			'scope',
 			'phase_update',
-			'progress_update'
+			'progress_update',
+			'failure'
 		];
 
 		for (const type of allTypes) {
@@ -273,6 +274,12 @@ describe('YjsGraphBinding', () => {
 		expect(progressNode).toBeDefined();
 		if (progressNode?.data.type === 'progress_update') {
 			expect(progressNode.data.fraction).toBe(0);
+		}
+
+		const failureNode = binding.graph.nodes.find((n) => n.data.type === 'failure');
+		expect(failureNode).toBeDefined();
+		if (failureNode?.data.type === 'failure') {
+			expect(failureNode.data.label).toBe('Failure');
 		}
 	});
 
@@ -489,5 +496,34 @@ describe('YjsGraphBinding', () => {
 		expect(after.data.totalSteps).toBeUndefined();
 		expect(after.data.message).toBeUndefined();
 		expect(after.data.fraction).toBe(0.5);
+	});
+
+	it('failure config survives the updateNodeData round-trip', () => {
+		// Exercises materializeNodeData ⇄ writeDataToConfig for the Failure
+		// node: failureMessage must persist + re-materialize, and clearing it
+		// must delete the key (not leave a stale value).
+		binding.addNode('f1', 'failure', { x: 0, y: 0 }, createDefaultNodeData('failure'));
+
+		const node = binding.graph.nodes.find((n) => n.id === 'f1');
+		expect(node?.data.type).toBe('failure');
+		if (node?.data.type !== 'failure') return;
+
+		binding.updateNodeData('f1', {
+			...node.data,
+			failureMessage: 'failed for {{ order_id }}'
+		} as Extract<WorkflowNodeData, { type: 'failure' }>);
+
+		let after = binding.graph.nodes.find((n) => n.id === 'f1');
+		expect(after?.data.type).toBe('failure');
+		if (after?.data.type !== 'failure') return;
+		expect(after.data.failureMessage).toBe('failed for {{ order_id }}');
+
+		binding.updateNodeData('f1', {
+			...after.data,
+			failureMessage: undefined
+		} as Extract<WorkflowNodeData, { type: 'failure' }>);
+		after = binding.graph.nodes.find((n) => n.id === 'f1');
+		if (after?.data.type !== 'failure') return;
+		expect(after.data.failureMessage).toBeUndefined();
 	});
 });

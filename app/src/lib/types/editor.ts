@@ -49,6 +49,7 @@ export type LoopNodeData = Extract<SchemaWorkflowNodeData, { type: 'loop' }>;
 export type ScopeNodeData = Extract<SchemaWorkflowNodeData, { type: 'scope' }>;
 export type PhaseUpdateNodeData = Extract<SchemaWorkflowNodeData, { type: 'phase_update' }>;
 export type ProgressUpdateNodeData = Extract<SchemaWorkflowNodeData, { type: 'progress_update' }>;
+export type FailureNodeData = Extract<SchemaWorkflowNodeData, { type: 'failure' }>;
 export type TriggerNodeData = Extract<SchemaWorkflowNodeData, { type: 'trigger' }>;
 
 // Convenience aliases for TaskBlockConfig variants used in editor pickers.
@@ -151,6 +152,13 @@ export const NODE_PALETTE: NodePaletteItem[] = [
 		color: '#c026d3'
 	},
 	{
+		type: 'failure',
+		label: 'Failure',
+		description: 'Mark the process failed with a message (net continues)',
+		icon: 'octagon-x',
+		color: '#dc2626'
+	},
+	{
 		type: 'trigger',
 		label: 'Trigger',
 		description: 'Fires the workflow on cron, catalog, webhook, etc.',
@@ -225,6 +233,11 @@ export function createDefaultNodeData(type: WorkflowNodeType): SchemaWorkflowNod
 				type: 'progress_update',
 				label: 'Progress Update',
 				fraction: 0
+			};
+		case 'failure':
+			return {
+				type: 'failure',
+				label: 'Failure'
 			};
 		case 'trigger':
 			return {

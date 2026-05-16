@@ -311,6 +311,14 @@ async fn process_domain_event(
                 complete_processes(db, &consumed_ids, &read_ids, ts).await?;
             }
 
+            // Mark process as failed when the process_fail effect fires. The
+            // net keeps running to its normal End — this is a process-level
+            // marker, not a net kill-switch — so workflow_instances.status is
+            // intentionally left untouched.
+            if effect_handler_id == "process_fail" {
+                fail_processes(db, &consumed_ids, &read_ids, effect_result, ts).await?;
+            }
+
             // Breadcrumb: log metric effect → write to hpi_metrics
             if effect_handler_id == "process_log_metric" {
                 record_metric_event(db, &consumed_ids, &read_ids, effect_result, ts, live).await?;
@@ -786,6 +794,52 @@ async fn complete_processes(
         tracing::info!(
             process_id = %pid,
             "marked process as completed",
+        );
+    }
+    Ok(())
+}
+
+/// Mark processes as failed when the process_fail effect fires.
+///
+/// Resolves process IDs from the consumed/read tokens (same tag-graph path as
+/// `complete_processes`) and sets their status to "failed", storing the
+/// interpolated failure message under `config.failure` (mirroring
+/// `write_progress`'s jsonb_set idiom). Empty resolution ⇒ graceful no-op
+/// (the Failure node was used outside a named process).
+async fn fail_processes(
+    db: &PgPool,
+    consumed_ids: &[String],
+    read_ids: &[String],
+    effect_result: &serde_json::Value,
+    ts: chrono::DateTime<chrono::Utc>,
+) -> Result<(), sqlx::Error> {
+    let process_ids = resolve_process_ids(db, consumed_ids, read_ids).await?;
+    if process_ids.is_empty() {
+        return Ok(());
+    }
+    let reason = effect_result
+        .get("reason")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let failure = serde_json::json!({ "message": reason, "failed_at": ts });
+    for pid in &process_ids {
+        sqlx::query(
+            "UPDATE hpi_processes SET status = 'failed', \
+               config = jsonb_set(COALESCE(config, '{}'::jsonb), '{failure}', $2::jsonb, true), \
+               updated_at = $3 \
+             WHERE process_id = $1",
+        )
+        .bind(pid)
+        .bind(&failure)
+        .bind(ts)
+        .execute(db)
+        .await?;
+
+        tracing::info!(
+            process_id = %pid,
+            reason = %reason,
+            "marked process as failed",
         );
     }
     Ok(())

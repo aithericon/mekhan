@@ -186,6 +186,21 @@ pub const PROCESS_COMPLETE: EffectDescriptor = EffectDescriptor {
     default_output_schema: None,
 };
 
+/// Fail a process lifecycle (publishes "process failed", passes through input).
+///
+/// Symmetric to [`PROCESS_COMPLETE`] but **tolerant**: the handler does not
+/// require a `process_id` in the token (authored graph nodes pass through the
+/// plain workflow token with no read-arc). The owning process is resolved by
+/// the causality tag graph in the projection layer, not the handler.
+pub const PROCESS_FAIL: EffectDescriptor = EffectDescriptor {
+    handler_id: "process_fail",
+    default_input_port: "failure",
+    default_output_port: "failed",
+    category: ServiceCategory::Orchestration,
+    default_input_schema: None,
+    default_output_schema: None,
+};
+
 /// Register artifacts in the data catalogue.
 pub const CATALOGUE_REGISTER: EffectDescriptor = EffectDescriptor {
     handler_id: "catalogue_register",
@@ -259,6 +274,7 @@ pub const ALL_BUILTIN: &[&EffectDescriptor] = &[
     &SPAWN_NET,
     &PROCESS_START,
     &PROCESS_COMPLETE,
+    &PROCESS_FAIL,
     &CATALOGUE_REGISTER,
     &CATALOGUE_LOOKUP,
     &CATALOGUE_SUBSCRIBE,
@@ -319,7 +335,7 @@ mod tests {
 
     #[test]
     fn all_builtin_covers_all_handlers() {
-        assert_eq!(ALL_BUILTIN.len(), 17);
+        assert_eq!(ALL_BUILTIN.len(), 18);
         let ids: Vec<&str> = ALL_BUILTIN.iter().map(|d| d.handler_id).collect();
         assert!(ids.contains(&"scheduler_submit"));
         assert!(ids.contains(&"scheduler_cancel"));
@@ -331,6 +347,7 @@ mod tests {
         assert!(ids.contains(&"human_cancel"));
         assert!(ids.contains(&"process_start"));
         assert!(ids.contains(&"process_complete"));
+        assert!(ids.contains(&"process_fail"));
         assert!(ids.contains(&"catalogue_register"));
         assert!(ids.contains(&"catalogue_lookup"));
         assert!(ids.contains(&"catalogue_subscribe"));

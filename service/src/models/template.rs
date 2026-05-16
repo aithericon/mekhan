@@ -240,6 +240,23 @@ pub enum WorkflowNodeData {
         #[serde(rename = "totalSteps", default, skip_serializing_if = "Option::is_none")]
         total_steps: Option<i64>,
     },
+    /// Pass-through control node that marks the owning HPI process `failed`
+    /// with a templated message. Compiles to a shape transition (forwards the
+    /// workflow token unchanged + emits a `#{ reason }` breadcrumb) followed
+    /// by the `process_fail` builtin effect. The net keeps running to its
+    /// normal End — this is a process-level marker, not a net kill-switch.
+    /// Effective only within a named process (`processName` on an upstream
+    /// Start); otherwise a silent no-op.
+    #[serde(rename = "failure")]
+    Failure {
+        label: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+        /// Failure message. Supports `{{ field }}` placeholders resolved
+        /// against the inbound token at run time.
+        #[serde(rename = "failureMessage", skip_serializing_if = "Option::is_none")]
+        failure_message: Option<String>,
+    },
     /// Trigger node (Phase 5). Lives at the template level and connects to a
     /// target input port via a single outgoing edge. Triggers are never edge
     /// targets; they are *inputs to the workflow*, not part of it. AIR
@@ -279,6 +296,7 @@ impl WorkflowNodeData {
             | Self::Scope { label, .. }
             | Self::PhaseUpdate { label, .. }
             | Self::ProgressUpdate { label, .. }
+            | Self::Failure { label, .. }
             | Self::Trigger { label, .. } => label,
         }
     }
@@ -296,6 +314,7 @@ impl WorkflowNodeData {
             Self::Scope { .. } => "scope",
             Self::PhaseUpdate { .. } => "phase_update",
             Self::ProgressUpdate { .. } => "progress_update",
+            Self::Failure { .. } => "failure",
             Self::Trigger { .. } => "trigger",
         }
     }
@@ -313,6 +332,7 @@ impl WorkflowNodeData {
             | Self::Scope { description, .. }
             | Self::PhaseUpdate { description, .. }
             | Self::ProgressUpdate { description, .. }
+            | Self::Failure { description, .. }
             | Self::Trigger { description, .. } => description.as_deref(),
         }
     }
@@ -343,7 +363,8 @@ impl WorkflowNodeData {
             | Self::Loop { .. }
             | Self::Scope { .. }
             | Self::PhaseUpdate { .. }
-            | Self::ProgressUpdate { .. } => vec![Port::empty_input()],
+            | Self::ProgressUpdate { .. }
+            | Self::Failure { .. } => vec![Port::empty_input()],
 
             // Trigger nodes are never edge targets — the editor refuses to draw
             // an edge into a Trigger node. Return empty so any malformed graph
@@ -409,7 +430,8 @@ impl WorkflowNodeData {
             | Self::Loop { .. }
             | Self::Scope { .. }
             | Self::PhaseUpdate { .. }
-            | Self::ProgressUpdate { .. } => vec![Port {
+            | Self::ProgressUpdate { .. }
+            | Self::Failure { .. } => vec![Port {
                 id: "out".to_string(),
                 label: "Output".to_string(),
                 fields: vec![],

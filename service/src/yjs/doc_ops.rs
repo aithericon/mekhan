@@ -414,6 +414,13 @@ pub fn write_node_config(
                 config.insert(txn, "totalSteps", *ts as f64);
             }
         }
+        WorkflowNodeData::Failure {
+            failure_message, ..
+        } => {
+            if let Some(m) = failure_message {
+                config.insert(txn, "failureMessage", m.clone());
+            }
+        }
         WorkflowNodeData::Trigger {
             source,
             concurrency,
