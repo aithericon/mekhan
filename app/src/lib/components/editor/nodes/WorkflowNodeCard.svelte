@@ -9,7 +9,9 @@
 		| 'loop'
 		| 'scope'
 		| 'parallel'
-		| 'automated';
+		| 'automated'
+		| 'phase-update'
+		| 'progress-update';
 
 	// tailwind-variants with explicit per-kind classes — Tailwind's JIT
 	// scanner can't expand `border-node-${kind}` dynamically.
@@ -25,6 +27,8 @@
 				'scope':       'from-node-scope/5        to-node-scope/15       border-node-scope/60',
 				'parallel':    'from-node-parallel/10    to-node-parallel/25    border-node-parallel/60',
 				'automated':   'from-node-automated/10   to-node-automated/25   border-node-automated/60',
+				'phase-update':    'from-node-phase-update/10    to-node-phase-update/25    border-node-phase-update/60',
+				'progress-update': 'from-node-progress-update/10 to-node-progress-update/25 border-node-progress-update/60',
 			},
 			selected: {
 				true: 'shadow-md',
@@ -40,6 +44,8 @@
 			{ kind: 'scope',      selected: true, class: 'border-node-scope' },
 			{ kind: 'parallel',   selected: true, class: 'border-node-parallel' },
 			{ kind: 'automated',  selected: true, class: 'border-node-automated' },
+			{ kind: 'phase-update',    selected: true, class: 'border-node-phase-update' },
+			{ kind: 'progress-update', selected: true, class: 'border-node-progress-update' },
 		],
 		defaultVariants: {
 			kind: 'start',
@@ -58,6 +64,8 @@
 		'scope':       'bg-node-scope',
 		'parallel':    'bg-node-parallel',
 		'automated':   'bg-node-automated',
+		'phase-update':    'bg-node-phase-update',
+		'progress-update': 'bg-node-progress-update',
 	};
 
 	const HEADER_BORDER: Record<WorkflowNodeKind, string> = {
@@ -69,6 +77,8 @@
 		'scope':       'border-node-scope/30',
 		'parallel':    'border-node-parallel/30',
 		'automated':   'border-node-automated/30',
+		'phase-update':    'border-node-phase-update/30',
+		'progress-update': 'border-node-progress-update/30',
 	};
 
 	const HANDLE_BORDER: Record<WorkflowNodeKind, string> = {
@@ -80,6 +90,8 @@
 		'scope':       '!border-node-scope',
 		'parallel':    '!border-node-parallel',
 		'automated':   '!border-node-automated',
+		'phase-update':    '!border-node-phase-update',
+		'progress-update': '!border-node-progress-update',
 	};
 
 	export function workflowNodeIconBg(kind: WorkflowNodeKind): string {

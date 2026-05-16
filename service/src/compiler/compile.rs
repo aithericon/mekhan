@@ -1,6 +1,6 @@
 use crate::models::template::{
-    BackoffKind, MergeStrategy, RetryPolicy, WorkflowEdge, WorkflowGraph, WorkflowNode,
-    WorkflowNodeData,
+    BackoffKind, MergeStrategy, PhaseUpdateStatus, RetryPolicy, WorkflowEdge, WorkflowGraph,
+    WorkflowNode, WorkflowNodeData,
 };
 use aithericon_executor_domain::InputSource;
 use aithericon_sdk::components::executor_lifecycle::{executor_lifecycle, ExecutorBridges};
@@ -2054,6 +2054,174 @@ let eid = dd.artifact_id;
             let group_id = format!("grp_{id}");
             let parent_group = fixups.scope_groups.get(id).cloned();
             fixups.groups.push((group_id, label.clone(), parent_group));
+        }
+
+        WorkflowNodeData::PhaseUpdate {
+            label,
+            phase_name,
+            status,
+            message,
+            ..
+        } => {
+            // Pass-through: shape transition forwards the workflow token
+            // unchanged on `out` and emits an `executor-phase`-shaped
+            // breadcrumb on `sig`; the effect transition runs
+            // `process_log_message`. The causality consumer trips
+            // `record_phase_event` on `source == "executor-phase"` (and
+            // `detail.event_type == "phase_changed"`), projecting
+            // `detail.{phase_name,status,message}` into
+            // `hpi_processes.config.progress.phases`. The process is resolved
+            // by tag propagation from the consumed (process-tagged) token —
+            // no read-arc needed; outside a named process this is a no-op.
+            let p_input: PlaceHandle<DynamicToken> =
+                ctx.state(format!("p_{id}_input"), format!("{label} - Input"));
+            let p_out: PlaceHandle<DynamicToken> =
+                ctx.state(format!("p_{id}_pu_out"), format!("{label} - Output"));
+            let p_sig: PlaceHandle<DynamicToken> = ctx.state(
+                format!("p_{id}_pu_sig"),
+                format!("{label} - Phase Breadcrumb"),
+            );
+            let p_done: PlaceHandle<DynamicToken> =
+                ctx.state(format!("p_{id}_pu_done"), format!("{label} - Logged"));
+
+            let name_expr = interpolate_to_rhai_expr(phase_name);
+            let status_lit = match status {
+                PhaseUpdateStatus::Running => "running",
+                PhaseUpdateStatus::Completed => "completed",
+                PhaseUpdateStatus::Failed => "failed",
+                PhaseUpdateStatus::Skipped => "skipped",
+            };
+            // Bind interpolations to locals so the map literal stays shallow
+            // (avoids the debug-build Rhai expr-depth limit) — same shape as
+            // the Start `process_name` transition.
+            let (msg_let, top_msg, detail_msg) = match message
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                Some(m) => {
+                    let e = interpolate_to_rhai_expr(m);
+                    (
+                        format!("let __mg = {e}; "),
+                        "message: __mg, ".to_string(),
+                        ", message: __mg".to_string(),
+                    )
+                }
+                None => (String::new(), String::new(), String::new()),
+            };
+            let logic = format!(
+                "let __pn = {name_expr}; {msg_let}#{{ out: input, sig: #{{ \
+                 source: \"executor-phase\", {top_msg}detail: #{{ \
+                 phase_name: __pn, status: \"{status_lit}\", \
+                 event_type: \"phase_changed\"{detail_msg} }} }} }}"
+            );
+            let prelude = if logic.contains("__pluck(") {
+                PLUCK_HELPER
+            } else {
+                ""
+            };
+            ctx.transition(
+                format!("t_{id}_pu_shape"),
+                format!("{label} - Phase Update"),
+            )
+            .auto_input("input", &p_input)
+            .auto_output("out", &p_out)
+            .auto_output("sig", &p_sig)
+            .logic_rhai(format!("{prelude}{logic}"))
+            .done();
+
+            ctx.transition(format!("t_{id}_pu_emit"), format!("{label} - Log Phase"))
+                .auto_input("message", &p_sig)
+                .auto_output("logged", &p_done)
+                .builtin_effect(&effects::PROCESS_LOG_MESSAGE);
+
+            ports.insert(
+                id.clone(),
+                NodePorts {
+                    input_place: p_input,
+                    output_places: vec![(None, p_out)],
+                    input_places: HashMap::new(),
+                },
+            );
+        }
+
+        WorkflowNodeData::ProgressUpdate {
+            label,
+            fraction,
+            message,
+            current_step,
+            total_steps,
+            ..
+        } => {
+            // Pass-through: shape forwards the token on `out` and emits a
+            // `process_log_metric` breadcrumb keyed `progress_fraction` on
+            // `sig`. The causality consumer trips `record_progress_event`
+            // (key match), projecting `value` + `detail.{message,current_step,
+            // total_steps}` into `hpi_processes.config.progress`. No-op
+            // outside a named process.
+            let p_input: PlaceHandle<DynamicToken> =
+                ctx.state(format!("p_{id}_input"), format!("{label} - Input"));
+            let p_out: PlaceHandle<DynamicToken> =
+                ctx.state(format!("p_{id}_pu_out"), format!("{label} - Output"));
+            let p_sig: PlaceHandle<DynamicToken> = ctx.state(
+                format!("p_{id}_pu_sig"),
+                format!("{label} - Progress Breadcrumb"),
+            );
+            let p_done: PlaceHandle<DynamicToken> =
+                ctx.state(format!("p_{id}_pu_done"), format!("{label} - Logged"));
+
+            // f64 Debug always round-trips with a decimal point ("1.0", not
+            // "1") so Rhai parses it as a float, matching `value.as_f64()`.
+            let frac = format!("{fraction:?}");
+            let cur = current_step.as_ref().map_or(0, |v| *v);
+            let tot = total_steps.as_ref().map_or(0, |v| *v);
+            let (msg_let, detail_msg) = match message
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                Some(m) => {
+                    let e = interpolate_to_rhai_expr(m);
+                    (format!("let __mg = {e}; "), "message: __mg, ".to_string())
+                }
+                None => (String::new(), String::new()),
+            };
+            let logic = format!(
+                "{msg_let}#{{ out: input, sig: #{{ key: \"progress_fraction\", \
+                 value: {frac}, detail: #{{ {detail_msg}current_step: {cur}, \
+                 total_steps: {tot} }} }} }}"
+            );
+            let prelude = if logic.contains("__pluck(") {
+                PLUCK_HELPER
+            } else {
+                ""
+            };
+            ctx.transition(
+                format!("t_{id}_pu_shape"),
+                format!("{label} - Progress Update"),
+            )
+            .auto_input("input", &p_input)
+            .auto_output("out", &p_out)
+            .auto_output("sig", &p_sig)
+            .logic_rhai(format!("{prelude}{logic}"))
+            .done();
+
+            ctx.transition(
+                format!("t_{id}_pu_emit"),
+                format!("{label} - Log Progress"),
+            )
+            .auto_input("metric", &p_sig)
+            .auto_output("logged", &p_done)
+            .builtin_effect(&effects::PROCESS_LOG_METRIC);
+
+            ports.insert(
+                id.clone(),
+                NodePorts {
+                    input_place: p_input,
+                    output_places: vec![(None, p_out)],
+                    input_places: HashMap::new(),
+                },
+            );
         }
 
         WorkflowNodeData::Trigger { .. } => {

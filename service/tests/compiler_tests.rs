@@ -4,9 +4,9 @@
 
 use mekhan_service::compiler::compile_to_air;
 use mekhan_service::models::template::{
-    BranchCondition, ExecutionBackendType, ExecutionSpecConfig, Port, Position, TaskBlockConfig,
-    TaskFieldConfig, TaskFieldKind, TaskStepConfig, WorkflowEdge, WorkflowGraph, WorkflowNode,
-    WorkflowNodeData,
+    BranchCondition, ExecutionBackendType, ExecutionSpecConfig, PhaseUpdateStatus, Port, Position,
+    TaskBlockConfig, TaskFieldConfig, TaskFieldKind, TaskStepConfig, WorkflowEdge, WorkflowGraph,
+    WorkflowNode, WorkflowNodeData,
 };
 use serde_json::{json, Value};
 
@@ -2688,4 +2688,300 @@ fn start_no_file_fields_leaves_compiled_output_unchanged() {
     assert!(!has_place(&air, "p_s_cat_art_0"), "unexpected artifact place");
     assert_eq!(places(&air).len(), 1, "expected 1 place after merge");
     assert!(transitions(&air).is_empty(), "expected no transitions after merge");
+}
+
+// ---------------------------------------------------------------------------
+// Process control nodes: Phase Update / Progress Update
+// ---------------------------------------------------------------------------
+
+fn phase_update_node(
+    id: &str,
+    phase_name: &str,
+    status: PhaseUpdateStatus,
+    message: Option<&str>,
+) -> WorkflowNode {
+    WorkflowNode {
+        id: id.to_string(),
+        node_type: "phase_update".to_string(),
+        position: pos(),
+        data: WorkflowNodeData::PhaseUpdate {
+            label: "Phase".to_string(),
+            description: None,
+            phase_name: phase_name.to_string(),
+            status,
+            message: message.map(str::to_string),
+        },
+        parent_id: None,
+        width: None,
+        height: None,
+    }
+}
+
+fn progress_update_node(
+    id: &str,
+    fraction: f64,
+    message: Option<&str>,
+    current_step: Option<i64>,
+    total_steps: Option<i64>,
+) -> WorkflowNode {
+    WorkflowNode {
+        id: id.to_string(),
+        node_type: "progress_update".to_string(),
+        position: pos(),
+        data: WorkflowNodeData::ProgressUpdate {
+            label: "Progress".to_string(),
+            description: None,
+            fraction,
+            message: message.map(str::to_string),
+            current_step,
+            total_steps,
+        },
+        parent_id: None,
+        width: None,
+        height: None,
+    }
+}
+
+#[test]
+fn phase_update_emits_log_message_phase_shape() {
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            phase_update_node("pu", "Validate", PhaseUpdateStatus::Running, None),
+            end_node("e"),
+        ],
+        edges: vec![edge("e1", "s", "pu"), edge("e2", "pu", "e")],
+        viewport: None,
+    };
+    let air = compile_to_air(&graph, "pu_test", "", &std::collections::HashMap::new())
+        .expect("should compile");
+
+    assert!(has_transition(&air, "t_pu_pu_shape"), "expected shape transition");
+    assert!(has_transition(&air, "t_pu_pu_emit"), "expected effect transition");
+    assert!(has_place(&air, "p_pu_pu_out"), "expected pass-through output place");
+    assert!(has_place(&air, "p_pu_pu_sig"), "expected breadcrumb place");
+    assert!(has_place(&air, "p_pu_pu_done"), "expected logged sink place");
+
+    let t_emit = get_transition(&air, "t_pu_pu_emit").unwrap();
+    assert_eq!(t_emit["logic"]["handler_id"], "process_log_message");
+
+    let shape = get_transition(&air, "t_pu_pu_shape").unwrap();
+    let src = shape["logic"]["source"].as_str().unwrap();
+    assert!(src.contains("executor-phase"), "phase source marker: {src}");
+    assert!(src.contains("phase_changed"), "event_type marker: {src}");
+    assert!(src.contains("\"running\""), "status literal: {src}");
+    assert!(src.contains("Validate"), "phase name literal: {src}");
+    // workflow token forwarded unchanged on `out`
+    assert!(src.contains("out: input"), "token pass-through: {src}");
+    // static phase name → no null-safe accessor / helper prelude
+    assert!(!src.contains("__pluck("), "no interpolation expected: {src}");
+}
+
+#[test]
+fn progress_update_emits_metric_progress_fraction() {
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            progress_update_node("pg", 0.5, None, Some(2), Some(5)),
+            end_node("e"),
+        ],
+        edges: vec![edge("e1", "s", "pg"), edge("e2", "pg", "e")],
+        viewport: None,
+    };
+    let air = compile_to_air(&graph, "pg_test", "", &std::collections::HashMap::new())
+        .expect("should compile");
+
+    assert!(has_transition(&air, "t_pg_pu_shape"), "expected shape transition");
+    assert!(has_transition(&air, "t_pg_pu_emit"), "expected effect transition");
+
+    let t_emit = get_transition(&air, "t_pg_pu_emit").unwrap();
+    assert_eq!(t_emit["logic"]["handler_id"], "process_log_metric");
+
+    let shape = get_transition(&air, "t_pg_pu_shape").unwrap();
+    let src = shape["logic"]["source"].as_str().unwrap();
+    assert!(src.contains("progress_fraction"), "metric key: {src}");
+    assert!(src.contains("value: 0.5"), "fraction float literal: {src}");
+    assert!(src.contains("current_step: 2"), "current_step: {src}");
+    assert!(src.contains("total_steps: 5"), "total_steps: {src}");
+    assert!(src.contains("out: input"), "token pass-through: {src}");
+}
+
+#[test]
+fn phase_update_interpolates_message_null_safe() {
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            phase_update_node(
+                "pu",
+                "Step {{ stage }}",
+                PhaseUpdateStatus::Completed,
+                Some("processing {{ item }}"),
+            ),
+            end_node("e"),
+        ],
+        edges: vec![edge("e1", "s", "pu"), edge("e2", "pu", "e")],
+        viewport: None,
+    };
+    let air = compile_to_air(&graph, "pu_interp", "", &std::collections::HashMap::new())
+        .expect("should compile");
+
+    let shape = get_transition(&air, "t_pu_pu_shape").unwrap();
+    let src = shape["logic"]["source"].as_str().unwrap();
+    // placeholders compile to the null-safe accessor + helper prelude
+    assert!(src.contains("fn __pluck("), "PLUCK_HELPER prelude expected: {src}");
+    assert!(
+        src.contains("__pluck(input, [\"stage\"])"),
+        "phase name placeholder accessor: {src}"
+    );
+    assert!(
+        src.contains("__pluck(input, [\"item\"])"),
+        "message placeholder accessor: {src}"
+    );
+    assert!(src.contains("\"completed\""), "status literal: {src}");
+}
+
+#[test]
+fn process_control_nodes_pass_token_through_to_end() {
+    // A Start→PhaseUpdate→ProgressUpdate→End chain must remain connected:
+    // each node's `out` place feeds the next, and the net still reaches a
+    // terminal place (the nodes are pass-through, not terminal).
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            phase_update_node("pu", "Ingest", PhaseUpdateStatus::Running, None),
+            progress_update_node("pg", 1.0, None, None, None),
+            end_node("e"),
+        ],
+        edges: vec![
+            edge("e1", "s", "pu"),
+            edge("e2", "pu", "pg"),
+            edge("e3", "pg", "e"),
+        ],
+        viewport: None,
+    };
+    let air = compile_to_air(&graph, "chain", "", &std::collections::HashMap::new())
+        .expect("should compile");
+
+    assert!(has_transition(&air, "t_pu_pu_shape"));
+    assert!(has_transition(&air, "t_pg_pu_shape"));
+    assert!(
+        has_place_of_type(&air, "terminal"),
+        "chain should still reach a terminal place"
+    );
+    // fraction 1.0 must serialize with a decimal point so Rhai treats it as
+    // a float matching `value.as_f64()` on the consumer side.
+    let pg = get_transition(&air, "t_pg_pu_shape").unwrap();
+    let src = pg["logic"]["source"].as_str().unwrap();
+    assert!(src.contains("value: 1.0"), "float-typed fraction: {src}");
+}
+
+#[test]
+fn phase_update_status_failed_and_skipped_literals() {
+    // Risk #3 in the plan: the status field MUST serialize to the exact
+    // PhaseStatus snake_case literal or `record_phase_event` silently
+    // defaults to "running". `running`/`completed` are covered above; this
+    // guards the other half of the enum.
+    for (status, lit) in [
+        (PhaseUpdateStatus::Failed, "failed"),
+        (PhaseUpdateStatus::Skipped, "skipped"),
+    ] {
+        let graph = WorkflowGraph {
+            nodes: vec![
+                start_node("s"),
+                phase_update_node("pu", "Validate", status, None),
+                end_node("e"),
+            ],
+            edges: vec![edge("e1", "s", "pu"), edge("e2", "pu", "e")],
+            viewport: None,
+        };
+        let air = compile_to_air(&graph, "pu_status", "", &std::collections::HashMap::new())
+            .expect("should compile");
+        let shape = get_transition(&air, "t_pu_pu_shape").unwrap();
+        let src = shape["logic"]["source"].as_str().unwrap();
+        assert!(
+            src.contains(&format!("status: \"{lit}\"")),
+            "expected status literal {lit:?}: {src}"
+        );
+        assert!(
+            !src.contains("\"running\""),
+            "status must not fall back to running for {lit:?}: {src}"
+        );
+    }
+}
+
+#[test]
+fn phase_update_omits_message_field_when_unset() {
+    // No message ⇒ neither the top-level `message:` (read by record_log_event)
+    // nor the `detail.message` key is emitted, so the consumer sees no
+    // spurious null/() message.
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            phase_update_node("pu", "Validate", PhaseUpdateStatus::Running, None),
+            end_node("e"),
+        ],
+        edges: vec![edge("e1", "s", "pu"), edge("e2", "pu", "e")],
+        viewport: None,
+    };
+    let air = compile_to_air(&graph, "pu_nomsg", "", &std::collections::HashMap::new())
+        .expect("should compile");
+    let shape = get_transition(&air, "t_pu_pu_shape").unwrap();
+    let src = shape["logic"]["source"].as_str().unwrap();
+    assert!(
+        !src.contains("message:"),
+        "no message key expected when message unset: {src}"
+    );
+}
+
+#[test]
+fn progress_update_interpolates_message_into_detail() {
+    // ProgressUpdate's message goes through a *different* compiler arm than
+    // PhaseUpdate's and lands under `detail` (where record_progress_event
+    // reads it), not at the top level.
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            progress_update_node("pg", 0.25, Some("rows {{ n }}"), None, None),
+            end_node("e"),
+        ],
+        edges: vec![edge("e1", "s", "pg"), edge("e2", "pg", "e")],
+        viewport: None,
+    };
+    let air = compile_to_air(&graph, "pg_interp", "", &std::collections::HashMap::new())
+        .expect("should compile");
+    let shape = get_transition(&air, "t_pg_pu_shape").unwrap();
+    let src = shape["logic"]["source"].as_str().unwrap();
+    assert!(src.contains("fn __pluck("), "PLUCK_HELPER prelude expected: {src}");
+    assert!(
+        src.contains("__pluck(input, [\"n\"])"),
+        "message placeholder accessor: {src}"
+    );
+    assert!(
+        src.contains("detail: #{ message: __mg"),
+        "interpolated message must sit inside `detail`: {src}"
+    );
+}
+
+#[test]
+fn progress_update_defaults_steps_to_zero() {
+    // Absent current/total steps default to literal 0 (record_progress_event
+    // reads detail.current_step/total_steps); no message ⇒ no detail.message
+    // and no helper prelude.
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            progress_update_node("pg", 0.0, None, None, None),
+            end_node("e"),
+        ],
+        edges: vec![edge("e1", "s", "pg"), edge("e2", "pg", "e")],
+        viewport: None,
+    };
+    let air = compile_to_air(&graph, "pg_defaults", "", &std::collections::HashMap::new())
+        .expect("should compile");
+    let shape = get_transition(&air, "t_pg_pu_shape").unwrap();
+    let src = shape["logic"]["source"].as_str().unwrap();
+    assert!(src.contains("current_step: 0"), "default current_step: {src}");
+    assert!(src.contains("total_steps: 0"), "default total_steps: {src}");
+    assert!(!src.contains("message:"), "no message key expected: {src}");
+    assert!(!src.contains("__pluck("), "no interpolation expected: {src}");
 }

@@ -602,6 +602,10 @@ fn node_to_dsl_step(node: &WorkflowNode) -> DslStep {
             step.max_iterations = Some(*max_iterations);
             step.loop_condition = Some(loop_condition.clone());
         }
+        WorkflowNodeData::PhaseUpdate { .. } | WorkflowNodeData::ProgressUpdate { .. } => {
+            // DSL doesn't yet model the process control nodes — they're
+            // GUI-authored for now. Same lossy-drop behaviour as triggers.
+        }
         WorkflowNodeData::Trigger { .. } => {
             // DSL doesn't yet model triggers — they're declared in the GUI for
             // now. Round-trip through JSON would lose the trigger; this exit

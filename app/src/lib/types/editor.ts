@@ -47,6 +47,8 @@ export type ParallelSplitNodeData = Extract<SchemaWorkflowNodeData, { type: 'par
 export type ParallelJoinNodeData = Extract<SchemaWorkflowNodeData, { type: 'parallel_join' }>;
 export type LoopNodeData = Extract<SchemaWorkflowNodeData, { type: 'loop' }>;
 export type ScopeNodeData = Extract<SchemaWorkflowNodeData, { type: 'scope' }>;
+export type PhaseUpdateNodeData = Extract<SchemaWorkflowNodeData, { type: 'phase_update' }>;
+export type ProgressUpdateNodeData = Extract<SchemaWorkflowNodeData, { type: 'progress_update' }>;
 export type TriggerNodeData = Extract<SchemaWorkflowNodeData, { type: 'trigger' }>;
 
 // Convenience aliases for TaskBlockConfig variants used in editor pickers.
@@ -135,6 +137,20 @@ export const NODE_PALETTE: NodePaletteItem[] = [
 		color: '#64748b'
 	},
 	{
+		type: 'phase_update',
+		label: 'Phase Update',
+		description: 'Mark a named phase on the process (within a named process)',
+		icon: 'flag',
+		color: '#0ea5a4'
+	},
+	{
+		type: 'progress_update',
+		label: 'Progress Update',
+		description: 'Set process progress fraction (within a named process)',
+		icon: 'gauge',
+		color: '#c026d3'
+	},
+	{
 		type: 'trigger',
 		label: 'Trigger',
 		description: 'Fires the workflow on cron, catalog, webhook, etc.',
@@ -197,6 +213,19 @@ export function createDefaultNodeData(type: WorkflowNodeType): SchemaWorkflowNod
 			};
 		case 'scope':
 			return { type: 'scope', label: 'Scope' };
+		case 'phase_update':
+			return {
+				type: 'phase_update',
+				label: 'Phase Update',
+				phaseName: 'New phase',
+				status: 'running'
+			};
+		case 'progress_update':
+			return {
+				type: 'progress_update',
+				label: 'Progress Update',
+				fraction: 0
+			};
 		case 'trigger':
 			return {
 				type: 'trigger',
