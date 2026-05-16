@@ -28,6 +28,13 @@ pub struct AppConfig {
     pub frontend_dir: Option<String>,
     #[serde(default)]
     pub auth: AuthConfig,
+    /// Static machine token for non-interactive clients (CI `mekhan apply`).
+    /// When set, a request bearing `Authorization: Bearer <this>` bypasses the
+    /// cookie/OIDC path and is authenticated as the `system:ci` principal.
+    /// Unset (the default) ⇒ the branch is disabled entirely. Sourced from
+    /// `MEKHAN_SERVICE_TOKEN`.
+    #[serde(default)]
+    pub service_token: Option<String>,
 }
 
 /// Identity-provider configuration. The hexagonal seam lets `mode` pick

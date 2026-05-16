@@ -100,10 +100,80 @@ pub async fn require_auth_middleware(
     mut req: axum::http::Request<axum::body::Body>,
     next: axum::middleware::Next,
 ) -> Result<Response, AuthError> {
+    // Static service-token path for non-interactive clients (CI
+    // `mekhan apply`). Orthogonal to the BFF cookie flow and trivially
+    // removable: only active when `MEKHAN_SERVICE_TOKEN` is configured, and
+    // a wrong/absent Bearer simply falls through to the cookie path below
+    // unchanged. Note the principal is stashed as an `Extension` only — a
+    // handler must read `Extension<AuthUser>` (not the `AuthUser`
+    // `FromRequestParts`, which re-runs the cookie authenticator).
+    if let Some(expected) = state.config.service_token.as_deref() {
+        if !expected.is_empty() {
+            if let Some(token) = bearer_token(req.headers()) {
+                if ct_eq(token.as_bytes(), expected.as_bytes()) {
+                    req.extensions_mut().insert(AuthUser::system_ci());
+                    return Ok(next.run(req).await);
+                }
+            }
+        }
+    }
+
     let jar = CookieJar::from_headers(req.headers());
     let user = state.authenticator.authenticate(req.headers(), &jar).await?;
     // Stash the user on the request so downstream handlers can pick it up via
     // an `Extension<AuthUser>` if they don't want to re-extract.
     req.extensions_mut().insert(user);
     Ok(next.run(req).await)
+}
+
+/// Parse `Authorization: Bearer <token>`, returning the token slice.
+fn bearer_token(headers: &axum::http::HeaderMap) -> Option<&str> {
+    headers
+        .get(axum::http::header::AUTHORIZATION)?
+        .to_str()
+        .ok()?
+        .strip_prefix("Bearer ")
+        .map(str::trim)
+}
+
+/// Length-checked constant-time byte comparison. The length is allowed to
+/// leak (token length is not secret); content comparison is constant-time so
+/// a configured service token can't be recovered by timing.
+fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{bearer_token, ct_eq};
+    use axum::http::{header::AUTHORIZATION, HeaderMap, HeaderValue};
+
+    #[test]
+    fn ct_eq_matches_only_identical_bytes() {
+        assert!(ct_eq(b"s3cr3t-token", b"s3cr3t-token"));
+        assert!(!ct_eq(b"s3cr3t-token", b"s3cr3t-tokes"));
+        assert!(!ct_eq(b"short", b"longer-token"));
+        assert!(!ct_eq(b"", b"x"));
+        assert!(ct_eq(b"", b""));
+    }
+
+    #[test]
+    fn bearer_token_parses_and_rejects() {
+        let mut h = HeaderMap::new();
+        h.insert(AUTHORIZATION, HeaderValue::from_static("Bearer abc123"));
+        assert_eq!(bearer_token(&h), Some("abc123"));
+
+        let mut h = HeaderMap::new();
+        h.insert(AUTHORIZATION, HeaderValue::from_static("Basic abc123"));
+        assert_eq!(bearer_token(&h), None);
+
+        assert_eq!(bearer_token(&HeaderMap::new()), None);
+    }
 }

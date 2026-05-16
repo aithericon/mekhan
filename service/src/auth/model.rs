@@ -31,6 +31,20 @@ impl AuthUser {
     pub fn subject_as_uuid(&self) -> Uuid {
         Uuid::new_v5(&SUBJECT_UUID_NAMESPACE, self.subject.as_bytes())
     }
+
+    /// Synthetic principal for the static service-token path (CI
+    /// `mekhan apply`). The fixed `subject` yields a stable
+    /// `subject_as_uuid()` so author/provenance columns get a consistent
+    /// machine identity, distinct from any human OIDC subject.
+    pub fn system_ci() -> Self {
+        Self {
+            subject: "system:ci".to_string(),
+            email: None,
+            display_name: Some("CI (service token)".to_string()),
+            roles: vec!["system".to_string()],
+            org_id: None,
+        }
+    }
 }
 
 /// JWT claims after the verifier has checked signature, issuer, audience,

@@ -124,6 +124,34 @@ build-frontend:
     fi
     echo "✓ Frontend built — $(du -sh build | cut -f1)"
 
+# ── GitOps: publish git-authored workflow templates ─────────────────────────
+
+# Build the mekhan CLI and `apply` every template directory under `dir` (each
+# must contain a committed `.mekhan.json`). Each apply atomically versions +
+# publishes the chain from the git artifact, recording commit provenance.
+# Auth: MEKHAN_CLI_TOKEN (must match the server's MEKHAN_SERVICE_TOKEN). The
+# target server is the `server_url` baked into each `.mekhan.json`.
+apply-workflows dir="workflows":
+    #!/usr/bin/env bash
+    cd ..
+    echo "▶ Building mekhan CLI"
+    SQLX_OFFLINE=true cargo build --release \
+      --manifest-path service/Cargo.toml --bin mekhan
+    bin=target/release/mekhan
+    shopt -s nullglob
+    found=0
+    for d in {{dir}}/*/; do
+      [ -f "${d}.mekhan.json" ] || continue
+      found=1
+      echo "▶ mekhan apply ${d}"
+      "$bin" apply "$d"
+    done
+    if [ "$found" -eq 0 ]; then
+      echo "✗ No template directories with .mekhan.json under {{dir}}/" >&2
+      exit 1
+    fi
+    echo "✓ Applied all workflow templates under {{dir}}/"
+
 # ── Package + push (Docker image) ───────────────────────────────────────────
 
 # Stage prebuilt binary + frontend, build OCI image, tag with SHA + branch

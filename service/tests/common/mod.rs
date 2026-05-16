@@ -76,6 +76,7 @@ pub fn test_config() -> AppConfig {
         artifact_s3: None,
         frontend_dir: None,
         auth: AuthConfig::default(),
+        service_token: None,
     }
 }
 
