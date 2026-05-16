@@ -76,7 +76,13 @@ impl EffectHandler for ProcessLogMetricHandler {
                     .and_then(|d| d.get("name"))
                     .and_then(|v| v.as_str())
             })
-            .unwrap_or("unknown")
+            // No fabricated fallback: the executor's end-of-execution
+            // `metrics_logged` summary rides the same metric signal as real
+            // `metric_point_logged` points but carries no name/value. It is
+            // not a plottable data point — emit an empty key so the mekhan
+            // consumer's empty-key guard drops it instead of recording a
+            // spurious `"unknown"` series.
+            .unwrap_or("")
             .to_string();
 
         let value = token_data
