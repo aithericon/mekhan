@@ -1340,7 +1340,8 @@ impl WorkflowGraph {
 pub mod dsl {
     use super::{
         default_output_port, default_terminal_port, BranchCondition, ExecutionBackendType,
-        ExecutionSpecConfig, Port, TaskBlockConfig, TaskStepConfig, WorkflowNode, WorkflowNodeData,
+        ExecutionSpecConfig, Port, RetryPolicy, TaskBlockConfig, TaskStepConfig, WorkflowNode,
+        WorkflowNodeData,
     };
     use serde::{Deserialize, Serialize};
 
@@ -1358,6 +1359,19 @@ pub mod dsl {
         // start
         #[serde(skip_serializing_if = "Option::is_none")]
         pub initial_data: Option<serde_json::Value>,
+
+        /// Declared Start input-port shape. `None` means the step omitted it
+        /// (legacy DSL files), in which case `from_dsl_step` falls back to the
+        /// empty-input default — preserving prior behaviour. Round-trips the
+        /// typed `initial` port that GUI-authored Starts carry.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub initial: Option<Port>,
+
+        /// Optional Start process-name template (see
+        /// `WorkflowNodeData::Start::process_name`). `None`/absent means no
+        /// named-process registration, matching the historical DSL default.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub process_name: Option<String>,
 
         // human_task
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -1415,6 +1429,11 @@ pub mod dsl {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         pub files: Vec<String>,
         pub config: serde_json::Value,
+        /// Retry behaviour for the automated step. `None`/absent means the
+        /// historical default (`RetryPolicy::default`, 3 immediate retries),
+        /// so legacy DSL files keep their prior semantics.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub retry_policy: Option<RetryPolicy>,
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1472,14 +1491,16 @@ pub mod dsl {
                 "start" => Ok(WorkflowNodeData::Start {
                     label: label.to_string(),
                     description: step.description.clone(),
-                    // DSL still carries `initial_data` for read-compat with old
-                    // files; the typed-ports model expects a `Port` here. CLI
-                    // DSL doesn't yet express ports, so we default to an empty
-                    // input port. Round-trip through DSL is lossy for typed
-                    // Start ports / `process_name` until the DSL format gains a
-                    // schema for them.
-                    initial: Port::empty_input(),
-                    process_name: None,
+                    // `initial_data` is the legacy read-compat blob (ignored
+                    // here). Typed Start ports + process-name now round-trip
+                    // via the dedicated `initial` / `process_name` fields;
+                    // absent (legacy files) falls back to the empty-input
+                    // default so older templates load unchanged.
+                    initial: step
+                        .initial
+                        .clone()
+                        .unwrap_or_else(Port::empty_input),
+                    process_name: step.process_name.clone(),
                 }),
                 "end" => Ok(WorkflowNodeData::End {
                     label: label.to_string(),
@@ -1574,7 +1595,10 @@ pub mod dsl {
                         },
                         input: Port::empty_input(),
                         output: default_output_port(backend_type),
-                        retry_policy: Default::default(),
+                        // Absent (legacy DSL) → historical default of 3
+                        // immediate retries; otherwise round-trip the
+                        // authored policy.
+                        retry_policy: exec.retry_policy.unwrap_or_default(),
                     })
                 }
                 "decision" => {
@@ -1659,6 +1683,8 @@ pub mod dsl {
                 label: Some(self.label().to_string()),
                 description: self.description().map(|s| s.to_string()),
                 initial_data: None,
+                initial: None,
+                process_name: None,
                 task_title: None,
                 instructions: None,
                 steps: None,
@@ -1673,11 +1699,13 @@ pub mod dsl {
             };
 
             match self {
-                WorkflowNodeData::Start { .. } => {
-                    // DSL doesn't yet express typed Start ports / process-name;
-                    // the round-trip drops the declared `initial` port shape
-                    // and `process_name`. CLI DSL is dev tooling — when the
-                    // format gains a schema (Phase 4-ish), populate it here.
+                WorkflowNodeData::Start {
+                    initial,
+                    process_name,
+                    ..
+                } => {
+                    step.initial = Some(initial.clone());
+                    step.process_name = process_name.clone();
                 }
                 WorkflowNodeData::End { .. } => {}
                 WorkflowNodeData::HumanTask {
@@ -1710,7 +1738,11 @@ pub mod dsl {
                         );
                     }
                 }
-                WorkflowNodeData::AutomatedStep { execution_spec, .. } => {
+                WorkflowNodeData::AutomatedStep {
+                    execution_spec,
+                    retry_policy,
+                    ..
+                } => {
                     // Extract entrypoint and files from config into their own
                     // fields
                     let mut config = execution_spec.config.clone();
@@ -1747,6 +1779,7 @@ pub mod dsl {
                         entrypoint,
                         files,
                         config,
+                        retry_policy: Some(*retry_policy),
                     });
                 }
                 WorkflowNodeData::Decision {

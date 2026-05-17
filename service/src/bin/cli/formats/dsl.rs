@@ -676,4 +676,207 @@ flow:
         let graph_hcl = super::super::hcl::parse(&hcl_str).expect("parse hcl back");
         assert_blocks_intact(&graph_hcl, "hcl");
     }
+
+    /// `Start.initial` (typed port), `Start.process_name`, and
+    /// `AutomatedStep.retry_policy` historically dropped silently on a
+    /// graph -> DSL -> graph round-trip. They now have dedicated DSL fields
+    /// and must survive a full round-trip through `to/from_dsl_step`, YAML,
+    /// and HCL. Non-default values on every field so a "default fallback"
+    /// can't pass by accident.
+    #[test]
+    fn start_ports_and_retry_policy_roundtrip_all_formats() {
+        use mekhan_service::models::template::{
+            BackoffKind, ExecutionBackendType, ExecutionSpecConfig, FieldKind, PortField,
+            RetryPolicy,
+        };
+
+        let custom_initial = Port {
+            id: "in".to_string(),
+            label: "Order Input".to_string(),
+            fields: vec![
+                PortField {
+                    name: "order_id".to_string(),
+                    label: "Order ID".to_string(),
+                    kind: FieldKind::Text,
+                    required: true,
+                    options: None,
+                    description: Some("the order".to_string()),
+                    accept: None,
+                },
+                PortField {
+                    name: "amount".to_string(),
+                    label: "Amount".to_string(),
+                    kind: FieldKind::Number,
+                    required: false,
+                    options: None,
+                    description: None,
+                    accept: None,
+                },
+            ],
+        };
+        let custom_retry = RetryPolicy {
+            max_retries: 7,
+            backoff: BackoffKind::Exponential,
+            base_delay_ms: 2500,
+        };
+        // Sanity: every value differs from the historical default so a
+        // silent drop -> default would fail the assertions below.
+        assert_ne!(custom_retry, RetryPolicy::default());
+        assert_ne!(custom_initial.fields.len(), Port::empty_input().fields.len());
+
+        let graph = WorkflowGraph {
+            nodes: vec![
+                WorkflowNode {
+                    id: "start".to_string(),
+                    node_type: "start".to_string(),
+                    position: Position { x: 0.0, y: 0.0 },
+                    data: WorkflowNodeData::Start {
+                        label: "Start".to_string(),
+                        description: None,
+                        initial: custom_initial.clone(),
+                        process_name: Some("Order {{ order_id }}".to_string()),
+                    },
+                    parent_id: None,
+                    width: None,
+                    height: None,
+                },
+                WorkflowNode {
+                    id: "run".to_string(),
+                    node_type: "automated_step".to_string(),
+                    position: Position { x: 0.0, y: 0.0 },
+                    data: WorkflowNodeData::AutomatedStep {
+                        label: "Run".to_string(),
+                        description: None,
+                        execution_spec: ExecutionSpecConfig {
+                            backend_type: ExecutionBackendType::Python,
+                            entrypoint: None,
+                            config: serde_json::json!({ "code": "print(1)" }),
+                        },
+                        input: Port::empty_input(),
+                        output: mekhan_service::models::template::default_output_port(
+                            ExecutionBackendType::Python,
+                        ),
+                        retry_policy: custom_retry,
+                    },
+                    parent_id: None,
+                    width: None,
+                    height: None,
+                },
+                WorkflowNode {
+                    id: "done".to_string(),
+                    node_type: "end".to_string(),
+                    position: Position { x: 0.0, y: 0.0 },
+                    data: WorkflowNodeData::End {
+                        label: "Done".to_string(),
+                        description: None,
+                        terminal: mekhan_service::models::template::default_terminal_port(),
+                    },
+                    parent_id: None,
+                    width: None,
+                    height: None,
+                },
+            ],
+            edges: vec![
+                WorkflowEdge {
+                    id: "e1".to_string(),
+                    source: "start".to_string(),
+                    target: "run".to_string(),
+                    source_handle: None,
+                    target_handle: Some("in".to_string()),
+                    label: None,
+                    edge_type: "sequence".to_string(),
+                },
+                WorkflowEdge {
+                    id: "e2".to_string(),
+                    source: "run".to_string(),
+                    target: "done".to_string(),
+                    source_handle: None,
+                    target_handle: Some("in".to_string()),
+                    label: None,
+                    edge_type: "sequence".to_string(),
+                },
+            ],
+            viewport: None,
+        };
+
+        fn assert_fields_intact(
+            graph: &WorkflowGraph,
+            via: &str,
+            expected_initial: &Port,
+            expected_retry: &RetryPolicy,
+        ) {
+            let start = graph
+                .nodes
+                .iter()
+                .find(|n| n.id == "start")
+                .unwrap_or_else(|| panic!("[{via}] start node missing"));
+            let WorkflowNodeData::Start {
+                initial,
+                process_name,
+                ..
+            } = &start.data
+            else {
+                panic!("[{via}] expected Start, got {:?}", start.data);
+            };
+            assert_eq!(
+                process_name.as_deref(),
+                Some("Order {{ order_id }}"),
+                "[{via}] process_name lost"
+            );
+            assert_eq!(initial.id, expected_initial.id, "[{via}] initial.id");
+            assert_eq!(
+                initial.label, expected_initial.label,
+                "[{via}] initial.label"
+            );
+            assert_eq!(
+                initial.fields.len(),
+                expected_initial.fields.len(),
+                "[{via}] initial.fields count"
+            );
+            for (got, want) in initial.fields.iter().zip(&expected_initial.fields) {
+                assert_eq!(got.name, want.name, "[{via}] field name");
+                assert_eq!(
+                    std::mem::discriminant(&got.kind),
+                    std::mem::discriminant(&want.kind),
+                    "[{via}] field kind for {}",
+                    want.name
+                );
+                assert_eq!(got.required, want.required, "[{via}] field required");
+                assert_eq!(
+                    got.description, want.description,
+                    "[{via}] field description"
+                );
+            }
+
+            let run = graph
+                .nodes
+                .iter()
+                .find(|n| n.id == "run")
+                .unwrap_or_else(|| panic!("[{via}] run node missing"));
+            let WorkflowNodeData::AutomatedStep { retry_policy, .. } = &run.data else {
+                panic!("[{via}] expected AutomatedStep, got {:?}", run.data);
+            };
+            assert_eq!(
+                retry_policy, expected_retry,
+                "[{via}] retry_policy not round-tripped"
+            );
+        }
+
+        // 1. Direct to/from_dsl_step (no serialization).
+        let dsl = DslWorkflow::from_workflow_graph(&graph);
+        let graph_direct = dsl.to_workflow_graph().expect("dsl -> graph");
+        assert_fields_intact(&graph_direct, "to/from_dsl_step", &custom_initial, &custom_retry);
+
+        // 2. YAML round-trip.
+        let yaml = serde_yaml_ng::to_string(&dsl).expect("serialize yaml");
+        let dsl_yaml: DslWorkflow =
+            serde_yaml_ng::from_str(&yaml).expect("parse yaml back");
+        let graph_yaml = dsl_yaml.to_workflow_graph().expect("yaml dsl -> graph");
+        assert_fields_intact(&graph_yaml, "yaml", &custom_initial, &custom_retry);
+
+        // 3. HCL round-trip.
+        let hcl_str = super::super::hcl::emit(&graph).expect("emit hcl");
+        let graph_hcl = super::super::hcl::parse(&hcl_str).expect("parse hcl back");
+        assert_fields_intact(&graph_hcl, "hcl", &custom_initial, &custom_retry);
+    }
 }
