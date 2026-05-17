@@ -18,6 +18,7 @@ use crate::models::template::{
     ListTemplatesQuery, PaginatedResponse, UpdateTemplateRequest, WorkflowGraph, WorkflowNodeData,
     WorkflowTemplate,
 };
+use crate::process::publish::{CompiledArtifacts, PublishService};
 use crate::AppState;
 
 /// POST /api/templates
@@ -470,27 +471,28 @@ pub async fn publish_template(
             }
         };
 
-    // Inject the `_aithericon_io` `.py`/`.pyi` pair into every Python step
-    // (shared with `apply` so git- and UI-authored steps stage identically).
-    synthesize_py_io_files(&graph, &mut ydoc_files);
+    let publisher = PublishService::new(&state);
 
-    // Upload node file contents to S3 so the executor can stage them at runtime.
-    if let Err(e) = upload_node_files(&state, id, existing.version, &ydoc_files).await {
+    // Synthesize Python IO stubs + compile AIR + serialize the graph in one
+    // shared step (identical to `apply`). `ydoc_files` is mutated so the S3
+    // upload below stages exactly what was compiled against.
+    let CompiledArtifacts {
+        air_json,
+        graph_json,
+    } = publisher.compile_artifacts(
+        &graph,
+        &existing.name,
+        &existing.description,
+        id,
+        existing.version,
+        &mut ydoc_files,
+    )?;
+
+    // Upload node file contents to S3 so the executor can stage them at
+    // runtime. Non-fatal for UI publish (legacy behavior).
+    if let Err(e) = publisher.upload_files(id, existing.version, &ydoc_files).await {
         tracing::warn!("S3 file upload failed (non-fatal): {e}");
     }
-
-    // Build the per-node input source map. Files have just been uploaded to S3
-    // under `templates/{tid}/v{ver}/{node_id}/{filename}`, so each one is a
-    // StoragePath input — the executor's worker downloads it via the global
-    // ArtifactStore at staging time.
-    let files = storage_path_files(id, existing.version, &ydoc_files);
-
-    // Compile to AIR
-    let air_json = compile_to_air(&graph, &existing.name, &existing.description, &files)
-        .map_err(|e| {
-            let view = e.to_view();
-            ApiError::compile(format!("compilation failed: {e}"), vec![view])
-        })?;
 
     // Persist the Y.Doc-reconstructed graph we just compiled into the `graph`
     // column. Publish previously wrote only `air_json`, leaving `graph` stale:
@@ -499,9 +501,7 @@ pub async fn publish_template(
     // read a trigger's `payload_mapping`) and the create-instance dialog —
     // would otherwise operate on a pre-Y.Doc graph that lacks newly-authored
     // nodes (a published trigger fired with "trigger node missing in graph").
-    let graph_json = serde_json::to_value(&graph)
-        .map_err(|e| ApiError::internal(format!("serialize graph: {e}")))?;
-
+    //
     // UI publish: no git provenance (column stays NULL).
     let template =
         finalize_publish_row(&state.db, id, &air_json, &graph_json, None).await?;
@@ -511,7 +511,7 @@ pub async fn publish_template(
     // at service startup, so without this a freshly-published trigger 404s
     // ("not found in any published template") until the next restart.
     // `template.graph` is now the freshly-persisted compiled graph.
-    let registered = state.triggers.register_template(&template).await;
+    let registered = publisher.register_triggers(&template).await;
     if registered > 0 {
         tracing::info!(template_id = %id, registered, "registered triggers on publish");
     }
@@ -564,45 +564,10 @@ async fn reconstruct_graph_from_ydoc(
     Ok(Some(result))
 }
 
-/// Upload file contents from nodes to S3 for archival.
-///
-/// Upload each Y.Text file under the deterministic key
-/// `templates/{template_id}/v{version}/{node_id}/{filename}`. The compiler
-/// emits `InputSource::StoragePath` references that resolve back to these keys
-/// at execution time via the executor worker's global ArtifactStore.
-async fn upload_node_files(
-    state: &AppState,
-    template_id: Uuid,
-    version: i32,
-    ydoc_files: &HashMap<String, HashMap<String, String>>,
-) -> Result<(), String> {
-    for (node_id, node_files) in ydoc_files {
-        for (filename, content) in node_files {
-            match state
-                .s3
-                .upload_file(template_id, version, node_id, filename, content.as_bytes())
-                .await
-            {
-                Ok(key) => {
-                    tracing::info!(
-                        node_id = %node_id,
-                        filename,
-                        key = %key,
-                        "uploaded node file to S3"
-                    );
-                }
-                Err(e) => {
-                    return Err(format!("upload {}/{}: {}", node_id, filename, e));
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
 /// Build the per-node `name -> InputSource::StoragePath` map that the compiler
-/// uses to emit executor inputs. Mirrors the layout written by
-/// [`upload_node_files`].
+/// uses to emit executor inputs. Mirrors the S3 layout written by
+/// [`crate::process::publish::PublishService::upload_files`]. Used by the
+/// stateful preview compile (`compile_preview`).
 fn storage_path_files(
     template_id: Uuid,
     version: i32,
@@ -653,31 +618,6 @@ fn inline_files(
             (node_id.clone(), sources)
         })
         .collect()
-}
-
-/// Inject the `_aithericon_io` `.py`/`.pyi` pair into every Python automated
-/// step from its computed input scope, mutating `ydoc_files` in place. Shared
-/// verbatim by publish and apply so git-authored and UI-authored Python steps
-/// stage identically. Silently skipped if the graph can't be scoped — the
-/// caller still proceeds and surfaces the real compile error.
-fn synthesize_py_io_files(
-    graph: &WorkflowGraph,
-    ydoc_files: &mut HashMap<String, HashMap<String, String>>,
-) {
-    if let Ok(scopes) = node_input_scopes(graph) {
-        for node in &graph.nodes {
-            if let WorkflowNodeData::AutomatedStep { execution_spec, .. } = &node.data {
-                if execution_spec.backend_type == ExecutionBackendType::Python {
-                    if let Some(scope) = scopes.get(&node.id) {
-                        let entry = ydoc_files.entry(node.id.clone()).or_default();
-                        for (filename, source) in generate_py_io_files(scope) {
-                            entry.insert(filename.to_string(), source);
-                        }
-                    }
-                }
-            }
-        }
-    }
 }
 
 /// Mark a template row as no longer the latest in its version chain. Generic
@@ -996,19 +936,23 @@ pub async fn apply_template(
     };
 
     // 2. Compile AIR FIRST — before any write. Pure; a failure leaves zero
-    //    side effects (no draft, no S3, no Y.Doc).
+    //    side effects (no draft, no S3, no Y.Doc). Same shared step as
+    //    `publish_template`.
     let graph = req.graph;
     let mut files_map = req.files;
-    synthesize_py_io_files(&graph, &mut files_map);
+    let publisher = PublishService::new(&state);
 
-    let air_files = storage_path_files(target_id, target_version, &files_map);
-    let air_json = compile_to_air(&graph, &latest.name, &latest.description, &air_files)
-        .map_err(|e| {
-            let view = e.to_view();
-            ApiError::compile(format!("compilation failed: {e}"), vec![view])
-        })?;
-    let graph_json = serde_json::to_value(&graph)
-        .map_err(|e| ApiError::internal(format!("serialize graph: {e}")))?;
+    let CompiledArtifacts {
+        air_json,
+        graph_json,
+    } = publisher.compile_artifacts(
+        &graph,
+        &latest.name,
+        &latest.description,
+        target_id,
+        target_version,
+        &mut files_map,
+    )?;
     let source_ref_json = req
         .source_ref
         .as_ref()
@@ -1018,8 +962,12 @@ pub async fn apply_template(
 
     // 3. Upload node files to S3 under the *target* version key, before the
     //    DB row. A failure here leaves only inert orphan objects (nothing
-    //    points at them) — no dangling row.
-    if let Err(e) = upload_node_files(&state, target_id, target_version, &files_map).await {
+    //    points at them) — no dangling row. Fatal for apply (unlike publish's
+    //    logged-warning legacy behavior).
+    if let Err(e) = publisher
+        .upload_files(target_id, target_version, &files_map)
+        .await
+    {
         return Err(ApiError::internal(format!("S3 file upload failed: {e}")));
     }
 
@@ -1095,7 +1043,7 @@ pub async fn apply_template(
     if mode == ApplyMode::Bump {
         state.triggers.forget_template(latest.id);
     }
-    let registered = state.triggers.register_template(&applied).await;
+    let registered = publisher.register_triggers(&applied).await;
     if registered > 0 {
         tracing::info!(template_id = %applied.id, registered, "registered triggers on apply");
     }
