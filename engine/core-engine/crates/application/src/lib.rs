@@ -9,6 +9,7 @@ pub(crate) mod evaluation;
 pub mod executor;
 pub mod executor_handlers;
 pub(crate) mod firing;
+pub mod http_executor_client;
 #[cfg(feature = "human")]
 pub mod human_handlers;
 pub(crate) mod idempotency_index;

@@ -3,6 +3,7 @@ pub mod backend;
 pub mod config;
 pub mod hardware_probe;
 pub mod heartbeat;
+pub mod inference_handler;
 #[cfg(feature = "kreuzberg")]
 pub mod ocr_handler;
 pub mod ollama_subprocess;
