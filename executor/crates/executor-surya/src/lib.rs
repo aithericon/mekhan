@@ -62,5 +62,7 @@ pub mod surya_subprocess;
 
 pub use backend::{SuryaBackend, SURYA_BASE_URL_ENV};
 pub use config::{ExtractionMode, ResolvedSuryaConfig, SuryaConfig};
+pub use plugin::{register as register_kreuzberg_plugin, unregister as unregister_kreuzberg_plugin,
+                 SuryaOcrPlugin, BACKEND_NAME as KREUZBERG_BACKEND_NAME};
 pub use port::{OcrError, OcrRequest, OcrResponse};
 pub use surya_subprocess::{SuryaSubprocess, SuryaSubprocessConfig};
