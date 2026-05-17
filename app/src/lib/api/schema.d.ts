@@ -4,6 +4,41 @@
  */
 
 export interface paths {
+    "/api/auth/tokens": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** GET /api/auth/tokens — the caller's automation tokens. */
+        get: operations["list_tokens"];
+        put?: never;
+        /** POST /api/auth/tokens — mint a token. The `secret` is returned once. */
+        post: operations["create_token"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/tokens/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** DELETE /api/auth/tokens/{id} — revoke a token (ownership-guarded). */
+        delete: operations["revoke_token"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/catalogue": {
         parameters: {
             query?: never;
@@ -1329,6 +1364,31 @@ export interface components {
             graph?: null | components["schemas"]["WorkflowGraph"];
             name: string;
         };
+        /** @description Request body for `POST /api/auth/tokens`. */
+        CreateTokenRequest: {
+            /** @description Optional longer note — stored as the machine-user `description`. */
+            description?: string | null;
+            /** @description Optional RFC 3339 expiry for the underlying PAT. Omit for no expiry. */
+            expires_at?: string | null;
+            /**
+             * @description Human-friendly label — stored as the backing Zitadel machine-user
+             *     `name`, shown in the token list.
+             */
+            name: string;
+        };
+        /**
+         * @description Response of `POST /api/auth/tokens`. Identical to [`TokenSummary`] plus the
+         *     one-time `secret` — Mekhan never stores or re-serves it.
+         */
+        CreatedToken: {
+            created_at?: string | null;
+            description?: string | null;
+            expires_at?: string | null;
+            id: string;
+            name: string;
+            /** @description The Personal Access Token. Present only here, only once. */
+            secret: string;
+        };
         /** @enum {string} */
         CronCatchup: "fire_missed" | "skip_missed";
         CronPreviewRequest: {
@@ -2247,6 +2307,20 @@ export interface components {
             role: string;
             token_id: string;
         };
+        /** @description One token row in `GET /api/auth/tokens`. Never carries the secret. */
+        TokenSummary: {
+            /** @description RFC 3339 creation timestamp, when Zitadel reports it. */
+            created_at?: string | null;
+            description?: string | null;
+            /** @description RFC 3339 PAT expiry — best-effort (omitted if Zitadel doesn't report it). */
+            expires_at?: string | null;
+            /**
+             * @description Opaque token id (the backing Zitadel machine-user id). Pass back to
+             *     `DELETE /api/auth/tokens/{id}` to revoke.
+             */
+            id: string;
+            name: string;
+        };
         TriggerHistoryResponse: {
             history: components["schemas"]["FireResult"][];
         };
@@ -2621,6 +2695,143 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    list_tokens: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The caller's tokens */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TokenSummary"][];
+                };
+            };
+            /** @description No session */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Token management disabled */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    create_token: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateTokenRequest"];
+            };
+        };
+        responses: {
+            /** @description Token created (secret shown once) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedToken"];
+                };
+            };
+            /** @description No session */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Identity provider error */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Token management disabled */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    revoke_token: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Token id from the list */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Revoked */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No session */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unknown token, or not the caller's */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Token management disabled */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     list_entries: {
         parameters: {
             query?: never;

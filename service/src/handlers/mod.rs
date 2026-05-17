@@ -1,3 +1,4 @@
+pub mod auth_tokens;
 pub mod files;
 pub mod health;
 pub mod instances;

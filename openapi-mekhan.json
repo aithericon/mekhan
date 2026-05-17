@@ -9,6 +9,164 @@
     "version": "0.1.0"
   },
   "paths": {
+    "/api/auth/tokens": {
+      "get": {
+        "tags": [
+          "auth-tokens"
+        ],
+        "summary": "GET /api/auth/tokens — the caller's automation tokens.",
+        "operationId": "list_tokens",
+        "responses": {
+          "200": {
+            "description": "The caller's tokens",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TokenSummary"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Token management disabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "auth-tokens"
+        ],
+        "summary": "POST /api/auth/tokens — mint a token. The `secret` is returned once.",
+        "operationId": "create_token",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTokenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Token created (secret shown once)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedToken"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Identity provider error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Token management disabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/tokens/{id}": {
+      "delete": {
+        "tags": [
+          "auth-tokens"
+        ],
+        "summary": "DELETE /api/auth/tokens/{id} — revoke a token (ownership-guarded).",
+        "operationId": "revoke_token",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Token id from the list",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Revoked"
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown token, or not the caller's",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Token management disabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/catalogue": {
       "get": {
         "tags": [
@@ -3857,6 +4015,72 @@
           }
         }
       },
+      "CreateTokenRequest": {
+        "type": "object",
+        "description": "Request body for `POST /api/auth/tokens`.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional longer note — stored as the machine-user `description`."
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional RFC 3339 expiry for the underlying PAT. Omit for no expiry."
+          },
+          "name": {
+            "type": "string",
+            "description": "Human-friendly label — stored as the backing Zitadel machine-user\n`name`, shown in the token list."
+          }
+        }
+      },
+      "CreatedToken": {
+        "type": "object",
+        "description": "Response of `POST /api/auth/tokens`. Identical to [`TokenSummary`] plus the\none-time `secret` — Mekhan never stores or re-serves it.",
+        "required": [
+          "id",
+          "name",
+          "secret"
+        ],
+        "properties": {
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "secret": {
+            "type": "string",
+            "description": "The Personal Access Token. Present only here, only once."
+          }
+        }
+      },
       "CronCatchup": {
         "type": "string",
         "enum": [
@@ -6500,6 +6724,43 @@
           }
         }
       },
+      "TokenSummary": {
+        "type": "object",
+        "description": "One token row in `GET /api/auth/tokens`. Never carries the secret.",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "RFC 3339 creation timestamp, when Zitadel reports it."
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "RFC 3339 PAT expiry — best-effort (omitted if Zitadel doesn't report it)."
+          },
+          "id": {
+            "type": "string",
+            "description": "Opaque token id (the backing Zitadel machine-user id). Pass back to\n`DELETE /api/auth/tokens/{id}` to revoke."
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
       "TriggerHistoryResponse": {
         "type": "object",
         "required": [
@@ -7659,6 +7920,10 @@
     {
       "name": "triggers",
       "description": "Workflow triggers — cron/catalog/lifecycle/webhook/manual entry points."
+    },
+    {
+      "name": "auth-tokens",
+      "description": "Embedded per-user automation tokens (Zitadel-backed PATs)."
     },
     {
       "name": "health",

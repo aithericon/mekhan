@@ -9,7 +9,7 @@ use mekhan_service::auth::bff::session::{PgSessionStore, SessionStore};
 use mekhan_service::auth::dev::NoopTokenVerifier;
 use mekhan_service::auth::resolver::StaticPrincipalResolver;
 use mekhan_service::auth::zitadel::{ZitadelConfig, ZitadelTokenVerifier};
-use mekhan_service::auth::{IntrospectionVerifier, PrincipalResolver, TokenVerifier};
+use mekhan_service::auth::{IntrospectionVerifier, PrincipalResolver, TokenVerifier, ZitadelMgmt};
 use mekhan_service::config::{AppConfig, AuthMode};
 use mekhan_service::db;
 use mekhan_service::lifecycle;
@@ -152,6 +152,7 @@ async fn main() -> anyhow::Result<()> {
     let (authenticator, oidc) =
         build_authenticator(&config, session_store.clone()).await?;
     let introspection = build_introspection(&config).await?;
+    let zitadel_mgmt = build_zitadel_mgmt(&config)?;
 
     // Background sweep of expired sessions + stale login flows.
     {
@@ -188,6 +189,7 @@ async fn main() -> anyhow::Result<()> {
         token_verifier,
         principal_resolver,
         introspection,
+        zitadel_mgmt,
         triggers: trigger_dispatcher,
         result_waiters,
     };
@@ -313,6 +315,31 @@ async fn build_introspection(
         .await
         .map_err(|e| anyhow::anyhow!("introspection init: {e}"))?;
     Ok(Some(Arc::new(verifier)))
+}
+
+/// Build the optional Zitadel Management broker for the embedded
+/// `/api/auth/tokens` feature. Active only in `bff` mode when `auth.broker_pat`
+/// is configured (provisioned by `deploy/zitadel/bootstrap.sh`); otherwise
+/// `None` and the token endpoints 503 / the UI hides the section. Mirrors
+/// [`build_introspection`]; synchronous — the client validates its PAT lazily.
+fn build_zitadel_mgmt(config: &AppConfig) -> anyhow::Result<Option<Arc<ZitadelMgmt>>> {
+    if config.auth.mode != AuthMode::Bff {
+        return Ok(None);
+    }
+    let (Some(issuer), Some(broker_pat)) = (
+        config.auth.issuer_url.as_deref(),
+        config.auth.broker_pat.clone(),
+    ) else {
+        tracing::info!(
+            "auth: token broker disabled (no auth.broker_pat) \
+             — embedded /api/auth/tokens unavailable"
+        );
+        return Ok(None);
+    };
+    let mgmt = ZitadelMgmt::new(issuer, broker_pat)
+        .map_err(|e| anyhow::anyhow!("zitadel mgmt init: {e}"))?;
+    tracing::info!("auth: Zitadel token broker ready (embedded PAT management)");
+    Ok(Some(Arc::new(mgmt)))
 }
 
 /// Refuse to boot a dev-mode credential bypass in production.

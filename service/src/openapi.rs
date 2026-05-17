@@ -36,6 +36,7 @@ use utoipa::OpenApi;
         (name = "provenance", description = "Token ancestry walks and cross-net signal links."),
         (name = "files", description = "Per-template file upload/download (50 MB limit, S3-backed)."),
         (name = "triggers", description = "Workflow triggers — cron/catalog/lifecycle/webhook/manual entry points."),
+        (name = "auth-tokens", description = "Embedded per-user automation tokens (Zitadel-backed PATs)."),
         (name = "health", description = "Liveness probe."),
     ),
 )]
