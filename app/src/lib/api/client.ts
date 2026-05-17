@@ -111,6 +111,11 @@ export type TokenInfo = components['schemas']['TokenInfo'];
 export type BridgeTarget = components['schemas']['BridgeTarget'];
 export type SignalDispatch = components['schemas']['SignalDispatch'];
 
+// ─── Access tokens (embedded PAT management) ────────────────────────────────
+export type TokenSummary = components['schemas']['TokenSummary'];
+export type CreatedToken = components['schemas']['CreatedToken'];
+export type CreateTokenRequest = components['schemas']['CreateTokenRequest'];
+
 // ─── Live events / SSE payloads ─────────────────────────────────────────────
 export type MetricsSeriesResponse = components['schemas']['MetricsSeriesResponse'];
 export type MetricPoint = components['schemas']['MetricPoint'];
@@ -774,6 +779,29 @@ export async function getCrossLink(signalKey: string): Promise<CrossLink> {
 			params: { path: { signal_key: signalKey } }
 		})
 	);
+}
+
+// ── Access tokens (embedded PAT management) ────────────────────────────────
+//
+// Cookie-only by construction on the backend. `listAccessTokens` returns
+// `null` (not throws) when the server reports the feature disabled (503, no
+// broker configured) so the UI can simply hide the section.
+
+export async function listAccessTokens(): Promise<TokenSummary[] | null> {
+	const res = await client.GET('/api/auth/tokens', {});
+	if (res.response.status === 503) return null;
+	return unwrap(res);
+}
+
+export async function createAccessToken(body: CreateTokenRequest): Promise<CreatedToken> {
+	return unwrap(await client.POST('/api/auth/tokens', { body }));
+}
+
+export async function revokeAccessToken(id: string): Promise<void> {
+	const res = await client.DELETE('/api/auth/tokens/{id}', { params: { path: { id } } });
+	if (res.error !== undefined && res.response.status >= 400) {
+		throw new Error(`API error ${res.response.status}: ${JSON.stringify(res.error)}`);
+	}
 }
 
 // ── Untyped raw-JSON helper ────────────────────────────────────────────────

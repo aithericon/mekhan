@@ -10,6 +10,7 @@
 		CardContent
 	} from '$lib/components/ui/card';
 	import { Separator } from '$lib/components/ui/separator';
+	import AccessTokens from '$lib/components/profile/AccessTokens.svelte';
 	import User from '@lucide/svelte/icons/user';
 	import LogOut from '@lucide/svelte/icons/log-out';
 	import LogIn from '@lucide/svelte/icons/log-in';
@@ -143,6 +144,8 @@
 					{signingOut ? 'Signing out…' : 'Sign out'}
 				</Button>
 			</div>
+
+			<AccessTokens />
 		{:else}
 			<Card>
 				<CardContent class="flex flex-col items-center gap-4 py-12 text-center">
