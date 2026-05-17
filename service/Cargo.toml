@@ -36,7 +36,7 @@ serde_qs = "0.13"
 urlencoding = "2"
 
 # HTTP client (for petri-lab engine)
-reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls", "stream"] }
 
 # NATS (lifecycle events, cleanup)
 async-nats = "0.39"

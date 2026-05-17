@@ -1,3 +1,4 @@
+pub mod cloud_layer_proxy;
 pub mod files;
 pub mod health;
 pub mod instances;

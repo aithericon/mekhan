@@ -199,6 +199,28 @@ pub fn build_router(state: AppState) -> Router {
         )
         .with_state(state.clone());
 
+    // Cloud-layer visualization proxy: mounted INSIDE the auth middleware
+    // (joined via merge after the protected router is built). Routes are not
+    // OpenAPI-modelled — they're BFF pass-throughs, not first-party resources.
+    let cloud_layer_router: Router = Router::new()
+        .route(
+            "/api/cloud-layer/runs/{run_id}/topology",
+            get(handlers::cloud_layer_proxy::get_topology),
+        )
+        .route(
+            "/api/cloud-layer/runs/{run_id}/stream",
+            get(handlers::cloud_layer_proxy::get_stream),
+        )
+        .route(
+            "/api/cloud-layer/runs/{run_id}/tokens/{token_id}/payload",
+            get(handlers::cloud_layer_proxy::get_token_payload),
+        )
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth::extractor::require_auth_middleware,
+        ))
+        .with_state(state.clone());
+
     // BFF auth endpoints — UNAUTHENTICATED (they establish the very session
     // the protected router requires). Same `/api/auth/*` prefix so the Vite
     // dev proxy and prod same-origin SPA serving work with no new rules.
@@ -237,7 +259,8 @@ pub fn build_router(state: AppState) -> Router {
     let protected = protected
         .merge(ws_router)
         .merge(webhook_router)
-        .merge(auth_router);
+        .merge(auth_router)
+        .merge(cloud_layer_router);
 
     let swagger = SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", api_spec);
 
