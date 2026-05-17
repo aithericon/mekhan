@@ -8,9 +8,12 @@ use tokio::net::TcpListener;
 
 pub mod mock_auth;
 pub mod test_infra;
+pub mod zitadel_live;
+pub mod zitadel_mock;
 pub use test_infra::{nats_url, postgres_url, wait_for_nats, wait_for_postgres, TestDb, TestNats};
 
 use mekhan_service::auth::authenticator::{Authenticator, NoopAuthenticator};
+use mekhan_service::auth::IntrospectionVerifier;
 use mekhan_service::auth::bff::session::{PgSessionStore, SessionStore};
 use mekhan_service::auth::dev::NoopTokenVerifier;
 use mekhan_service::auth::resolver::StaticPrincipalResolver;
@@ -125,6 +128,49 @@ pub async fn test_app_with_authenticator(
         token_verifier: Arc::new(NoopTokenVerifier::default()),
         principal_resolver: Arc::new(StaticPrincipalResolver),
         introspection: None,
+        triggers,
+    };
+
+    let router = build_router(state);
+    (router, db)
+}
+
+/// Build the full Axum Router with a caller-supplied [`IntrospectionVerifier`]
+/// wired into `AppState.introspection` (the machine-PAT Bearer path). The
+/// cookie `Authenticator` is a mock that requires a cookie, so a request with
+/// no valid Bearer falls through and 401s — letting tests prove both the
+/// introspection success path and the fall-through.
+pub async fn test_app_with_introspection(
+    introspection: Arc<IntrospectionVerifier>,
+) -> (Router, PgPool) {
+    let db = create_test_db().await;
+    let config = test_config();
+    let petri = PetriClient::new(&config.petri_lab_url);
+    let nats = MekhanNats::connect(&config.nats_url, None)
+        .await
+        .expect("failed to connect to NATS — run test infra");
+    let yjs_persistence = YjsPersistence::new(db.clone());
+    let yjs_manager = Arc::new(YjsManager::new(yjs_persistence));
+    let artifact_store = Arc::new(ArtifactStore::new(&config.s3));
+    let session_store: Arc<dyn SessionStore> = Arc::new(PgSessionStore::new(db.clone()));
+
+    let triggers = test_triggers(db.clone(), petri.clone(), nats.clone());
+    let state = AppState {
+        db: db.clone(),
+        petri,
+        nats,
+        config: config.clone(),
+        yjs: yjs_manager,
+        s3: artifact_store,
+        artifact_s3: None,
+        catalogue_repo: Arc::new(PgCatalogueRepository::new(db.clone())),
+        live: LiveBroadcasts::new(),
+        authenticator: Arc::new(mock_auth::MockAuthenticator::cookie_required("cookie-user")),
+        session_store,
+        oidc: None,
+        token_verifier: Arc::new(NoopTokenVerifier::default()),
+        principal_resolver: Arc::new(StaticPrincipalResolver),
+        introspection: Some(introspection),
         triggers,
     };
 
