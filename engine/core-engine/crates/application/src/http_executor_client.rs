@@ -1,29 +1,490 @@
-//! HTTP-based `ExecutorClient` implementation.
+//! HTTP-sync `EffectHandler` implementation for cap-routed inference dispatch.
 //!
-//! Sub-phase 2.3b scaffold — implementation lands in the corresponding
-//! Wave 1 dispatch slice. This stub exists so dependent crates can name
-//! the module before the body is wired.
+//! Sub-phase 2.3b — implements `HttpInferenceHandler`, the cloud-layer path
+//! that replaces NATS-async dispatch when cap-routing's `HttpPreDispatchHook`
+//! has enriched `EffectInput.config` with `base_url` + `lease_token`.
 //!
-//! ## Wave-2.3b framing
+//! ## Why `EffectHandler`, not `ExecutorClient`
 //!
-//! Mekhan's existing `ExecutorClient` impl is `petri_executor::
-//! ExecutorNatsClient` (registered at `net_registry.rs:579-596` under
-//! `#[cfg(feature = "executor")]`). The NATS dispatch is correct for
-//! batch/SLURM workloads but does NOT honor cap-routing's HTTP-shaped
-//! enrichment (`pool_url`, `lease_token`, `pool_id`) that arrives via
-//! the `HttpPreDispatchHook` chain.
+//! `ExecutorClient` is the submit-then-poll-for-signals contract (async
+//! NATS-style). HTTP-sync is request/response: we POST, await the response,
+//! and return. The cleanest fit is an `EffectHandler` that sits parallel to
+//! `ExecutorSubmitHandler` — same trait, different dispatch path.
 //!
-//! `HttpExecutorClient` is the parallel impl that:
-//! 1. Reads `pool_url` + `lease_token` from `EffectInput.config` (the
-//!    pre-dispatch hook's enriched output).
-//! 2. Dispatches the inference job synchronously via HTTP to
-//!    `{pool_url}/v1/inference` (the matching endpoint authored by Item 1
-//!    in `executor-llm/src/inference_handler.rs`).
-//! 3. Releases the lease back to cap-routing on both success AND error
-//!    paths (no in-flight counter leak).
+//! ## Enrichment field shape
 //!
-//! Registration switches to this client when cloud-layer mode is detected
-//! (env-based; see Item 3 wiring in `net_registry.rs`). The NATS client
-//! remains the default for non-cloud-layer dispatches.
+//! Cloud-layer-workflow's `CapabilityRoutingHook::merge_enrichment` overlays
+//! these fields into the effect_config before the handler fires:
+//! - `base_url: String` — executor pool HTTP base URL (e.g. `http://host:3301`)
+//! - `lease_token: String` — bearer token for the pool request
+//! - `pool_id: String` — cap-routing pool identifier
+//! - `hardware_kind: Option<String>` — present when cap-routing knows it
+//!
+//! The original scenario fields (`required_model`, `system_prompt`, etc.) are
+//! preserved via LWW merge and are also readable from `EffectInput.config`.
+//!
+//! ## Lease-release semantics (deferred)
+//!
+//! Handler-side lease release is NOT implemented in this slice. Cloud-layer-
+//! workflow's `CapabilityRoutingHook::merge_enrichment` does not enrich a
+//! cap-routing release URL into `EffectInput.config`; the dispatcher in
+//! cloud-layer-workflow holds cap-routing's base URL out-of-band and releases
+//! via that path. Cap-routing's TTL eviction (15s, per A3 § 7 workaround 1)
+//! is the backstop for this slice. A follow-up slice will either (a) enrich
+//! `cap_routing_release_url` so the handler can release explicitly, or (b)
+//! wire cloud-layer-workflow's existing dispatcher to release based on engine
+//! event-stream observations. Tracked under workstream #61.
+//!
+//! ## Registration
+//!
+//! Item 3 (downstream serial) wires `HttpInferenceHandler` into
+//! `net_registry.rs` under the `executor_submit` handler_id when
+//! `CLOUD_LAYER_BASE_URL` is set. This file owns only the handler body.
 
-// Implementation lands in Item 2 of sub-phase 2.3b.
+use std::collections::HashMap;
+use std::time::Duration;
+
+use serde_json::Value as JsonValue;
+
+use crate::effect::{EffectError, EffectHandler, EffectInput, EffectOutput, EffectPortSchemas};
+
+/// HTTP-sync inference dispatch handler.
+///
+/// Reads cap-routing pre-dispatch enrichment (`base_url`, `lease_token`)
+/// from `EffectInput.config`, builds an inference request from the input
+/// token, and POSTs to `{base_url}/v1/inference` — the endpoint implemented
+/// in Item 1 (`executor-llm/src/inference_handler.rs`).
+pub struct HttpInferenceHandler {
+    http: reqwest::Client,
+    input_port: String,
+    output_port: String,
+}
+
+impl HttpInferenceHandler {
+    pub fn new(input_port: impl Into<String>, output_port: impl Into<String>) -> Self {
+        let http = reqwest::Client::builder()
+            // Vision-model inference on qwen3.6:35b-a3b on M5 Metal can take
+            // 5-30 s per image; 300 s is generous to prevent spurious timeouts
+            // on cold starts or queued requests.
+            .timeout(Duration::from_secs(300))
+            .build()
+            .expect("reqwest::Client::builder must not fail with default config");
+        Self {
+            http,
+            input_port: input_port.into(),
+            output_port: output_port.into(),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl EffectHandler for HttpInferenceHandler {
+    async fn execute(&self, input: EffectInput) -> Result<EffectOutput, EffectError> {
+        // 1. Read the input token from the configured port.
+        let job_data = input.inputs.get(&self.input_port).ok_or_else(|| {
+            EffectError::Fatal(format!(
+                "HttpInferenceHandler: missing input port '{}'",
+                self.input_port
+            ))
+        })?;
+
+        // 2. Read enrichment from effect_config. The pre-dispatch hook
+        //    overlays base_url + lease_token via LWW while preserving the
+        //    original scenario fields (required_model, system_prompt, …).
+        let config = input.config.as_ref().ok_or_else(|| {
+            EffectError::Fatal(
+                "HttpInferenceHandler requires pre-dispatch enrichment in effect_config \
+                 (missing entirely)"
+                    .into(),
+            )
+        })?;
+
+        let base_url = config
+            .get("base_url")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                EffectError::Fatal(
+                    "HttpInferenceHandler requires base_url in enriched effect_config".into(),
+                )
+            })?
+            .trim_end_matches('/');
+
+        let lease_token = config
+            .get("lease_token")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                EffectError::Fatal(
+                    "HttpInferenceHandler requires lease_token in enriched effect_config".into(),
+                )
+            })?;
+
+        // Per feedback_no_default_model: fail closed if required_model absent.
+        let required_model = config
+            .get("required_model")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                EffectError::Fatal(
+                    "HttpInferenceHandler requires required_model in effect_config".into(),
+                )
+            })?;
+
+        let system_prompt = config.get("system_prompt").and_then(|v| v.as_str());
+
+        // 3. Build the inference request.
+        //    Token fields from p_input: file_b64, mime_type, document_id.
+        //    Maps to Item 1's POST /v1/inference shape:
+        //    { model, system_prompt?, prompt, images:[{base64, mime_type}] }
+        let images: JsonValue = {
+            let file_b64 = job_data.get("file_b64").and_then(|v| v.as_str());
+            let mime_type = job_data
+                .get("mime_type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("image/png");
+            if let Some(b64) = file_b64 {
+                serde_json::json!([{ "base64": b64, "mime_type": mime_type }])
+            } else {
+                serde_json::json!([])
+            }
+        };
+
+        let document_id = job_data
+            .get("document_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        let prompt = if document_id.is_empty() {
+            "Extract structured fields from the attached image.".to_string()
+        } else {
+            format!(
+                "Extract structured fields from the attached image. document_id={}",
+                document_id
+            )
+        };
+
+        let mut inference_body = serde_json::json!({
+            "model": required_model,
+            "prompt": prompt,
+            "images": images,
+        });
+        if let Some(sp) = system_prompt {
+            if let Some(obj) = inference_body.as_object_mut() {
+                obj.insert("system_prompt".to_string(), JsonValue::String(sp.to_string()));
+            }
+        }
+
+        // 4. HTTP-dispatch synchronously.
+        let inference_url = format!("{}/v1/inference", base_url);
+        let dispatch_result = self
+            .http
+            .post(&inference_url)
+            .bearer_auth(lease_token)
+            .json(&inference_body)
+            .send()
+            .await;
+
+        let response_body = match dispatch_result {
+            Ok(resp) if resp.status().is_success() => resp
+                .json::<JsonValue>()
+                .await
+                .map_err(|e| EffectError::ExecutionFailed(format!("response JSON parse: {e}")))?,
+            Ok(resp) => {
+                let status = resp.status();
+                let body = resp.text().await.unwrap_or_default();
+                return Err(EffectError::ExecutionFailed(format!(
+                    "HTTP {status}: {body}"
+                )));
+            }
+            Err(e) => {
+                return Err(EffectError::ExecutionFailed(format!("HTTP transport: {e}")));
+            }
+        };
+
+        // 5. Project response into EffectOutput.
+        //    Merge inference response fields into the output token so
+        //    downstream Rhai/transitions can read `output`, `model`, `usage`,
+        //    `structured_output`, etc.
+        let mut output_data = job_data.clone();
+        if let Some(obj) = output_data.as_object_mut() {
+            if let Some(resp_obj) = response_body.as_object() {
+                for (k, v) in resp_obj {
+                    obj.insert(k.clone(), v.clone());
+                }
+            }
+        }
+
+        let mut tokens = HashMap::new();
+        tokens.insert(self.output_port.clone(), output_data);
+
+        Ok(EffectOutput {
+            tokens,
+            result: response_body,
+        })
+    }
+
+    fn replay(&self, _input: &EffectInput, _stored_result: &JsonValue) {}
+
+    fn name(&self) -> &str {
+        "http_inference"
+    }
+
+    fn port_schemas(&self) -> Option<EffectPortSchemas> {
+        Some(EffectPortSchemas {
+            inputs: HashMap::from([(
+                self.input_port.clone(),
+                "#/definitions/HttpInferenceInput".into(),
+            )]),
+            outputs: HashMap::from([(
+                self.output_port.clone(),
+                "#/definitions/HttpInferenceSubmitted".into(),
+            )]),
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use petri_domain::TransitionId;
+    use serde_json::json;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::{Arc, Mutex};
+
+    fn make_input_with_config(
+        port: &str,
+        data: JsonValue,
+        config: Option<JsonValue>,
+    ) -> EffectInput {
+        let mut inputs = HashMap::new();
+        inputs.insert(port.to_string(), data);
+        EffectInput {
+            transition_id: TransitionId::new(),
+            inputs,
+            config,
+            read_inputs: HashMap::new(),
+            process_step: None,
+        }
+    }
+
+    /// Spawn a one-shot HTTP stub server.
+    /// Returns the bound address.
+    /// `captured_headers` receives lines from the request that start with "authorization:".
+    /// `captured_body` receives the request body (after the header/body separator).
+    fn spawn_stub_server(
+        response_status: u16,
+        response_body: &'static str,
+        captured_headers: Arc<Mutex<Vec<String>>>,
+        captured_body: Arc<Mutex<Option<String>>>,
+    ) -> std::net::SocketAddr {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            if let Ok((mut sock, _)) = listener.accept() {
+                let mut buf = vec![0u8; 16384];
+                let n = sock.read(&mut buf).unwrap_or(0);
+                let raw = String::from_utf8_lossy(&buf[..n]).to_string();
+
+                for line in raw.lines() {
+                    if line.to_lowercase().starts_with("authorization:") {
+                        captured_headers.lock().unwrap().push(line.to_string());
+                    }
+                }
+                if let Some(pos) = raw.find("\r\n\r\n") {
+                    *captured_body.lock().unwrap() = Some(raw[pos + 4..].to_string());
+                }
+
+                let reason = if response_status == 200 { "OK" } else { "Error" };
+                let resp = format!(
+                    "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    response_status, reason, response_body.len(), response_body
+                );
+                let _ = sock.write_all(resp.as_bytes());
+                let _ = sock.flush();
+            }
+        });
+        addr
+    }
+
+    // -------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_handler_rejects_missing_effect_config() {
+        let handler = HttpInferenceHandler::new("job", "submitted");
+        let input = make_input_with_config("job", json!({"file_b64": "abc"}), None);
+        let err = handler.execute(input).await.unwrap_err();
+        assert!(
+            matches!(err, EffectError::Fatal(_)),
+            "expected Fatal, got: {:?}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handler_rejects_missing_base_url() {
+        let handler = HttpInferenceHandler::new("job", "submitted");
+        let config = json!({
+            "lease_token": "tok",
+            "required_model": "test-model-a",
+        });
+        let input = make_input_with_config("job", json!({}), Some(config));
+        let err = handler.execute(input).await.unwrap_err();
+        assert!(
+            matches!(err, EffectError::Fatal(ref msg) if msg.contains("base_url")),
+            "expected Fatal with base_url mention, got: {:?}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handler_rejects_missing_lease_token() {
+        let handler = HttpInferenceHandler::new("job", "submitted");
+        let config = json!({
+            "base_url": "http://127.0.0.1:9999",
+            "required_model": "test-model-a",
+        });
+        let input = make_input_with_config("job", json!({}), Some(config));
+        let err = handler.execute(input).await.unwrap_err();
+        assert!(
+            matches!(err, EffectError::Fatal(ref msg) if msg.contains("lease_token")),
+            "expected Fatal with lease_token mention, got: {:?}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handler_rejects_missing_required_model() {
+        let handler = HttpInferenceHandler::new("job", "submitted");
+        let config = json!({
+            "base_url": "http://127.0.0.1:9999",
+            "lease_token": "tok",
+        });
+        let input = make_input_with_config("job", json!({}), Some(config));
+        let err = handler.execute(input).await.unwrap_err();
+        assert!(
+            matches!(err, EffectError::Fatal(ref msg) if msg.contains("required_model")),
+            "expected Fatal with required_model mention, got: {:?}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handler_dispatches_with_bearer_auth() {
+        let captured_headers = Arc::new(Mutex::new(Vec::<String>::new()));
+        let captured_body = Arc::new(Mutex::new(None::<String>));
+        let canned = r#"{"output":"test result","model":"test-model-a","usage":{"input_tokens":10,"output_tokens":20}}"#;
+        let addr = spawn_stub_server(200, canned, captured_headers.clone(), captured_body.clone());
+
+        let handler = HttpInferenceHandler::new("job", "submitted");
+        let config = json!({
+            "base_url": format!("http://{}", addr),
+            "lease_token": "Bearer-test-token-xyz",
+            "required_model": "test-model-a",
+        });
+        let token_data = json!({
+            "file_b64": "aGVsbG8=",
+            "mime_type": "image/png",
+            "document_id": "doc-001",
+        });
+        let input = make_input_with_config("job", token_data, Some(config));
+        let output = handler.execute(input).await.expect("handler must succeed");
+
+        let headers = captured_headers.lock().unwrap();
+        assert!(
+            headers
+                .iter()
+                .any(|h| h.to_lowercase().contains("bearer-test-token-xyz")),
+            "expected Bearer token in Authorization header, got: {:?}",
+            headers
+        );
+
+        let submitted = output.tokens.get("submitted").expect("submitted port");
+        assert_eq!(submitted["output"], "test result");
+        assert_eq!(submitted["file_b64"], "aGVsbG8=");
+        assert_eq!(submitted["document_id"], "doc-001");
+    }
+
+    #[tokio::test]
+    async fn test_handler_propagates_pool_error_without_release_attempt() {
+        // Pool returns 500 → ExecutionFailed. Lease release is intentionally
+        // deferred to cap-routing TTL eviction (workstream #61); no release
+        // POST should be attempted by the handler.
+        let captured_headers = Arc::new(Mutex::new(Vec::new()));
+        let captured_body = Arc::new(Mutex::new(None));
+        let addr = spawn_stub_server(
+            500,
+            r#"{"error":"internal server error"}"#,
+            captured_headers,
+            captured_body,
+        );
+
+        let handler = HttpInferenceHandler::new("job", "submitted");
+        let config = json!({
+            "base_url": format!("http://{}", addr),
+            "lease_token": "tok-error",
+            "required_model": "test-model-b",
+        });
+        let input = make_input_with_config("job", json!({"document_id": "x"}), Some(config));
+        let err = handler.execute(input).await.unwrap_err();
+        assert!(
+            matches!(err, EffectError::ExecutionFailed(_)),
+            "expected ExecutionFailed on pool error, got: {:?}",
+            err
+        );
+        // Honest-absence: no release POST — handler defers release to TTL.
+        // The stub only accepted one connection (the inference call); no second
+        // connection means the release endpoint was never contacted.
+    }
+
+    #[tokio::test]
+    async fn test_handler_uses_input_token_for_images_field() {
+        let captured_headers = Arc::new(Mutex::new(Vec::new()));
+        let captured_body = Arc::new(Mutex::new(None::<String>));
+        let canned = r#"{"output":"ok","model":"test-model-a"}"#;
+        let addr = spawn_stub_server(200, canned, captured_headers, captured_body.clone());
+
+        let handler = HttpInferenceHandler::new("job", "submitted");
+        let config = json!({
+            "base_url": format!("http://{}", addr),
+            "lease_token": "tok-img",
+            "required_model": "test-model-a",
+        });
+        let token = json!({
+            "file_b64": "aW1hZ2VkYXRh",
+            "mime_type": "image/jpeg",
+            "document_id": "doc-img-001",
+        });
+        let input = make_input_with_config("job", token, Some(config));
+        let _ = handler.execute(input).await.expect("must succeed");
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let body_opt = captured_body.lock().unwrap().clone();
+        let body_str = body_opt.expect("request body must have been captured");
+        let parsed: JsonValue =
+            serde_json::from_str(&body_str).expect("request body must be valid JSON");
+
+        let images = parsed.get("images").expect("images field required");
+        let first = images.get(0).expect("at least one image entry");
+        assert_eq!(first["base64"], "aW1hZ2VkYXRh");
+        assert_eq!(first["mime_type"], "image/jpeg");
+    }
+
+    #[test]
+    fn test_name_returns_http_inference() {
+        let handler = HttpInferenceHandler::new("job", "submitted");
+        assert_eq!(handler.name(), "http_inference");
+    }
+
+    #[test]
+    fn test_port_schemas_declared() {
+        let handler = HttpInferenceHandler::new("job", "submitted");
+        let schemas = handler.port_schemas().expect("port_schemas must be Some");
+        assert!(
+            schemas.inputs.contains_key("job"),
+            "expected input port 'job' in schemas"
+        );
+        assert!(
+            schemas.outputs.contains_key("submitted"),
+            "expected output port 'submitted' in schemas"
+        );
+    }
+}
