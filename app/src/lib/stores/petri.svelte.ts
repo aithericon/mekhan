@@ -6,15 +6,26 @@
  */
 
 import { connectSse, type SseConnection } from '$lib/net/sse';
+import { createPetriApi, PetriApiError } from '$lib/stores/petri-api';
+import {
+	computeEventSpotlight,
+	computeMarkingDiff,
+	projectBridgedOut,
+	projectMarking
+} from '$lib/stores/petri-projection';
+import {
+	getSelectedEventDetails as getSelectedEventDetails_,
+	getSelectedGroupDetails as getSelectedGroupDetails_,
+	getSelectedPlaceDetails as getSelectedPlaceDetails_,
+	getSelectedTokenDetails as getSelectedTokenDetails_,
+	getSelectedTransitionDetails as getSelectedTransitionDetails_
+} from '$lib/stores/inspector-selectors';
 import type {
 	PetriNet,
-	Token,
 	PersistedEvent,
-	DomainEvent,
 	TransitionStatus,
 	ScenarioGroup,
 	SelectedElement,
-	EventSpotlight,
 	MarkingDiff,
 	TokenColor
 } from '$lib/types/petri';
@@ -32,6 +43,7 @@ const PETRI_BASE = '/petri';
 
 export function createPetriStore(netId: string, baseUrl: string = PETRI_BASE) {
 	const apiBase = `${baseUrl}/api/nets/${netId}`;
+	const api = createPetriApi(apiBase);
 
 	// ── Core state ──────────────────────────────────────────────────────
 	let topology: PetriNet | null = $state(null);
@@ -49,8 +61,20 @@ export function createPetriStore(netId: string, baseUrl: string = PETRI_BASE) {
 	let evaluating: boolean = $state(false);
 
 	// ── Analysis & services ─────────────────────────────────────────────
-	let analysisReport: { is_valid: boolean; summary: { error_count: number; warning_count: number; info_count: number }; issues: Array<{ level: string; code: string; message: string; node_id: string; node_type: string }> } | null = $state(null);
-	let services: { handlers: string[]; categories: Record<string, string[]> } | null = $state(null);
+	type AnalysisReport = {
+		is_valid: boolean;
+		summary: { error_count: number; warning_count: number; info_count: number };
+		issues: Array<{
+			level: string;
+			code: string;
+			message: string;
+			node_id: string;
+			node_type: string;
+		}>;
+	};
+	type Services = { handlers: string[]; categories: Record<string, string[]> };
+	let analysisReport: AnalysisReport | null = $state(null);
+	let services: Services | null = $state(null);
 
 	// ── SSE ─────────────────────────────────────────────────────────────
 	let sseConnection: SseConnection | null = null;
@@ -96,94 +120,38 @@ export function createPetriStore(netId: string, baseUrl: string = PETRI_BASE) {
 	}
 
 	// ── Projected marking ───────────────────────────────────────────────
-	const projectedMarking = $derived.by(() => {
-		const marking = new Map<string, Token[]>();
-		if (!events.length) return marking;
+	const projectedMarking = $derived.by(() => projectMarking(events, replayIndex));
 
-		const end = Math.min(replayIndex + 1, events.length);
-		for (let i = 0; i < end; i++) {
-			const ev = events[i].event;
-			applyEventToMarking(marking, ev);
-		}
-		return marking;
-	});
-
-	const bridgedOutTokens = $derived.by(() => {
-		const bridged = new Map<string, Token[]>();
-		if (!events.length) return bridged;
-
-		const end = Math.min(replayIndex + 1, events.length);
-		for (let i = 0; i < end; i++) {
-			const ev = events[i].event;
-			if (ev.type === 'TokenBridgedOut') {
-				const tokens = bridged.get(ev.source_place_id) ?? [];
-				tokens.push(ev.token);
-				bridged.set(ev.source_place_id, tokens);
-			}
-		}
-		return bridged;
-	});
+	const bridgedOutTokens = $derived.by(() => projectBridgedOut(events, replayIndex));
 
 	// ── Event spotlight ─────────────────────────────────────────────────
-	const eventSpotlight = $derived.by((): EventSpotlight | null => {
+	const eventSpotlight = $derived.by(() => {
 		const sel = selectedElement;
 		if (!sel || sel.type !== 'event') return null;
-		const ev = events.find((e) => e.sequence === sel.sequence);
-		if (!ev) return null;
-
-		const consumedPlaceIds: string[] = [];
-		const producedPlaceIds: string[] = [];
-		let transitionId: string | null = null;
-		let targetPlaceId: string | null = null;
-
-		const domainEvent = ev.event;
-		if (
-			domainEvent.type === 'TransitionFired' ||
-			domainEvent.type === 'EffectCompleted' ||
-			domainEvent.type === 'EffectFailed'
-		) {
-			transitionId = domainEvent.transition_id;
-			if ('consumed_tokens' in domainEvent && domainEvent.consumed_tokens) {
-				for (const [placeId] of domainEvent.consumed_tokens) {
-					consumedPlaceIds.push(placeId);
-				}
-			}
-			if ('produced_tokens' in domainEvent && domainEvent.produced_tokens) {
-				for (const [placeId] of domainEvent.produced_tokens) {
-					producedPlaceIds.push(placeId);
-				}
-			}
-		} else if (domainEvent.type === 'TokenCreated') {
-			targetPlaceId = domainEvent.place_id;
-		} else if (domainEvent.type === 'TokenBridgedOut') {
-			if (domainEvent.transition_id) transitionId = domainEvent.transition_id;
-			consumedPlaceIds.push(domainEvent.source_place_id);
-		}
-
-		const allNodeIds = [
-			...consumedPlaceIds,
-			...producedPlaceIds,
-			...(transitionId ? [transitionId] : []),
-			...(targetPlaceId ? [targetPlaceId] : [])
-		];
-
-		return { transitionId, consumedPlaceIds, producedPlaceIds, targetPlaceId, allNodeIds };
+		return computeEventSpotlight(events, sel.sequence);
 	});
 
 	// ── Marking diff (for pulse animations) ─────────────────────────────
 	let markingDiff: MarkingDiff | null = $state(null);
 
 	// ── API functions ───────────────────────────────────────────────────
+	//
+	// Transport + typing lives in `petri-api.ts`, which throws a single
+	// `PetriApiError` on any non-2xx. These wrappers keep each call site's
+	// original error *policy*: fatal reads set `error`, non-critical reads
+	// swallow, command helpers return `{ success }` with the response body.
+
+	/** Extract the response body for `{ success }`-style helpers. */
+	function failureText(e: unknown): string {
+		if (e instanceof PetriApiError) return e.body;
+		return e instanceof Error ? e.message : String(e);
+	}
 
 	async function fetchTopology() {
 		try {
-			const res = await fetch(`${apiBase}/topology`);
-			if (!res.ok) throw new Error(`${res.status}`);
-			const data = await res.json();
-			// Engine returns TopologyResponse: { topology: { places, transitions, arcs, groups } }
-			const net = data.topology ?? data.net ?? data;
+			const { topology: net, groups } = await api.fetchTopology();
 			topology = net;
-			currentGroups = net?.groups ?? data.groups ?? [];
+			currentGroups = groups;
 		} catch (e: any) {
 			error = `Failed to fetch topology: ${e.message}`;
 		}
@@ -191,11 +159,8 @@ export function createPetriStore(netId: string, baseUrl: string = PETRI_BASE) {
 
 	async function fetchEvents() {
 		try {
-			const res = await fetch(`${apiBase}/events`);
-			if (!res.ok) throw new Error(`${res.status}`);
-			const data = await res.json();
+			const raw = await api.fetchEvents();
 			// Deduplicate by sequence (backend may emit duplicates)
-			const raw: PersistedEvent[] = data.events ?? [];
 			const seen = new Set<number>();
 			events = raw.filter((e) => {
 				if (seen.has(e.sequence)) return false;
@@ -217,10 +182,7 @@ export function createPetriStore(netId: string, baseUrl: string = PETRI_BASE) {
 
 	async function fetchNewEvents() {
 		try {
-			const res = await fetch(`${apiBase}/events?from_sequence=${lastFetchedSequence + 1}`);
-			if (!res.ok) return;
-			const data = await res.json();
-			const newEvents: PersistedEvent[] = data.events ?? [];
+			const newEvents = await api.fetchEvents(lastFetchedSequence + 1);
 			if (newEvents.length > 0) {
 				// Deduplicate by sequence
 				const existingSeqs = new Set(events.map((e) => e.sequence));
@@ -243,11 +205,9 @@ export function createPetriStore(netId: string, baseUrl: string = PETRI_BASE) {
 
 	async function fetchState() {
 		try {
-			const res = await fetch(`${apiBase}/state`);
-			if (!res.ok) return;
-			const data = await res.json();
-			if (data.transition_statuses) {
-				transitionStatuses = data.transition_statuses;
+			const statuses = await api.fetchState();
+			if (statuses) {
+				transitionStatuses = statuses as Record<string, TransitionStatus>;
 			}
 		} catch {
 			// Non-critical
@@ -256,10 +216,7 @@ export function createPetriStore(netId: string, baseUrl: string = PETRI_BASE) {
 
 	async function fetchRunMode() {
 		try {
-			const res = await fetch(`${apiBase}/run-mode`);
-			if (!res.ok) return;
-			const data = await res.json();
-			runMode = data.mode ?? 'stopped';
+			runMode = await api.fetchRunMode();
 		} catch {
 			// Non-critical
 		}
@@ -269,7 +226,7 @@ export function createPetriStore(netId: string, baseUrl: string = PETRI_BASE) {
 
 	async function fireTransition(transitionId: string) {
 		try {
-			await fetch(`${apiBase}/command/fire/${transitionId}`, { method: 'POST' });
+			await api.fireTransition(transitionId);
 			await fetchEvents();
 		} catch (e: any) {
 			error = `Failed to fire transition: ${e.message}`;
@@ -279,31 +236,18 @@ export function createPetriStore(netId: string, baseUrl: string = PETRI_BASE) {
 	async function injectToken(placeId: string, data: unknown): Promise<{ success: boolean; error?: string }> {
 		try {
 			const color: TokenColor = data == null ? { type: 'Unit' } : { type: 'Data', value: data };
-			const res = await fetch(`${apiBase}/command/create-token`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ place_id: placeId, color })
-			});
-			if (!res.ok) {
-				const body = await res.text();
-				return { success: false, error: body };
-			}
+			await api.createToken(placeId, color);
 			await fetchEvents();
 			return { success: true };
 		} catch (e: any) {
-			return { success: false, error: e.message };
+			return { success: false, error: failureText(e) };
 		}
 	}
 
 	async function evaluate(maxSteps?: number) {
 		evaluating = true;
 		try {
-			const res = await fetch(`${apiBase}/command/evaluate`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ max_steps: maxSteps ?? 100 })
-			});
-			if (!res.ok) throw new Error(`${res.status}`);
+			await api.evaluate(maxSteps ?? 100);
 			await fetchEvents();
 		} catch (e: any) {
 			error = `Evaluate failed: ${e.message}`;
@@ -314,7 +258,7 @@ export function createPetriStore(netId: string, baseUrl: string = PETRI_BASE) {
 
 	async function reset() {
 		try {
-			await fetch(`${apiBase}/command/reset`, { method: 'POST' });
+			await api.reset();
 			events = [];
 			replayIndex = -1;
 			lastFetchedSequence = 0;
@@ -329,11 +273,7 @@ export function createPetriStore(netId: string, baseUrl: string = PETRI_BASE) {
 
 	async function setRunMode(mode: string) {
 		try {
-			await fetch(`${apiBase}/run-mode`, {
-				method: 'PUT',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ mode })
-			});
+			await api.setRunMode(mode);
 			runMode = mode;
 			await fetchEvents();
 		} catch (e: any) {
@@ -343,7 +283,7 @@ export function createPetriStore(netId: string, baseUrl: string = PETRI_BASE) {
 
 	async function hibernate() {
 		try {
-			await fetch(`${apiBase}/command/hibernate`, { method: 'POST' });
+			await api.hibernate();
 			stopLiveUpdates();
 		} catch (e: any) {
 			error = `Hibernate failed: ${e.message}`;
@@ -352,9 +292,7 @@ export function createPetriStore(netId: string, baseUrl: string = PETRI_BASE) {
 
 	async function fetchAnalysis() {
 		try {
-			const res = await fetch(`${apiBase}/analysis`);
-			if (!res.ok) return;
-			analysisReport = await res.json();
+			analysisReport = await api.fetchAnalysis<AnalysisReport>();
 		} catch {
 			// Non-critical
 		}
@@ -362,9 +300,7 @@ export function createPetriStore(netId: string, baseUrl: string = PETRI_BASE) {
 
 	async function fetchServices() {
 		try {
-			const res = await fetch(`${apiBase}/services`);
-			if (!res.ok) return;
-			services = await res.json();
+			services = await api.fetchServices<Services>();
 		} catch {
 			// Non-critical
 		}
@@ -372,31 +308,24 @@ export function createPetriStore(netId: string, baseUrl: string = PETRI_BASE) {
 
 	async function loadScenario(scenario: unknown): Promise<{ success: boolean; error?: string; places_count?: number; transitions_count?: number; tokens_count?: number }> {
 		try {
-			const res = await fetch(`${apiBase}/scenario`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify(scenario)
-			});
-			if (!res.ok) {
-				const body = await res.text();
-				return { success: false, error: body };
-			}
-			const data = await res.json();
-			return { success: true, places_count: data.places_count, transitions_count: data.transitions_count, tokens_count: data.tokens_count };
+			const data = await api.loadScenario(scenario);
+			return {
+				success: true,
+				places_count: data.places_count,
+				transitions_count: data.transitions_count,
+				tokens_count: data.tokens_count
+			};
 		} catch (e: any) {
-			return { success: false, error: e.message };
+			return { success: false, error: failureText(e) };
 		}
 	}
 
 	async function saveTransitionScript(transitionId: string, script: string, guard: string | null) {
-		const res = await fetch(`${apiBase}/topology/transition/${transitionId}`, {
-			method: 'PATCH',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ script, guard })
-		});
-		if (!res.ok) {
-			const body = await res.text();
-			throw new Error(body);
+		try {
+			await api.saveTransitionScript(transitionId, script, guard);
+		} catch (e: any) {
+			// Preserve the original convention: rethrow the response body text.
+			throw new Error(failureText(e));
 		}
 		await fetchTopology();
 		await fetchEvents();
@@ -405,42 +334,13 @@ export function createPetriStore(netId: string, baseUrl: string = PETRI_BASE) {
 	// ── Timeline & selection ────────────────────────────────────────────
 
 	function setReplayIndex(index: number) {
-		// Compute marking diff for pulse animation
-		if (Math.abs(index - replayIndex) === 1 && index >= 0 && index < events.length) {
-			const ev = events[index > replayIndex ? index : replayIndex].event;
-			const appeared: string[] = [];
-			const disappeared: string[] = [];
-			let firedTransition: string | null = null;
-
-			if (
-				ev.type === 'TransitionFired' ||
-				ev.type === 'EffectCompleted' ||
-				ev.type === 'EffectFailed'
-			) {
-				firedTransition = ev.transition_id;
-				const consumed = ('consumed_tokens' in ev && ev.consumed_tokens) ? ev.consumed_tokens : [];
-				const produced = ('produced_tokens' in ev && ev.produced_tokens) ? ev.produced_tokens : [];
-				if (index > replayIndex) {
-					for (const [placeId] of consumed) disappeared.push(placeId);
-					for (const [placeId] of produced) appeared.push(placeId);
-				} else {
-					for (const [placeId] of consumed) appeared.push(placeId);
-					for (const [placeId] of produced) disappeared.push(placeId);
-				}
-			} else if (ev.type === 'TokenCreated') {
-				if (index > replayIndex) appeared.push(ev.place_id);
-				else disappeared.push(ev.place_id);
-			} else if (ev.type === 'TokenConsumed' || ev.type === 'TokenRemoved') {
-				if (index > replayIndex) disappeared.push(ev.place_id);
-				else appeared.push(ev.place_id);
-			} else if (ev.type === 'TokenBridgedOut') {
-				if (ev.transition_id) firedTransition = ev.transition_id;
-				if (index > replayIndex) disappeared.push(ev.source_place_id);
-				else appeared.push(ev.source_place_id);
-			}
-
-			markingDiff = { appeared, disappeared, firedTransition };
-			setTimeout(() => { markingDiff = null; }, 700);
+		// Compute marking diff for pulse animation (adjacent single-step moves).
+		const diff = computeMarkingDiff(events, replayIndex, index);
+		if (diff) {
+			markingDiff = diff;
+			setTimeout(() => {
+				markingDiff = null;
+			}, 700);
 		} else {
 			markingDiff = null;
 		}
@@ -460,205 +360,38 @@ export function createPetriStore(netId: string, baseUrl: string = PETRI_BASE) {
 
 	// ── Inspector helpers ───────────────────────────────────────────────
 
+	// These delegate to the pure selectors in `inspector-selectors.ts`; the
+	// store only supplies the current reactive inputs.
 	function getSelectedPlaceDetails() {
-		const sel = selectedElement;
-		if (!sel || sel.type !== 'place' || !topology) return null;
-		const place = topology.places.find((p) => p.id === sel.id);
-		if (!place) return null;
-		const tokens = projectedMarking.get(place.id) ?? [];
-		return { place, tokens };
+		return getSelectedPlaceDetails_(selectedElement, topology, projectedMarking);
 	}
 
 	function getSelectedTransitionDetails() {
-		const sel = selectedElement;
-		if (!sel || sel.type !== 'transition' || !topology) return null;
-		const transition = topology.transitions.find((t) => t.id === sel.id);
-		if (!transition) return null;
-		const inputArcs = topology.arcs
-			.filter((a) => a.transition_id === transition.id && a.direction === 'place_to_transition')
-			.map((a) => ({ place_id: a.place_id, place_name: getPlaceName(a.place_id), weight: a.weight }));
-		const outputArcs = topology.arcs
-			.filter((a) => a.transition_id === transition.id && a.direction === 'transition_to_place')
-			.map((a) => ({ place_id: a.place_id, place_name: getPlaceName(a.place_id), weight: a.weight }));
-		return { transition, inputArcs, outputArcs };
+		return getSelectedTransitionDetails_(selectedElement, topology, getPlaceName);
 	}
 
 	function getSelectedTokenDetails() {
-		const sel = selectedElement;
-		if (!sel || sel.type !== 'token') return null;
-		const tokens = projectedMarking.get(sel.placeId) ?? [];
-		let token = tokens.find((t) => t.id === sel.tokenId);
-		// Also search bridged-out tokens (ghost tokens in outboxes)
-		if (!token) {
-			const bridged = bridgedOutTokens.get(sel.placeId) ?? [];
-			token = bridged.find((t) => t.id === sel.tokenId);
-		}
-		if (!token) return null;
-		const placeName = getPlaceName(sel.placeId);
-		const creationEvent = events.find(
-			(e) => e.event.type === 'TokenCreated' && (e.event as any).token?.id === token.id
+		return getSelectedTokenDetails_(
+			selectedElement,
+			projectedMarking,
+			bridgedOutTokens,
+			events,
+			getPlaceName
 		);
-		return { token, placeName, creationEvent };
 	}
 
 	function getSelectedEventDetails() {
-		const sel = selectedElement;
-		if (!sel || sel.type !== 'event') return null;
-		const event = events.find((e) => e.sequence === sel.sequence);
-		if (!event) return null;
-
-		const details: {
-			event: PersistedEvent;
-			eventTypeName: string;
-			transitionName?: string;
-			placeName?: string;
-			consumedTokens?: { placeId: string; placeName: string; tokenId: string }[];
-			producedTokens?: { placeId: string; placeName: string; token: Token }[];
-			readTokens?: { placeId: string; placeName: string; token: Token }[];
-			token?: Token;
-			errorMessage?: string;
-			targetNetId?: string;
-			targetPlaceName?: string;
-			correlationId?: string;
-			replyToPlaceName?: string;
-			replyChannels?: Record<string, string>;
-			signalKey?: string;
-			workflowId?: string;
-			effectHandlerId?: string;
-			effectResult?: unknown;
-			inputData?: Record<string, unknown>;
-			retryable?: boolean;
-		} = {
-			event,
-			eventTypeName: event.event.type
-		};
-
-		switch (event.event.type as string) {
-			case 'TransitionFired': {
-				const e = event.event as any;
-				details.transitionName = getTransitionName(e.transition_id);
-				details.consumedTokens = (e.consumed_tokens as [string, string][])?.map(
-					([placeId, tokenId]: [string, string]) => ({
-						placeId,
-						placeName: getPlaceName(placeId),
-						tokenId
-					})
-				);
-				details.producedTokens = (e.produced_tokens as [string, Token][])?.map(
-					([placeId, token]: [string, Token]) => ({
-						placeId,
-						placeName: getPlaceName(placeId),
-						token
-					})
-				);
-				if (e.read_tokens?.length) {
-					details.readTokens = (e.read_tokens as [string, Token][]).map(
-						([placeId, token]: [string, Token]) => ({
-							placeId,
-							placeName: getPlaceName(placeId),
-							token
-						})
-					);
-				}
-				break;
-			}
-			case 'TokenCreated': {
-				const e = event.event as any;
-				details.placeName = getPlaceName(e.place_id);
-				details.token = e.token;
-				if (e.signal_key) details.signalKey = e.signal_key;
-				if (e.workflow_id) details.workflowId = e.workflow_id;
-				break;
-			}
-			case 'TokenConsumed': {
-				const e = event.event as any;
-				details.placeName = getPlaceName(e.place_id);
-				break;
-			}
-			case 'NetInitialized': {
-				break;
-			}
-			case 'TokenBridgedOut': {
-				const e = event.event as any;
-				details.transitionName = e.transition_id ? getTransitionName(e.transition_id) : undefined;
-				details.placeName = getPlaceName(e.source_place_id);
-				details.token = e.token;
-				details.targetNetId = e.target_net_id;
-				details.targetPlaceName = e.target_place_name;
-				if (e.signal_key) details.signalKey = e.signal_key;
-				details.replyToPlaceName = e.reply_to_place_name ?? undefined;
-				if (e.reply_channels) details.replyChannels = e.reply_channels;
-				break;
-			}
-			case 'EffectCompleted': {
-				const e = event.event as any;
-				details.transitionName = getTransitionName(e.transition_id);
-				details.effectHandlerId = e.effect_handler_id;
-				details.effectResult = e.effect_result;
-				details.consumedTokens = (e.consumed_tokens as [string, string][])?.map(
-					([placeId, tokenId]: [string, string]) => ({
-						placeId,
-						placeName: getPlaceName(placeId),
-						tokenId
-					})
-				);
-				details.producedTokens = (e.produced_tokens as [string, Token][])?.map(
-					([placeId, token]: [string, Token]) => ({
-						placeId,
-						placeName: getPlaceName(placeId),
-						token
-					})
-				);
-				if (e.read_tokens?.length) {
-					details.readTokens = (e.read_tokens as [string, Token][]).map(
-						([placeId, token]: [string, Token]) => ({
-							placeId,
-							placeName: getPlaceName(placeId),
-							token
-						})
-					);
-				}
-				break;
-			}
-			case 'EffectFailed': {
-				const e = event.event as any;
-				details.transitionName = getTransitionName(e.transition_id);
-				details.effectHandlerId = e.effect_handler_id;
-				details.errorMessage = e.error_message ?? 'Effect failed';
-				details.retryable = e.retryable ?? true;
-				if (e.input_data) details.inputData = e.input_data;
-				details.consumedTokens = (e.consumed_tokens as [string, string][])?.map(
-					([placeId, tokenId]: [string, string]) => ({
-						placeId,
-						placeName: getPlaceName(placeId),
-						tokenId
-					})
-				);
-				details.producedTokens = (e.produced_tokens as [string, Token][])?.map(
-					([placeId, token]: [string, Token]) => ({
-						placeId,
-						placeName: getPlaceName(placeId),
-						token
-					})
-				);
-				break;
-			}
-			case 'ErrorOccurred': {
-				const e = event.event as any;
-				details.errorMessage = resolveErrorMessage(e.message ?? '');
-				break;
-			}
-		}
-
-		return details;
+		return getSelectedEventDetails_(
+			selectedElement,
+			events,
+			getTransitionName,
+			getPlaceName,
+			resolveErrorMessage
+		);
 	}
 
 	function getSelectedGroupDetails() {
-		const sel = selectedElement;
-		if (!sel || sel.type !== 'group') return null;
-		const group = currentGroups.find((g) => g.id === sel.id);
-		if (!group) return null;
-		return { group };
+		return getSelectedGroupDetails_(selectedElement, currentGroups);
 	}
 
 	// ── SSE live updates ────────────────────────────────────────────────
@@ -818,57 +551,3 @@ export function createPetriStore(netId: string, baseUrl: string = PETRI_BASE) {
 }
 
 export type PetriStore = ReturnType<typeof createPetriStore>;
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function applyEventToMarking(marking: Map<string, Token[]>, ev: DomainEvent) {
-	switch (ev.type) {
-		case 'TokenCreated': {
-			const tokens = marking.get(ev.place_id) ?? [];
-			tokens.push(ev.token);
-			marking.set(ev.place_id, tokens);
-			break;
-		}
-		case 'TransitionFired':
-		case 'EffectCompleted': {
-			// Remove consumed tokens
-			for (const [placeId, tokenId] of ev.consumed_tokens) {
-				const tokens = marking.get(placeId);
-				if (tokens) {
-					const idx = tokens.findIndex((t) => t.id === tokenId);
-					if (idx >= 0) tokens.splice(idx, 1);
-					if (tokens.length === 0) marking.delete(placeId);
-				}
-			}
-			// Add produced tokens
-			for (const [placeId, token] of ev.produced_tokens) {
-				const tokens = marking.get(placeId) ?? [];
-				tokens.push(token);
-				marking.set(placeId, tokens);
-			}
-			break;
-		}
-		case 'TokenConsumed':
-		case 'TokenRemoved': {
-			const tokens = marking.get(ev.place_id);
-			if (tokens) {
-				const idx = tokens.findIndex((t) => t.id === ev.token_id);
-				if (idx >= 0) tokens.splice(idx, 1);
-				if (tokens.length === 0) marking.delete(ev.place_id);
-			}
-			break;
-		}
-		case 'TokenBridgedOut': {
-			// Token leaves the local marking
-			const tokens = marking.get(ev.source_place_id);
-			if (tokens) {
-				const idx = tokens.findIndex((t) => t.id === ev.token.id);
-				if (idx >= 0) tokens.splice(idx, 1);
-				if (tokens.length === 0) marking.delete(ev.source_place_id);
-			}
-			break;
-		}
-	}
-}
