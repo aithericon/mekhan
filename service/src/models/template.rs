@@ -119,6 +119,18 @@ pub enum WorkflowNodeData {
         /// for `terminal` lands in Phase 4.
         #[serde(default = "default_terminal_port")]
         terminal: Port,
+        /// Optional success-result binding. Each entry's `expression` is a
+        /// Rhai expression over the inbound token; together they assemble the
+        /// structured `value` of the success envelope (`{ ok: true, value }`)
+        /// stamped onto the terminal token's `exit_code`. Empty (the default)
+        /// inserts no transition — the terminal token is byte-identical to
+        /// pre-feature behavior and the instance `result` stays NULL.
+        #[serde(
+            rename = "resultMapping",
+            default,
+            skip_serializing_if = "Vec::is_empty"
+        )]
+        result_mapping: Vec<FieldMapping>,
     },
     #[serde(rename = "human_task")]
     HumanTask {
@@ -256,6 +268,17 @@ pub enum WorkflowNodeData {
         /// against the inbound token at run time.
         #[serde(rename = "failureMessage", skip_serializing_if = "Option::is_none")]
         failure_message: Option<String>,
+        /// Optional error-result binding. Each entry's `expression` is a Rhai
+        /// expression over the inbound token; together they assemble the
+        /// structured `error.value` of the error envelope
+        /// (`{ ok: false, error: { reason, value } }`) stamped onto the
+        /// token's `exit_code` and carried through to the terminal End.
+        #[serde(
+            rename = "errorResultMapping",
+            default,
+            skip_serializing_if = "Vec::is_empty"
+        )]
+        error_result_mapping: Vec<FieldMapping>,
     },
     /// Trigger node (Phase 5). Lives at the template level and connects to a
     /// target input port via a single outgoing edge. Triggers are never edge
@@ -276,6 +299,15 @@ pub enum WorkflowNodeData {
         /// expression evaluated against the trigger source's event payload.
         #[serde(rename = "payloadMapping", default)]
         payload_mapping: Vec<FieldMapping>,
+        /// Default reply mode applied when a fire caller doesn't request one.
+        /// Optional + skip-if-none so existing published graphs round-trip
+        /// unchanged.
+        #[serde(
+            rename = "replyDefault",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
+        reply_default: Option<ReplyMode>,
         /// Disabled triggers are stored but the dispatcher ignores them.
         #[serde(default)]
         enabled: bool,
@@ -1108,6 +1140,29 @@ pub struct FieldMapping {
     pub expression: String,
 }
 
+/// How a `POST /api/triggers/{id}/fire` caller wants the response delivered.
+/// The caller selects per-request (query `?reply=`, `Prefer` header, or a
+/// JSON body field); a Trigger node's optional `replyDefault` is used only
+/// when the caller doesn't specify. `Sse` is never *executed* on the fire
+/// endpoint — SSE is the dedicated `GET /api/instances/{id}/stream` — but is
+/// modeled so a node can advertise it as the intended consumption mode.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum ReplyMode {
+    /// Return `{ result }` immediately; caller polls / streams. Default —
+    /// byte-identical to pre-feature behavior.
+    #[default]
+    FireAndForget,
+    /// Hold the HTTP connection until the spawned instance reaches a terminal
+    /// state, then return its result envelope (bounded by
+    /// `wait_timeout_secs`; degrades to `202 { instance_id }` on timeout).
+    WaitForResult,
+    /// Advisory: the caller intends to consume the dedicated SSE stream.
+    Sse,
+}
+
 // --- Branch conditions ---
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -1310,6 +1365,7 @@ impl WorkflowGraph {
                         label: "End".to_string(),
                         description: None,
                         terminal: default_terminal_port(),
+                        result_mapping: Vec::new(),
                     },
                     parent_id: None,
                     width: None,
@@ -1506,6 +1562,7 @@ pub mod dsl {
                     label: label.to_string(),
                     description: step.description.clone(),
                     terminal: default_terminal_port(),
+                    result_mapping: Vec::new(),
                 }),
                 "human_task" => {
                     let task_steps = step
@@ -1979,6 +2036,7 @@ mod tests {
                 label: "End".to_string(),
                 description: None,
                 terminal: default_terminal_port(),
+                result_mapping: Vec::new(),
             },
             parent_id: None,
             width: None,

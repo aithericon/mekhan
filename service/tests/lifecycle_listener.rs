@@ -145,7 +145,7 @@ async fn net_completed_updates_instance_status() {
     let listener_nats = nats.clone();
     let listener_db = db.clone();
     tokio::spawn(async move {
-        start_lifecycle_listener(listener_nats, listener_db, sub_mgr, None).await;
+        start_lifecycle_listener(listener_nats, listener_db, sub_mgr, None, mekhan_service::triggers::ResultWaiters::new()).await;
     });
 
     // Give the listener a moment to subscribe
@@ -186,7 +186,7 @@ async fn net_cancelled_updates_instance_status() {
     let listener_nats = nats.clone();
     let listener_db = db.clone();
     tokio::spawn(async move {
-        start_lifecycle_listener(listener_nats, listener_db, sub_mgr, None).await;
+        start_lifecycle_listener(listener_nats, listener_db, sub_mgr, None, mekhan_service::triggers::ResultWaiters::new()).await;
     });
 
     tokio::time::sleep(Duration::from_millis(200)).await;
@@ -214,7 +214,7 @@ async fn completed_event_is_idempotent() {
     let listener_nats = nats.clone();
     let listener_db = db.clone();
     tokio::spawn(async move {
-        start_lifecycle_listener(listener_nats, listener_db, sub_mgr, None).await;
+        start_lifecycle_listener(listener_nats, listener_db, sub_mgr, None, mekhan_service::triggers::ResultWaiters::new()).await;
     });
 
     tokio::time::sleep(Duration::from_millis(200)).await;
@@ -249,7 +249,7 @@ async fn already_completed_instance_ignores_cancel() {
     let listener_nats = nats.clone();
     let listener_db = db.clone();
     tokio::spawn(async move {
-        start_lifecycle_listener(listener_nats, listener_db, sub_mgr, None).await;
+        start_lifecycle_listener(listener_nats, listener_db, sub_mgr, None, mekhan_service::triggers::ResultWaiters::new()).await;
     });
 
     tokio::time::sleep(Duration::from_millis(200)).await;

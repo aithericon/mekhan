@@ -9,9 +9,11 @@
 //! source modules a stable shape to follow.
 
 use serde_json::Value;
+use tokio::sync::oneshot;
 
 use crate::triggers::dispatcher::TriggerDispatcher;
 use crate::triggers::model::{FireResult, TriggerError};
+use crate::triggers::waiters::{ResultWaiters, TerminalOutcome};
 
 /// Fire a manual trigger. Equivalent to calling `dispatcher.fire(node_id,
 /// payload)` directly — kept as a free function so the per-source modules all
@@ -22,4 +24,16 @@ pub async fn fire(
     payload: Value,
 ) -> Result<FireResult, TriggerError> {
     dispatcher.fire(node_id, payload).await
+}
+
+/// Fire a manual trigger in WaitForResult mode: a Spawn additionally
+/// registers a terminal-outcome waiter whose receiver is returned alongside
+/// the `FireResult` (always `None` for Signal-kind fires).
+pub async fn fire_waiting(
+    dispatcher: &TriggerDispatcher,
+    node_id: &str,
+    payload: Value,
+    waiters: &ResultWaiters,
+) -> Result<(FireResult, Option<oneshot::Receiver<TerminalOutcome>>), TriggerError> {
+    dispatcher.fire_waiting(node_id, payload, waiters).await
 }

@@ -109,11 +109,16 @@ async fn main() -> anyhow::Result<()> {
     .await;
     tracing::info!("trigger dispatcher ready");
 
+    // WaitForResult waiter registry — shared between the fire handler (via
+    // AppState) and the lifecycle consumer that resolves terminal outcomes.
+    let result_waiters = mekhan_service::triggers::ResultWaiters::new();
+
     tokio::spawn(lifecycle::start_lifecycle_listener(
         mekhan_nats.clone(),
         db.clone(),
         subscription_manager.clone(),
         Some(trigger_dispatcher.clone()),
+        result_waiters.clone(),
     ));
 
     // Causality ingest (PETRI_GLOBAL domain events → causality tables)
@@ -184,6 +189,7 @@ async fn main() -> anyhow::Result<()> {
         principal_resolver,
         introspection,
         triggers: trigger_dispatcher,
+        result_waiters,
     };
 
     let app = build_router(state);

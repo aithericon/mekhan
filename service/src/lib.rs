@@ -79,6 +79,8 @@ pub struct AppState {
     /// Bearer path in `require_auth_middleware` is disabled.
     pub introspection: Option<Arc<crate::auth::IntrospectionVerifier>>,
     pub triggers: Arc<TriggerDispatcher>,
+    /// In-flight WaitForResult waiters, shared with the lifecycle consumer.
+    pub result_waiters: Arc<crate::triggers::ResultWaiters>,
 }
 
 /// Build the `OpenApiRouter` containing every `#[utoipa::path]`-annotated
@@ -117,6 +119,7 @@ fn build_openapi_router() -> OpenApiRouter<AppState> {
         ))
         .routes(routes!(handlers::instances::get_instance_state))
         .routes(routes!(handlers::instances::get_instance_events))
+        .routes(routes!(handlers::instances::stream_instance))
         // Processes (HPI inspection)
         .routes(routes!(process::handlers::list_processes))
         .routes(routes!(process::handlers::process_stats))

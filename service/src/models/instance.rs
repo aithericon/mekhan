@@ -16,6 +16,12 @@ pub struct WorkflowInstance {
     pub completed_at: Option<DateTime<Utc>>,
     pub current_step: Option<String>,
     pub metadata: serde_json::Value,
+    /// Structured result envelope (`{ ok: true, value }` /
+    /// `{ ok: false, error: { reason, value } }`) declared by the workflow's
+    /// End/Failure result binding. NULL until the instance reaches a terminal
+    /// state, and stays NULL for workflows with no result binding.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]

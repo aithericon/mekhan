@@ -8,7 +8,7 @@ use crate::compiler::rhai_gen::{
     json_to_rhai_literal, with_pluck_prelude,
 };
 use crate::models::template::{
-    PhaseUpdateStatus, WorkflowEdge, WorkflowNode, WorkflowNodeData,
+    FieldMapping, PhaseUpdateStatus, WorkflowEdge, WorkflowNode, WorkflowNodeData,
 };
 use aithericon_executor_domain::InputSource;
 use aithericon_sdk::components::executor_lifecycle::{executor_lifecycle, ExecutorBridges};
@@ -491,11 +491,43 @@ let eid = dd.artifact_id;
     Ok(())
 }
 
+/// Build `(let-bindings, value-expr)` Rhai for a result-mapping list, mirroring
+/// the PhaseUpdate "bind interpolations to shallow locals" recipe so the
+/// envelope map literal stays within the debug-build Rhai expr-depth limit.
+/// Empty list → `("", "()")` (Rhai unit, serializes to JSON `null`).
+///
+/// `expression` is raw author Rhai (same trust model as Trigger
+/// `payload_mapping` / BranchCondition `guard`); the publish-time validator
+/// (`validate::validate_guards`) parses each and resolves its `input.<field>`
+/// refs against the node's inbound scope. `target_field` is emitted as a
+/// JSON-escaped Rhai map key so any field name is injection-safe.
+fn result_mapping_rhai(mappings: &[FieldMapping]) -> (String, String) {
+    if mappings.is_empty() {
+        return (String::new(), "()".to_string());
+    }
+    let mut lets = String::new();
+    let mut entries: Vec<String> = Vec::with_capacity(mappings.len());
+    for (i, m) in mappings.iter().enumerate() {
+        lets.push_str(&format!("let __rv{i} = ({}); ", m.expression));
+        let key =
+            serde_json::to_string(&m.target_field).unwrap_or_else(|_| "\"\"".to_string());
+        entries.push(format!("{key}: __rv{i}"));
+    }
+    (lets, format!("#{{ {} }}", entries.join(", ")))
+}
+
 fn lower_end(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     let id = &cx.node.id;
-    let WorkflowNodeData::End { label, .. } = &cx.node.data else {
+    let WorkflowNodeData::End {
+        label,
+        result_mapping,
+        ..
+    } = &cx.node.data
+    else {
         unreachable!("lower_end on non-End node")
     };
+    let (rv_lets, rv_val) = result_mapping_rhai(result_mapping);
+    let has_result = !result_mapping.is_empty();
     let ctx = &mut *cx.ctx;
 
     // Incoming edges always land in `p_{id}_done` — keep that id
@@ -504,19 +536,50 @@ fn lower_end(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     let done_id = format!("p_{id}_done");
     let done: PlaceHandle<DynamicToken> = ctx.state(&done_id, label);
 
+    // When (and only when) a result is declared, insert a pure-Rhai shape
+    // transition between the stable `p_{id}_done` and the terminal feed that
+    // stamps the success envelope onto `exit_code`. The `if "exit_code" in`
+    // guard is the Failure→End precedence rule: a token that already flowed
+    // through a Failure node keeps its `{ ok: false }` envelope; only an
+    // otherwise-unstamped token gets `{ ok: true, value }`. Skipped entirely
+    // for bare End so the terminal token (and the instance `result`) is
+    // byte-identical to pre-feature behavior.
+    let (terminal_feed, terminal_feed_id) = if has_result {
+        let shaped: PlaceHandle<DynamicToken> =
+            ctx.state(format!("p_{id}_result"), format!("{label} - Result"));
+        let logic = format!(
+            "{rv_lets}let __rv = {rv_val}; let __out = input; \
+             if \"exit_code\" in __out {{ }} \
+             else {{ __out.exit_code = #{{ ok: true, value: __rv }}; }} \
+             #{{ result: __out }}"
+        );
+        ctx.transition(
+            format!("t_{id}_result_shape"),
+            format!("{label} - Result"),
+        )
+        .auto_input("input", &done)
+        .auto_output("result", &shaped)
+        .logic_rhai(with_pluck_prelude(&logic))
+        .done();
+        (shaped, format!("p_{id}_result"))
+    } else {
+        (done.clone(), done_id)
+    };
+
     match cx.fixups.process_token_place.clone() {
         // No process was registered by the Start (opt-in unused) —
-        // the End is a bare terminal, unchanged behavior.
+        // the terminal feed is itself the terminal place.
         None => {
-            cx.fixups.terminal_place_ids.push(done_id);
+            cx.fixups.terminal_place_ids.push(terminal_feed_id);
         }
         // A Start registered a process — mirror the Start pattern:
-        // insert a `process_complete` effect between the (stable)
-        // incoming place and a new terminal. The handler reads
-        // `process_id` from the parked `ProcessStarted` token via a
-        // read-arc (non-consuming, so multiple End nodes each
-        // complete), passes the workflow token through, and the
-        // causality projector picks up `completed: true`.
+        // insert a `process_complete` effect between the (post-shape)
+        // feed place and a new terminal. The handler reads `process_id`
+        // from the parked `ProcessStarted` token via a read-arc
+        // (non-consuming, so multiple End nodes each complete), passes
+        // the workflow token through unchanged (so any stamped
+        // `exit_code` survives), and the causality projector picks up
+        // `completed: true`.
         Some(proc_place) => {
             let completed: PlaceHandle<DynamicToken> =
                 ctx.state(format!("p_{id}_completed"), format!("{label} - Completed"));
@@ -525,7 +588,7 @@ fn lower_end(cx: &mut LoweringCtx) -> Result<(), CompileError> {
                 format!("{label} - Complete Process"),
             )
             .read_input("process", &proc_place)
-            .auto_input("done", &done)
+            .auto_input("done", &terminal_feed)
             .auto_output("completed", &completed)
             .process_complete();
 
@@ -1174,11 +1237,13 @@ fn lower_failure(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     let WorkflowNodeData::Failure {
         label,
         failure_message,
+        error_result_mapping,
         ..
     } = &cx.node.data
     else {
         unreachable!("lower_failure on non-Failure node")
     };
+    let (er_lets, er_val) = result_mapping_rhai(error_result_mapping);
     let ctx = &mut *cx.ctx;
 
     // Pass-through: shape transition forwards the workflow token
@@ -1213,7 +1278,19 @@ fn lower_failure(cx: &mut LoweringCtx) -> Result<(), CompileError> {
         }
         None => (String::new(), "\"\"".to_string()),
     };
-    let logic = format!("{msg_let}#{{ out: input, fail: #{{ reason: {reason_val} }} }}");
+    // Beyond the original `#{ reason }` breadcrumb, stamp the error envelope
+    // onto the forwarded token's `exit_code`. Reaching a Failure node *is* a
+    // business-failure declaration, so this is unconditional — the net keeps
+    // running to its normal End, whose result-shape guard (`if "exit_code"
+    // in`) then preserves this envelope instead of overwriting it. Every map
+    // literal is bound to a shallow local first (debug-build Rhai expr-depth
+    // limit) — same recipe as PhaseUpdate's `__mg`.
+    let logic = format!(
+        "{msg_let}{er_lets}let __er = {er_val}; \
+         let __ec = #{{ reason: {reason_val}, value: __er }}; \
+         let __out = input; __out.exit_code = #{{ ok: false, error: __ec }}; \
+         #{{ out: __out, fail: #{{ reason: {reason_val} }} }}"
+    );
     ctx.transition(format!("t_{id}_fail_shape"), format!("{label} - Failure"))
         .auto_input("input", &p_input)
         .auto_output("out", &p_out)

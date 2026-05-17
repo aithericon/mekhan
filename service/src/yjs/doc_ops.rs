@@ -339,7 +339,13 @@ pub fn write_node_config(
                 config.insert(txn, "processName", pn.to_string());
             }
         }
-        WorkflowNodeData::End { .. } => {}
+        WorkflowNodeData::End { result_mapping, .. } => {
+            if !result_mapping.is_empty() {
+                let rm_val = serde_json::to_value(result_mapping)
+                    .unwrap_or(serde_json::Value::Array(vec![]));
+                config.insert(txn, "resultMapping", json_value_to_any(&rm_val));
+            }
+        }
         WorkflowNodeData::HumanTask {
             task_title,
             instructions_mdsvex,
@@ -415,16 +421,24 @@ pub fn write_node_config(
             }
         }
         WorkflowNodeData::Failure {
-            failure_message, ..
+            failure_message,
+            error_result_mapping,
+            ..
         } => {
             if let Some(m) = failure_message {
                 config.insert(txn, "failureMessage", m.clone());
+            }
+            if !error_result_mapping.is_empty() {
+                let erm_val = serde_json::to_value(error_result_mapping)
+                    .unwrap_or(serde_json::Value::Array(vec![]));
+                config.insert(txn, "errorResultMapping", json_value_to_any(&erm_val));
             }
         }
         WorkflowNodeData::Trigger {
             source,
             concurrency,
             payload_mapping,
+            reply_default,
             enabled,
             ..
         } => {
@@ -435,6 +449,10 @@ pub fn write_node_config(
             let mapping_val =
                 serde_json::to_value(payload_mapping).unwrap_or(serde_json::Value::Array(vec![]));
             config.insert(txn, "payloadMapping", json_value_to_any(&mapping_val));
+            if let Some(rd) = reply_default {
+                let rd_val = serde_json::to_value(rd).unwrap_or_default();
+                config.insert(txn, "replyDefault", json_value_to_any(&rd_val));
+            }
             config.insert(txn, "enabled", *enabled);
         }
     }
@@ -472,6 +490,7 @@ mod tests {
                             label: "Terminal".to_string(),
                             fields: vec![],
                         },
+                        result_mapping: Vec::new(),
                     },
                     parent_id: Some("scope1".to_string()),
                     width: None,

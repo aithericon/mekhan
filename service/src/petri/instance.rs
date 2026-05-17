@@ -257,6 +257,7 @@ mod tests {
                         label: "End".to_string(),
                         description: None,
                         terminal: crate::models::template::default_terminal_port(),
+                        result_mapping: Vec::new(),
                     },
                     parent_id: None,
                     width: None,

@@ -22,6 +22,8 @@ use utoipa::OpenApi;
             crate::causality::live::LiveMetricEvent,
             crate::causality::live::LiveLogEvent,
             crate::causality::live::LiveArtifactEvent,
+            crate::models::template::ReplyMode,
+            crate::triggers::TerminalOutcome,
         ),
     ),
     tags(

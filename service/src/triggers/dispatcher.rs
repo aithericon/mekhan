@@ -21,6 +21,8 @@ use super::model::{
     locate_trigger, FireOutcome, FireResult, TriggerError, TriggerKind, TriggerLocator,
     TriggerRecord,
 };
+use super::waiters::{ResultWaiters, TerminalOutcome};
+use tokio::sync::oneshot;
 
 /// In-memory registry of triggers across all published templates plus the
 /// runtime collaborators needed to fire one. Cheap to clone (everything is
@@ -129,7 +131,10 @@ impl TriggerDispatcher {
         let mut registered = 0;
         for node in &graph.nodes {
             let WorkflowNodeData::Trigger {
-                source, enabled, ..
+                source,
+                enabled,
+                reply_default,
+                ..
             } = &node.data
             else {
                 continue;
@@ -163,6 +168,7 @@ impl TriggerDispatcher {
                 target_node_id: target_node.id.clone(),
                 target_handle,
                 source: source.clone(),
+                reply_default: *reply_default,
                 enabled: *enabled,
                 registered_at: Utc::now(),
             };
@@ -220,13 +226,41 @@ impl TriggerDispatcher {
             .unwrap_or_default()
     }
 
-    /// Core fire path. Resolves the trigger, evaluates `payload_mapping`
-    /// against `event_payload`, then routes to spawn or signal.
+    /// Fire a trigger, discarding any WaitForResult handle. The path used by
+    /// every background source (cron/catalog/lifecycle/webhook) and by
+    /// FireAndForget callers.
     pub async fn fire(
         &self,
         node_id: &str,
         event_payload: Value,
     ) -> Result<FireResult, TriggerError> {
+        self.fire_impl(node_id, event_payload, None)
+            .await
+            .map(|(result, _rx)| result)
+    }
+
+    /// Fire a trigger and, for a Spawn, register a WaitForResult waiter.
+    /// Returns the receiver alongside the `FireResult` (always `None` for
+    /// Signal-kind fires — there is no instance to wait on).
+    pub async fn fire_waiting(
+        &self,
+        node_id: &str,
+        event_payload: Value,
+        waiters: &ResultWaiters,
+    ) -> Result<(FireResult, Option<oneshot::Receiver<TerminalOutcome>>), TriggerError> {
+        self.fire_impl(node_id, event_payload, Some(waiters)).await
+    }
+
+    /// Core fire path. Resolves the trigger, evaluates `payload_mapping`
+    /// against `event_payload`, then routes to spawn or signal. When `wait`
+    /// is `Some` and the route spawns, a WaitForResult waiter is registered
+    /// and its receiver returned.
+    async fn fire_impl(
+        &self,
+        node_id: &str,
+        event_payload: Value,
+        wait: Option<&ResultWaiters>,
+    ) -> Result<(FireResult, Option<oneshot::Receiver<TerminalOutcome>>), TriggerError> {
         let record = self
             .triggers
             .get(node_id)
@@ -327,11 +361,14 @@ impl TriggerDispatcher {
         ) {
             Ok(t) => t,
             Err(e) => {
-                return Ok(finalize(
-                    FireOutcome::Dropped {
-                        reason: format!("payload mapping failed: {e}"),
-                    },
-                    false,
+                return Ok((
+                    finalize(
+                        FireOutcome::Dropped {
+                            reason: format!("payload mapping failed: {e}"),
+                        },
+                        false,
+                    ),
+                    None,
                 ));
             }
         };
@@ -342,20 +379,37 @@ impl TriggerDispatcher {
         // `parameterize_air`). Spawn's `parameterize_air` re-checks the same
         // Start port; redundant but keeps its other duties intact.
         if let Err(ve) = target_port.validate_token(&token) {
-            return Ok(finalize(
-                FireOutcome::Dropped {
-                    reason: format!("token rejected by target port '{}': {ve}", target_port.id),
-                },
-                false,
+            return Ok((
+                finalize(
+                    FireOutcome::Dropped {
+                        reason: format!(
+                            "token rejected by target port '{}': {ve}",
+                            target_port.id
+                        ),
+                    },
+                    false,
+                ),
+                None,
             ));
         }
 
-        let outcome_result = match record.kind {
-            TriggerKind::Spawn => self.fire_spawn(&record, &template, &graph, token).await,
-            TriggerKind::Signal => self.fire_signal(&record, token).await,
+        let (outcome_result, rx): (
+            Result<FireOutcome, TriggerError>,
+            Option<oneshot::Receiver<TerminalOutcome>>,
+        ) = match record.kind {
+            TriggerKind::Spawn => {
+                match self
+                    .fire_spawn(&record, &template, &graph, token, wait)
+                    .await
+                {
+                    Ok((outcome, rx)) => (Ok(outcome), rx),
+                    Err(e) => (Err(e), None),
+                }
+            }
+            TriggerKind::Signal => (self.fire_signal(&record, token).await, None),
         };
         match outcome_result {
-            Ok(outcome) => Ok(finalize(outcome, false)),
+            Ok(outcome) => Ok((finalize(outcome, false), rx)),
             Err(e) => {
                 // Genuine infra failure (DB / deploy / NATS). Record it so it's
                 // visible in history and counted as an error (not the old
@@ -377,7 +431,8 @@ impl TriggerDispatcher {
         template: &WorkflowTemplate,
         graph: &WorkflowGraph,
         token: Value,
-    ) -> Result<FireOutcome, TriggerError> {
+        wait: Option<&ResultWaiters>,
+    ) -> Result<(FireOutcome, Option<oneshot::Receiver<TerminalOutcome>>), TriggerError> {
         let air_json = template
             .air_json
             .clone()
@@ -422,9 +477,37 @@ impl TriggerDispatcher {
             .await
             .map_err(|e| TriggerError::InstanceFailed(e.to_string()))?;
 
-        Ok(FireOutcome::Spawned {
-            instance_id: instance.id,
-        })
+        // WaitForResult: register the waiter, then close the
+        // create→deploy→terminal race. The net may already be terminal (the
+        // lifecycle consumer's `resolve` was a no-op — no waiter existed when
+        // it ran); re-read the row and resolve synchronously if so. `resolve`
+        // is idempotent, so a consumer that resolves between our `register`
+        // and this re-read is harmless (first writer wins).
+        let rx = match wait {
+            Some(waiters) => {
+                let rx = waiters.register(instance.id);
+                if let Ok(Some((status, result))) =
+                    sqlx::query_as::<_, (String, Option<serde_json::Value>)>(
+                        "SELECT status, result FROM workflow_instances WHERE id = $1",
+                    )
+                    .bind(instance.id)
+                    .fetch_optional(&self.db)
+                    .await
+                {
+                    if matches!(
+                        status.as_str(),
+                        "completed" | "cancelled" | "failed" | "archived"
+                    ) {
+                        waiters
+                            .resolve(&instance.id, TerminalOutcome { status, result });
+                    }
+                }
+                Some(rx)
+            }
+            None => None,
+        };
+
+        Ok((FireOutcome::Spawned { instance_id: instance.id }, rx))
     }
 
     async fn fire_signal(

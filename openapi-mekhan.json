@@ -849,6 +849,56 @@
         }
       }
     },
+    "/api/instances/{id}/stream": {
+      "get": {
+        "tags": [
+          "instances"
+        ],
+        "summary": "GET /api/instances/{id}/stream",
+        "description": "SSE stream of the instance's domain events, replayed from the start\n(`DeliverPolicy::All`) then live, terminated by a final `result` event\ncarrying the structured envelope. Composes with FireAndForget: fire, get\nthe instance id, then open this stream. No per-instance ownership check —\nconsistent with `get_instance` (auth middleware gates the route).",
+        "operationId": "stream_instance",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Instance id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "SSE stream of domain events + final result",
+            "content": {
+              "text/event-stream": {}
+            }
+          },
+          "404": {
+            "description": "Instance not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/processes": {
       "get": {
         "tags": [
@@ -3150,8 +3200,6 @@
         "tags": [
           "triggers"
         ],
-        "summary": "POST /api/triggers/{node_id}/fire",
-        "description": "Accepts either `application/json` (`{ \"payload\": { ... } }` — the scope\nkeys for `payload_mapping`) or `multipart/form-data` for file entrypoints:\nan optional JSON `payload` part plus one binary part per file field. Each\nfile part is uploaded to blob storage (scoped to the trigger's template +\ntarget node) and injected into the payload under the part name as a\n`{ key, url, filename, content_type, size }` reference object — the same\nshape the create-instance dialog produces, which `FieldKind::File` accepts.",
         "operationId": "fire_trigger",
         "parameters": [
           {
@@ -3176,7 +3224,7 @@
         },
         "responses": {
           "200": {
-            "description": "Trigger fired",
+            "description": "Trigger fired (FireAndForget, or WaitForResult resolved)",
             "content": {
               "application/json": {
                 "schema": {
@@ -3184,6 +3232,9 @@
                 }
               }
             }
+          },
+          "202": {
+            "description": "WaitForResult timed out — instance still running; poll/stream it"
           },
           "400": {
             "description": "Fire failed (e.g. mapping or instance error)",
@@ -3204,6 +3255,9 @@
                 }
               }
             }
+          },
+          "406": {
+            "description": "SSE requested on the fire endpoint — use GET /api/instances/{id}/stream"
           }
         }
       }
@@ -4379,6 +4433,17 @@
         "properties": {
           "payload": {
             "description": "JSON object whose top-level keys are bound as the trigger's scope\nidentifiers for `payload_mapping`. For `Manual` triggers supply the\nform values keyed by field name (matching `source_scope`); for other\nsources the dispatcher synthesizes this scope from the event itself."
+          },
+          "reply_mode": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ReplyMode",
+                "description": "Optional per-request reply mode (lowest of the explicit selectors —\noverridden by `?reply=` / `Prefer`, overrides the node default)."
+              }
+            ]
           }
         }
       },
@@ -4388,6 +4453,17 @@
           "result"
         ],
         "properties": {
+          "outcome": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TerminalOutcome",
+                "description": "Present only on a successful `WaitForResult` fire — the instance's\nterminal disposition. Absent (not `null`) for FireAndForget, keeping\nthe default response byte-identical to pre-feature behavior."
+              }
+            ]
+          },
           "result": {
             "$ref": "#/components/schemas/FireResult"
           }
@@ -5913,6 +5989,15 @@
           }
         }
       },
+      "ReplyMode": {
+        "type": "string",
+        "description": "How a `POST /api/triggers/{id}/fire` caller wants the response delivered.\nThe caller selects per-request (query `?reply=`, `Prefer` header, or a\nJSON body field); a Trigger node's optional `replyDefault` is used only\nwhen the caller doesn't specify. `Sse` is never *executed* on the fire\nendpoint — SSE is the dedicated `GET /api/instances/{id}/stream` — but is\nmodeled so a node can advertise it as the intended consumption mode.",
+        "enum": [
+          "fire_and_forget",
+          "wait_for_result",
+          "sse"
+        ]
+      },
       "RetryPolicy": {
         "type": "object",
         "description": "Retry behaviour for an `AutomatedStep` whose execution fails or times out.\n\nOn failure the compiler re-dispatches the job (a fresh executor submit)\nwhile `retries < max_retries`, optionally after a `backoff` delay, then\nroutes the exhausted token to the node's error output.",
@@ -6368,6 +6453,22 @@
           },
           "title": {
             "type": "string"
+          }
+        }
+      },
+      "TerminalOutcome": {
+        "type": "object",
+        "description": "The terminal disposition handed back to a WaitForResult caller.",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "result": {
+            "description": "The structured result envelope (the same value persisted to\n`workflow_instances.result`), or absent when none was produced."
+          },
+          "status": {
+            "type": "string",
+            "description": "Net terminal status: `completed` | `cancelled` | `failed`."
           }
         }
       },
@@ -6882,6 +6983,9 @@
           "net_id": {
             "type": "string"
           },
+          "result": {
+            "description": "Structured result envelope (`{ ok: true, value }` /\n`{ ok: false, error: { reason, value } }`) declared by the workflow's\nEnd/Failure result binding. NULL until the instance reaches a terminal\nstate, and stays NULL for workflows with no result binding."
+          },
           "started_at": {
             "type": [
               "string",
@@ -7000,6 +7104,13 @@
               },
               "label": {
                 "type": "string"
+              },
+              "resultMapping": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/FieldMapping"
+                },
+                "description": "Optional success-result binding. Each entry's `expression` is a\nRhai expression over the inbound token; together they assemble the\nstructured `value` of the success envelope (`{ ok: true, value }`)\nstamped onto the terminal token's `exit_code`. Empty (the default)\ninserts no transition — the terminal token is byte-identical to\npre-feature behavior and the instance `result` stays NULL."
               },
               "terminal": {
                 "$ref": "#/components/schemas/Port",
@@ -7347,6 +7458,13 @@
                   "null"
                 ]
               },
+              "errorResultMapping": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/FieldMapping"
+                },
+                "description": "Optional error-result binding. Each entry's `expression` is a Rhai\nexpression over the inbound token; together they assemble the\nstructured `error.value` of the error envelope\n(`{ ok: false, error: { reason, value } }`) stamped onto the\ntoken's `exit_code` and carried through to the terminal End."
+              },
               "failureMessage": {
                 "type": [
                   "string",
@@ -7397,6 +7515,17 @@
                   "$ref": "#/components/schemas/FieldMapping"
                 },
                 "description": "Per-target-field mapping. Each entry's `expression` is a Rhai\nexpression evaluated against the trigger source's event payload."
+              },
+              "replyDefault": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ReplyMode",
+                    "description": "Default reply mode applied when a fire caller doesn't request one.\nOptional + skip-if-none so existing published graphs round-trip\nunchanged."
+                  }
+                ]
               },
               "source": {
                 "$ref": "#/components/schemas/TriggerSource",

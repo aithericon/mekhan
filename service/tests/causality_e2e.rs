@@ -306,6 +306,7 @@ async fn causality_full_pipeline() {
         principal_resolver,
         introspection: None,
         triggers,
+        result_waiters: mekhan_service::triggers::ResultWaiters::new(),
     });
 
     // ── 2. Spawn Mekhan consumers (clean slate) ──────────────────────────
@@ -360,7 +361,7 @@ async fn causality_full_pipeline() {
     let l_db = db.clone();
     let l_sub = sub_mgr.clone();
     let _lifecycle =
-        spawn_consumer(move || start_lifecycle_listener(l_nats, l_db, l_sub, None)).await;
+        spawn_consumer(move || start_lifecycle_listener(l_nats, l_db, l_sub, None, mekhan_service::triggers::ResultWaiters::new())).await;
 
     // ── 3. Compile & deploy scenario ─────────────────────────────────────
 
@@ -614,7 +615,7 @@ async fn interpolated_human_task_resolves_start_file_param() {
     let l_db = db.clone();
     let l_sub = sub_mgr.clone();
     let _lifecycle =
-        spawn_consumer(move || start_lifecycle_listener(l_nats, l_db, l_sub, None)).await;
+        spawn_consumer(move || start_lifecycle_listener(l_nats, l_db, l_sub, None, mekhan_service::triggers::ResultWaiters::new())).await;
 
     // Minimal Start(file param) → Review(interpolated blocks) → End graph.
     let graph = json!({
@@ -795,4 +796,262 @@ async fn interpolated_human_task_resolves_start_file_param() {
     );
 
     eprintln!("  ✓ interpolated_human_task_resolves_start_file_param passed");
+}
+
+// ── Rich return values: result-envelope pipeline ─────────────────────────
+//
+// End-to-end proof of Part A: compiler stamps `exit_code` → engine lifts it
+// into `NetCompleted` → lifecycle consumer persists it to
+// `workflow_instances.result`. Covers the success envelope, the Failure→End
+// precedence guard, and the bare-End backward-compat (result stays NULL).
+
+/// Spin up the app + NATS consumers (causality + lifecycle), publish `graph`,
+/// create one instance seeded with `start_token`, and return
+/// `(app, db, instance_id)` once it is `running`.
+async fn rrv_publish_and_create(
+    graph: Value,
+    start_token: Value,
+) -> (axum::Router, sqlx::PgPool, Uuid, TaskHandle, TaskHandle) {
+    let engine_nats = engine_nats_url();
+    let (app, db) = common::test_app_with_petri_url(&engine_nats, &engine_url()).await;
+    let nats = MekhanNats::connect(&engine_nats, None)
+        .await
+        .expect("connect to NATS");
+    clean_slate(&nats).await;
+    let kv = nats
+        .ensure_catalogue_subscriptions_kv()
+        .await
+        .expect("create KV");
+    let sub_mgr = Arc::new(SubscriptionManager::new(kv, nats.jetstream().clone()));
+
+    let c_nats = nats.clone();
+    let c_db = db.clone();
+    let c_sub = sub_mgr.clone();
+    let c_live = LiveBroadcasts::new();
+    let causality =
+        spawn_consumer(move || start_causality_ingest(c_nats, c_db, c_sub, c_live, None)).await;
+    let l_nats = nats.clone();
+    let l_db = db.clone();
+    let l_sub = sub_mgr.clone();
+    let lifecycle = spawn_consumer(move || {
+        start_lifecycle_listener(
+            l_nats,
+            l_db,
+            l_sub,
+            None,
+            mekhan_service::triggers::ResultWaiters::new(),
+        )
+    })
+    .await;
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/templates")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&json!({
+                        "name": "Rich Return E2E",
+                        "graph": graph,
+                        "author_id": Uuid::new_v4(),
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED, "create template");
+    let template_id = body_json(resp.into_body()).await["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/templates/{template_id}/publish"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "publish template");
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/instances")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&json!({
+                        "template_id": template_id,
+                        "created_by": Uuid::new_v4(),
+                        "metadata": {},
+                        "start_tokens": [{ "start_block_id": "start", "token": start_token }],
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED, "create instance");
+    let instance = body_json(resp.into_body()).await;
+    let id = Uuid::parse_str(instance["id"].as_str().unwrap()).unwrap();
+    // Hand the consumer handles back — `TaskHandle` aborts on drop, so the
+    // caller must keep them alive for the duration of the test.
+    (app, db, id, causality, lifecycle)
+}
+
+async fn fetch_result(db: &sqlx::PgPool, id: Uuid) -> Option<Value> {
+    sqlx::query_scalar::<_, Option<Value>>(
+        "SELECT result FROM workflow_instances WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_one(db)
+    .await
+    .unwrap()
+}
+
+fn start_with_fields(fields: Value) -> Value {
+    json!({
+        "id": "start", "type": "start", "position": { "x": 0, "y": 0 },
+        "data": { "type": "start", "label": "Start",
+                  "initial": { "id": "in", "label": "In", "fields": fields } }
+    })
+}
+
+#[tokio::test]
+async fn rrv_end_result_mapping_success_envelope() {
+    if !engine_available().await {
+        eprintln!("SKIP: engine not available — just dev up");
+        return;
+    }
+    let graph = json!({
+        "nodes": [
+            start_with_fields(json!([
+                { "name": "amount", "label": "Amount", "kind": "number", "required": true }
+            ])),
+            { "id": "end", "type": "end", "position": { "x": 240, "y": 0 },
+              "data": { "type": "end", "label": "Done",
+                        "resultMapping": [
+                            { "targetField": "total", "expression": "input.amount" }
+                        ] } }
+        ],
+        "edges": [
+            { "id": "e1", "source": "start", "target": "end",
+              "targetHandle": "in", "type": "sequence" }
+        ]
+    });
+    let (app, db, id, _c, _l) =
+        rrv_publish_and_create(graph, json!({ "amount": 42 })).await;
+    wait_for_instance_status(&db, id, "completed", Duration::from_secs(30)).await;
+
+    assert_eq!(
+        fetch_result(&db, id).await,
+        Some(json!({ "ok": true, "value": { "total": 42 } })),
+        "success envelope persisted from exit_code"
+    );
+
+    // The GET handler surfaces it too (model + serde wiring).
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/instances/{id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = body_json(resp.into_body()).await;
+    assert_eq!(body["result"], json!({ "ok": true, "value": { "total": 42 } }));
+    eprintln!("  ✓ rrv_end_result_mapping_success_envelope passed");
+}
+
+#[tokio::test]
+async fn rrv_failure_precedence_over_end() {
+    if !engine_available().await {
+        eprintln!("SKIP: engine not available — just dev up");
+        return;
+    }
+    // Start → Failure → End. The Failure stamps the error envelope; the End
+    // also declares a resultMapping. The precedence guard must keep the
+    // Failure envelope (net still completes — Failure forwards to End).
+    let graph = json!({
+        "nodes": [
+            start_with_fields(json!([
+                { "name": "code", "label": "Code", "kind": "text", "required": true }
+            ])),
+            { "id": "f", "type": "failure", "position": { "x": 240, "y": 0 },
+              "data": { "type": "failure", "label": "Fail",
+                        "failureMessage": "boom",
+                        "errorResultMapping": [
+                            { "targetField": "code", "expression": "input.code" }
+                        ] } },
+            { "id": "end", "type": "end", "position": { "x": 480, "y": 0 },
+              "data": { "type": "end", "label": "Done",
+                        "resultMapping": [
+                            { "targetField": "clobbered", "expression": "\"NOPE\"" }
+                        ] } }
+        ],
+        "edges": [
+            { "id": "e1", "source": "start", "target": "f",
+              "targetHandle": "in", "type": "sequence" },
+            { "id": "e2", "source": "f", "target": "end",
+              "targetHandle": "in", "type": "sequence" }
+        ]
+    });
+    let (_app, db, id, _c, _l) =
+        rrv_publish_and_create(graph, json!({ "code": "E_BAD" })).await;
+    // Failure does NOT change net status — it forwards to End → completed.
+    wait_for_instance_status(&db, id, "completed", Duration::from_secs(30)).await;
+
+    let result = fetch_result(&db, id).await.expect("result persisted");
+    assert_eq!(result["ok"], json!(false), "Failure envelope preserved");
+    assert_eq!(result["error"]["reason"], json!("boom"));
+    assert_eq!(result["error"]["value"], json!({ "code": "E_BAD" }));
+    assert!(
+        !result.to_string().contains("NOPE"),
+        "End must not clobber the Failure envelope: {result}"
+    );
+    eprintln!("  ✓ rrv_failure_precedence_over_end passed");
+}
+
+#[tokio::test]
+async fn rrv_bare_end_result_is_null() {
+    if !engine_available().await {
+        eprintln!("SKIP: engine not available — just dev up");
+        return;
+    }
+    // Start → End, no resultMapping, no Failure: backward-compat contract —
+    // no exit_code stamped → NetCompleted.exit_code None → result stays NULL.
+    let graph = json!({
+        "nodes": [
+            start_with_fields(json!([
+                { "name": "x", "label": "X", "kind": "number", "required": false }
+            ])),
+            { "id": "end", "type": "end", "position": { "x": 240, "y": 0 },
+              "data": { "type": "end", "label": "Done" } }
+        ],
+        "edges": [
+            { "id": "e1", "source": "start", "target": "end",
+              "targetHandle": "in", "type": "sequence" }
+        ]
+    });
+    let (_app, db, id, _c, _l) =
+        rrv_publish_and_create(graph, json!({ "x": 1 })).await;
+    wait_for_instance_status(&db, id, "completed", Duration::from_secs(30)).await;
+    assert_eq!(
+        fetch_result(&db, id).await,
+        None,
+        "bare End must leave result NULL (unchanged legacy behavior)"
+    );
+    eprintln!("  ✓ rrv_bare_end_result_is_null passed");
 }

@@ -17,6 +17,11 @@ pub struct AppConfig {
     pub nats_creds: Option<String>,
     #[serde(default)]
     pub cleanup: CleanupConfig,
+    /// Upper bound (seconds) a `?reply=wait` fire holds the HTTP connection
+    /// before degrading to `202 { instance_id }`. Bounds connection/pool
+    /// pressure; SSE is the path for genuinely long workflows.
+    #[serde(default = "default_wait_timeout_secs")]
+    pub wait_timeout_secs: u64,
     #[serde(default)]
     pub s3: S3Config,
     #[serde(default)]
@@ -201,6 +206,10 @@ impl Default for CleanupConfig {
             purge_events: default_purge_events(),
         }
     }
+}
+
+fn default_wait_timeout_secs() -> u64 {
+    30
 }
 
 fn default_host() -> String {

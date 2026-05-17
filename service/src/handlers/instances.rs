@@ -1,8 +1,16 @@
+use std::convert::Infallible;
+use std::time::Duration;
+
+use async_nats::jetstream;
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
+    response::sse::{Event, KeepAlive, Sse},
     Json,
 };
+use futures::stream::Stream;
+use futures::StreamExt;
+use petri_domain::{DomainEvent, PersistedEvent};
 use serde_json::json;
 use uuid::Uuid;
 
@@ -201,6 +209,147 @@ pub async fn get_instance(
     .ok_or_else(|| ApiError::not_found("instance not found"))?;
 
     Ok(Json(instance))
+}
+
+/// GET /api/instances/{id}/stream
+///
+/// SSE stream of the instance's domain events, replayed from the start
+/// (`DeliverPolicy::All`) then live, terminated by a final `result` event
+/// carrying the structured envelope. Composes with FireAndForget: fire, get
+/// the instance id, then open this stream. No per-instance ownership check —
+/// consistent with `get_instance` (auth middleware gates the route).
+#[utoipa::path(
+    get,
+    path = "/api/instances/{id}/stream",
+    params(("id" = Uuid, Path, description = "Instance id")),
+    responses(
+        (status = 200, description = "SSE stream of domain events + final result", content_type = "text/event-stream"),
+        (status = 404, description = "Instance not found", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse),
+    ),
+    tag = "instances",
+)]
+pub async fn stream_instance(
+    State(state): State<AppState>,
+    _user: AuthUser,
+    Path(id): Path<Uuid>,
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
+    // Pre-stream existence check so 404 is a real HTTP status (not an SSE
+    // error frame), and to short-circuit already-terminal / history-purged
+    // instances without touching NATS.
+    let row = sqlx::query_as::<_, (String, String, Option<serde_json::Value>)>(
+        "SELECT net_id, status, result FROM workflow_instances WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?;
+    let (net_id, status, db_result) =
+        row.ok_or_else(|| ApiError::not_found("instance not found"))?;
+
+    let already_terminal = matches!(
+        status.as_str(),
+        "completed" | "cancelled" | "failed" | "archived"
+    );
+    let nats = state.nats.clone();
+
+    let stream = async_stream::stream! {
+        yield Ok(Event::default().event("connected").data(net_id.clone()));
+
+        // Already finished (or events purged by the cleanup sweep): emit the
+        // persisted result envelope and close — no point replaying history.
+        if already_terminal {
+            let payload = db_result.unwrap_or(serde_json::Value::Null);
+            yield Ok(Event::default().event("result").data(payload.to_string()));
+            return;
+        }
+
+        let stream_h = match nats.jetstream().get_stream("PETRI_GLOBAL").await {
+            Ok(s) => s,
+            Err(e) => {
+                yield Ok(Event::default().event("error").data(format!("stream: {e}")));
+                return;
+            }
+        };
+        // Ephemeral consumer (no durable name) so NATS auto-reaps it when the
+        // client disconnects and this future is dropped.
+        let consumer = match stream_h
+            .create_consumer(jetstream::consumer::pull::Config {
+                filter_subject: format!("petri.events.{net_id}.>"),
+                deliver_policy: jetstream::consumer::DeliverPolicy::All,
+                ack_policy: jetstream::consumer::AckPolicy::Explicit,
+                ..Default::default()
+            })
+            .await
+        {
+            Ok(c) => c,
+            Err(e) => {
+                yield Ok(Event::default().event("error").data(format!("consumer: {e}")));
+                return;
+            }
+        };
+        let mut messages = match consumer.messages().await {
+            Ok(m) => m,
+            Err(e) => {
+                yield Ok(Event::default().event("error").data(format!("messages: {e}")));
+                return;
+            }
+        };
+
+        let mut ping = tokio::time::interval(Duration::from_secs(10));
+        loop {
+            tokio::select! {
+                msg = messages.next() => {
+                    match msg {
+                        Some(Ok(m)) => {
+                            if let Ok(ev) = serde_json::from_slice::<PersistedEvent>(&m.payload) {
+                                let name = serde_json::to_value(&ev.event)
+                                    .ok()
+                                    .and_then(|v| {
+                                        v.get("type")
+                                            .and_then(|t| t.as_str().map(String::from))
+                                    })
+                                    .unwrap_or_else(|| "event".to_string());
+                                let data =
+                                    serde_json::to_string(&ev).unwrap_or_default();
+                                yield Ok(Event::default().event(name).data(data));
+
+                                // Terminal: derive the envelope straight from
+                                // the event (race-free vs. the DB write the
+                                // lifecycle consumer is doing concurrently),
+                                // emit it, and close.
+                                let terminal_envelope = match &ev.event {
+                                    DomainEvent::NetCompleted { exit_code, .. } => {
+                                        Some(exit_code.clone().unwrap_or(serde_json::Value::Null))
+                                    }
+                                    DomainEvent::NetCancelled { reason, .. } => Some(json!({
+                                        "ok": false,
+                                        "error": { "reason": reason, "value": serde_json::Value::Null }
+                                    })),
+                                    _ => None,
+                                };
+                                if let Some(env) = terminal_envelope {
+                                    let _ = m.ack().await;
+                                    yield Ok(Event::default().event("result").data(env.to_string()));
+                                    return;
+                                }
+                            }
+                            let _ = m.ack().await;
+                        }
+                        Some(Err(e)) => {
+                            tracing::warn!("instance stream read error: {e}");
+                        }
+                        None => return,
+                    }
+                }
+                _ = ping.tick() => {
+                    yield Ok(Event::default().comment("ping"));
+                }
+            }
+        }
+    };
+
+    Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(10))))
 }
 
 /// GET /api/instances/:id/state

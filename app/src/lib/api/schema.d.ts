@@ -319,6 +319,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/instances/{id}/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/instances/{id}/stream
+         * @description SSE stream of the instance's domain events, replayed from the start
+         *     (`DeliverPolicy::All`) then live, terminated by a final `result` event
+         *     carrying the structured envelope. Composes with FireAndForget: fire, get
+         *     the instance id, then open this stream. No per-instance ownership check —
+         *     consistent with `get_instance` (auth middleware gates the route).
+         */
+        get: operations["stream_instance"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/processes": {
         parameters: {
             query?: never;
@@ -1065,16 +1089,6 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /**
-         * POST /api/triggers/{node_id}/fire
-         * @description Accepts either `application/json` (`{ "payload": { ... } }` — the scope
-         *     keys for `payload_mapping`) or `multipart/form-data` for file entrypoints:
-         *     an optional JSON `payload` part plus one binary part per file field. Each
-         *     file part is uploaded to blob storage (scoped to the trigger's template +
-         *     target node) and injected into the payload under the part name as a
-         *     `{ key, url, filename, content_type, size }` reference object — the same
-         *     shape the create-instance dialog produces, which `FieldKind::File` accepts.
-         */
         post: operations["fire_trigger"];
         delete?: never;
         options?: never;
@@ -1524,8 +1538,10 @@ export interface components {
              *     sources the dispatcher synthesizes this scope from the event itself.
              */
             payload?: unknown;
+            reply_mode?: null | components["schemas"]["ReplyMode"];
         };
         FireTriggerResponse: {
+            outcome?: null | components["schemas"]["TerminalOutcome"];
             result: components["schemas"]["FireResult"];
         };
         HealthResponse: {
@@ -2038,6 +2054,16 @@ export interface components {
             nodes: components["schemas"]["AncestryNode"][];
         };
         /**
+         * @description How a `POST /api/triggers/{id}/fire` caller wants the response delivered.
+         *     The caller selects per-request (query `?reply=`, `Prefer` header, or a
+         *     JSON body field); a Trigger node's optional `replyDefault` is used only
+         *     when the caller doesn't specify. `Sse` is never *executed* on the fire
+         *     endpoint — SSE is the dedicated `GET /api/instances/{id}/stream` — but is
+         *     modeled so a node can advertise it as the intended consumption mode.
+         * @enum {string}
+         */
+        ReplyMode: "fire_and_forget" | "wait_for_result" | "sse";
+        /**
          * @description Retry behaviour for an `AutomatedStep` whose execution fails or times out.
          *
          *     On failure the compiler re-dispatches the job (a fresh executor submit)
@@ -2200,6 +2226,16 @@ export interface components {
             id: string;
             title: string;
         };
+        /** @description The terminal disposition handed back to a WaitForResult caller. */
+        TerminalOutcome: {
+            /**
+             * @description The structured result envelope (the same value persisted to
+             *     `workflow_instances.result`), or absent when none was produced.
+             */
+            result?: unknown;
+            /** @description Net terminal status: `completed` | `cancelled` | `failed`. */
+            status: string;
+        };
         TokenInfo: {
             /**
              * @description Full token payload (color). Null for `consumed` role when the
@@ -2338,6 +2374,13 @@ export interface components {
             id: string;
             metadata: unknown;
             net_id: string;
+            /**
+             * @description Structured result envelope (`{ ok: true, value }` /
+             *     `{ ok: false, error: { reason, value } }`) declared by the workflow's
+             *     End/Failure result binding. NULL until the instance reaches a terminal
+             *     state, and stays NULL for workflows with no result binding.
+             */
+            result?: unknown;
             /** Format: date-time */
             started_at?: string | null;
             status: string;
@@ -2389,6 +2432,15 @@ export interface components {
         } | {
             description?: string | null;
             label: string;
+            /**
+             * @description Optional success-result binding. Each entry's `expression` is a
+             *     Rhai expression over the inbound token; together they assemble the
+             *     structured `value` of the success envelope (`{ ok: true, value }`)
+             *     stamped onto the terminal token's `exit_code`. Empty (the default)
+             *     inserts no transition — the terminal token is byte-identical to
+             *     pre-feature behavior and the instance `result` stays NULL.
+             */
+            resultMapping?: components["schemas"]["FieldMapping"][];
             /**
              * @description Declared terminal token shape. Defaults to an empty port (accepts
              *     any incoming token) so existing End nodes keep working. UI editor
@@ -2500,6 +2552,14 @@ export interface components {
         } | {
             description?: string | null;
             /**
+             * @description Optional error-result binding. Each entry's `expression` is a Rhai
+             *     expression over the inbound token; together they assemble the
+             *     structured `error.value` of the error envelope
+             *     (`{ ok: false, error: { reason, value } }`) stamped onto the
+             *     token's `exit_code` and carried through to the terminal End.
+             */
+            errorResultMapping?: components["schemas"]["FieldMapping"][];
+            /**
              * @description Failure message. Supports `{{ field }}` placeholders resolved
              *     against the inbound token at run time.
              */
@@ -2519,6 +2579,7 @@ export interface components {
              *     expression evaluated against the trigger source's event payload.
              */
             payloadMapping?: components["schemas"]["FieldMapping"][];
+            replyDefault?: null | components["schemas"]["ReplyMode"];
             /** @description Tagged source describing what event fires this trigger. */
             source: components["schemas"]["TriggerSource"];
             /** @enum {string} */
@@ -3166,6 +3227,47 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["InstanceStateResponse"];
+                };
+            };
+            /** @description Instance not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    stream_instance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Instance id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description SSE stream of domain events + final result */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": unknown;
                 };
             };
             /** @description Instance not found */
@@ -4777,7 +4879,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Trigger fired */
+            /** @description Trigger fired (FireAndForget, or WaitForResult resolved) */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -4785,6 +4887,13 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["FireTriggerResponse"];
                 };
+            };
+            /** @description WaitForResult timed out — instance still running; poll/stream it */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Fire failed (e.g. mapping or instance error) */
             400: {
@@ -4803,6 +4912,13 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
+            };
+            /** @description SSE requested on the fire endpoint — use GET /api/instances/{id}/stream */
+            406: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

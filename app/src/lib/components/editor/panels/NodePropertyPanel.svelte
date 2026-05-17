@@ -18,6 +18,7 @@
 	import PhaseUpdateNodeSection from './property-sections/PhaseUpdateNodeSection.svelte';
 	import ProgressUpdateNodeSection from './property-sections/ProgressUpdateNodeSection.svelte';
 	import FailureNodeSection from './property-sections/FailureNodeSection.svelte';
+	import EndNodeSection from './property-sections/EndNodeSection.svelte';
 	import { computeScopes, type ScopeEntry } from '$lib/editor/guard-scope';
 	import { outputPortsFor } from '$lib/editor/derived-ports';
 	import { Button } from '$lib/components/ui/button';
@@ -175,6 +176,8 @@
 			<ProgressUpdateNodeSection {data} {readonly} {onchange} />
 		{:else if data.type === 'failure'}
 			<FailureNodeSection {data} {readonly} {onchange} />
+		{:else if data.type === 'end'}
+			<EndNodeSection {data} {readonly} {onchange} />
 		{/if}
 
 		<!-- Phase 4: read-only derived port preview for variants whose outputs

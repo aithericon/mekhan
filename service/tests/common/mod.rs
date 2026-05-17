@@ -69,6 +69,7 @@ pub fn test_config() -> AppConfig {
         nats_url: nats_url(),
         nats_creds: None,
         cleanup: CleanupConfig::default(),
+        wait_timeout_secs: 30,
         s3: S3Config {
             endpoint: s3_endpoint,
             bucket: "mekhan-test".to_string(),
@@ -129,6 +130,7 @@ pub async fn test_app_with_authenticator(
         principal_resolver: Arc::new(StaticPrincipalResolver),
         introspection: None,
         triggers,
+        result_waiters: mekhan_service::triggers::ResultWaiters::new(),
     };
 
     let router = build_router(state);
@@ -172,6 +174,7 @@ pub async fn test_app_with_introspection(
         principal_resolver: Arc::new(StaticPrincipalResolver),
         introspection: Some(introspection),
         triggers,
+        result_waiters: mekhan_service::triggers::ResultWaiters::new(),
     };
 
     let router = build_router(state);
@@ -215,6 +218,7 @@ pub async fn test_app() -> (Router, PgPool) {
         principal_resolver: Arc::new(StaticPrincipalResolver),
         introspection: None,
         triggers,
+        result_waiters: mekhan_service::triggers::ResultWaiters::new(),
     };
 
     let router = build_router(state);
@@ -257,6 +261,7 @@ pub async fn test_app_with_nats(nats_url: &str) -> (Router, PgPool) {
         principal_resolver: Arc::new(StaticPrincipalResolver),
         introspection: None,
         triggers,
+        result_waiters: mekhan_service::triggers::ResultWaiters::new(),
     };
 
     let router = build_router(state);
@@ -301,6 +306,7 @@ pub async fn test_app_with_petri_url(nats_url: &str, petri_url: &str) -> (Router
         principal_resolver: Arc::new(StaticPrincipalResolver),
         introspection: None,
         triggers,
+        result_waiters: mekhan_service::triggers::ResultWaiters::new(),
     };
 
     let router = build_router(state);

@@ -11,9 +11,12 @@
 
 use std::collections::HashMap;
 
+use std::time::Duration;
+
 use axum::{
     extract::{FromRequest, Multipart, Path, Query, Request, State},
     http::{header, HeaderMap, Method, StatusCode},
+    response::{IntoResponse, Response},
     Json,
 };
 use chrono::{DateTime, Utc};
@@ -25,9 +28,9 @@ use uuid::Uuid;
 use crate::auth::AuthUser;
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::template::{
-    HttpMethod, TriggerSource, WorkflowGraph, WorkflowNodeData, WorkflowTemplate,
+    HttpMethod, ReplyMode, TriggerSource, WorkflowGraph, WorkflowNodeData, WorkflowTemplate,
 };
-use crate::triggers::{FireResult, TriggerError, TriggerRecord};
+use crate::triggers::{FireOutcome, FireResult, TerminalOutcome, TriggerError, TriggerRecord};
 use crate::AppState;
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -77,11 +80,27 @@ pub struct FireTriggerRequest {
     /// sources the dispatcher synthesizes this scope from the event itself.
     #[serde(default)]
     pub payload: serde_json::Value,
+    /// Optional per-request reply mode (lowest of the explicit selectors —
+    /// overridden by `?reply=` / `Prefer`, overrides the node default).
+    #[serde(default)]
+    pub reply_mode: Option<ReplyMode>,
+}
+
+/// Query selector for the reply mode: `?reply=wait|nowait|stream`.
+#[derive(Debug, Default, Deserialize)]
+pub struct FireQuery {
+    #[serde(default)]
+    pub reply: Option<String>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct FireTriggerResponse {
     pub result: FireResult,
+    /// Present only on a successful `WaitForResult` fire — the instance's
+    /// terminal disposition. Absent (not `null`) for FireAndForget, keeping
+    /// the default response byte-identical to pre-feature behavior.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<TerminalOutcome>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -167,14 +186,46 @@ pub async fn list_template_triggers(
 /// target node) and injected into the payload under the part name as a
 /// `{ key, url, filename, content_type, size }` reference object — the same
 /// shape the create-instance dialog produces, which `FieldKind::File` accepts.
+/// Resolve the effective reply mode. Precedence (first match wins):
+/// 1. `Accept: text/event-stream` ⇒ `Sse` (rejected with 406 — SSE is the
+///    dedicated stream endpoint, not negotiated on fire)
+/// 2. `?reply=wait|nowait|stream`
+/// 3. `Prefer: respond-async` ⇒ FireAndForget
+/// 4. JSON body `reply_mode`
+/// 5. the Trigger node's `replyDefault`
+/// 6. FireAndForget (back-compat default)
+fn resolve_reply_mode(
+    accept: &str,
+    prefer: &str,
+    query_reply: Option<&str>,
+    body: Option<ReplyMode>,
+    node_default: Option<ReplyMode>,
+) -> ReplyMode {
+    if accept.contains("text/event-stream") {
+        return ReplyMode::Sse;
+    }
+    match query_reply {
+        Some("wait") => return ReplyMode::WaitForResult,
+        Some("nowait") => return ReplyMode::FireAndForget,
+        Some("stream") => return ReplyMode::Sse,
+        _ => {}
+    }
+    if prefer.contains("respond-async") {
+        return ReplyMode::FireAndForget;
+    }
+    body.or(node_default).unwrap_or(ReplyMode::FireAndForget)
+}
+
 #[utoipa::path(
     post,
     path = "/api/triggers/{node_id}/fire",
     params(("node_id" = String, Path, description = "Trigger node id")),
     request_body = FireTriggerRequest,
     responses(
-        (status = 200, description = "Trigger fired", body = FireTriggerResponse),
+        (status = 200, description = "Trigger fired (FireAndForget, or WaitForResult resolved)", body = FireTriggerResponse),
+        (status = 202, description = "WaitForResult timed out — instance still running; poll/stream it"),
         (status = 404, description = "Trigger not found", body = ErrorResponse),
+        (status = 406, description = "SSE requested on the fire endpoint — use GET /api/instances/{id}/stream"),
         (status = 400, description = "Fire failed (e.g. mapping or instance error)", body = ErrorResponse),
     ),
     tag = "triggers",
@@ -184,33 +235,111 @@ pub async fn fire_trigger(
     _user: AuthUser,
     Path(node_id): Path<String>,
     request: Request,
-) -> Result<Json<FireTriggerResponse>, ApiError> {
-    let content_type = request
-        .headers()
+) -> Result<Response, ApiError> {
+    // Read everything needed off the request before the body is consumed.
+    let headers = request.headers();
+    let content_type = headers
         .get(header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("")
         .to_ascii_lowercase();
+    let accept = headers
+        .get(header::ACCEPT)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let prefer = headers
+        .get("prefer")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let query: FireQuery = Query::try_from_uri(request.uri())
+        .map(|Query(q)| q)
+        .unwrap_or_default();
 
-    let payload = if content_type.starts_with("multipart/form-data") {
-        build_multipart_payload(&state, &node_id, request).await?
+    let (payload, body_reply_mode) = if content_type.starts_with("multipart/form-data") {
+        (build_multipart_payload(&state, &node_id, request).await?, None)
     } else {
         let bytes = axum::body::to_bytes(request.into_body(), 4 * 1024 * 1024)
             .await
             .map_err(|e| ApiError::bad_request(format!("failed to read body: {e}")))?;
         if bytes.is_empty() {
-            Value::Null
+            (Value::Null, None)
         } else {
-            serde_json::from_slice::<FireTriggerRequest>(&bytes)
-                .map_err(|e| ApiError::bad_request(format!("invalid JSON body: {e}")))?
-                .payload
+            let req: FireTriggerRequest = serde_json::from_slice(&bytes)
+                .map_err(|e| ApiError::bad_request(format!("invalid JSON body: {e}")))?;
+            (req.payload, req.reply_mode)
         }
     };
 
-    let result = crate::triggers::sources::manual::fire(&state.triggers, &node_id, payload)
-        .await
-        .map_err(map_trigger_error)?;
-    Ok(Json(FireTriggerResponse { result }))
+    let node_default = state.triggers.get(&node_id).and_then(|r| r.reply_default);
+    let mode = resolve_reply_mode(
+        &accept,
+        &prefer,
+        query.reply.as_deref(),
+        body_reply_mode,
+        node_default,
+    );
+
+    match mode {
+        ReplyMode::Sse => Err(ApiError::new(
+            StatusCode::NOT_ACCEPTABLE,
+            "SSE is served by GET /api/instances/{id}/stream — fire FireAndForget, \
+             then open the stream with the returned instance id",
+        )),
+        ReplyMode::FireAndForget => {
+            let result =
+                crate::triggers::sources::manual::fire(&state.triggers, &node_id, payload)
+                    .await
+                    .map_err(map_trigger_error)?;
+            Ok(Json(FireTriggerResponse {
+                result,
+                outcome: None,
+            })
+            .into_response())
+        }
+        ReplyMode::WaitForResult => {
+            let (result, rx) = crate::triggers::sources::manual::fire_waiting(
+                &state.triggers,
+                &node_id,
+                payload,
+                &state.result_waiters,
+            )
+            .await
+            .map_err(map_trigger_error)?;
+
+            match (&result.outcome, rx) {
+                (FireOutcome::Spawned { instance_id }, Some(rx)) => {
+                    let iid = *instance_id;
+                    let dur = Duration::from_secs(state.config.wait_timeout_secs);
+                    match tokio::time::timeout(dur, rx).await {
+                        Ok(Ok(outcome)) => Ok(Json(FireTriggerResponse {
+                            result,
+                            outcome: Some(outcome),
+                        })
+                        .into_response()),
+                        // Timeout, or sender dropped without sending: drop the
+                        // waiter (no leak) and degrade to polling.
+                        _ => {
+                            state.result_waiters.deregister(&iid);
+                            Ok((
+                                StatusCode::ACCEPTED,
+                                Json(serde_json::json!({ "instance_id": iid })),
+                            )
+                                .into_response())
+                        }
+                    }
+                }
+                // Signal-kind / dropped fire — no instance to wait on; return
+                // the FireAndForget shape unchanged.
+                _ => Ok(Json(FireTriggerResponse {
+                    result,
+                    outcome: None,
+                })
+                .into_response()),
+            }
+        }
+    }
 }
 
 /// Build the fire payload from a `multipart/form-data` body: merge the JSON
@@ -642,7 +771,10 @@ pub async fn webhook_receiver(
         .fire(&trigger.node_id, payload)
         .await
         .map_err(map_trigger_error)?;
-    Ok(Json(FireTriggerResponse { result }))
+    Ok(Json(FireTriggerResponse {
+        result,
+        outcome: None,
+    }))
 }
 
 fn methods_match(declared: HttpMethod, actual: &Method) -> bool {

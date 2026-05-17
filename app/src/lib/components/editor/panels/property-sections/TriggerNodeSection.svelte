@@ -33,6 +33,14 @@
 	const mappings = $derived(data.payloadMapping ?? []);
 	const enabled = $derived(data.enabled ?? false);
 
+	type ReplyMode = components['schemas']['ReplyMode'];
+	const replyDefault = $derived((data.replyDefault ?? 'fire_and_forget') as ReplyMode);
+	const replyLabels: Record<ReplyMode, string> = {
+		fire_and_forget: 'Fire & forget (default)',
+		wait_for_result: 'Wait for result',
+		sse: 'SSE stream'
+	};
+
 	// A trigger's *armed* state is the inverse of every other field here: it is
 	// operational state of the published template, not a draft setting. In a
 	// draft this is read-only (it ships armed by default); on the published
@@ -541,6 +549,33 @@
 			{/if}
 		</div>
 	{/if}
+
+	<!-- Default reply mode. Caller can override per-request via
+	     ?reply= / Prefer / body; this is only the fallback. -->
+	<FormField label="Default reply mode" for="trigger-reply-default">
+		<Select.Root
+			type="single"
+			value={replyDefault}
+			onValueChange={(v) => {
+				if (v) update('replyDefault', v as ReplyMode);
+			}}
+			disabled={readonly}
+		>
+			<Select.Trigger id="trigger-reply-default" class="w-full" disabled={readonly}>
+				{replyLabels[replyDefault]}
+			</Select.Trigger>
+			<Select.Content>
+				<Select.Item value="fire_and_forget" label="Fire & forget (default)" />
+				<Select.Item value="wait_for_result" label="Wait for result" />
+				<Select.Item value="sse" label="SSE stream" />
+			</Select.Content>
+		</Select.Root>
+		<p class="mt-1 text-[10px] text-muted-foreground">
+			Used only when a caller doesn't request a mode. <code>SSE</code> is
+			advisory — streaming is the dedicated
+			<code>GET /api/instances/&lt;id&gt;/stream</code> endpoint.
+		</p>
+	</FormField>
 
 	<!-- Payload mapping — each row projects one target-port field. -->
 	<div class="space-y-1.5">

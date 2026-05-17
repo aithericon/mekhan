@@ -391,6 +391,30 @@ pub(crate) fn validate_guards<'a>(
                 let scope = scopes.get(&node.id).cloned().unwrap_or_default();
                 validate_one_guard(&node.id, loop_condition, &scope)?;
             }
+            // Result-binding expressions run in the same `input.<field>`
+            // scope model as guards (the inbound token), so reuse the exact
+            // parse + ref-resolution path.
+            WorkflowNodeData::End { result_mapping, .. } => {
+                let scope = scopes.get(&node.id).cloned().unwrap_or_default();
+                for m in result_mapping {
+                    if m.expression.trim().is_empty() {
+                        continue;
+                    }
+                    validate_one_guard(&node.id, &m.expression, &scope)?;
+                }
+            }
+            WorkflowNodeData::Failure {
+                error_result_mapping,
+                ..
+            } => {
+                let scope = scopes.get(&node.id).cloned().unwrap_or_default();
+                for m in error_result_mapping {
+                    if m.expression.trim().is_empty() {
+                        continue;
+                    }
+                    validate_one_guard(&node.id, &m.expression, &scope)?;
+                }
+            }
             _ => {}
         }
     }

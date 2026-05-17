@@ -44,6 +44,7 @@ fn end_node(id: &str) -> WorkflowNode {
             label: "End".to_string(),
             description: None,
         terminal: mekhan_service::models::template::default_terminal_port(),
+        result_mapping: Vec::new(),
         },
         parent_id: None,
         width: None,
@@ -1447,6 +1448,7 @@ fn edge_type_mismatch_fails_when_target_port_has_required_fields() {
                     accept: None,
                 }],
             },
+            result_mapping: Vec::new(),
         },
         parent_id: None,
         width: None,
@@ -2077,6 +2079,7 @@ fn trigger_node(id: &str, source: mekhan_service::models::template::TriggerSourc
             source,
             concurrency: Default::default(),
             payload_mapping: vec![],
+            reply_default: None,
             enabled: true,
         },
         parent_id: None,
@@ -3010,6 +3013,7 @@ fn failure_node(id: &str, message: Option<&str>) -> WorkflowNode {
             label: "Failure".to_string(),
             description: None,
             failure_message: message.map(str::to_string),
+            error_result_mapping: Vec::new(),
         },
         parent_id: None,
         width: None,
@@ -3042,10 +3046,108 @@ fn failure_emits_process_fail_passthrough() {
 
     let shape = get_transition(&air, "t_f_fail_shape").unwrap();
     let src = shape["logic"]["source"].as_str().unwrap();
-    assert!(src.contains("out: input"), "token pass-through: {src}");
+    // The token is forwarded on `out` (net continues to End) but now carries
+    // the error envelope stamped onto `exit_code` — `out` is the
+    // envelope-stamped `__out`, not bare `input`.
+    assert!(src.contains("out: __out"), "forwards stamped token: {src}");
+    assert!(
+        src.contains("exit_code = #{ ok: false"),
+        "error envelope stamped: {src}"
+    );
     assert!(src.contains("fail: #{ reason:"), "reason breadcrumb: {src}");
     assert!(src.contains("boom"), "message literal: {src}");
     assert!(!src.contains("__pluck("), "no interpolation expected: {src}");
+}
+
+/// End with a `resultMapping` inserts a `t_{id}_result_shape` transition that
+/// stamps the success envelope behind the Failure-precedence guard, and feeds
+/// a new `p_{id}_result` terminal place.
+#[test]
+fn end_result_mapping_stamps_success_envelope() {
+    use mekhan_service::models::template::FieldMapping;
+    let mut end = end_node("e");
+    if let WorkflowNodeData::End { result_mapping, .. } = &mut end.data {
+        *result_mapping = vec![FieldMapping {
+            target_field: "total".to_string(),
+            // Constant — keeps the test focused on AIR shape, not on
+            // upstream-scope resolution (covered by validate.rs tests).
+            expression: "42".to_string(),
+        }];
+    }
+    let graph = WorkflowGraph {
+        nodes: vec![start_node("s"), end],
+        edges: vec![edge("e1", "s", "e")],
+        viewport: None,
+    };
+    let air = compile_to_air(&graph, "end_res", "", &std::collections::HashMap::new())
+        .expect("should compile");
+
+    assert!(
+        has_transition(&air, "t_e_result_shape"),
+        "expected result-shape transition"
+    );
+    assert!(has_place(&air, "p_e_result"), "expected result terminal place");
+    let shape = get_transition(&air, "t_e_result_shape").unwrap();
+    let src = shape["logic"]["source"].as_str().unwrap();
+    assert!(src.contains("ok: true"), "success envelope: {src}");
+    assert!(
+        src.contains("if \"exit_code\" in __out"),
+        "Failure-precedence guard: {src}"
+    );
+    assert!(src.contains("\"total\": __rv0"), "mapped field: {src}");
+}
+
+/// A bare End (no `resultMapping`) inserts no result-shape transition — the
+/// terminal token and instance `result` are byte-identical to pre-feature
+/// behavior.
+#[test]
+fn bare_end_has_no_result_shape() {
+    let graph = WorkflowGraph {
+        nodes: vec![start_node("s"), end_node("e")],
+        edges: vec![edge("e1", "s", "e")],
+        viewport: None,
+    };
+    let air = compile_to_air(&graph, "bare_end", "", &std::collections::HashMap::new())
+        .expect("should compile");
+    assert!(
+        !has_transition(&air, "t_e_result_shape"),
+        "bare End must not insert a result-shape transition"
+    );
+    // Place ids are subject to edge-merge renaming; the invariant is simply
+    // that a terminal place still exists (unchanged legacy behavior).
+    assert!(
+        has_place_of_type(&air, "terminal"),
+        "bare End must still produce a terminal place"
+    );
+}
+
+/// Failure with an `errorResultMapping` folds the mapped object into the
+/// error envelope's `value`.
+#[test]
+fn failure_error_mapping_in_envelope() {
+    use mekhan_service::models::template::FieldMapping;
+    let mut fail = failure_node("f", Some("bad"));
+    if let WorkflowNodeData::Failure {
+        error_result_mapping,
+        ..
+    } = &mut fail.data
+    {
+        *error_result_mapping = vec![FieldMapping {
+            target_field: "code".to_string(),
+            expression: "99".to_string(),
+        }];
+    }
+    let graph = WorkflowGraph {
+        nodes: vec![start_node("s"), fail, end_node("e")],
+        edges: vec![edge("e1", "s", "f"), edge("e2", "f", "e")],
+        viewport: None,
+    };
+    let air = compile_to_air(&graph, "fail_res", "", &std::collections::HashMap::new())
+        .expect("should compile");
+    let shape = get_transition(&air, "t_f_fail_shape").unwrap();
+    let src = shape["logic"]["source"].as_str().unwrap();
+    assert!(src.contains("ok: false"), "error envelope: {src}");
+    assert!(src.contains("\"code\": __rv0"), "mapped error field: {src}");
 }
 
 #[test]
