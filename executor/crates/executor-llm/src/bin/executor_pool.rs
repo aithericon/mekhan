@@ -91,9 +91,41 @@ async fn main() -> anyhow::Result<()> {
         "Managed Ollama subprocess up and serving"
     );
 
-    // 3. Pool listener (healthz + inference). OllamaAdapter is the sole
-    //    CompletionPort in the pool binary — Anthropic/OpenAI adapters are
-    //    not wired here since this executor manages a local Ollama subprocess.
+    // Workstream #30 (sub-phase 2.5a): always_hot pre-pull. Pull each
+    // model in AITHERICON_EXECUTOR_ALWAYS_HOT_MODELS BEFORE registration
+    // so cap-routing's first heartbeat snapshot already shows the model
+    // warm. Fail-closed: any pull failure aborts boot.
+    let always_hot: Vec<String> = std::env::var("AITHERICON_EXECUTOR_ALWAYS_HOT_MODELS")
+        .ok()
+        .map(|s| {
+            s.split(',')
+                .map(|m| m.trim().to_string())
+                .filter(|m| !m.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+    if !always_hot.is_empty() {
+        tracing::info!(
+            count = always_hot.len(),
+            models = ?always_hot,
+            "Pre-pulling AITHERICON_EXECUTOR_ALWAYS_HOT_MODELS (workstream #30)"
+        );
+        for model in &always_hot {
+            ollama.model_load(model).await.map_err(|e| {
+                anyhow::anyhow!(
+                    "AITHERICON_EXECUTOR_ALWAYS_HOT_MODELS pre-pull '{}' failed (fail-closed): {}",
+                    model,
+                    e
+                )
+            })?;
+            tracing::info!(model = %model, "always_hot pull complete");
+        }
+    }
+
+    // 3. Pool listener (healthz + inference + /v1/models/{load,evict}).
+    //    OllamaAdapter is the sole CompletionPort in the pool binary —
+    //    Anthropic/OpenAI adapters are not wired here since this executor
+    //    manages a local Ollama subprocess.
     let llm_port: Arc<dyn aithericon_executor_llm::CompletionPort> =
         Arc::new(aithericon_executor_llm::adapters::ollama::OllamaAdapter);
     let listener_cancel = CancellationToken::new();

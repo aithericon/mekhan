@@ -28,24 +28,94 @@
 //!   and the feature-vs-env-gate alignment notes.
 //!
 //! The route addition is purely additive: with the kreuzberg feature OFF,
-//! the listener's route table contains only `/v1/healthz` and
-//! `/v1/inference`.
+//! the listener's route table contains only `/v1/healthz`, `/v1/inference`,
+//! `/v1/models/load`, and `/v1/models/evict`.
+//!
+//! ## Workstream #30 (sub-phase 2.5a) — model-lifecycle endpoints
+//!
+//! The listener additionally serves:
+//!
+//! - `POST /v1/models/load` — wraps `OllamaSubprocess::model_load` (Ollama
+//!   `/api/pull`). Cap-routing's cold-load coordinator POSTs here to pre-warm
+//!   a model on the pool when `pick_route` returned `cold_load_required:
+//!   true`.
+//! - `POST /v1/models/evict` — wraps `OllamaSubprocess::model_unload` (Ollama
+//!   `DELETE /api/delete`). Cap-routing's LRU maintenance loop + admin
+//!   `/v1/models/evict` POST here to remove a model from the pool's runtime.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use axum::routing::get;
+use axum::extract::State;
+use axum::http::StatusCode;
+use axum::routing::{get, post};
 use axum::Json;
 use axum::Router;
+use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
 use crate::inference_handler::{inference, InferenceState};
 use crate::ollama_subprocess::OllamaSubprocess;
 use crate::port::CompletionPort;
 
-/// Spawn a minimal axum listener on `bind_addr` serving `/v1/healthz` and
-/// `POST /v1/inference` (and, when compiled with `--features kreuzberg`,
-/// also `POST /v1/ocr/extract`). Returns the actual bound address (useful when
+/// Request body for `POST /v1/models/load` and `POST /v1/models/evict`.
+/// Workstream #30 wire shape — matches cap-routing's `call_pool_load` /
+/// `call_pool_evict` body.
+#[derive(Debug, Deserialize)]
+struct ModelOpRequest {
+    model: String,
+}
+
+/// Response body for `POST /v1/models/load`. Wall-clock duration for
+/// telemetry; success is signalled by the HTTP 200.
+#[derive(Debug, Serialize)]
+struct LoadModelResponse {
+    model: String,
+    duration_ms: u64,
+}
+
+/// Shared state for the model-ops handlers — just the Arc'd subprocess
+/// handle so we can call its `model_load` / `model_unload` methods.
+#[derive(Clone)]
+struct ModelOpsState {
+    ollama: Arc<OllamaSubprocess>,
+}
+
+async fn models_load(
+    State(state): State<ModelOpsState>,
+    Json(req): Json<ModelOpRequest>,
+) -> Result<Json<LoadModelResponse>, (StatusCode, String)> {
+    let started = std::time::Instant::now();
+    state
+        .ollama
+        .model_load(&req.model)
+        .await
+        .map_err(|e| (StatusCode::FAILED_DEPENDENCY, e.to_string()))?;
+    let duration_ms = started.elapsed().as_millis() as u64;
+    tracing::info!(model = %req.model, duration_ms, "Model pulled via /v1/models/load");
+    Ok(Json(LoadModelResponse {
+        model: req.model,
+        duration_ms,
+    }))
+}
+
+async fn models_evict(
+    State(state): State<ModelOpsState>,
+    Json(req): Json<ModelOpRequest>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    state
+        .ollama
+        .model_unload(&req.model)
+        .await
+        .map_err(|e| (StatusCode::FAILED_DEPENDENCY, e.to_string()))?;
+    tracing::info!(model = %req.model, "Model evicted via /v1/models/evict");
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Spawn a minimal axum listener on `bind_addr` serving `/v1/healthz`,
+/// `POST /v1/inference`, `POST /v1/models/load`, `POST /v1/models/evict`,
+/// (and, when compiled with `--features kreuzberg`, also
+/// `POST /v1/ocr/extract`). Returns the actual bound address (useful when
 /// `bind_addr` requested port 0). Shutdown via the cancellation token.
 pub async fn spawn_pool_listener(
     bind_addr: SocketAddr,
@@ -55,7 +125,10 @@ pub async fn spawn_pool_listener(
 ) -> anyhow::Result<SocketAddr> {
     let inference_state = InferenceState {
         port: llm_port,
-        ollama,
+        ollama: Arc::clone(&ollama),
+    };
+    let model_ops_state = ModelOpsState {
+        ollama: Arc::clone(&ollama),
     };
 
     let router = Router::new()
@@ -70,6 +143,15 @@ pub async fn spawn_pool_listener(
         )
         .route("/v1/inference", axum::routing::post(inference))
         .with_state(inference_state);
+
+    // Workstream #30 model-lifecycle endpoints — additive; same listener,
+    // separate state extractor.
+    let router = router.merge(
+        Router::new()
+            .route("/v1/models/load", post(models_load))
+            .route("/v1/models/evict", post(models_evict))
+            .with_state(model_ops_state),
+    );
 
     // OCR-framing Wave 2: feature-gated /v1/ocr/extract route. The block
     // is additive — when the kreuzberg feature is OFF, the router above is
