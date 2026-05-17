@@ -9,7 +9,7 @@ use mekhan_service::auth::bff::session::{PgSessionStore, SessionStore};
 use mekhan_service::auth::dev::NoopTokenVerifier;
 use mekhan_service::auth::resolver::StaticPrincipalResolver;
 use mekhan_service::auth::zitadel::{ZitadelConfig, ZitadelTokenVerifier};
-use mekhan_service::auth::{PrincipalResolver, TokenVerifier};
+use mekhan_service::auth::{IntrospectionVerifier, PrincipalResolver, TokenVerifier};
 use mekhan_service::config::{AppConfig, AuthMode};
 use mekhan_service::db;
 use mekhan_service::lifecycle;
@@ -146,6 +146,7 @@ async fn main() -> anyhow::Result<()> {
     let session_store: Arc<dyn SessionStore> = Arc::new(PgSessionStore::new(db.clone()));
     let (authenticator, oidc) =
         build_authenticator(&config, session_store.clone()).await?;
+    let introspection = build_introspection(&config).await?;
 
     // Background sweep of expired sessions + stale login flows.
     {
@@ -181,6 +182,7 @@ async fn main() -> anyhow::Result<()> {
         oidc,
         token_verifier,
         principal_resolver,
+        introspection,
         triggers: trigger_dispatcher,
     };
 
@@ -278,6 +280,33 @@ async fn build_authenticator(
             Ok((Arc::new(NoopAuthenticator::default()), None))
         }
     }
+}
+
+/// Build the optional RFC 7662 introspection verifier for machine PATs.
+/// Active only in `bff` mode when an introspection API credential is fully
+/// configured; otherwise `None` and the Bearer path stays disabled (cookie
+/// auth only — `dev_noop` already lets every request through).
+async fn build_introspection(
+    config: &AppConfig,
+) -> anyhow::Result<Option<Arc<IntrospectionVerifier>>> {
+    if config.auth.mode != AuthMode::Bff {
+        return Ok(None);
+    }
+    let (Some(issuer), Some(client_id), Some(client_secret)) = (
+        config.auth.issuer_url.as_deref(),
+        config.auth.introspection_client_id.clone(),
+        config.auth.introspection_client_secret.clone(),
+    ) else {
+        tracing::info!(
+            "auth: introspection disabled (no auth.introspection_client_id/secret) \
+             — machine PAT auth unavailable"
+        );
+        return Ok(None);
+    };
+    let verifier = IntrospectionVerifier::new(issuer, client_id, client_secret)
+        .await
+        .map_err(|e| anyhow::anyhow!("introspection init: {e}"))?;
+    Ok(Some(Arc::new(verifier)))
 }
 
 /// Refuse to boot a dev-mode credential bypass in production.

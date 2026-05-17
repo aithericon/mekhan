@@ -71,8 +71,13 @@ pub struct AppState {
     /// JWT verifier — still used, but only internally by the BFF callback to
     /// verify the token the IdP returns before caching the `AuthUser`.
     pub token_verifier: Arc<dyn TokenVerifier>,
-    /// Claims → `AuthUser` mapper. Reused unchanged by the BFF callback.
+    /// Claims → `AuthUser` mapper. Reused unchanged by the BFF callback and
+    /// the introspection Bearer path.
     pub principal_resolver: Arc<dyn PrincipalResolver>,
+    /// RFC 7662 introspection for machine PATs (CI `mekhan apply`). `None`
+    /// unless an introspection API credential is configured — then the
+    /// Bearer path in `require_auth_middleware` is disabled.
+    pub introspection: Option<Arc<crate::auth::IntrospectionVerifier>>,
     pub triggers: Arc<TriggerDispatcher>,
 }
 

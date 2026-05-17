@@ -129,8 +129,9 @@ build-frontend:
 # Build the mekhan CLI and `apply` every template directory under `dir` (each
 # must contain a committed `.mekhan.json`). Each apply atomically versions +
 # publishes the chain from the git artifact, recording commit provenance.
-# Auth: MEKHAN_CLI_TOKEN (must match the server's MEKHAN_SERVICE_TOKEN). The
-# target server is the `server_url` baked into each `.mekhan.json`.
+# Auth: MEKHAN_CLI_TOKEN — a Zitadel service-user PAT the server validates
+# via RFC 7662 introspection. Target server is the `server_url` baked into
+# each `.mekhan.json`.
 apply-workflows dir="workflows":
     #!/usr/bin/env bash
     cd ..

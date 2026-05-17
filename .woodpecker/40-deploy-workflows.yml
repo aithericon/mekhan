@@ -8,8 +8,9 @@
 # in `workflow_templates.source_ref`.
 #
 # Target server: the `server_url` baked into each `.mekhan.json`.
-# Auth: the `mekhan_cli_token` Woodpecker secret is exported as
-# MEKHAN_CLI_TOKEN; it must match the server's MEKHAN_SERVICE_TOKEN env.
+# Auth: the `mekhan_cli_token` Woodpecker secret (a Zitadel service-user
+# Personal Access Token) is exported as MEKHAN_CLI_TOKEN; the server
+# validates it via Zitadel RFC 7662 token introspection.
 # =============================================================================
 
 when:

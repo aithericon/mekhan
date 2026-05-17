@@ -176,6 +176,35 @@ fi
 echo "OIDC app id:   $app_id"
 echo "OIDC clientId: $client_id"
 
+# ── ensure API application (introspection credential) ────────────────────────
+# Mekhan authenticates to Zitadel's RFC 7662 introspection endpoint as this
+# confidential API app (HTTP Basic) to validate machine PATs presented by CI
+# `mekhan apply`. The client secret is only returned at creation, so an
+# existing app's secret is regenerated to keep the written config valid.
+API_APP_NAME="${APP_NAME}-introspect"
+echo "Looking up API app '$API_APP_NAME'..."
+api_app_search=$(jq -nc --arg name "$API_APP_NAME" \
+  '{queries: [{nameQuery: {name: $name, method: "TEXT_QUERY_METHOD_EQUALS"}}]}')
+api_app_id=$(api POST "/management/v1/projects/$project_id/apps/_search" "$api_app_search" \
+  | jq -r '.result[0].id // empty')
+
+if [ -z "$api_app_id" ]; then
+  echo "Creating API application '$API_APP_NAME'..."
+  api_create=$(api POST "/management/v1/projects/$project_id/apps/api" \
+    "$(jq -nc --arg name "$API_APP_NAME" \
+        '{name: $name, authMethodType: "API_AUTH_METHOD_TYPE_BASIC"}')")
+  api_app_id=$(echo "$api_create" | jq -r '.appId')
+  introspect_client_id=$(echo "$api_create" | jq -r '.clientId')
+  introspect_client_secret=$(echo "$api_create" | jq -r '.clientSecret')
+else
+  echo "Reusing API app $api_app_id — regenerating client secret"
+  api_regen=$(api POST \
+    "/management/v1/projects/$project_id/apps/$api_app_id/api_config/_secret" '{}')
+  introspect_client_id=$(echo "$api_regen" | jq -r '.clientId')
+  introspect_client_secret=$(echo "$api_regen" | jq -r '.clientSecret')
+fi
+echo "API app id:    $api_app_id"
+
 ISSUER="$ZITADEL_HOST"
 AUDIENCE="$client_id"
 
@@ -193,6 +222,10 @@ mode = "bff"
 issuer_url = "$ISSUER"
 audience = "$AUDIENCE"
 client_id = "$client_id"
+# Confidential API app Mekhan uses to call Zitadel token introspection
+# (RFC 7662) so CI \`mekhan apply\` can authenticate with a service-user PAT.
+introspection_client_id = "$introspect_client_id"
+introspection_client_secret = "$introspect_client_secret"
 # Local http dev: do not set the Secure cookie attribute (browsers drop
 # Secure cookies on plain http). Set true behind https in production.
 cookie_secure = false
@@ -220,5 +253,14 @@ Next:
 
   Then open http://localhost:5173 — you'll be redirected to Zitadel to log
   in, and land back signed in with only an HttpOnly session cookie.
+
+GitOps machine token (CI \`mekhan apply\`):
+  The introspection API app above lets Mekhan validate Zitadel PATs. To
+  mint the token CI presents, in the Console:
+    1. Users → Service Users → New (e.g. "gitops")
+    2. grant it this project's role(s) so apply is authorized
+    3. Personal Access Tokens → + → copy the token once
+  Put that token in MEKHAN_CLI_TOKEN locally / the \`mekhan_cli_token\`
+  Woodpecker secret. Rotate by deleting + recreating the PAT in the Console.
 ────────────────────────────────────────────────────────────
 EOF

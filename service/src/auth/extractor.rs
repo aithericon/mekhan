@@ -100,20 +100,21 @@ pub async fn require_auth_middleware(
     mut req: axum::http::Request<axum::body::Body>,
     next: axum::middleware::Next,
 ) -> Result<Response, AuthError> {
-    // Static service-token path for non-interactive clients (CI
-    // `mekhan apply`). Orthogonal to the BFF cookie flow and trivially
-    // removable: only active when `MEKHAN_SERVICE_TOKEN` is configured, and
-    // a wrong/absent Bearer simply falls through to the cookie path below
-    // unchanged. Note the principal is stashed as an `Extension` only — a
-    // handler must read `Extension<AuthUser>` (not the `AuthUser`
-    // `FromRequestParts`, which re-runs the cookie authenticator).
-    if let Some(expected) = state.config.service_token.as_deref() {
-        if !expected.is_empty() {
-            if let Some(token) = bearer_token(req.headers()) {
-                if ct_eq(token.as_bytes(), expected.as_bytes()) {
-                    req.extensions_mut().insert(AuthUser::system_ci());
-                    return Ok(next.run(req).await);
-                }
+    // Machine-PAT path for non-interactive clients (CI `mekhan apply`):
+    // RFC 7662 introspection against Zitadel, resolved to the *real* service
+    // user via the shared `PrincipalResolver` (same mapping the BFF callback
+    // uses). Disabled unless an introspection API credential is configured;
+    // a missing / invalid / inactive Bearer just falls through to the cookie
+    // path below (so browsers are unaffected and the failure surfaces as the
+    // normal cookie 401). The principal is stashed as an `Extension` only —
+    // a handler must read `Extension<AuthUser>` (the `AuthUser`
+    // `FromRequestParts` re-runs the cookie authenticator and ignores this).
+    if let Some(verifier) = state.introspection.as_ref() {
+        if let Some(token) = bearer_token(req.headers()) {
+            if let Ok(claims) = verifier.verify(token).await {
+                let user = state.principal_resolver.resolve(claims).await?;
+                req.extensions_mut().insert(user);
+                return Ok(next.run(req).await);
             }
         }
     }
@@ -136,33 +137,10 @@ fn bearer_token(headers: &axum::http::HeaderMap) -> Option<&str> {
         .map(str::trim)
 }
 
-/// Length-checked constant-time byte comparison. The length is allowed to
-/// leak (token length is not secret); content comparison is constant-time so
-/// a configured service token can't be recovered by timing.
-fn ct_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut diff = 0u8;
-    for (x, y) in a.iter().zip(b.iter()) {
-        diff |= x ^ y;
-    }
-    diff == 0
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{bearer_token, ct_eq};
+    use super::bearer_token;
     use axum::http::{header::AUTHORIZATION, HeaderMap, HeaderValue};
-
-    #[test]
-    fn ct_eq_matches_only_identical_bytes() {
-        assert!(ct_eq(b"s3cr3t-token", b"s3cr3t-token"));
-        assert!(!ct_eq(b"s3cr3t-token", b"s3cr3t-tokes"));
-        assert!(!ct_eq(b"short", b"longer-token"));
-        assert!(!ct_eq(b"", b"x"));
-        assert!(ct_eq(b"", b""));
-    }
 
     #[test]
     fn bearer_token_parses_and_rejects() {

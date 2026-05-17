@@ -28,13 +28,6 @@ pub struct AppConfig {
     pub frontend_dir: Option<String>,
     #[serde(default)]
     pub auth: AuthConfig,
-    /// Static machine token for non-interactive clients (CI `mekhan apply`).
-    /// When set, a request bearing `Authorization: Bearer <this>` bypasses the
-    /// cookie/OIDC path and is authenticated as the `system:ci` principal.
-    /// Unset (the default) ⇒ the branch is disabled entirely. Sourced from
-    /// `MEKHAN_SERVICE_TOKEN`.
-    #[serde(default)]
-    pub service_token: Option<String>,
 }
 
 /// Identity-provider configuration. The hexagonal seam lets `mode` pick
@@ -93,6 +86,17 @@ pub struct AuthConfig {
     /// clients that still send a Bearer (future).
     #[serde(default)]
     pub cors_origins: Vec<String>,
+    /// OIDC client_id of the confidential **API application** Mekhan uses to
+    /// authenticate itself when calling Zitadel's token-introspection
+    /// endpoint (RFC 7662) to validate machine PATs (CI `mekhan apply`).
+    /// Distinct from the public SPA `client_id`. Unset ⇒ the Bearer
+    /// introspection path is disabled (cookie auth only).
+    #[serde(default)]
+    pub introspection_client_id: Option<String>,
+    /// Client secret of that API application (HTTP Basic on the introspect
+    /// call). Provisioned by `deploy/zitadel/bootstrap.sh`.
+    #[serde(default)]
+    pub introspection_client_secret: Option<String>,
 }
 
 impl Default for AuthConfig {
@@ -109,6 +113,8 @@ impl Default for AuthConfig {
             cookie_secure: false,
             cookie_domain: None,
             cors_origins: Vec::new(),
+            introspection_client_id: None,
+            introspection_client_secret: None,
         }
     }
 }

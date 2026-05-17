@@ -76,7 +76,6 @@ pub fn test_config() -> AppConfig {
         artifact_s3: None,
         frontend_dir: None,
         auth: AuthConfig::default(),
-        service_token: None,
     }
 }
 
@@ -125,6 +124,7 @@ pub async fn test_app_with_authenticator(
         oidc: None,
         token_verifier: Arc::new(NoopTokenVerifier::default()),
         principal_resolver: Arc::new(StaticPrincipalResolver),
+        introspection: None,
         triggers,
     };
 
@@ -167,6 +167,7 @@ pub async fn test_app() -> (Router, PgPool) {
         oidc: None,
         token_verifier: Arc::new(NoopTokenVerifier::default()),
         principal_resolver: Arc::new(StaticPrincipalResolver),
+        introspection: None,
         triggers,
     };
 
@@ -208,6 +209,7 @@ pub async fn test_app_with_nats(nats_url: &str) -> (Router, PgPool) {
         oidc: None,
         token_verifier: Arc::new(NoopTokenVerifier::default()),
         principal_resolver: Arc::new(StaticPrincipalResolver),
+        introspection: None,
         triggers,
     };
 
@@ -251,6 +253,7 @@ pub async fn test_app_with_petri_url(nats_url: &str, petri_url: &str) -> (Router
         oidc: None,
         token_verifier: Arc::new(NoopTokenVerifier::default()),
         principal_resolver: Arc::new(StaticPrincipalResolver),
+        introspection: None,
         triggers,
     };
 

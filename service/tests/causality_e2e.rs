@@ -304,6 +304,7 @@ async fn causality_full_pipeline() {
         oidc: None,
         token_verifier,
         principal_resolver,
+        introspection: None,
         triggers,
     });
 
