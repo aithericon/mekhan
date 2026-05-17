@@ -51,6 +51,11 @@ export function createPetriStore(netId: string, baseUrl: string = PETRI_BASE) {
 	let replayIndex: number = $state(-1);
 	let loading: boolean = $state(false);
 	let error: string | null = $state(null);
+	// Neutral terminal signal: the engine has tombstoned this net (completed
+	// or cancelled — HTTP 409 on the event stream). NOT an error; the UI uses
+	// it to stop hammering and show a calm "closed" state rather than a scary
+	// failure. The completed-net replay/data view is a separate pending design.
+	let netClosed: boolean = $state(false);
 	let selectedElement: SelectedElement = $state(null);
 	let transitionStatuses: Record<string, TransitionStatus> = $state({});
 	let currentGroups: ScenarioGroup[] = $state([]);
@@ -405,6 +410,15 @@ export function createPetriStore(netId: string, baseUrl: string = PETRI_BASE) {
 				initialRetryMs: SSE_INITIAL_RETRY_MS,
 				// After the retry budget is spent, fall back to polling.
 				onRetriesExhausted: () => startPolling(),
+				// Terminal client error (esp. 409 "Net is completed or
+				// cancelled"): retrying/polling can never succeed and would
+				// 409 forever. Stop cleanly with a neutral closed signal —
+				// no polling, no fatal error.
+				onTerminal: () => {
+					disconnectSSE();
+					stopPolling();
+					netClosed = true;
+				},
 				onEvent: ({ event, data }) => handleSSEMessage(event, data)
 			}
 		);
@@ -500,6 +514,7 @@ export function createPetriStore(netId: string, baseUrl: string = PETRI_BASE) {
 		get markingDiff() { return markingDiff; },
 		get loading() { return loading; },
 		get error() { return error; },
+		get netClosed() { return netClosed; },
 		get selectedElement() { return selectedElement; },
 		get transitionStatuses() { return transitionStatuses; },
 		get currentGroups() { return currentGroups; },

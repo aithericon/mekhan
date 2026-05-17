@@ -57,6 +57,13 @@ export function createTaskStore() {
 			fetchImpl: authFetch,
 			maxRetries: SSE_MAX_RETRIES,
 			initialRetryMs: SSE_INITIAL_RETRY_MS,
+			// Terminal client error: retrying can never succeed. Stop cleanly
+			// instead of spending the retry budget; matches the existing
+			// "stop silently" outcome (no error surfaced).
+			onTerminal: () => {
+				sseConnection?.close();
+				sseConnection = null;
+			},
 			onEvent: ({ event }) => {
 				if (TASK_EVENTS.has(event)) {
 					setTimeout(() => fetchTasks(currentStatus), 300);
