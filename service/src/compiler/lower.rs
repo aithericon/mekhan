@@ -1010,13 +1010,12 @@ fn lower_phase_update(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     };
     let ctx = &mut *cx.ctx;
 
-    // Pass-through: shape transition forwards the workflow token
-    // unchanged on `out` and emits an `executor-phase`-shaped
-    // breadcrumb on `sig`; the effect transition runs
-    // `process_log_message`. The causality consumer trips
-    // `record_phase_event` on `source == "executor-phase"` (and
-    // `detail.event_type == "phase_changed"`), projecting
-    // `detail.{phase_name,status,message}` into
+    // Pass-through: the shape transition forwards the workflow token
+    // unchanged on `out` and emits a canonical serialized
+    // `StatusDetail::PhaseChanged` (the `event_type`-tagged form) on
+    // `sig`; the effect transition runs the typed `process_phase`
+    // effect, whose `effect_result` is the verbatim `StatusDetail`. The
+    // causality consumer deserializes it whole and projects into
     // `hpi_processes.config.progress.phases`. The process is resolved
     // by tag propagation from the consumed (process-tagged) token —
     // no read-arc needed; outside a named process this is a no-op.
@@ -1026,10 +1025,10 @@ fn lower_phase_update(cx: &mut LoweringCtx) -> Result<(), CompileError> {
         ctx.state(format!("p_{id}_pu_out"), format!("{label} - Output"));
     let p_sig: PlaceHandle<DynamicToken> = ctx.state(
         format!("p_{id}_pu_sig"),
-        format!("{label} - Phase Breadcrumb"),
+        format!("{label} - Phase Detail"),
     );
     let p_done: PlaceHandle<DynamicToken> =
-        ctx.state(format!("p_{id}_pu_done"), format!("{label} - Logged"));
+        ctx.state(format!("p_{id}_pu_done"), format!("{label} - Recorded"));
 
     let name_expr = interpolate_to_rhai_expr(phase_name);
     let status_lit = match status {
@@ -1041,7 +1040,7 @@ fn lower_phase_update(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     // Bind interpolations to locals so the map literal stays shallow
     // (avoids the debug-build Rhai expr-depth limit) — same shape as
     // the Start `process_name` transition.
-    let (msg_let, top_msg, detail_msg) = match message
+    let (msg_let, detail_msg) = match message
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
@@ -1050,17 +1049,15 @@ fn lower_phase_update(cx: &mut LoweringCtx) -> Result<(), CompileError> {
             let e = interpolate_to_rhai_expr(m);
             (
                 format!("let __mg = {e}; "),
-                "message: __mg, ".to_string(),
                 ", message: __mg".to_string(),
             )
         }
-        None => (String::new(), String::new(), String::new()),
+        None => (String::new(), String::new()),
     };
     let logic = format!(
         "let __pn = {name_expr}; {msg_let}#{{ out: input, sig: #{{ \
-         source: \"executor-phase\", {top_msg}detail: #{{ \
-         phase_name: __pn, status: \"{status_lit}\", \
-         event_type: \"phase_changed\"{detail_msg} }} }} }}"
+         event_type: \"phase_changed\", phase_name: __pn, \
+         status: \"{status_lit}\"{detail_msg} }} }}"
     );
     ctx.transition(
         format!("t_{id}_pu_shape"),
@@ -1072,10 +1069,10 @@ fn lower_phase_update(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     .logic_rhai(with_pluck_prelude(&logic))
     .done();
 
-    ctx.transition(format!("t_{id}_pu_emit"), format!("{label} - Log Phase"))
-        .auto_input("message", &p_sig)
-        .auto_output("logged", &p_done)
-        .builtin_effect(&effects::PROCESS_LOG_MESSAGE);
+    ctx.transition(format!("t_{id}_pu_emit"), format!("{label} - Record Phase"))
+        .auto_input("phase", &p_sig)
+        .auto_output("recorded", &p_done)
+        .builtin_effect(&effects::PROCESS_PHASE);
 
     cx.ports.insert(
         id.clone(),
@@ -1103,25 +1100,27 @@ fn lower_progress_update(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     };
     let ctx = &mut *cx.ctx;
 
-    // Pass-through: shape forwards the token on `out` and emits a
-    // `process_log_metric` breadcrumb keyed `progress_fraction` on
-    // `sig`. The causality consumer trips `record_progress_event`
-    // (key match), projecting `value` + `detail.{message,current_step,
-    // total_steps}` into `hpi_processes.config.progress`. No-op
-    // outside a named process.
+    // Pass-through: the shape transition forwards the token on `out`
+    // and emits a canonical serialized `StatusDetail::ProgressUpdated`
+    // (the `event_type`-tagged form) on `sig`; the effect transition
+    // runs the typed `process_progress` effect, whose `effect_result`
+    // is the verbatim `StatusDetail`. The causality consumer
+    // deserializes it whole and projects into
+    // `hpi_processes.config.progress`. No-op outside a named process.
     let p_input: PlaceHandle<DynamicToken> =
         ctx.state(format!("p_{id}_input"), format!("{label} - Input"));
     let p_out: PlaceHandle<DynamicToken> =
         ctx.state(format!("p_{id}_pu_out"), format!("{label} - Output"));
     let p_sig: PlaceHandle<DynamicToken> = ctx.state(
         format!("p_{id}_pu_sig"),
-        format!("{label} - Progress Breadcrumb"),
+        format!("{label} - Progress Detail"),
     );
     let p_done: PlaceHandle<DynamicToken> =
-        ctx.state(format!("p_{id}_pu_done"), format!("{label} - Logged"));
+        ctx.state(format!("p_{id}_pu_done"), format!("{label} - Recorded"));
 
     // f64 Debug always round-trips with a decimal point ("1.0", not
-    // "1") so Rhai parses it as a float, matching `value.as_f64()`.
+    // "1") so Rhai parses it as a float, matching the typed
+    // `StatusDetail::ProgressUpdated.fraction`.
     let frac = format!("{fraction:?}");
     let cur = current_step.as_ref().map_or(0, |v| *v);
     let tot = total_steps.as_ref().map_or(0, |v| *v);
@@ -1132,14 +1131,14 @@ fn lower_progress_update(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     {
         Some(m) => {
             let e = interpolate_to_rhai_expr(m);
-            (format!("let __mg = {e}; "), "message: __mg, ".to_string())
+            (format!("let __mg = {e}; "), ", message: __mg".to_string())
         }
         None => (String::new(), String::new()),
     };
     let logic = format!(
-        "{msg_let}#{{ out: input, sig: #{{ key: \"progress_fraction\", \
-         value: {frac}, detail: #{{ {detail_msg}current_step: {cur}, \
-         total_steps: {tot} }} }} }}"
+        "{msg_let}#{{ out: input, sig: #{{ \
+         event_type: \"progress_updated\", fraction: {frac}, \
+         current_step: {cur}, total_steps: {tot}{detail_msg} }} }}"
     );
     ctx.transition(
         format!("t_{id}_pu_shape"),
@@ -1153,11 +1152,11 @@ fn lower_progress_update(cx: &mut LoweringCtx) -> Result<(), CompileError> {
 
     ctx.transition(
         format!("t_{id}_pu_emit"),
-        format!("{label} - Log Progress"),
+        format!("{label} - Record Progress"),
     )
-    .auto_input("metric", &p_sig)
-    .auto_output("logged", &p_done)
-    .builtin_effect(&effects::PROCESS_LOG_METRIC);
+    .auto_input("progress", &p_sig)
+    .auto_output("recorded", &p_done)
+    .builtin_effect(&effects::PROCESS_PROGRESS);
 
     cx.ports.insert(
         id.clone(),

@@ -2743,7 +2743,7 @@ fn progress_update_node(
 }
 
 #[test]
-fn phase_update_emits_log_message_phase_shape() {
+fn phase_update_emits_typed_status_detail_phase_changed() {
     let graph = WorkflowGraph {
         nodes: vec![
             start_node("s"),
@@ -2759,16 +2759,20 @@ fn phase_update_emits_log_message_phase_shape() {
     assert!(has_transition(&air, "t_pu_pu_shape"), "expected shape transition");
     assert!(has_transition(&air, "t_pu_pu_emit"), "expected effect transition");
     assert!(has_place(&air, "p_pu_pu_out"), "expected pass-through output place");
-    assert!(has_place(&air, "p_pu_pu_sig"), "expected breadcrumb place");
-    assert!(has_place(&air, "p_pu_pu_done"), "expected logged sink place");
+    assert!(has_place(&air, "p_pu_pu_sig"), "expected detail place");
+    assert!(has_place(&air, "p_pu_pu_done"), "expected recorded sink place");
 
+    // Typed effect, not the lossy process_log_message downgrade.
     let t_emit = get_transition(&air, "t_pu_pu_emit").unwrap();
-    assert_eq!(t_emit["logic"]["handler_id"], "process_log_message");
+    assert_eq!(t_emit["logic"]["handler_id"], "process_phase");
 
     let shape = get_transition(&air, "t_pu_pu_shape").unwrap();
     let src = shape["logic"]["source"].as_str().unwrap();
-    assert!(src.contains("executor-phase"), "phase source marker: {src}");
-    assert!(src.contains("phase_changed"), "event_type marker: {src}");
+    // The breadcrumb is now a canonical serialized StatusDetail::PhaseChanged
+    // (event_type-tagged), with no executor-phase magic-string marker.
+    assert!(!src.contains("executor-phase"), "no magic source marker: {src}");
+    assert!(src.contains("phase_changed"), "event_type tag: {src}");
+    assert!(src.contains("phase_name:"), "typed phase_name field: {src}");
     assert!(src.contains("\"running\""), "status literal: {src}");
     assert!(src.contains("Validate"), "phase name literal: {src}");
     // workflow token forwarded unchanged on `out`
@@ -2778,7 +2782,7 @@ fn phase_update_emits_log_message_phase_shape() {
 }
 
 #[test]
-fn progress_update_emits_metric_progress_fraction() {
+fn progress_update_emits_typed_status_detail_progress_updated() {
     let graph = WorkflowGraph {
         nodes: vec![
             start_node("s"),
@@ -2794,13 +2798,18 @@ fn progress_update_emits_metric_progress_fraction() {
     assert!(has_transition(&air, "t_pg_pu_shape"), "expected shape transition");
     assert!(has_transition(&air, "t_pg_pu_emit"), "expected effect transition");
 
+    // Typed effect, not the lossy process_log_metric downgrade.
     let t_emit = get_transition(&air, "t_pg_pu_emit").unwrap();
-    assert_eq!(t_emit["logic"]["handler_id"], "process_log_metric");
+    assert_eq!(t_emit["logic"]["handler_id"], "process_progress");
 
     let shape = get_transition(&air, "t_pg_pu_shape").unwrap();
     let src = shape["logic"]["source"].as_str().unwrap();
-    assert!(src.contains("progress_fraction"), "metric key: {src}");
-    assert!(src.contains("value: 0.5"), "fraction float literal: {src}");
+    // Canonical serialized StatusDetail::ProgressUpdated — no progress_fraction
+    // metric-key magic string; fraction/current_step/total_steps are typed
+    // fields that survive end-to-end.
+    assert!(!src.contains("progress_fraction"), "no magic metric key: {src}");
+    assert!(src.contains("progress_updated"), "event_type tag: {src}");
+    assert!(src.contains("fraction: 0.5"), "fraction float literal: {src}");
     assert!(src.contains("current_step: 2"), "current_step: {src}");
     assert!(src.contains("total_steps: 5"), "total_steps: {src}");
     assert!(src.contains("out: input"), "token pass-through: {src}");
@@ -2869,10 +2878,11 @@ fn process_control_nodes_pass_token_through_to_end() {
         "chain should still reach a terminal place"
     );
     // fraction 1.0 must serialize with a decimal point so Rhai treats it as
-    // a float matching `value.as_f64()` on the consumer side.
+    // a float matching the typed StatusDetail::ProgressUpdated.fraction on
+    // the consumer side.
     let pg = get_transition(&air, "t_pg_pu_shape").unwrap();
     let src = pg["logic"]["source"].as_str().unwrap();
-    assert!(src.contains("value: 1.0"), "float-typed fraction: {src}");
+    assert!(src.contains("fraction: 1.0"), "float-typed fraction: {src}");
 }
 
 #[test]
@@ -2934,10 +2944,10 @@ fn phase_update_omits_message_field_when_unset() {
 }
 
 #[test]
-fn progress_update_interpolates_message_into_detail() {
-    // ProgressUpdate's message goes through a *different* compiler arm than
-    // PhaseUpdate's and lands under `detail` (where record_progress_event
-    // reads it), not at the top level.
+fn progress_update_interpolates_message_typed_field() {
+    // ProgressUpdate's message is now a top-level field of the canonical
+    // StatusDetail::ProgressUpdated (serde flattens the tagged variant), not
+    // nested under a `detail` map.
     let graph = WorkflowGraph {
         nodes: vec![
             start_node("s"),
@@ -2956,9 +2966,14 @@ fn progress_update_interpolates_message_into_detail() {
         src.contains("__pluck(input, [\"n\"])"),
         "message placeholder accessor: {src}"
     );
+    assert!(src.contains("progress_updated"), "event_type tag: {src}");
     assert!(
-        src.contains("detail: #{ message: __mg"),
-        "interpolated message must sit inside `detail`: {src}"
+        src.contains("message: __mg"),
+        "interpolated message bound as typed field: {src}"
+    );
+    assert!(
+        !src.contains("detail: #{"),
+        "no nested detail wrapper in typed shape: {src}"
     );
 }
 
