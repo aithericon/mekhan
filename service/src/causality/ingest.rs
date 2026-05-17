@@ -6,7 +6,7 @@ use futures::StreamExt;
 use serde::Deserialize;
 use sqlx::PgPool;
 
-use aithericon_executor_domain::{Phase, PhaseStatus, Progress};
+use aithericon_executor_domain::{Phase, PhaseStatus, Progress, StatusDetail};
 use petri_domain::{DomainEvent, PersistedEvent};
 
 use crate::catalogue::model::CatalogueRegisterCommand;
@@ -639,11 +639,12 @@ struct ProjectorCtx<'a> {
 /// One `effect_handler_id` → causality side-effect mapping.
 ///
 /// Each implementation owns exactly the block that used to live behind an
-/// `if effect_handler_id == "..."` guard in `process_domain_event`, including
-/// any folded canonical projections (e.g. a `progress_fraction` metric also
-/// updating typed progress). The registry ([`projector_for`]) makes the set
-/// of handled ids explicit: an unknown id resolves to `None` and is a no-op
-/// by construction, not silently lost in a ladder.
+/// `if effect_handler_id == "..."` guard in `process_domain_event`. The
+/// typed `process_phase` / `process_progress` ids each map to their own
+/// projector that deserializes the whole `StatusDetail` — no magic-string
+/// folding onto the log/metric projectors. The registry ([`projector_for`])
+/// makes the set of handled ids explicit: an unknown id resolves to `None`
+/// and is a no-op by construction, not silently lost in a ladder.
 #[async_trait]
 trait Projector: Sync {
     async fn project(&self, ctx: &ProjectorCtx<'_>) -> Result<(), sqlx::Error>;
@@ -706,21 +707,41 @@ impl Projector for ProcessLogMetric {
             ctx.ts,
             ctx.live,
         )
-        .await?;
-        // Canonical projection: executor ProgressUpdated arrives reshaped as
-        // a metric keyed "progress_fraction" — fold it into the typed
-        // config.progress alongside (not instead of) the metric.
-        if ctx.effect_result.get("key").and_then(|v| v.as_str()) == Some("progress_fraction") {
-            record_progress_event(
-                ctx.db,
-                ctx.consumed_ids,
-                ctx.read_ids,
-                ctx.effect_result,
-                ctx.ts,
-            )
-            .await?;
-        }
-        Ok(())
+        .await
+    }
+}
+
+struct ProcessPhase;
+#[async_trait]
+impl Projector for ProcessPhase {
+    async fn project(&self, ctx: &ProjectorCtx<'_>) -> Result<(), sqlx::Error> {
+        // effect_result IS the verbatim serialized StatusDetail. Deserialize
+        // the whole typed value and project the PhaseChanged variant.
+        project_phase_status_detail(
+            ctx.db,
+            ctx.consumed_ids,
+            ctx.read_ids,
+            ctx.effect_result,
+            ctx.ts,
+        )
+        .await
+    }
+}
+
+struct ProcessProgress;
+#[async_trait]
+impl Projector for ProcessProgress {
+    async fn project(&self, ctx: &ProjectorCtx<'_>) -> Result<(), sqlx::Error> {
+        // effect_result IS the verbatim serialized StatusDetail. Deserialize
+        // the whole typed value and project the ProgressUpdated variant.
+        project_progress_status_detail(
+            ctx.db,
+            ctx.consumed_ids,
+            ctx.read_ids,
+            ctx.effect_result,
+            ctx.ts,
+        )
+        .await
     }
 }
 
@@ -736,29 +757,7 @@ impl Projector for ProcessLogMessage {
             ctx.ts,
             ctx.live,
         )
-        .await?;
-        // Canonical projection: executor PhaseChanged arrives reshaped as a
-        // log (source "executor-phase"); fold it into the typed
-        // config.progress.phases alongside (not instead of) the log.
-        let is_phase = ctx.effect_result.get("source").and_then(|v| v.as_str())
-            == Some("executor-phase")
-            || ctx
-                .effect_result
-                .get("detail")
-                .and_then(|d| d.get("event_type"))
-                .and_then(|v| v.as_str())
-                == Some("phase_changed");
-        if is_phase {
-            record_phase_event(
-                ctx.db,
-                ctx.consumed_ids,
-                ctx.read_ids,
-                ctx.effect_result,
-                ctx.ts,
-            )
-            .await?;
-        }
-        Ok(())
+        .await
     }
 }
 
@@ -812,6 +811,8 @@ fn projector_for(effect_handler_id: &str) -> Option<&'static dyn Projector> {
         "process_start" => Some(&ProcessStart),
         "process_complete" => Some(&ProcessComplete),
         "process_fail" => Some(&ProcessFail),
+        "process_phase" => Some(&ProcessPhase),
+        "process_progress" => Some(&ProcessProgress),
         "process_log_metric" => Some(&ProcessLogMetric),
         "process_log_message" => Some(&ProcessLogMessage),
         "human_task" => Some(&HumanTask),
@@ -1174,38 +1175,26 @@ async fn write_progress(
     Ok(())
 }
 
-/// Project an executor `PhaseChanged` event (reshaped into a
-/// `process_log_message` whose `detail` is the serialized
-/// `StatusDetail::PhaseChanged`) into `config.progress.phases`. Upserts the
-/// phase by name, preserving first-seen order; sets `started_at` on first
-/// transition to `running` and `ended_at` on a terminal status.
+/// Project a typed `StatusDetail::PhaseChanged` into
+/// `config.progress.phases`. Upserts the phase by name, preserving
+/// first-seen order; sets `started_at` on first transition to `running`
+/// and `ended_at` on a terminal status.
+///
+/// The whole `StatusDetail` is deserialized once by the projector — there
+/// is no field-by-field reconstruction or magic-string detection here.
 async fn record_phase_event(
     db: &PgPool,
     consumed_ids: &[String],
     read_ids: &[String],
-    effect_result: &serde_json::Value,
+    phase_name: &str,
+    status: PhaseStatus,
+    message: Option<&str>,
     ts: chrono::DateTime<chrono::Utc>,
 ) -> Result<(), sqlx::Error> {
-    let detail = effect_result
-        .get("detail")
-        .cloned()
-        .unwrap_or(serde_json::Value::Null);
-    let phase_name = detail
-        .get("phase_name")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
     if phase_name.is_empty() {
         return Ok(());
     }
-    let status: PhaseStatus = detail
-        .get("status")
-        .cloned()
-        .and_then(|v| serde_json::from_value(v).ok())
-        .unwrap_or(PhaseStatus::Running);
-    let message = detail
-        .get("message")
-        .and_then(|v| v.as_str())
-        .map(str::to_string);
+    let message = message.map(str::to_string);
     let terminal = matches!(
         status,
         PhaseStatus::Completed | PhaseStatus::Failed | PhaseStatus::Skipped
@@ -1246,36 +1235,23 @@ async fn record_phase_event(
     Ok(())
 }
 
-/// Project an executor `ProgressUpdated` event (reshaped into a
-/// `process_log_metric` keyed `progress_fraction`, with current/total/message
-/// in `detail`) into `config.progress`, leaving `phases` untouched.
+/// Project a typed `StatusDetail::ProgressUpdated` into
+/// `config.progress`, leaving `phases` untouched.
+///
+/// The whole `StatusDetail` is deserialized once by the projector — there
+/// is no `progress_fraction` magic-string key match or field-by-field
+/// reconstruction here.
 async fn record_progress_event(
     db: &PgPool,
     consumed_ids: &[String],
     read_ids: &[String],
-    effect_result: &serde_json::Value,
+    fraction: f64,
+    message: Option<&str>,
+    current_step: u64,
+    total_steps: u64,
     ts: chrono::DateTime<chrono::Utc>,
 ) -> Result<(), sqlx::Error> {
-    let fraction = effect_result
-        .get("value")
-        .and_then(|v| v.as_f64())
-        .unwrap_or(0.0);
-    let detail = effect_result
-        .get("detail")
-        .cloned()
-        .unwrap_or(serde_json::Value::Null);
-    let message = detail
-        .get("message")
-        .and_then(|v| v.as_str())
-        .map(str::to_string);
-    let current_step = detail
-        .get("current_step")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let total_steps = detail
-        .get("total_steps")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
+    let message = message.map(str::to_string);
 
     let process_ids = resolved_or_done!(db, consumed_ids, read_ids);
 
@@ -1289,6 +1265,68 @@ async fn record_progress_event(
         progress.total_steps = total_steps;
         progress.updated_at = ts;
         write_progress(db, pid, &progress, ts).await?;
+    }
+    Ok(())
+}
+
+/// Deserialize an `effect_result` into a typed `StatusDetail` and project
+/// the `PhaseChanged` variant. Any other variant (or a malformed payload)
+/// is a structural no-op — there is no stringly fallback.
+async fn project_phase_status_detail(
+    db: &PgPool,
+    consumed_ids: &[String],
+    read_ids: &[String],
+    effect_result: &serde_json::Value,
+    ts: chrono::DateTime<chrono::Utc>,
+) -> Result<(), sqlx::Error> {
+    if let Ok(StatusDetail::PhaseChanged {
+        phase_name,
+        status,
+        message,
+    }) = serde_json::from_value::<StatusDetail>(effect_result.clone())
+    {
+        record_phase_event(
+            db,
+            consumed_ids,
+            read_ids,
+            &phase_name,
+            status,
+            message.as_deref(),
+            ts,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+/// Deserialize an `effect_result` into a typed `StatusDetail` and project
+/// the `ProgressUpdated` variant. Any other variant (or a malformed
+/// payload) is a structural no-op — there is no stringly fallback.
+async fn project_progress_status_detail(
+    db: &PgPool,
+    consumed_ids: &[String],
+    read_ids: &[String],
+    effect_result: &serde_json::Value,
+    ts: chrono::DateTime<chrono::Utc>,
+) -> Result<(), sqlx::Error> {
+    if let Ok(StatusDetail::ProgressUpdated {
+        fraction,
+        message,
+        current_step,
+        total_steps,
+    }) = serde_json::from_value::<StatusDetail>(effect_result.clone())
+    {
+        record_progress_event(
+            db,
+            consumed_ids,
+            read_ids,
+            fraction,
+            message.as_deref(),
+            current_step,
+            total_steps,
+            ts,
+        )
+        .await?;
     }
     Ok(())
 }
