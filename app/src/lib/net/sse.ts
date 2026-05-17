@@ -37,6 +37,15 @@ export interface ConnectSseOptions {
 	 * caller decides what to do (poll fallback, error status, nothing).
 	 */
 	onRetriesExhausted?: () => void;
+	/**
+	 * Invoked when the connect response is a TERMINAL client error (e.g. 404,
+	 * 409, 401, 403) that retrying can never fix — for instance the petri
+	 * engine's 409 "Net is completed or cancelled" tombstone gate. The
+	 * connection stops cleanly WITHOUT scheduling a retry or exhausting the
+	 * budget; the caller decides the resulting state. `body` is the response
+	 * body text (it carries the engine's reason string).
+	 */
+	onTerminal?: (status: number, body: string) => void;
 	/** Max reconnect attempts after the initial connect. Default 8. */
 	maxRetries?: number;
 	/** Base backoff in ms; delay = initialRetryMs * 2^attempt. Default 1000. */
@@ -51,6 +60,20 @@ export interface ConnectSseOptions {
 export interface SseConnection {
 	/** Abort the current connection and stop reconnecting. */
 	close(): void;
+}
+
+/**
+ * Whether an HTTP status is a TERMINAL client error: retrying it can never
+ * succeed, so the connection must stop instead of entering backoff.
+ *
+ * The whole 4xx range is terminal EXCEPT 408 (Request Timeout) and 429 (Too
+ * Many Requests), which are transient and retryable. 5xx, network errors and
+ * normal stream-end stay on the existing retry path.
+ */
+function isTerminalStatus(status: number): boolean {
+	if (status < 400 || status >= 500) return false;
+	if (status === 408 || status === 429) return false;
+	return true;
 }
 
 /**
@@ -123,6 +146,7 @@ export function connectSse(
 		onReconnect,
 		onOpen,
 		onRetriesExhausted,
+		onTerminal,
 		maxRetries = 8,
 		initialRetryMs = 1000,
 		fetchImpl = fetch
@@ -159,7 +183,20 @@ export function connectSse(
 		(async () => {
 			try {
 				const resp = await fetchImpl(target, { signal: ctrl.signal });
-				if (!resp.ok || !resp.body) {
+				if (!resp.ok) {
+					if (isTerminalStatus(resp.status)) {
+						// Permanent client error (e.g. petri's 409 tombstone):
+						// retrying can never succeed. Stop cleanly, do NOT
+						// schedule a retry or spend the retry budget.
+						const body = await resp.text().catch(() => '');
+						if (ctrl.signal.aborted) return;
+						closed = true;
+						onTerminal?.(resp.status, body);
+						return;
+					}
+					throw new Error(`SSE connect failed: ${resp.status}`);
+				}
+				if (!resp.body) {
 					throw new Error(`SSE connect failed: ${resp.status}`);
 				}
 				retryCount = 0;
@@ -205,6 +242,12 @@ export interface SseChannelOptions<TPayload> {
 	backfill: () => Promise<unknown>;
 	/** Status sink, mirroring the prior per-channel ConnectionStatus. */
 	setStatus: (status: 'reconnecting' | 'streaming' | 'error') => void;
+	/**
+	 * Invoked when the stream hits a TERMINAL client error (see
+	 * {@link ConnectSseOptions.onTerminal}). The channel stops reconnecting;
+	 * by default it transitions to `'error'` via `setStatus`.
+	 */
+	onTerminal?: (status: number, body: string) => void;
 	/** Max reconnect attempts. Default 8. */
 	maxRetries?: number;
 	/** Base backoff in ms. Default 1000. */
@@ -235,6 +278,7 @@ export function createSseChannel<TPayload>(
 		backfillOn = ['gap', 'resync'],
 		backfill,
 		setStatus,
+		onTerminal,
 		maxRetries = 8,
 		initialRetryMs = 1000
 	} = opts;
@@ -251,6 +295,11 @@ export function createSseChannel<TPayload>(
 			onReconnect: () => setStatus('reconnecting'),
 			onOpen: () => setStatus('streaming'),
 			onRetriesExhausted: () => setStatus('error'),
+			onTerminal: (status, body) => {
+				closed = true;
+				if (onTerminal) onTerminal(status, body);
+				else setStatus('error');
+			},
 			onEvent: async ({ event, data }) => {
 				if (event === eventName) {
 					try {
