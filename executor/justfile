@@ -34,6 +34,15 @@ run:
 run-debug:
     RUST_LOG=debug cargo run -p aithericon-executor-service
 
+# Launch the Surya executor pool (Item 5 of sub-phase 2.2b). Spawns the
+# managed Surya subprocess from .dev/surya-venv/ (run `just
+# surya-venv-setup` first if absent), binds /v1/healthz + /v1/ocr/extract
+# on AITHERICON_EXECUTOR_SURYA_POOL_PORT (default 3302), and registers
+# with cloud-layer-capability-routing. Fail-closed if CLOUD_LAYER_JWT_SECRET
+# is unset or the subprocess can't start.
+run-executor-surya-pool:
+    cargo run -p aithericon-executor-surya --bin aithericon-executor-surya-pool
+
 # Start NATS JetStream via Docker
 nats-up:
     docker run -d --name executor-nats -p 4222:4222 nats:latest -js

@@ -24,6 +24,15 @@ homepage.workspace = true
 # Apache-2.0; Datalab commercial-license inquiry is user-routed at slice
 # close.
 
+# Item 5: dedicated register-as-pool binary (parallel to
+# aithericon-executor-llm's aithericon-executor-pool). Spawns the managed
+# Surya subprocess, binds the pool_listener axum task on the pool_url
+# port, registers `services.surya = { healthy: true }` with
+# cloud-layer-capability-routing, and runs the heartbeat loop.
+[[bin]]
+name = "aithericon-executor-surya-pool"
+path = "src/bin/executor_surya_pool.rs"
+
 [dependencies]
 aithericon-executor-domain = { workspace = true }
 aithericon-executor-backend = { workspace = true }
@@ -52,13 +61,20 @@ base64 = "0.22"
 # already-converted.
 kreuzberg = { version = "4", default-features = false, features = ["tokio-runtime"] }
 
+# Pool register-as-pool wiring (Item 5) — mirrors executor-llm's dep set.
+# axum used by pool_listener; jsonwebtoken + uuid + gethostname + anyhow
+# used by register_as_pool + the bin's startup orchestration;
+# tracing-subscriber initialised in the bin's main(). tokio-util already
+# above in the core dep block (CancellationToken used in subprocess
+# lifecycle).
+axum = { workspace = true }
+anyhow = { workspace = true }
+jsonwebtoken = { workspace = true }
+gethostname = { workspace = true }
+uuid = { workspace = true }
+tracing-subscriber = { workspace = true }
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 serde_json = { workspace = true }
 tempfile = "3"
-# Mock HTTP server for backend integration tests — spawns a minimal axum
-# listener that the SuryaAdapter can talk to without bringing up the real
-# Python subprocess. Already in workspace deps for executor-llm's
-# pool_listener; using here at dev-only.
-axum = { workspace = true }
-tokio-util = { workspace = true }
