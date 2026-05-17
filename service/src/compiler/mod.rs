@@ -12,4 +12,4 @@ mod wire;
 pub use compile::compile_to_air;
 pub use error::{CompileError, CompileErrorView};
 pub use pyio::generate_py_io_files;
-pub use validate::node_input_scopes;
+pub use validate::{node_input_scopes, resolve_trigger_target_port};
