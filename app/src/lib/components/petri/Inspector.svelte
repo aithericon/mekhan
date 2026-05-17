@@ -8,6 +8,7 @@
 	import NodeKindBadge from './NodeKindBadge.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Textarea } from '$lib/components/ui/textarea';
+	import { isLeaseToken, getLeaseJobId } from '$lib/petri/token-analysis';
 
 	// ---------------------------------------------------------------------------
 	// Detail shape interfaces
@@ -132,71 +133,6 @@
 		tracker.update(selectedElement);
 		return tracker.value;
 	});
-
-	// ---------------------------------------------------------------------------
-	// Token analysis helpers
-	// ---------------------------------------------------------------------------
-
-	function isLeaseToken(token: { color: { type: string; value?: unknown } }): boolean {
-		if (token.color.type !== 'Data' || !token.color.value) return false;
-		const data = token.color.value as Record<string, unknown>;
-		return 'job_id' in data && 'worker_id' in data;
-	}
-
-	function hasCoordinationProvenance(token: { color: { type: string; value?: unknown } }): boolean {
-		if (token.color.type !== 'Data' || !token.color.value) return false;
-		const data = token.color.value as Record<string, unknown>;
-		return '_provenance' in data && typeof data._provenance === 'object';
-	}
-
-	function getCoordinationProvenance(token: { color: { type: string; value?: unknown } }): {
-		source: string;
-		signal_type: string;
-		workflow_id: string;
-		adapter_pool: string;
-		request_sent_at?: string;
-		response_received_at?: string;
-		confirm_sent_at?: string;
-		transition?: string;
-	} | null {
-		if (!hasCoordinationProvenance(token)) return null;
-		const data = token.color.value as Record<string, unknown>;
-		return data._provenance as any;
-	}
-
-	function formatDuration(start: string, end: string): string {
-		const startMs = new Date(start).getTime();
-		const endMs = new Date(end).getTime();
-		const durationMs = endMs - startMs;
-		if (durationMs < 1000) return `${durationMs}ms`;
-		return `${(durationMs / 1000).toFixed(2)}s`;
-	}
-
-	function getLeaseJobId(token: { color: { type: string; value?: unknown } }): string | null {
-		if (!isLeaseToken(token)) return null;
-		const data = token.color.value as Record<string, unknown>;
-		return data.job_id as string;
-	}
-
-	// ---------------------------------------------------------------------------
-	// Display helpers
-	// ---------------------------------------------------------------------------
-
-	function formatGuard(guard: any): string {
-		if (!guard || guard.type === 'Always') return 'Always (no guard)';
-		switch (guard.type) {
-			case 'IntegerGreaterThan': return `Integer > ${guard.value}`;
-			case 'IntegerLessThan': return `Integer < ${guard.value}`;
-			case 'DataHasField': return `Has field "${guard.field}"`;
-			case 'FieldCompare': return `${guard.field} ${guard.op} ${JSON.stringify(guard.value)}`;
-			case 'ColorEquals': return `Color equals ${JSON.stringify(guard.value)}`;
-			default: return guard.type;
-		}
-	}
-
-	function formatJson(value: unknown): string {
-		return JSON.stringify(value, null, 2);
-	}
 
 	// ---------------------------------------------------------------------------
 	// Actions
