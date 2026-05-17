@@ -103,9 +103,12 @@ pub async fn run(_server: &str, directory: &str) -> Result<()> {
 /// template directory's repo. `None` when not a git work tree — apply still
 /// works; provenance is optional.
 fn git_source_ref(dir: &Path) -> Option<Value> {
-    // `status --porcelain` doubles as the git-work-tree probe: if this fails
-    // the dir isn't a repo and we record no provenance.
-    let dirty = match run_git(dir, &["status", "--porcelain"]) {
+    // `git -C <dir> status --porcelain -- .` scopes the dirty check to the
+    // template directory's subtree (the pathspec `.` is relative to the
+    // `-C` dir), so unrelated working-tree changes elsewhere in the repo
+    // don't false-positive this workflow as dirty. Also doubles as the
+    // git-work-tree probe: if it fails the dir isn't a repo → no provenance.
+    let dirty = match run_git(dir, &["status", "--porcelain", "--", "."]) {
         Some(out) => !out.trim().is_empty(),
         None => return None,
     };
