@@ -7,6 +7,7 @@
 
 import { listTasks } from '$lib/api/client';
 import { authFetch } from '$lib/auth/fetch';
+import { connectSse, type SseConnection } from '$lib/net/sse';
 import type { HumanTask } from '$lib/types/tasks';
 
 const SSE_URL = '/api/tasks/stream';
@@ -20,8 +21,7 @@ export function createTaskStore() {
 	let error: string | null = $state(null);
 
 	// SSE state
-	let sseAbortController: AbortController | null = null;
-	let sseRetryCount = 0;
+	let sseConnection: SseConnection | null = null;
 	let destroyed = false;
 
 	// Current filter
@@ -43,67 +43,29 @@ export function createTaskStore() {
 		}
 	}
 
+	const TASK_EVENTS = new Set([
+		'task_created',
+		'task_completed',
+		'task_failed',
+		'task_cancelled'
+	]);
+
 	function connectSSE() {
 		if (destroyed) return;
-		sseAbortController?.abort();
-		const controller = new AbortController();
-		sseAbortController = controller;
-
-		(async () => {
-			try {
-				const resp = await authFetch(SSE_URL, { signal: controller.signal });
-				if (!resp.ok || !resp.body) {
-					throw new Error(`SSE connect failed: ${resp.status}`);
+		sseConnection?.close();
+		sseConnection = connectSse(SSE_URL, {
+			fetchImpl: authFetch,
+			maxRetries: SSE_MAX_RETRIES,
+			initialRetryMs: SSE_INITIAL_RETRY_MS,
+			onEvent: ({ event }) => {
+				if (TASK_EVENTS.has(event)) {
+					setTimeout(() => fetchTasks(currentStatus), 300);
 				}
-
-				sseRetryCount = 0;
-				const reader = resp.body.getReader();
-				const decoder = new TextDecoder();
-				let buffer = '';
-
-				while (true) {
-					const { done, value } = await reader.read();
-					if (done) break;
-
-					buffer += decoder.decode(value, { stream: true });
-					const lines = buffer.split('\n');
-					buffer = lines.pop() ?? '';
-
-					let shouldRefetchTasks = false;
-					let shouldNotifyProcess = false;
-					for (const line of lines) {
-						if (
-							line.startsWith('event: task_created') ||
-							line.startsWith('event: task_completed') ||
-							line.startsWith('event: task_failed') ||
-							line.startsWith('event: task_cancelled')
-						) {
-							shouldRefetchTasks = true;
-						}
-						if (line.startsWith('event: process_update')) {
-							shouldNotifyProcess = true;
-						}
-					}
-
-					if (shouldRefetchTasks) {
-						setTimeout(() => fetchTasks(currentStatus), 300);
-					}
-					if (shouldNotifyProcess && processUpdateCallback) {
-						setTimeout(() => processUpdateCallback?.(), 300);
-					}
+				if (event === 'process_update' && processUpdateCallback) {
+					setTimeout(() => processUpdateCallback?.(), 300);
 				}
-			} catch (e) {
-				if (controller.signal.aborted) return;
-				console.warn('SSE error:', e);
 			}
-
-			// Reconnect with exponential backoff
-			if (!destroyed && sseRetryCount < SSE_MAX_RETRIES) {
-				const delay = SSE_INITIAL_RETRY_MS * Math.pow(2, sseRetryCount);
-				sseRetryCount++;
-				setTimeout(() => connectSSE(), delay);
-			}
-		})();
+		});
 	}
 
 	function init(status?: string) {
@@ -120,7 +82,8 @@ export function createTaskStore() {
 
 	function destroy() {
 		destroyed = true;
-		sseAbortController?.abort();
+		sseConnection?.close();
+		sseConnection = null;
 	}
 
 	return {

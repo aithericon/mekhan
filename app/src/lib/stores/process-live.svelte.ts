@@ -22,6 +22,7 @@ import {
 	type LogTailRow,
 	type MetricPoint
 } from '$lib/api/client';
+import { createSseChannel, type SseChannel } from '$lib/net/sse';
 
 const SSE_MAX_RETRIES = 8;
 const SSE_INITIAL_RETRY_MS = 1000;
@@ -97,12 +98,9 @@ export function createProcessLiveStore(processId: string, opts: ProcessLiveOptio
 	let lastArtifactSeq = 0;
 
 	// SSE control.
-	let metricsAbort: AbortController | null = null;
-	let logsAbort: AbortController | null = null;
-	let artifactsAbort: AbortController | null = null;
-	let metricsRetry = 0;
-	let logsRetry = 0;
-	let artifactsRetry = 0;
+	let metricsChannel: SseChannel | null = null;
+	let logsChannel: SseChannel | null = null;
+	let artifactsChannel: SseChannel | null = null;
 	let destroyed = false;
 
 	// Staleness tracking for tab-resume / network-resume heuristics.
@@ -271,163 +269,78 @@ export function createProcessLiveStore(processId: string, opts: ProcessLiveOptio
 
 	function connectMetrics() {
 		if (destroyed) return;
-		metricsAbort?.abort();
-		const controller = new AbortController();
-		metricsAbort = controller;
-
-		const url = processMetricsStreamUrl(processId, {
-			since_seq: lastMetricSeq,
-			signal_key: signalKey,
-			keys: keys.length > 0 ? keys : undefined
+		metricsChannel?.close();
+		metricsChannel = createSseChannel<LiveMetricEvent>({
+			streamUrl: () =>
+				processMetricsStreamUrl(processId, {
+					since_seq: lastMetricSeq,
+					signal_key: signalKey,
+					keys: keys.length > 0 ? keys : undefined
+				}),
+			eventName: 'metric',
+			onPayload: appendMetric,
+			backfill: backfillMetrics,
+			setStatus: (s) => {
+				metricStatus = s;
+			},
+			maxRetries: SSE_MAX_RETRIES,
+			initialRetryMs: SSE_INITIAL_RETRY_MS
 		});
-
-		(async () => {
-			metricStatus = 'reconnecting';
-			try {
-				const resp = await fetch(url, { signal: controller.signal });
-				if (!resp.ok || !resp.body) throw new Error(`metrics SSE: ${resp.status}`);
-
-				metricsRetry = 0;
-				metricStatus = 'streaming';
-
-				await parseSse(resp.body, controller, async (eventName, dataStr) => {
-					if (eventName === 'metric') {
-						try {
-							const e = JSON.parse(dataStr) as LiveMetricEvent;
-							appendMetric(e);
-						} catch {
-							/* ignore malformed */
-						}
-					} else if (eventName === 'gap') {
-						// Ring buffer rolled past our since_seq — re-fetch backfill and reset.
-						await backfillMetrics().catch(() => undefined);
-					} else if (eventName === 'resync') {
-						await backfillMetrics().catch(() => undefined);
-					}
-				});
-			} catch (e) {
-				if (controller.signal.aborted) return;
-				console.warn('metrics SSE error:', e);
-			}
-
-			if (!destroyed && metricsRetry < SSE_MAX_RETRIES) {
-				const delay = SSE_INITIAL_RETRY_MS * Math.pow(2, metricsRetry);
-				metricsRetry++;
-				setTimeout(() => connectMetrics(), delay);
-			} else if (!destroyed) {
-				metricStatus = 'error';
-			}
-		})();
 	}
 
 	function connectArtifacts() {
 		if (destroyed) return;
-		artifactsAbort?.abort();
-		const controller = new AbortController();
-		artifactsAbort = controller;
-
-		const url = processArtifactsStreamUrl(processId, {
-			since_seq: lastArtifactSeq,
-			categories: artifactCategories.length > 0 ? artifactCategories : undefined,
-			render_hints: artifactRenderHints.length > 0 ? artifactRenderHints : undefined
+		artifactsChannel?.close();
+		artifactsChannel = createSseChannel<LiveArtifactEntry>({
+			streamUrl: () =>
+				processArtifactsStreamUrl(processId, {
+					since_seq: lastArtifactSeq,
+					categories: artifactCategories.length > 0 ? artifactCategories : undefined,
+					render_hints: artifactRenderHints.length > 0 ? artifactRenderHints : undefined
+				}),
+			eventName: 'artifact',
+			onPayload: appendArtifact,
+			backfill: backfillArtifacts,
+			setStatus: (s) => {
+				artifactStatus = s;
+			},
+			maxRetries: SSE_MAX_RETRIES,
+			initialRetryMs: SSE_INITIAL_RETRY_MS
 		});
-
-		(async () => {
-			artifactStatus = 'reconnecting';
-			try {
-				const resp = await fetch(url, { signal: controller.signal });
-				if (!resp.ok || !resp.body) throw new Error(`artifacts SSE: ${resp.status}`);
-
-				artifactsRetry = 0;
-				artifactStatus = 'streaming';
-
-				await parseSse(resp.body, controller, async (eventName, dataStr) => {
-					if (eventName === 'artifact') {
-						try {
-							const e = JSON.parse(dataStr) as LiveArtifactEntry;
-							appendArtifact(e);
-						} catch {
-							/* ignore malformed */
-						}
-					} else if (eventName === 'gap' || eventName === 'resync') {
-						await backfillArtifacts().catch(() => undefined);
-					}
-				});
-			} catch (e) {
-				if (controller.signal.aborted) return;
-				console.warn('artifacts SSE error:', e);
-			}
-
-			if (!destroyed && artifactsRetry < SSE_MAX_RETRIES) {
-				const delay = SSE_INITIAL_RETRY_MS * Math.pow(2, artifactsRetry);
-				artifactsRetry++;
-				setTimeout(() => connectArtifacts(), delay);
-			} else if (!destroyed) {
-				artifactStatus = 'error';
-			}
-		})();
 	}
 
 	function connectLogs() {
 		if (destroyed) return;
-		logsAbort?.abort();
-		const controller = new AbortController();
-		logsAbort = controller;
-
-		const url = processLogsStreamUrl(processId, {
-			since_seq: lastLogSeq,
-			signal_key: signalKey,
-			level: logLevel,
-			q: logQuery
+		logsChannel?.close();
+		logsChannel = createSseChannel<LiveLogEvent>({
+			streamUrl: () =>
+				processLogsStreamUrl(processId, {
+					since_seq: lastLogSeq,
+					signal_key: signalKey,
+					level: logLevel,
+					q: logQuery
+				}),
+			eventName: 'log',
+			onPayload: appendLog,
+			backfill: backfillLogs,
+			setStatus: (s) => {
+				logStatus = s;
+			},
+			maxRetries: SSE_MAX_RETRIES,
+			initialRetryMs: SSE_INITIAL_RETRY_MS
 		});
-
-		(async () => {
-			logStatus = 'reconnecting';
-			try {
-				const resp = await fetch(url, { signal: controller.signal });
-				if (!resp.ok || !resp.body) throw new Error(`logs SSE: ${resp.status}`);
-
-				logsRetry = 0;
-				logStatus = 'streaming';
-
-				await parseSse(resp.body, controller, async (eventName, dataStr) => {
-					if (eventName === 'log') {
-						try {
-							const e = JSON.parse(dataStr) as LiveLogEvent;
-							appendLog(e);
-						} catch {
-							/* ignore */
-						}
-					} else if (eventName === 'gap' || eventName === 'resync') {
-						await backfillLogs().catch(() => undefined);
-					}
-				});
-			} catch (e) {
-				if (controller.signal.aborted) return;
-				console.warn('logs SSE error:', e);
-			}
-
-			if (!destroyed && logsRetry < SSE_MAX_RETRIES) {
-				const delay = SSE_INITIAL_RETRY_MS * Math.pow(2, logsRetry);
-				logsRetry++;
-				setTimeout(() => connectLogs(), delay);
-			} else if (!destroyed) {
-				logStatus = 'error';
-			}
-		})();
 	}
 
 	// Force-reconnect both SSE streams with fresh retry budgets.
 	// Called from `online` / `visibilitychange` / `pageshow` handlers below.
+	// Each connectX() builds a brand-new channel whose retry counter starts at
+	// 0, so the retry budget is implicitly refreshed.
 	function forceReconnect(reason: string) {
 		if (destroyed) return;
 		console.log(`[process-live] force-reconnect: ${reason}`);
-		metricsAbort?.abort();
-		logsAbort?.abort();
-		artifactsAbort?.abort();
-		metricsRetry = 0;
-		logsRetry = 0;
-		artifactsRetry = 0;
+		metricsChannel?.close();
+		logsChannel?.close();
+		artifactsChannel?.close();
 		// Refresh DB backfill so we don't miss events that rolled past the ring
 		// buffer while the tab was idle.
 		Promise.all([backfillMetrics(), backfillLogs(), backfillArtifacts()])
@@ -536,9 +449,9 @@ export function createProcessLiveStore(processId: string, opts: ProcessLiveOptio
 	function destroy() {
 		destroyed = true;
 		detachResumeListeners();
-		metricsAbort?.abort();
-		logsAbort?.abort();
-		artifactsAbort?.abort();
+		metricsChannel?.close();
+		logsChannel?.close();
+		artifactsChannel?.close();
 	}
 
 	return {
@@ -592,52 +505,4 @@ export function createProcessLiveStore(processId: string, opts: ProcessLiveOptio
 		setWindowSeconds,
 		destroy
 	};
-}
-
-/**
- * Minimal SSE parser over a ReadableStream. Dispatches `(eventName, data)`
- * once per dispatched event. Handles multi-line data fields.
- */
-async function parseSse(
-	body: ReadableStream<Uint8Array>,
-	controller: AbortController,
-	onEvent: (event: string, data: string) => void | Promise<void>
-): Promise<void> {
-	const reader = body.getReader();
-	const decoder = new TextDecoder();
-	let buffer = '';
-	let currentEvent = 'message';
-	let currentData: string[] = [];
-
-	const flush = async () => {
-		if (currentData.length === 0 && currentEvent === 'message') return;
-		const data = currentData.join('\n');
-		currentData = [];
-		const ev = currentEvent;
-		currentEvent = 'message';
-		await onEvent(ev, data);
-	};
-
-	while (!controller.signal.aborted) {
-		const { done, value } = await reader.read();
-		if (done) break;
-		buffer += decoder.decode(value, { stream: true });
-		const lines = buffer.split('\n');
-		buffer = lines.pop() ?? '';
-		for (const rawLine of lines) {
-			const line = rawLine.replace(/\r$/, '');
-			if (line === '') {
-				await flush();
-				continue;
-			}
-			if (line.startsWith(':')) continue; // comment / keepalive
-			const colon = line.indexOf(':');
-			const field = colon === -1 ? line : line.slice(0, colon);
-			const valueRaw = colon === -1 ? '' : line.slice(colon + 1);
-			const value = valueRaw.startsWith(' ') ? valueRaw.slice(1) : valueRaw;
-			if (field === 'event') currentEvent = value;
-			else if (field === 'data') currentData.push(value);
-			// id field ignored — we track seq inside the payload.
-		}
-	}
 }

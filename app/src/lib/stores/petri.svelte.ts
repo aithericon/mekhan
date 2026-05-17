@@ -5,6 +5,7 @@
  * state for the visualizer components (LabCanvas, Timeline, EventLog, Inspector).
  */
 
+import { connectSse, type SseConnection } from '$lib/net/sse';
 import type {
 	PetriNet,
 	Token,
@@ -52,8 +53,7 @@ export function createPetriStore(netId: string, baseUrl: string = PETRI_BASE) {
 	let services: { handlers: string[]; categories: Record<string, string[]> } | null = $state(null);
 
 	// ── SSE ─────────────────────────────────────────────────────────────
-	let sseAbortController: AbortController | null = null;
-	let sseRetryCount = 0;
+	let sseConnection: SseConnection | null = null;
 	const SSE_MAX_RETRIES = 5;
 	const SSE_INITIAL_RETRY_MS = 1000;
 	let pollInterval: ReturnType<typeof setInterval> | null = null;
@@ -664,58 +664,17 @@ export function createPetriStore(netId: string, baseUrl: string = PETRI_BASE) {
 	// ── SSE live updates ────────────────────────────────────────────────
 
 	function connectSSE() {
-		if (sseAbortController) sseAbortController.abort();
-		sseAbortController = new AbortController();
-
-		const fromSeq = lastFetchedSequence + 1;
-		const url = `${apiBase}/events/stream?from_sequence=${fromSeq}`;
-
-		fetch(url, { signal: sseAbortController.signal })
-			.then((response) => {
-				if (!response.ok || !response.body) {
-					throw new Error(`SSE failed: ${response.status}`);
-				}
-				sseRetryCount = 0;
-				const reader = response.body.getReader();
-				const decoder = new TextDecoder();
-				let buffer = '';
-
-				async function processChunk(): Promise<void> {
-					while (true) {
-						const { done, value } = await reader.read();
-						if (done) {
-							// Stream ended — reconnect
-							scheduleSSERetry();
-							return;
-						}
-						buffer += decoder.decode(value, { stream: true });
-						const lines = buffer.split('\n');
-						buffer = lines.pop() ?? '';
-
-						let eventType = '';
-						let eventData = '';
-
-						for (const line of lines) {
-							if (line.startsWith('event: ')) {
-								eventType = line.slice(7).trim();
-							} else if (line.startsWith('data: ')) {
-								eventData = line.slice(6);
-							} else if (line === '' && eventData) {
-								handleSSEMessage(eventType, eventData);
-								eventType = '';
-								eventData = '';
-							}
-						}
-					}
-				}
-
-				return processChunk();
-			})
-			.catch((err) => {
-				if (err.name !== 'AbortError') {
-					scheduleSSERetry();
-				}
-			});
+		sseConnection?.close();
+		sseConnection = connectSse(
+			() => `${apiBase}/events/stream?from_sequence=${lastFetchedSequence + 1}`,
+			{
+				maxRetries: SSE_MAX_RETRIES,
+				initialRetryMs: SSE_INITIAL_RETRY_MS,
+				// After the retry budget is spent, fall back to polling.
+				onRetriesExhausted: () => startPolling(),
+				onEvent: ({ event, data }) => handleSSEMessage(event, data)
+			}
+		);
 	}
 
 	function handleSSEMessage(type: string, data: string) {
@@ -747,22 +706,9 @@ export function createPetriStore(netId: string, baseUrl: string = PETRI_BASE) {
 		}
 	}
 
-	function scheduleSSERetry() {
-		if (sseRetryCount >= SSE_MAX_RETRIES) {
-			// Fall back to polling
-			startPolling();
-			return;
-		}
-		const delay = SSE_INITIAL_RETRY_MS * Math.pow(2, sseRetryCount);
-		sseRetryCount++;
-		setTimeout(() => connectSSE(), delay);
-	}
-
 	function disconnectSSE() {
-		if (sseAbortController) {
-			sseAbortController.abort();
-			sseAbortController = null;
-		}
+		sseConnection?.close();
+		sseConnection = null;
 	}
 
 	function startPolling() {
