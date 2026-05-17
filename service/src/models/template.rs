@@ -1330,6 +1330,478 @@ impl WorkflowGraph {
     }
 }
 
+/// Single source of truth for the DSL (YAML/HCL) ↔ graph node mapping.
+///
+/// The CLI's `formats::dsl` module owns flow-string parsing, auto-layout and
+/// the `DslWorkflow` envelope; the per-node payload mapping lives here, next
+/// to [`WorkflowNodeData`], so a new enum variant fails to compile until
+/// [`WorkflowNodeData::to_dsl_step`] handles it (no catch-all) and the
+/// DSL→model direction can't silently swallow a known type.
+pub mod dsl {
+    use super::{
+        default_output_port, default_terminal_port, BranchCondition, ExecutionBackendType,
+        ExecutionSpecConfig, Port, TaskBlockConfig, TaskStepConfig, WorkflowNode, WorkflowNodeData,
+    };
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Debug, Serialize, Deserialize)]
+    pub struct DslStep {
+        #[serde(rename = "type")]
+        pub step_type: String,
+
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub label: Option<String>,
+
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub description: Option<String>,
+
+        // start
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub initial_data: Option<serde_json::Value>,
+
+        // human_task
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub task_title: Option<String>,
+
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub instructions: Option<String>,
+
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub steps: Option<Vec<DslTaskStep>>,
+
+        // automated_step
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub execution: Option<DslExecution>,
+
+        // decision
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub conditions: Option<Vec<DslBranchCondition>>,
+
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub default_branch: Option<String>,
+
+        // loop
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub max_iterations: Option<i32>,
+
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub loop_condition: Option<String>,
+
+        // scope
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pub children: Vec<String>,
+
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub width: Option<f64>,
+
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub height: Option<f64>,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct DslTaskStep {
+        pub title: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub description: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub blocks: Option<Vec<serde_json::Value>>,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct DslExecution {
+        pub backend: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub entrypoint: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pub files: Vec<String>,
+        pub config: serde_json::Value,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct DslBranchCondition {
+        pub edge: String,
+        pub label: String,
+        pub guard: String,
+    }
+
+    /// Synthesize a stable edge id from a source/target/handle triple.
+    /// Mirrors the flow-parser's id scheme so DSL-declared decision branches
+    /// resolve to the same edges the flow strings create.
+    pub fn edge_id(source: &str, target: &str, handle: Option<&str>) -> String {
+        match handle {
+            Some(h) => format!("edge_{}_{}_to_{}", source, h, target),
+            None => format!("edge_{}_to_{}", source, target),
+        }
+    }
+
+    /// `snake_case` step key → `Title Case` label fallback.
+    pub fn title_case(s: &str) -> String {
+        s.split('_')
+            .map(|word| {
+                let mut chars = word.chars();
+                match chars.next() {
+                    None => String::new(),
+                    Some(c) => c.to_uppercase().to_string() + chars.as_str(),
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    /// Extract the target step key from an auto-generated edge ID.
+    /// e.g. `edge_check_yes_to_process` → `process`.
+    pub fn extract_edge_target(edge_id: &str) -> String {
+        if let Some(pos) = edge_id.rfind("_to_") {
+            edge_id[pos + 4..].to_string()
+        } else {
+            edge_id.to_string()
+        }
+    }
+
+    impl WorkflowNodeData {
+        /// Build a node payload from a parsed DSL step. The `step_type`
+        /// discriminator is data (it comes from YAML/HCL), so this arm is a
+        /// string match — but every real variant is handled explicitly and
+        /// the fallthrough is an error, never a silently-mistyped node.
+        pub fn from_dsl_step(
+            key: &str,
+            step: &DslStep,
+            label: &str,
+        ) -> Result<WorkflowNodeData, String> {
+            match step.step_type.as_str() {
+                "start" => Ok(WorkflowNodeData::Start {
+                    label: label.to_string(),
+                    description: step.description.clone(),
+                    // DSL still carries `initial_data` for read-compat with old
+                    // files; the typed-ports model expects a `Port` here. CLI
+                    // DSL doesn't yet express ports, so we default to an empty
+                    // input port. Round-trip through DSL is lossy for typed
+                    // Start ports / `process_name` until the DSL format gains a
+                    // schema for them.
+                    initial: Port::empty_input(),
+                    process_name: None,
+                }),
+                "end" => Ok(WorkflowNodeData::End {
+                    label: label.to_string(),
+                    description: step.description.clone(),
+                    terminal: default_terminal_port(),
+                }),
+                "human_task" => {
+                    let task_steps = step
+                        .steps
+                        .as_ref()
+                        .map(|dsl_steps| {
+                            dsl_steps
+                                .iter()
+                                .enumerate()
+                                .map(|(i, ds)| {
+                                    let blocks: Vec<TaskBlockConfig> = ds
+                                        .blocks
+                                        .as_ref()
+                                        .map(|b| {
+                                            b.iter()
+                                                .filter_map(|v| {
+                                                    serde_json::from_value(v.clone()).ok()
+                                                })
+                                                .collect()
+                                        })
+                                        .unwrap_or_default();
+                                    TaskStepConfig {
+                                        id: format!("{}-step-{}", key, i),
+                                        title: ds.title.clone(),
+                                        description_mdsvex: ds.description.clone(),
+                                        blocks,
+                                    }
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+
+                    Ok(WorkflowNodeData::HumanTask {
+                        label: label.to_string(),
+                        description: step.description.clone(),
+                        task_title: step
+                            .task_title
+                            .clone()
+                            .unwrap_or_else(|| label.to_string()),
+                        instructions_mdsvex: step.instructions.clone(),
+                        steps: task_steps,
+                    })
+                }
+                "automated_step" => {
+                    let exec = step.execution.as_ref().ok_or_else(|| {
+                        format!("automated_step '{}' requires an 'execution' field", key)
+                    })?;
+                    // Merge entrypoint and files list into config
+                    let mut config = exec.config.clone();
+                    if let serde_json::Value::Object(ref mut map) = config {
+                        if let Some(ref ep) = exec.entrypoint {
+                            map.insert(
+                                "entrypoint".to_string(),
+                                serde_json::Value::String(ep.clone()),
+                            );
+                        }
+                        if !exec.files.is_empty() {
+                            let files_arr: Vec<serde_json::Value> = exec
+                                .files
+                                .iter()
+                                .map(|f| serde_json::Value::String(f.clone()))
+                                .collect();
+                            map.insert(
+                                "required_files".to_string(),
+                                serde_json::Value::Array(files_arr),
+                            );
+                        }
+                    }
+                    // Parse the backend discriminator via serde — keeps the
+                    // DSL's accepted value set in lockstep with the wire enum.
+                    let backend_type: ExecutionBackendType = serde_json::from_value(
+                        serde_json::Value::String(exec.backend.clone()),
+                    )
+                    .map_err(|_| {
+                        format!(
+                            "automated_step '{}' has unknown backend '{}' (expected one of: python, process, docker, http, llm, file_ops, kreuzberg)",
+                            key, exec.backend
+                        )
+                    })?;
+                    Ok(WorkflowNodeData::AutomatedStep {
+                        label: label.to_string(),
+                        description: step.description.clone(),
+                        execution_spec: ExecutionSpecConfig {
+                            backend_type,
+                            entrypoint: None,
+                            config,
+                        },
+                        input: Port::empty_input(),
+                        output: default_output_port(backend_type),
+                        retry_policy: Default::default(),
+                    })
+                }
+                "decision" => {
+                    let dsl_conditions = step.conditions.as_ref().cloned().unwrap_or_default();
+                    let conditions: Vec<BranchCondition> = dsl_conditions
+                        .iter()
+                        .map(|dc| {
+                            let eid = edge_id(
+                                key,
+                                &dc.edge,
+                                Some(&dc.label.to_lowercase().replace(' ', "_")),
+                            );
+                            BranchCondition {
+                                edge_id: eid,
+                                label: dc.label.clone(),
+                                guard: dc.guard.clone(),
+                            }
+                        })
+                        .collect();
+
+                    let default_branch = step
+                        .default_branch
+                        .as_ref()
+                        .map(|target| edge_id(key, target, None));
+
+                    Ok(WorkflowNodeData::Decision {
+                        label: label.to_string(),
+                        description: step.description.clone(),
+                        conditions,
+                        default_branch,
+                    })
+                }
+                "parallel_split" => Ok(WorkflowNodeData::ParallelSplit {
+                    label: label.to_string(),
+                    description: step.description.clone(),
+                }),
+                "parallel_join" => Ok(WorkflowNodeData::ParallelJoin {
+                    label: label.to_string(),
+                    description: step.description.clone(),
+                    merge_strategy: Default::default(),
+                }),
+                "loop" => {
+                    let max_iter = step
+                        .max_iterations
+                        .ok_or_else(|| format!("loop '{}' requires 'max_iterations'", key))?;
+                    let condition = step
+                        .loop_condition
+                        .clone()
+                        .ok_or_else(|| format!("loop '{}' requires 'loop_condition'", key))?;
+                    Ok(WorkflowNodeData::Loop {
+                        label: label.to_string(),
+                        description: step.description.clone(),
+                        max_iterations: max_iter,
+                        loop_condition: condition,
+                    })
+                }
+                "scope" => Ok(WorkflowNodeData::Scope {
+                    label: label.to_string(),
+                    description: step.description.clone(),
+                }),
+                // The process-control + trigger nodes are GUI-authored: the
+                // DSL has no schema for their required fields, and
+                // `to_dsl_step` drops them on the way out (documented lossy).
+                // They previously fell into the generic catch-all error; keep
+                // that behaviour but make it explicit per kind so the
+                // round-trip asymmetry is greppable rather than silent.
+                "phase_update" | "progress_update" | "failure" | "trigger" => Err(format!(
+                    "step '{}' has GUI-only type '{}' which the DSL format does not model",
+                    key, step.step_type
+                )),
+                other => Err(format!("unknown step type '{}' for step '{}'", other, key)),
+            }
+        }
+
+        /// Project this node payload onto a fresh [`DslStep`]. Exhaustive
+        /// `match self` — adding a [`WorkflowNodeData`] variant is a compile
+        /// error here until the new variant declares how it serializes (or
+        /// explicitly that it's GUI-only and dropped).
+        pub fn to_dsl_step(&self, node: &WorkflowNode) -> DslStep {
+            let mut step = DslStep {
+                step_type: node.node_type.clone(),
+                label: Some(self.label().to_string()),
+                description: self.description().map(|s| s.to_string()),
+                initial_data: None,
+                task_title: None,
+                instructions: None,
+                steps: None,
+                execution: None,
+                conditions: None,
+                default_branch: None,
+                max_iterations: None,
+                loop_condition: None,
+                children: Vec::new(),
+                width: node.width,
+                height: node.height,
+            };
+
+            match self {
+                WorkflowNodeData::Start { .. } => {
+                    // DSL doesn't yet express typed Start ports / process-name;
+                    // the round-trip drops the declared `initial` port shape
+                    // and `process_name`. CLI DSL is dev tooling — when the
+                    // format gains a schema (Phase 4-ish), populate it here.
+                }
+                WorkflowNodeData::End { .. } => {}
+                WorkflowNodeData::HumanTask {
+                    task_title,
+                    instructions_mdsvex,
+                    steps: task_steps,
+                    ..
+                } => {
+                    step.task_title = Some(task_title.clone());
+                    step.instructions = instructions_mdsvex.clone();
+                    if !task_steps.is_empty() {
+                        step.steps = Some(
+                            task_steps
+                                .iter()
+                                .map(|ts| DslTaskStep {
+                                    title: ts.title.clone(),
+                                    description: ts.description_mdsvex.clone(),
+                                    blocks: if ts.blocks.is_empty() {
+                                        None
+                                    } else {
+                                        Some(
+                                            ts.blocks
+                                                .iter()
+                                                .filter_map(|b| serde_json::to_value(b).ok())
+                                                .collect(),
+                                        )
+                                    },
+                                })
+                                .collect(),
+                        );
+                    }
+                }
+                WorkflowNodeData::AutomatedStep { execution_spec, .. } => {
+                    // Extract entrypoint and files from config into their own
+                    // fields
+                    let mut config = execution_spec.config.clone();
+                    let (entrypoint, files) =
+                        if let serde_json::Value::Object(ref mut map) = config {
+                            let ep = map
+                                .remove("entrypoint")
+                                .and_then(|v| v.as_str().map(|s| s.to_string()));
+                            let f = map
+                                .remove("required_files")
+                                .and_then(|v| {
+                                    v.as_array().map(|arr| {
+                                        arr.iter()
+                                            .filter_map(|item| {
+                                                item.as_str().map(|s| s.to_string())
+                                            })
+                                            .collect()
+                                    })
+                                })
+                                .unwrap_or_default();
+                            (ep, f)
+                        } else {
+                            (None, vec![])
+                        };
+                    // Round-trip the enum through serde to recover the
+                    // canonical snake_case wire string (`python`, `file_ops`,
+                    // …) so the DSL export matches what users would type.
+                    let backend = serde_json::to_value(execution_spec.backend_type)
+                        .ok()
+                        .and_then(|v| v.as_str().map(|s| s.to_string()))
+                        .unwrap_or_default();
+                    step.execution = Some(DslExecution {
+                        backend,
+                        entrypoint,
+                        files,
+                        config,
+                    });
+                }
+                WorkflowNodeData::Decision {
+                    conditions,
+                    default_branch,
+                    ..
+                } => {
+                    if !conditions.is_empty() {
+                        step.conditions = Some(
+                            conditions
+                                .iter()
+                                .map(|bc| DslBranchCondition {
+                                    edge: extract_edge_target(&bc.edge_id),
+                                    label: bc.label.clone(),
+                                    guard: bc.guard.clone(),
+                                })
+                                .collect(),
+                        );
+                    }
+                    if let Some(db) = default_branch {
+                        step.default_branch = Some(extract_edge_target(db));
+                    }
+                }
+                WorkflowNodeData::ParallelSplit { .. } => {}
+                WorkflowNodeData::ParallelJoin { .. } => {}
+                WorkflowNodeData::Scope { .. } => {
+                    // children are populated by the CLI envelope after the
+                    // step map is built
+                }
+                WorkflowNodeData::Loop {
+                    max_iterations,
+                    loop_condition,
+                    ..
+                } => {
+                    step.max_iterations = Some(*max_iterations);
+                    step.loop_condition = Some(loop_condition.clone());
+                }
+                WorkflowNodeData::PhaseUpdate { .. }
+                | WorkflowNodeData::ProgressUpdate { .. }
+                | WorkflowNodeData::Failure { .. } => {
+                    // DSL doesn't model the process-control nodes — GUI-authored
+                    // for now. Same lossy-drop behaviour as triggers.
+                }
+                WorkflowNodeData::Trigger { .. } => {
+                    // DSL doesn't model triggers — declared in the GUI for now.
+                    // Round-trip through DSL drops them, matching how legacy
+                    // DSL templates behave.
+                }
+            }
+
+            step
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -4,100 +4,28 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
 use mekhan_service::models::template::{
-    BranchCondition, ExecutionBackendType, ExecutionSpecConfig, Port, Position, TaskBlockConfig,
-    TaskStepConfig, WorkflowEdge, WorkflowGraph, WorkflowNode, WorkflowNodeData,
+    Position, WorkflowEdge, WorkflowGraph, WorkflowNode, WorkflowNodeData,
 };
 
 use super::layout;
 
 // ---------------------------------------------------------------------------
 // DSL types (shared between YAML and HCL)
+//
+// The per-node payload types and the node<->step mapping are single-sourced
+// in `mekhan_service::models::template::dsl`, next to `WorkflowNodeData`, so
+// the model<->DSL match is compiler-checked. Re-exported here so `hcl.rs` /
+// `yaml.rs` keep importing them via `super::dsl::*` unchanged.
 // ---------------------------------------------------------------------------
+
+pub use mekhan_service::models::template::dsl::{
+    edge_id, title_case, DslBranchCondition, DslExecution, DslStep, DslTaskStep,
+};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DslWorkflow {
     pub steps: IndexMap<String, DslStep>,
     pub flow: Vec<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct DslStep {
-    #[serde(rename = "type")]
-    pub step_type: String,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub label: Option<String>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-
-    // start
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub initial_data: Option<serde_json::Value>,
-
-    // human_task
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub task_title: Option<String>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub instructions: Option<String>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub steps: Option<Vec<DslTaskStep>>,
-
-    // automated_step
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub execution: Option<DslExecution>,
-
-    // decision
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub conditions: Option<Vec<DslBranchCondition>>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub default_branch: Option<String>,
-
-    // loop
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_iterations: Option<i32>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub loop_condition: Option<String>,
-
-    // scope
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub children: Vec<String>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub width: Option<f64>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub height: Option<f64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DslTaskStep {
-    pub title: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub blocks: Option<Vec<serde_json::Value>>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DslExecution {
-    pub backend: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub entrypoint: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub files: Vec<String>,
-    pub config: serde_json::Value,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DslBranchCondition {
-    pub edge: String,
-    pub label: String,
-    pub guard: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -149,26 +77,6 @@ fn parse_step_ref(s: &str) -> Result<(String, Option<String>), String> {
     }
 }
 
-fn edge_id(source: &str, target: &str, handle: Option<&str>) -> String {
-    match handle {
-        Some(h) => format!("edge_{}_{}_to_{}", source, h, target),
-        None => format!("edge_{}_to_{}", source, target),
-    }
-}
-
-fn title_case(s: &str) -> String {
-    s.split('_')
-        .map(|word| {
-            let mut chars = word.chars();
-            match chars.next() {
-                None => String::new(),
-                Some(c) => c.to_uppercase().to_string() + chars.as_str(),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
 // ---------------------------------------------------------------------------
 // DSL → WorkflowGraph
 // ---------------------------------------------------------------------------
@@ -184,7 +92,7 @@ impl DslWorkflow {
                 .label
                 .clone()
                 .unwrap_or_else(|| title_case(key));
-            let data = step_to_node_data(key, step, &label)?;
+            let data = WorkflowNodeData::from_dsl_step(key, step, &label)?;
             let (width, height) = if step.step_type == "scope" {
                 (step.width.or(Some(400.0)), step.height.or(Some(300.0)))
             } else {
@@ -263,170 +171,6 @@ impl DslWorkflow {
     }
 }
 
-fn step_to_node_data(
-    key: &str,
-    step: &DslStep,
-    label: &str,
-) -> Result<WorkflowNodeData, String> {
-    match step.step_type.as_str() {
-        "start" => Ok(WorkflowNodeData::Start {
-            label: label.to_string(),
-            description: step.description.clone(),
-            // DSL still carries `initial_data` for read-compat with old files;
-            // the typed-ports model expects a `Port` here. CLI DSL doesn't yet
-            // express ports, so we default to an empty input port. Round-trip
-            // through DSL is lossy for typed Start ports until the DSL format
-            // gains a `initial` schema.
-            initial: Port::empty_input(),
-            // DSL doesn't express the process-name template either.
-            process_name: None,
-        }),
-        "end" => Ok(WorkflowNodeData::End {
-            label: label.to_string(),
-            description: step.description.clone(),
-            terminal: mekhan_service::models::template::default_terminal_port(),
-        }),
-        "human_task" => {
-            let task_steps = step
-                .steps
-                .as_ref()
-                .map(|dsl_steps| {
-                    dsl_steps
-                        .iter()
-                        .enumerate()
-                        .map(|(i, ds)| {
-                            let blocks: Vec<TaskBlockConfig> = ds
-                                .blocks
-                                .as_ref()
-                                .map(|b| {
-                                    b.iter()
-                                        .filter_map(|v| serde_json::from_value(v.clone()).ok())
-                                        .collect()
-                                })
-                                .unwrap_or_default();
-                            TaskStepConfig {
-                                id: format!("{}-step-{}", key, i),
-                                title: ds.title.clone(),
-                                description_mdsvex: ds.description.clone(),
-                                blocks,
-                            }
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
-
-            Ok(WorkflowNodeData::HumanTask {
-                label: label.to_string(),
-                description: step.description.clone(),
-                task_title: step
-                    .task_title
-                    .clone()
-                    .unwrap_or_else(|| label.to_string()),
-                instructions_mdsvex: step.instructions.clone(),
-                steps: task_steps,
-            })
-        }
-        "automated_step" => {
-            let exec = step.execution.as_ref().ok_or_else(|| {
-                format!("automated_step '{}' requires an 'execution' field", key)
-            })?;
-            // Merge entrypoint and files list into config
-            let mut config = exec.config.clone();
-            if let serde_json::Value::Object(ref mut map) = config {
-                if let Some(ref ep) = exec.entrypoint {
-                    map.insert("entrypoint".to_string(), serde_json::Value::String(ep.clone()));
-                }
-                if !exec.files.is_empty() {
-                    let files_arr: Vec<serde_json::Value> = exec.files.iter()
-                        .map(|f| serde_json::Value::String(f.clone()))
-                        .collect();
-                    map.insert("required_files".to_string(), serde_json::Value::Array(files_arr));
-                }
-            }
-            // Parse the backend discriminator via serde — keeps the DSL's
-            // accepted value set in lockstep with the wire enum.
-            let backend_type: ExecutionBackendType = serde_json::from_value(
-                serde_json::Value::String(exec.backend.clone()),
-            )
-            .map_err(|_| {
-                format!(
-                    "automated_step '{}' has unknown backend '{}' (expected one of: python, process, docker, http, llm, file_ops, kreuzberg)",
-                    key, exec.backend
-                )
-            })?;
-            Ok(WorkflowNodeData::AutomatedStep {
-                label: label.to_string(),
-                description: step.description.clone(),
-                execution_spec: ExecutionSpecConfig {
-                    backend_type,
-                    entrypoint: None,
-                    config,
-                },
-                input: Port::empty_input(),
-                output: mekhan_service::models::template::default_output_port(backend_type),
-                retry_policy: Default::default(),
-            })
-        }
-        "decision" => {
-            let dsl_conditions = step.conditions.as_ref().cloned().unwrap_or_default();
-            let conditions: Vec<BranchCondition> = dsl_conditions
-                .iter()
-                .map(|dc| {
-                    let eid = edge_id(
-                        key,
-                        &dc.edge,
-                        Some(&dc.label.to_lowercase().replace(' ', "_")),
-                    );
-                    BranchCondition {
-                        edge_id: eid,
-                        label: dc.label.clone(),
-                        guard: dc.guard.clone(),
-                    }
-                })
-                .collect();
-
-            let default_branch = step.default_branch.as_ref().map(|target| {
-                edge_id(key, target, None)
-            });
-
-            Ok(WorkflowNodeData::Decision {
-                label: label.to_string(),
-                description: step.description.clone(),
-                conditions,
-                default_branch,
-            })
-        }
-        "parallel_split" => Ok(WorkflowNodeData::ParallelSplit {
-            label: label.to_string(),
-            description: step.description.clone(),
-        }),
-        "parallel_join" => Ok(WorkflowNodeData::ParallelJoin {
-            label: label.to_string(),
-            description: step.description.clone(),
-            merge_strategy: Default::default(),
-        }),
-        "loop" => {
-            let max_iter = step.max_iterations.ok_or_else(|| {
-                format!("loop '{}' requires 'max_iterations'", key)
-            })?;
-            let condition = step.loop_condition.clone().ok_or_else(|| {
-                format!("loop '{}' requires 'loop_condition'", key)
-            })?;
-            Ok(WorkflowNodeData::Loop {
-                label: label.to_string(),
-                description: step.description.clone(),
-                max_iterations: max_iter,
-                loop_condition: condition,
-            })
-        }
-        "scope" => Ok(WorkflowNodeData::Scope {
-            label: label.to_string(),
-            description: step.description.clone(),
-        }),
-        other => Err(format!("unknown step type '{}' for step '{}'", other, key)),
-    }
-}
-
 fn apply_decision_edge_labels(
     graph: &mut WorkflowGraph,
     steps: &IndexMap<String, DslStep>,
@@ -456,7 +200,7 @@ impl DslWorkflow {
     pub fn from_workflow_graph(graph: &WorkflowGraph) -> Self {
         let mut steps = IndexMap::new();
         for node in &graph.nodes {
-            steps.insert(node.id.clone(), node_to_dsl_step(node));
+            steps.insert(node.id.clone(), node.data.to_dsl_step(node));
         }
 
         // Populate scope children from parent_id references
@@ -471,160 +215,6 @@ impl DslWorkflow {
         let flow = build_flow_chains(&graph.edges);
 
         DslWorkflow { steps, flow }
-    }
-}
-
-fn node_to_dsl_step(node: &WorkflowNode) -> DslStep {
-    let mut step = DslStep {
-        step_type: node.node_type.clone(),
-        label: Some(node.data.label().to_string()),
-        description: node.data.description().map(|s| s.to_string()),
-        initial_data: None,
-        task_title: None,
-        instructions: None,
-        steps: None,
-        execution: None,
-        conditions: None,
-        default_branch: None,
-        max_iterations: None,
-        loop_condition: None,
-        children: Vec::new(),
-        width: node.width,
-        height: node.height,
-    };
-
-    match &node.data {
-        WorkflowNodeData::Start { .. } => {
-            // DSL doesn't yet express typed Start ports; the round-trip drops
-            // the declared `initial` port shape. CLI DSL is dev tooling — when
-            // the format gains a `initial` schema (Phase 4-ish), populate it
-            // here.
-        }
-        WorkflowNodeData::End { .. } => {}
-        WorkflowNodeData::HumanTask {
-            task_title,
-            instructions_mdsvex,
-            steps: task_steps,
-            ..
-        } => {
-            step.task_title = Some(task_title.clone());
-            step.instructions = instructions_mdsvex.clone();
-            if !task_steps.is_empty() {
-                step.steps = Some(
-                    task_steps
-                        .iter()
-                        .map(|ts| DslTaskStep {
-                            title: ts.title.clone(),
-                            description: ts.description_mdsvex.clone(),
-                            blocks: if ts.blocks.is_empty() {
-                                None
-                            } else {
-                                Some(
-                                    ts.blocks
-                                        .iter()
-                                        .filter_map(|b| serde_json::to_value(b).ok())
-                                        .collect(),
-                                )
-                            },
-                        })
-                        .collect(),
-                );
-            }
-        }
-        WorkflowNodeData::AutomatedStep {
-            execution_spec, ..
-        } => {
-            // Extract entrypoint and files from config into their own fields
-            let mut config = execution_spec.config.clone();
-            let (entrypoint, files) = if let serde_json::Value::Object(ref mut map) = config {
-                let ep = map.remove("entrypoint")
-                    .and_then(|v| v.as_str().map(|s| s.to_string()));
-                let f = map.remove("required_files")
-                    .and_then(|v| v.as_array().map(|arr| {
-                        arr.iter()
-                            .filter_map(|item| item.as_str().map(|s| s.to_string()))
-                            .collect()
-                    }))
-                    .unwrap_or_default();
-                (ep, f)
-            } else {
-                (None, vec![])
-            };
-            // Round-trip the enum through serde to recover the canonical
-            // snake_case wire string (`python`, `file_ops`, …) so the DSL
-            // export matches what users would type into YAML/HCL.
-            let backend = serde_json::to_value(execution_spec.backend_type)
-                .ok()
-                .and_then(|v| v.as_str().map(|s| s.to_string()))
-                .unwrap_or_default();
-            step.execution = Some(DslExecution {
-                backend,
-                entrypoint,
-                files,
-                config,
-            });
-        }
-        WorkflowNodeData::Decision {
-            conditions,
-            default_branch,
-            ..
-        } => {
-            if !conditions.is_empty() {
-                step.conditions = Some(
-                    conditions
-                        .iter()
-                        .map(|bc| {
-                            // Extract target from edge_id: edge_source_handle_to_TARGET
-                            let target = extract_edge_target(&bc.edge_id);
-                            DslBranchCondition {
-                                edge: target,
-                                label: bc.label.clone(),
-                                guard: bc.guard.clone(),
-                            }
-                        })
-                        .collect(),
-                );
-            }
-            if let Some(db) = default_branch {
-                step.default_branch = Some(extract_edge_target(db));
-            }
-        }
-        WorkflowNodeData::ParallelSplit { .. } => {}
-        WorkflowNodeData::ParallelJoin { .. } => {}
-        WorkflowNodeData::Scope { .. } => {
-            // children are populated by from_workflow_graph after building the step map
-        }
-        WorkflowNodeData::Loop {
-            max_iterations,
-            loop_condition,
-            ..
-        } => {
-            step.max_iterations = Some(*max_iterations);
-            step.loop_condition = Some(loop_condition.clone());
-        }
-        WorkflowNodeData::PhaseUpdate { .. }
-        | WorkflowNodeData::ProgressUpdate { .. }
-        | WorkflowNodeData::Failure { .. } => {
-            // DSL doesn't yet model the process control nodes — they're
-            // GUI-authored for now. Same lossy-drop behaviour as triggers.
-        }
-        WorkflowNodeData::Trigger { .. } => {
-            // DSL doesn't yet model triggers — they're declared in the GUI for
-            // now. Round-trip through JSON would lose the trigger; this exit
-            // simply drops them, matching how legacy DSL templates behave.
-        }
-    }
-
-    step
-}
-
-/// Extract the target step key from an auto-generated edge ID.
-/// e.g., "edge_check_yes_to_process" → "process"
-fn extract_edge_target(edge_id: &str) -> String {
-    if let Some(pos) = edge_id.rfind("_to_") {
-        edge_id[pos + 4..].to_string()
-    } else {
-        edge_id.to_string()
     }
 }
 
@@ -717,6 +307,7 @@ fn format_step_ref(key: &str, handle: Option<&str>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mekhan_service::models::template::{Port, TaskBlockConfig};
 
     #[test]
     fn scope_step_sets_parent_id_on_children() {
