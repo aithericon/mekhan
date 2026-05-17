@@ -57,7 +57,7 @@ up:
 # Requires `bash deploy/zitadel/bootstrap.sh` once (writes mekhan.local.toml).
 up-auth:
     @just dev::_dirs
-    @just dev::_infra-up
+    @just dev::_infra-up auth
     @just dev::_wait-infra
     @just dev::up-executor
     @just dev::up-engine
@@ -139,10 +139,26 @@ openapi:
 
 # ── Infra ────────────────────────────────────────────────────────────────────
 
-_infra-up:
-    @echo "▶ infra up (postgres + nats + rustfs)…"
-    @docker compose up -d
+# Bring docker-compose infra up. Optional `profile` arg passes
+# `--profile <profile>` to docker compose, used by `up-auth` to include
+# the `auth`-gated Zitadel containers (zitadel-db / zitadel / zitadel-login
+# / zitadel-proxy). Default (no profile) skips them — the standard
+# `just dev up` flow runs mekhan-service in `dev_noop` mode and does not
+# need Zitadel.
+_infra-up profile="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -n "{{profile}}" ]; then
+      echo "▶ infra up (postgres + nats + rustfs + profile: {{profile}})…"
+      docker compose --profile {{profile}} up -d
+    else
+      echo "▶ infra up (postgres + nats + rustfs)…"
+      docker compose up -d
+    fi
 
+# Tear infra down. `docker compose down` stops all containers in the
+# project regardless of which profile started them, so no profile arg
+# is needed here.
 _infra-down:
     @echo "▶ infra down…"
     @docker compose down

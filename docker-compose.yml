@@ -54,6 +54,7 @@ services:
   zitadel-db:
     image: postgres:16-alpine
     container_name: zitadel-db
+    profiles: ["auth"]
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
@@ -71,6 +72,7 @@ services:
   zitadel:
     image: ghcr.io/zitadel/zitadel:v4.15.0
     container_name: zitadel
+    profiles: ["auth"]
     restart: unless-stopped
     # FirstInstance config (admin user, machine user, PAT path) is supplied
     # via `--steps /zitadel-config/zitadel.yaml`. Database + external URL
@@ -117,6 +119,7 @@ services:
   zitadel-login:
     image: ghcr.io/zitadel/zitadel-login:v4.15.0
     container_name: zitadel-login
+    profiles: ["auth"]
     restart: unless-stopped
     environment:
       # Route the login UI's internal API calls back through caddy so the
@@ -139,6 +142,7 @@ services:
   zitadel-proxy:
     image: caddy:2-alpine
     container_name: zitadel-proxy
+    profiles: ["auth"]
     restart: unless-stopped
     ports:
       - "8080:8080"
