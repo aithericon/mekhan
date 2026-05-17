@@ -41,7 +41,7 @@ s3_endpoint  := "http://localhost:9005"
 # Default recipe: bring up the full stack
 default: up
 
-# Start everything: infra + executor + engine + mekhan + app
+# Start everything: infra + executor + engine + mekhan + app (auth: dev_noop)
 up:
     @just dev::_dirs
     @just dev::_infra-up
@@ -51,6 +51,19 @@ up:
     @just dev::up-mekhan
     @just dev::up-app
     @just dev::_summary
+
+# Same as `up` but with auth ENABLED: mekhan-service runs in BFF mode (real
+# Zitadel cookie login for the SPA + machine-PAT introspection for the CLI).
+# Requires `bash deploy/zitadel/bootstrap.sh` once (writes mekhan.local.toml).
+up-auth:
+    @just dev::_dirs
+    @just dev::_infra-up
+    @just dev::_wait-infra
+    @just dev::up-executor
+    @just dev::up-engine
+    @just dev::up-mekhan bff
+    @just dev::up-app
+    @just dev::_summary "ENABLED (BFF + Zitadel PAT introspection)"
 
 # Stop everything: native daemons first, then infra
 down:
@@ -269,7 +282,10 @@ down-engine:
 
 # ── Mekhan service (Rust backend) ────────────────────────────────────────────
 
-up-mekhan:
+# auth_mode: "dev_noop" (default — offline, every request is the dev user)
+# or "bff" (real Zitadel cookie auth + machine-PAT introspection; requires
+# `bash deploy/zitadel/bootstrap.sh` to have written mekhan.local.toml).
+up-mekhan auth_mode="dev_noop":
     #!/usr/bin/env bash
     set -euo pipefail
     just dev::_dirs
@@ -282,15 +298,27 @@ up-mekhan:
     # output lands in ./target/, not service/target/. Build from repo root.
     cargo build --bin mekhan-service
 
-    echo "▶ starting mekhan-service on :3100…"
     # mekhan.toml carries the localhost db / nats / s3 endpoints; env overrides
     # win, so we make sure NATS + DB + S3 match the running infra.
     #
-    # MEKHAN__AUTH__MODE=dev_noop overrides mekhan.local.toml's bff mode:
-    # NoopAuthenticator authenticates every request as the fixed dev user, so
-    # the local stack needs no Zitadel and the SPA's GET /api/auth/session
-    # returns the dev user (no redirect) — fully offline. Guarded — main.rs
-    # refuses dev_noop if MEKHAN_ENV=prod.
+    # dev_noop: MEKHAN__AUTH__MODE=dev_noop overrides mekhan.local.toml's bff
+    # mode — NoopAuthenticator makes every request the fixed dev user, no
+    # Zitadel needed, fully offline. bff: no override, so mekhan.local.toml's
+    # mode=bff + issuer/client_id + introspection creds take effect (real
+    # cookie auth for the SPA, RFC 7662 PAT introspection for the CLI).
+    # main.rs refuses dev_noop if MEKHAN_ENV=prod.
+    mode_assign=""
+    if [ "{{auth_mode}}" = "bff" ]; then
+      if ! grep -q 'introspection_client_id' service/mekhan.local.toml 2>/dev/null; then
+        echo "✗ auth_mode=bff needs introspection creds in service/mekhan.local.toml" >&2
+        echo "  run: bash deploy/zitadel/bootstrap.sh" >&2
+        exit 1
+      fi
+      echo "▶ starting mekhan-service on :3100 (auth: BFF + Zitadel PAT introspection)…"
+    else
+      mode_assign="MEKHAN__AUTH__MODE=dev_noop"
+      echo "▶ starting mekhan-service on :3100 (auth: dev_noop — offline)…"
+    fi
     nohup env \
       RUST_LOG="info,mekhan_service=debug" \
       MEKHAN__DATABASE_URL="{{database_url}}" \
@@ -299,7 +327,7 @@ up-mekhan:
       MEKHAN__S3__ENDPOINT="{{s3_endpoint}}" \
       MEKHAN__S3__ACCESS_KEY="rustfsadmin" \
       MEKHAN__S3__SECRET_KEY="rustfsadmin" \
-      MEKHAN__AUTH__MODE="dev_noop" \
+      ${mode_assign:+"$mode_assign"} \
       "$PWD/target/debug/mekhan-service" \
       > "{{log_dir}}/mekhan.log" 2>&1 &
     echo $! > "{{pid_dir}}/mekhan.pid"
@@ -370,7 +398,7 @@ _kill name:
     rm -f "$pf"
     echo "  ✓ {{name}} stopped"
 
-_summary:
+_summary auth="DISABLED (dev_noop) — every request is the dev user":
     @echo ""
     @echo "✓ dev stack up:"
     @echo "  postgres   → localhost:5439              (db: mekhan / user: mekhan / pw: mekhan)"
@@ -381,7 +409,7 @@ _summary:
     @echo "  mekhan     → http://localhost:3100"
     @echo "  app (dev)  → http://localhost:5173"
     @echo ""
-    @echo "  auth       → DISABLED (dev_noop) — every request is the dev user"
+    @echo "  auth       → {{auth}}"
     @echo ""
     @echo "  logs   : just dev logs <executor|engine|mekhan|app|infra>"
     @echo "  status : just dev status"
