@@ -205,6 +205,49 @@ else
 fi
 echo "API app id:    $api_app_id"
 
+# ── ensure token-broker service user ─────────────────────────────────────────
+# Backs the embedded /api/auth/tokens feature: Mekhan, authenticated as this
+# machine user's PAT, lazily creates one machine user + PAT per token a
+# logged-in human mints from /profile. ORG_OWNER lets it manage those users
+# within the org. The PAT secret is only returned at creation, so (like the
+# API-app secret above) any existing broker PATs are deleted and a fresh one
+# minted on every run to keep the written config valid.
+BROKER_USERNAME="mekhan-token-broker"
+echo "Looking up token-broker service user '$BROKER_USERNAME'..."
+broker_search=$(jq -nc --arg name "$BROKER_USERNAME" \
+  '{queries: [{userNameQuery: {userName: $name, method: "TEXT_QUERY_METHOD_EQUALS"}}]}')
+broker_user_id=$(api_soft POST /v2/users "$broker_search" | jq -r '.result[0].userId // empty')
+
+if [ -z "$broker_user_id" ]; then
+  echo "Creating token-broker service user..."
+  broker_create=$(api POST /management/v1/users/machine \
+    "$(jq -nc --arg name "$BROKER_USERNAME" \
+        '{userName: $name, name: "Mekhan Token Broker", description: "Brokers per-user automation PATs for the embedded /api/auth/tokens feature"}')")
+  broker_user_id=$(echo "$broker_create" | jq -r '.userId')
+fi
+echo "Token-broker user id: $broker_user_id"
+
+# Grant ORG_OWNER (manage users/PATs within the org). PUT is idempotent;
+# POST is the create path when no membership row exists yet.
+echo "Ensuring token-broker has ORG_OWNER…"
+broker_member=$(jq -nc --arg uid "$broker_user_id" '{userId: $uid, roles: ["ORG_OWNER"]}')
+api_soft PUT "/management/v1/orgs/me/members/$broker_user_id" "$broker_member" >/dev/null || \
+  api_soft POST /management/v1/orgs/me/members "$broker_member" >/dev/null
+
+# Re-mint the broker PAT (secret returned once). Delete any existing PATs so
+# re-runs converge on exactly one valid token written to config.
+echo "Re-minting token-broker PAT…"
+existing_pats=$(api_soft POST "/management/v1/users/$broker_user_id/pats/_search" '{}' \
+  | jq -r '.result[]?.id // empty')
+for tid in $existing_pats; do
+  api_soft DELETE "/management/v1/users/$broker_user_id/pats/$tid" >/dev/null || true
+done
+broker_pat=$(api POST "/management/v1/users/$broker_user_id/pats" '{}' | jq -r '.token')
+if [ -z "$broker_pat" ] || [ "$broker_pat" = "null" ]; then
+  echo "error: failed to mint token-broker PAT" >&2
+  exit 1
+fi
+
 ISSUER="$ZITADEL_HOST"
 AUDIENCE="$client_id"
 
@@ -226,6 +269,10 @@ client_id = "$client_id"
 # (RFC 7662) so CI \`mekhan apply\` can authenticate with a service-user PAT.
 introspection_client_id = "$introspect_client_id"
 introspection_client_secret = "$introspect_client_secret"
+# Service-user PAT Mekhan presents to the Zitadel Management API to broker the
+# embedded /api/auth/tokens feature (Profile → Access tokens): one machine
+# user + PAT per token a logged-in human mints. Re-minted every bootstrap run.
+broker_pat = "$broker_pat"
 # Local http dev: do not set the Secure cookie attribute (browsers drop
 # Secure cookies on plain http). Set true behind https in production.
 cookie_secure = false
@@ -255,12 +302,10 @@ Next:
   in, and land back signed in with only an HttpOnly session cookie.
 
 GitOps machine token (CI \`mekhan apply\`):
-  The introspection API app above lets Mekhan validate Zitadel PATs. To
-  mint the token CI presents, in the Console:
-    1. Users → Service Users → New (e.g. "gitops")
-    2. grant it this project's role(s) so apply is authorized
-    3. Personal Access Tokens → + → copy the token once
+  No Console steps — mint it from inside Mekhan:
+    Profile → Access tokens → Create token → copy the secret once.
   Put that token in MEKHAN_CLI_TOKEN locally / the \`mekhan_cli_token\`
-  Woodpecker secret. Rotate by deleting + recreating the PAT in the Console.
+  Woodpecker secret. Revoke it from the same page; Zitadel introspection
+  reflects the revocation within ~60 s.
 ────────────────────────────────────────────────────────────
 EOF
