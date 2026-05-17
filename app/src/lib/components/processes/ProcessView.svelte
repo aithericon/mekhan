@@ -130,7 +130,6 @@
 				step: p.name,
 				label: p.name,
 				status: p.status,
-				human: false,
 				started_at: p.started_at ?? undefined,
 				completed_at: p.ended_at ?? undefined,
 				duration_ms
