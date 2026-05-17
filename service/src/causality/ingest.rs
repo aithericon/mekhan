@@ -176,8 +176,8 @@ async fn process_domain_event(
             consumed_tokens,
             produced_tokens,
             read_tokens,
-            process_step_started,
-            process_step_completed,
+            process_step_started: _,
+            process_step_completed: _,
         } => {
             sqlx::query(
                 "INSERT INTO causality_events (net_id, event_seq, event_type, transition_name, timestamp) \
@@ -207,21 +207,6 @@ async fn process_domain_event(
             let read_ids: Vec<String> = read_tokens.iter().map(|(_, t)| t.id.0.to_string()).collect();
             let produced_ids: Vec<String> = produced_tokens.iter().map(|(_, t)| t.id.0.to_string()).collect();
             propagate_process_tags(db, &consumed_ids, &read_ids, &produced_ids).await?;
-
-            // Project step breadcrumbs: if this transition is annotated with
-            // process_step_started/process_step_completed, record the step event
-            // against each process that the consumed/read tokens belong to.
-            if process_step_started.is_some() || process_step_completed.is_some() {
-                record_step_event(
-                    db,
-                    &consumed_ids,
-                    &read_ids,
-                    process_step_started.as_deref(),
-                    process_step_completed.as_deref(),
-                    ts,
-                )
-                .await?;
-            }
         }
 
         DomainEvent::EffectCompleted {
@@ -318,21 +303,6 @@ async fn process_domain_event(
                     triggers,
                 };
                 projector.project(&ctx).await?;
-            }
-
-            // Step breadcrumb (same as TransitionFired). Not keyed by
-            // effect_handler_id — runs for any EffectCompleted carrying a
-            // step annotation, so it stays outside the registry.
-            if process_step_started.is_some() || process_step_completed.is_some() {
-                record_step_event(
-                    db,
-                    &consumed_ids,
-                    &read_ids,
-                    process_step_started.as_deref(),
-                    process_step_completed.as_deref(),
-                    ts,
-                )
-                .await?;
             }
         }
 
@@ -862,9 +832,10 @@ async fn insert_event_token(
 
 /// Enrich auto-discovered processes with metadata from a process_start effect.
 ///
-/// The process_start handler creates a named HPI process with steps. Instead of
-/// maintaining a separate process event ingest path, we extract that metadata here
-/// and update the causality-discovered process rows directly.
+/// The process_start handler creates a named HPI process with optional
+/// description/namespace metadata. Instead of maintaining a separate process
+/// event ingest path, we extract that metadata here and update the
+/// causality-discovered process rows directly.
 async fn enrich_processes_from_start_event(
     db: &PgPool,
     consumed_ids: &[String],
@@ -882,9 +853,6 @@ async fn enrich_processes_from_start_event(
             }
             if let Some(ns) = effect_result.get("namespace") {
                 cfg.insert("namespace".to_string(), ns.clone());
-            }
-            if let Some(steps) = effect_result.get("steps") {
-                cfg.insert("steps".to_string(), steps.clone());
             }
             if cfg.is_empty() { None } else { Some(serde_json::Value::Object(cfg)) }
         });
@@ -1085,46 +1053,6 @@ macro_rules! resolved_or_done {
     }};
 }
 
-/// Project a step breadcrumb into hpi_processes.config['step_events'].
-///
-/// Records step transitions (started/completed) against each process the
-/// firing transition's tokens belong to. Updates the process's updated_at.
-async fn record_step_event(
-    db: &PgPool,
-    consumed_ids: &[String],
-    read_ids: &[String],
-    step_started: Option<&str>,
-    step_completed: Option<&str>,
-    ts: chrono::DateTime<chrono::Utc>,
-) -> Result<(), sqlx::Error> {
-    let process_ids = resolved_or_done!(db, consumed_ids, read_ids);
-
-    for pid in &process_ids {
-        let event = serde_json::json!({
-            "timestamp": ts.to_rfc3339(),
-            "started": step_started,
-            "completed": step_completed,
-        });
-        // Append to config.step_events array; create it if missing.
-        sqlx::query(
-            "UPDATE hpi_processes SET \
-               config = jsonb_set(\
-                 COALESCE(config, '{}'::jsonb), \
-                 '{step_events}', \
-                 COALESCE(config->'step_events', '[]'::jsonb) || $2::jsonb, \
-                 true), \
-               updated_at = $3 \
-             WHERE process_id = $1",
-        )
-        .bind(pid)
-        .bind(&event)
-        .bind(ts)
-        .execute(db)
-        .await?;
-    }
-    Ok(())
-}
-
 /// Load the canonical `Progress` from a process's `config.progress`, or a
 /// fresh empty one. `config.progress` is serialized exactly as
 /// `aithericon_executor_domain::Progress` — the single reconciled model.
@@ -1153,7 +1081,7 @@ async fn load_progress(
 }
 
 /// Persist the canonical `Progress` back into `config.progress` (create the
-/// key if missing), mirroring `record_step_event`'s jsonb_set pattern.
+/// key if missing), using the same jsonb_set idiom as the other config writers.
 async fn write_progress(
     db: &PgPool,
     process_id: &str,
