@@ -56,3 +56,9 @@ kreuzberg = { version = "4", default-features = false, features = ["tokio-runtim
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 serde_json = { workspace = true }
 tempfile = "3"
+# Mock HTTP server for backend integration tests — spawns a minimal axum
+# listener that the SuryaAdapter can talk to without bringing up the real
+# Python subprocess. Already in workspace deps for executor-llm's
+# pool_listener; using here at dev-only.
+axum = { workspace = true }
+tokio-util = { workspace = true }

@@ -60,7 +60,7 @@ pub mod plugin;
 pub mod port;
 pub mod surya_subprocess;
 
-pub use backend::SuryaBackend;
-pub use config::SuryaConfig;
+pub use backend::{SuryaBackend, SURYA_BASE_URL_ENV};
+pub use config::{ExtractionMode, ResolvedSuryaConfig, SuryaConfig};
 pub use port::{OcrError, OcrRequest, OcrResponse};
 pub use surya_subprocess::{SuryaSubprocess, SuryaSubprocessConfig};
