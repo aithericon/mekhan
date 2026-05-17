@@ -429,10 +429,35 @@ fn validate_one_guard(
     Ok(())
 }
 
+// --- Trigger target-port resolution (shared) ---
+
+/// Resolve the port a trigger feeds on its target node.
+///
+/// For a Start target the workflow's input shape is the Start's declared
+/// `initial` port (stored under `output_ports` because Start *emits* the
+/// token); every other target uses its declared input port. The matching port
+/// is the one whose id equals `target_handle`.
+///
+/// Single source of truth for this rule: the compiler's `validate_triggers`
+/// pass enforces it at publish, and the runtime trigger dispatcher applies the
+/// identical resolution at fire time. Returns `None` when no port on the
+/// resolved side carries `target_handle`; callers map that to their own
+/// error type.
+pub fn resolve_trigger_target_port(
+    target_node: &WorkflowNode,
+    target_handle: &str,
+) -> Option<crate::models::template::Port> {
+    let ports = match &target_node.data {
+        WorkflowNodeData::Start { .. } => target_node.data.output_ports(),
+        _ => target_node.data.input_ports(),
+    };
+    ports.into_iter().find(|p| p.id == target_handle)
+}
+
 // --- Trigger node validation (Phase 5a) ---
 
 pub(crate) fn validate_triggers(graph: &WorkflowGraph) -> Result<(), CompileError> {
-    use crate::models::template::{Port, WorkflowEdge};
+    use crate::models::template::WorkflowEdge;
 
     let nodes_by_id: HashMap<&str, &WorkflowNode> =
         graph.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
@@ -494,17 +519,7 @@ pub(crate) fn validate_triggers(graph: &WorkflowGraph) -> Result<(), CompileErro
         let Some(tgt_node) = nodes_by_id.get(edge.target.as_str()) else {
             continue;
         };
-        // For Start targets the "input shape" of the workflow is the Start's
-        // declared `initial` port — even though that's stored under
-        // `output_ports()` because Start *emits* the token. The trigger feeds
-        // data into that shape. For every other target, use the regular
-        // `input_ports()`.
-        let tgt_ports = match &tgt_node.data {
-            WorkflowNodeData::Start { .. } => tgt_node.data.output_ports(),
-            _ => tgt_node.data.input_ports(),
-        };
-        let tgt_port: Option<Port> = tgt_ports.iter().find(|p| p.id == target_handle).cloned();
-        let Some(tgt_port) = tgt_port else {
+        let Some(tgt_port) = resolve_trigger_target_port(tgt_node, target_handle) else {
             return Err(CompileError::UnknownTargetPort {
                 edge_id: edge.id.clone(),
                 node_id: edge.target.clone(),

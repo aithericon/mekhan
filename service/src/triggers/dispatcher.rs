@@ -274,10 +274,8 @@ impl TriggerDispatcher {
             });
         };
 
-        // Resolve the port the trigger feeds. For a Start target the workflow's
-        // input shape is the Start's declared `initial` (stored under
-        // `output_ports` because Start *emits* it); every other target uses its
-        // input port. Same resolution the compiler does in `validate_triggers`.
+        // Resolve the port the trigger feeds. Shared with the compiler's
+        // `validate_triggers` publish-time check so the two can't drift.
         let target_node = graph
             .nodes
             .iter()
@@ -286,19 +284,15 @@ impl TriggerDispatcher {
                 node_id: node_id.to_string(),
                 target: format!("target node '{}' missing in graph", record.target_node_id),
             })?;
-        let target_port = match &target_node.data {
-            WorkflowNodeData::Start { .. } => target_node.data.output_ports(),
-            _ => target_node.data.input_ports(),
-        }
-        .into_iter()
-        .find(|p| p.id == record.target_handle)
-        .ok_or_else(|| TriggerError::TargetMissing {
-            node_id: node_id.to_string(),
-            target: format!(
-                "target port '{}' missing on node '{}'",
-                record.target_handle, record.target_node_id
-            ),
-        })?;
+        let target_port =
+            crate::compiler::resolve_trigger_target_port(target_node, &record.target_handle)
+                .ok_or_else(|| TriggerError::TargetMissing {
+                    node_id: node_id.to_string(),
+                    target: format!(
+                        "target port '{}' missing on node '{}'",
+                        record.target_handle, record.target_node_id
+                    ),
+                })?;
 
         let source_kind = record.source.kind().to_string();
         let locator = TriggerLocator {
