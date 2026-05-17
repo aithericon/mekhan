@@ -16,6 +16,7 @@ pub use backend::LlmBackend;
 pub use config::{LlmConfig, Provider};
 pub use hardware_probe::{probe_hardware, HardwareAdvertisement};
 pub use heartbeat::{heartbeat_loop, probe_loaded_models, HeartbeatConfig};
+pub use inference_handler::InferenceState;
 pub use ollama_subprocess::{OllamaSubprocess, OllamaSubprocessConfig};
 pub use pool_boot::{register_as_pool, PoolBootConfig, PoolBootHandle};
 pub use pool_listener::spawn_pool_listener;
