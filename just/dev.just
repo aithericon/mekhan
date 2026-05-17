@@ -335,6 +335,14 @@ up-mekhan auth_mode="dev_noop":
       mode_assign="MEKHAN__AUTH__MODE=dev_noop"
       echo "▶ starting mekhan-service on :3100 (auth: dev_noop — offline)…"
     fi
+    # CLOUD_LAYER_JWT_SECRET propagation (sub-phase 2.4): mekhan-service's
+    # cloud-layer BFF proxy mints HS256 JWTs against this secret for
+    # service-to-service calls to cloud-layer-workflow. When unset, the
+    # proxy endpoints fail-closed with 503 "cloud-layer not configured"
+    # (legitimate; mekhan-service still works for native mekhan-NATS flows).
+    # Conditional pass-through: include the env line only when the parent
+    # shell has it exported. Operator runs `CLOUD_LAYER_JWT_SECRET=... just
+    # dev up` or sources cloud-layer's .env.dev before launching.
     nohup env \
       RUST_LOG="info,mekhan_service=debug" \
       MEKHAN__DATABASE_URL="{{database_url}}" \
@@ -343,6 +351,8 @@ up-mekhan auth_mode="dev_noop":
       MEKHAN__S3__ENDPOINT="{{s3_endpoint}}" \
       MEKHAN__S3__ACCESS_KEY="rustfsadmin" \
       MEKHAN__S3__SECRET_KEY="rustfsadmin" \
+      ${CLOUD_LAYER_JWT_SECRET:+CLOUD_LAYER_JWT_SECRET="$CLOUD_LAYER_JWT_SECRET"} \
+      ${CLOUD_LAYER_BASE_URL:+CLOUD_LAYER_BASE_URL="$CLOUD_LAYER_BASE_URL"} \
       ${mode_assign:+"$mode_assign"} \
       "$PWD/target/debug/mekhan-service" \
       > "{{log_dir}}/mekhan.log" 2>&1 &
