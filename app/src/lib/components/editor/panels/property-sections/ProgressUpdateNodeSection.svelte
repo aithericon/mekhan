@@ -1,8 +1,8 @@
 <script lang="ts">
 	// ProgressUpdate: sets the owning HPI process's progress fraction (+ optional
-	// message / step counts). Compiles to a `process_log_metric` breadcrumb
-	// keyed `progress_fraction`, projected into `config.progress`. No-op outside
-	// a named process.
+	// message / step counts). Compiles to the typed `process_progress` effect
+	// emitting a canonical `StatusDetail::ProgressUpdated`, projected into
+	// `config.progress`. No-op outside a named process.
 	import type { ProgressUpdateNodeData } from '$lib/types/editor';
 	import { FormField } from '$lib/components/ui/form-field';
 	import { Input } from '$lib/components/ui/input';
