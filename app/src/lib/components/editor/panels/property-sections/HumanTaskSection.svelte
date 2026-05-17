@@ -14,10 +14,9 @@
 		binding?: YjsGraphBinding;
 		nodeId?: string;
 		onchange: (data: HumanTaskNodeData) => void;
-		onexpand?: () => void;
 	};
 
-	let { data, readonly = false, binding, nodeId, onchange, onexpand }: Props = $props();
+	let { data, readonly = false, binding, nodeId, onchange }: Props = $props();
 
 	function addStep() {
 		onchange({
@@ -31,7 +30,6 @@
 				}
 			]
 		});
-		onexpand?.();
 	}
 </script>
 

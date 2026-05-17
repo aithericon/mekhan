@@ -5,7 +5,8 @@ import type {
 	WorkflowNodeType,
 	WorkflowEdge,
 	WorkflowEdgeType,
-	TriggerNodeData
+	TriggerNodeData,
+	PhaseUpdateNodeData
 } from '$lib/types/editor';
 
 /**
@@ -185,10 +186,14 @@ export class YjsGraphBinding {
 					backoff: 'immediate' | 'fixed' | 'exponential';
 					baseDelayMs: number;
 				}) ?? { maxRetries: 3, backoff: 'immediate', baseDelayMs: 0 };
+				const output = config?.output as
+					| { id: string; label: string; fields: unknown[] }
+					| undefined;
 				return {
 					...base,
 					type: 'automated_step',
 					executionSpec: { entrypoint: 'main.py', ...spec },
+					...(output ? { output: output as never } : {}),
 					retryPolicy
 				};
 			}
@@ -220,6 +225,36 @@ export class YjsGraphBinding {
 				};
 			case 'scope':
 				return { ...base, type: 'scope' };
+			case 'phase_update':
+				return {
+					...base,
+					type: 'phase_update',
+					phaseName: (config?.phaseName as string) ?? '',
+					status:
+						(config?.status as PhaseUpdateNodeData['status']) ?? 'running',
+					...(config?.message ? { message: config.message as string } : {})
+				};
+			case 'progress_update':
+				return {
+					...base,
+					type: 'progress_update',
+					fraction: (config?.fraction as number) ?? 0,
+					...(config?.message ? { message: config.message as string } : {}),
+					...(config?.currentStep !== undefined
+						? { currentStep: config.currentStep as number }
+						: {}),
+					...(config?.totalSteps !== undefined
+						? { totalSteps: config.totalSteps as number }
+						: {})
+				};
+			case 'failure':
+				return {
+					...base,
+					type: 'failure',
+					...(config?.failureMessage
+						? { failureMessage: config.failureMessage as string }
+						: {})
+				};
 			case 'trigger':
 				return {
 					...base,
@@ -500,6 +535,11 @@ export class YjsGraphBinding {
 				break;
 			case 'automated_step':
 				config.set('executionSpec', data.executionSpec);
+				// Declared output port. Persist whenever the editor supplies one
+				// (PortsSection always sends a full Port on edit). Without this the
+				// "Add field" round-trip is dropped on write and re-materializes
+				// empty, so output fields can never be added.
+				if (data.output) config.set('output', data.output);
 				config.set(
 					'retryPolicy',
 					data.retryPolicy ?? { maxRetries: 3, backoff: 'immediate', baseDelayMs: 0 }
@@ -519,6 +559,40 @@ export class YjsGraphBinding {
 				config.set('loopCondition', data.loopCondition);
 				break;
 			case 'scope':
+				break;
+			case 'phase_update':
+				config.set('phaseName', data.phaseName);
+				config.set('status', data.status ?? 'running');
+				if (data.message != null && data.message !== '') {
+					config.set('message', data.message);
+				} else {
+					config.delete('message');
+				}
+				break;
+			case 'progress_update':
+				config.set('fraction', data.fraction);
+				if (data.message != null && data.message !== '') {
+					config.set('message', data.message);
+				} else {
+					config.delete('message');
+				}
+				if (data.currentStep != null) {
+					config.set('currentStep', data.currentStep);
+				} else {
+					config.delete('currentStep');
+				}
+				if (data.totalSteps != null) {
+					config.set('totalSteps', data.totalSteps);
+				} else {
+					config.delete('totalSteps');
+				}
+				break;
+			case 'failure':
+				if (data.failureMessage != null && data.failureMessage !== '') {
+					config.set('failureMessage', data.failureMessage);
+				} else {
+					config.delete('failureMessage');
+				}
 				break;
 			case 'trigger':
 				config.set('source', data.source);

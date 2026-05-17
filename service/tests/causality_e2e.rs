@@ -280,6 +280,8 @@ async fn causality_full_pipeline() {
     let artifact_store = Arc::new(mekhan_service::s3::ArtifactStore::new(&config.s3));
     let catalogue_repo = Arc::new(mekhan_service::catalogue::repository::PgCatalogueRepository::new(db.clone()));
     let (token_verifier, principal_resolver) = common::default_test_auth();
+    let session_store: Arc<dyn mekhan_service::auth::bff::session::SessionStore> =
+        Arc::new(mekhan_service::auth::bff::session::PgSessionStore::new(db.clone()));
     let triggers = Arc::new(mekhan_service::triggers::TriggerDispatcher::new(
         db.clone(),
         petri.clone(),
@@ -295,8 +297,14 @@ async fn causality_full_pipeline() {
         artifact_s3: None,
         catalogue_repo,
         live: LiveBroadcasts::new(),
+        authenticator: Arc::new(
+            mekhan_service::auth::authenticator::NoopAuthenticator::default(),
+        ),
+        session_store,
+        oidc: None,
         token_verifier,
         principal_resolver,
+        introspection: None,
         triggers,
     });
 

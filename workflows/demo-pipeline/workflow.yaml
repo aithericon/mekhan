@@ -1,0 +1,9 @@
+steps:
+  start:
+    type: start
+    label: Start
+  end:
+    type: end
+    label: End
+flow:
+- start -> end

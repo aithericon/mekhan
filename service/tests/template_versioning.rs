@@ -10,6 +10,7 @@ use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use tower::ServiceExt;
 use uuid::Uuid;
+use mekhan_service::models::template::WorkflowGraph;
 use mekhan_service::yjs::persistence::YjsPersistence;
 use yrs::{Any, Map, Out, ReadTxn, StateVector, Transact, WriteTxn};
 
@@ -590,4 +591,148 @@ async fn new_version_forks_authored_ydoc_graph() {
         Some("Authored In YDoc"),
         "new version must fork the source's authored Y.Doc graph, not a blank canvas"
     );
+}
+
+// ---------------------------------------------------------------------------
+// GitOps `apply`: create draft -> apply -> seeded+published v1 w/ provenance
+// ---------------------------------------------------------------------------
+
+async fn create_draft(app: &axum::Router, name: &str) -> String {
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/templates")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({ "name": name, "author_id": Uuid::new_v4() }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let created = body_json(resp.into_body()).await;
+    created["id"].as_str().unwrap().to_string()
+}
+
+fn apply_body() -> String {
+    json!({
+        "graph": WorkflowGraph::default_graph(),
+        "source_ref": { "remote": "git@forge:wf.git", "sha": "deadbeef", "dirty": false, "ref": "main" }
+    })
+    .to_string()
+}
+
+async fn apply(app: &axum::Router, id: &str) -> axum::http::Response<Body> {
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(&format!("/api/templates/{id}/apply"))
+                .header("content-type", "application/json")
+                .body(Body::from(apply_body()))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn apply_seeds_fresh_init_draft_as_v1() {
+    let (app, db) = common::test_app().await;
+    let id = create_draft(&app, "GitOps Seed").await;
+
+    let resp = apply(&app, &id).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v = body_json(resp.into_body()).await;
+    assert_eq!(v["version"], 1);
+    assert_eq!(v["published"], true);
+    assert_eq!(v["is_latest"], true);
+
+    // Seed publishes the same v1 row in place (no bump).
+    let id_uuid: Uuid = id.parse().unwrap();
+    let (source_ref,): (Option<Value>,) =
+        sqlx::query_as("SELECT source_ref FROM workflow_templates WHERE id = $1")
+            .bind(id_uuid)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+    let sr = source_ref.expect("source_ref must be stamped");
+    assert_eq!(sr["sha"], "deadbeef");
+    assert_eq!(sr["ref"], "main");
+}
+
+#[tokio::test]
+async fn apply_bumps_published_head() {
+    let (app, db) = common::test_app().await;
+    let v1_id = create_draft(&app, "GitOps Bump").await;
+
+    // Publish v1 the normal way (UI publish leaves source_ref NULL).
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(&format!("/api/templates/{v1_id}/publish"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // Apply -> born-published v2.
+    let resp = apply(&app, &v1_id).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v2 = body_json(resp.into_body()).await;
+    assert_eq!(v2["version"], 2);
+    assert_eq!(v2["published"], true);
+    assert_eq!(v2["is_latest"], true);
+    assert_eq!(v2["source_ref"]["sha"], "deadbeef");
+
+    let v1_uuid: Uuid = v1_id.parse().unwrap();
+    let (is_latest, sr): (bool, Option<Value>) = sqlx::query_as(
+        "SELECT is_latest, source_ref FROM workflow_templates WHERE id = $1",
+    )
+    .bind(v1_uuid)
+    .fetch_one(&db)
+    .await
+    .unwrap();
+    assert!(!is_latest, "v1 must no longer be latest");
+    assert!(sr.is_none(), "UI-published v1 must keep source_ref NULL");
+}
+
+#[tokio::test]
+async fn apply_rejects_ui_new_version_draft() {
+    let (app, _db) = common::test_app().await;
+    let v1_id = create_draft(&app, "GitOps Conflict").await;
+
+    // Publish v1, then open a UI new-version draft (v2, unpublished).
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(&format!("/api/templates/{v1_id}/publish"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(&format!("/api/templates/{v1_id}/new-version"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    // Apply against the chain must 409 — the head is a web-editor draft.
+    let resp = apply(&app, &v1_id).await;
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
 }

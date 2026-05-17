@@ -87,7 +87,9 @@ pub async fn run(_server: &str, directory: &str, dry_run: bool) -> Result<()> {
 }
 
 /// Upload binary asset files via POST /api/templates/{id}/files/{node_id}.
-async fn upload_assets(
+/// Shared with `mekhan apply`. Sends a Bearer token from `MEKHAN_CLI_TOKEN`
+/// when set, so it works against a BFF-protected server.
+pub(crate) async fn upload_assets(
     server_url: &str,
     template_id: &str,
     assets: &HashMap<String, HashMap<String, Vec<u8>>>,
@@ -107,9 +109,11 @@ async fn upload_assets(
 
             let form = reqwest::multipart::Form::new().part("file", part);
 
-            let resp = client
-                .post(&url)
-                .multipart(form)
+            let mut rb = client.post(&url).multipart(form);
+            if let Ok(token) = std::env::var("MEKHAN_CLI_TOKEN") {
+                rb = rb.bearer_auth(token);
+            }
+            let resp = rb
                 .send()
                 .await
                 .with_context(|| format!("failed to upload {}/{}", node_id, filename))?;

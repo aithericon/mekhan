@@ -5,7 +5,7 @@ Cargo.lock.bak
 *.rs.bk
 
 # Node
-app/node_modules/
+node_modules/
 app/.output/
 app/.svelte-kit/
 app/build/

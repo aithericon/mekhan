@@ -1,10 +1,11 @@
 /**
- * Frontend auth port. Mirrors the Rust backend's `TokenVerifier` /
- * `PrincipalResolver` split: the rest of the SPA depends only on this
- * interface and the `AuthSession` shape, never on Zitadel's specifics.
+ * Auth data shapes shared across the SPA.
  *
- * Adapters live alongside this file (`zitadel-adapter.ts`). Swap by editing
- * the import in `store.svelte.ts`.
+ * In the BFF model the browser never runs the OIDC flow or holds a token —
+ * the Rust service owns all of that. What remains client-side is just the
+ * resolved-principal shape that `GET /api/auth/session` returns and the
+ * `auth` rune store exposes. (The old `AuthProvider` port + Zitadel adapter
+ * were removed with the client-side OIDC.)
  */
 
 export interface AuthUser {
@@ -12,27 +13,16 @@ export interface AuthUser {
 	email?: string;
 	displayName?: string;
 	roles: string[];
+	/** Zitadel org the principal belongs to, when the IdP asserts one. */
+	orgId?: string;
 }
 
 export interface AuthSession {
+	/**
+	 * Always empty in the BFF model — no token reaches the browser. Retained
+	 * so the `AuthSession` shape (and existing readers) stay stable.
+	 */
 	accessToken: string;
 	expiresAt: number; // unix seconds
 	user: AuthUser;
-}
-
-export interface AuthProvider {
-	/** Returns the active session, or null if signed out / never signed in. */
-	getSession(): AuthSession | null;
-	/** Redirect the browser to the identity provider's login flow. */
-	signIn(): Promise<void>;
-	/** Complete the OIDC redirect callback. Returns the established session. */
-	completeSignIn(): Promise<AuthSession>;
-	/** Clear local session state and (optionally) redirect to provider logout. */
-	signOut(): Promise<void>;
-	/**
-	 * Subscribe to session changes. Returns an unsubscribe function. Adapters
-	 * push a new value whenever silent renew refreshes the token or signOut
-	 * clears it.
-	 */
-	subscribe(listener: (session: AuthSession | null) => void): () => void;
 }

@@ -8,6 +8,9 @@ import ParallelSplitNode from './ParallelSplitNode.svelte';
 import ParallelJoinNode from './ParallelJoinNode.svelte';
 import LoopNode from './LoopNode.svelte';
 import ScopeNode from './ScopeNode.svelte';
+import PhaseUpdateNode from './PhaseUpdateNode.svelte';
+import ProgressUpdateNode from './ProgressUpdateNode.svelte';
+import FailureNode from './FailureNode.svelte';
 import TriggerNode from './TriggerNode.svelte';
 
 export const nodeTypes: NodeTypes = {
@@ -20,5 +23,8 @@ export const nodeTypes: NodeTypes = {
 	parallel_join: ParallelJoinNode as any,
 	loop: LoopNode as any,
 	scope: ScopeNode as any,
+	phase_update: PhaseUpdateNode as any,
+	progress_update: ProgressUpdateNode as any,
+	failure: FailureNode as any,
 	trigger: TriggerNode as any
 };

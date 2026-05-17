@@ -28,6 +28,12 @@ pub struct WorkflowTemplate {
     // Compiled AIR (populated on publish)
     pub air_json: Option<serde_json::Value>,
 
+    // GitOps provenance — the git ref a `mekhan apply` published from
+    // (shape: `SourceRef`). NULL for UI-published / new_version rows, so its
+    // presence also marks a git-managed version. Stored raw to match the
+    // `graph`/`air_json` `serde_json::Value` + `sqlx::FromRow` convention.
+    pub source_ref: Option<serde_json::Value>,
+
     // Metadata
     pub author_id: Uuid,
     pub created_at: DateTime<Utc>,
@@ -192,6 +198,65 @@ pub enum WorkflowNodeData {
         #[serde(skip_serializing_if = "Option::is_none")]
         description: Option<String>,
     },
+    /// Pass-through control node that marks a named phase on the owning HPI
+    /// process. Compiles to a shape transition (forwards the workflow token
+    /// unchanged + emits an `executor-phase`-shaped breadcrumb) followed by a
+    /// `process_log_message` effect. The causality consumer projects it into
+    /// `hpi_processes.config.progress.phases`. Effective only when an upstream
+    /// Start registered a process (`processName`); otherwise a silent no-op.
+    #[serde(rename = "phase_update")]
+    PhaseUpdate {
+        label: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+        /// Phase name. Supports `{{ field }}` placeholders resolved against the
+        /// inbound token at run time.
+        #[serde(rename = "phaseName")]
+        phase_name: String,
+        /// Status to set on the phase. Defaults to `running`.
+        #[serde(default)]
+        status: PhaseUpdateStatus,
+        /// Optional phase message. Supports `{{ field }}` placeholders.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        message: Option<String>,
+    },
+    /// Pass-through control node that sets the owning HPI process's progress
+    /// fraction (and optional message / step counts). Compiles to a shape
+    /// transition + a `process_log_metric` effect keyed `progress_fraction`,
+    /// projected into `hpi_processes.config.progress`. Effective only within a
+    /// named process; otherwise a silent no-op.
+    #[serde(rename = "progress_update")]
+    ProgressUpdate {
+        label: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+        /// Overall completion fraction, 0.0–1.0.
+        fraction: f64,
+        /// Optional progress message. Supports `{{ field }}` placeholders.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        message: Option<String>,
+        #[serde(rename = "currentStep", default, skip_serializing_if = "Option::is_none")]
+        current_step: Option<i64>,
+        #[serde(rename = "totalSteps", default, skip_serializing_if = "Option::is_none")]
+        total_steps: Option<i64>,
+    },
+    /// Pass-through control node that marks the owning HPI process `failed`
+    /// with a templated message. Compiles to a shape transition (forwards the
+    /// workflow token unchanged + emits a `#{ reason }` breadcrumb) followed
+    /// by the `process_fail` builtin effect. The net keeps running to its
+    /// normal End — this is a process-level marker, not a net kill-switch.
+    /// Effective only within a named process (`processName` on an upstream
+    /// Start); otherwise a silent no-op.
+    #[serde(rename = "failure")]
+    Failure {
+        label: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+        /// Failure message. Supports `{{ field }}` placeholders resolved
+        /// against the inbound token at run time.
+        #[serde(rename = "failureMessage", skip_serializing_if = "Option::is_none")]
+        failure_message: Option<String>,
+    },
     /// Trigger node (Phase 5). Lives at the template level and connects to a
     /// target input port via a single outgoing edge. Triggers are never edge
     /// targets; they are *inputs to the workflow*, not part of it. AIR
@@ -229,6 +294,9 @@ impl WorkflowNodeData {
             | Self::ParallelJoin { label, .. }
             | Self::Loop { label, .. }
             | Self::Scope { label, .. }
+            | Self::PhaseUpdate { label, .. }
+            | Self::ProgressUpdate { label, .. }
+            | Self::Failure { label, .. }
             | Self::Trigger { label, .. } => label,
         }
     }
@@ -244,6 +312,9 @@ impl WorkflowNodeData {
             Self::ParallelJoin { .. } => "parallel_join",
             Self::Loop { .. } => "loop",
             Self::Scope { .. } => "scope",
+            Self::PhaseUpdate { .. } => "phase_update",
+            Self::ProgressUpdate { .. } => "progress_update",
+            Self::Failure { .. } => "failure",
             Self::Trigger { .. } => "trigger",
         }
     }
@@ -259,6 +330,9 @@ impl WorkflowNodeData {
             | Self::ParallelJoin { description, .. }
             | Self::Loop { description, .. }
             | Self::Scope { description, .. }
+            | Self::PhaseUpdate { description, .. }
+            | Self::ProgressUpdate { description, .. }
+            | Self::Failure { description, .. }
             | Self::Trigger { description, .. } => description.as_deref(),
         }
     }
@@ -287,7 +361,10 @@ impl WorkflowNodeData {
             | Self::ParallelSplit { .. }
             | Self::ParallelJoin { .. }
             | Self::Loop { .. }
-            | Self::Scope { .. } => vec![Port::empty_input()],
+            | Self::Scope { .. }
+            | Self::PhaseUpdate { .. }
+            | Self::ProgressUpdate { .. }
+            | Self::Failure { .. } => vec![Port::empty_input()],
 
             // Trigger nodes are never edge targets — the editor refuses to draw
             // an edge into a Trigger node. Return empty so any malformed graph
@@ -351,7 +428,10 @@ impl WorkflowNodeData {
             Self::ParallelSplit { .. }
             | Self::ParallelJoin { .. }
             | Self::Loop { .. }
-            | Self::Scope { .. } => vec![Port {
+            | Self::Scope { .. }
+            | Self::PhaseUpdate { .. }
+            | Self::ProgressUpdate { .. }
+            | Self::Failure { .. } => vec![Port {
                 id: "out".to_string(),
                 label: "Output".to_string(),
                 fields: vec![],
@@ -542,6 +622,22 @@ pub enum MergeStrategy {
     #[default]
     ShallowLastWins,
     DeepMerge,
+}
+
+/// Author-selected status for a `PhaseUpdate` control node. Serialized
+/// snake_case so it lands on the breadcrumb exactly as the executor
+/// `PhaseStatus` the causality consumer deserializes in `record_phase_event`
+/// (`aithericon_executor_domain::PhaseStatus`). `Pending` is intentionally
+/// omitted — an author explicitly marking a phase always means it is at least
+/// running.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PhaseUpdateStatus {
+    #[default]
+    Running,
+    Completed,
+    Failed,
+    Skipped,
 }
 
 /// Delay applied between automated-step retry attempts.
@@ -1112,6 +1208,34 @@ pub struct CompileRequest {
     pub files: std::collections::HashMap<String, std::collections::HashMap<String, String>>,
 }
 
+/// Git provenance recorded on a version published via `mekhan apply`.
+/// Serialized into the `workflow_templates.source_ref` JSONB column.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct SourceRef {
+    /// Git remote URL (`git remote get-url origin`).
+    pub remote: String,
+    /// Commit SHA the artifact was applied from (`git rev-parse HEAD`).
+    pub sha: String,
+    /// Working tree had uncommitted changes at apply time
+    /// (`git status --porcelain` non-empty).
+    pub dirty: bool,
+    /// Branch / ref name, when resolvable (`git rev-parse --abbrev-ref HEAD`).
+    #[serde(rename = "ref", default, skip_serializing_if = "Option::is_none")]
+    pub git_ref: Option<String>,
+}
+
+/// Request body for `POST /api/templates/{id}/apply` — the GitOps path.
+/// The `graph` REPLACES the chain head wholesale (no CRDT merge); binary
+/// assets are uploaded out-of-band via the files endpoint before this call.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct ApplyTemplateRequest {
+    pub graph: WorkflowGraph,
+    #[serde(default)]
+    pub files: std::collections::HashMap<String, std::collections::HashMap<String, String>>,
+    #[serde(default)]
+    pub source_ref: Option<SourceRef>,
+}
+
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateTemplateRequest {
     pub name: String,
@@ -1505,5 +1629,36 @@ mod tests {
             let result: Result<TaskBlockConfig, _> = serde_json::from_value(json.clone());
             assert!(result.is_ok(), "block type {} failed to deserialize: {:?}", i, result.err());
         }
+    }
+
+    #[test]
+    fn source_ref_jsonb_roundtrip() {
+        // What `apply` serializes into the `source_ref` JSONB column. `ref`
+        // is renamed and omitted when None; `dirty` is always present.
+        let sr = SourceRef {
+            remote: "git@forge.aithericon.eu:Milan/wf.git".to_string(),
+            sha: "a1b2c3d4".to_string(),
+            dirty: true,
+            git_ref: Some("main".to_string()),
+        };
+        let v = serde_json::to_value(&sr).unwrap();
+        assert_eq!(v["remote"], "git@forge.aithericon.eu:Milan/wf.git");
+        assert_eq!(v["sha"], "a1b2c3d4");
+        assert_eq!(v["dirty"], true);
+        assert_eq!(v["ref"], "main");
+        let back: SourceRef = serde_json::from_value(v).unwrap();
+        assert_eq!(back.sha, "a1b2c3d4");
+        assert_eq!(back.git_ref.as_deref(), Some("main"));
+
+        let none = SourceRef {
+            remote: "r".to_string(),
+            sha: "s".to_string(),
+            dirty: false,
+            git_ref: None,
+        };
+        let v = serde_json::to_value(&none).unwrap();
+        assert!(v.get("ref").is_none(), "ref must be omitted when None");
+        let back: SourceRef = serde_json::from_value(v).unwrap();
+        assert_eq!(back.git_ref, None);
     }
 }

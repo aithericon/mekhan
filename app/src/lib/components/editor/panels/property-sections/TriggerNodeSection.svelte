@@ -12,6 +12,7 @@
 	import TriggerHistory from './TriggerHistory.svelte';
 	import { CopyButton } from '$lib/components/ui/copy-button';
 	import { browser } from '$app/environment';
+	import { onMount } from 'svelte';
 	import type { YjsGraphBinding } from '$lib/yjs/graph-binding.svelte';
 
 	type FieldMapping = components['schemas']['FieldMapping'];
@@ -31,6 +32,64 @@
 	const sourceKind = $derived(source?.kind ?? 'manual');
 	const mappings = $derived(data.payloadMapping ?? []);
 	const enabled = $derived(data.enabled ?? false);
+
+	// A trigger's *armed* state is the inverse of every other field here: it is
+	// operational state of the published template, not a draft setting. In a
+	// draft this is read-only (it ships armed by default); on the published
+	// template it is the one live control and writes through the API, not Yjs
+	// (the editor binding is frozen for published templates).
+	let liveEnabled = $state<boolean | null>(null);
+	let toggling = $state(false);
+	let toggleError = $state<string | null>(null);
+
+	const displayEnabled = $derived(readonly ? (liveEnabled ?? enabled) : enabled);
+
+	async function refreshLiveEnabled() {
+		if (!readonly || !nodeId) return;
+		try {
+			const res = await fetch('/api/triggers');
+			if (!res.ok) return;
+			const body = await res.json();
+			const t = (body.triggers ?? []).find(
+				(x: { node_id: string }) => x.node_id === nodeId
+			);
+			if (t) liveEnabled = t.enabled;
+		} catch {
+			// Leave liveEnabled null → fall back to the graph value.
+		}
+	}
+
+	async function toggleEnabled(next: boolean) {
+		// Draft: not an editable setting (inverse of normal freeze).
+		if (!readonly || !nodeId) return;
+		toggling = true;
+		toggleError = null;
+		const prev = liveEnabled ?? enabled;
+		liveEnabled = next; // optimistic
+		try {
+			const res = await fetch(`/api/triggers/${encodeURIComponent(nodeId)}/enabled`, {
+				method: 'PATCH',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ enabled: next })
+			});
+			if (!res.ok) {
+				liveEnabled = prev;
+				toggleError = `Failed to ${next ? 'enable' : 'disable'} (${res.status})`;
+				return;
+			}
+			const body = await res.json();
+			if (typeof body.enabled === 'boolean') liveEnabled = body.enabled;
+		} catch (e) {
+			liveEnabled = prev;
+			toggleError = String(e);
+		} finally {
+			toggling = false;
+		}
+	}
+
+	onMount(() => {
+		void refreshLiveEnabled();
+	});
 
 	// Sample-request scaffolding for the API-call (manual) source. The body a
 	// caller should POST mirrors the target Start's `initial` schema — but only
@@ -58,6 +117,54 @@
 		}
 	}
 
+	// Rhai keywords/literals that lex as identifiers but aren't scope reads.
+	const RHAI_RESERVED = new Set([
+		'true',
+		'false',
+		'null',
+		'let',
+		'const',
+		'if',
+		'else',
+		'for',
+		'in',
+		'while',
+		'loop',
+		'fn',
+		'return',
+		'switch',
+		'this',
+		'break',
+		'continue',
+		'throw',
+		'try',
+		'catch'
+	]);
+
+	// Root scope identifiers a mapping expression reads. At fire time the POSTed
+	// `payload`'s top-level keys bind as bare Rhai variables, so the root of each
+	// reference chain (before the first `.`/`[`) is a body key the caller must
+	// send. Heuristic — covers the bare-ident / member-access shapes mappings
+	// use, not a full Rhai parser.
+	function rootRefs(expr: string): string[] {
+		// Blank out string/char literals so identifiers inside them don't count.
+		const stripped = expr.replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g, '""');
+		const out: string[] = [];
+		const re = /[A-Za-z_$][A-Za-z0-9_$]*/g;
+		let m: RegExpExecArray | null;
+		while ((m = re.exec(stripped))) {
+			const id = m[0];
+			const before = stripped.slice(0, m.index).trimEnd();
+			const after = stripped.slice(re.lastIndex).trimStart();
+			if (before.endsWith('.')) continue; // property access, not a scope var
+			if (after.startsWith('(')) continue; // function call name
+			if (after.startsWith(':') && !after.startsWith('::')) continue; // map key
+			if (RHAI_RESERVED.has(id)) continue;
+			out.push(id);
+		}
+		return out;
+	}
+
 	const targetStartFields = $derived.by((): PortField[] => {
 		if (!binding || !nodeId) return [];
 		const g = binding.graph;
@@ -75,8 +182,19 @@
 	// (FireTriggerRequest.payload) — not the bare object. File fields can't go
 	// in JSON; they're uploaded as multipart parts and the server injects a
 	// reference object, so they're excluded from the JSON `payload`.
-	const samplePayload = $derived(
-		Object.fromEntries(nonFileFields.map((f) => [f.name, sampleValue(f)]))
+	// With a payload mapping the body the caller must POST is keyed by the
+	// identifiers the expressions read (the mapping's input) — not the target
+	// Start fields (its output). Without a mapping the trigger forwards
+	// `payload` verbatim, so mirror the Start schema.
+	const mappedInputKeys = $derived.by(() => {
+		const keys = new Set<string>();
+		for (const m of mappings) for (const id of rootRefs(m.expression)) keys.add(id);
+		return [...keys];
+	});
+	const samplePayload = $derived.by(() =>
+		mappings.length > 0
+			? Object.fromEntries(mappedInputKeys.map((k) => [k, 'example']))
+			: Object.fromEntries(nonFileFields.map((f) => [f.name, sampleValue(f)]))
 	);
 
 	function fileMime(f: PortField): string {
@@ -415,10 +533,10 @@
 				</p>
 			{/if}
 			{#if hasMapping}
-				<p class="rounded-md bg-amber-50 p-2 text-[11px] text-amber-800">
-					This trigger remaps the payload, so the real body is whatever your
-					mapping expressions read. The sample above mirrors the Start schema
-					and is only accurate with no payload mapping.
+				<p class="text-[11px] text-muted-foreground">
+					Body keys are the identifiers your mapping expressions read; the
+					values shown are placeholders. The expressions project them onto the
+					target Start fields.
 				</p>
 			{/if}
 		</div>
@@ -510,19 +628,33 @@
 		{/if}
 	</div>
 
-	<!-- Enabled toggle. -->
+	<!-- Enabled. Inverse of every other field: armed state is operational
+	     state of the *published* template, not a draft setting. Read-only in
+	     draft (ships armed); the one live control once published. -->
 	<label class="flex items-center gap-2">
 		<input
 			type="checkbox"
-			checked={enabled}
-			disabled={readonly}
-			onchange={(e) => update('enabled', (e.currentTarget as HTMLInputElement).checked)}
+			checked={displayEnabled}
+			disabled={!readonly || toggling}
+			onchange={(e) => toggleEnabled((e.currentTarget as HTMLInputElement).checked)}
 		/>
 		<span class="text-sm">Enabled</span>
+		{#if toggling}<span class="text-[10px] text-muted-foreground">…</span>{/if}
 	</label>
-	<p class="text-[11px] text-muted-foreground">
-		Disabled triggers are stored with the template but the dispatcher ignores them.
-	</p>
+	{#if readonly}
+		<p class="text-[11px] text-muted-foreground">
+			Arm or pause this trigger on the published template — takes effect immediately,
+			no new version required.
+		</p>
+	{:else}
+		<p class="text-[11px] text-muted-foreground">
+			Triggers ship enabled. Arming and pausing is done on the published template,
+			not here — it isn’t a draft setting.
+		</p>
+	{/if}
+	{#if toggleError}
+		<p class="text-[11px] text-destructive">{toggleError}</p>
+	{/if}
 
 	{#if nodeId}
 		<TriggerHistory {nodeId} />

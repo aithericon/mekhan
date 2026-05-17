@@ -2543,6 +2543,90 @@
         }
       }
     },
+    "/api/templates/{id}/apply": {
+      "post": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "POST /api/templates/{id}/apply",
+        "description": "GitOps entry point: atomically publish a new version of the chain straight\nfrom a git-authored artifact. The supplied `graph` REPLACES the chain head\nwholesale (no CRDT merge). Either seeds-and-publishes a fresh `mekhan init`\ndraft as v1 in place, or bumps the published head to a new born-published\nversion. The collaborative Y.Doc draft window is collapsed to nothing, so\npublish-freeze itself is the isolation between git- and web-authored\ntemplates.",
+        "operationId": "apply_template",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Any template id in the target chain",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApplyTemplateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Applied: seeded v1 or a new born-published version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowTemplate"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Compilation failed or graph invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Template not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Chain head is an unpublished web-editor draft",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/templates/{id}/compile": {
       "post": {
         "tags": [
@@ -2988,12 +3072,86 @@
         }
       }
     },
+    "/api/triggers/{node_id}/enabled": {
+      "patch": {
+        "tags": [
+          "triggers"
+        ],
+        "summary": "PATCH /api/triggers/{node_id}/enabled",
+        "description": "Arm or pause a single trigger on its **published** template. This is the\ndeliberate inverse of the rest of the template: a trigger's `source`,\n`payload_mapping` and target are frozen at publish, but whether it is\ncurrently armed is operational state of the live template — so it is\neditable exactly when everything else is locked, and *only* then (drafts\nare armed by editing the graph in the editor).\n\nThe published row's `graph` column is the runtime source of truth that\n`hydrate()` and `fire()` read, so we flip `enabled` on the trigger node\nthere and re-register the template to make the change live immediately;\nit then survives restarts via the normal `hydrate()` path.",
+        "operationId": "set_trigger_enabled",
+        "parameters": [
+          {
+            "name": "node_id",
+            "in": "path",
+            "description": "Trigger node id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetTriggerEnabledRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Trigger enabled state updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TriggerView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Trigger not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Template is not published",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/triggers/{node_id}/fire": {
       "post": {
         "tags": [
           "triggers"
         ],
         "summary": "POST /api/triggers/{node_id}/fire",
+        "description": "Accepts either `application/json` (`{ \"payload\": { ... } }` — the scope\nkeys for `payload_mapping`) or `multipart/form-data` for file entrypoints:\nan optional JSON `payload` part plus one binary part per file field. Each\nfile part is uploaded to blob storage (scoped to the trigger's template +\ntarget node) and injected into the payload under the part name as a\n`{ key, url, filename, content_type, size }` reference object — the same\nshape the create-instance dialog produces, which `FieldKind::File` accepts.",
         "operationId": "fire_trigger",
         "parameters": [
           {
@@ -3163,6 +3321,43 @@
             "type": [
               "string",
               "null"
+            ]
+          }
+        }
+      },
+      "ApplyTemplateRequest": {
+        "type": "object",
+        "description": "Request body for `POST /api/templates/{id}/apply` — the GitOps path.\nThe `graph` REPLACES the chain head wholesale (no CRDT merge); binary\nassets are uploaded out-of-band via the files endpoint before this call.",
+        "required": [
+          "graph"
+        ],
+        "properties": {
+          "files": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "propertyNames": {
+                "type": "string"
+              }
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "graph": {
+            "$ref": "#/components/schemas/WorkflowGraph"
+          },
+          "source_ref": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SourceRef"
+              }
             ]
           }
         }
@@ -5158,6 +5353,7 @@
                   ],
                   "format": "uuid"
                 },
+                "source_ref": {},
                 "updated_at": {
                   "type": "string",
                   "format": "date-time"
@@ -5504,6 +5700,16 @@
           }
         }
       },
+      "PhaseUpdateStatus": {
+        "type": "string",
+        "description": "Author-selected status for a `PhaseUpdate` control node. Serialized\nsnake_case so it lands on the breadcrumb exactly as the executor\n`PhaseStatus` the causality consumer deserializes in `record_phase_event`\n(`aithericon_executor_domain::PhaseStatus`). `Pending` is intentionally\nomitted — an author explicitly marking a phase always means it is at least\nrunning.",
+        "enum": [
+          "running",
+          "completed",
+          "failed",
+          "skipped"
+        ]
+      },
       "Port": {
         "type": "object",
         "description": "A named bundle of typed fields exchanged at a block boundary. Two ports\ntype-match if their field sets are equal (same names, same kinds, with\n`Json` as the escape hatch).",
@@ -5747,6 +5953,17 @@
           }
         }
       },
+      "SetTriggerEnabledRequest": {
+        "type": "object",
+        "required": [
+          "enabled"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          }
+        }
+      },
       "SignalDispatch": {
         "type": "object",
         "required": [
@@ -5764,6 +5981,36 @@
           },
           "signal_key": {
             "type": "string"
+          }
+        }
+      },
+      "SourceRef": {
+        "type": "object",
+        "description": "Git provenance recorded on a version published via `mekhan apply`.\nSerialized into the `workflow_templates.source_ref` JSONB column.",
+        "required": [
+          "remote",
+          "sha",
+          "dirty"
+        ],
+        "properties": {
+          "dirty": {
+            "type": "boolean",
+            "description": "Working tree had uncommitted changes at apply time\n(`git status --porcelain` non-empty)."
+          },
+          "ref": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Branch / ref name, when resolvable (`git rev-parse --abbrev-ref HEAD`)."
+          },
+          "remote": {
+            "type": "string",
+            "description": "Git remote URL (`git remote get-url origin`)."
+          },
+          "sha": {
+            "type": "string",
+            "description": "Commit SHA the artifact was applied from (`git rev-parse HEAD`)."
           }
         }
       },
@@ -6995,6 +7242,131 @@
           },
           {
             "type": "object",
+            "description": "Pass-through control node that marks a named phase on the owning HPI\nprocess. Compiles to a shape transition (forwards the workflow token\nunchanged + emits an `executor-phase`-shaped breadcrumb) followed by a\n`process_log_message` effect. The causality consumer projects it into\n`hpi_processes.config.progress.phases`. Effective only when an upstream\nStart registered a process (`processName`); otherwise a silent no-op.",
+            "required": [
+              "label",
+              "phaseName",
+              "type"
+            ],
+            "properties": {
+              "description": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "label": {
+                "type": "string"
+              },
+              "message": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Optional phase message. Supports `{{ field }}` placeholders."
+              },
+              "phaseName": {
+                "type": "string",
+                "description": "Phase name. Supports `{{ field }}` placeholders resolved against the\ninbound token at run time."
+              },
+              "status": {
+                "$ref": "#/components/schemas/PhaseUpdateStatus",
+                "description": "Status to set on the phase. Defaults to `running`."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "phase_update"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Pass-through control node that sets the owning HPI process's progress\nfraction (and optional message / step counts). Compiles to a shape\ntransition + a `process_log_metric` effect keyed `progress_fraction`,\nprojected into `hpi_processes.config.progress`. Effective only within a\nnamed process; otherwise a silent no-op.",
+            "required": [
+              "label",
+              "fraction",
+              "type"
+            ],
+            "properties": {
+              "currentStep": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64"
+              },
+              "description": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "fraction": {
+                "type": "number",
+                "format": "double",
+                "description": "Overall completion fraction, 0.0–1.0."
+              },
+              "label": {
+                "type": "string"
+              },
+              "message": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Optional progress message. Supports `{{ field }}` placeholders."
+              },
+              "totalSteps": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "progress_update"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Pass-through control node that marks the owning HPI process `failed`\nwith a templated message. Compiles to a shape transition (forwards the\nworkflow token unchanged + emits a `#{ reason }` breadcrumb) followed\nby the `process_fail` builtin effect. The net keeps running to its\nnormal End — this is a process-level marker, not a net kill-switch.\nEffective only within a named process (`processName` on an upstream\nStart); otherwise a silent no-op.",
+            "required": [
+              "label",
+              "type"
+            ],
+            "properties": {
+              "description": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "failureMessage": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Failure message. Supports `{{ field }}` placeholders resolved\nagainst the inbound token at run time."
+              },
+              "label": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "failure"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
             "description": "Trigger node (Phase 5). Lives at the template level and connects to a\ntarget input port via a single outgoing edge. Triggers are never edge\ntargets; they are *inputs to the workflow*, not part of it. AIR\ncompilation skips trigger nodes — they are a pre-compile concern owned\nby the dispatcher (`service::triggers`).",
             "required": [
               "label",
@@ -7109,6 +7481,7 @@
             ],
             "format": "uuid"
           },
+          "source_ref": {},
           "updated_at": {
             "type": "string",
             "format": "date-time"

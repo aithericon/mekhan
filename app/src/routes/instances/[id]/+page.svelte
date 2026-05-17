@@ -40,6 +40,10 @@
 
 	const hasNet = $derived(!!instance && instance.status !== 'created' && !!instance.net_id);
 	const primaryProcess = $derived(processes[0] ?? null);
+	const selectedProcess = $derived(
+		processes.find((p) => p.process_id === selectedProcessId) ?? primaryProcess
+	);
+	const processName = $derived(selectedProcess?.name ?? null);
 
 	// Keep a valid selected process as the list resolves / changes.
 	$effect(() => {
@@ -94,11 +98,13 @@
 		<div class="border-b border-border bg-card px-4 py-2 shrink-0">
 			<div class="flex items-center justify-between gap-3">
 				<div class="flex items-center gap-3 min-w-0">
-					<h1 class="text-sm font-semibold text-foreground">Run</h1>
+					<h1 class="shrink-0 text-base font-semibold text-foreground">
+						{processName ?? 'Run'}
+					</h1>
 					<Badge class={statusColors[instance.status] ?? ''} variant="secondary">
 						{instance.status}
 					</Badge>
-					<span class="font-mono text-[11px] text-muted-foreground truncate">
+					<span class="font-mono text-sm text-muted-foreground truncate">
 						{instance.net_id}
 					</span>
 				</div>
@@ -119,7 +125,7 @@
 					{/if}
 				</div>
 			</div>
-			<div class="mt-1 flex flex-wrap gap-x-4 gap-y-0.5 text-[11px] text-muted-foreground">
+			<div class="mt-1 flex flex-wrap gap-x-4 gap-y-0.5 text-sm text-muted-foreground">
 				<span>created {formatDate(instance.created_at)}</span>
 				<span>started {formatDate(instance.started_at ?? null)}</span>
 				<span>completed {formatDate(instance.completed_at ?? null)}</span>
@@ -151,7 +157,7 @@
 				class="flex items-center gap-1 border-b border-border bg-card px-3 py-1 shrink-0"
 			>
 				<button
-					class="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors
+					class="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-sm font-medium transition-colors
 						{mode === 'process'
 						? 'bg-primary text-primary-foreground'
 						: 'text-muted-foreground hover:bg-accent hover:text-foreground'}"
@@ -162,7 +168,7 @@
 				</button>
 				{#if hasNet}
 					<button
-						class="ml-auto inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs transition-colors
+						class="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-sm transition-colors
 							{mode === 'petri'
 							? 'bg-accent text-foreground'
 							: 'text-muted-foreground/70 hover:bg-accent hover:text-foreground'}"
@@ -184,7 +190,7 @@
 					{#if primaryProcess && selectedProcessId}
 						<div class="mx-auto w-full px-6 py-6">
 							{#if processes.length > 1}
-								<div class="mb-3 flex flex-wrap items-center gap-1.5 text-xs">
+								<div class="mb-3 flex flex-wrap items-center gap-1.5 text-sm">
 									<span class="text-muted-foreground">Processes:</span>
 									{#each processes as p (p.process_id)}
 										<button
@@ -208,7 +214,7 @@
 							<LayoutDashboard class="size-8 text-muted-foreground/40" />
 							<p>No process for this run yet.</p>
 							{#if hasNet}
-								<button class="text-xs underline hover:text-foreground" onclick={openPetri}>
+								<button class="text-sm underline hover:text-foreground" onclick={openPetri}>
 									Inspect the Petri net
 								</button>
 							{/if}

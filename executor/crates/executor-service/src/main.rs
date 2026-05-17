@@ -556,7 +556,10 @@ fn build_executor(
 
     #[cfg(feature = "file-ops")]
     {
-        registry = registry.register(aithericon_executor_file_ops::FileOpsBackend::new());
+        registry = registry.register(
+            aithericon_executor_file_ops::FileOpsBackend::new()
+                .with_default_storage(config.storage.clone()),
+        );
         info!("file_ops backend registered");
     }
 

@@ -8,7 +8,8 @@
 #   just dev down         # stop everything
 #   just dev logs <name>  # tail one component
 #   just dev status       # what's running
-#   just dev restart      # down + up
+#   just dev restart      # down + up (data preserved)
+#   just dev reset        # down + wipe pg/nats/rustfs volumes + up
 #
 # Per-component recipes (`up-executor`, `up-engine`, …) restart a single
 # service without touching the rest — useful when iterating.
@@ -40,7 +41,7 @@ s3_endpoint  := "http://localhost:9005"
 # Default recipe: bring up the full stack
 default: up
 
-# Start everything: infra + executor + engine + mekhan + app
+# Start everything: infra + executor + engine + mekhan + app (auth: dev_noop)
 up:
     @just dev::_dirs
     @just dev::_infra-up
@@ -50,6 +51,19 @@ up:
     @just dev::up-mekhan
     @just dev::up-app
     @just dev::_summary
+
+# Same as `up` but with auth ENABLED: mekhan-service runs in BFF mode (real
+# Zitadel cookie login for the SPA + machine-PAT introspection for the CLI).
+# Requires `bash deploy/zitadel/bootstrap.sh` once (writes mekhan.local.toml).
+up-auth:
+    @just dev::_dirs
+    @just dev::_infra-up
+    @just dev::_wait-infra
+    @just dev::up-executor
+    @just dev::up-engine
+    @just dev::up-mekhan bff
+    @just dev::up-app
+    @just dev::_summary "ENABLED (BFF + Zitadel PAT introspection)"
 
 # Stop everything: native daemons first, then infra
 down:
@@ -62,6 +76,18 @@ down:
 # Restart the whole stack
 restart:
     @just dev::down
+    @just dev::up
+
+# Tears the whole stack down, destroys the postgres + nats + rustfs data
+# volumes, then brings everything back up clean. The native daemons re-run
+# sqlx migrations / recreate the jetstream + S3 bucket on boot, so this
+# yields a pristine environment. Zitadel (zitadel-pgdata) is intentionally
+# left untouched so its bootstrap survives.
+#
+# Complete wipe of pg/nats/rustfs, then back up clean
+reset:
+    @just dev::down
+    @just dev::_infra-wipe
     @just dev::up
 
 # Show what's running
@@ -120,6 +146,23 @@ _infra-up:
 _infra-down:
     @echo "▶ infra down…"
     @docker compose down
+
+# Destroy the postgres + nats + rustfs data volumes. Assumes the stack is
+# already down (see `reset`) so nothing holds the volumes open. Volume names
+# follow docker compose's `<project>_<volume>` convention; project name
+# defaults to the compose dir basename (matches just/db.just's `reset`).
+_infra-wipe:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    project="$(basename "$PWD")"
+    echo "▶ wiping infra data volumes (postgres + nats + rustfs)…"
+    for vol in mekhan-pgdata mekhan-natsdata mekhan-rustfs-data mekhan-rustfs-logs; do
+      if docker volume rm "${project}_${vol}" >/dev/null 2>&1; then
+        echo "  ✓ removed ${project}_${vol}"
+      else
+        echo "  · ${project}_${vol} (absent or already gone)"
+      fi
+    done
 
 _wait-infra:
     #!/usr/bin/env bash
@@ -239,7 +282,10 @@ down-engine:
 
 # ── Mekhan service (Rust backend) ────────────────────────────────────────────
 
-up-mekhan:
+# auth_mode: "dev_noop" (default — offline, every request is the dev user)
+# or "bff" (real Zitadel cookie auth + machine-PAT introspection; requires
+# `bash deploy/zitadel/bootstrap.sh` to have written mekhan.local.toml).
+up-mekhan auth_mode="dev_noop":
     #!/usr/bin/env bash
     set -euo pipefail
     just dev::_dirs
@@ -252,14 +298,27 @@ up-mekhan:
     # output lands in ./target/, not service/target/. Build from repo root.
     cargo build --bin mekhan-service
 
-    echo "▶ starting mekhan-service on :3100…"
     # mekhan.toml carries the localhost db / nats / s3 endpoints; env overrides
     # win, so we make sure NATS + DB + S3 match the running infra.
     #
-    # MEKHAN__AUTH__MODE=dev_noop overrides mekhan.local.toml's zitadel mode:
-    # NoopTokenVerifier accepts any/no token, so the local stack needs no
-    # Zitadel and browser-initiated artifact downloads (which can't carry a
-    # Bearer header) work. Guarded — main.rs refuses dev_noop if MEKHAN_ENV=prod.
+    # dev_noop: MEKHAN__AUTH__MODE=dev_noop overrides mekhan.local.toml's bff
+    # mode — NoopAuthenticator makes every request the fixed dev user, no
+    # Zitadel needed, fully offline. bff: no override, so mekhan.local.toml's
+    # mode=bff + issuer/client_id + introspection creds take effect (real
+    # cookie auth for the SPA, RFC 7662 PAT introspection for the CLI).
+    # main.rs refuses dev_noop if MEKHAN_ENV=prod.
+    mode_assign=""
+    if [ "{{auth_mode}}" = "bff" ]; then
+      if ! grep -q 'introspection_client_id' service/mekhan.local.toml 2>/dev/null; then
+        echo "✗ auth_mode=bff needs introspection creds in service/mekhan.local.toml" >&2
+        echo "  run: bash deploy/zitadel/bootstrap.sh" >&2
+        exit 1
+      fi
+      echo "▶ starting mekhan-service on :3100 (auth: BFF + Zitadel PAT introspection)…"
+    else
+      mode_assign="MEKHAN__AUTH__MODE=dev_noop"
+      echo "▶ starting mekhan-service on :3100 (auth: dev_noop — offline)…"
+    fi
     nohup env \
       RUST_LOG="info,mekhan_service=debug" \
       MEKHAN__DATABASE_URL="{{database_url}}" \
@@ -268,7 +327,7 @@ up-mekhan:
       MEKHAN__S3__ENDPOINT="{{s3_endpoint}}" \
       MEKHAN__S3__ACCESS_KEY="rustfsadmin" \
       MEKHAN__S3__SECRET_KEY="rustfsadmin" \
-      MEKHAN__AUTH__MODE="dev_noop" \
+      ${mode_assign:+"$mode_assign"} \
       "$PWD/target/debug/mekhan-service" \
       > "{{log_dir}}/mekhan.log" 2>&1 &
     echo $! > "{{pid_dir}}/mekhan.pid"
@@ -291,16 +350,11 @@ up-app:
       echo "▶ installing app deps…"
       (cd app && pnpm install)
     fi
-    # Match the backend's dev_noop auth: write a fresh env override each `up`
-    # so config drift can't accumulate (cf. executor.toml above). In Vite dev
-    # mode `.env.development.local` outranks `.env.local`, so this wins over
-    # the bootstrap-generated zitadel config without touching that file.
-    # gitignored (.env.* in app/.gitignore). Delete it + flip MEKHAN__AUTH__MODE
-    # back to re-enable Zitadel locally.
-    cat > app/.env.development.local <<'EOF'
-    # Generated by `just dev` — auth disabled for the managed dev stack.
-    VITE_AUTH_MODE=dev_noop
-    EOF
+    # BFF model: the SPA has no auth env at all — it only calls
+    # GET /api/auth/session, which the dev_noop backend answers with the fixed
+    # dev user (no redirect, fully offline). Remove any stale env override a
+    # previous (pre-BFF) `just dev` may have written so it can't shadow things.
+    rm -f app/.env.development.local
     echo "▶ starting SvelteKit dev server on :5173…"
     nohup bash -c 'cd "$PWD/app" && exec pnpm run dev -- --host 0.0.0.0 --port 5173' \
       > "{{log_dir}}/app.log" 2>&1 &
@@ -344,7 +398,7 @@ _kill name:
     rm -f "$pf"
     echo "  ✓ {{name}} stopped"
 
-_summary:
+_summary auth="DISABLED (dev_noop) — every request is the dev user":
     @echo ""
     @echo "✓ dev stack up:"
     @echo "  postgres   → localhost:5439              (db: mekhan / user: mekhan / pw: mekhan)"
@@ -355,8 +409,9 @@ _summary:
     @echo "  mekhan     → http://localhost:3100"
     @echo "  app (dev)  → http://localhost:5173"
     @echo ""
-    @echo "  auth       → DISABLED (dev_noop) — every request is the dev user"
+    @echo "  auth       → {{auth}}"
     @echo ""
     @echo "  logs   : just dev logs <executor|engine|mekhan|app|infra>"
     @echo "  status : just dev status"
     @echo "  stop   : just dev down"
+    @echo "  wipe   : just dev reset   (destroys pg/nats/rustfs data)"

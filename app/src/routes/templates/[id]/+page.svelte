@@ -4,8 +4,6 @@
 	import { onDestroy } from 'svelte';
 	import WorkflowCanvas from '$lib/components/editor/WorkflowCanvas.svelte';
 	import NodePropertyPanel from '$lib/components/editor/panels/NodePropertyPanel.svelte';
-	import { Sheet, SheetContent, SheetTitle, SheetDescription } from '$lib/components/ui/sheet';
-	import { getSheetWidthClass } from '$lib/components/editor/panels/panel-width';
 	import EditorToolbar from '$lib/components/editor/toolbar/EditorToolbar.svelte';
 	import CreateInstanceDialog from '$lib/components/instances/CreateInstanceDialog.svelte';
 	import {
@@ -33,7 +31,6 @@
 	let saving = $state(false);
 	let error = $state<string | null>(null);
 	let selectedNodeId = $state<string | null>(null);
-	let panelExpanded = $state(false);
 	let airPreview = $state<object | null>(null);
 	let runDialogOpen = $state(false);
 
@@ -174,7 +171,6 @@
 
 	function handleNodeSelect(nodeId: string | null) {
 		selectedNodeId = nodeId;
-		panelExpanded = false;
 	}
 
 	function handleDeleteSelectedNode() {
@@ -191,7 +187,6 @@
 			binding.removeNode(id);
 		}
 		selectedNodeId = null;
-		panelExpanded = false;
 	}
 
 	function handleNodeDataChange(data: WorkflowNodeData) {
@@ -226,6 +221,7 @@
 			published={template?.published ?? false}
 			{saving}
 			{templateId}
+			version={template?.version}
 			awareness={session.awareness}
 			provider={session.provider}
 			onpublish={handlePublish}
@@ -258,44 +254,18 @@
 				onRemoveEdges={handleRemoveEdges}
 			/>
 
-			{#if selectedNodeData && !panelExpanded}
+			{#if selectedNodeData}
 				<NodePropertyPanel
 					data={selectedNodeData}
 					readonly={template?.published ?? false}
 					onchange={handleNodeDataChange}
 					onclose={() => (selectedNodeId = null)}
-					onexpand={() => (panelExpanded = true)}
 					ondelete={handleDeleteSelectedNode}
 					{binding}
 					nodeId={selectedNodeId ?? undefined}
 					{templateId}
 					onselectnode={handleNodeSelect}
 				/>
-			{/if}
-
-			{#if panelExpanded && selectedNodeData}
-				<Sheet.Root
-					open
-					onOpenChange={(open) => { if (!open) panelExpanded = false; }}
-				>
-					<SheetContent class={getSheetWidthClass(selectedNodeData)}>
-						<SheetTitle>Node Properties</SheetTitle>
-						<SheetDescription>Edit the selected node</SheetDescription>
-						<NodePropertyPanel
-							data={selectedNodeData}
-							readonly={template?.published ?? false}
-							expanded
-							onchange={handleNodeDataChange}
-							onclose={() => (selectedNodeId = null)}
-							oncollapse={() => (panelExpanded = false)}
-							ondelete={handleDeleteSelectedNode}
-							{binding}
-							nodeId={selectedNodeId ?? undefined}
-							{templateId}
-							onselectnode={handleNodeSelect}
-						/>
-					</SheetContent>
-				</Sheet.Root>
 			{/if}
 		</div>
 

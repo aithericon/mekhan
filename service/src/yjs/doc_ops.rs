@@ -383,6 +383,44 @@ pub fn write_node_config(
             config.insert(txn, "maxIterations", *max_iterations as f64);
             config.insert(txn, "loopCondition", loop_condition.clone());
         }
+        WorkflowNodeData::PhaseUpdate {
+            phase_name,
+            status,
+            message,
+            ..
+        } => {
+            config.insert(txn, "phaseName", phase_name.clone());
+            let status_val = serde_json::to_value(status).unwrap_or_default();
+            config.insert(txn, "status", json_value_to_any(&status_val));
+            if let Some(m) = message {
+                config.insert(txn, "message", m.clone());
+            }
+        }
+        WorkflowNodeData::ProgressUpdate {
+            fraction,
+            message,
+            current_step,
+            total_steps,
+            ..
+        } => {
+            config.insert(txn, "fraction", *fraction);
+            if let Some(m) = message {
+                config.insert(txn, "message", m.clone());
+            }
+            if let Some(cs) = current_step {
+                config.insert(txn, "currentStep", *cs as f64);
+            }
+            if let Some(ts) = total_steps {
+                config.insert(txn, "totalSteps", *ts as f64);
+            }
+        }
+        WorkflowNodeData::Failure {
+            failure_message, ..
+        } => {
+            if let Some(m) = failure_message {
+                config.insert(txn, "failureMessage", m.clone());
+            }
+        }
         WorkflowNodeData::Trigger {
             source,
             concurrency,

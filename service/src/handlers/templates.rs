@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
-    Json,
+    Extension, Json,
 };
 use uuid::Uuid;
 
@@ -14,8 +14,9 @@ use crate::compiler::{compile_to_air, generate_py_io_files, node_input_scopes};
 use crate::lifecycle::cleanup_net;
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::template::{
-    CompileRequest, CreateTemplateRequest, ExecutionBackendType, ListTemplatesQuery,
-    PaginatedResponse, UpdateTemplateRequest, WorkflowGraph, WorkflowNodeData, WorkflowTemplate,
+    ApplyTemplateRequest, CompileRequest, CreateTemplateRequest, ExecutionBackendType,
+    ListTemplatesQuery, PaginatedResponse, UpdateTemplateRequest, WorkflowGraph, WorkflowNodeData,
+    WorkflowTemplate,
 };
 use crate::AppState;
 
@@ -391,6 +392,16 @@ pub async fn delete_template(
         }
     }
 
+    // Capture every version id in the chain before the delete so we can drop
+    // their triggers from the in-memory dispatcher afterwards (otherwise a
+    // deleted template's triggers keep firing until the next restart).
+    let version_ids: Vec<(uuid::Uuid,)> =
+        sqlx::query_as("SELECT id FROM workflow_templates WHERE base_template_id = $1")
+            .bind(base_id)
+            .fetch_all(&state.db)
+            .await
+            .unwrap_or_default();
+
     // Delete all versions in the template chain
     sqlx::query("DELETE FROM workflow_templates WHERE base_template_id = $1")
         .bind(base_id)
@@ -400,6 +411,10 @@ pub async fn delete_template(
             tracing::error!("failed to delete template: {e}");
             ApiError::internal(e.to_string())
         })?;
+
+    for (vid,) in version_ids {
+        state.triggers.forget_template(vid);
+    }
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -455,27 +470,9 @@ pub async fn publish_template(
             }
         };
 
-    // Generate the `_aithericon_io` pair per Python automated step from the
-    // node's computed input scope (the same flat `input.<field>` model guards
-    // use): a thin `.py` delegate to the SDK plus a typed `.pyi` overlay.
-    // Staged with the step like any other node file so step code can do
-    // `from _aithericon_io import load_input`. Skipped silently if the graph
-    // can't be scoped — publish should still proceed and surface the real
-    // compile error below.
-    if let Ok(scopes) = node_input_scopes(&graph) {
-        for node in &graph.nodes {
-            if let WorkflowNodeData::AutomatedStep { execution_spec, .. } = &node.data {
-                if execution_spec.backend_type == ExecutionBackendType::Python {
-                    if let Some(scope) = scopes.get(&node.id) {
-                        let entry = ydoc_files.entry(node.id.clone()).or_default();
-                        for (filename, source) in generate_py_io_files(scope) {
-                            entry.insert(filename.to_string(), source);
-                        }
-                    }
-                }
-            }
-        }
-    }
+    // Inject the `_aithericon_io` `.py`/`.pyi` pair into every Python step
+    // (shared with `apply` so git- and UI-authored steps stage identically).
+    synthesize_py_io_files(&graph, &mut ydoc_files);
 
     // Upload node file contents to S3 so the executor can stage them at runtime.
     if let Err(e) = upload_node_files(&state, id, existing.version, &ydoc_files).await {
@@ -505,23 +502,9 @@ pub async fn publish_template(
     let graph_json = serde_json::to_value(&graph)
         .map_err(|e| ApiError::internal(format!("serialize graph: {e}")))?;
 
-    let template = sqlx::query_as::<_, WorkflowTemplate>(
-        r#"
-        UPDATE workflow_templates
-        SET published = TRUE, published_at = NOW(), air_json = $2, graph = $3, updated_at = NOW()
-        WHERE id = $1
-        RETURNING *
-        "#,
-    )
-    .bind(id)
-    .bind(&air_json)
-    .bind(&graph_json)
-    .fetch_one(&state.db)
-    .await
-    .map_err(|e| {
-        tracing::error!("failed to publish template: {e}");
-        ApiError::internal(e.to_string())
-    })?;
+    // UI publish: no git provenance (column stays NULL).
+    let template =
+        finalize_publish_row(&state.db, id, &air_json, &graph_json, None).await?;
 
     // Make the just-published template's triggers live immediately. The
     // dispatcher's in-memory registry is otherwise only filled by `hydrate()`
@@ -672,6 +655,142 @@ fn inline_files(
         .collect()
 }
 
+/// Inject the `_aithericon_io` `.py`/`.pyi` pair into every Python automated
+/// step from its computed input scope, mutating `ydoc_files` in place. Shared
+/// verbatim by publish and apply so git-authored and UI-authored Python steps
+/// stage identically. Silently skipped if the graph can't be scoped — the
+/// caller still proceeds and surfaces the real compile error.
+fn synthesize_py_io_files(
+    graph: &WorkflowGraph,
+    ydoc_files: &mut HashMap<String, HashMap<String, String>>,
+) {
+    if let Ok(scopes) = node_input_scopes(graph) {
+        for node in &graph.nodes {
+            if let WorkflowNodeData::AutomatedStep { execution_spec, .. } = &node.data {
+                if execution_spec.backend_type == ExecutionBackendType::Python {
+                    if let Some(scope) = scopes.get(&node.id) {
+                        let entry = ydoc_files.entry(node.id.clone()).or_default();
+                        for (filename, source) in generate_py_io_files(scope) {
+                            entry.insert(filename.to_string(), source);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Mark a template row as no longer the latest in its version chain. Generic
+/// over the executor so it works on the pool or inside a transaction.
+async fn mark_not_latest<'e, E>(exec: E, id: Uuid) -> Result<(), ApiError>
+where
+    E: sqlx::PgExecutor<'e>,
+{
+    sqlx::query("UPDATE workflow_templates SET is_latest = FALSE WHERE id = $1")
+        .bind(id)
+        .execute(exec)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    Ok(())
+}
+
+/// The publish-finalize UPDATE: freeze the row, store compiled AIR + the
+/// just-compiled graph, and stamp git provenance. `source_ref` is `None` for a
+/// UI publish (column stays NULL) and `Some` for `apply`'s seed path. Generic
+/// over the executor so publish (pool) and apply (txn) share one statement —
+/// the single place the `source_ref` column is threaded on an UPDATE.
+async fn finalize_publish_row<'e, E>(
+    exec: E,
+    id: Uuid,
+    air_json: &serde_json::Value,
+    graph_json: &serde_json::Value,
+    source_ref: Option<&serde_json::Value>,
+) -> Result<WorkflowTemplate, ApiError>
+where
+    E: sqlx::PgExecutor<'e>,
+{
+    sqlx::query_as::<_, WorkflowTemplate>(
+        r#"
+        UPDATE workflow_templates
+        SET published = TRUE, published_at = NOW(), air_json = $2, graph = $3,
+            source_ref = $4, updated_at = NOW()
+        WHERE id = $1
+        RETURNING *
+        "#,
+    )
+    .bind(id)
+    .bind(air_json)
+    .bind(graph_json)
+    .bind(source_ref)
+    .fetch_one(exec)
+    .await
+    .map_err(|e| {
+        tracing::error!("failed to publish template: {e}");
+        ApiError::internal(e.to_string())
+    })
+}
+
+/// Insert a new chain version that is *born published* — the atomic primitive
+/// behind `apply`'s bump path. Unlike `new_version`'s draft INSERT, the row
+/// lands `published = TRUE` in a single statement so there is no persisted
+/// latest-but-unpublished intermediate state. Caller must `mark_not_latest`
+/// the source within the same transaction.
+#[allow(clippy::too_many_arguments)]
+async fn insert_published_version<'e, E>(
+    exec: E,
+    src: &WorkflowTemplate,
+    new_id: Uuid,
+    version: i32,
+    air_json: &serde_json::Value,
+    graph_json: &serde_json::Value,
+    source_ref: Option<&serde_json::Value>,
+) -> Result<WorkflowTemplate, ApiError>
+where
+    E: sqlx::PgExecutor<'e>,
+{
+    let base_id = src.base_template_id.unwrap_or(src.id);
+    sqlx::query_as::<_, WorkflowTemplate>(
+        r#"
+        INSERT INTO workflow_templates
+            (id, name, description, base_template_id, parent_id, version,
+             is_latest, published, published_at, graph, air_json, source_ref, author_id)
+        VALUES ($1, $2, $3, $4, $5, $6, TRUE, TRUE, NOW(), $7, $8, $9, $10)
+        RETURNING *
+        "#,
+    )
+    .bind(new_id)
+    .bind(&src.name)
+    .bind(&src.description)
+    .bind(base_id)
+    .bind(src.id)
+    .bind(version)
+    .bind(graph_json)
+    .bind(air_json)
+    .bind(source_ref)
+    .bind(src.author_id)
+    .fetch_one(exec)
+    .await
+    .map_err(|e| {
+        tracing::error!("failed to insert published version: {e}");
+        ApiError::internal(e.to_string())
+    })
+}
+
+/// Fetch the newest version (highest `version`) in a template's chain.
+async fn latest_in_chain(
+    pool: &sqlx::PgPool,
+    base_id: Uuid,
+) -> Result<WorkflowTemplate, ApiError> {
+    sqlx::query_as::<_, WorkflowTemplate>(
+        "SELECT * FROM workflow_templates WHERE base_template_id = $1 ORDER BY version DESC LIMIT 1",
+    )
+    .bind(base_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .ok_or_else(|| ApiError::not_found("template chain not found"))
+}
+
 /// POST /api/templates/{id}/new-version
 #[utoipa::path(
     post,
@@ -743,11 +862,7 @@ pub async fn new_version(
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     // Mark old version as not latest
-    sqlx::query("UPDATE workflow_templates SET is_latest = FALSE WHERE id = $1")
-        .bind(id)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    mark_not_latest(&mut *tx, id).await?;
 
     // Create new version
     let template = sqlx::query_as::<_, WorkflowTemplate>(
@@ -776,6 +891,12 @@ pub async fn new_version(
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
+    // The previous version is now superseded (is_latest = FALSE). Its triggers
+    // must stop firing immediately, not linger in the in-memory dispatcher
+    // until the next restart — `hydrate()` already excludes non-latest
+    // versions, so this just makes the running process match restart state.
+    state.triggers.forget_template(existing.id);
+
     // Seed Y.Doc for the new version so WS collaboration works immediately,
     // including the copied per-node files.
     if let Err(e) = state
@@ -789,6 +910,197 @@ pub async fn new_version(
     }
 
     Ok((StatusCode::CREATED, Json(template)))
+}
+
+/// Which `apply` path the chain head selects. Pure decision so it can be
+/// unit-tested without a DB.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ApplyMode {
+    /// Seed-publish a fresh `mekhan init` draft in place as v1.
+    Seed,
+    /// Bump the published head to a new born-published version.
+    Bump,
+}
+
+/// Decide the apply path from the chain's latest version. `Err` carries the
+/// 409 message when the head is a UI-created unpublished draft. Only
+/// `create_template` (via `mekhan init`) yields a v1 / parent-NULL /
+/// unpublished row — `new_version` always sets `parent_id` — so that triple
+/// uniquely identifies an untouched init draft.
+pub(crate) fn apply_mode(latest: &WorkflowTemplate) -> Result<ApplyMode, String> {
+    if latest.published {
+        Ok(ApplyMode::Bump)
+    } else if latest.version == 1 && latest.parent_id.is_none() {
+        Ok(ApplyMode::Seed)
+    } else {
+        Err(format!(
+            "latest version v{} is an unpublished web-editor draft; \
+             resolve or detach before apply (out of scope)",
+            latest.version
+        ))
+    }
+}
+
+/// POST /api/templates/{id}/apply
+///
+/// GitOps entry point: atomically publish a new version of the chain straight
+/// from a git-authored artifact. The supplied `graph` REPLACES the chain head
+/// wholesale (no CRDT merge). Either seeds-and-publishes a fresh `mekhan init`
+/// draft as v1 in place, or bumps the published head to a new born-published
+/// version. The collaborative Y.Doc draft window is collapsed to nothing, so
+/// publish-freeze itself is the isolation between git- and web-authored
+/// templates.
+#[utoipa::path(
+    post,
+    path = "/api/templates/{id}/apply",
+    params(("id" = Uuid, Path, description = "Any template id in the target chain")),
+    request_body = ApplyTemplateRequest,
+    responses(
+        (status = 200, description = "Applied: seeded v1 or a new born-published version", body = WorkflowTemplate),
+        (status = 400, description = "Compilation failed or graph invalid", body = ErrorResponse),
+        (status = 404, description = "Template not found", body = ErrorResponse),
+        (status = 409, description = "Chain head is an unpublished web-editor draft", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse),
+    ),
+    tag = "templates",
+)]
+pub async fn apply_template(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthUser>,
+    Path(id): Path<Uuid>,
+    Json(req): Json<ApplyTemplateRequest>,
+) -> Result<Json<WorkflowTemplate>, ApiError> {
+    // 1. Resolve the chain head and pick the bootstrap branch. Read-only —
+    //    nothing is written until the compile has passed.
+    let existing = sqlx::query_as::<_, WorkflowTemplate>(
+        "SELECT * FROM workflow_templates WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .ok_or_else(|| ApiError::not_found("template not found"))?;
+
+    let base_id = existing.base_template_id.unwrap_or(existing.id);
+    let latest = latest_in_chain(&state.db, base_id).await?;
+
+    let mode = apply_mode(&latest).map_err(ApiError::conflict)?;
+
+    let target_id = match mode {
+        ApplyMode::Seed => latest.id,
+        ApplyMode::Bump => Uuid::new_v4(),
+    };
+    let target_version = match mode {
+        ApplyMode::Seed => latest.version,
+        ApplyMode::Bump => latest.version + 1,
+    };
+
+    // 2. Compile AIR FIRST — before any write. Pure; a failure leaves zero
+    //    side effects (no draft, no S3, no Y.Doc).
+    let graph = req.graph;
+    let mut files_map = req.files;
+    synthesize_py_io_files(&graph, &mut files_map);
+
+    let air_files = storage_path_files(target_id, target_version, &files_map);
+    let air_json = compile_to_air(&graph, &latest.name, &latest.description, &air_files)
+        .map_err(|e| {
+            let view = e.to_view();
+            ApiError::compile(format!("compilation failed: {e}"), vec![view])
+        })?;
+    let graph_json = serde_json::to_value(&graph)
+        .map_err(|e| ApiError::internal(format!("serialize graph: {e}")))?;
+    let source_ref_json = req
+        .source_ref
+        .as_ref()
+        .map(serde_json::to_value)
+        .transpose()
+        .map_err(|e| ApiError::internal(format!("serialize source_ref: {e}")))?;
+
+    // 3. Upload node files to S3 under the *target* version key, before the
+    //    DB row. A failure here leaves only inert orphan objects (nothing
+    //    points at them) — no dangling row.
+    if let Err(e) = upload_node_files(&state, target_id, target_version, &files_map).await {
+        return Err(ApiError::internal(format!("S3 file upload failed: {e}")));
+    }
+
+    // 4. Single transaction: the only persisted, queryable transition. The
+    //    row is born in its final published+latest form — there is no
+    //    intermediate latest-but-unpublished state to strand on failure.
+    let mut tx = state
+        .db
+        .begin()
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    let applied = match mode {
+        ApplyMode::Seed => {
+            finalize_publish_row(
+                &mut *tx,
+                latest.id,
+                &air_json,
+                &graph_json,
+                source_ref_json.as_ref(),
+            )
+            .await?
+        }
+        ApplyMode::Bump => {
+            mark_not_latest(&mut *tx, latest.id).await?;
+            insert_published_version(
+                &mut *tx,
+                &latest,
+                target_id,
+                target_version,
+                &air_json,
+                &graph_json,
+                source_ref_json.as_ref(),
+            )
+            .await?
+        }
+    };
+
+    tx.commit()
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    tracing::info!(
+        template_id = %applied.id,
+        version = applied.version,
+        actor = %user.subject,
+        "applied template from git"
+    );
+
+    // 5. Post-commit, non-fatal: the executor runs from AIR/S3 and the
+    //    `graph` column (both durable above), not the Y.Doc. Bump mints a
+    //    brand-new id, so this is a clean Y.Doc init exactly like
+    //    `new_version`. Seed reuses the existing v1 id whose Y.Doc would
+    //    *merge* (store_update appends) rather than replace — and the row is
+    //    now published⇒read-only — so the seeded v1's editor view stays at
+    //    its init seed (cosmetic only; the published graph/AIR are correct).
+    if mode == ApplyMode::Bump {
+        if let Err(e) = state
+            .yjs
+            .persistence
+            .init_doc_from_graph_with_files(applied.id, &graph, &files_map)
+            .await
+        {
+            tracing::error!(
+                "failed to init Y.Doc for applied version {}: {e}",
+                applied.id
+            );
+        }
+    }
+
+    // 6. Trigger registry (process-local, post-commit so it can only ever
+    //    reflect a row that truly landed published+latest).
+    if mode == ApplyMode::Bump {
+        state.triggers.forget_template(latest.id);
+    }
+    let registered = state.triggers.register_template(&applied).await;
+    if registered > 0 {
+        tracing::info!(template_id = %applied.id, registered, "registered triggers on apply");
+    }
+
+    Ok(Json(applied))
 }
 
 /// GET /api/templates/{id}/versions
@@ -1039,4 +1351,57 @@ pub async fn compile_graph(
             ApiError::compile(format!("compilation failed: {e}"), vec![view])
         })?;
     Ok(Json(air))
+}
+
+#[cfg(test)]
+mod apply_mode_tests {
+    use super::{apply_mode, ApplyMode, WorkflowTemplate};
+    use chrono::Utc;
+    use uuid::Uuid;
+
+    fn tmpl(version: i32, published: bool, parent_id: Option<Uuid>) -> WorkflowTemplate {
+        WorkflowTemplate {
+            id: Uuid::new_v4(),
+            name: "t".into(),
+            description: String::new(),
+            base_template_id: None,
+            parent_id,
+            version,
+            is_latest: true,
+            published,
+            published_at: None,
+            published_by: None,
+            graph: serde_json::json!({}),
+            air_json: None,
+            source_ref: None,
+            author_id: Uuid::new_v4(),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn fresh_init_draft_seeds() {
+        // v1 / parent NULL / unpublished — the only shape `mekhan init` makes.
+        assert_eq!(apply_mode(&tmpl(1, false, None)).unwrap(), ApplyMode::Seed);
+    }
+
+    #[test]
+    fn published_head_bumps() {
+        let t = tmpl(3, true, Some(Uuid::new_v4()));
+        assert_eq!(apply_mode(&t).unwrap(), ApplyMode::Bump);
+    }
+
+    #[test]
+    fn ui_new_version_draft_conflicts() {
+        // unpublished, version > 1 → a web-editor `new_version` draft → 409.
+        let err = apply_mode(&tmpl(2, false, Some(Uuid::new_v4()))).unwrap_err();
+        assert!(err.contains("web-editor draft"), "got: {err}");
+    }
+
+    #[test]
+    fn unpublished_v1_with_parent_is_not_seed() {
+        // Defensive: v1 but parent set is not a fresh init → must not Seed.
+        assert!(apply_mode(&tmpl(1, false, Some(Uuid::new_v4()))).is_err());
+    }
 }

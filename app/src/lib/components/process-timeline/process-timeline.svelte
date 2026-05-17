@@ -64,7 +64,7 @@
 				{#if ts}
 					<Tooltip.Root>
 						<Tooltip.Trigger
-							class="cursor-default text-xs tabular-nums text-muted-foreground"
+							class="cursor-default text-sm tabular-nums text-muted-foreground"
 						>
 							{formatTimestamp(ts)}
 						</Tooltip.Trigger>
@@ -136,13 +136,13 @@
 			<div class="min-w-0 flex-1 pb-4">
 				<div class="flex items-center gap-2">
 					<span
-						class={`text-base font-medium ${entry.status === 'pending' ? 'text-muted-foreground' : 'text-foreground'}`}
+						class={`text-sm font-medium ${entry.status === 'pending' ? 'text-muted-foreground' : 'text-foreground'}`}
 					>
 						{entry.label}
 					</span>
 					{#if entry.human}
 						<span
-							class="rounded-full bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900 dark:text-amber-200"
+							class="rounded-full bg-amber-100 px-1.5 py-0.5 text-sm font-medium text-amber-700 dark:bg-amber-900 dark:text-amber-200"
 						>
 							human
 						</span>

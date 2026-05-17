@@ -15,6 +15,7 @@ use aithericon_executor_domain::{
     ExecutionJob, ExecutionOutcome, ExecutionResult, ExecutionSpec, ExecutionStatus, ExecutorError,
     RunContext,
 };
+use aithericon_executor_storage::StorageConfig;
 
 use crate::config::FileOpsConfig;
 use crate::ops;
@@ -32,18 +33,28 @@ use crate::ops;
 /// 2. [`execute()`](ExecutionBackend::execute) — runs a three-way
 ///    `tokio::select!` (cancellation, timeout, operation dispatch).
 ///    Operation errors become [`ExecutionOutcome::BackendError`], not `Err`.
-pub struct FileOpsBackend;
-
-impl FileOpsBackend {
-    /// Create a new stateless file-ops backend instance.
-    pub fn new() -> Self {
-        Self
-    }
+///
+/// The only state held is an optional `default_storage`, used as a fallback
+/// for the `probe` operation when it omits `storage` (e.g. compiler-injected
+/// probes against the platform's own object store) — mirroring
+/// `InputSource::StoragePath { storage: Option<_> }`.
+#[derive(Default)]
+pub struct FileOpsBackend {
+    default_storage: Option<StorageConfig>,
 }
 
-impl Default for FileOpsBackend {
-    fn default() -> Self {
-        Self::new()
+impl FileOpsBackend {
+    /// Create a new file-ops backend instance with no default storage.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set the default storage used as a fallback for `probe` operations
+    /// that omit their own `storage` config — typically the executor's
+    /// globally-configured object store.
+    pub fn with_default_storage(mut self, storage: Option<StorageConfig>) -> Self {
+        self.default_storage = storage;
+        self
     }
 }
 
@@ -138,7 +149,7 @@ impl ExecutionBackend for FileOpsBackend {
                     logs: None,
                 })
             },
-            result = ops::dispatch(&config, &run_context.run_dir.artifacts_dir) => {
+            result = ops::dispatch(&config, &run_context.run_dir.artifacts_dir, self.default_storage.as_ref()) => {
                 let duration = start.elapsed();
                 match result {
                     Ok(outputs) => {

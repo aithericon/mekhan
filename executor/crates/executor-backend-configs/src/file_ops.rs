@@ -47,7 +47,12 @@ pub struct ProbeConfig {
     pub path: String,
     #[serde(default)]
     pub include_statistics: bool,
-    pub storage: StorageConfig,
+    /// Optional. When omitted (e.g. compiler-injected probes against the
+    /// platform's own object store), the executor falls back to its
+    /// globally-configured default storage — mirroring
+    /// `InputSource::StoragePath { storage: Option<_> }`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub storage: Option<StorageConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

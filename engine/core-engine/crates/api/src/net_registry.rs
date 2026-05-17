@@ -24,7 +24,8 @@ use petri_application::pre_dispatch::{
 };
 use petri_application::{
     AdapterScheduler, EventRepository, MockSchedulerClient, PetriNetService,
-    ProcessCompleteHandler, ProcessLogMessageHandler, ProcessLogMetricHandler, ProcessStartHandler,
+    ProcessCompleteHandler, ProcessFailHandler, ProcessLogMessageHandler, ProcessLogMetricHandler,
+    ProcessStartHandler,
     SchedulerCancelHandler, SchedulerSubmitHandler, StateProjection, TimerCancelHandler,
     TimerScheduleHandler, TopologyRepository,
 };
@@ -752,6 +753,10 @@ where
             .expect("register process_complete effect handler");
 
         service
+            .register_effect_handler("process_fail", Arc::new(ProcessFailHandler::new()))
+            .expect("register process_fail effect handler");
+
+        service
             .register_effect_handler(
                 effects::PROCESS_LOG_METRIC.handler_id,
                 Arc::new(ProcessLogMetricHandler::new(
@@ -771,7 +776,7 @@ where
             )
             .expect("register process_log_message effect handler");
 
-        tracing::info!(net_id = %net_id, "Registered process lifecycle effect handlers (start + complete + metric + log)");
+        tracing::info!(net_id = %net_id, "Registered process lifecycle effect handlers (start + complete + fail + metric + log)");
 
         // Register timer effect handlers if configured
         if let Some(ref timer_client) = self.timer_client {

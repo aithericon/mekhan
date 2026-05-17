@@ -1280,6 +1280,18 @@ impl<'ctx> TransitionBuilder<'ctx> {
         self.builtin_effect(&effects::PROCESS_COMPLETE);
     }
 
+    /// Fail a process lifecycle (free-form ports).
+    ///
+    /// Tolerant counterpart to [`process_complete`](Self::process_complete):
+    /// passes the trigger token through and marks the owning process failed
+    /// (resolved by the causality tag graph — no `process_id` required on the
+    /// token). The net continues to its normal end.
+    ///
+    /// This is a terminal method — auto-finalizes the transition.
+    pub fn process_fail(self) {
+        self.builtin_effect(&effects::PROCESS_FAIL);
+    }
+
     /// Start a process lifecycle with fully typed contract.
     ///
     /// Wires input/output ports, the `process_start` effect with config —

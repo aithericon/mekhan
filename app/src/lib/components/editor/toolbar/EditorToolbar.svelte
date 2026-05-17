@@ -10,6 +10,7 @@
 	import type { MekhanWsProvider } from '$lib/yjs/ws-provider';
 	import AwarenessBar from '../AwarenessBar.svelte';
 	import ConnectionStatus from '../ConnectionStatus.svelte';
+	import TemplateVersionMenu from './TemplateVersionMenu.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Input } from '$lib/components/ui/input';
@@ -19,6 +20,8 @@
 		published: boolean;
 		saving: boolean;
 		templateId?: string;
+		/** Version number of the open template; enables the history menu. */
+		version?: number;
 		awareness?: Awareness;
 		provider?: MekhanWsProvider;
 		onsave?: () => void;
@@ -37,6 +40,7 @@
 		published,
 		saving,
 		templateId,
+		version,
 		awareness,
 		provider,
 		onsave,
@@ -116,6 +120,9 @@
 			<Badge class="bg-amber-100 text-amber-700" variant="secondary">
 				Draft
 			</Badge>
+		{/if}
+		{#if templateId && version !== undefined}
+			<TemplateVersionMenu {templateId} currentVersion={version} mode="canvas" />
 		{/if}
 		{#if provider}
 			<ConnectionStatus {provider} />

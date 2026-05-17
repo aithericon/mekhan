@@ -1,3 +1,4 @@
+mod apply;
 mod cancel;
 mod diff;
 mod doc_ops;
@@ -85,6 +86,15 @@ enum Commands {
         directory: String,
     },
 
+    /// GitOps: atomically version + publish a template from the local
+    /// git-authored artifact, recording git provenance. The local graph
+    /// REPLACES the chain head (no collaborative merge).
+    Apply {
+        /// Directory containing the template (defaults to current directory)
+        #[arg(default_value = ".")]
+        directory: String,
+    },
+
     /// Create a new workflow instance from a published template
     Run {
         /// Directory containing the template (defaults to current directory)
@@ -152,6 +162,7 @@ async fn main() -> anyhow::Result<()> {
         } => push::run(&cli.server, &directory, dry_run).await,
         Commands::Status { directory } => status::run(&cli.server, &directory).await,
         Commands::Publish { directory } => publish::run(&cli.server, &directory).await,
+        Commands::Apply { directory } => apply::run(&cli.server, &directory).await,
         Commands::Run { directory } => run::run(&cli.server, &directory).await,
         Commands::Instances { template } => {
             instances::run(&cli.server, template.as_deref()).await

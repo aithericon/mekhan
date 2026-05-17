@@ -34,6 +34,35 @@ export const showcaseGraph: WorkflowGraph = {
 			data: { type: 'scope', label: 'High-Value Review' }
 		},
 
+		// ── API-call trigger → Start (pass-through payload mapping) ──
+		// "API call" is the Manual source kind: fire via
+		// POST /api/triggers/{thisNodeId}/fire with a JSON body (or multipart
+		// with file parts). Pass-through means each Start field is filled from
+		// the same-named key in the fire payload; uploaded file parts auto-map
+		// onto file-kind fields.
+		//
+		// IMPORTANT: the trigger dispatcher registry is keyed *globally* by
+		// trigger node id (last-write-wins across all published templates), so
+		// a fixed slug here would collide. The id below is only a placeholder —
+		// `freshShowcaseGraph()` rewrites it to a unique value at every demo
+		// creation. Never publish this graph without going through that.
+		{
+			id: 'trigger-placeholder',
+			type: 'trigger',
+			position: { x: 40, y: 110 },
+			data: {
+				type: 'trigger',
+				label: 'API Call',
+				source: { kind: 'manual', form: [] },
+				concurrency: 'allow',
+				payloadMapping: [
+					{ targetField: 'invoice_file', expression: 'invoice_file' },
+					{ targetField: 'invoice_id', expression: 'invoice_id' }
+				],
+				enabled: true
+			}
+		},
+
 		// ── Row 1: Entry ──────────────────────────────────────
 		{
 			id: 'start',
@@ -85,7 +114,7 @@ export const showcaseGraph: WorkflowGraph = {
 						blocks: [
 							{
 								type: 'image',
-								url: '{{ invoice_file.url }}',
+								url: '/api/files/{{ invoice_file.key }}',
 								alt: 'Uploaded invoice',
 								caption: 'Original invoice document (uploaded at instance start)'
 							},
@@ -93,7 +122,7 @@ export const showcaseGraph: WorkflowGraph = {
 								type: 'download',
 								downloads: [
 									{
-										url: '{{ invoice_file.url }}',
+										url: '/api/files/{{ invoice_file.key }}',
 										filename: '{{ invoice_file.filename }}',
 										mime_type: '{{ invoice_file.content_type }}',
 										description: 'Original uploaded invoice'
@@ -326,6 +355,15 @@ export const showcaseGraph: WorkflowGraph = {
 	],
 
 	edges: [
+		// API Call trigger → Start (single outgoing edge; trigger is a
+		// dispatcher concern and is skipped during AIR compilation).
+		{
+			id: 'e-trigger-start',
+			source: 'trigger-placeholder',
+			target: 'start',
+			targetHandle: 'in',
+			type: 'sequence'
+		},
 		// Start → Review
 		{
 			id: 'e-start-review',
@@ -550,6 +588,32 @@ set_output("checked_at", "2024-01-01")
 };
 
 /**
+ * Deep-clone the seed graph and assign the trigger node a fresh, globally
+ * unique id (rewriting its outgoing edge to match).
+ *
+ * The trigger dispatcher registry is keyed solely by trigger node id and is
+ * last-write-wins across *all* published templates, so a fixed id baked into
+ * a shared seed would let one demo (or any template reusing the slug) hijack
+ * `/api/triggers/{id}/fire`. Minting the id at creation time keeps every demo
+ * instance's trigger isolated. The graph is pure JSON (the API wire shape),
+ * so a JSON round-trip is a safe, environment-agnostic deep clone.
+ */
+function freshShowcaseGraph(): WorkflowGraph {
+	const graph: WorkflowGraph = JSON.parse(JSON.stringify(showcaseGraph));
+	const triggerId = `trigger-${crypto.randomUUID()}`;
+	for (const node of graph.nodes) {
+		if (node.data?.type === 'trigger') {
+			const oldId = node.id;
+			node.id = triggerId;
+			for (const edge of graph.edges) {
+				if (edge.source === oldId) edge.source = triggerId;
+			}
+		}
+	}
+	return graph;
+}
+
+/**
  * Find the singleton "Invoice Processing Demo" template, creating it on first use.
  * The demo entry point uses this so every visit lands on the same shared template.
  */
@@ -562,7 +626,7 @@ export async function findOrCreateShowcaseTemplate(): Promise<Template> {
 	return createTemplate({
 		name: SHOWCASE_TEMPLATE_NAME,
 		description: SHOWCASE_TEMPLATE_DESCRIPTION,
-		graph: showcaseGraph,
+		graph: freshShowcaseGraph(),
 		files: showcaseFiles
 	});
 }

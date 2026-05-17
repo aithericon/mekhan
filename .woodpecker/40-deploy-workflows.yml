@@ -1,0 +1,35 @@
+# =============================================================================
+# GitOps workflow deploy — `mekhan apply` git-authored templates
+# =============================================================================
+# Gated: manual dispatch on main, or a version tag. NOT run on push/PR — this
+# mutates a live mekhan server. Builds the mekhan CLI and applies every
+# template directory under `workflows/`, atomically versioning + publishing
+# each chain from the committed git artifact with commit provenance recorded
+# in `workflow_templates.source_ref`.
+#
+# Target server: the `server_url` baked into each `.mekhan.json`.
+# Auth: the `mekhan_cli_token` Woodpecker secret (a Zitadel service-user
+# Personal Access Token) is exported as MEKHAN_CLI_TOKEN; the server
+# validates it via Zitadel RFC 7662 token introspection.
+# =============================================================================
+
+when:
+    - branch: main
+      event: manual
+    - event: tag
+
+labels:
+    "!host": titan
+    role: build
+
+steps:
+    - name: apply-workflows
+      image: 192.168.101.1:5000/nixos/nix:2.32.8
+      environment:
+          NIX_CONFIG: "experimental-features = nix-command flakes"
+          CARGO_HOME: /var/lib/ci-jobs/cache/cargo
+          MEKHAN_CLI_TOKEN:
+              from_secret: mekhan_cli_token
+      commands:
+          - nix develop --no-write-lock-file --command bash -lc 'just ci::apply-workflows'
+      depends_on: []

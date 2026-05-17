@@ -8,8 +8,13 @@ use tokio::net::TcpListener;
 
 pub mod mock_auth;
 pub mod test_infra;
+pub mod zitadel_live;
+pub mod zitadel_mock;
 pub use test_infra::{nats_url, postgres_url, wait_for_nats, wait_for_postgres, TestDb, TestNats};
 
+use mekhan_service::auth::authenticator::{Authenticator, NoopAuthenticator};
+use mekhan_service::auth::IntrospectionVerifier;
+use mekhan_service::auth::bff::session::{PgSessionStore, SessionStore};
 use mekhan_service::auth::dev::NoopTokenVerifier;
 use mekhan_service::auth::resolver::StaticPrincipalResolver;
 use mekhan_service::auth::{PrincipalResolver, TokenVerifier};
@@ -88,11 +93,12 @@ pub fn default_test_auth() -> (Arc<dyn TokenVerifier>, Arc<dyn PrincipalResolver
 }
 
 /// Build the full Axum Router wired to a test database, using a caller-supplied
-/// `TokenVerifier`. Lets a single test exercise the auth middleware against
-/// `MockTokenVerifier` while keeping the rest of `AppState` identical to
-/// production. The principal resolver stays the default.
-pub async fn test_app_with_verifier(
-    verifier: Arc<dyn TokenVerifier>,
+/// [`Authenticator`]. Lets a single test exercise the per-request auth seam
+/// (cookie present/absent/expired → 200/401) while keeping the rest of
+/// `AppState` identical to production. The token verifier / resolver stay the
+/// defaults (only the BFF callback path uses them).
+pub async fn test_app_with_authenticator(
+    authenticator: Arc<dyn Authenticator>,
 ) -> (Router, PgPool) {
     let db = create_test_db().await;
     let config = test_config();
@@ -103,6 +109,7 @@ pub async fn test_app_with_verifier(
     let yjs_persistence = YjsPersistence::new(db.clone());
     let yjs_manager = Arc::new(YjsManager::new(yjs_persistence));
     let artifact_store = Arc::new(ArtifactStore::new(&config.s3));
+    let session_store: Arc<dyn SessionStore> = Arc::new(PgSessionStore::new(db.clone()));
 
     let triggers = test_triggers(db.clone(), petri.clone(), nats.clone());
     let state = AppState {
@@ -115,8 +122,55 @@ pub async fn test_app_with_verifier(
         artifact_s3: None,
         catalogue_repo: Arc::new(PgCatalogueRepository::new(db.clone())),
         live: LiveBroadcasts::new(),
-        token_verifier: verifier,
+        authenticator,
+        session_store,
+        oidc: None,
+        token_verifier: Arc::new(NoopTokenVerifier::default()),
         principal_resolver: Arc::new(StaticPrincipalResolver),
+        introspection: None,
+        triggers,
+    };
+
+    let router = build_router(state);
+    (router, db)
+}
+
+/// Build the full Axum Router with a caller-supplied [`IntrospectionVerifier`]
+/// wired into `AppState.introspection` (the machine-PAT Bearer path). The
+/// cookie `Authenticator` is a mock that requires a cookie, so a request with
+/// no valid Bearer falls through and 401s — letting tests prove both the
+/// introspection success path and the fall-through.
+pub async fn test_app_with_introspection(
+    introspection: Arc<IntrospectionVerifier>,
+) -> (Router, PgPool) {
+    let db = create_test_db().await;
+    let config = test_config();
+    let petri = PetriClient::new(&config.petri_lab_url);
+    let nats = MekhanNats::connect(&config.nats_url, None)
+        .await
+        .expect("failed to connect to NATS — run test infra");
+    let yjs_persistence = YjsPersistence::new(db.clone());
+    let yjs_manager = Arc::new(YjsManager::new(yjs_persistence));
+    let artifact_store = Arc::new(ArtifactStore::new(&config.s3));
+    let session_store: Arc<dyn SessionStore> = Arc::new(PgSessionStore::new(db.clone()));
+
+    let triggers = test_triggers(db.clone(), petri.clone(), nats.clone());
+    let state = AppState {
+        db: db.clone(),
+        petri,
+        nats,
+        config: config.clone(),
+        yjs: yjs_manager,
+        s3: artifact_store,
+        artifact_s3: None,
+        catalogue_repo: Arc::new(PgCatalogueRepository::new(db.clone())),
+        live: LiveBroadcasts::new(),
+        authenticator: Arc::new(mock_auth::MockAuthenticator::cookie_required("cookie-user")),
+        session_store,
+        oidc: None,
+        token_verifier: Arc::new(NoopTokenVerifier::default()),
+        principal_resolver: Arc::new(StaticPrincipalResolver),
+        introspection: Some(introspection),
         triggers,
     };
 
@@ -141,6 +195,7 @@ pub async fn test_app() -> (Router, PgPool) {
     let yjs_persistence = YjsPersistence::new(db.clone());
     let yjs_manager = Arc::new(YjsManager::new(yjs_persistence));
     let artifact_store = Arc::new(ArtifactStore::new(&config.s3));
+    let session_store: Arc<dyn SessionStore> = Arc::new(PgSessionStore::new(db.clone()));
 
     let triggers = test_triggers(db.clone(), petri.clone(), nats.clone());
     let state = AppState {
@@ -153,8 +208,12 @@ pub async fn test_app() -> (Router, PgPool) {
         artifact_s3: None,
         catalogue_repo: Arc::new(PgCatalogueRepository::new(db.clone())),
         live: LiveBroadcasts::new(),
+        authenticator: Arc::new(NoopAuthenticator::default()),
+        session_store,
+        oidc: None,
         token_verifier: Arc::new(NoopTokenVerifier::default()),
         principal_resolver: Arc::new(StaticPrincipalResolver),
+        introspection: None,
         triggers,
     };
 
@@ -178,6 +237,7 @@ pub async fn test_app_with_nats(nats_url: &str) -> (Router, PgPool) {
     let yjs_persistence = YjsPersistence::new(db.clone());
     let yjs_manager = Arc::new(YjsManager::new(yjs_persistence));
     let artifact_store = Arc::new(ArtifactStore::new(&config.s3));
+    let session_store: Arc<dyn SessionStore> = Arc::new(PgSessionStore::new(db.clone()));
 
     let triggers = test_triggers(db.clone(), petri.clone(), nats.clone());
     let state = AppState {
@@ -190,8 +250,12 @@ pub async fn test_app_with_nats(nats_url: &str) -> (Router, PgPool) {
         artifact_s3: None,
         catalogue_repo: Arc::new(PgCatalogueRepository::new(db.clone())),
         live: LiveBroadcasts::new(),
+        authenticator: Arc::new(NoopAuthenticator::default()),
+        session_store,
+        oidc: None,
         token_verifier: Arc::new(NoopTokenVerifier::default()),
         principal_resolver: Arc::new(StaticPrincipalResolver),
+        introspection: None,
         triggers,
     };
 
@@ -217,6 +281,7 @@ pub async fn test_app_with_petri_url(nats_url: &str, petri_url: &str) -> (Router
     let yjs_persistence = YjsPersistence::new(db.clone());
     let yjs_manager = Arc::new(YjsManager::new(yjs_persistence));
     let artifact_store = Arc::new(ArtifactStore::new(&config.s3));
+    let session_store: Arc<dyn SessionStore> = Arc::new(PgSessionStore::new(db.clone()));
 
     let triggers = test_triggers(db.clone(), petri.clone(), nats.clone());
     let state = AppState {
@@ -229,8 +294,12 @@ pub async fn test_app_with_petri_url(nats_url: &str, petri_url: &str) -> (Router
         artifact_s3: None,
         catalogue_repo: Arc::new(PgCatalogueRepository::new(db.clone())),
         live: LiveBroadcasts::new(),
+        authenticator: Arc::new(NoopAuthenticator::default()),
+        session_store,
+        oidc: None,
         token_verifier: Arc::new(NoopTokenVerifier::default()),
         principal_resolver: Arc::new(StaticPrincipalResolver),
+        introspection: None,
         triggers,
     };
 

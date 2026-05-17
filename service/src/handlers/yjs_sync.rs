@@ -3,14 +3,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use axum::{
     extract::{
         ws::{Message, WebSocket},
-        Path, Query, State, WebSocketUpgrade,
+        Path, State, WebSocketUpgrade,
     },
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::IntoResponse,
     Json,
 };
+use axum_extra::extract::cookie::CookieJar;
 use futures::{SinkExt, StreamExt};
-use serde::Deserialize;
 use serde_json::json;
 use tokio::sync::mpsc;
 use uuid::Uuid;
@@ -21,42 +21,24 @@ use crate::AppState;
 /// Global client ID counter for uniquely identifying WebSocket connections.
 static NEXT_CLIENT_ID: AtomicU64 = AtomicU64::new(1);
 
-#[derive(Debug, Deserialize)]
-pub struct YjsAuthQuery {
-    /// Bearer token (same JWT used on HTTP routes). Browsers can't send the
-    /// Authorization header on WS upgrades, so it's threaded through the query
-    /// string. Validated against the same [`crate::auth::TokenVerifier`] port.
-    #[serde(default)]
-    pub token: Option<String>,
-}
-
 /// GET /api/yjs/{template_id} -> WebSocket upgrade
 pub async fn ws_handler(
     ws: WebSocketUpgrade,
     Path(template_id): Path<Uuid>,
-    Query(auth): Query<YjsAuthQuery>,
+    headers: HeaderMap,
+    jar: CookieJar,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    // Pass the (possibly empty) token to the verifier and let the adapter
-    // decide — matches the HTTP middleware contract so tests with the noop
-    // verifier work without a token while real Zitadel deployments reject.
-    let token = auth.token.as_deref().unwrap_or("");
-    let claims = match state.token_verifier.verify(token).await {
-        Ok(claims) => claims,
-        Err(e) => {
-            tracing::debug!(template_id = %template_id, "yjs ws token rejected: {e}");
-            return (
-                StatusCode::FORBIDDEN,
-                Json(json!({"error": "invalid token"})),
-            )
-                .into_response();
-        }
-    };
-    if let Err(e) = state.principal_resolver.resolve(claims).await {
-        tracing::debug!(template_id = %template_id, "yjs ws resolver rejected: {e}");
+    // Authenticate the upgrade via the same `mekhan_session` HttpOnly cookie
+    // that gates the HTTP API. Browsers can't set an Authorization header on a
+    // WS upgrade, but the same-origin cookie rides it automatically — no
+    // `?token=` query param needed. Goes through the same `Authenticator` so
+    // dev_noop accepts unauthenticated and bff requires a valid session.
+    if let Err(e) = state.authenticator.authenticate(&headers, &jar).await {
+        tracing::debug!(template_id = %template_id, "yjs ws auth rejected: {e}");
         return (
             StatusCode::FORBIDDEN,
-            Json(json!({"error": "invalid principal"})),
+            Json(json!({"error": "unauthenticated"})),
         )
             .into_response();
     }

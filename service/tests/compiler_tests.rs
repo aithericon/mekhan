@@ -4,9 +4,9 @@
 
 use mekhan_service::compiler::compile_to_air;
 use mekhan_service::models::template::{
-    BranchCondition, ExecutionBackendType, ExecutionSpecConfig, Port, Position, TaskBlockConfig,
-    TaskFieldConfig, TaskFieldKind, TaskStepConfig, WorkflowEdge, WorkflowGraph, WorkflowNode,
-    WorkflowNodeData,
+    BranchCondition, ExecutionBackendType, ExecutionSpecConfig, PhaseUpdateStatus, Port, Position,
+    TaskBlockConfig, TaskFieldConfig, TaskFieldKind, TaskStepConfig, WorkflowEdge, WorkflowGraph,
+    WorkflowNode, WorkflowNodeData,
 };
 use serde_json::{json, Value};
 
@@ -2478,5 +2478,623 @@ fn trigger_cron_invalid_timezone_fails() {
     assert!(
         err.to_string().contains("invalid timezone"),
         "unexpected error: {err}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Start file-upload inputs → injected catalogue-registration chain
+// ---------------------------------------------------------------------------
+
+/// Build a Start whose `initial` port carries the given fields (kind chosen by
+/// caller) and an optional process-name template.
+fn start_node_with_fields(
+    id: &str,
+    fields: &[(&str, mekhan_service::models::template::FieldKind)],
+    process_name: Option<&str>,
+) -> WorkflowNode {
+    use mekhan_service::models::template::PortField;
+    WorkflowNode {
+        id: id.to_string(),
+        node_type: "start".to_string(),
+        position: pos(),
+        data: WorkflowNodeData::Start {
+            label: "Start".to_string(),
+            description: None,
+            initial: Port {
+                id: "in".to_string(),
+                label: "Input".to_string(),
+                fields: fields
+                    .iter()
+                    .map(|(name, kind)| PortField {
+                        name: name.to_string(),
+                        label: name.to_string(),
+                        kind: *kind,
+                        required: true,
+                        options: None,
+                        description: None,
+                        accept: None,
+                    })
+                    .collect(),
+            },
+            process_name: process_name.map(str::to_string),
+        },
+        parent_id: None,
+        width: None,
+        height: None,
+    }
+}
+
+#[test]
+fn start_file_field_emits_catalogue_chain() {
+    use mekhan_service::models::template::FieldKind;
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node_with_fields("s", &[("doc", FieldKind::File)], None),
+            end_node("e"),
+        ],
+        edges: vec![edge("e1", "s", "e")],
+        viewport: None,
+    };
+    let air = compile_to_air(&graph, "cat", "", &std::collections::HashMap::new())
+        .expect("should compile");
+
+    // Topology: shape → submit → (executor lifecycle) → fold/degrade → reg.
+    assert!(has_transition(&air, "t_s_cat_shape_0"), "missing shape transition");
+    assert!(has_transition(&air, "t_s_fmeta_submit_0"), "missing fmeta submit");
+    assert!(has_transition(&air, "t_s_fmeta_fold_0"), "missing fmeta fold");
+    assert!(has_transition(&air, "t_s_fmeta_degrade_0"), "missing fmeta degrade");
+    assert!(has_transition(&air, "t_s_fmeta_dl_0"), "missing fmeta dead-letter");
+    assert!(has_transition(&air, "t_s_cat_reg_0"), "missing register transition");
+    // The executor lifecycle is reused and scoped under "s_fmeta_0".
+    assert!(
+        has_transition(&air, "s_fmeta_0/submit"),
+        "missing scoped executor lifecycle (s_fmeta_0/submit)"
+    );
+
+    assert!(has_place(&air, "p_s_cat_desc_0"), "missing descriptor place");
+    assert!(has_place(&air, "p_s_cat_art_0"), "missing artifact place");
+    assert!(has_place(&air, "p_s_cat_out_0"), "missing pass-through place");
+    assert!(has_place(&air, "p_s_cat_done_0"), "missing parked output place");
+    assert!(has_place(&air, "p_s_fmeta_inbox_0"), "missing fmeta inbox place");
+    assert!(has_place(&air, "p_s_fmeta_result_0"), "missing fmeta result place");
+    assert!(has_place(&air, "p_s_fmeta_fail_0"), "missing fmeta failure place");
+    assert!(has_place(&air, "p_s_fmeta_park_0"), "missing fmeta park place");
+
+    let reg = serde_json::to_string(get_transition(&air, "t_s_cat_reg_0").unwrap()).unwrap();
+    assert!(
+        reg.contains("catalogue_register"),
+        "register transition is not a catalogue_register effect: {reg}"
+    );
+
+    // Shape now emits a flat descriptor (no nested `detail`, no `category`);
+    // those move to the fold/degrade folds.
+    let shape = serde_json::to_string(get_transition(&air, "t_s_cat_shape_0").unwrap()).unwrap();
+    for needle in ["doc", "artifact_id", "storage_path", "_instance_id"] {
+        assert!(
+            shape.contains(needle),
+            "shape logic missing {needle:?}: {shape}"
+        );
+    }
+
+    // Submit builds a FileOps `probe` job (no inline storage → executor
+    // default store).
+    let submit = serde_json::to_string(get_transition(&air, "t_s_fmeta_submit_0").unwrap()).unwrap();
+    for needle in ["file_ops", "probe", "storage_path", "execution_id"] {
+        assert!(submit.contains(needle), "submit logic missing {needle:?}: {submit}");
+    }
+
+    // Success fold merges the extracted metadata; degrade does not.
+    let fold = serde_json::to_string(get_transition(&air, "t_s_fmeta_fold_0").unwrap()).unwrap();
+    assert!(
+        fold.contains("file_metadata") && fold.contains("res.detail.outputs.metadata"),
+        "fold should merge fmeta into file_metadata: {fold}"
+    );
+    let degrade =
+        serde_json::to_string(get_transition(&air, "t_s_fmeta_degrade_0").unwrap()).unwrap();
+    assert!(
+        !degrade.contains("file_metadata"),
+        "degrade must register WITHOUT file_metadata: {degrade}"
+    );
+    // Both folds correlate the parked descriptor by job_id.
+    assert!(
+        fold.contains("job_id") && degrade.contains("job_id"),
+        "fold/degrade must correlate on job_id"
+    );
+}
+
+#[test]
+fn start_multiple_file_fields_chain_in_order() {
+    use mekhan_service::models::template::FieldKind;
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node_with_fields(
+                "s",
+                &[("a", FieldKind::File), ("b", FieldKind::File)],
+                None,
+            ),
+            end_node("e"),
+        ],
+        edges: vec![edge("e1", "s", "e")],
+        viewport: None,
+    };
+    let air = compile_to_air(&graph, "cat2", "", &std::collections::HashMap::new())
+        .expect("should compile");
+
+    assert!(has_transition(&air, "t_s_cat_reg_0"));
+    assert!(has_transition(&air, "t_s_cat_reg_1"));
+    assert!(has_transition(&air, "t_s_cat_shape_1"));
+    assert!(has_place(&air, "p_s_cat_out_0"));
+
+    // The second segment's shape transition consumes the first segment's
+    // pass-through place — i.e. the segments are chained in order.
+    let shape1 = serde_json::to_string(get_transition(&air, "t_s_cat_shape_1").unwrap()).unwrap();
+    assert!(
+        shape1.contains("p_s_cat_out_0"),
+        "second shape should consume p_s_cat_out_0: {shape1}"
+    );
+
+    // Each segment gets its own scoped, non-colliding executor lifecycle.
+    assert!(has_transition(&air, "s_fmeta_0/submit"), "missing lifecycle 0");
+    assert!(has_transition(&air, "s_fmeta_1/submit"), "missing lifecycle 1");
+    assert!(has_place(&air, "p_s_fmeta_park_0") && has_place(&air, "p_s_fmeta_park_1"));
+}
+
+#[test]
+fn start_file_field_with_process_name_chains_after_process_start() {
+    use mekhan_service::models::template::FieldKind;
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node_with_fields("s", &[("doc", FieldKind::File)], Some("Run")),
+            end_node("e"),
+        ],
+        edges: vec![edge("e1", "s", "e")],
+        viewport: None,
+    };
+    let air = compile_to_air(&graph, "catpn", "", &std::collections::HashMap::new())
+        .expect("should compile");
+
+    // Both the process-start chain and the catalogue chain exist…
+    assert!(has_transition(&air, "t_s_proc_start"), "missing process_start");
+    assert!(has_transition(&air, "t_s_cat_shape_0"), "missing catalogue chain");
+
+    // …and the catalogue chain sits *after* process_start: its shape
+    // transition consumes the process chain's output place, not p_s_ready.
+    let shape = serde_json::to_string(get_transition(&air, "t_s_cat_shape_0").unwrap()).unwrap();
+    assert!(
+        shape.contains("p_s_ready_out"),
+        "catalogue chain should consume the process-start output place: {shape}"
+    );
+}
+
+#[test]
+fn start_no_file_fields_leaves_compiled_output_unchanged() {
+    use mekhan_service::models::template::FieldKind;
+    // A non-file Start declares typed inputs but no file uploads → no
+    // synthetic catalogue nodes, and the Start→End pass-through still merges
+    // to a single terminal place with zero transitions (identical to the
+    // baseline `start_to_end_produces_terminal_place`).
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node_with_fields("s", &[("note", FieldKind::Text)], None),
+            end_node("e"),
+        ],
+        edges: vec![edge("e1", "s", "e")],
+        viewport: None,
+    };
+    let air = compile_to_air(&graph, "nofile", "", &std::collections::HashMap::new())
+        .expect("should compile");
+
+    assert!(!has_transition(&air, "t_s_cat_shape_0"), "unexpected catalogue chain");
+    assert!(!has_place(&air, "p_s_cat_art_0"), "unexpected artifact place");
+    assert_eq!(places(&air).len(), 1, "expected 1 place after merge");
+    assert!(transitions(&air).is_empty(), "expected no transitions after merge");
+}
+
+// ---------------------------------------------------------------------------
+// Process control nodes: Phase Update / Progress Update
+// ---------------------------------------------------------------------------
+
+fn phase_update_node(
+    id: &str,
+    phase_name: &str,
+    status: PhaseUpdateStatus,
+    message: Option<&str>,
+) -> WorkflowNode {
+    WorkflowNode {
+        id: id.to_string(),
+        node_type: "phase_update".to_string(),
+        position: pos(),
+        data: WorkflowNodeData::PhaseUpdate {
+            label: "Phase".to_string(),
+            description: None,
+            phase_name: phase_name.to_string(),
+            status,
+            message: message.map(str::to_string),
+        },
+        parent_id: None,
+        width: None,
+        height: None,
+    }
+}
+
+fn progress_update_node(
+    id: &str,
+    fraction: f64,
+    message: Option<&str>,
+    current_step: Option<i64>,
+    total_steps: Option<i64>,
+) -> WorkflowNode {
+    WorkflowNode {
+        id: id.to_string(),
+        node_type: "progress_update".to_string(),
+        position: pos(),
+        data: WorkflowNodeData::ProgressUpdate {
+            label: "Progress".to_string(),
+            description: None,
+            fraction,
+            message: message.map(str::to_string),
+            current_step,
+            total_steps,
+        },
+        parent_id: None,
+        width: None,
+        height: None,
+    }
+}
+
+#[test]
+fn phase_update_emits_log_message_phase_shape() {
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            phase_update_node("pu", "Validate", PhaseUpdateStatus::Running, None),
+            end_node("e"),
+        ],
+        edges: vec![edge("e1", "s", "pu"), edge("e2", "pu", "e")],
+        viewport: None,
+    };
+    let air = compile_to_air(&graph, "pu_test", "", &std::collections::HashMap::new())
+        .expect("should compile");
+
+    assert!(has_transition(&air, "t_pu_pu_shape"), "expected shape transition");
+    assert!(has_transition(&air, "t_pu_pu_emit"), "expected effect transition");
+    assert!(has_place(&air, "p_pu_pu_out"), "expected pass-through output place");
+    assert!(has_place(&air, "p_pu_pu_sig"), "expected breadcrumb place");
+    assert!(has_place(&air, "p_pu_pu_done"), "expected logged sink place");
+
+    let t_emit = get_transition(&air, "t_pu_pu_emit").unwrap();
+    assert_eq!(t_emit["logic"]["handler_id"], "process_log_message");
+
+    let shape = get_transition(&air, "t_pu_pu_shape").unwrap();
+    let src = shape["logic"]["source"].as_str().unwrap();
+    assert!(src.contains("executor-phase"), "phase source marker: {src}");
+    assert!(src.contains("phase_changed"), "event_type marker: {src}");
+    assert!(src.contains("\"running\""), "status literal: {src}");
+    assert!(src.contains("Validate"), "phase name literal: {src}");
+    // workflow token forwarded unchanged on `out`
+    assert!(src.contains("out: input"), "token pass-through: {src}");
+    // static phase name → no null-safe accessor / helper prelude
+    assert!(!src.contains("__pluck("), "no interpolation expected: {src}");
+}
+
+#[test]
+fn progress_update_emits_metric_progress_fraction() {
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            progress_update_node("pg", 0.5, None, Some(2), Some(5)),
+            end_node("e"),
+        ],
+        edges: vec![edge("e1", "s", "pg"), edge("e2", "pg", "e")],
+        viewport: None,
+    };
+    let air = compile_to_air(&graph, "pg_test", "", &std::collections::HashMap::new())
+        .expect("should compile");
+
+    assert!(has_transition(&air, "t_pg_pu_shape"), "expected shape transition");
+    assert!(has_transition(&air, "t_pg_pu_emit"), "expected effect transition");
+
+    let t_emit = get_transition(&air, "t_pg_pu_emit").unwrap();
+    assert_eq!(t_emit["logic"]["handler_id"], "process_log_metric");
+
+    let shape = get_transition(&air, "t_pg_pu_shape").unwrap();
+    let src = shape["logic"]["source"].as_str().unwrap();
+    assert!(src.contains("progress_fraction"), "metric key: {src}");
+    assert!(src.contains("value: 0.5"), "fraction float literal: {src}");
+    assert!(src.contains("current_step: 2"), "current_step: {src}");
+    assert!(src.contains("total_steps: 5"), "total_steps: {src}");
+    assert!(src.contains("out: input"), "token pass-through: {src}");
+}
+
+#[test]
+fn phase_update_interpolates_message_null_safe() {
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            phase_update_node(
+                "pu",
+                "Step {{ stage }}",
+                PhaseUpdateStatus::Completed,
+                Some("processing {{ item }}"),
+            ),
+            end_node("e"),
+        ],
+        edges: vec![edge("e1", "s", "pu"), edge("e2", "pu", "e")],
+        viewport: None,
+    };
+    let air = compile_to_air(&graph, "pu_interp", "", &std::collections::HashMap::new())
+        .expect("should compile");
+
+    let shape = get_transition(&air, "t_pu_pu_shape").unwrap();
+    let src = shape["logic"]["source"].as_str().unwrap();
+    // placeholders compile to the null-safe accessor + helper prelude
+    assert!(src.contains("fn __pluck("), "PLUCK_HELPER prelude expected: {src}");
+    assert!(
+        src.contains("__pluck(input, [\"stage\"])"),
+        "phase name placeholder accessor: {src}"
+    );
+    assert!(
+        src.contains("__pluck(input, [\"item\"])"),
+        "message placeholder accessor: {src}"
+    );
+    assert!(src.contains("\"completed\""), "status literal: {src}");
+}
+
+#[test]
+fn process_control_nodes_pass_token_through_to_end() {
+    // A Start→PhaseUpdate→ProgressUpdate→End chain must remain connected:
+    // each node's `out` place feeds the next, and the net still reaches a
+    // terminal place (the nodes are pass-through, not terminal).
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            phase_update_node("pu", "Ingest", PhaseUpdateStatus::Running, None),
+            progress_update_node("pg", 1.0, None, None, None),
+            end_node("e"),
+        ],
+        edges: vec![
+            edge("e1", "s", "pu"),
+            edge("e2", "pu", "pg"),
+            edge("e3", "pg", "e"),
+        ],
+        viewport: None,
+    };
+    let air = compile_to_air(&graph, "chain", "", &std::collections::HashMap::new())
+        .expect("should compile");
+
+    assert!(has_transition(&air, "t_pu_pu_shape"));
+    assert!(has_transition(&air, "t_pg_pu_shape"));
+    assert!(
+        has_place_of_type(&air, "terminal"),
+        "chain should still reach a terminal place"
+    );
+    // fraction 1.0 must serialize with a decimal point so Rhai treats it as
+    // a float matching `value.as_f64()` on the consumer side.
+    let pg = get_transition(&air, "t_pg_pu_shape").unwrap();
+    let src = pg["logic"]["source"].as_str().unwrap();
+    assert!(src.contains("value: 1.0"), "float-typed fraction: {src}");
+}
+
+#[test]
+fn phase_update_status_failed_and_skipped_literals() {
+    // Risk #3 in the plan: the status field MUST serialize to the exact
+    // PhaseStatus snake_case literal or `record_phase_event` silently
+    // defaults to "running". `running`/`completed` are covered above; this
+    // guards the other half of the enum.
+    for (status, lit) in [
+        (PhaseUpdateStatus::Failed, "failed"),
+        (PhaseUpdateStatus::Skipped, "skipped"),
+    ] {
+        let graph = WorkflowGraph {
+            nodes: vec![
+                start_node("s"),
+                phase_update_node("pu", "Validate", status, None),
+                end_node("e"),
+            ],
+            edges: vec![edge("e1", "s", "pu"), edge("e2", "pu", "e")],
+            viewport: None,
+        };
+        let air = compile_to_air(&graph, "pu_status", "", &std::collections::HashMap::new())
+            .expect("should compile");
+        let shape = get_transition(&air, "t_pu_pu_shape").unwrap();
+        let src = shape["logic"]["source"].as_str().unwrap();
+        assert!(
+            src.contains(&format!("status: \"{lit}\"")),
+            "expected status literal {lit:?}: {src}"
+        );
+        assert!(
+            !src.contains("\"running\""),
+            "status must not fall back to running for {lit:?}: {src}"
+        );
+    }
+}
+
+#[test]
+fn phase_update_omits_message_field_when_unset() {
+    // No message ⇒ neither the top-level `message:` (read by record_log_event)
+    // nor the `detail.message` key is emitted, so the consumer sees no
+    // spurious null/() message.
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            phase_update_node("pu", "Validate", PhaseUpdateStatus::Running, None),
+            end_node("e"),
+        ],
+        edges: vec![edge("e1", "s", "pu"), edge("e2", "pu", "e")],
+        viewport: None,
+    };
+    let air = compile_to_air(&graph, "pu_nomsg", "", &std::collections::HashMap::new())
+        .expect("should compile");
+    let shape = get_transition(&air, "t_pu_pu_shape").unwrap();
+    let src = shape["logic"]["source"].as_str().unwrap();
+    assert!(
+        !src.contains("message:"),
+        "no message key expected when message unset: {src}"
+    );
+}
+
+#[test]
+fn progress_update_interpolates_message_into_detail() {
+    // ProgressUpdate's message goes through a *different* compiler arm than
+    // PhaseUpdate's and lands under `detail` (where record_progress_event
+    // reads it), not at the top level.
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            progress_update_node("pg", 0.25, Some("rows {{ n }}"), None, None),
+            end_node("e"),
+        ],
+        edges: vec![edge("e1", "s", "pg"), edge("e2", "pg", "e")],
+        viewport: None,
+    };
+    let air = compile_to_air(&graph, "pg_interp", "", &std::collections::HashMap::new())
+        .expect("should compile");
+    let shape = get_transition(&air, "t_pg_pu_shape").unwrap();
+    let src = shape["logic"]["source"].as_str().unwrap();
+    assert!(src.contains("fn __pluck("), "PLUCK_HELPER prelude expected: {src}");
+    assert!(
+        src.contains("__pluck(input, [\"n\"])"),
+        "message placeholder accessor: {src}"
+    );
+    assert!(
+        src.contains("detail: #{ message: __mg"),
+        "interpolated message must sit inside `detail`: {src}"
+    );
+}
+
+#[test]
+fn progress_update_defaults_steps_to_zero() {
+    // Absent current/total steps default to literal 0 (record_progress_event
+    // reads detail.current_step/total_steps); no message ⇒ no detail.message
+    // and no helper prelude.
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            progress_update_node("pg", 0.0, None, None, None),
+            end_node("e"),
+        ],
+        edges: vec![edge("e1", "s", "pg"), edge("e2", "pg", "e")],
+        viewport: None,
+    };
+    let air = compile_to_air(&graph, "pg_defaults", "", &std::collections::HashMap::new())
+        .expect("should compile");
+    let shape = get_transition(&air, "t_pg_pu_shape").unwrap();
+    let src = shape["logic"]["source"].as_str().unwrap();
+    assert!(src.contains("current_step: 0"), "default current_step: {src}");
+    assert!(src.contains("total_steps: 0"), "default total_steps: {src}");
+    assert!(!src.contains("message:"), "no message key expected: {src}");
+    assert!(!src.contains("__pluck("), "no interpolation expected: {src}");
+}
+
+fn failure_node(id: &str, message: Option<&str>) -> WorkflowNode {
+    WorkflowNode {
+        id: id.to_string(),
+        node_type: "failure".to_string(),
+        position: pos(),
+        data: WorkflowNodeData::Failure {
+            label: "Failure".to_string(),
+            description: None,
+            failure_message: message.map(str::to_string),
+        },
+        parent_id: None,
+        width: None,
+        height: None,
+    }
+}
+
+#[test]
+fn failure_emits_process_fail_passthrough() {
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            failure_node("f", Some("boom")),
+            end_node("e"),
+        ],
+        edges: vec![edge("e1", "s", "f"), edge("e2", "f", "e")],
+        viewport: None,
+    };
+    let air = compile_to_air(&graph, "fail_test", "", &std::collections::HashMap::new())
+        .expect("should compile");
+
+    assert!(has_transition(&air, "t_f_fail_shape"), "expected shape transition");
+    assert!(has_transition(&air, "t_f_fail_emit"), "expected effect transition");
+    assert!(has_place(&air, "p_f_fail_out"), "expected pass-through output place");
+    assert!(has_place(&air, "p_f_fail_sig"), "expected breadcrumb place");
+    assert!(has_place(&air, "p_f_fail_done"), "expected failed sink place");
+
+    let t_emit = get_transition(&air, "t_f_fail_emit").unwrap();
+    assert_eq!(t_emit["logic"]["handler_id"], "process_fail");
+
+    let shape = get_transition(&air, "t_f_fail_shape").unwrap();
+    let src = shape["logic"]["source"].as_str().unwrap();
+    assert!(src.contains("out: input"), "token pass-through: {src}");
+    assert!(src.contains("fail: #{ reason:"), "reason breadcrumb: {src}");
+    assert!(src.contains("boom"), "message literal: {src}");
+    assert!(!src.contains("__pluck("), "no interpolation expected: {src}");
+}
+
+#[test]
+fn failure_interpolates_message_null_safe() {
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            failure_node("f", Some("failed at {{ stage }}")),
+            end_node("e"),
+        ],
+        edges: vec![edge("e1", "s", "f"), edge("e2", "f", "e")],
+        viewport: None,
+    };
+    let air = compile_to_air(&graph, "fail_interp", "", &std::collections::HashMap::new())
+        .expect("should compile");
+    let shape = get_transition(&air, "t_f_fail_shape").unwrap();
+    let src = shape["logic"]["source"].as_str().unwrap();
+    assert!(src.contains("fn __pluck("), "PLUCK_HELPER prelude expected: {src}");
+    assert!(
+        src.contains("__pluck(input, [\"stage\"])"),
+        "message placeholder accessor: {src}"
+    );
+    assert!(src.contains("reason: __fm"), "reason bound to message local: {src}");
+}
+
+#[test]
+fn failure_omits_reason_when_unset() {
+    // No failureMessage ⇒ empty string literal reason, no helper prelude.
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            failure_node("f", None),
+            end_node("e"),
+        ],
+        edges: vec![edge("e1", "s", "f"), edge("e2", "f", "e")],
+        viewport: None,
+    };
+    let air = compile_to_air(&graph, "fail_nomsg", "", &std::collections::HashMap::new())
+        .expect("should compile");
+    let shape = get_transition(&air, "t_f_fail_shape").unwrap();
+    let src = shape["logic"]["source"].as_str().unwrap();
+    assert!(src.contains("reason: \"\""), "empty reason literal: {src}");
+    assert!(!src.contains("__fm"), "no message local when unset: {src}");
+    assert!(!src.contains("__pluck("), "no interpolation expected: {src}");
+}
+
+#[test]
+fn failure_passes_token_through_to_end() {
+    // Core design guarantee: a Failure node is pass-through, NOT terminal —
+    // the net still reaches its End after marking the process failed.
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            failure_node("f", Some("nope")),
+            end_node("e"),
+        ],
+        edges: vec![edge("e1", "s", "f"), edge("e2", "f", "e")],
+        viewport: None,
+    };
+    let air = compile_to_air(&graph, "fail_chain", "", &std::collections::HashMap::new())
+        .expect("should compile");
+    assert!(has_transition(&air, "t_f_fail_shape"));
+    assert!(
+        has_place_of_type(&air, "terminal"),
+        "chain with a Failure node should still reach a terminal place"
     );
 }

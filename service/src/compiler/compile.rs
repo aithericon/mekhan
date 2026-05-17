@@ -1,6 +1,6 @@
 use crate::models::template::{
-    BackoffKind, MergeStrategy, RetryPolicy, WorkflowEdge, WorkflowGraph, WorkflowNode,
-    WorkflowNodeData,
+    BackoffKind, MergeStrategy, PhaseUpdateStatus, RetryPolicy, WorkflowEdge, WorkflowGraph,
+    WorkflowNode, WorkflowNodeData,
 };
 use aithericon_executor_domain::InputSource;
 use aithericon_sdk::components::executor_lifecycle::{executor_lifecycle, ExecutorBridges};
@@ -1280,29 +1280,23 @@ fn expand_node(
     let id = &node.id;
 
     match &node.data {
-        WorkflowNodeData::Start { label, process_name, .. } => {
+        WorkflowNodeData::Start { label, process_name, initial, .. } => {
             // Initial tokens are seeded per-Start at instance creation time by
             // `parameterize_air` into `p_{id}_ready` (it strips the `_ready`
             // suffix to find the place). That place id must stay stable.
             let place_id = format!("p_{id}_ready");
             let ready: PlaceHandle<DynamicToken> = ctx.state(&place_id, label);
 
-            match process_name
+            // Head of the Start's output chain *before* any artifact
+            // registration: the bare ready place, or the tail of the optional
+            // process-registration chain.
+            let head: PlaceHandle<DynamicToken> = match process_name
                 .as_deref()
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
             {
                 // Default: single-place Start, no process registration.
-                None => {
-                    ports.insert(
-                        id.clone(),
-                        NodePorts {
-                            input_place: ready.clone(),
-                            output_places: vec![(None, ready)],
-                            input_places: HashMap::new(),
-                        },
-                    );
-                }
+                None => ready.clone(),
                 // Opt-in: derive a per-instance process name from the Start
                 // inputs and register a named HPI process via the
                 // `process_start` effect. The causality projector
@@ -1316,15 +1310,26 @@ fn expand_node(
                     let named: PlaceHandle<DynamicToken> =
                         ctx.state(format!("p_{id}_named"), format!("{label} - Named"));
                     let name_expr = interpolate_to_rhai_expr(tpl);
+                    let prelude = if name_expr.contains("__pluck(") {
+                        PLUCK_HELPER
+                    } else {
+                        ""
+                    };
                     ctx.transition(
                         format!("t_{id}_proc_name"),
                         format!("{label} - Derive Process Name"),
                     )
                     .auto_input("input", &ready)
                     .auto_output("output", &named)
-                    .logic(format!(
-                        "let d = input; d._process_name = {name_expr}; #{{ output: d }}"
-                    ));
+                    // `.logic_rhai` (not `.logic`): the builder's inline
+                    // validator doesn't model `fn` parameters, so the
+                    // `__pluck` helper's params read as undefined. Same path
+                    // `wire_edge`/ParallelJoin already use for helper-fn
+                    // scripts; the engine still parses it at scenario load.
+                    .logic_rhai(format!(
+                        "{prelude}let d = input; d._process_name = {name_expr}; #{{ output: d }}"
+                    ))
+                    .done();
 
                     // 2. process_start effect: register the process. The
                     //    handler reads the name from `_process_name`
@@ -1356,16 +1361,276 @@ fn expand_node(
                     // → every End node can complete it independently).
                     fixups.process_token_place = Some(proc_sink.clone());
 
-                    ports.insert(
-                        id.clone(),
-                        NodePorts {
-                            input_place: ready,
-                            output_places: vec![(None, proc_out)],
-                            input_places: HashMap::new(),
+                    proc_out
+                }
+            };
+
+            // Artifact registration: iff the Start declares ≥1 file-upload
+            // input, insert a synthetic chain between the Start (post
+            // process-start) and the rest of the graph that registers each
+            // uploaded file into the catalogue. One segment per file field;
+            // a Rhai "shape" transition passes the workflow token through
+            // unchanged on `pass` and emits a per-file artifact token on
+            // `artifact` (only when the file is actually present), which a
+            // reused `catalogue_register` effect consumes (its output is
+            // parked, like the process_start `process` sink). With no file
+            // inputs nothing is emitted and the compiled output is identical.
+            let file_fields: Vec<&str> = initial
+                .fields
+                .iter()
+                .filter(|f| f.kind == crate::models::template::FieldKind::File)
+                .map(|f| f.name.as_str())
+                .collect();
+
+            let tail: PlaceHandle<DynamicToken> = if file_fields.is_empty() {
+                head
+            } else {
+                let mut prev = head;
+                for (i, &fname) in file_fields.iter().enumerate() {
+                    // ── Places ──────────────────────────────────────────────
+                    // `cat_out`  : workflow token continues here immediately.
+                    // `cat_desc` : per-file descriptor (S3 key + catalogue
+                    //              identity), produced only when the file is
+                    //              actually present.
+                    // `cat_art`  : the `catalogue_register` input shape; fed
+                    //              by the fmeta fold (success) or the degraded
+                    //              fold (extraction failure).
+                    // `cat_done` : parked effect output.
+                    let cat_out: PlaceHandle<DynamicToken> = ctx.state(
+                        format!("p_{id}_cat_out_{i}"),
+                        format!("{label} - After Artifact {i}"),
+                    );
+                    let cat_desc: PlaceHandle<DynamicToken> = ctx.state(
+                        format!("p_{id}_cat_desc_{i}"),
+                        format!("{label} - Artifact {i} Descriptor"),
+                    );
+                    let cat_art: PlaceHandle<DynamicToken> = ctx.state(
+                        format!("p_{id}_cat_art_{i}"),
+                        format!("{label} - Artifact {i}"),
+                    );
+                    let cat_done: PlaceHandle<DynamicToken> = ctx.state(
+                        format!("p_{id}_cat_done_{i}"),
+                        format!("{label} - Artifact {i} Catalogued"),
+                    );
+                    // fmeta branch plumbing (created outside the lifecycle
+                    // scope so their ids stay stable and the fold/degrade
+                    // transitions can reference them).
+                    let fmeta_inbox: PlaceHandle<ExecutorSubmitInput> = ctx.state(
+                        format!("p_{id}_fmeta_inbox_{i}"),
+                        format!("{label} - fmeta {i} Inbox"),
+                    );
+                    let fmeta_result: PlaceHandle<DynamicToken> = ctx.state(
+                        format!("p_{id}_fmeta_result_{i}"),
+                        format!("{label} - fmeta {i} Result"),
+                    );
+                    let fmeta_fail: PlaceHandle<DynamicToken> = ctx.state(
+                        format!("p_{id}_fmeta_fail_{i}"),
+                        format!("{label} - fmeta {i} Failure"),
+                    );
+                    let fmeta_park: PlaceHandle<DynamicToken> = ctx.state(
+                        format!("p_{id}_fmeta_park_{i}"),
+                        format!("{label} - fmeta {i} Descriptor (parked)"),
+                    );
+
+                    // Split: `pass` always carries the unchanged workflow
+                    // token onward (the workflow never waits for fmeta);
+                    // `artifact` is a flat descriptor emitted only when the
+                    // file is present. `_instance_id` (injected into every
+                    // Start token) keys the per-run dedup id. Omitting
+                    // `artifact` when the file is absent/null produces no
+                    // token for that port (route_output_tokens only emits
+                    // produced ports), so an optional file isn't registered.
+                    ctx.transition(
+                        format!("t_{id}_cat_shape_{i}"),
+                        format!("{label} - Shape Artifact {i}"),
+                    )
+                    .auto_input("tok", &prev)
+                    .auto_output("pass", &cat_out)
+                    .auto_output("artifact", &cat_desc)
+                    .logic(format!(
+                        r#"let d = tok;
+let fv = d["{fname}"];
+if type_of(fv) == "map" && fv.key != () {{
+  #{{
+    pass: d,
+    artifact: #{{
+      execution_id: d._instance_id,
+      artifact_id: "start-" + d._instance_id + "-{fname}",
+      name: fv.filename,
+      mime_type: fv.content_type,
+      size_bytes: fv.size,
+      storage_path: fv.key
+    }}
+  }}
+}} else {{
+  #{{ pass: d }}
+}}"#
+                    ));
+
+                    // Build the FileOps `probe` job (runs fmeta against the
+                    // uploaded blob; `storage` is omitted so the executor
+                    // uses its globally-configured default store). The job
+                    // id == artifact_id, unique per instance per field — the
+                    // correlation key that re-joins the parked descriptor
+                    // with the executor result. The descriptor is parked so
+                    // the upload's authoritative name/mime/size/path survive
+                    // the round-trip (the lifecycle drops everything except
+                    // job_id/run/detail).
+                    ctx.transition(
+                        format!("t_{id}_fmeta_submit_{i}"),
+                        format!("{label} - fmeta {i} Submit"),
+                    )
+                    .auto_input("desc", &cat_desc)
+                    .auto_output("job", &fmeta_inbox)
+                    .auto_output("keep", &fmeta_park)
+                    .logic(
+                        r#"let dd = desc;
+let eid = dd.artifact_id;
+#{
+  job: #{
+    job_id: eid,
+    run: 0,
+    retries: 0,
+    max_retries: 0,
+    execution_id: eid,
+    spec: #{
+      backend: "file_ops",
+      inputs: [],
+      outputs: [],
+      config: #{ operation: "probe", path: dd.storage_path }
+    }
+  },
+  keep: #{
+    job_id: eid,
+    execution_id: dd.execution_id,
+    artifact_id: dd.artifact_id,
+    name: dd.name,
+    mime_type: dd.mime_type,
+    size_bytes: dd.size_bytes,
+    storage_path: dd.storage_path
+  }
+}"#,
+                    );
+
+                    // Reuse the full executor lifecycle (submit → status →
+                    // result/failure forwarding) for the probe. Scoped so
+                    // its fixed internal ids don't collide across fields or
+                    // with AutomatedStep lifecycles.
+                    let dead_letter = ctx.scoped_prefix(
+                        format!("{id}_fmeta_{i}"),
+                        format!("{label} - fmeta {i}"),
+                        |ctx| {
+                            executor_lifecycle(
+                                ctx,
+                                ExecutorBridges {
+                                    inbox: fmeta_inbox.clone(),
+                                    result_out: Some(fmeta_result.clone()),
+                                    failure_out: Some(fmeta_fail.clone()),
+                                    process_id: None,
+                                    process_step: None,
+                                    catalogue: false,
+                                    process: false,
+                                },
+                            )
+                            .dead_letter
                         },
                     );
+
+                    // Effect/infra errors land in the lifecycle's dead-letter
+                    // terminal. Reshape them onto the failure place so the
+                    // artifact is still catalogued (degraded, no
+                    // file_metadata) rather than lost.
+                    ctx.transition(
+                        format!("t_{id}_fmeta_dl_{i}"),
+                        format!("{label} - fmeta {i} Dead Letter"),
+                    )
+                    .auto_input("dead", &dead_letter)
+                    .auto_output("out", &fmeta_fail)
+                    .logic(
+                        r#"#{ out: #{ job_id: dead.job_id, reason: if dead.reason != () { dead.reason } else { "dead_letter" } } }"#,
+                    );
+
+                    // Success: merge the extracted fmeta JSON into
+                    // `detail.file_metadata` and emit the fully-annotated
+                    // `catalogue_register` input. Correlate the parked
+                    // descriptor with the executor result by job_id.
+                    ctx.transition(
+                        format!("t_{id}_fmeta_fold_{i}"),
+                        format!("{label} - fmeta {i} Fold"),
+                    )
+                    .auto_input("res", &fmeta_result)
+                    .auto_input("kept", &fmeta_park)
+                    .correlate("res", "kept", "job_id")
+                    .auto_output("artifact", &cat_art)
+                    .logic(
+                        r#"#{
+  artifact: #{
+    execution_id: kept.execution_id,
+    detail: #{
+      artifact_id: kept.artifact_id,
+      name: kept.name,
+      category: "input",
+      mime_type: kept.mime_type,
+      size_bytes: kept.size_bytes,
+      storage_path: kept.storage_path,
+      file_metadata: res.detail.outputs.metadata
+    }
+  }
+}"#,
+                    );
+
+                    // Failure/timeout/dead-letter: register the artifact
+                    // anyway, without file_metadata. Still a single INSERT,
+                    // so catalogue subscriptions/triggers stay sane.
+                    ctx.transition(
+                        format!("t_{id}_fmeta_degrade_{i}"),
+                        format!("{label} - fmeta {i} Degrade"),
+                    )
+                    .auto_input("fail", &fmeta_fail)
+                    .auto_input("kept", &fmeta_park)
+                    .correlate("fail", "kept", "job_id")
+                    .auto_output("artifact", &cat_art)
+                    .logic(
+                        r#"#{
+  artifact: #{
+    execution_id: kept.execution_id,
+    detail: #{
+      artifact_id: kept.artifact_id,
+      name: kept.name,
+      category: "input",
+      mime_type: kept.mime_type,
+      size_bytes: kept.size_bytes,
+      storage_path: kept.storage_path
+    }
+  }
+}"#,
+                    );
+
+                    // Unchanged from Phase 1: the INSERT-only catalogue
+                    // effect, now deferred to the tail of the artifact
+                    // branch (the net is the staging ground — only annotated
+                    // entries reach the catalogue on the happy path).
+                    ctx.transition(
+                        format!("t_{id}_cat_reg_{i}"),
+                        format!("{label} - Register Artifact {i}"),
+                    )
+                    .auto_input("artifacts", &cat_art)
+                    .auto_output("catalogued", &cat_done)
+                    .builtin_effect(&effects::CATALOGUE_REGISTER);
+
+                    prev = cat_out;
                 }
-            }
+                prev
+            };
+
+            ports.insert(
+                id.clone(),
+                NodePorts {
+                    input_place: ready,
+                    output_places: vec![(None, tail)],
+                    input_places: HashMap::new(),
+                },
+            );
         }
 
         WorkflowNodeData::End { label, .. } => {
@@ -1791,6 +2056,244 @@ fn expand_node(
             fixups.groups.push((group_id, label.clone(), parent_group));
         }
 
+        WorkflowNodeData::PhaseUpdate {
+            label,
+            phase_name,
+            status,
+            message,
+            ..
+        } => {
+            // Pass-through: shape transition forwards the workflow token
+            // unchanged on `out` and emits an `executor-phase`-shaped
+            // breadcrumb on `sig`; the effect transition runs
+            // `process_log_message`. The causality consumer trips
+            // `record_phase_event` on `source == "executor-phase"` (and
+            // `detail.event_type == "phase_changed"`), projecting
+            // `detail.{phase_name,status,message}` into
+            // `hpi_processes.config.progress.phases`. The process is resolved
+            // by tag propagation from the consumed (process-tagged) token —
+            // no read-arc needed; outside a named process this is a no-op.
+            let p_input: PlaceHandle<DynamicToken> =
+                ctx.state(format!("p_{id}_input"), format!("{label} - Input"));
+            let p_out: PlaceHandle<DynamicToken> =
+                ctx.state(format!("p_{id}_pu_out"), format!("{label} - Output"));
+            let p_sig: PlaceHandle<DynamicToken> = ctx.state(
+                format!("p_{id}_pu_sig"),
+                format!("{label} - Phase Breadcrumb"),
+            );
+            let p_done: PlaceHandle<DynamicToken> =
+                ctx.state(format!("p_{id}_pu_done"), format!("{label} - Logged"));
+
+            let name_expr = interpolate_to_rhai_expr(phase_name);
+            let status_lit = match status {
+                PhaseUpdateStatus::Running => "running",
+                PhaseUpdateStatus::Completed => "completed",
+                PhaseUpdateStatus::Failed => "failed",
+                PhaseUpdateStatus::Skipped => "skipped",
+            };
+            // Bind interpolations to locals so the map literal stays shallow
+            // (avoids the debug-build Rhai expr-depth limit) — same shape as
+            // the Start `process_name` transition.
+            let (msg_let, top_msg, detail_msg) = match message
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                Some(m) => {
+                    let e = interpolate_to_rhai_expr(m);
+                    (
+                        format!("let __mg = {e}; "),
+                        "message: __mg, ".to_string(),
+                        ", message: __mg".to_string(),
+                    )
+                }
+                None => (String::new(), String::new(), String::new()),
+            };
+            let logic = format!(
+                "let __pn = {name_expr}; {msg_let}#{{ out: input, sig: #{{ \
+                 source: \"executor-phase\", {top_msg}detail: #{{ \
+                 phase_name: __pn, status: \"{status_lit}\", \
+                 event_type: \"phase_changed\"{detail_msg} }} }} }}"
+            );
+            let prelude = if logic.contains("__pluck(") {
+                PLUCK_HELPER
+            } else {
+                ""
+            };
+            ctx.transition(
+                format!("t_{id}_pu_shape"),
+                format!("{label} - Phase Update"),
+            )
+            .auto_input("input", &p_input)
+            .auto_output("out", &p_out)
+            .auto_output("sig", &p_sig)
+            .logic_rhai(format!("{prelude}{logic}"))
+            .done();
+
+            ctx.transition(format!("t_{id}_pu_emit"), format!("{label} - Log Phase"))
+                .auto_input("message", &p_sig)
+                .auto_output("logged", &p_done)
+                .builtin_effect(&effects::PROCESS_LOG_MESSAGE);
+
+            ports.insert(
+                id.clone(),
+                NodePorts {
+                    input_place: p_input,
+                    output_places: vec![(None, p_out)],
+                    input_places: HashMap::new(),
+                },
+            );
+        }
+
+        WorkflowNodeData::ProgressUpdate {
+            label,
+            fraction,
+            message,
+            current_step,
+            total_steps,
+            ..
+        } => {
+            // Pass-through: shape forwards the token on `out` and emits a
+            // `process_log_metric` breadcrumb keyed `progress_fraction` on
+            // `sig`. The causality consumer trips `record_progress_event`
+            // (key match), projecting `value` + `detail.{message,current_step,
+            // total_steps}` into `hpi_processes.config.progress`. No-op
+            // outside a named process.
+            let p_input: PlaceHandle<DynamicToken> =
+                ctx.state(format!("p_{id}_input"), format!("{label} - Input"));
+            let p_out: PlaceHandle<DynamicToken> =
+                ctx.state(format!("p_{id}_pu_out"), format!("{label} - Output"));
+            let p_sig: PlaceHandle<DynamicToken> = ctx.state(
+                format!("p_{id}_pu_sig"),
+                format!("{label} - Progress Breadcrumb"),
+            );
+            let p_done: PlaceHandle<DynamicToken> =
+                ctx.state(format!("p_{id}_pu_done"), format!("{label} - Logged"));
+
+            // f64 Debug always round-trips with a decimal point ("1.0", not
+            // "1") so Rhai parses it as a float, matching `value.as_f64()`.
+            let frac = format!("{fraction:?}");
+            let cur = current_step.as_ref().map_or(0, |v| *v);
+            let tot = total_steps.as_ref().map_or(0, |v| *v);
+            let (msg_let, detail_msg) = match message
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                Some(m) => {
+                    let e = interpolate_to_rhai_expr(m);
+                    (format!("let __mg = {e}; "), "message: __mg, ".to_string())
+                }
+                None => (String::new(), String::new()),
+            };
+            let logic = format!(
+                "{msg_let}#{{ out: input, sig: #{{ key: \"progress_fraction\", \
+                 value: {frac}, detail: #{{ {detail_msg}current_step: {cur}, \
+                 total_steps: {tot} }} }} }}"
+            );
+            let prelude = if logic.contains("__pluck(") {
+                PLUCK_HELPER
+            } else {
+                ""
+            };
+            ctx.transition(
+                format!("t_{id}_pu_shape"),
+                format!("{label} - Progress Update"),
+            )
+            .auto_input("input", &p_input)
+            .auto_output("out", &p_out)
+            .auto_output("sig", &p_sig)
+            .logic_rhai(format!("{prelude}{logic}"))
+            .done();
+
+            ctx.transition(
+                format!("t_{id}_pu_emit"),
+                format!("{label} - Log Progress"),
+            )
+            .auto_input("metric", &p_sig)
+            .auto_output("logged", &p_done)
+            .builtin_effect(&effects::PROCESS_LOG_METRIC);
+
+            ports.insert(
+                id.clone(),
+                NodePorts {
+                    input_place: p_input,
+                    output_places: vec![(None, p_out)],
+                    input_places: HashMap::new(),
+                },
+            );
+        }
+
+        WorkflowNodeData::Failure {
+            label,
+            failure_message,
+            ..
+        } => {
+            // Pass-through: shape transition forwards the workflow token
+            // unchanged on `out` (the net continues to its normal End) and
+            // emits a `#{ reason }` breadcrumb on `fail`; the effect
+            // transition runs the tolerant `process_fail` builtin. The
+            // causality consumer resolves the owning process by tag
+            // propagation from the consumed (process-tagged) token — no
+            // read-arc; outside a named process this is a no-op.
+            let p_input: PlaceHandle<DynamicToken> =
+                ctx.state(format!("p_{id}_input"), format!("{label} - Input"));
+            let p_out: PlaceHandle<DynamicToken> =
+                ctx.state(format!("p_{id}_fail_out"), format!("{label} - Output"));
+            let p_sig: PlaceHandle<DynamicToken> = ctx.state(
+                format!("p_{id}_fail_sig"),
+                format!("{label} - Failure Breadcrumb"),
+            );
+            let p_done: PlaceHandle<DynamicToken> =
+                ctx.state(format!("p_{id}_fail_done"), format!("{label} - Failed"));
+
+            // Bind the interpolation to a local so the map literal stays
+            // shallow (debug-build Rhai expr-depth limit) — same shape as the
+            // PhaseUpdate / ProgressUpdate arms.
+            let (msg_let, reason_val) = match failure_message
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                Some(m) => {
+                    let e = interpolate_to_rhai_expr(m);
+                    (format!("let __fm = {e}; "), "__fm".to_string())
+                }
+                None => (String::new(), "\"\"".to_string()),
+            };
+            let logic = format!(
+                "{msg_let}#{{ out: input, fail: #{{ reason: {reason_val} }} }}"
+            );
+            let prelude = if logic.contains("__pluck(") {
+                PLUCK_HELPER
+            } else {
+                ""
+            };
+            ctx.transition(format!("t_{id}_fail_shape"), format!("{label} - Failure"))
+                .auto_input("input", &p_input)
+                .auto_output("out", &p_out)
+                .auto_output("fail", &p_sig)
+                .logic_rhai(format!("{prelude}{logic}"))
+                .done();
+
+            ctx.transition(
+                format!("t_{id}_fail_emit"),
+                format!("{label} - Fail Process"),
+            )
+            .auto_input("failure", &p_sig)
+            .auto_output("failed", &p_done)
+            .builtin_effect(&effects::PROCESS_FAIL);
+
+            ports.insert(
+                id.clone(),
+                NodePorts {
+                    input_place: p_input,
+                    output_places: vec![(None, p_out)],
+                    input_places: HashMap::new(),
+                },
+            );
+        }
+
         WorkflowNodeData::Trigger { .. } => {
             // Trigger nodes are NOT compiled into AIR — they are a pre-compile
             // concern owned by the trigger dispatcher (`service::triggers`).
@@ -1989,14 +2492,37 @@ fn rhai_str_escape(s: &str) -> String {
         .replace('\r', "\\r")
 }
 
-/// Validate a `{{ … }}` placeholder body and turn it into a safe Rhai
-/// accessor rooted at the workflow token (`input`).
+/// Null-safe path walker prepended to any generated script that contains a
+/// `{{ … }}` interpolation. Walks string/int segments; the moment the current
+/// value isn't a traversable map/array (or the key/index is absent) it yields
+/// `()` instead of raising a Rhai error.
+///
+/// Rationale: a `{{ a.b }}` placeholder used to compile to the raw accessor
+/// `input.a.b`. When `a` is a plain string (e.g. a file field supplied as a
+/// bare storage key instead of an upload object), `string.b` is a *hard* Rhai
+/// error — unlike a missing map key, which already yields `()`. A hard error
+/// in a pure edge transition means its input token is never consumed, so the
+/// per-net eval loop retries the transition every cycle forever (observed: one
+/// bad `{{ invoice_file.url }}` produced 50k+ `ErrorOccurred` events and wedged
+/// net cancellation). Routing every placeholder through `__pluck` makes the
+/// whole class degrade to an empty string instead.
+const PLUCK_HELPER: &str = "fn __pluck(__r, __segs) { \
+for __s in __segs { \
+let __t = type_of(__r); \
+if __t == \"map\" && type_of(__s) == \"string\" { __r = __r[__s]; continue; } \
+if __t == \"array\" && type_of(__s) == \"i64\" && __s >= 0 && __s < __r.len() { __r = __r[__s]; continue; } \
+return (); \
+} __r } ";
+
+/// Validate a `{{ … }}` placeholder body and turn it into a safe, null-safe
+/// Rhai accessor rooted at the workflow token (`input`).
 ///
 /// Only dotted identifier paths with optional numeric indices are accepted —
 /// e.g. `invoice_file.url`, `items[0].amount`. This is deliberately *not* a
 /// Rhai expression evaluator: arbitrary expressions are rejected (returns
 /// `None`) so a template author can never inject executable Rhai through a
-/// task block string.
+/// task block string. The accepted path is emitted as a [`PLUCK_HELPER`]
+/// call so a misaimed placeholder degrades to `()` rather than hard-erroring.
 fn placeholder_to_accessor(inner: &str) -> Option<String> {
     let s = inner.trim();
     if s.is_empty() {
@@ -2016,12 +2542,15 @@ fn placeholder_to_accessor(inner: &str) -> Option<String> {
         *i > start
     }
 
-    let mut out = String::from("input");
+    // Collect path segments as Rhai literals: identifiers (validated to
+    // `[A-Za-z0-9_]`, so safe unquoted-escaped) become quoted string keys,
+    // `[n]` becomes a bare integer index. Emitted as `__pluck(input, [..])`.
+    let mut segs: Vec<String> = Vec::new();
+    let first = i;
     if !ident(bytes, &mut i) {
         return None;
     }
-    out.push('.');
-    out.push_str(&s[..i]);
+    segs.push(format!("\"{}\"", &s[first..i]));
 
     while i < bytes.len() {
         match bytes[i] {
@@ -2031,8 +2560,7 @@ fn placeholder_to_accessor(inner: &str) -> Option<String> {
                 if !ident(bytes, &mut i) {
                     return None;
                 }
-                out.push('.');
-                out.push_str(&s[seg_start..i]);
+                segs.push(format!("\"{}\"", &s[seg_start..i]));
             }
             b'[' => {
                 i += 1;
@@ -2043,15 +2571,13 @@ fn placeholder_to_accessor(inner: &str) -> Option<String> {
                 if i == num_start || i >= bytes.len() || bytes[i] != b']' {
                     return None;
                 }
-                out.push('[');
-                out.push_str(&s[num_start..i]);
-                out.push(']');
+                segs.push(s[num_start..i].to_string());
                 i += 1; // consume ']'
             }
             _ => return None,
         }
     }
-    Some(out)
+    Some(format!("__pluck(input, [{}])", segs.join(", ")))
 }
 
 /// Turn a raw string that may contain `{{ path }}` placeholders into a Rhai
@@ -2348,8 +2874,18 @@ fn build_human_task_injection_logic(target_node: &WorkflowNode) -> String {
             interpolate_to_rhai_expr(instructions_mdsvex.as_deref().unwrap_or(""));
         let title_expr = interpolate_to_rhai_expr(task_title);
 
+        // Only prepend the helper when an interpolation actually emitted a
+        // `__pluck(` call, so placeholder-free human tasks stay byte-identical.
+        let prelude = if title_expr.contains("__pluck(")
+            || instructions_expr.contains("__pluck(")
+            || steps_rhai.contains("__pluck(")
+        {
+            PLUCK_HELPER
+        } else {
+            ""
+        };
         format!(
-            "let d = input; \
+            "{prelude}let d = input; \
              d.title = {title_expr}; \
              d.instructions_mdsvex = {instructions_expr}; \
              d.steps = {steps_rhai}; \
@@ -2369,13 +2905,16 @@ mod tests {
     fn placeholder_paths_validate() {
         assert_eq!(
             placeholder_to_accessor("invoice_file.url").as_deref(),
-            Some("input.invoice_file.url")
+            Some("__pluck(input, [\"invoice_file\", \"url\"])")
         );
         assert_eq!(
             placeholder_to_accessor("  items[0].amount  ").as_deref(),
-            Some("input.items[0].amount")
+            Some("__pluck(input, [\"items\", 0, \"amount\"])")
         );
-        assert_eq!(placeholder_to_accessor("invoice_id").as_deref(), Some("input.invoice_id"));
+        assert_eq!(
+            placeholder_to_accessor("invoice_id").as_deref(),
+            Some("__pluck(input, [\"invoice_id\"])")
+        );
         // Rejected: arbitrary Rhai / unsafe content stays literal.
         assert_eq!(placeholder_to_accessor("a + b").as_deref(), None);
         assert_eq!(placeholder_to_accessor("system(\"rm\")").as_deref(), None);
@@ -2401,12 +2940,45 @@ mod tests {
     fn interpolation_builds_concat_expr() {
         assert_eq!(
             interpolate_to_rhai_expr("{{ invoice_file.url }}"),
-            "(\"\" + (input.invoice_file.url))"
+            "(\"\" + (__pluck(input, [\"invoice_file\", \"url\"])))"
         );
         assert_eq!(
             interpolate_to_rhai_expr("Invoice {{ invoice_id }} ready"),
-            "(\"\" + \"Invoice \" + (input.invoice_id) + \" ready\")"
+            "(\"\" + \"Invoice \" + (__pluck(input, [\"invoice_id\"])) + \" ready\")"
         );
+    }
+
+    /// Regression: the exact scenario that wedged a live net. A
+    /// `{{ invoice_file.url }}` placeholder where `invoice_file` is a bare
+    /// string (not an upload object) must degrade to an empty string, never
+    /// raise a hard Rhai error (which a pure edge transition would retry
+    /// forever).
+    #[test]
+    fn interpolation_is_null_safe_on_non_map_field() {
+        let engine = rhai::Engine::new();
+        let expr = interpolate_to_rhai_expr("img: {{ invoice_file.url }}");
+
+        // invoice_file is a string -> .url is a hard error without __pluck.
+        let s: String = engine
+            .eval::<String>(&format!(
+                "{PLUCK_HELPER}let input = #{{ invoice_file: \"example\" }}; {expr}"
+            ))
+            .expect("must not hard-error on a string-typed field");
+        assert_eq!(s, "img: ");
+
+        // Missing entirely -> still empty, no error.
+        let s2: String = engine
+            .eval::<String>(&format!("{PLUCK_HELPER}let input = #{{}}; {expr}"))
+            .expect("must not hard-error on a missing field");
+        assert_eq!(s2, "img: ");
+
+        // Proper upload object -> the value resolves.
+        let s3: String = engine
+            .eval::<String>(&format!(
+                "{PLUCK_HELPER}let input = #{{ invoice_file: #{{ url: \"http://x/y\" }} }}; {expr}"
+            ))
+            .expect("resolves");
+        assert_eq!(s3, "img: http://x/y");
     }
 
     #[test]
@@ -2435,16 +3007,18 @@ mod tests {
         };
 
         let logic = build_human_task_injection_logic(&node);
+        // Null-safe accessor + helper prelude (it has interpolations).
+        assert!(logic.starts_with("fn __pluck("), "helper prelude missing: {logic}");
         assert!(
-            logic.contains("d.title = (\"\" + \"Invoice \" + (input.invoice_id))"),
+            logic.contains("d.title = (\"\" + \"Invoice \" + (__pluck(input, [\"invoice_id\"])))"),
             "title not interpolated: {logic}"
         );
         assert!(
-            logic.contains("(input.invoice_file.filename)"),
+            logic.contains("(__pluck(input, [\"invoice_file\", \"filename\"]))"),
             "instructions not interpolated: {logic}"
         );
         assert!(
-            logic.contains("(input.invoice_file.url)"),
+            logic.contains("(__pluck(input, [\"invoice_file\", \"url\"]))"),
             "step block string not interpolated: {logic}"
         );
         // Static block keys remain plain literals.
@@ -2549,9 +3123,12 @@ mod tests {
             .expect("t_s_proc_name transition");
         let logic = proc_name["logic"]["source"].as_str().unwrap_or_default();
         assert!(
-            logic.contains(r#"d._process_name = ("" + "Invoice " + (input.invoice_id))"#),
+            logic.contains(
+                r#"d._process_name = ("" + "Invoice " + (__pluck(input, ["invoice_id"])))"#
+            ),
             "name expr not interpolated: {logic}"
         );
+        assert!(logic.starts_with("fn __pluck("), "helper prelude missing: {logic}");
 
         // 2. process_start effect transition, name resolved from the token.
         let proc_start = transitions

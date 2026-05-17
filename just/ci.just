@@ -82,6 +82,38 @@ test-rust:
     cd ..
     cargo test --workspace --no-fail-fast
 
+# Layer-2 real-Zitadel e2e: bring up the full stack, bootstrap Zitadel
+# (provisions the introspection API app + writes mekhan.local.toml), then
+# run the MEKHAN_E2E_ZITADEL-gated test which mints/uses/revokes a live
+# service-user PAT. Heavy + Docker-dependent — its own gated lane, never a
+# PR gate. `down -v` always, so a fresh Zitadel each run.
+test-e2e-zitadel:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd ..
+    cleanup() { docker compose down -v >/dev/null 2>&1 || true; }
+    trap cleanup EXIT
+    echo "▶ infra + zitadel up…"
+    docker compose up -d
+    echo "▶ waiting for zitadel…"
+    for _ in $(seq 1 90); do
+      curl -fsS http://localhost:8080/debug/ready >/dev/null 2>&1 && break
+      sleep 2
+    done
+    echo "▶ waiting for postgres…"
+    for _ in $(seq 1 30); do
+      docker compose exec -T postgres pg_isready -U mekhan -d mekhan >/dev/null 2>&1 && break
+      sleep 1
+    done
+    echo "▶ bootstrap zitadel (idempotent)…"
+    bash deploy/zitadel/bootstrap.sh
+    echo "▶ running gated e2e…"
+    TEST_POSTGRES_URL="postgres://mekhan:mekhan@localhost:5439/mekhan" \
+    TEST_NATS_URL="nats://localhost:4333" \
+    TEST_S3_ENDPOINT="http://localhost:9099" \
+    MEKHAN_E2E_ZITADEL=1 \
+      cargo test --test zitadel_e2e -- --test-threads=1 --nocapture
+
 # Vitest unit tests
 test-frontend-unit:
     #!/usr/bin/env bash
@@ -123,6 +155,35 @@ build-frontend:
       exit 1
     fi
     echo "✓ Frontend built — $(du -sh build | cut -f1)"
+
+# ── GitOps: publish git-authored workflow templates ─────────────────────────
+
+# Build the mekhan CLI and `apply` every template directory under `dir` (each
+# must contain a committed `.mekhan.json`). Each apply atomically versions +
+# publishes the chain from the git artifact, recording commit provenance.
+# Auth: MEKHAN_CLI_TOKEN — a Zitadel service-user PAT the server validates
+# via RFC 7662 introspection. Target server is the `server_url` baked into
+# each `.mekhan.json`.
+apply-workflows dir="workflows":
+    #!/usr/bin/env bash
+    cd ..
+    echo "▶ Building mekhan CLI"
+    SQLX_OFFLINE=true cargo build --release \
+      --manifest-path service/Cargo.toml --bin mekhan
+    bin=target/release/mekhan
+    shopt -s nullglob
+    found=0
+    for d in {{dir}}/*/; do
+      [ -f "${d}.mekhan.json" ] || continue
+      found=1
+      echo "▶ mekhan apply ${d}"
+      "$bin" apply "$d"
+    done
+    if [ "$found" -eq 0 ]; then
+      echo "✗ No template directories with .mekhan.json under {{dir}}/" >&2
+      exit 1
+    fi
+    echo "✓ Applied all workflow templates under {{dir}}/"
 
 # ── Package + push (Docker image) ───────────────────────────────────────────
 

@@ -806,6 +806,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/templates/{id}/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * POST /api/templates/{id}/apply
+         * @description GitOps entry point: atomically publish a new version of the chain straight
+         *     from a git-authored artifact. The supplied `graph` REPLACES the chain head
+         *     wholesale (no CRDT merge). Either seeds-and-publishes a fresh `mekhan init`
+         *     draft as v1 in place, or bumps the published head to a new born-published
+         *     version. The collaborative Y.Doc draft window is collapsed to nothing, so
+         *     publish-freeze itself is the isolation between git- and web-authored
+         *     templates.
+         */
+        post: operations["apply_template"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/templates/{id}/compile": {
         parameters: {
             query?: never;
@@ -1000,6 +1026,36 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/triggers/{node_id}/enabled": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * PATCH /api/triggers/{node_id}/enabled
+         * @description Arm or pause a single trigger on its **published** template. This is the
+         *     deliberate inverse of the rest of the template: a trigger's `source`,
+         *     `payload_mapping` and target are frozen at publish, but whether it is
+         *     currently armed is operational state of the live template — so it is
+         *     editable exactly when everything else is locked, and *only* then (drafts
+         *     are armed by editing the graph in the editor).
+         *
+         *     The published row's `graph` column is the runtime source of truth that
+         *     `hydrate()` and `fire()` read, so we flip `enabled` on the trigger node
+         *     there and re-register the template to make the change live immediately;
+         *     it then survives restarts via the normal `hydrate()` path.
+         */
+        patch: operations["set_trigger_enabled"];
+        trace?: never;
+    };
     "/api/triggers/{node_id}/fire": {
         parameters: {
             query?: never;
@@ -1009,7 +1065,16 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** POST /api/triggers/{node_id}/fire */
+        /**
+         * POST /api/triggers/{node_id}/fire
+         * @description Accepts either `application/json` (`{ "payload": { ... } }` — the scope
+         *     keys for `payload_mapping`) or `multipart/form-data` for file entrypoints:
+         *     an optional JSON `payload` part plus one binary part per file field. Each
+         *     file part is uploaded to blob storage (scoped to the trigger's template +
+         *     target node) and injected into the payload under the part name as a
+         *     `{ key, url, filename, content_type, size }` reference object — the same
+         *     shape the create-instance dialog produces, which `FieldKind::File` accepts.
+         */
         post: operations["fire_trigger"];
         delete?: never;
         options?: never;
@@ -1073,6 +1138,20 @@ export interface components {
             timestamp: string;
             token_id: string;
             transition_name?: string | null;
+        };
+        /**
+         * @description Request body for `POST /api/templates/{id}/apply` — the GitOps path.
+         *     The `graph` REPLACES the chain head wholesale (no CRDT merge); binary
+         *     assets are uploaded out-of-band via the files endpoint before this call.
+         */
+        ApplyTemplateRequest: {
+            files?: {
+                [key: string]: {
+                    [key: string]: string;
+                };
+            };
+            graph: components["schemas"]["WorkflowGraph"];
+            source_ref?: null | components["schemas"]["SourceRef"];
         };
         /**
          * @description Response shape for `GET /api/processes/{process_id}/artifacts/list`.
@@ -1775,6 +1854,7 @@ export interface components {
                 published_at?: string | null;
                 /** Format: uuid */
                 published_by?: string | null;
+                source_ref?: unknown;
                 /** Format: date-time */
                 updated_at: string;
                 /** Format: int32 */
@@ -1883,6 +1963,16 @@ export interface components {
             total_pages: number;
         };
         /**
+         * @description Author-selected status for a `PhaseUpdate` control node. Serialized
+         *     snake_case so it lands on the breadcrumb exactly as the executor
+         *     `PhaseStatus` the causality consumer deserializes in `record_phase_event`
+         *     (`aithericon_executor_domain::PhaseStatus`). `Pending` is intentionally
+         *     omitted — an author explicitly marking a phase always means it is at least
+         *     running.
+         * @enum {string}
+         */
+        PhaseUpdateStatus: "running" | "completed" | "failed" | "skipped";
+        /**
          * @description A named bundle of typed fields exchanged at a block boundary. Two ports
          *     type-match if their field sets are equal (same names, same kinds, with
          *     `Json` as the escape hatch).
@@ -1980,11 +2070,31 @@ export interface components {
             /** @description Rhai identifier the expression references (e.g. `fire_time`). */
             name: string;
         };
+        SetTriggerEnabledRequest: {
+            enabled: boolean;
+        };
         SignalDispatch: {
             dispatch_net: string;
             /** Format: int64 */
             dispatch_seq: number;
             signal_key: string;
+        };
+        /**
+         * @description Git provenance recorded on a version published via `mekhan apply`.
+         *     Serialized into the `workflow_templates.source_ref` JSONB column.
+         */
+        SourceRef: {
+            /**
+             * @description Working tree had uncommitted changes at apply time
+             *     (`git status --porcelain` non-empty).
+             */
+            dirty: boolean;
+            /** @description Branch / ref name, when resolvable (`git rev-parse --abbrev-ref HEAD`). */
+            ref?: string | null;
+            /** @description Git remote URL (`git remote get-url origin`). */
+            remote: string;
+            /** @description Commit SHA the artifact was applied from (`git rev-parse HEAD`). */
+            sha: string;
         };
         SourceScopeResponse: {
             /**
@@ -2358,6 +2468,46 @@ export interface components {
             /** @enum {string} */
             type: "scope";
         } | {
+            description?: string | null;
+            label: string;
+            /** @description Optional phase message. Supports `{{ field }}` placeholders. */
+            message?: string | null;
+            /**
+             * @description Phase name. Supports `{{ field }}` placeholders resolved against the
+             *     inbound token at run time.
+             */
+            phaseName: string;
+            /** @description Status to set on the phase. Defaults to `running`. */
+            status?: components["schemas"]["PhaseUpdateStatus"];
+            /** @enum {string} */
+            type: "phase_update";
+        } | {
+            /** Format: int64 */
+            currentStep?: number | null;
+            description?: string | null;
+            /**
+             * Format: double
+             * @description Overall completion fraction, 0.0–1.0.
+             */
+            fraction: number;
+            label: string;
+            /** @description Optional progress message. Supports `{{ field }}` placeholders. */
+            message?: string | null;
+            /** Format: int64 */
+            totalSteps?: number | null;
+            /** @enum {string} */
+            type: "progress_update";
+        } | {
+            description?: string | null;
+            /**
+             * @description Failure message. Supports `{{ field }}` placeholders resolved
+             *     against the inbound token at run time.
+             */
+            failureMessage?: string | null;
+            label: string;
+            /** @enum {string} */
+            type: "failure";
+        } | {
             /** @description Concurrency / dedup policy applied by the dispatcher. */
             concurrency?: components["schemas"]["ConcurrencyPolicy"];
             description?: string | null;
@@ -2395,6 +2545,7 @@ export interface components {
             published_at?: string | null;
             /** Format: uuid */
             published_by?: string | null;
+            source_ref?: unknown;
             /** Format: date-time */
             updated_at: string;
             /** Format: int32 */
@@ -4142,6 +4293,69 @@ export interface operations {
             };
         };
     };
+    apply_template: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Any template id in the target chain */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApplyTemplateRequest"];
+            };
+        };
+        responses: {
+            /** @description Applied: seeded v1 or a new born-published version */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowTemplate"];
+                };
+            };
+            /** @description Compilation failed or graph invalid */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Template not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Chain head is an unpublished web-editor draft */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     compile_preview: {
         parameters: {
             query?: never;
@@ -4489,6 +4703,60 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SourceScopeResponse"];
+                };
+            };
+        };
+    };
+    set_trigger_enabled: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Trigger node id */
+                node_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetTriggerEnabledRequest"];
+            };
+        };
+        responses: {
+            /** @description Trigger enabled state updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TriggerView"];
+                };
+            };
+            /** @description Trigger not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Template is not published */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
         };

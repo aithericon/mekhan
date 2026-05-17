@@ -24,7 +24,9 @@ use uuid::Uuid;
 
 use crate::auth::AuthUser;
 use crate::models::error::{ApiError, ErrorResponse};
-use crate::models::template::{HttpMethod, TriggerSource};
+use crate::models::template::{
+    HttpMethod, TriggerSource, WorkflowGraph, WorkflowNodeData, WorkflowTemplate,
+};
 use crate::triggers::{FireResult, TriggerError, TriggerRecord};
 use crate::AppState;
 
@@ -323,6 +325,120 @@ pub async fn trigger_history(
 ) -> Json<TriggerHistoryResponse> {
     let history = state.triggers.history_for(&node_id);
     Json(TriggerHistoryResponse { history })
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct SetTriggerEnabledRequest {
+    pub enabled: bool,
+}
+
+/// PATCH /api/triggers/{node_id}/enabled
+///
+/// Arm or pause a single trigger on its **published** template. This is the
+/// deliberate inverse of the rest of the template: a trigger's `source`,
+/// `payload_mapping` and target are frozen at publish, but whether it is
+/// currently armed is operational state of the live template — so it is
+/// editable exactly when everything else is locked, and *only* then (drafts
+/// are armed by editing the graph in the editor).
+///
+/// The published row's `graph` column is the runtime source of truth that
+/// `hydrate()` and `fire()` read, so we flip `enabled` on the trigger node
+/// there and re-register the template to make the change live immediately;
+/// it then survives restarts via the normal `hydrate()` path.
+#[utoipa::path(
+    patch,
+    path = "/api/triggers/{node_id}/enabled",
+    params(("node_id" = String, Path, description = "Trigger node id")),
+    request_body = SetTriggerEnabledRequest,
+    responses(
+        (status = 200, description = "Trigger enabled state updated", body = TriggerView),
+        (status = 404, description = "Trigger not found", body = ErrorResponse),
+        (status = 409, description = "Template is not published", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse),
+    ),
+    tag = "triggers",
+)]
+pub async fn set_trigger_enabled(
+    State(state): State<AppState>,
+    _user: AuthUser,
+    Path(node_id): Path<String>,
+    Json(req): Json<SetTriggerEnabledRequest>,
+) -> Result<Json<TriggerView>, ApiError> {
+    let record = state.triggers.get(&node_id).ok_or_else(|| {
+        ApiError::not_found(format!(
+            "trigger '{node_id}' not found in any published template"
+        ))
+    })?;
+
+    let template = sqlx::query_as::<_, WorkflowTemplate>(
+        "SELECT * FROM workflow_templates WHERE id = $1 AND version = $2",
+    )
+    .bind(record.template_id)
+    .bind(record.template_version)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .ok_or_else(|| ApiError::not_found("template not found"))?;
+
+    // Inverse of the publish freeze: enable/disable is *only* a published-
+    // template control. A draft trigger's armed state is set by editing the
+    // graph in the editor, so reject this here to keep one writer per state.
+    if !template.published {
+        return Err(ApiError::conflict(
+            "trigger enable/disable is only available on a published template; edit drafts in the editor",
+        ));
+    }
+
+    let mut graph: WorkflowGraph = serde_json::from_value(template.graph.clone())
+        .map_err(|e| ApiError::internal(format!("invalid graph: {e}")))?;
+
+    let mut found = false;
+    for node in &mut graph.nodes {
+        if node.id != node_id {
+            continue;
+        }
+        if let WorkflowNodeData::Trigger { enabled, .. } = &mut node.data {
+            *enabled = req.enabled;
+            found = true;
+        }
+    }
+    if !found {
+        return Err(ApiError::not_found(format!(
+            "trigger node '{node_id}' not present in template graph"
+        )));
+    }
+
+    let graph_json =
+        serde_json::to_value(&graph).map_err(|e| ApiError::internal(e.to_string()))?;
+
+    let updated = sqlx::query_as::<_, WorkflowTemplate>(
+        r#"
+        UPDATE workflow_templates
+        SET graph = $2, updated_at = NOW()
+        WHERE id = $1
+        RETURNING *
+        "#,
+    )
+    .bind(template.id)
+    .bind(&graph_json)
+    .fetch_one(&state.db)
+    .await
+    .map_err(|e| {
+        tracing::error!("failed to persist trigger enabled state: {e}");
+        ApiError::internal(e.to_string())
+    })?;
+
+    // Refresh the in-memory registry so the change is live without a restart.
+    // `register_template` clears this template+version's prior records first,
+    // so this is idempotent.
+    state.triggers.register_template(&updated).await;
+
+    let view = state
+        .triggers
+        .get(&node_id)
+        .map(TriggerView::from)
+        .ok_or_else(|| ApiError::internal("trigger missing after re-register"))?;
+    Ok(Json(view))
 }
 
 #[derive(Debug, Serialize, ToSchema)]

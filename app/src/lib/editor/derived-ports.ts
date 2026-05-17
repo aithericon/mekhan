@@ -31,6 +31,9 @@ export function outputPortsFor(data: WorkflowNodeData): Port[] {
 		case 'parallel_join':
 		case 'loop':
 		case 'scope':
+		case 'phase_update':
+		case 'progress_update':
+		case 'failure':
 		case 'trigger':
 			// Triggers "wear the shape" of the target port — the editor resolves
 			// it at render time via the outgoing edge. Statically we expose an
@@ -55,6 +58,9 @@ export function inputPortsFor(data: WorkflowNodeData): Port[] {
 		case 'parallel_join':
 		case 'loop':
 		case 'scope':
+		case 'phase_update':
+		case 'progress_update':
+		case 'failure':
 			return [{ id: 'in', label: 'Input', fields: [] }];
 		case 'trigger':
 			// Triggers are never edge targets — no input port.

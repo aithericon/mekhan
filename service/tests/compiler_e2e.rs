@@ -317,8 +317,9 @@ fn ui_invoice_processing_deserializes_and_compiles() {
 
 /// The Start node declares a `file` start-param (`invoice_file`) and the
 /// Review human task references it from an image + download block via
-/// `{{ invoice_file.url }}`. The compiled AIR must carry the *resolved* token
-/// accessor (`input.invoice_file.url`), not the raw placeholder.
+/// `{{ invoice_file.url }}`. The compiled AIR must carry the *resolved*
+/// null-safe token accessor (`__pluck(input, ["invoice_file", "url"])`), not
+/// the raw placeholder.
 #[test]
 fn ui_invoice_processing_interpolates_start_file_param() {
     let graph = load_graph("invoice-processing.json");
@@ -337,19 +338,23 @@ fn ui_invoice_processing_interpolates_start_file_param() {
         .expect("should compile");
     let air_str = serde_json::to_string(&air).unwrap();
 
-    // Placeholders were substituted with safe token accessors.
+    // Placeholders were substituted with null-safe token accessors, and the
+    // __pluck helper prelude was injected into the human-task edge script.
+    // (Needles are JSON-escaping-agnostic — air_str is serialized AIR.)
     assert!(
-        air_str.contains("input.invoice_file.url"),
-        "image/download url placeholder not interpolated"
+        air_str.contains("fn __pluck("),
+        "null-safe accessor helper not injected"
     );
     assert!(
-        air_str.contains("input.invoice_file.filename"),
-        "download filename placeholder not interpolated"
+        air_str.contains("__pluck(input, ["),
+        "placeholders not rewritten to __pluck accessors"
     );
-    assert!(
-        air_str.contains("input.invoice_file.content_type"),
-        "download mime_type placeholder not interpolated"
-    );
+    for field in ["invoice_file", "filename", "content_type"] {
+        assert!(
+            air_str.contains(field),
+            "interpolated path missing {field:?}"
+        );
+    }
     // The raw placeholder must NOT survive into the compiled net.
     assert!(
         !air_str.contains("{{ invoice_file.url }}"),

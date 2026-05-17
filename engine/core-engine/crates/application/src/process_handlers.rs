@@ -219,6 +219,89 @@ impl EffectHandler for ProcessCompleteHandler {
     }
 }
 
+/// Effect handler that marks a process as failed.
+///
+/// **Tolerant** counterpart to [`ProcessCompleteHandler`]. Authored Failure
+/// control nodes pass through the plain workflow token with **no read-arc**, so
+/// — unlike `process_complete` — a `process_id` is *not* required in the token
+/// and its absence is **not** an error. The owning process is resolved by the
+/// causality tag graph in Mekhan's projection layer, exactly as the
+/// `process_log_*` breadcrumbs are. The `reason` (interpolated failure message)
+/// is echoed into the effect_result for the projection to persist.
+pub struct ProcessFailHandler;
+
+impl ProcessFailHandler {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for ProcessFailHandler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait::async_trait]
+impl EffectHandler for ProcessFailHandler {
+    async fn execute(&self, input: EffectInput) -> Result<EffectOutput, EffectError> {
+        // process_id is OPTIONAL here (no read-arc on the authored node) — never
+        // a fatal error if absent. Mekhan resolves the process via the token
+        // tag graph regardless.
+        let process_id = input
+            .read_inputs
+            .values()
+            .chain(input.inputs.values())
+            .find_map(|v| v.get("process_id").and_then(|p| p.as_str()))
+            .map(|s| s.to_string());
+
+        // Reason is the interpolated failure message the compiler placed on the
+        // breadcrumb token (`#{ reason: <msg> }`).
+        let reason = input
+            .read_inputs
+            .values()
+            .chain(input.inputs.values())
+            .find_map(|v| v.get("reason").and_then(|r| r.as_str()))
+            .unwrap_or("")
+            .to_string();
+
+        // Pass through (same single/merged branching as ProcessCompleteHandler).
+        let mut tokens = HashMap::new();
+        if input.inputs.len() == 1 {
+            let data = input.inputs.values().next().unwrap();
+            tokens.insert("failed".to_string(), data.clone());
+        } else {
+            let mut merged = serde_json::Map::new();
+            for (_, data) in &input.inputs {
+                if let Some(obj) = data.as_object() {
+                    merged.extend(obj.clone());
+                }
+            }
+            tokens.insert("failed".to_string(), JsonValue::Object(merged));
+        }
+
+        let mut result = serde_json::Map::new();
+        if let Some(pid) = process_id {
+            result.insert("process_id".to_string(), JsonValue::String(pid));
+        }
+        result.insert("failed".to_string(), JsonValue::Bool(true));
+        result.insert("reason".to_string(), JsonValue::String(reason));
+
+        Ok(EffectOutput {
+            tokens,
+            result: JsonValue::Object(result),
+        })
+    }
+
+    fn replay(&self, _input: &EffectInput, _stored_result: &JsonValue) {
+        // Stateless
+    }
+
+    fn name(&self) -> &str {
+        "process_fail"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -239,6 +322,64 @@ mod tests {
     fn test_process_complete_handler_no_port_schemas() {
         let handler = ProcessCompleteHandler::new();
         assert!(handler.port_schemas().is_none());
+    }
+
+    #[test]
+    fn test_process_fail_handler_no_port_schemas() {
+        let handler = ProcessFailHandler::new();
+        assert!(handler.port_schemas().is_none());
+    }
+
+    #[tokio::test]
+    async fn process_fail_passes_through_and_echoes_reason_without_process_id() {
+        // Authored Failure nodes have NO read-arc → the token carries no
+        // process_id. The handler must NOT error and must echo the reason.
+        let handler = ProcessFailHandler::new();
+        let mut inputs = HashMap::new();
+        inputs.insert(
+            "failure".to_string(),
+            serde_json::json!({ "reason": "boom 42", "order_id": "42" }),
+        );
+        let out = handler
+            .execute(EffectInput {
+                transition_id: petri_domain::TransitionId::named("t_n_fail_emit"),
+                inputs,
+                config: None,
+                read_inputs: HashMap::new(),
+                process_step: None,
+            })
+            .await
+            .expect("process_fail must not error when process_id is absent");
+
+        assert_eq!(out.result["failed"], true);
+        assert_eq!(out.result["reason"], "boom 42");
+        assert!(out.result.get("process_id").is_none());
+        // Token passed through unchanged on the `failed` port.
+        assert_eq!(out.tokens["failed"]["order_id"], "42");
+    }
+
+    #[tokio::test]
+    async fn process_fail_surfaces_process_id_when_present() {
+        let handler = ProcessFailHandler::new();
+        let mut read_inputs = HashMap::new();
+        read_inputs.insert(
+            "process".to_string(),
+            serde_json::json!({ "process_id": "inv-7" }),
+        );
+        let mut inputs = HashMap::new();
+        inputs.insert("failure".to_string(), serde_json::json!({ "reason": "x" }));
+        let out = handler
+            .execute(EffectInput {
+                transition_id: petri_domain::TransitionId::named("t_n_fail_emit"),
+                inputs,
+                config: None,
+                read_inputs,
+                process_step: None,
+            })
+            .await
+            .expect("handler ok");
+        assert_eq!(out.result["process_id"], "inv-7");
+        assert_eq!(out.result["failed"], true);
     }
 
     use petri_domain::TransitionId;
