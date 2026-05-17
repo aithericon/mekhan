@@ -15,7 +15,7 @@ use crate::models::instance::{
 use crate::models::responses::InstanceEventsResponse;
 use crate::models::template::{PaginatedResponse, WorkflowGraph, WorkflowTemplate};
 use crate::petri::events::fetch_events;
-use crate::petri::instance::{deploy_instance, parameterize_air, ParameterizeError};
+use crate::petri::launcher::{InstanceLauncher, LaunchError, LaunchSpec};
 use crate::AppState;
 
 /// POST /api/instances
@@ -66,62 +66,33 @@ pub async fn create_instance(
     let net_id = format!("mekhan-{instance_id}");
     let metadata = req.metadata.clone().unwrap_or(json!({}));
 
-    // Parameterize AIR JSON for this instance. Validation failures (missing
-    // start_tokens, kind mismatch, etc.) become 400s — the request is invalid.
-    let parameterized_air = parameterize_air(
-        &air_json,
-        instance_id,
-        template.id,
-        template.version,
-        created_by,
-        &graph,
-        &req.start_tokens,
-    )
-    .map_err(|e| match e {
-        ParameterizeError::MissingStartTokens(_)
-        | ParameterizeError::UnknownStartBlock(_)
-        | ParameterizeError::DuplicateStartToken(_)
-        | ParameterizeError::TokenNotObject(_)
-        | ParameterizeError::MissingRequiredField { .. }
-        | ParameterizeError::FieldKindMismatch { .. } => ApiError::bad_request(e.to_string()),
-    })?;
-
-    // Insert instance record FIRST so the lifecycle listener can find it
-    // if the net completes before we return.
-    let instance = sqlx::query_as::<_, WorkflowInstance>(
-        r#"
-        INSERT INTO workflow_instances (id, template_id, template_version, net_id, status, created_by, started_at, metadata)
-        VALUES ($1, $2, $3, $4, 'running', $5, NOW(), $6)
-        RETURNING *
-        "#,
-    )
-    .bind(instance_id)
-    .bind(template.id)
-    .bind(template.version)
-    .bind(&net_id)
-    .bind(created_by)
-    .bind(&metadata)
-    .fetch_one(&state.db)
-    .await
-    .map_err(|e| {
-        tracing::error!("failed to insert instance: {e}");
-        ApiError::internal(e.to_string())
-    })?;
-
-    // Deploy to petri-lab (DB row already exists for lifecycle listener).
-    // On failure we must clean up the DB row before bubbling the error — the
-    // listener would otherwise see a never-deployed instance forever.
-    if let Err(e) = deploy_instance(&state.petri, &net_id, &parameterized_air).await {
-        tracing::error!("failed to deploy instance to petri-lab: {e}");
-        let _ = sqlx::query("DELETE FROM workflow_instances WHERE id = $1")
-            .bind(instance_id)
-            .execute(&state.db)
-            .await;
-        return Err(ApiError::new(
-            StatusCode::BAD_GATEWAY,
-            format!("failed to deploy to engine: {e}"),
-        ));
-    }
+    // Parameterize → insert row (before deploy, for the lifecycle listener) →
+    // deploy → roll back the row on deploy failure. The launcher owns that
+    // sequence; here we only translate its failures to HTTP statuses:
+    // parameterize failures are caller error (400), a deploy failure is an
+    // engine fault (502).
+    let launcher = InstanceLauncher::new(&state.db, &state.petri);
+    let instance = launcher
+        .launch(LaunchSpec {
+            instance_id,
+            net_id,
+            template_id: template.id,
+            template_version: template.version,
+            created_by,
+            metadata,
+            air_json: &air_json,
+            graph: &graph,
+            start_tokens: &req.start_tokens,
+        })
+        .await
+        .map_err(|e| match e {
+            LaunchError::Parameterize(pe) => ApiError::bad_request(pe.to_string()),
+            LaunchError::Database(msg) => ApiError::internal(msg),
+            LaunchError::Deploy(msg) => ApiError::new(
+                StatusCode::BAD_GATEWAY,
+                format!("failed to deploy to engine: {msg}"),
+            ),
+        })?;
 
     Ok((StatusCode::CREATED, Json(instance)))
 }

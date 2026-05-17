@@ -11,11 +11,11 @@ use serde_json::{json, Value};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::models::instance::{StartToken, WorkflowInstance};
+use crate::models::instance::StartToken;
 use crate::models::template::{WorkflowGraph, WorkflowNodeData, WorkflowTemplate};
 use crate::nats::MekhanNats;
 use crate::petri::client::PetriClient;
-use crate::petri::instance::{deploy_instance, parameterize_air};
+use crate::petri::launcher::{InstanceLauncher, LaunchSpec};
 
 use super::model::{
     locate_trigger, FireOutcome, FireResult, TriggerError, TriggerKind, TriggerLocator,
@@ -403,48 +403,30 @@ impl TriggerDispatcher {
             token,
         }];
 
-        let parameterized = parameterize_air(
-            &air_json,
-            instance_id,
-            template.id,
-            template.version,
-            created_by,
-            graph,
-            &start_tokens,
-        )
-        .map_err(|e| TriggerError::InstanceFailed(e.to_string()))?;
-
         // Audit metadata: who triggered this and which template version.
         let metadata = json!({
             "triggered_by": record.node_id,
             "trigger_kind": record.source.kind(),
         });
 
-        let instance = sqlx::query_as::<_, WorkflowInstance>(
-            r#"
-            INSERT INTO workflow_instances (id, template_id, template_version, net_id, status, created_by, started_at, metadata)
-            VALUES ($1, $2, $3, $4, 'running', $5, NOW(), $6)
-            RETURNING *
-            "#,
-        )
-        .bind(instance_id)
-        .bind(template.id)
-        .bind(template.version)
-        .bind(&net_id)
-        .bind(created_by)
-        .bind(&metadata)
-        .fetch_one(&self.db)
-        .await
-        .map_err(|e| TriggerError::Database(e.to_string()))?;
-
-        if let Err(e) = deploy_instance(&self.petri, &net_id, &parameterized).await {
-            // Roll back the row to keep lifecycle from observing a phantom.
-            let _ = sqlx::query("DELETE FROM workflow_instances WHERE id = $1")
-                .bind(instance_id)
-                .execute(&self.db)
-                .await;
-            return Err(TriggerError::InstanceFailed(format!("deploy: {e}")));
-        }
+        // Same parameterize → insert → deploy → rollback sequence as the user
+        // POST path, owned by the launcher. A spawn folds every launch failure
+        // into InstanceFailed (the dropped-fire is recorded by the caller).
+        let launcher = InstanceLauncher::new(&self.db, &self.petri);
+        let instance = launcher
+            .launch(LaunchSpec {
+                instance_id,
+                net_id,
+                template_id: template.id,
+                template_version: template.version,
+                created_by,
+                metadata,
+                air_json: &air_json,
+                graph,
+                start_tokens: &start_tokens,
+            })
+            .await
+            .map_err(|e| TriggerError::InstanceFailed(e.to_string()))?;
 
         Ok(FireOutcome::Spawned {
             instance_id: instance.id,
