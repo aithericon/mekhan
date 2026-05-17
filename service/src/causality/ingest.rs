@@ -906,6 +906,26 @@ async fn resolve_process_ids(
     .await
 }
 
+/// Resolve the set of processes for `consumed`+`read` tokens, returning early
+/// from the *caller* when none resolve.
+///
+/// Every breadcrumb projector opens with the same three lines: resolve the
+/// process IDs, bail if empty, then loop per process. This macro collapses the
+/// first two — `let pids = resolved_or_done!(db, consumed, read);` — leaving
+/// each projector with only its parse + per-pid write specifics. It expands to
+/// a `Vec` binding (not a closure-driven loop) so each projector's
+/// `await`-in-loop borrows stay trivial and behavior is byte-identical to the
+/// hand-written form it replaces.
+macro_rules! resolved_or_done {
+    ($db:expr, $consumed:expr, $read:expr) => {{
+        let pids = resolve_process_ids($db, $consumed, $read).await?;
+        if pids.is_empty() {
+            return Ok(());
+        }
+        pids
+    }};
+}
+
 /// Project a step breadcrumb into hpi_processes.config['step_events'].
 ///
 /// Records step transitions (started/completed) against each process the
@@ -918,10 +938,7 @@ async fn record_step_event(
     step_completed: Option<&str>,
     ts: chrono::DateTime<chrono::Utc>,
 ) -> Result<(), sqlx::Error> {
-    let process_ids = resolve_process_ids(db, consumed_ids, read_ids).await?;
-    if process_ids.is_empty() {
-        return Ok(());
-    }
+    let process_ids = resolved_or_done!(db, consumed_ids, read_ids);
 
     for pid in &process_ids {
         let event = serde_json::json!({
@@ -1036,10 +1053,7 @@ async fn record_phase_event(
         PhaseStatus::Completed | PhaseStatus::Failed | PhaseStatus::Skipped
     );
 
-    let process_ids = resolve_process_ids(db, consumed_ids, read_ids).await?;
-    if process_ids.is_empty() {
-        return Ok(());
-    }
+    let process_ids = resolved_or_done!(db, consumed_ids, read_ids);
 
     for pid in &process_ids {
         let mut progress = load_progress(db, pid, ts).await?;
@@ -1105,10 +1119,7 @@ async fn record_progress_event(
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
 
-    let process_ids = resolve_process_ids(db, consumed_ids, read_ids).await?;
-    if process_ids.is_empty() {
-        return Ok(());
-    }
+    let process_ids = resolved_or_done!(db, consumed_ids, read_ids);
 
     for pid in &process_ids {
         let mut progress = load_progress(db, pid, ts).await?;
@@ -1173,7 +1184,7 @@ async fn record_metric_event(
         return Ok(());
     }
 
-    let process_ids = resolve_process_ids(db, consumed_ids, read_ids).await?;
+    let process_ids = resolved_or_done!(db, consumed_ids, read_ids);
     let signal_key = resolve_signal_key_from_consumed(db, consumed_ids).await?;
     for pid in &process_ids {
         sqlx::query(
@@ -1217,7 +1228,7 @@ async fn record_log_event(
     let message = effect_result.get("message").and_then(|v| v.as_str()).unwrap_or("");
     let detail = effect_result.get("detail").cloned().unwrap_or(serde_json::json!({}));
 
-    let process_ids = resolve_process_ids(db, consumed_ids, read_ids).await?;
+    let process_ids = resolved_or_done!(db, consumed_ids, read_ids);
     let signal_key = resolve_signal_key_from_consumed(db, consumed_ids).await?;
     for pid in &process_ids {
         sqlx::query(
