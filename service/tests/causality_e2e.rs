@@ -305,6 +305,7 @@ async fn causality_full_pipeline() {
         token_verifier,
         principal_resolver,
         introspection: None,
+        zitadel_mgmt: None,
         triggers,
         result_waiters: mekhan_service::triggers::ResultWaiters::new(),
     });
