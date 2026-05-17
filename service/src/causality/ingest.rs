@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use chrono::Utc;
 use futures::StreamExt;
 use serde::Deserialize;
@@ -297,83 +298,31 @@ async fn process_domain_event(
                 .await?;
             }
 
-            // Enrich auto-discovered processes with process_start metadata.
-            // The process_start effect can fire at any point in the process lifecycle,
-            // not just at the start. Its consumed/read tokens carry process tags
-            // from seed tokens. We update those process rows with the name,
-            // description, and steps from the effect result.
-            if effect_handler_id == "process_start" {
-                enrich_processes_from_start_event(db, &consumed_ids, &read_ids, effect_result, ts).await?;
-            }
-
-            // Mark process as completed when process_complete effect fires.
-            if effect_handler_id == "process_complete" {
-                complete_processes(db, &consumed_ids, &read_ids, ts).await?;
-            }
-
-            // Mark process as failed when the process_fail effect fires. The
-            // net keeps running to its normal End — this is a process-level
-            // marker, not a net kill-switch — so workflow_instances.status is
-            // intentionally left untouched.
-            if effect_handler_id == "process_fail" {
-                fail_processes(db, &consumed_ids, &read_ids, effect_result, ts).await?;
-            }
-
-            // Breadcrumb: log metric effect → write to hpi_metrics
-            if effect_handler_id == "process_log_metric" {
-                record_metric_event(db, &consumed_ids, &read_ids, effect_result, ts, live).await?;
-                // Canonical projection: executor ProgressUpdated arrives reshaped
-                // as a metric keyed "progress_fraction" — fold it into the
-                // typed config.progress alongside (not instead of) the metric.
-                if effect_result.get("key").and_then(|v| v.as_str()) == Some("progress_fraction") {
-                    record_progress_event(db, &consumed_ids, &read_ids, effect_result, ts).await?;
-                }
-            }
-
-            // Breadcrumb: log message effect → write to hpi_logs
-            if effect_handler_id == "process_log_message" {
-                record_log_event(db, &consumed_ids, &read_ids, effect_result, ts, live).await?;
-                // Canonical projection: executor PhaseChanged arrives reshaped
-                // as a log (source "executor-phase"); fold it into the typed
-                // config.progress.phases alongside (not instead of) the log.
-                let is_phase = effect_result.get("source").and_then(|v| v.as_str())
-                    == Some("executor-phase")
-                    || effect_result
-                        .get("detail")
-                        .and_then(|d| d.get("event_type"))
-                        .and_then(|v| v.as_str())
-                        == Some("phase_changed");
-                if is_phase {
-                    record_phase_event(db, &consumed_ids, &read_ids, effect_result, ts).await?;
-                }
-            }
-
-            // Breadcrumb: human task effect → write to hpi_tasks
-            if effect_handler_id == "human_task" {
-                record_task_event(db, &consumed_ids, &read_ids, effect_result, ts).await?;
-            }
-
-            // Catalogue registration: the effect_result IS the full
-            // CatalogueRegisterCommand. Resolve provenance from our
-            // causality context and insert directly.
-            if effect_handler_id == "catalogue_register" {
-                register_catalogue_entry(
+            // Dispatch the effect_handler_id-keyed causality side-effects.
+            // The registry owns the id→projector mapping; an unknown id is a
+            // visible no-op (`None`), not a silently-missing ladder arm.
+            if let Some(projector) = projector_for(effect_handler_id) {
+                let ctx = ProjectorCtx {
                     db,
                     net_id,
                     seq,
-                    &consumed_ids,
-                    &read_ids,
+                    consumed_ids: &consumed_ids,
+                    read_ids: &read_ids,
                     effect_result,
-                    process_step_completed.as_deref()
+                    process_step: process_step_completed
+                        .as_deref()
                         .or(process_step_started.as_deref()),
                     ts,
                     subscription_manager,
                     live,
                     triggers,
-                ).await?;
+                };
+                projector.project(&ctx).await?;
             }
 
-            // Step breadcrumb (same as TransitionFired)
+            // Step breadcrumb (same as TransitionFired). Not keyed by
+            // effect_handler_id — runs for any EffectCompleted carrying a
+            // step annotation, so it stays outside the registry.
             if process_step_started.is_some() || process_step_completed.is_some() {
                 record_step_event(
                     db,
@@ -662,6 +611,215 @@ async fn process_domain_event(
     Ok(())
 }
 
+/// Decoded `EffectCompleted` envelope handed to a [`Projector`].
+///
+/// `process_domain_event` does the generic envelope work (insert the
+/// `causality_events` row, the event tokens, propagate process tags, record
+/// signal cross-links) and then asks the registry for the projector matching
+/// `effect_handler_id`. Everything an `effect_handler_id`-keyed projector
+/// could need is bundled here so dispatch is a single call. Lifetimes are all
+/// borrowed from the `process_domain_event` frame — `ProjectorCtx` is built,
+/// used, and dropped within one event.
+struct ProjectorCtx<'a> {
+    db: &'a PgPool,
+    net_id: &'a str,
+    seq: i64,
+    consumed_ids: &'a [String],
+    read_ids: &'a [String],
+    effect_result: &'a serde_json::Value,
+    /// `process_step_completed` falling back to `process_step_started`, the
+    /// exact precedence the old inline `catalogue_register` arm used.
+    process_step: Option<&'a str>,
+    ts: chrono::DateTime<chrono::Utc>,
+    subscription_manager: &'a SubscriptionManager,
+    live: &'a LiveBroadcasts,
+    triggers: Option<&'a TriggerDispatcher>,
+}
+
+/// One `effect_handler_id` → causality side-effect mapping.
+///
+/// Each implementation owns exactly the block that used to live behind an
+/// `if effect_handler_id == "..."` guard in `process_domain_event`, including
+/// any folded canonical projections (e.g. a `progress_fraction` metric also
+/// updating typed progress). The registry ([`projector_for`]) makes the set
+/// of handled ids explicit: an unknown id resolves to `None` and is a no-op
+/// by construction, not silently lost in a ladder.
+#[async_trait]
+trait Projector: Sync {
+    async fn project(&self, ctx: &ProjectorCtx<'_>) -> Result<(), sqlx::Error>;
+}
+
+struct ProcessStart;
+#[async_trait]
+impl Projector for ProcessStart {
+    async fn project(&self, ctx: &ProjectorCtx<'_>) -> Result<(), sqlx::Error> {
+        // The process_start effect can fire at any point in the process
+        // lifecycle, not just at the start. Its consumed/read tokens carry
+        // process tags from seed tokens. We update those process rows with
+        // the name, description, and steps from the effect result.
+        enrich_processes_from_start_event(
+            ctx.db,
+            ctx.consumed_ids,
+            ctx.read_ids,
+            ctx.effect_result,
+            ctx.ts,
+        )
+        .await
+    }
+}
+
+struct ProcessComplete;
+#[async_trait]
+impl Projector for ProcessComplete {
+    async fn project(&self, ctx: &ProjectorCtx<'_>) -> Result<(), sqlx::Error> {
+        complete_processes(ctx.db, ctx.consumed_ids, ctx.read_ids, ctx.ts).await
+    }
+}
+
+struct ProcessFail;
+#[async_trait]
+impl Projector for ProcessFail {
+    async fn project(&self, ctx: &ProjectorCtx<'_>) -> Result<(), sqlx::Error> {
+        // The net keeps running to its normal End — this is a process-level
+        // marker, not a net kill-switch — so workflow_instances.status is
+        // intentionally left untouched.
+        fail_processes(
+            ctx.db,
+            ctx.consumed_ids,
+            ctx.read_ids,
+            ctx.effect_result,
+            ctx.ts,
+        )
+        .await
+    }
+}
+
+struct ProcessLogMetric;
+#[async_trait]
+impl Projector for ProcessLogMetric {
+    async fn project(&self, ctx: &ProjectorCtx<'_>) -> Result<(), sqlx::Error> {
+        record_metric_event(
+            ctx.db,
+            ctx.consumed_ids,
+            ctx.read_ids,
+            ctx.effect_result,
+            ctx.ts,
+            ctx.live,
+        )
+        .await?;
+        // Canonical projection: executor ProgressUpdated arrives reshaped as
+        // a metric keyed "progress_fraction" — fold it into the typed
+        // config.progress alongside (not instead of) the metric.
+        if ctx.effect_result.get("key").and_then(|v| v.as_str()) == Some("progress_fraction") {
+            record_progress_event(
+                ctx.db,
+                ctx.consumed_ids,
+                ctx.read_ids,
+                ctx.effect_result,
+                ctx.ts,
+            )
+            .await?;
+        }
+        Ok(())
+    }
+}
+
+struct ProcessLogMessage;
+#[async_trait]
+impl Projector for ProcessLogMessage {
+    async fn project(&self, ctx: &ProjectorCtx<'_>) -> Result<(), sqlx::Error> {
+        record_log_event(
+            ctx.db,
+            ctx.consumed_ids,
+            ctx.read_ids,
+            ctx.effect_result,
+            ctx.ts,
+            ctx.live,
+        )
+        .await?;
+        // Canonical projection: executor PhaseChanged arrives reshaped as a
+        // log (source "executor-phase"); fold it into the typed
+        // config.progress.phases alongside (not instead of) the log.
+        let is_phase = ctx.effect_result.get("source").and_then(|v| v.as_str())
+            == Some("executor-phase")
+            || ctx
+                .effect_result
+                .get("detail")
+                .and_then(|d| d.get("event_type"))
+                .and_then(|v| v.as_str())
+                == Some("phase_changed");
+        if is_phase {
+            record_phase_event(
+                ctx.db,
+                ctx.consumed_ids,
+                ctx.read_ids,
+                ctx.effect_result,
+                ctx.ts,
+            )
+            .await?;
+        }
+        Ok(())
+    }
+}
+
+struct HumanTask;
+#[async_trait]
+impl Projector for HumanTask {
+    async fn project(&self, ctx: &ProjectorCtx<'_>) -> Result<(), sqlx::Error> {
+        record_task_event(
+            ctx.db,
+            ctx.consumed_ids,
+            ctx.read_ids,
+            ctx.effect_result,
+            ctx.ts,
+        )
+        .await
+    }
+}
+
+struct CatalogueRegister;
+#[async_trait]
+impl Projector for CatalogueRegister {
+    async fn project(&self, ctx: &ProjectorCtx<'_>) -> Result<(), sqlx::Error> {
+        // The effect_result IS the full CatalogueRegisterCommand. Resolve
+        // provenance from our causality context and insert directly.
+        register_catalogue_entry(
+            ctx.db,
+            ctx.net_id,
+            ctx.seq,
+            ctx.consumed_ids,
+            ctx.read_ids,
+            ctx.effect_result,
+            ctx.process_step,
+            ctx.ts,
+            ctx.subscription_manager,
+            ctx.live,
+            ctx.triggers,
+        )
+        .await
+    }
+}
+
+/// Registry: map an `effect_handler_id` to the projector that owns its
+/// causality side-effects, or `None` when no projector handles it.
+///
+/// This is the single place the handled-id set is declared. Adding a
+/// projector means adding one arm here; a missing projector is a visible
+/// `None` (a structural no-op) rather than an arm silently absent from a
+/// long `if` ladder.
+fn projector_for(effect_handler_id: &str) -> Option<&'static dyn Projector> {
+    match effect_handler_id {
+        "process_start" => Some(&ProcessStart),
+        "process_complete" => Some(&ProcessComplete),
+        "process_fail" => Some(&ProcessFail),
+        "process_log_metric" => Some(&ProcessLogMetric),
+        "process_log_message" => Some(&ProcessLogMessage),
+        "human_task" => Some(&HumanTask),
+        "catalogue_register" => Some(&CatalogueRegister),
+        _ => None,
+    }
+}
+
 /// Convert a TokenColor into the most useful JSON representation for UI
 /// display: `Data(v)` → `v`, `Integer(n)` → number, `Unit` → null.
 /// The type tag is elided — consumers of the provenance detail endpoint
@@ -906,6 +1064,26 @@ async fn resolve_process_ids(
     .await
 }
 
+/// Resolve the set of processes for `consumed`+`read` tokens, returning early
+/// from the *caller* when none resolve.
+///
+/// Every breadcrumb projector opens with the same three lines: resolve the
+/// process IDs, bail if empty, then loop per process. This macro collapses the
+/// first two — `let pids = resolved_or_done!(db, consumed, read);` — leaving
+/// each projector with only its parse + per-pid write specifics. It expands to
+/// a `Vec` binding (not a closure-driven loop) so each projector's
+/// `await`-in-loop borrows stay trivial and behavior is byte-identical to the
+/// hand-written form it replaces.
+macro_rules! resolved_or_done {
+    ($db:expr, $consumed:expr, $read:expr) => {{
+        let pids = resolve_process_ids($db, $consumed, $read).await?;
+        if pids.is_empty() {
+            return Ok(());
+        }
+        pids
+    }};
+}
+
 /// Project a step breadcrumb into hpi_processes.config['step_events'].
 ///
 /// Records step transitions (started/completed) against each process the
@@ -918,10 +1096,7 @@ async fn record_step_event(
     step_completed: Option<&str>,
     ts: chrono::DateTime<chrono::Utc>,
 ) -> Result<(), sqlx::Error> {
-    let process_ids = resolve_process_ids(db, consumed_ids, read_ids).await?;
-    if process_ids.is_empty() {
-        return Ok(());
-    }
+    let process_ids = resolved_or_done!(db, consumed_ids, read_ids);
 
     for pid in &process_ids {
         let event = serde_json::json!({
@@ -1036,10 +1211,7 @@ async fn record_phase_event(
         PhaseStatus::Completed | PhaseStatus::Failed | PhaseStatus::Skipped
     );
 
-    let process_ids = resolve_process_ids(db, consumed_ids, read_ids).await?;
-    if process_ids.is_empty() {
-        return Ok(());
-    }
+    let process_ids = resolved_or_done!(db, consumed_ids, read_ids);
 
     for pid in &process_ids {
         let mut progress = load_progress(db, pid, ts).await?;
@@ -1105,10 +1277,7 @@ async fn record_progress_event(
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
 
-    let process_ids = resolve_process_ids(db, consumed_ids, read_ids).await?;
-    if process_ids.is_empty() {
-        return Ok(());
-    }
+    let process_ids = resolved_or_done!(db, consumed_ids, read_ids);
 
     for pid in &process_ids {
         let mut progress = load_progress(db, pid, ts).await?;
@@ -1173,7 +1342,7 @@ async fn record_metric_event(
         return Ok(());
     }
 
-    let process_ids = resolve_process_ids(db, consumed_ids, read_ids).await?;
+    let process_ids = resolved_or_done!(db, consumed_ids, read_ids);
     let signal_key = resolve_signal_key_from_consumed(db, consumed_ids).await?;
     for pid in &process_ids {
         sqlx::query(
@@ -1217,7 +1386,7 @@ async fn record_log_event(
     let message = effect_result.get("message").and_then(|v| v.as_str()).unwrap_or("");
     let detail = effect_result.get("detail").cloned().unwrap_or(serde_json::json!({}));
 
-    let process_ids = resolve_process_ids(db, consumed_ids, read_ids).await?;
+    let process_ids = resolved_or_done!(db, consumed_ids, read_ids);
     let signal_key = resolve_signal_key_from_consumed(db, consumed_ids).await?;
     for pid in &process_ids {
         sqlx::query(
