@@ -8,7 +8,8 @@
 #   just dev down         # stop everything
 #   just dev logs <name>  # tail one component
 #   just dev status       # what's running
-#   just dev restart      # down + up
+#   just dev restart      # down + up (data preserved)
+#   just dev reset        # down + wipe pg/nats/rustfs volumes + up
 #
 # Per-component recipes (`up-executor`, `up-engine`, …) restart a single
 # service without touching the rest — useful when iterating.
@@ -62,6 +63,18 @@ down:
 # Restart the whole stack
 restart:
     @just dev::down
+    @just dev::up
+
+# Tears the whole stack down, destroys the postgres + nats + rustfs data
+# volumes, then brings everything back up clean. The native daemons re-run
+# sqlx migrations / recreate the jetstream + S3 bucket on boot, so this
+# yields a pristine environment. Zitadel (zitadel-pgdata) is intentionally
+# left untouched so its bootstrap survives.
+#
+# Complete wipe of pg/nats/rustfs, then back up clean
+reset:
+    @just dev::down
+    @just dev::_infra-wipe
     @just dev::up
 
 # Show what's running
@@ -120,6 +133,23 @@ _infra-up:
 _infra-down:
     @echo "▶ infra down…"
     @docker compose down
+
+# Destroy the postgres + nats + rustfs data volumes. Assumes the stack is
+# already down (see `reset`) so nothing holds the volumes open. Volume names
+# follow docker compose's `<project>_<volume>` convention; project name
+# defaults to the compose dir basename (matches just/db.just's `reset`).
+_infra-wipe:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    project="$(basename "$PWD")"
+    echo "▶ wiping infra data volumes (postgres + nats + rustfs)…"
+    for vol in mekhan-pgdata mekhan-natsdata mekhan-rustfs-data mekhan-rustfs-logs; do
+      if docker volume rm "${project}_${vol}" >/dev/null 2>&1; then
+        echo "  ✓ removed ${project}_${vol}"
+      else
+        echo "  · ${project}_${vol} (absent or already gone)"
+      fi
+    done
 
 _wait-infra:
     #!/usr/bin/env bash
@@ -356,3 +386,4 @@ _summary:
     @echo "  logs   : just dev logs <executor|engine|mekhan|app|infra>"
     @echo "  status : just dev status"
     @echo "  stop   : just dev down"
+    @echo "  wipe   : just dev reset   (destroys pg/nats/rustfs data)"
