@@ -22,12 +22,9 @@ export interface ProcessTimelineEntry {
 	step: string;
 	label: string;
 	status: 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
-	human: boolean;
 	started_at?: string;
 	completed_at?: string;
 	duration_ms?: number;
-	iterations?: number;
-	completed_iterations?: number;
 }
 
 /**
