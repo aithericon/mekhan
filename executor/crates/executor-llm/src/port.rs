@@ -21,6 +21,45 @@ pub trait CompletionPort: Send + Sync {
     fn name(&self) -> &str;
 }
 
+/// A tool the LLM may invoke during a completion.
+///
+/// MCP-spec compatible field names (`input_schema`). Per-provider adapters
+/// normalize to/from provider dialects (`parameters` for Ollama/OpenAI) at
+/// the adapter boundary — internal representation always uses `input_schema`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolDefinition {
+    pub name: String,
+    pub description: String,
+    /// MCP-spec field name. Adapters normalize to provider dialects at the boundary.
+    pub input_schema: serde_json::Value,
+}
+
+/// A tool call emitted by the LLM.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCall {
+    /// Unique identifier for this call instance. Adapters generate a UUID when
+    /// the provider doesn't emit one (e.g., Ollama).
+    pub call_id: String,
+    pub name: String,
+    pub args: serde_json::Value,
+}
+
+/// Error returned when a tool invocation fails.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolError {
+    pub message: String,
+    pub kind: ToolErrorKind,
+}
+
+/// Classification of tool failure modes.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolErrorKind {
+    ExecutionFailed,
+    Timeout,
+    NotFound,
+}
+
 /// Provider-agnostic completion request.
 pub struct CompletionRequest {
     pub model: String,
@@ -28,6 +67,8 @@ pub struct CompletionRequest {
     pub temperature: Option<f64>,
     pub max_tokens: Option<u64>,
     pub response_format: ResponseFormat,
+    /// Tools the LLM may invoke. Empty Vec = no tools available.
+    pub tools: Vec<ToolDefinition>,
 }
 
 /// A single message in the conversation.
@@ -49,6 +90,7 @@ pub struct ImageData {
 }
 
 /// Provider-agnostic completion response — full observability.
+#[derive(Debug)]
 pub struct CompletionResponse {
     pub content: String,
     pub usage: TokenUsage,
@@ -56,6 +98,8 @@ pub struct CompletionResponse {
     pub finish_reason: FinishReason,
     /// Parsed JSON when response_format was JsonSchema.
     pub structured_output: Option<serde_json::Value>,
+    /// Tool calls emitted by the LLM. Empty Vec = LLM produced a terminal response.
+    pub tool_calls: Vec<ToolCall>,
 }
 
 /// Token usage metrics from the LLM provider.
@@ -138,6 +182,7 @@ impl CompletionRequest {
             temperature: config.temperature,
             max_tokens: config.max_tokens,
             response_format,
+            tools: vec![],
         }
     }
 }

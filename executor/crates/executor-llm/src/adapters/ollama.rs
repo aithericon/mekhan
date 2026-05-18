@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::ollama_subprocess::OllamaSubprocess;
 use crate::port::{
     CompletionPort, CompletionRequest, CompletionResponse, FinishReason, LlmError, ResponseFormat,
-    Role, TokenUsage,
+    Role, ToolCall, ToolDefinition, TokenUsage,
 };
 
 /// HTTP-only adapter against an Ollama HTTP endpoint.
@@ -66,6 +66,8 @@ struct OllamaChatRequest<'a> {
     format: Option<&'a serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     options: Option<OllamaOptions>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tools: Vec<OllamaToolDefinition>,
 }
 
 #[derive(Serialize)]
@@ -84,6 +86,21 @@ struct OllamaOptions {
     num_predict: Option<u64>,
 }
 
+/// Ollama tool definition wire shape. Ollama uses `parameters` (not `input_schema`).
+#[derive(Serialize)]
+struct OllamaToolDefinition {
+    r#type: &'static str,
+    function: OllamaToolFunction,
+}
+
+#[derive(Serialize)]
+struct OllamaToolFunction {
+    name: String,
+    description: String,
+    /// Ollama's dialect uses `parameters` where internal representation uses `input_schema`.
+    parameters: serde_json::Value,
+}
+
 #[derive(Deserialize)]
 struct OllamaChatResponse {
     message: OllamaResponseMessage,
@@ -99,7 +116,22 @@ struct OllamaChatResponse {
 
 #[derive(Deserialize)]
 struct OllamaResponseMessage {
+    #[serde(default)]
     content: String,
+    #[serde(default)]
+    tool_calls: Vec<OllamaToolCall>,
+}
+
+/// Ollama's tool_call wire shape.
+#[derive(Deserialize)]
+struct OllamaToolCall {
+    function: OllamaToolCallFunction,
+}
+
+#[derive(Deserialize)]
+struct OllamaToolCallFunction {
+    name: String,
+    arguments: serde_json::Value,
 }
 
 fn role_str(role: &Role) -> &'static str {
@@ -115,6 +147,17 @@ fn parse_done_reason(reason: Option<&str>) -> FinishReason {
         Some("stop") | None => FinishReason::Stop,
         Some("length") => FinishReason::Length,
         Some(other) => FinishReason::Other(other.to_string()),
+    }
+}
+
+fn tool_definition_to_ollama(def: &ToolDefinition) -> OllamaToolDefinition {
+    OllamaToolDefinition {
+        r#type: "function",
+        function: OllamaToolFunction {
+            name: def.name.clone(),
+            description: def.description.clone(),
+            parameters: def.input_schema.clone(),
+        },
     }
 }
 
@@ -153,12 +196,19 @@ async fn ollama_complete(
         None
     };
 
+    let tools: Vec<OllamaToolDefinition> = request
+        .tools
+        .iter()
+        .map(tool_definition_to_ollama)
+        .collect();
+
     let body = OllamaChatRequest {
         model: &request.model,
         messages,
         stream: false,
         format,
         options,
+        tools,
     };
 
     let url = format!("{}/api/chat", base_url.trim_end_matches('/'));
@@ -195,6 +245,18 @@ async fn ollama_complete(
         total_tokens: resp.prompt_eval_count + resp.eval_count,
     };
 
+    // Ollama doesn't emit call_ids; generate a UUID per call.
+    let tool_calls: Vec<ToolCall> = resp
+        .message
+        .tool_calls
+        .into_iter()
+        .map(|tc| ToolCall {
+            call_id: uuid_v4(),
+            name: tc.function.name,
+            args: tc.function.arguments,
+        })
+        .collect();
+
     // Parse structured output when using json_schema format
     let structured_output = match &request.response_format {
         ResponseFormat::JsonSchema { .. } => {
@@ -216,5 +278,26 @@ async fn ollama_complete(
         model: resp.model,
         finish_reason,
         structured_output,
+        tool_calls,
     })
+}
+
+/// Generate a random UUID v4 string for call_ids. Avoids pulling in the `uuid`
+/// crate into a hot path — the value only needs to be unique within a run.
+fn uuid_v4() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    format!("call_{:08x}_{:08x}", nanos, pseudo_random())
+}
+
+fn pseudo_random() -> u32 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut h = DefaultHasher::new();
+    std::thread::current().id().hash(&mut h);
+    std::time::Instant::now().elapsed().subsec_nanos().hash(&mut h);
+    h.finish() as u32
 }

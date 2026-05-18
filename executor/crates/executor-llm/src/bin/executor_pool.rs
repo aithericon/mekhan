@@ -38,8 +38,8 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use aithericon_executor_llm::{
-    register_as_pool, spawn_pool_listener, OllamaSubprocess, OllamaSubprocessConfig,
-    PoolBootConfig,
+    pool_listener::ToolResultsState, register_as_pool, spawn_pool_listener, OllamaSubprocess,
+    OllamaSubprocessConfig, PoolBootConfig,
 };
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::layer::SubscriberExt;
@@ -122,18 +122,21 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    // 3. Pool listener (healthz + inference + /v1/models/{load,evict}).
+    // 3. Pool listener (healthz + inference + /v1/models/{load,evict} +
+    //    /v1/runs/{run_id}/tool_results).
     //    OllamaAdapter is the sole CompletionPort in the pool binary —
     //    Anthropic/OpenAI adapters are not wired here since this executor
     //    manages a local Ollama subprocess.
     let llm_port: Arc<dyn aithericon_executor_llm::CompletionPort> =
         Arc::new(aithericon_executor_llm::adapters::ollama::OllamaAdapter);
     let listener_cancel = CancellationToken::new();
+    let tool_results_state = ToolResultsState::new();
     let _actual_addr = spawn_pool_listener(
         pool_bind,
         listener_cancel.clone(),
         llm_port,
         Arc::clone(&ollama),
+        tool_results_state,
     )
     .await?;
     tracing::info!(

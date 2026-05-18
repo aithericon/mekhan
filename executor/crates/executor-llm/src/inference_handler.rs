@@ -159,6 +159,7 @@ pub(crate) async fn run_completion(
         temperature: req.temperature,
         max_tokens: req.max_tokens,
         response_format,
+        tools: vec![],
     };
 
     let completion = port.complete(&completion_req, env).await.map_err(|e| {
@@ -244,6 +245,7 @@ mod tests {
                         total_tokens: 30,
                     },
                     structured_output: None,
+                    tool_calls: vec![],
                 }),
             }
         }
@@ -267,6 +269,7 @@ mod tests {
                     finish_reason: r.finish_reason.clone(),
                     usage: r.usage.clone(),
                     structured_output: r.structured_output.clone(),
+                    tool_calls: r.tool_calls.clone(),
                 }),
                 Err(LlmError::Api(s)) => Err(LlmError::Api(s.clone())),
                 Err(LlmError::Config(s)) => Err(LlmError::Config(s.clone())),

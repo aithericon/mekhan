@@ -4,8 +4,8 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use crate::port::{
-    CompletionPort, CompletionRequest, CompletionResponse, FinishReason, LlmError,
-    ResponseFormat, Role, TokenUsage,
+    CompletionPort, CompletionRequest, CompletionResponse, FinishReason, LlmError, ResponseFormat,
+    Role, ToolCall, ToolDefinition, TokenUsage,
 };
 
 pub struct OpenAiAdapter;
@@ -48,6 +48,23 @@ struct OpenAiChatRequest<'a> {
     temperature: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tools: Vec<OpenAiToolDefinition>,
+}
+
+/// OpenAI tool definition wire shape. Uses `parameters` (not `input_schema`).
+#[derive(Serialize)]
+struct OpenAiToolDefinition {
+    r#type: &'static str,
+    function: OpenAiToolFunction,
+}
+
+#[derive(Serialize)]
+struct OpenAiToolFunction {
+    name: String,
+    description: String,
+    /// OpenAI's dialect uses `parameters` where internal representation uses `input_schema`.
+    parameters: serde_json::Value,
 }
 
 #[derive(Serialize)]
@@ -112,6 +129,22 @@ struct OpenAiChoice {
 #[derive(Deserialize)]
 struct OpenAiResponseMessage {
     content: Option<String>,
+    #[serde(default)]
+    tool_calls: Vec<OpenAiToolCall>,
+}
+
+/// OpenAI tool_call wire shape.
+#[derive(Deserialize)]
+struct OpenAiToolCall {
+    id: String,
+    function: OpenAiToolCallFunction,
+}
+
+#[derive(Deserialize)]
+struct OpenAiToolCallFunction {
+    name: String,
+    /// OpenAI emits args as a JSON string; we parse it to a Value.
+    arguments: String,
 }
 
 #[derive(Deserialize, Default)]
@@ -138,6 +171,17 @@ fn parse_finish_reason(reason: Option<&str>) -> FinishReason {
         Some("length") => FinishReason::Length,
         Some("content_filter") => FinishReason::ContentFilter,
         Some(other) => FinishReason::Other(other.to_string()),
+    }
+}
+
+fn tool_definition_to_openai(def: &ToolDefinition) -> OpenAiToolDefinition {
+    OpenAiToolDefinition {
+        r#type: "function",
+        function: OpenAiToolFunction {
+            name: def.name.clone(),
+            description: def.description.clone(),
+            parameters: def.input_schema.clone(),
+        },
     }
 }
 
@@ -187,12 +231,19 @@ async fn openai_complete(
         }),
     };
 
+    let tools: Vec<OpenAiToolDefinition> = request
+        .tools
+        .iter()
+        .map(tool_definition_to_openai)
+        .collect();
+
     let body = OpenAiChatRequest {
         model: &request.model,
         messages,
         response_format,
         temperature: request.temperature,
         max_tokens: request.max_tokens,
+        tools,
     };
 
     let url = format!(
@@ -242,6 +293,22 @@ async fn openai_complete(
         total_tokens: resp.usage.total_tokens,
     };
 
+    // OpenAI emits arguments as a JSON string; parse each to a Value.
+    let tool_calls: Vec<ToolCall> = choice
+        .message
+        .tool_calls
+        .iter()
+        .map(|tc| {
+            let args: serde_json::Value =
+                serde_json::from_str(&tc.function.arguments).unwrap_or(serde_json::Value::Null);
+            ToolCall {
+                call_id: tc.id.clone(),
+                name: tc.function.name.clone(),
+                args,
+            }
+        })
+        .collect();
+
     // Parse structured output when using json_schema format
     let structured_output = match &request.response_format {
         ResponseFormat::JsonSchema { .. } => {
@@ -261,5 +328,6 @@ async fn openai_complete(
         model: resp.model,
         finish_reason,
         structured_output,
+        tool_calls,
     })
 }

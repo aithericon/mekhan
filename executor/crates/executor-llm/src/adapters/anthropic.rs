@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::port::{
     CompletionPort, CompletionRequest, CompletionResponse, FinishReason, LlmError, ResponseFormat,
-    Role, TokenUsage,
+    Role, ToolCall, TokenUsage,
 };
 
 pub struct AnthropicAdapter;
@@ -114,7 +114,8 @@ enum AnthropicContent {
     Text { text: String },
     #[serde(rename = "tool_use")]
     ToolUse {
-        #[allow(dead_code)]
+        /// Anthropic emits `id` natively; used as call_id in ToolCall.
+        id: String,
         name: String,
         input: serde_json::Value,
     },
@@ -183,7 +184,10 @@ async fn anthropic_complete(
         }
     }
 
-    // For structured output, use tool_use with a single "extract" tool
+    // For structured output, use tool_use with a single "extract" tool.
+    // For text mode, wire user-declared tools from request.tools.
+    // The two modes are mutually exclusive: structured output uses tool_choice:any
+    // to force the synthetic tool; user-defined tools use tool_choice:auto.
     let (tools, tool_choice) = match &request.response_format {
         ResponseFormat::JsonSchema { schema } => {
             let tool = AnthropicTool {
@@ -198,7 +202,22 @@ async fn anthropic_complete(
                 }),
             )
         }
-        ResponseFormat::Text => (None, None),
+        ResponseFormat::Text => {
+            if request.tools.is_empty() {
+                (None, None)
+            } else {
+                let user_tools: Vec<AnthropicTool<'_>> = request
+                    .tools
+                    .iter()
+                    .map(|t| AnthropicTool {
+                        name: &t.name,
+                        description: &t.description,
+                        input_schema: &t.input_schema,
+                    })
+                    .collect();
+                (Some(user_tools), Some(AnthropicToolChoice { r#type: "auto".into() }))
+            }
+        }
     };
 
     let max_tokens = request.max_tokens.unwrap_or(4096);
@@ -253,17 +272,30 @@ async fn anthropic_complete(
         total_tokens: resp.usage.input_tokens + resp.usage.output_tokens,
     };
 
-    // Extract content: text blocks and/or tool_use blocks
+    // Extract content: text blocks and/or tool_use blocks.
+    // Structured-output mode uses a synthetic "extract" tool; those blocks go to
+    // structured_output and NOT to tool_calls. User-declared tools go to tool_calls.
+    let structured_output_mode = matches!(request.response_format, ResponseFormat::JsonSchema { .. });
+
     let mut text_parts = Vec::new();
     let mut structured_output: Option<serde_json::Value> = None;
+    let mut tool_calls: Vec<ToolCall> = Vec::new();
 
     for block in &resp.content {
         match block {
             AnthropicContent::Text { text } => {
                 text_parts.push(text.clone());
             }
-            AnthropicContent::ToolUse { input, .. } => {
-                structured_output = Some(input.clone());
+            AnthropicContent::ToolUse { id, name, input } => {
+                if structured_output_mode && name == "extract" {
+                    structured_output = Some(input.clone());
+                } else {
+                    tool_calls.push(ToolCall {
+                        call_id: id.clone(),
+                        name: name.clone(),
+                        args: input.clone(),
+                    });
+                }
             }
         }
     }
@@ -280,5 +312,6 @@ async fn anthropic_complete(
         model: resp.model,
         finish_reason,
         structured_output,
+        tool_calls,
     })
 }
