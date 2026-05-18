@@ -58,9 +58,46 @@ where
     type Rejection = AuthError;
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        // Dual-use: `require_auth_middleware` has already resolved the
+        // principal — Bearer→introspection (machine PAT) *or* session cookie
+        // (browser) — and stashed it as a request extension. Consume that so a
+        // plain `user: AuthUser` handler arg works for *both* client kinds
+        // with no per-handler opt-in. This is what makes the GitOps/CI CLI
+        // (token) and the SPA (cookie) hit the same endpoints.
+        if let Some(user) = parts.extensions.get::<AuthUser>() {
+            return Ok(user.clone());
+        }
+        // No middleware ran (routes mounted OUTSIDE it — the `/api/auth/*`
+        // endpoints): authenticate directly against the session cookie.
         let state = AppState::from_ref(state);
         let jar = CookieJar::from_headers(&parts.headers);
         state.authenticator.authenticate(&parts.headers, &jar).await
+    }
+}
+
+/// A strictly **cookie-authenticated** principal — never the
+/// Bearer/introspection path, even behind `require_auth_middleware`. This is
+/// the pre-dual-use `AuthUser` behaviour, now opt-in and explicit. Used only
+/// where a machine PAT must be refused: the `/api/auth/tokens` endpoints, so a
+/// token can never be used to mint or revoke tokens (the privilege-escalation
+/// guard, now stated intentionally at the call site instead of being an
+/// accidental property of the extractor everywhere).
+pub struct CookieAuthUser(pub AuthUser);
+
+impl<S> FromRequestParts<S> for CookieAuthUser
+where
+    AppState: axum::extract::FromRef<S>,
+    S: Send + Sync,
+{
+    type Rejection = AuthError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        // Deliberately ignores any middleware-injected extension and the
+        // Bearer path: only a valid `mekhan_session` cookie authenticates.
+        let state = AppState::from_ref(state);
+        let jar = CookieJar::from_headers(&parts.headers);
+        let user = state.authenticator.authenticate(&parts.headers, &jar).await?;
+        Ok(CookieAuthUser(user))
     }
 }
 
@@ -76,6 +113,11 @@ where
     type Rejection = AuthError;
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Option<Self>, Self::Rejection> {
+        // Dual-use, same as the required extractor: prefer the principal the
+        // middleware already resolved (Bearer or cookie).
+        if let Some(user) = parts.extensions.get::<AuthUser>() {
+            return Ok(Some(user.clone()));
+        }
         let jar = CookieJar::from_headers(&parts.headers);
         if jar.get(SESSION_COOKIE).is_none() {
             return Ok(None);
@@ -106,9 +148,10 @@ pub async fn require_auth_middleware(
     // uses). Disabled unless an introspection API credential is configured;
     // a missing / invalid / inactive Bearer just falls through to the cookie
     // path below (so browsers are unaffected and the failure surfaces as the
-    // normal cookie 401). The principal is stashed as an `Extension` only —
-    // a handler must read `Extension<AuthUser>` (the `AuthUser`
-    // `FromRequestParts` re-runs the cookie authenticator and ignores this).
+    // normal cookie 401). The resolved principal is stashed as a request
+    // extension; the dual-use `AuthUser` `FromRequestParts` consumes it, so a
+    // plain `user: AuthUser` handler arg accepts *either* client. Endpoints
+    // that must stay browser-only use `CookieAuthUser` instead.
     if let Some(verifier) = state.introspection.as_ref() {
         if let Some(token) = bearer_token(req.headers()) {
             if let Ok(claims) = verifier.verify(token).await {
