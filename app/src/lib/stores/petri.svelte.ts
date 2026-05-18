@@ -372,10 +372,17 @@ export function createPetriStore(netId: string, baseUrl: string = PETRI_BASE) {
 
 	async function loadScenario(scenario: unknown): Promise<{ success: boolean; error?: string; places_count?: number; transitions_count?: number; tokens_count?: number }> {
 		try {
+			// Wire shape: LoadScenarioRequest envelope `{ scenario, skip_mask?, stage_overrides? }`
+			// (sub-phase 2.5e-γ.mekhan-S3 cutover; the bare-scenario request shape was
+			// retired with the scaffold envelope cutover on the engine side per
+			// `feedback_no_backward_compat_hedging_in_migration_waves` +
+			// `feedback_delete_superseded_code`). The frontend editor does not drive
+			// ablation; `skip_mask`/`stage_overrides` are omitted (engine deserialises
+			// them as empty via serde defaults).
 			const res = await fetch(`${apiBase}/scenario`, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify(scenario)
+				body: JSON.stringify({ scenario })
 			});
 			if (!res.ok) {
 				const body = await res.text();

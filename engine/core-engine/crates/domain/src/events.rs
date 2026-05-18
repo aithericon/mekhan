@@ -91,6 +91,40 @@ pub enum DomainEvent {
         process_step_completed: Option<String>,
     },
 
+    /// A transition was deliberately bypassed because its `transition_id` was
+    /// listed in the per-run `DispatchOptions.skip_mask` (sub-phase
+    /// 2.5e-γ.mekhan additive surface for research-harness ablation studies).
+    ///
+    /// Distinct from `TransitionFired` with empty payload: explicit shape so
+    /// the cloud-layer-side honest-absence citation pool can classify
+    /// "transition produced no claims because skipped" vs "transition fired
+    /// and produced no claims" (different semantic outcomes for ablation
+    /// scoring + visualization correctness per
+    /// `project_three_use_cases_and_visualization`).
+    ///
+    /// Tokens consumed from input places are still removed (the transition
+    /// is enabled-and-fired structurally — the skip happens in the firing
+    /// path AFTER input-binding selection). Output ports receive
+    /// `Token::new_unit()` defaults so downstream transitions can proceed
+    /// (or fail their own input-schema validation, which is the honest
+    /// outcome for ablation).
+    TransitionSkipped {
+        transition_id: TransitionId,
+        /// Human-readable transition name (for debugging/logging).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        transition_name: Option<String>,
+        /// Tokens consumed from input places: (place_id, token_id).
+        consumed_tokens: Vec<(PlaceId, TokenId)>,
+        /// Default tokens produced in output places: (place_id, Token).
+        /// One `Token::new_unit()` per declared output port that resolves
+        /// to a place.
+        produced_tokens: Vec<(PlaceId, Token)>,
+        /// Why the transition was skipped. Currently always `"skip_mask"`;
+        /// extensible for future skip causes (e.g., budget exhaustion,
+        /// guard pre-evaluation).
+        skip_reason: String,
+    },
+
     /// A token was produced by a transition but routed to a bridge-out place.
     /// Not added to local marking — forwarded to a remote net.
     TokenBridgedOut {

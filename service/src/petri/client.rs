@@ -25,13 +25,24 @@ impl PetriClient {
     }
 
     /// Deploy a scenario (AIR JSON) to a net.
+    ///
+    /// Wire shape: `LoadScenarioRequest` envelope `{ "scenario": <air_json> }`
+    /// (sub-phase 2.5e-γ.mekhan-S3 cutover; the bare-scenario request shape was
+    /// retired with the scaffold envelope cutover on the engine side per
+    /// `feedback_no_backward_compat_hedging_in_migration_waves` +
+    /// `feedback_delete_superseded_code`). Mekhan-service itself does not drive
+    /// ablation, so `skip_mask` + `stage_overrides` are always empty here; the
+    /// envelope's serde-skip-if-empty defaults render the wire body as
+    /// `{"scenario": <air_json>}` — still the envelope shape, just with no
+    /// additive keys.
     pub async fn deploy_scenario(
         &self,
         net_id: &str,
         air_json: &Value,
     ) -> Result<(), PetriError> {
         let url = format!("{}/api/nets/{}/scenario", self.base_url, net_id);
-        let resp = self.client.post(&url).json(air_json).send().await?;
+        let envelope = serde_json::json!({ "scenario": air_json });
+        let resp = self.client.post(&url).json(&envelope).send().await?;
         if !resp.status().is_success() {
             let status = resp.status().as_u16();
             let body = resp.text().await.unwrap_or_default();

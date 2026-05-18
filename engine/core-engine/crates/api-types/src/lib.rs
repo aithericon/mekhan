@@ -376,8 +376,63 @@ pub struct ScenarioDefinition {
     pub requirements: Vec<petri_domain::effects::ServiceRequirement>,
 }
 
-/// Request body for POST /api/scenario
-pub type LoadScenarioRequest = ScenarioDefinition;
+/// Per-run dispatch options re-exported from `petri-domain`. See
+/// [`petri_domain::DispatchOptions`] for full semantics. Re-exported here so
+/// `LoadScenarioRequest` (an api-types wire DTO) and the cloud-layer-side
+/// adapter's mirror can share the same canonical type without the api-types
+/// crate having to define a parallel shape.
+pub use petri_domain::DispatchOptions;
+
+/// Request body for `POST /api/scenario` + `POST /api/nets/{net_id}/scenario`
+/// (sub-phase 2.5e-γ.mekhan envelope shape — replaces the prior bare-
+/// `ScenarioDefinition` type alias per
+/// `feedback_no_backward_compat_hedging_in_migration_waves`; cloud-layer-
+/// workflow's `core_engine_client` sends this shape unconditionally since
+/// commit `5b5f308`).
+///
+/// `skip_mask` + `stage_overrides` serialize-skip-if-empty, so a load
+/// without dispatch options renders as `{ "scenario": <scenario> }` on the
+/// wire — still the envelope shape, just with no additive keys.
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+pub struct LoadScenarioRequest {
+    /// Petri-net definition (canonical structural shape; unchanged from the
+    /// pre-γ.mekhan `ScenarioDefinition` semantics).
+    pub scenario: ScenarioDefinition,
+    /// Transition IDs to skip at evaluate-time. See [`DispatchOptions::skip_mask`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skip_mask: Vec<String>,
+    /// Per-transition JSON merge-patch overrides keyed by transition_id. See
+    /// [`DispatchOptions::stage_overrides`].
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub stage_overrides: HashMap<String, serde_json::Value>,
+}
+
+impl LoadScenarioRequest {
+    /// Extract the dispatch options into a flat `DispatchOptions` for storage
+    /// on the engine's `NetInstance`.
+    pub fn dispatch_options(&self) -> DispatchOptions {
+        DispatchOptions {
+            skip_mask: self.skip_mask.clone(),
+            stage_overrides: self.stage_overrides.clone(),
+        }
+    }
+
+    /// Consume the envelope, returning the inner `ScenarioDefinition`.
+    pub fn into_scenario(self) -> ScenarioDefinition {
+        self.scenario
+    }
+
+    /// Construct an envelope from a bare scenario, with no dispatch options.
+    /// Convenience for tests and ergonomic call sites that don't need
+    /// ablation.
+    pub fn from_scenario(scenario: ScenarioDefinition) -> Self {
+        Self {
+            scenario,
+            skip_mask: Vec::new(),
+            stage_overrides: HashMap::new(),
+        }
+    }
+}
 
 /// Response for POST /api/scenario
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]

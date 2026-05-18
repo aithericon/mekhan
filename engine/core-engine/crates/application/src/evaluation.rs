@@ -281,6 +281,7 @@ pub(crate) async fn evaluate_until_quiescent<
     secret_store: Option<&dyn SecretStore>,
     net_parameters: Option<&serde_json::Value>,
     pre_dispatch: Option<&PreDispatchRuntime>,
+    dispatch_options: &petri_domain::DispatchOptions,
 ) -> Result<EvaluateResult, ServiceError> {
     let mut steps_executed = 0;
     let mut transitions_fired = Vec::new();
@@ -321,6 +322,7 @@ pub(crate) async fn evaluate_until_quiescent<
                     secret_store,
                     net_parameters,
                     pre_dispatch,
+                    dispatch_options,
                 )
                 .await;
 

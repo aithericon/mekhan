@@ -336,9 +336,31 @@ fn deploy(json: &str, url: &str, net_id: Option<&str>) {
         }
     };
 
+    // Sub-phase 2.5e-γ.mekhan: wrap the scenario in the envelope shape
+    // `{ "scenario": <scenario>, "skip_mask"?, "stage_overrides"? }` (the only
+    // accepted POST shape per feedback_no_backward_compat_hedging_in_migration_waves).
+    // The CLI doesn't drive ablation, so skip_mask + stage_overrides are
+    // omitted; the engine's serde-skip-if-empty defaults render the wire
+    // body as `{"scenario": <scenario>}`.
+    let scenario_value: serde_json::Value = match serde_json::from_str(json) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("Failed to parse scenario JSON: {}", e);
+            std::process::exit(1);
+        }
+    };
+    let envelope = serde_json::json!({ "scenario": scenario_value });
+    let envelope_body = match serde_json::to_string(&envelope) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Failed to encode envelope JSON: {}", e);
+            std::process::exit(1);
+        }
+    };
+
     match ureq::post(&endpoint)
         .set("Content-Type", "application/json")
-        .send_string(json)
+        .send_string(&envelope_body)
     {
         Ok(response) => {
             let status_code = response.status();

@@ -236,6 +236,11 @@ where
     pub on_scenario_loaded: RwLock<Vec<OnScenarioLoaded>>,
     /// Cancellation token for graceful shutdown of per-net tasks (eval loop, listeners).
     pub cancel_token: CancellationToken,
+    /// Sub-phase 2.5e-γ.mekhan per-run dispatch options (skip_mask +
+    /// stage_overrides). Owned here per-NetInstance so concurrent loads on
+    /// distinct net_ids never collide. `as_app_state` clones the Arc into
+    /// the per-request AppState facade.
+    pub dispatch_options: Arc<RwLock<petri_domain::DispatchOptions>>,
 }
 
 impl<E, T, S> NetInstance<E, T, S>
@@ -260,6 +265,7 @@ where
             run_mode: self.run_mode.clone(),
             eval_notify: self.eval_notify.clone(),
             event_tx: self.event_tx.clone(),
+            dispatch_options: self.dispatch_options.clone(),
         }
     }
 }
@@ -903,6 +909,7 @@ where
             event_tx: event_tx.clone(),
             on_scenario_loaded: RwLock::new(Vec::new()),
             cancel_token: cancel_token.clone(),
+            dispatch_options: Arc::new(RwLock::new(petri_domain::DispatchOptions::default())),
         });
 
         // Spawn evaluation loop for this net

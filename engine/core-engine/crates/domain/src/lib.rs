@@ -1,6 +1,7 @@
 pub mod adapter;
 pub mod arc;
 pub mod catalogue;
+pub mod dispatch;
 pub mod effects;
 pub mod events;
 pub mod executor;
@@ -18,6 +19,7 @@ pub mod transition;
 
 pub use adapter::*;
 pub use arc::*;
+pub use dispatch::{apply_merge_patch, DispatchOptions};
 pub use events::*;
 pub use executor::*;
 pub use ids::*;

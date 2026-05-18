@@ -85,6 +85,10 @@ where
     /// owning NetRegistry binds the chain at net-instantiation time. See
     /// `pre-dispatch-hook.md` § 6 for the registration model.
     pre_dispatch: RwLock<Option<Arc<PreDispatchRuntime>>>,
+    /// Sub-phase 2.5e-γ.mekhan per-run dispatch options (skip_mask +
+    /// stage_overrides). Mutated by the `load_scenario` handler; consulted
+    /// by the firing path. Cleared by `clear()`.
+    dispatch_options: RwLock<petri_domain::DispatchOptions>,
 }
 
 impl<E, T, S> PetriNetService<E, T, S>
@@ -112,6 +116,7 @@ where
             eval_lock: tokio::sync::Mutex::new(()),
             dedup_index: crate::idempotency_index::DedupIndex::new(),
             pre_dispatch: RwLock::new(None),
+            dispatch_options: RwLock::new(petri_domain::DispatchOptions::default()),
         }
     }
 
@@ -485,6 +490,23 @@ where
     // Firing (delegates to firing module)
     // ========================================================================
 
+    /// Sub-phase 2.5e-γ.mekhan: install per-run dispatch options (skip_mask +
+    /// stage_overrides). Called by the `load_scenario` handler immediately
+    /// after a successful `initialize` so the firing path sees the options
+    /// from the first evaluate cycle onwards. Cleared by `clear()` so a
+    /// subsequent scenario load starts from `DispatchOptions::default()`
+    /// unless the load explicitly sets new options.
+    pub fn set_dispatch_options(&self, options: petri_domain::DispatchOptions) {
+        *self.dispatch_options.write().unwrap() = options;
+    }
+
+    /// Snapshot of the current dispatch options. Returns a clone so the
+    /// firing path can hold the value across `.await` boundaries without
+    /// holding the read lock.
+    pub fn dispatch_options_snapshot(&self) -> petri_domain::DispatchOptions {
+        self.dispatch_options.read().unwrap().clone()
+    }
+
     /// Fire a transition using port-based routing.
     pub async fn fire_transition(
         &self,
@@ -504,6 +526,7 @@ where
         let params_ref = params.as_ref();
         let rt = self.pre_dispatch_runtime();
         let rt_ref = rt.as_deref();
+        let dispatch_options = self.dispatch_options_snapshot();
         firing::fire_transition::<E, T, S>(
             self.events.as_ref(),
             self.topology.as_ref(),
@@ -518,6 +541,7 @@ where
             secrets_ref,
             params_ref,
             rt_ref,
+            &dispatch_options,
         )
         .await
     }
@@ -609,6 +633,7 @@ where
         let params_ref = params.as_ref();
         let rt = self.pre_dispatch_runtime();
         let rt_ref = rt.as_deref();
+        let dispatch_options = self.dispatch_options_snapshot();
         evaluation::evaluate_until_quiescent(
             self.events.as_ref(),
             self.topology.as_ref(),
@@ -624,6 +649,7 @@ where
             secrets_ref,
             params_ref,
             rt_ref,
+            &dispatch_options,
         )
         .await
     }

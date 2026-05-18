@@ -100,6 +100,10 @@ fn event_type_name(event: &DomainEvent) -> &'static str {
         DomainEvent::NetInitialized { .. } => "net.initialized",
         DomainEvent::TokenCreated { .. } => "token.created",
         DomainEvent::TransitionFired { .. } => "transition.fired",
+        // Sub-phase 2.5e-γ.mekhan scaffold variant — distinct subject so
+        // ablation observers can subscribe to skip events without
+        // pattern-matching the firing-path subject.
+        DomainEvent::TransitionSkipped { .. } => "transition.skipped",
         DomainEvent::TokenConsumed { .. } => "token.consumed",
         DomainEvent::TokenRemoved { .. } => "token.removed",
         DomainEvent::TokenUpdated { .. } => "token.updated",
