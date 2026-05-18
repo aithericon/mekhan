@@ -227,12 +227,22 @@ if [ -z "$broker_user_id" ]; then
 fi
 echo "Token-broker user id: $broker_user_id"
 
-# Grant ORG_OWNER (manage users/PATs within the org). PUT is idempotent;
-# POST is the create path when no membership row exists yet.
+# Grant ORG_OWNER so the broker can manage machine users + PATs in the org.
+# Idempotent: search first, then POST the membership only if absent. Uses the
+# hard-failing `api` (curl -fsS) for the grant — `api_soft` swallows 4xx, so a
+# `cmd || fallback` here would silently skip the grant (it did, once).
 echo "Ensuring token-broker has ORG_OWNER…"
-broker_member=$(jq -nc --arg uid "$broker_user_id" '{userId: $uid, roles: ["ORG_OWNER"]}')
-api_soft PUT "/management/v1/orgs/me/members/$broker_user_id" "$broker_member" >/dev/null || \
-  api_soft POST /management/v1/orgs/me/members "$broker_member" >/dev/null
+broker_is_member=$(api_soft POST /management/v1/orgs/me/members/_search '{}' \
+  | jq -r --arg u "$broker_user_id" '.result[]? | select(.userId == $u) | .userId' \
+  | head -1)
+if [ -z "$broker_is_member" ]; then
+  api POST /management/v1/orgs/me/members \
+    "$(jq -nc --arg uid "$broker_user_id" '{userId: $uid, roles: ["ORG_OWNER"]}')" \
+    >/dev/null
+  echo "Granted ORG_OWNER to token-broker $broker_user_id"
+else
+  echo "token-broker $broker_user_id already an org member"
+fi
 
 # Re-mint the broker PAT (secret returned once). Delete any existing PATs so
 # re-runs converge on exactly one valid token written to config.
