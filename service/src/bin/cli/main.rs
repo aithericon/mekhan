@@ -4,6 +4,7 @@ mod diff;
 mod doc_ops;
 mod formats;
 mod fs_ops;
+mod http;
 mod init;
 mod instances;
 mod list;

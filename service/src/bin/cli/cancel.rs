@@ -4,8 +4,7 @@ use serde_json::Value;
 pub async fn run(server: &str, instance_id: &str) -> Result<()> {
     let url = format!("{}/api/instances/{}", server, instance_id);
     let client = reqwest::Client::new();
-    let resp = client
-        .delete(&url)
+    let resp = crate::http::auth(client.delete(&url))
         .send()
         .await
         .context("failed to connect to server")?;
