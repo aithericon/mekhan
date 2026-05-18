@@ -163,6 +163,41 @@ export function validateField(field: TaskField, formData: Record<string, unknown
 	return null;
 }
 
+/**
+ * Coerce validated form values to the JSON shape their declared
+ * `TaskFieldKind` implies, just before submit. Numbers/sliders/ratings are
+ * kept as strings in the reactive store (see `makeSetNumberValue`) so the
+ * inputs stay controlled, but the compiler's enforced `Data__*` schema types
+ * them strictly — the wire payload must carry a real `number`/`boolean` or
+ * the net wedges at `t_*_yield`. `validateFields` has already run, so every
+ * numeric value here is finite; bad input never reaches this and the user has
+ * already seen a per-field error. A blank optional numeric value is dropped
+ * (an unfilled number is "not provided"; the open-`additionalProperties`
+ * schema accepts its absence — a present `""` would not).
+ */
+export function coerceFormData(
+	fields: TaskField[],
+	formData: Record<string, unknown>
+): Record<string, unknown> {
+	const out: Record<string, unknown> = { ...formData };
+	for (const field of fields) {
+		const raw = out[field.name];
+		if (field.kind === 'number' || field.kind === 'range' || field.kind === 'rating') {
+			if (typeof raw === 'number') continue;
+			const trimmed = typeof raw === 'string' ? raw.trim() : '';
+			if (trimmed.length === 0) {
+				delete out[field.name];
+			} else {
+				const n = Number(trimmed);
+				if (Number.isFinite(n)) out[field.name] = n;
+			}
+		} else if (field.kind === 'checkbox') {
+			out[field.name] = raw === true;
+		}
+	}
+	return out;
+}
+
 export function fieldsForStep(step: TaskStep): TaskField[] {
 	const fields: TaskField[] = [];
 	for (const block of step.blocks) {

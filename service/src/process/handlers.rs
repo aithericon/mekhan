@@ -370,6 +370,114 @@ pub async fn get_task(
     Ok(Json(to_human_task_json(&task)))
 }
 
+/// Backstop coercion of human-task form submissions to the JSON shape their
+/// declared `TaskFieldKind` implies. The task-form UI already coerces (where
+/// it can also surface per-field errors before submit), but the `aithericon`
+/// CLI, raw API callers, and trigger paths post completions without it — and
+/// the compiler's enforced `Data__*` schema types Number/Bool strictly, so an
+/// uncoerced `"23"`/`"true"` wedges the net at `t_*_yield`. Coercing at this
+/// single completion ingress keeps the strict schema honest for every caller
+/// without loosening it (the reverted "lenient scalar schemas" approach).
+///
+/// Only `number`/`range`/`rating` (→ JSON number) and `checkbox` (→ JSON
+/// bool) are rewritten; other kinds are already strings. Non-empty input that
+/// won't parse as a number is left untouched so the schema surfaces a clear
+/// failure rather than this silently corrupting data; a blank numeric value
+/// is dropped (an unfilled optional number is "not provided", which the
+/// open-`additionalProperties` schema accepts — a present `""` would not).
+fn coerce_form_data(detail: &JsonValue, data: JsonValue) -> JsonValue {
+    let JsonValue::Object(mut map) = data else {
+        return data;
+    };
+    for (name, kind) in form_field_kinds(detail) {
+        if !map.contains_key(&name) {
+            continue;
+        }
+        match kind.as_str() {
+            "number" | "range" | "rating" => match &map[&name] {
+                JsonValue::Number(_) => {}
+                JsonValue::String(s) => {
+                    let trimmed = s.trim();
+                    if trimmed.is_empty() {
+                        map.remove(&name);
+                    } else if let Some(n) = parse_json_number(trimmed) {
+                        map.insert(name, n);
+                    }
+                }
+                _ => {}
+            },
+            "checkbox" => {
+                let b = coerce_bool(&map[&name]);
+                map.insert(name, JsonValue::Bool(b));
+            }
+            _ => {}
+        }
+    }
+    JsonValue::Object(map)
+}
+
+/// `(field name, declared kind)` for every Input block across the task's form
+/// steps, read from the engine `HumanTaskRequest` projected into the task
+/// `detail`. Tolerates absent/missing `steps` (returns empty → no-op), so a
+/// task created by a path that doesn't carry a form simply isn't touched.
+fn form_field_kinds(detail: &JsonValue) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let Some(steps) = detail.get("steps").and_then(|v| v.as_array()) else {
+        return out;
+    };
+    for step in steps {
+        let Some(blocks) = step.get("blocks").and_then(|v| v.as_array()) else {
+            continue;
+        };
+        for block in blocks {
+            if block.get("type").and_then(|v| v.as_str()) != Some("input") {
+                continue;
+            }
+            let Some(field) = block.get("field") else {
+                continue;
+            };
+            if let (Some(name), Some(kind)) = (
+                field.get("name").and_then(|v| v.as_str()),
+                field.get("kind").and_then(|v| v.as_str()),
+            ) {
+                out.push((name.to_string(), kind.to_string()));
+            }
+        }
+    }
+    out
+}
+
+/// Parse a numeric string into the narrowest JSON number (`i64`/`u64`/`f64`),
+/// or `None` if it isn't a finite number.
+fn parse_json_number(s: &str) -> Option<JsonValue> {
+    if let Ok(i) = s.parse::<i64>() {
+        return Some(JsonValue::from(i));
+    }
+    if let Ok(u) = s.parse::<u64>() {
+        return Some(JsonValue::from(u));
+    }
+    let f = s.parse::<f64>().ok()?;
+    if !f.is_finite() {
+        return None;
+    }
+    serde_json::Number::from_f64(f).map(JsonValue::Number)
+}
+
+/// Best-effort string/number → bool for checkbox fields posted by non-UI
+/// callers. The Svelte form already sends a real boolean; this only kicks in
+/// for the CLI / raw API.
+fn coerce_bool(v: &JsonValue) -> bool {
+    match v {
+        JsonValue::Bool(b) => *b,
+        JsonValue::String(s) => matches!(
+            s.trim().to_ascii_lowercase().as_str(),
+            "true" | "on" | "1" | "yes" | "y"
+        ),
+        JsonValue::Number(n) => n.as_f64().map(|f| f != 0.0).unwrap_or(false),
+        _ => false,
+    }
+}
+
 /// POST /api/tasks/{id}/complete — complete a task and publish NATS signal.
 #[utoipa::path(
     post,
@@ -405,6 +513,21 @@ pub async fn complete_task(
         )));
     }
 
+    // Coerce form submissions to their declared field kinds before this
+    // completion is persisted and signalled (backstop for non-UI callers;
+    // see `coerce_form_data`). Rebuild the `{ data: ... }` envelope so the
+    // persisted task detail (rendered by the completed-task panel) and the
+    // engine signal carry identical typed values.
+    let raw_data = body.get("data").cloned().unwrap_or_else(|| body.clone());
+    let coerced_data = coerce_form_data(&task.detail, raw_data);
+    let body = match body {
+        JsonValue::Object(mut m) if m.contains_key("data") => {
+            m.insert("data".to_string(), coerced_data.clone());
+            JsonValue::Object(m)
+        }
+        _ => coerced_data.clone(),
+    };
+
     // Update task status in DB
     let updated = queries::update_task_status(&state.db, &id, "completed", Some(&body))
         .await
@@ -424,7 +547,7 @@ pub async fn complete_task(
         let subject = format!("human.completed.{net_id}.{place}");
         let completion = serde_json::json!({
             "task_id": id,
-            "data": body.get("data").cloned().unwrap_or(body.clone()),
+            "data": coerced_data,
             "completed_at": Utc::now().to_rfc3339(),
         });
         let payload = serde_json::to_vec(&completion).unwrap_or_default();
@@ -504,4 +627,97 @@ pub async fn cancel_task(
     }
 
     Ok(Json(to_human_task_json(&updated)))
+}
+
+#[cfg(test)]
+mod coerce_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn detail_with_fields(fields: &[(&str, &str)]) -> JsonValue {
+        let blocks: Vec<JsonValue> = fields
+            .iter()
+            .map(|(name, kind)| {
+                json!({ "type": "input", "field": { "name": name, "label": name, "kind": kind } })
+            })
+            .collect();
+        json!({ "steps": [ { "id": "s1", "title": "Step", "blocks": blocks } ] })
+    }
+
+    #[test]
+    fn coerces_number_and_checkbox_strings_to_typed_json() {
+        let detail = detail_with_fields(&[
+            ("age", "number"),
+            ("ratio", "number"),
+            ("agree", "checkbox"),
+            ("note", "text"),
+        ]);
+        let data = json!({
+            "age": "23",
+            "ratio": "23.5",
+            "agree": "true",
+            "note": "hello"
+        });
+        let out = coerce_form_data(&detail, data);
+        assert_eq!(out["age"], json!(23));
+        assert_eq!(out["ratio"], json!(23.5));
+        assert_eq!(out["agree"], json!(true));
+        // Non-numeric/bool kinds pass through untouched.
+        assert_eq!(out["note"], json!("hello"));
+    }
+
+    #[test]
+    fn range_and_rating_are_numeric_real_bool_passes_through() {
+        let detail =
+            detail_with_fields(&[("vol", "range"), ("stars", "rating"), ("ok", "checkbox")]);
+        let out = coerce_form_data(&detail, json!({ "vol": "4", "stars": "5", "ok": true }));
+        assert_eq!(out["vol"], json!(4));
+        assert_eq!(out["stars"], json!(5));
+        assert_eq!(out["ok"], json!(true));
+    }
+
+    #[test]
+    fn blank_optional_number_is_dropped_unparseable_is_left_for_the_schema() {
+        let detail = detail_with_fields(&[("a", "number"), ("b", "number")]);
+        let out = coerce_form_data(&detail, json!({ "a": "  ", "b": "not-a-number" }));
+        assert!(
+            out.get("a").is_none(),
+            "blank optional number must be omitted so the open schema accepts its absence"
+        );
+        assert_eq!(
+            out["b"],
+            json!("not-a-number"),
+            "unparseable input is left so the strict schema yields a clear error"
+        );
+    }
+
+    #[test]
+    fn missing_steps_is_a_no_op() {
+        let out = coerce_form_data(&json!({}), json!({ "age": "23" }));
+        assert_eq!(out["age"], json!("23"));
+    }
+
+    #[test]
+    fn parse_json_number_prefers_integers() {
+        assert_eq!(parse_json_number("23"), Some(json!(23)));
+        assert_eq!(parse_json_number("-4"), Some(json!(-4)));
+        assert_eq!(parse_json_number("23.5"), Some(json!(23.5)));
+        assert_eq!(parse_json_number("1e3"), Some(json!(1000.0)));
+        assert_eq!(parse_json_number("nan"), None);
+        assert_eq!(parse_json_number("abc"), None);
+    }
+
+    #[test]
+    fn coerce_bool_handles_strings_numbers_and_bools() {
+        assert!(coerce_bool(&json!(true)));
+        assert!(coerce_bool(&json!("true")));
+        assert!(coerce_bool(&json!("On")));
+        assert!(coerce_bool(&json!("1")));
+        assert!(coerce_bool(&json!(2)));
+        assert!(!coerce_bool(&json!(false)));
+        assert!(!coerce_bool(&json!("false")));
+        assert!(!coerce_bool(&json!("")));
+        assert!(!coerce_bool(&json!(0)));
+        assert!(!coerce_bool(&json!(null)));
+    }
 }
