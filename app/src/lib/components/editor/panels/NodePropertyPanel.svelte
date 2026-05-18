@@ -19,7 +19,7 @@
 	import ProgressUpdateNodeSection from './property-sections/ProgressUpdateNodeSection.svelte';
 	import FailureNodeSection from './property-sections/FailureNodeSection.svelte';
 	import EndNodeSection from './property-sections/EndNodeSection.svelte';
-	import { computeScopes, type ScopeEntry } from '$lib/editor/guard-scope';
+	import { fetchNodeScopes, type ScopeEntry } from '$lib/editor/guard-scope';
 	import { outputPortsFor } from '$lib/editor/derived-ports';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -60,14 +60,27 @@
 		onchange({ ...data, [key]: value } as WorkflowNodeData);
 	}
 
-	// Compute the in-scope identifiers at the currently-selected node so the
-	// Decision/Loop guard editors can offer typed pickers + autocomplete. We
-	// re-run on every change to `binding.graph` (cheap — O(nodes + edges) and
-	// the editor is already paying for full Y.Doc rerenders).
-	const scope: ScopeEntry[] = $derived.by(() => {
-		if (!binding || !nodeId) return [];
-		const all = computeScopes(binding.graph);
-		return all.get(nodeId) ?? [];
+	// In-scope identifiers at the selected node for the Decision/Loop guard
+	// pickers. Single source of truth: the backend shape-aware analyzer
+	// (`POST /api/analyze`). Debounced so a burst of graph edits collapses to
+	// one round-trip; best-effort (stale/empty on failure — never throws).
+	let scope = $state<ScopeEntry[]>([]);
+	$effect(() => {
+		const g = binding?.graph;
+		const id = nodeId;
+		if (!g || !id) {
+			scope = [];
+			return;
+		}
+		let cancelled = false;
+		const timer = setTimeout(async () => {
+			const all = await fetchNodeScopes(g);
+			if (!cancelled) scope = all.get(id) ?? [];
+		}, 250);
+		return () => {
+			cancelled = true;
+			clearTimeout(timer);
+		};
 	});
 </script>
 

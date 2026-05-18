@@ -491,7 +491,7 @@ impl WorkflowNodeData {
 /// task steps. Duplicate field names (first-wins) and non-input blocks are
 /// silently ignored — the editor enforces uniqueness during authoring, and
 /// the human-task form UI is the source of truth for behavior.
-fn derive_human_task_output_port(steps: &[TaskStepConfig]) -> Port {
+pub(crate) fn derive_human_task_output_port(steps: &[TaskStepConfig]) -> Port {
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut fields: Vec<PortField> = Vec::new();
     for step in steps {

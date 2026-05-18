@@ -7,6 +7,7 @@ use crate::compiler::rhai_gen::{
     build_join_merge_logic, build_merge_logic, build_retry_topology, interpolate_to_rhai_expr,
     json_to_rhai_literal, with_pluck_prelude,
 };
+use crate::compiler::token_shape::YIELD_LOGIC;
 use crate::models::template::{
     FieldMapping, PhaseUpdateStatus, WorkflowEdge, WorkflowNode, WorkflowNodeData,
 };
@@ -50,6 +51,13 @@ pub(crate) struct PostProcess {
     /// before their terminal place, so the process is marked complete. `None`
     /// = no process registered → End stays a bare terminal (unchanged).
     pub(crate) process_token_place: Option<PlaceHandle<DynamicToken>>,
+    /// Control/data split (foundation): node_id → its write-once parked data
+    /// place id. Generalizes the `process_token_place` precedent — every
+    /// HumanTask/AutomatedStep parks its full output here once; the read-arc
+    /// synthesis phase (post-merge, in `compile_to_air`) wires guards that
+    /// reference that producer's fields to read-arc this place, and registers
+    /// the typed `#/definitions/*` for the data + control tokens.
+    pub(crate) data_places: HashMap<String, String>,
 }
 
 /// Tracks which places are the input/output interface of each expanded node.
@@ -609,6 +617,37 @@ fn lower_end(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     Ok(())
 }
 
+/// Foundation: split a data-yielding node's output into a write-once parked
+/// **data** place + a slim **control** place, joined by a `t_{id}_yield`
+/// transition. Generalizes the Start-parks-`ProcessStarted` precedent to
+/// every HumanTask/AutomatedStep. Returns the control place (the node's new
+/// downstream output) and the data place id (recorded in `fixups.data_places`
+/// for the post-merge read-arc synthesis phase). Schema refs are left as the
+/// default permissive `DynamicToken`; the post-merge phase upgrades the data/
+/// ctrl `token_schema` to the typed `#/definitions/*` and registers them.
+fn split_outputs(
+    ctx: &mut Context,
+    id: &str,
+    label: &str,
+    producer_out: &PlaceHandle<DynamicToken>,
+) -> (String, PlaceHandle<DynamicToken>) {
+    let p_data: PlaceHandle<DynamicToken> = ctx.state(
+        format!("p_{id}_data"),
+        format!("{label} - Parked Data (write-once)"),
+    );
+    let p_ctrl: PlaceHandle<DynamicToken> =
+        ctx.state(format!("p_{id}_ctrl"), format!("{label} - Control Token"));
+    ctx.transition(
+        format!("t_{id}_yield"),
+        format!("{label} - Yield (park data, forward control)"),
+    )
+    .auto_input("tok", producer_out)
+    .auto_output("data", &p_data)
+    .auto_output("ctrl", &p_ctrl)
+    .logic(YIELD_LOGIC);
+    (format!("p_{id}_data"), p_ctrl)
+}
+
 fn lower_human_task(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     let id = &cx.node.id;
     let WorkflowNodeData::HumanTask { label, .. } = &cx.node.data else {
@@ -651,15 +690,19 @@ fn lower_human_task(cx: &mut LoweringCtx) -> Result<(), CompileError> {
         .auto_output("done", &p_output)
         .logic(build_merge_logic("state", "signal"));
 
+    // Foundation split: park the full human-task output, forward slim control.
+    let (data_place_id, p_ctrl) = split_outputs(ctx, id, label, &p_output);
+
     cx.fixups
         .groups
         .push((format!("grp_{id}"), label.clone(), scope_group));
+    cx.fixups.data_places.insert(id.clone(), data_place_id);
 
     cx.ports.insert(
         id.clone(),
         NodePorts {
             input_place: p_input,
-            output_places: vec![(None, p_output)],
+            output_places: vec![(None, p_ctrl)],
             input_places: HashMap::new(),
         },
     );
@@ -775,16 +818,24 @@ fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileError> {
         .auto_output("error", &p_error)
         .logic(r#"#{ error: dead }"#);
 
+    // Foundation split: park the executor result envelope as write-once data,
+    // forward only the slim control token on the success path. The error
+    // path is not a data token (it routes to error handlers) — left as-is.
+    let (data_place_id, p_ctrl) = split_outputs(ctx, id, label, &p_output);
+    cx.fixups.data_places.insert(id.clone(), data_place_id);
+
     cx.ports.insert(
         id.clone(),
         NodePorts {
             input_place: p_input,
-            // Default success output + a named "error" output. An edge
-            // drawn from the node's error handle (source_handle ==
-            // "error") wires to `p_error` via `find_output_place`; if
-            // no error edge exists `p_error` simply has no consumer
-            // (the prior dead-end-on-failure behaviour).
-            output_places: vec![(None, p_output), (Some("error".to_string()), p_error)],
+            // Slim control success output + the unchanged named "error"
+            // output. An edge from the node's error handle (source_handle
+            // == "error") wires to `p_error` via `find_output_place`; if no
+            // error edge exists `p_error` simply has no consumer.
+            output_places: vec![
+                (None, p_ctrl),
+                (Some("error".to_string()), p_error),
+            ],
             input_places: HashMap::new(),
         },
     );

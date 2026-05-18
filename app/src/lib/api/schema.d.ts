@@ -4,6 +4,27 @@
  */
 
 export interface paths {
+    "/api/analyze": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stateless shape analysis: the editor's single source of truth for guard
+         *     scope + diagnostics. Independent of `compile_to_air` succeeding (no files
+         *     needed) so feedback lands while editing, not at publish.
+         */
+        post: operations["analyze_graph"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/auth/tokens": {
         parameters: {
             query?: never;
@@ -1604,6 +1625,12 @@ export interface components {
             outcome?: null | components["schemas"]["TerminalOutcome"];
             result: components["schemas"]["FireResult"];
         };
+        /** @description Flattened guard diagnostic (`node_id` is highlighted in the editor). */
+        GuardDiagnosticDto: {
+            kind: string;
+            message: string;
+            node_id: string;
+        };
         HealthResponse: {
             service: string;
             status: string;
@@ -2146,6 +2173,20 @@ export interface components {
              */
             maxRetries?: number;
         };
+        /**
+         * @description One reachable, producer-attributed reference the guard picker should
+         *     offer at a node. The single source of truth for editor scope —
+         *     replaces the deleted client-side `computeScopes` reimplementation.
+         */
+        ScopeEntryDto: {
+            note: string;
+            /** @description What you'd type in a guard, e.g. `input.data.invoice_amount`. */
+            path: string;
+            producer_label: string;
+            producer_node: string;
+            /** @description Type label (`String`, `Number`, `Bool`, `Opaque(..)`, …). */
+            ty: string;
+        };
         /** @description One identifier available to a trigger's payload-mapping expressions. */
         ScopeVar: {
             /**
@@ -2379,6 +2420,17 @@ export interface components {
             template_id: string;
             /** Format: int32 */
             template_version: number;
+        };
+        /**
+         * @description Shape-aware analysis surface — per-node scope + diagnostics. Pure and
+         *     graph-only: works on drafts that can't compile/publish yet.
+         */
+        TypeSurfaceResponse: {
+            diagnostics: components["schemas"]["GuardDiagnosticDto"][];
+            graph_ok: boolean;
+            scopes: {
+                [key: string]: components["schemas"]["ScopeEntryDto"][];
+            };
         };
         UpdateTemplateRequest: {
             description?: string | null;
@@ -2695,6 +2747,30 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    analyze_graph: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CompileRequest"];
+            };
+        };
+        responses: {
+            /** @description Shape-aware scope + diagnostics */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TypeSurfaceResponse"];
+                };
+            };
+        };
+    };
     list_tokens: {
         parameters: {
             query?: never;

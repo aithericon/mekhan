@@ -12,9 +12,9 @@
 		readonly?: boolean;
 		onchange: (data: DecisionNodeData) => void;
 		/**
-		 * In-scope identifiers for guards on this node, precomputed by the
-		 * parent panel via `computeScopes(graph).get(nodeId)`. Empty if the
-		 * node is detached or has no typed-port upstreams.
+		 * In-scope identifiers for guards on this node, fetched by the parent
+		 * panel from the backend shape-aware analyzer (`POST /api/analyze`,
+		 * the single source of truth). Empty if detached or unresolvable.
 		 */
 		scope?: ScopeEntry[];
 	};

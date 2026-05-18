@@ -135,11 +135,38 @@ fn ui_linear_human_task_deserializes_and_compiles() {
     let air = compile_to_air(&graph, "linear", "Linear workflow", &std::collections::HashMap::new()).expect("should compile");
 
     // HumanTask internal: input, active, signal, errors, output = 5 places
-    // + Start place = 6 (End merged into HumanTask output)
-    assert_eq!(places(&air).len(), 6);
+    // + Start place = 6, + the foundation control/data split adds the
+    // write-once parked data place and the slim control place = 8.
+    assert_eq!(places(&air).len(), 8);
     assert!(has_place_of_type(&air, "terminal"));
     assert!(has_place_of_type(&air, "signal"));
     assert_no_seeded_places(&air);
+
+    // Foundation split: parked data + control places + yield transition.
+    assert!(has_place(&air, "p_ht-1_data"), "parked data place");
+    assert!(has_place(&air, "p_ht-1_ctrl"), "slim control place");
+    assert!(has_transition(&air, "t_ht-1_yield"), "yield transition");
+    // Monotone invariant: nothing consumes the parked data place.
+    for t in transitions(&air) {
+        for a in t["inputs"].as_array().cloned().unwrap_or_default() {
+            if a["place"] == serde_json::json!("p_ht-1_data") {
+                assert_eq!(a["read"], serde_json::json!(true), "data place must be read-only");
+            }
+        }
+    }
+    // Data place carries an enforced typed schema (not bare DynamicToken).
+    let data_place = places(&air)
+        .iter()
+        .find(|p| p["id"] == "p_ht-1_data")
+        .unwrap();
+    assert_eq!(
+        data_place["token_schema"],
+        serde_json::json!("#/definitions/Data__ht-1")
+    );
+    assert!(
+        air["definitions"]["Data__ht-1"].is_object(),
+        "Data__ht-1 definition must be registered"
+    );
 
     // HumanTask injection transition (Start→HumanTask needs data injection)
     assert!(

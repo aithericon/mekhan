@@ -121,6 +121,7 @@ fn build_openapi_router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::templates::compile_preview))
         .routes(routes!(handlers::templates::io_stubs))
         .routes(routes!(handlers::templates::compile_graph))
+        .routes(routes!(handlers::templates::analyze_graph))
         // Instances
         .routes(routes!(
             handlers::instances::list_instances,

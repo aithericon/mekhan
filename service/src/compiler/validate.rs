@@ -2,7 +2,7 @@
 //! topological scope computation guards/trigger-mappings resolve against.
 
 use crate::compiler::error::CompileError;
-use crate::compiler::graph::{topo_order, WorkflowDiGraph};
+use crate::compiler::graph::WorkflowDiGraph;
 use crate::models::template::{FieldKind, WorkflowGraph, WorkflowNode, WorkflowNodeData};
 use petgraph::visit::Bfs;
 use petgraph::{algo::is_cyclic_directed, Direction};
@@ -270,186 +270,76 @@ pub(crate) fn validate_edges_typed(graph: &WorkflowGraph) -> Result<(), CompileE
 
 // --- Guard scope resolution (Phase 3) ---
 
-/// In-scope identifier at a node: `<node_id>.<field>` plus its declared kind.
-/// Used to validate Rhai guards reference real upstream fields.
-/// Flat guard scope: upstream output-port field name → its declared kind.
-///
-/// Guards/loop-conditions are evaluated by the engine with a single `input`
-/// token in scope (the compiler wires every Decision/Loop transition as
-/// `.auto_input("input", …)`), so the only valid reference form is
-/// `input.<field>`. The scope is therefore the flat union of every reachable
-/// upstream field name; same-named fields from different upstreams collapse
-/// (last writer wins in the accumulating token — a `tracing::warn!` notes the
-/// collision).
-pub(crate) type ScopeFields = std::collections::BTreeMap<String, FieldKind>;
+// The flat `compute_scopes`/`ScopeFields`/`validate_one_guard` model was
+// deleted in the control/data foundation cut. The shape-aware model in
+// `token_shape` is now the single source of truth: it knows the *real*
+// nested shape at each place and which parked data place owns every field.
 
-/// Build the scope visible at each node — the union of every upstream node's
-/// declared output port fields, reached via the DAG (loop_back edges excluded
-/// from scope walks, matching the topological order used for compilation).
-///
-/// The result is keyed by node id and only contains entries for nodes whose
-/// guards we actually validate (Decision, Loop), but is computed for every
-/// node anyway because cost is O(|edges|) and the editor reuses the per-node
-/// map for autocomplete.
-pub(crate) fn compute_scopes<'a>(
-    graph: &'a WorkflowGraph,
-    wg: &WorkflowDiGraph<'a>,
-) -> Result<HashMap<String, ScopeFields>, CompileError> {
-    let order = topo_order(wg)?;
-    let mut scopes: HashMap<String, ScopeFields> = HashMap::new();
-
-    for ni in &order {
-        let node = *wg.dag.node_weight(*ni).unwrap();
-        let mut scope: ScopeFields = ScopeFields::new();
-
-        // Inherit from every DAG predecessor.
-        for pred_ni in wg.dag.neighbors_directed(*ni, Direction::Incoming) {
-            let pred = *wg.dag.node_weight(pred_ni).unwrap();
-            if let Some(pred_scope) = scopes.get(&pred.id) {
-                for (k, v) in pred_scope {
-                    scope.insert(k.clone(), *v);
-                }
-            }
-            // Add the predecessor's declared output-port fields as flat names
-            // (everything funnels through the single `input` token at runtime).
-            // A clashing name from a different upstream is last-writer-wins;
-            // note it so authors aren't silently surprised.
-            for port in pred.data.output_ports() {
-                for f in &port.fields {
-                    if let Some(prev) = scope.get(&f.name) {
-                        if *prev != f.kind {
-                            tracing::warn!(
-                                node = %node.id,
-                                field = %f.name,
-                                "guard scope field name collides across upstream outputs with differing kinds; last writer wins"
-                            );
-                        }
-                    }
-                    scope.insert(f.name.clone(), f.kind);
-                }
-            }
-        }
-
-        // A Loop exposes its own `iteration` counter to its `loop_condition`
-        // (referenced as `input.iteration`).
-        if matches!(node.data, WorkflowNodeData::Loop { .. }) {
-            scope.insert("iteration".to_string(), FieldKind::Number);
-        }
-
-        scopes.insert(node.id.clone(), scope);
-    }
-
-    // Nodes unreachable from Start won't appear in the topo order; give them
-    // an empty scope so the validation pass can still produce a clean error
-    // ("identifier not in scope" rather than panicking on a missing key).
-    for node in &graph.nodes {
-        scopes.entry(node.id.clone()).or_default();
-    }
-
-    Ok(scopes)
-}
-
-/// Per-node input scope: field name → declared kind, the flat union of every
-/// upstream output-port field (exactly the `input.<field>` model decision
-/// guards see). This is the *typed shape of the token arriving at the node* —
-/// the basis for generated typed step stubs. Keyed by node id.
+/// Per-node input scope: top-level field → declared kind. Now backed by the
+/// shape-aware model (`token_shape::node_input_field_kinds`). Same signature
+/// so the Python-stub generator and its callers are untouched. Keyed by node
+/// id.
 pub fn node_input_scopes(
     graph: &WorkflowGraph,
 ) -> Result<HashMap<String, std::collections::BTreeMap<String, FieldKind>>, CompileError> {
-    let wg = WorkflowDiGraph::build(graph)?;
-    compute_scopes(graph, &wg)
+    crate::compiler::token_shape::node_input_field_kinds(graph)
 }
 
-/// Validate Rhai guards on Decision and Loop nodes:
+/// Validate Rhai guards on Decision/Loop nodes:
 /// 1. Syntax-check via `rhai::Engine::compile`.
-/// 2. Resolve every `<ident>.<field>` reference against the node's scope.
-///
-/// Type-kind checking (e.g. comparing a `Text` field against a number literal)
-/// is out of scope per the Phase 3 plan — full inference over Rhai expressions
-/// isn't worth the complexity for the level of safety it adds.
+/// 2. Resolve every `input.<path>` reference against the **shape-aware**
+///    model — the single source of truth. `guard_readarc_plan` is the one
+///    resolver (also used by the post-merge read-arc synthesis phase); it
+///    errors with provenance when a reference is genuinely unresolvable.
 pub(crate) fn validate_guards<'a>(
     graph: &'a WorkflowGraph,
-    wg: &WorkflowDiGraph<'a>,
-) -> Result<(), CompileError> {
-    let scopes = compute_scopes(graph, wg)?;
-
-    for node in &graph.nodes {
-        match &node.data {
-            WorkflowNodeData::Decision { conditions, .. } => {
-                let scope = scopes.get(&node.id).cloned().unwrap_or_default();
-                for cond in conditions {
-                    if cond.guard.trim().is_empty() {
-                        continue;
-                    }
-                    validate_one_guard(&node.id, &cond.guard, &scope)?;
-                }
-            }
-            WorkflowNodeData::Loop { loop_condition, .. } => {
-                if loop_condition.trim().is_empty() {
-                    continue;
-                }
-                let scope = scopes.get(&node.id).cloned().unwrap_or_default();
-                validate_one_guard(&node.id, loop_condition, &scope)?;
-            }
-            // Result-binding expressions run in the same `input.<field>`
-            // scope model as guards (the inbound token), so reuse the exact
-            // parse + ref-resolution path.
-            WorkflowNodeData::End { result_mapping, .. } => {
-                let scope = scopes.get(&node.id).cloned().unwrap_or_default();
-                for m in result_mapping {
-                    if m.expression.trim().is_empty() {
-                        continue;
-                    }
-                    validate_one_guard(&node.id, &m.expression, &scope)?;
-                }
-            }
-            WorkflowNodeData::Failure {
-                error_result_mapping,
-                ..
-            } => {
-                let scope = scopes.get(&node.id).cloned().unwrap_or_default();
-                for m in error_result_mapping {
-                    if m.expression.trim().is_empty() {
-                        continue;
-                    }
-                    validate_one_guard(&node.id, &m.expression, &scope)?;
-                }
-            }
-            _ => {}
-        }
-    }
-
-    Ok(())
-}
-
-fn validate_one_guard(
-    node_id: &str,
-    source: &str,
-    scope: &ScopeFields,
+    _wg: &WorkflowDiGraph<'a>,
 ) -> Result<(), CompileError> {
     use crate::compiler::rhai_scope;
 
-    rhai_scope::parse_guard(source).map_err(|message| CompileError::GuardSyntax {
-        node_id: node_id.to_string(),
-        message,
-    })?;
-
-    // Canonical model: the only in-scope root is the reserved `input` token;
-    // a reference is valid iff it's `input.<field>` and `<field>` is a
-    // reachable upstream output-port field (or a Loop's `iteration`).
-    for r in rhai_scope::extract_qualified_refs(source) {
-        let resolved = r.node_id == "input" && scope.contains_key(&r.field);
-        if !resolved {
-            let mut available: Vec<String> =
-                scope.keys().map(|f| format!("input.{}", f)).collect();
-            available.sort();
-            return Err(CompileError::GuardUnresolved {
-                node_id: node_id.to_string(),
-                identifier: format!("{}.{}", r.node_id, r.field),
-                available,
-            });
+    for node in &graph.nodes {
+        // Result-binding expressions (End/Failure, added on main) evaluate
+        // `input.<path>` in transition *logic* just like guards do, so they
+        // get the same syntax check + shape-aware resolution (the read-arc
+        // synthesis phase rebinds them onto the owning parked data place).
+        let sources: Vec<&str> = match &node.data {
+            WorkflowNodeData::Decision { conditions, .. } => conditions
+                .iter()
+                .map(|c| c.guard.as_str())
+                .filter(|s| !s.trim().is_empty())
+                .collect(),
+            WorkflowNodeData::Loop { loop_condition, .. }
+                if !loop_condition.trim().is_empty() =>
+            {
+                vec![loop_condition.as_str()]
+            }
+            WorkflowNodeData::End { result_mapping, .. } => result_mapping
+                .iter()
+                .map(|m| m.expression.as_str())
+                .filter(|s| !s.trim().is_empty())
+                .collect(),
+            WorkflowNodeData::Failure {
+                error_result_mapping,
+                ..
+            } => error_result_mapping
+                .iter()
+                .map(|m| m.expression.as_str())
+                .filter(|s| !s.trim().is_empty())
+                .collect(),
+            _ => continue,
+        };
+        for src in sources {
+            rhai_scope::parse_guard(src).map_err(|message| CompileError::GuardSyntax {
+                node_id: node.id.clone(),
+                message,
+            })?;
         }
     }
+
+    // Single shape-aware resolver: errors (provenance-rich GuardUnresolved)
+    // if any guard references a field no upstream node produces and isn't on
+    // the pre-yield control token.
+    crate::compiler::token_shape::guard_readarc_plan(graph)?;
     Ok(())
 }
 

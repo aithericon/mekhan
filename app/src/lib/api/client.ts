@@ -257,6 +257,14 @@ export async function compileGraph(data: CompileRequest): Promise<object> {
 	return unwrap(await client.POST('/api/compile', { body: data })) as unknown as object;
 }
 
+/** Shape-aware analysis surface — the editor's single source of truth for
+ * guard scope + diagnostics. Graph-only: works on drafts that can't compile. */
+export type TypeSurfaceResponse = components['schemas']['TypeSurfaceResponse'];
+
+export async function analyzeGraph(data: CompileRequest): Promise<TypeSurfaceResponse> {
+	return unwrap(await client.POST('/api/analyze', { body: data })) as TypeSurfaceResponse;
+}
+
 /**
  * Generated `_aithericon_io` files per Python automated step, keyed
  * `nodeId -> { filename -> source }` — a `.py` SDK delegate plus a typed
