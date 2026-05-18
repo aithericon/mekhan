@@ -176,6 +176,7 @@ pub async fn test_app_with_introspection(
         introspection: Some(introspection),
         zitadel_mgmt: None,
         triggers,
+        result_waiters: mekhan_service::triggers::ResultWaiters::new(),
     };
 
     let router = build_router(state);
@@ -411,6 +412,7 @@ pub async fn test_app_waiters(
         token_verifier: Arc::new(NoopTokenVerifier::default()),
         principal_resolver: Arc::new(StaticPrincipalResolver),
         introspection: None,
+        zitadel_mgmt: None,
         triggers,
         result_waiters: result_waiters.clone(),
     };
