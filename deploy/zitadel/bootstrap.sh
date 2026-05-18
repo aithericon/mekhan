@@ -179,8 +179,10 @@ echo "OIDC clientId: $client_id"
 # ── ensure API application (introspection credential) ────────────────────────
 # Mekhan authenticates to Zitadel's RFC 7662 introspection endpoint as this
 # confidential API app (HTTP Basic) to validate machine PATs presented by CI
-# `mekhan apply`. The client secret is only returned at creation, so an
-# existing app's secret is regenerated to keep the written config valid.
+# `mekhan apply`. The client secret is only returned at creation, and Zitadel
+# v4's secret-regen endpoint (apps/{id}/api_config/_secret) 404s — so on a
+# re-run we delete the existing app and recreate it. Delete+create is the
+# only reliably idempotent path and always yields a config-valid secret.
 API_APP_NAME="${APP_NAME}-introspect"
 echo "Looking up API app '$API_APP_NAME'..."
 api_app_search=$(jq -nc --arg name "$API_APP_NAME" \
@@ -188,21 +190,17 @@ api_app_search=$(jq -nc --arg name "$API_APP_NAME" \
 api_app_id=$(api POST "/management/v1/projects/$project_id/apps/_search" "$api_app_search" \
   | jq -r '.result[0].id // empty')
 
-if [ -z "$api_app_id" ]; then
-  echo "Creating API application '$API_APP_NAME'..."
-  api_create=$(api POST "/management/v1/projects/$project_id/apps/api" \
-    "$(jq -nc --arg name "$API_APP_NAME" \
-        '{name: $name, authMethodType: "API_AUTH_METHOD_TYPE_BASIC"}')")
-  api_app_id=$(echo "$api_create" | jq -r '.appId')
-  introspect_client_id=$(echo "$api_create" | jq -r '.clientId')
-  introspect_client_secret=$(echo "$api_create" | jq -r '.clientSecret')
-else
-  echo "Reusing API app $api_app_id — regenerating client secret"
-  api_regen=$(api POST \
-    "/management/v1/projects/$project_id/apps/$api_app_id/api_config/_secret" '{}')
-  introspect_client_id=$(echo "$api_regen" | jq -r '.clientId')
-  introspect_client_secret=$(echo "$api_regen" | jq -r '.clientSecret')
+if [ -n "$api_app_id" ]; then
+  echo "Recreating API app $api_app_id (v4 has no working secret-regen reuse path)"
+  api DELETE "/management/v1/projects/$project_id/apps/$api_app_id" >/dev/null
 fi
+echo "Creating API application '$API_APP_NAME'..."
+api_create=$(api POST "/management/v1/projects/$project_id/apps/api" \
+  "$(jq -nc --arg name "$API_APP_NAME" \
+      '{name: $name, authMethodType: "API_AUTH_METHOD_TYPE_BASIC"}')")
+api_app_id=$(echo "$api_create" | jq -r '.appId')
+introspect_client_id=$(echo "$api_create" | jq -r '.clientId')
+introspect_client_secret=$(echo "$api_create" | jq -r '.clientSecret')
 echo "API app id:    $api_app_id"
 
 # ── ensure token-broker service user ─────────────────────────────────────────
