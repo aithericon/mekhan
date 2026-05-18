@@ -313,6 +313,65 @@ pub async fn test_app_with_petri_url(nats_url: &str, petri_url: &str) -> (Router
     (router, db)
 }
 
+/// Like [`test_app_with_petri_url`], but returns the `AppState.result_waiters`
+/// `Arc` so a test can hand the **same** registry to a spawned
+/// `start_lifecycle_listener`. That shared `Arc` is the seam WaitForResult
+/// rides: the fire handler registers on `state.result_waiters`, the lifecycle
+/// consumer resolves on the listener's `waiters` — they must be one and the
+/// same. `wait_timeout_secs` is threaded into the config so a test can force a
+/// fast WaitForResult timeout.
+pub async fn test_app_waiters(
+    nats_url: &str,
+    petri_url: &str,
+    wait_timeout_secs: u64,
+) -> (
+    Router,
+    PgPool,
+    Arc<mekhan_service::triggers::ResultWaiters>,
+) {
+    let db = create_test_db().await;
+    let mut config = test_config();
+    config.nats_url = nats_url.to_string();
+    config.petri_lab_url = petri_url.to_string();
+    config.wait_timeout_secs = wait_timeout_secs;
+
+    let petri = PetriClient::new(petri_url);
+
+    let nats = MekhanNats::connect(nats_url, None)
+        .await
+        .unwrap_or_else(|e| panic!("failed to connect to NATS at {nats_url}: {e}"));
+
+    let yjs_persistence = YjsPersistence::new(db.clone());
+    let yjs_manager = Arc::new(YjsManager::new(yjs_persistence));
+    let artifact_store = Arc::new(ArtifactStore::new(&config.s3));
+    let session_store: Arc<dyn SessionStore> = Arc::new(PgSessionStore::new(db.clone()));
+
+    let triggers = test_triggers(db.clone(), petri.clone(), nats.clone());
+    let result_waiters = mekhan_service::triggers::ResultWaiters::new();
+    let state = AppState {
+        db: db.clone(),
+        petri,
+        nats,
+        config: config.clone(),
+        yjs: yjs_manager,
+        s3: artifact_store,
+        artifact_s3: None,
+        catalogue_repo: Arc::new(PgCatalogueRepository::new(db.clone())),
+        live: LiveBroadcasts::new(),
+        authenticator: Arc::new(NoopAuthenticator::default()),
+        session_store,
+        oidc: None,
+        token_verifier: Arc::new(NoopTokenVerifier::default()),
+        principal_resolver: Arc::new(StaticPrincipalResolver),
+        introspection: None,
+        triggers,
+        result_waiters: result_waiters.clone(),
+    };
+
+    let router = build_router(state);
+    (router, db, result_waiters)
+}
+
 /// Start the full Axum server on a random port for WebSocket tests.
 /// Returns `(SocketAddr, PgPool)` — the address to connect to and the pool for assertions.
 pub async fn start_test_server() -> (SocketAddr, PgPool) {
