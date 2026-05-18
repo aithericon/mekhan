@@ -126,3 +126,58 @@ structured-output stage is separate from the tool-use stage).
 - **Deferred**: `tool_invocations` persistence table (workstream #99); in-memory ring + tracing
   log is sufficient for 2.5d-tools. Tool-result streaming, cross-tenant sharing, and cancellation
   propagation are also deferred (see wire-contracts §8).
+
+---
+
+## Amendment — provenance integration (2026-05-18, per supervisor A.7.1+A.7.2 dispositions)
+
+"Tool use as first-class" includes citation-chain integrity by construction. Tool results contribute
+citations to a per-run flat pool; LLM-emitted claims cite from this pool; cloud-layer's
+`CitationValidator` enforces fail-closed.
+
+### A.7.1 (B) — Tool admissibility in citation-required Agent stages
+
+Tools that return source-traceable data (e.g. `search_patient_context` → `embedding_chunk`,
+`query_patient_demographics` → `db_row`) attach real citations to their result. Tools without an
+underlying source (e.g. `lookup_icd10`, `check_drug_interaction` — computational/reference) declare
+`citations: []` honestly. When the LLM cites a claim derived from a zero-citation tool result, the
+claim's citation is rendered as `kind: stage_output` with the optional `via_tool_call` annotation
+identifying which tool call produced the underlying computation. The clinician audit chain runs
+through tool inputs (args) + tool version + tool logic — all traceable from the `via_tool_call`
+mediation record.
+
+### A.7.2 (A) — Citation chain shape (multi-tool turns)
+
+Mekhan's `agent_loop` accumulates tool-result citations into a per-run `citation_pool: Vec<Citation>`.
+On the wire (`SseEvent::ToolResolved.result`), the full `{payload, citations: [Citation]}` shape
+propagates upstream. Cloud-layer-workflow's `ToolCallTracker` records the citations per resolved
+call. Multi-tool composition is implicit: the LLM's final-claim citations reference individual pool
+entries; the chain reconstructs from each citation's `via_tool_call` field. Causal-graph tracking
+(tool A's output → tool B's input) is OUT OF SCOPE — future-wave concern if surfaced.
+
+### `via_tool_call` annotation contract
+
+```jsonc
+{
+  "via_tool_call": {
+    "call_id": "call_abc123",                  // mekhan-issued; unique per invocation
+    "tool_name": "search_patient_context",
+    "tool_version": "v1",                       // tool-side semver string (registry-declared)
+    "input_args_hash": "sha256:..."             // SHA-256 of canonical-JSON-serialised input args
+  }
+}
+```
+
+Clinician audit verifies "this evaluation came from THIS tool call with THESE inputs" via the
+`call_id` (joins to the SSE event log) and `input_args_hash` (deterministic over the input shape,
+so replays prove the args weren't mutated).
+
+### Mekhan-side responsibility
+
+`agent_loop.rs` propagates the full `{payload, citations}` shape in `SseEvent::ToolResolved.result`;
+the existing `serde_json::Value` shape already accommodates this without typed Rust changes.
+Citation TYPE checking happens cloud-layer-side via `CitationValidator`; mekhan validates nothing
+beyond the wire-shape (well-formed JSON).
+
+Future extension toward "Option C — per-tool citation_class" preserved as workstream candidate
+(#101) if clinical audit surfaces a need for tighter per-tool typing.
