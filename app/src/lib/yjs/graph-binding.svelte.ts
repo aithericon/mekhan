@@ -265,7 +265,8 @@ export class YjsGraphBinding {
 					},
 					concurrency: (config?.concurrency as TriggerNodeData['concurrency']) ?? 'allow',
 					payloadMapping: (config?.payloadMapping as TriggerNodeData['payloadMapping']) ?? [],
-					enabled: (config?.enabled as boolean) ?? false
+					enabled: (config?.enabled as boolean) ?? false,
+					replyDefault: (config?.replyDefault as TriggerNodeData['replyDefault']) ?? undefined
 				};
 		}
 	}
@@ -599,6 +600,7 @@ export class YjsGraphBinding {
 				config.set('concurrency', data.concurrency);
 				config.set('payloadMapping', data.payloadMapping ?? []);
 				config.set('enabled', data.enabled ?? false);
+				config.set('replyDefault', data.replyDefault ?? null);
 				break;
 		}
 	}
