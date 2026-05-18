@@ -235,16 +235,12 @@ impl TokenShape {
 
     /// Structural shape → JSON Schema for the engine's `SchemaRegistry`.
     ///
-    /// Enforces *structure* strictly (object nesting / arrays / known field
-    /// presence — the bug class this foundation exists to kill) but scalars
-    /// leniently: the human-task UI delivers Number/Checkbox fields as their
-    /// string form (`"23"`, `"true"`), so Number/Bool accept the JSON
-    /// primitive *or* its string — otherwise the enforced schema would
-    /// spuriously wedge every human-task numeric field at `t_*_yield`
-    /// (a real runtime failure observed end-to-end). `additionalProperties`
-    /// stays open and nothing is `required` (extra/optional keys, executor
-    /// envelope, injected metadata pass). `Opaque`/`Any`/`FileRef`/`Json`
-    /// stay permissive `{}` (the declared→enforced ramp tightens these).
+    /// Known fields get a type constraint; `additionalProperties` stays open
+    /// and nothing is `required`, so the schema *validates the shape we know*
+    /// without rejecting extra/optional keys (the executor envelope, metadata
+    /// the lowering stamps on, etc.). `Opaque`/`Any`/`FileRef` are permissive
+    /// `{}` — undeclared executor outputs and catalogue refs must not be
+    /// rejected (the declared→enforced ramp tightens these later).
     pub fn to_json_schema(&self) -> Value {
         match self {
             TokenShape::Object(map) => {
@@ -262,13 +258,8 @@ impl TokenShape {
                 "type": "array",
                 "items": inner.to_json_schema()
             }),
-            // Lenient: the human-UI posts numeric/checkbox fields as strings.
-            TokenShape::Scalar(ScalarTy::Number) => {
-                serde_json::json!({ "type": ["number", "string"] })
-            }
-            TokenShape::Scalar(ScalarTy::Bool) => {
-                serde_json::json!({ "type": ["boolean", "string"] })
-            }
+            TokenShape::Scalar(ScalarTy::Number) => serde_json::json!({ "type": "number" }),
+            TokenShape::Scalar(ScalarTy::Bool) => serde_json::json!({ "type": "boolean" }),
             TokenShape::Scalar(ScalarTy::String) | TokenShape::Scalar(ScalarTy::Timestamp) => {
                 serde_json::json!({ "type": "string" })
             }
