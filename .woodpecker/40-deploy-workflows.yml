@@ -14,22 +14,22 @@
 # =============================================================================
 
 when:
-    - branch: main
-      event: manual
-    - event: tag
+  - branch: main
+    event: manual
+  - event: tag
 
 labels:
-    "!host": titan
-    role: build
+  role: build
 
 steps:
-    - name: apply-workflows
-      image: 192.168.101.1:5000/nixos/nix:2.32.8
-      environment:
-          NIX_CONFIG: "experimental-features = nix-command flakes"
-          CARGO_HOME: /var/lib/ci-jobs/cache/cargo
-          MEKHAN_CLI_TOKEN:
-              from_secret: mekhan_cli_token
-      commands:
-          - nix develop --no-write-lock-file --command bash -lc 'just ci::apply-workflows'
-      depends_on: []
+  - name: apply-workflows
+    image: 192.168.101.1:5000/nixos/nix:2.32.8
+    environment:
+      NIX_CONFIG: "experimental-features = nix-command flakes"
+      CARGO_HOME: /var/lib/ci-jobs/cache/cargo
+      MEKHAN_CLI_TOKEN:
+        from_secret: mekhan_cli_token
+    commands:
+      - nix develop --no-write-lock-file --command bash -lc 'just
+        ci::apply-workflows'
+    depends_on: []

@@ -13,38 +13,39 @@
 # =============================================================================
 
 when:
-    - branch: main
-      event: push
-    - branch: dev
-      event: push
-    - branch: main
-      event: pull_request
-    - branch: dev
-      event: pull_request
-    - branch: main
-      event: manual
-    - branch: dev
-      event: manual
+  - branch: main
+    event: push
+  - branch: dev
+    event: push
+  - branch: main
+    event: pull_request
+  - branch: dev
+    event: pull_request
+  - branch: main
+    event: manual
+  - branch: dev
+    event: manual
 
 labels:
-    "!host": titan
-    role: test
+  role: test
 
 steps:
-    - name: rust-check
-      image: 192.168.101.1:5000/nixos/nix:2.32.8
-      environment:
-          NIX_CONFIG: "experimental-features = nix-command flakes"
-          CARGO_HOME: /var/lib/ci-jobs/cache/cargo
-      commands:
-          - nix develop --no-write-lock-file --command bash -lc 'just ci::check-rust'
-      depends_on: []
+  - name: rust-check
+    image: 192.168.101.1:5000/nixos/nix:2.32.8
+    environment:
+      NIX_CONFIG: "experimental-features = nix-command flakes"
+      CARGO_HOME: /var/lib/ci-jobs/cache/cargo
+    commands:
+      - nix develop --no-write-lock-file --command bash -lc 'just
+        ci::check-rust'
+    depends_on: []
 
-    - name: web-test
-      image: 192.168.101.1:5000/nixos/nix:2.32.8
-      environment:
-          NIX_CONFIG: "experimental-features = nix-command flakes"
-          NPM_CONFIG_CACHE: /var/lib/ci-jobs/cache/npm
-      commands:
-          - nix develop --no-write-lock-file --command bash -lc 'just ci::test-frontend-unit'
-      depends_on: []
+  - name: web-test
+    image: 192.168.101.1:5000/nixos/nix:2.32.8
+    environment:
+      NIX_CONFIG: "experimental-features = nix-command flakes"
+      NPM_CONFIG_CACHE: /var/lib/ci-jobs/cache/npm
+    commands:
+      - nix develop --no-write-lock-file --command bash -lc 'just
+        ci::test-frontend-unit'
+    depends_on: []

@@ -14,23 +14,23 @@
 # =============================================================================
 
 when:
-    - branch: main
-      event: manual
-    - branch: dev
-      event: manual
+  - branch: main
+    event: manual
+  - branch: dev
+    event: manual
 
 labels:
-    "!host": titan
-    role: test
+  role: test
 
 steps:
-    - name: e2e-zitadel
-      image: 192.168.101.1:5000/nixos/nix:2.32.8
-      environment:
-          NIX_CONFIG: "experimental-features = nix-command flakes"
-          CARGO_HOME: /var/lib/ci-jobs/cache/cargo
-      volumes:
-          - /var/run/docker.sock:/var/run/docker.sock
-      commands:
-          - nix develop --no-write-lock-file --command bash -lc 'just ci::test-e2e-zitadel'
-      depends_on: []
+  - name: e2e-zitadel
+    image: 192.168.101.1:5000/nixos/nix:2.32.8
+    environment:
+      NIX_CONFIG: "experimental-features = nix-command flakes"
+      CARGO_HOME: /var/lib/ci-jobs/cache/cargo
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    commands:
+      - nix develop --no-write-lock-file --command bash -lc 'just
+        ci::test-e2e-zitadel'
+    depends_on: []
