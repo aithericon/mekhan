@@ -50,10 +50,17 @@ resource "zitadel_application_oidc" "spa" {
   # the opaque session cookie.
   auth_method_type = "OIDC_AUTH_METHOD_TYPE_NONE"
 
-  version              = "OIDC_VERSION_1_0"
-  dev_mode             = false
-  access_token_type    = "OIDC_TOKEN_TYPE_BEARER"
-  id_token_role_assertion       = true
-  id_token_userinfo_assertion   = true
-  access_token_role_assertion   = true
+  version  = "OIDC_VERSION_1_0"
+  dev_mode = false
+
+  # mekhan's BFF JWT-verifies the access token in
+  # service/src/auth/bff/handlers.rs:167 using ZitadelTokenVerifier. That
+  # path requires a signed JWT — opaque (BEARER) tokens base64-fail the
+  # header decode. Keep this on _JWT unless you also rewrite the verifier
+  # to introspect opaque tokens via /oauth/v2/introspect.
+  access_token_type = "OIDC_TOKEN_TYPE_JWT"
+
+  id_token_role_assertion     = true
+  id_token_userinfo_assertion = true
+  access_token_role_assertion = true
 }
