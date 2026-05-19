@@ -89,6 +89,10 @@ pub fn doc_to_graph(doc: &Doc) -> Result<WorkflowGraph, String> {
             serde_json::from_value(serde_json::Value::Object(data_json))
                 .map_err(|e| format!("deserialize node data for {}: {}", node_id, e))?;
 
+        let slug = match node_map.get(&txn, "slug") {
+            Some(yrs::Out::Any(Any::String(s))) => Some(s.to_string()),
+            _ => None,
+        };
         let parent_id = match node_map.get(&txn, "parentId") {
             Some(yrs::Out::Any(Any::String(s))) => Some(s.to_string()),
             _ => None,
@@ -105,6 +109,7 @@ pub fn doc_to_graph(doc: &Doc) -> Result<WorkflowGraph, String> {
         nodes.push(WorkflowNode {
             id: node_id.to_string(),
             node_type,
+            slug,
             position,
             data,
             parent_id,
@@ -469,6 +474,7 @@ mod tests {
                 WorkflowNode {
                     id: "scope1".to_string(),
                     node_type: "scope".to_string(),
+                    slug: None,
                     position: Position { x: 50.0, y: 100.0 },
                     data: WorkflowNodeData::Scope {
                         label: "My Group".to_string(),
@@ -481,6 +487,7 @@ mod tests {
                 WorkflowNode {
                     id: "child1".to_string(),
                     node_type: "end".to_string(),
+                    slug: None,
                     position: Position { x: 100.0, y: 200.0 },
                     data: WorkflowNodeData::End {
                         label: "Done".to_string(),
@@ -541,6 +548,7 @@ mod tests {
                 nodes: vec![WorkflowNode {
                     id: "s".to_string(),
                     node_type: "start".to_string(),
+                    slug: None,
                     position: Position { x: 0.0, y: 0.0 },
                     data: WorkflowNodeData::Start {
                         label: "Start".to_string(),

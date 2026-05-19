@@ -44,6 +44,19 @@ pub enum CompileError {
     //     `<upstream_node>.<field>` reference against the topological scope at
     //     that node. The editor consumes these via `to_view()` and highlights
     //     the offending node.
+    /// Two nodes resolve to the same author-facing `slug` (the
+    /// `<slug>.<field>` guard namespace must be unique within a graph). Only
+    /// explicit, user-set slugs can conflict — derived defaults are
+    /// collision-suffixed deterministically and never reach here.
+    #[error(
+        "nodes '{node_a}' and '{node_b}' both use slug '{slug}' — slugs must be unique within a graph"
+    )]
+    SlugConflict {
+        slug: String,
+        node_a: String,
+        node_b: String,
+    },
+
     #[error("guard on node '{node_id}' has a Rhai syntax error: {message}")]
     GuardSyntax { node_id: String, message: String },
 
@@ -129,6 +142,7 @@ impl CompileError {
             Self::UnknownSourcePort { .. } => "unknown_source_port",
             Self::UnknownTargetPort { .. } => "unknown_target_port",
             Self::EdgeTypeMismatch { .. } => "edge_type_mismatch",
+            Self::SlugConflict { .. } => "slug_conflict",
             Self::GuardSyntax { .. } => "guard_syntax",
             Self::GuardUnresolved { .. } => "guard_unresolved",
             Self::TriggerEdgeCardinality { .. } => "trigger_edge_cardinality",
@@ -162,6 +176,7 @@ impl CompileError {
             Self::GuardSyntax { node_id, .. } | Self::GuardUnresolved { node_id, .. } => {
                 Some(node_id)
             }
+            Self::SlugConflict { node_a, .. } => Some(node_a),
             Self::TriggerEdgeCardinality { node_id, .. }
             | Self::TriggerIsEdgeTarget { node_id, .. }
             | Self::TriggerUnknownTargetField { node_id, .. }

@@ -5,8 +5,9 @@
 use crate::compiler::error::CompileError;
 use crate::compiler::rhai_gen::{
     build_join_merge_logic, build_merge_logic, build_retry_topology, interpolate_to_rhai_expr,
-    json_to_rhai_literal, with_pluck_prelude,
+    json_to_rhai_literal, rhai_str_escape, with_pluck_prelude,
 };
+use crate::compiler::token_shape::YIELD_LOGIC;
 use crate::models::template::{
     FieldMapping, PhaseUpdateStatus, WorkflowEdge, WorkflowNode, WorkflowNodeData,
 };
@@ -50,6 +51,13 @@ pub(crate) struct PostProcess {
     /// before their terminal place, so the process is marked complete. `None`
     /// = no process registered → End stays a bare terminal (unchanged).
     pub(crate) process_token_place: Option<PlaceHandle<DynamicToken>>,
+    /// Control/data split (foundation): node_id → its write-once parked data
+    /// place id. Generalizes the `process_token_place` precedent — every
+    /// HumanTask/AutomatedStep parks its full output here once; the read-arc
+    /// synthesis phase (post-merge, in `compile_to_air`) wires guards that
+    /// reference that producer's fields to read-arc this place, and registers
+    /// the typed `#/definitions/*` for the data + control tokens.
+    pub(crate) data_places: HashMap<String, String>,
 }
 
 /// Tracks which places are the input/output interface of each expanded node.
@@ -480,11 +488,20 @@ let eid = dd.artifact_id;
         prev
     };
 
+    // Foundation fork: park a write-once copy of the Start token so
+    // downstream guards / result-mappings can borrow `start.<field>`
+    // (read-arc), exactly like a HumanTask/AutomatedStep. Unlike
+    // `split_outputs` we do NOT slim the forwarded token — the
+    // immediately-following task still interpolates Start fields off the
+    // control token (`{{ invoice_id }}`), so we fork rather than split.
+    let (data_place_id, p_main) = park_outputs(ctx, id, label, &tail);
+    cx.fixups.data_places.insert(id.clone(), data_place_id);
+
     cx.ports.insert(
         id.clone(),
         NodePorts {
             input_place: ready,
-            output_places: vec![(None, tail)],
+            output_places: vec![(None, p_main)],
             input_places: HashMap::new(),
         },
     );
@@ -609,6 +626,70 @@ fn lower_end(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     Ok(())
 }
 
+/// Foundation: split a data-yielding node's output into a write-once parked
+/// **data** place + a slim **control** place, joined by a `t_{id}_yield`
+/// transition. Generalizes the Start-parks-`ProcessStarted` precedent to
+/// every HumanTask/AutomatedStep. Returns the control place (the node's new
+/// downstream output) and the data place id (recorded in `fixups.data_places`
+/// for the post-merge read-arc synthesis phase). Schema refs are left as the
+/// default permissive `DynamicToken`; the post-merge phase upgrades the data/
+/// ctrl `token_schema` to the typed `#/definitions/*` and registers them.
+fn split_outputs(
+    ctx: &mut Context,
+    id: &str,
+    label: &str,
+    producer_out: &PlaceHandle<DynamicToken>,
+) -> (String, PlaceHandle<DynamicToken>) {
+    let p_data: PlaceHandle<DynamicToken> = ctx.state(
+        format!("p_{id}_data"),
+        format!("{label} - Parked Data (write-once)"),
+    );
+    let p_ctrl: PlaceHandle<DynamicToken> =
+        ctx.state(format!("p_{id}_ctrl"), format!("{label} - Control Token"));
+    ctx.transition(
+        format!("t_{id}_yield"),
+        format!("{label} - Yield (park data, forward control)"),
+    )
+    .auto_input("tok", producer_out)
+    .auto_output("data", &p_data)
+    .auto_output("ctrl", &p_ctrl)
+    .logic(YIELD_LOGIC);
+    (format!("p_{id}_data"), p_ctrl)
+}
+
+/// Foundation (Start variant): park a write-once copy of the producer's
+/// output as `p_{id}_data` so downstream guards / result-mappings can borrow
+/// `<slug>.<field>` via the same read-arc synthesis as `split_outputs` —
+/// **without** slimming the forwarded token. Start is special: the very next
+/// node still reads its inputs off the control token (human-task
+/// `{{ invoice_id }}` interpolation is baked against the inbound token at
+/// compile time), so the token must continue intact. We therefore *fork*
+/// (`#{ data: d, main: d }`) rather than *split*. Returns the parked-data
+/// place id (recorded in `fixups.data_places`) and the place carrying the
+/// unchanged token onward.
+fn park_outputs(
+    ctx: &mut Context,
+    id: &str,
+    label: &str,
+    producer_out: &PlaceHandle<DynamicToken>,
+) -> (String, PlaceHandle<DynamicToken>) {
+    let p_data: PlaceHandle<DynamicToken> = ctx.state(
+        format!("p_{id}_data"),
+        format!("{label} - Parked Data (write-once)"),
+    );
+    let p_main: PlaceHandle<DynamicToken> =
+        ctx.state(format!("p_{id}_main"), format!("{label} - Output"));
+    ctx.transition(
+        format!("t_{id}_park"),
+        format!("{label} - Park Inputs (fork: park data, forward token)"),
+    )
+    .auto_input("tok", producer_out)
+    .auto_output("data", &p_data)
+    .auto_output("main", &p_main)
+    .logic("let d = tok; #{ data: d, main: d }");
+    (format!("p_{id}_data"), p_main)
+}
+
 fn lower_human_task(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     let id = &cx.node.id;
     let WorkflowNodeData::HumanTask { label, .. } = &cx.node.data else {
@@ -651,15 +732,19 @@ fn lower_human_task(cx: &mut LoweringCtx) -> Result<(), CompileError> {
         .auto_output("done", &p_output)
         .logic(build_merge_logic("state", "signal"));
 
+    // Foundation split: park the full human-task output, forward slim control.
+    let (data_place_id, p_ctrl) = split_outputs(ctx, id, label, &p_output);
+
     cx.fixups
         .groups
         .push((format!("grp_{id}"), label.clone(), scope_group));
+    cx.fixups.data_places.insert(id.clone(), data_place_id);
 
     cx.ports.insert(
         id.clone(),
         NodePorts {
             input_place: p_input,
-            output_places: vec![(None, p_output)],
+            output_places: vec![(None, p_ctrl)],
             input_places: HashMap::new(),
         },
     );
@@ -775,16 +860,24 @@ fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileError> {
         .auto_output("error", &p_error)
         .logic(r#"#{ error: dead }"#);
 
+    // Foundation split: park the executor result envelope as write-once data,
+    // forward only the slim control token on the success path. The error
+    // path is not a data token (it routes to error handlers) — left as-is.
+    let (data_place_id, p_ctrl) = split_outputs(ctx, id, label, &p_output);
+    cx.fixups.data_places.insert(id.clone(), data_place_id);
+
     cx.ports.insert(
         id.clone(),
         NodePorts {
             input_place: p_input,
-            // Default success output + a named "error" output. An edge
-            // drawn from the node's error handle (source_handle ==
-            // "error") wires to `p_error` via `find_output_place`; if
-            // no error edge exists `p_error` simply has no consumer
-            // (the prior dead-end-on-failure behaviour).
-            output_places: vec![(None, p_output), (Some("error".to_string()), p_error)],
+            // Slim control success output + the unchanged named "error"
+            // output. An edge from the node's error handle (source_handle
+            // == "error") wires to `p_error` via `find_output_place`; if no
+            // error edge exists `p_error` simply has no consumer.
+            output_places: vec![
+                (None, p_ctrl),
+                (Some("error".to_string()), p_error),
+            ],
             input_places: HashMap::new(),
         },
     );
@@ -809,12 +902,43 @@ fn lower_decision(cx: &mut LoweringCtx) -> Result<(), CompileError> {
 
     let mut output_places = Vec::new();
 
-    // One transition per condition (competing transitions from the same input)
+    // Normalize once: a blank guard means "always match".
+    let guards: Vec<String> = conditions
+        .iter()
+        .map(|c| {
+            if c.guard.trim().is_empty() {
+                "true".to_string()
+            } else {
+                c.guard.clone()
+            }
+        })
+        .collect();
+    let n = guards.len();
+
+    // One transition per condition. Precedence is declaration order: branch i
+    // fires only when its own guard holds AND every higher-precedence guard
+    // does not (switch/case fallthrough). This keeps at most one branch (or
+    // the default) enabled per token, so ordering is structural and does not
+    // hinge on the engine's enabling-time / specificity / id tiebreak — which
+    // can otherwise be skewed by read-arcs injected for borrowed guard data.
+    // The descending priority is a redundant, declarative encoding of the same
+    // order (and keeps default below every branch, dead-end below default).
     for (i, cond) in conditions.iter().enumerate() {
         let p_out: PlaceHandle<DynamicToken> = ctx.state(
             format!("p_{id}_out_{i}"),
             format!("{label} - {}", cond.label),
         );
+
+        let guard = if i == 0 {
+            format!("({})", guards[0])
+        } else {
+            let exclude = (0..i)
+                .rev()
+                .map(|j| format!("!({})", guards[j]))
+                .collect::<Vec<_>>()
+                .join(" && ");
+            format!("({}) && {exclude}", guards[i])
+        };
 
         ctx.transition(
             format!("t_{id}_branch_{i}"),
@@ -822,28 +946,58 @@ fn lower_decision(cx: &mut LoweringCtx) -> Result<(), CompileError> {
         )
         .auto_input("input", &p_input)
         .auto_output("output", &p_out)
-        .guard_rhai(&cond.guard)
+        .guard_rhai(guard)
+        .priority(format!("{}", n - i + 1))
         .logic_rhai("#{ output: input }")
         .done();
 
         output_places.push((Some(cond.edge_id.clone()), p_out));
     }
 
-    // Default branch (no guard)
+    // Default branch: the cascade's terminal `else` — enabled only when no
+    // branch guard matched. With zero conditions it stays unconditional
+    // (preserves the historical always-route behavior).
     if let Some(default_edge_id) = default_branch {
         let p_default: PlaceHandle<DynamicToken> = ctx.state(
             format!("p_{id}_out_default"),
             format!("{label} - Default"),
         );
 
-        ctx.transition(format!("t_{id}_default"), format!("{label} - Default"))
+        let t = ctx
+            .transition(format!("t_{id}_default"), format!("{label} - Default"))
             .auto_input("input", &p_input)
             .auto_output("output", &p_default)
-            .logic_rhai("#{ output: input }")
-            .done();
+            .priority("1");
+        let t = if n > 0 {
+            let none_match = (0..n)
+                .map(|j| format!("!({})", guards[j]))
+                .collect::<Vec<_>>()
+                .join(" && ");
+            t.guard_rhai(none_match)
+        } else {
+            t
+        };
+        t.logic_rhai("#{ output: input }").done();
 
         output_places.push((Some(default_edge_id.clone()), p_default));
     }
+
+    // Unroutable token (no branch matched and no default, or a guard threw at
+    // runtime so its negation poisoned the cascade) -> explicit, observable
+    // net error instead of a silently stranded token. Unguarded + lowest
+    // priority so it only ever wins when nothing else is enabled. The `throw`
+    // is a permanent ScriptError: the engine emits ErrorOccurred and consumes
+    // the token (no infinite re-fire).
+    let deadend_msg =
+        format!("decision {label}: token matched no branch and no default branch");
+    ctx.transition(
+        format!("t_{id}_deadend"),
+        format!("{label} - No Match (error)"),
+    )
+    .auto_input("input", &p_input)
+    .priority("0")
+    .logic_rhai(format!("throw \"{}\"", rhai_str_escape(&deadend_msg)))
+    .done();
 
     cx.ports.insert(
         id.clone(),

@@ -50,6 +50,11 @@ pub enum ServiceError {
         transition_id: TransitionId,
         handler_id: String,
         message: String,
+        /// Mirrors the underlying `EffectError::is_retryable()`. Recorded for
+        /// audit/observability only — the engine treats a no-`_error`-port
+        /// failure as marking-advancing regardless (retry/compensation is
+        /// authored via an `_error` port).
+        retryable: bool,
     },
 
     #[error(
@@ -130,6 +135,106 @@ impl ServiceError {
             | Self::SecretResolutionFailed { .. }
             | Self::Internal(_)
             | Self::EventStore(_) => 500,
+        }
+    }
+
+    /// Whether this failure is permanent: re-firing the same transition with
+    /// the same marking would deterministically fail again.
+    ///
+    /// Permanent failures must advance the marking (see `firing.rs`) and stop
+    /// the eval pass / fail the net, otherwise the consumer→eval bridge re-kicks
+    /// the loop forever. Non-permanent (benign/transient/race) failures leave
+    /// the net alive and merely stop the current pass.
+    ///
+    /// `EffectFailed` is permanent here regardless of its `retryable` flag:
+    /// without an `_error` port the engine drops + audits either way, so the
+    /// transition cannot make progress on a retry. Nets that want retry or
+    /// compensation declare an `_error` port (handled before this error is
+    /// ever produced).
+    pub fn is_permanent(&self) -> bool {
+        matches!(
+            self,
+            Self::SchemaValidationFailed { .. }
+                | Self::UnknownOutputPort { .. }
+                | Self::NoArcForPort { .. }
+                | Self::ScriptError { .. }
+                | Self::EffectContractError(_)
+                | Self::TransitionNotFound(_)
+                | Self::EffectFailed { .. }
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tid() -> TransitionId {
+        TransitionId("t".to_string())
+    }
+
+    #[test]
+    fn permanent_variants_are_permanent() {
+        let permanent = [
+            ServiceError::SchemaValidationFailed {
+                port_name: "out".into(),
+                transition_id: tid(),
+                error: "bad".into(),
+            },
+            ServiceError::UnknownOutputPort {
+                port_name: "x".into(),
+            },
+            ServiceError::NoArcForPort {
+                port_name: "x".into(),
+            },
+            ServiceError::ScriptError {
+                script_type: "guard".into(),
+                message: "boom".into(),
+            },
+            ServiceError::EffectContractError("mismatch".into()),
+            ServiceError::TransitionNotFound(tid()),
+            ServiceError::EffectFailed {
+                transition_id: tid(),
+                handler_id: "h".into(),
+                message: "m".into(),
+                retryable: true,
+            },
+            ServiceError::EffectFailed {
+                transition_id: tid(),
+                handler_id: "h".into(),
+                message: "m".into(),
+                retryable: false,
+            },
+        ];
+        for e in &permanent {
+            assert!(e.is_permanent(), "{e:?} should be permanent");
+        }
+    }
+
+    #[test]
+    fn benign_and_transient_variants_are_not_permanent() {
+        let not_permanent = [
+            ServiceError::GuardNotSatisfied(tid()),
+            ServiceError::NoTopology,
+            ServiceError::Internal("transient".into()),
+            ServiceError::InvalidOperation("x".into()),
+            ServiceError::PreDispatchRejected {
+                transition_id: tid(),
+                hook_name: "h".into(),
+                reason: "r".into(),
+            },
+            ServiceError::PreDispatchDeferred {
+                transition_id: tid(),
+                hook_name: "h".into(),
+                retry_after_ms: 10,
+            },
+            ServiceError::SecretResolutionFailed {
+                transition_id: tid(),
+                message: "m".into(),
+            },
+        ];
+        for e in &not_permanent {
+            assert!(!e.is_permanent(), "{e:?} should NOT be permanent");
         }
     }
 }

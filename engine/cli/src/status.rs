@@ -105,6 +105,7 @@ fn print_multi_net_status(metadata: &Value) {
             "running" | "hot" => status.green(),
             "hibernated" => status.yellow(),
             "stopped" | "cancelled" => status.red(),
+            "failed" => status.red().bold(),
             "completed" => status.cyan(),
             _ => status.normal(),
         };

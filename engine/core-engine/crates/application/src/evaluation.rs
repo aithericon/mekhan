@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::sync::RwLock;
 
 use chrono::{DateTime, Utc};
-use petri_domain::{DomainEvent, Marking, PersistedEvent, PlaceKind, TokenColor, TransitionId};
+use petri_domain::{Marking, PersistedEvent, PlaceKind, TokenColor, TransitionId};
 
 use aithericon_secrets::SecretStore;
 
@@ -25,6 +25,24 @@ pub struct TerminalReachedInfo {
     pub exit_code: Option<serde_json::Value>,
 }
 
+/// Info about a permanent firing failure that stopped the eval pass.
+///
+/// Set when a transition failed with a permanent error
+/// ([`ServiceError::is_permanent`]). The firing layer has already advanced
+/// the marking (consumed the offending tokens) and emitted the audit event;
+/// this signals the eval-loop driver to raise a net-level `NetFailed` marker
+/// and tear the net down rather than spin.
+#[derive(Clone, Debug)]
+pub struct FailureInfo {
+    /// The transition whose firing failed permanently.
+    pub transition_id: TransitionId,
+    /// Human-readable failure reason (the `ServiceError` display string).
+    pub reason: String,
+    /// Whether the underlying error was classified retryable (audit only —
+    /// the net fails regardless; retry is authored via an `_error` port).
+    pub retryable: bool,
+}
+
 /// Result of evaluating transitions until quiescence.
 #[derive(Clone, Debug)]
 pub struct EvaluateResult {
@@ -38,6 +56,10 @@ pub struct EvaluateResult {
     pub events: Vec<PersistedEvent>,
     /// If quiescent and a terminal place has tokens, contains the terminal info.
     pub terminal_reached: Option<TerminalReachedInfo>,
+    /// If the pass stopped because a transition failed permanently, the details.
+    /// The marking was already advanced by the firing layer; the driver should
+    /// emit `NetFailed` and stop the net.
+    pub failure_reached: Option<FailureInfo>,
 }
 
 /// Why evaluation stopped.
@@ -64,6 +86,7 @@ pub(crate) fn is_enabled(
     topology: &impl TopologyRepository,
     transition_id: &TransitionId,
     marking: &Marking,
+    schema_registry: Option<&SchemaRegistry>,
 ) -> Result<bool, ServiceError> {
     let net = topology.get_topology().ok_or(ServiceError::NoTopology)?;
 
@@ -74,7 +97,7 @@ pub(crate) fn is_enabled(
 
     let input_arcs = net.input_arcs(transition_id);
 
-    Ok(find_valid_binding(executor, &transition, &input_arcs, marking, None).is_some())
+    Ok(find_valid_binding(executor, &transition, &input_arcs, marking, schema_registry).is_some())
 }
 
 /// Get all enabled transitions.
@@ -82,13 +105,15 @@ pub(crate) fn enabled_transitions(
     executor: &TransitionExecutor,
     topology: &impl TopologyRepository,
     marking: &Marking,
+    schema_registry: Option<&SchemaRegistry>,
 ) -> Result<Vec<TransitionId>, ServiceError> {
     let net = topology.get_topology().ok_or(ServiceError::NoTopology)?;
 
     let mut enabled = Vec::new();
     for transition in net.transitions.values() {
         let input_arcs = net.input_arcs(&transition.id);
-        if find_valid_binding(executor, transition, &input_arcs, marking, None).is_some() {
+        if find_valid_binding(executor, transition, &input_arcs, marking, schema_registry).is_some()
+        {
             enabled.push(transition.id.clone());
         }
     }
@@ -101,6 +126,7 @@ pub(crate) fn transition_statuses(
     executor: &TransitionExecutor,
     topology: &impl TopologyRepository,
     marking: &Marking,
+    schema_registry: Option<&SchemaRegistry>,
 ) -> Result<HashMap<TransitionId, TransitionStatusDetail>, ServiceError> {
     let net = topology.get_topology().ok_or(ServiceError::NoTopology)?;
 
@@ -131,7 +157,7 @@ pub(crate) fn transition_statuses(
         }
 
         // Use find_valid_binding to search all token combinations
-        match find_valid_binding(executor, &transition, &input_arcs, marking, None) {
+        match find_valid_binding(executor, &transition, &input_arcs, marking, schema_registry) {
             Some(_) => {
                 statuses.insert(transition.id.clone(), TransitionStatusDetail::Enabled);
             }
@@ -161,6 +187,7 @@ pub(crate) fn transition_enabling_time(
     topology: &impl TopologyRepository,
     transition_id: &TransitionId,
     marking: &Marking,
+    schema_registry: Option<&SchemaRegistry>,
 ) -> Result<Option<DateTime<Utc>>, ServiceError> {
     let net = topology.get_topology().ok_or(ServiceError::NoTopology)?;
 
@@ -171,7 +198,7 @@ pub(crate) fn transition_enabling_time(
 
     let input_arcs = net.input_arcs(transition_id);
 
-    match find_valid_binding(executor, &transition, &input_arcs, marking, None) {
+    match find_valid_binding(executor, &transition, &input_arcs, marking, schema_registry) {
         Some(binding) => Ok(binding.max_created_at),
         None => Ok(None),
     }
@@ -188,6 +215,7 @@ pub(crate) fn select_next_transition(
     executor: &TransitionExecutor,
     topology: &impl TopologyRepository,
     marking: &Marking,
+    schema_registry: Option<&SchemaRegistry>,
 ) -> Result<Option<TransitionId>, ServiceError> {
     let net = topology.get_topology().ok_or(ServiceError::NoTopology)?;
 
@@ -200,7 +228,8 @@ pub(crate) fn select_next_transition(
         let input_arcs = net.input_arcs(&transition.id);
 
         // Find a valid binding for this transition
-        if let Some(binding) = find_valid_binding(executor, transition, &input_arcs, marking, None)
+        if let Some(binding) =
+            find_valid_binding(executor, transition, &input_arcs, marking, schema_registry)
         {
             let enabling_time = binding.max_created_at;
 
@@ -290,7 +319,8 @@ pub(crate) async fn evaluate_until_quiescent<
         let marking = get_marking_cached(events, projection, cached_state).await;
 
         // Select next transition to fire
-        let next_transition = select_next_transition(executor, topology, &marking)?;
+        let next_transition =
+            select_next_transition(executor, topology, &marking, schema_registry)?;
 
         match next_transition {
             None => {
@@ -302,10 +332,15 @@ pub(crate) async fn evaluate_until_quiescent<
                     final_state: EvaluateFinalState::Quiescent,
                     events: events_generated,
                     terminal_reached,
+                    failure_reached: None,
                 });
             }
             Some(transition_id) => {
                 let wf_id = *workflow_id_lock.read().unwrap();
+                // Snapshot the log position so a permanent failure can collect
+                // the audit events the firing layer appended (EffectFailed /
+                // ErrorOccurred / TokenRemoved) into the EvaluateResult.
+                let seq_before = events.current_sequence().await;
                 // Fire the transition
                 let result = fire_transition::<E, T, S>(
                     events,
@@ -330,27 +365,37 @@ pub(crate) async fn evaluate_until_quiescent<
                         events_generated.push(event);
                         steps_executed += 1;
                     }
-                    Err(
-                        ref e @ ServiceError::ScriptError { .. }
-                        | ref e @ ServiceError::UnknownOutputPort { .. }
-                        | ref e @ ServiceError::SchemaValidationFailed { .. },
-                    ) => {
-                        // Emit ErrorOccurred event so script/routing failures
-                        // are visible in the event log and CLI
-                        let error_msg = format!("Transition {}: {}", transition_id, e);
-                        tracing::warn!("{}", error_msg);
-                        let error_event = events
-                            .append(DomainEvent::ErrorOccurred { message: error_msg })
-                            .await?;
-                        events_generated.push(error_event);
-                        // Stop the eval loop — the transition is broken,
-                        // retrying it would produce infinite errors
+                    Err(ref e) if e.is_permanent() => {
+                        // Permanent failure: re-firing with the same marking
+                        // would deterministically fail again. The firing layer
+                        // has ALREADY advanced the marking (consumed the
+                        // offending tokens via EffectFailed{tokens_consumed} /
+                        // TokenRemoved) and emitted the audit event. Do NOT
+                        // re-append ErrorOccurred here — a second append would
+                        // re-kick the consumer→eval bridge and double the
+                        // audit, which is exactly the infinite-loop feedback we
+                        // are eliminating. Stop the pass and report the failure
+                        // so the eval-loop driver raises a net-level NetFailed
+                        // marker and tears the net down.
+                        let reason = format!("Transition {}: {}", transition_id, e);
+                        tracing::warn!("{}", reason);
+                        let retryable =
+                            matches!(e, ServiceError::EffectFailed { retryable: true, .. });
+                        // Surface the audit events the firing layer appended
+                        // (so callers/tests see them in EvaluateResult.events;
+                        // the driver also re-reads the store for SSE).
+                        events_generated.extend(events.events_since(seq_before).await);
                         return Ok(EvaluateResult {
                             steps_executed,
                             transitions_fired,
                             final_state: EvaluateFinalState::Quiescent,
                             events: events_generated,
                             terminal_reached: None,
+                            failure_reached: Some(FailureInfo {
+                                transition_id,
+                                reason,
+                                retryable,
+                            }),
                         });
                     }
                     // Pre-dispatch soft outcomes — marking unchanged, audit
@@ -367,8 +412,13 @@ pub(crate) async fn evaluate_until_quiescent<
                             final_state: EvaluateFinalState::Quiescent,
                             events: events_generated,
                             terminal_reached: None,
+                            failure_reached: None,
                         });
                     }
+                    // Non-permanent, non-soft errors (e.g. a benign
+                    // GuardNotSatisfied race, a transient Internal): leave the
+                    // net alive and end the pass. The driver logs and waits for
+                    // the next notify.
                     Err(e) => return Err(e),
                 }
             }
@@ -382,6 +432,7 @@ pub(crate) async fn evaluate_until_quiescent<
         final_state: EvaluateFinalState::LimitReached,
         events: events_generated,
         terminal_reached: None,
+        failure_reached: None,
     })
 }
 
@@ -530,6 +581,135 @@ mod tests {
         let topo = TestTopology(None);
         let marking = Marking::new();
         assert!(check_terminal_state(&topo, &marking).is_none());
+    }
+
+    // ── Decision cascade regression ─────────────────────────────────────
+    //
+    // A Decision lowers branches as a switch/case cascade: branch i fires
+    // only when its own guard holds AND no higher-precedence guard did. This
+    // test reproduces the bug class the cascade fixes: a lower-precedence
+    // branch whose guard borrows upstream data gets an extra (read) input
+    // arc, so the engine's rule-2 "specificity" (more input arcs) used to
+    // override the declared order before priority was ever consulted.
+
+    use petri_domain::{Arc as PetriArc, Port, Transition};
+
+    fn cascade_net(branch1_guard: &str) -> PetriNet {
+        let mut net = PetriNet::new();
+        net.add_place(Place::internal("p_input"));
+        net.add_place(Place::internal("p_data"));
+        net.add_place(Place::internal("p_out0"));
+        net.add_place(Place::internal("p_out1"));
+
+        // branch 0: declared first, payload-only, ONE input arc, top priority.
+        net.add_transition(
+            Transition::new("t_dec_branch_0", "#{ output: input }")
+                .with_input_port(Port::new("input"))
+                .with_guard("(true)")
+                .with_priority("4"),
+        );
+        // branch 1: declared second, borrows producer data via a read-arc
+        // (TWO input arcs => higher rule-2 "specificity"), lower priority.
+        net.add_transition(
+            Transition::new("t_dec_branch_1", "#{ output: input }")
+                .with_input_port(Port::new("input"))
+                .with_input_port(Port::new("d_prod"))
+                .with_guard(branch1_guard)
+                .with_priority("3"),
+        );
+
+        let tb0 = TransitionId("t_dec_branch_0".to_string());
+        let tb1 = TransitionId("t_dec_branch_1".to_string());
+        net.add_arc(PetriArc::input(
+            PlaceId("p_input".to_string()),
+            tb0.clone(),
+            "input",
+        ));
+        net.add_arc(PetriArc::output(
+            tb0,
+            "output",
+            PlaceId("p_out0".to_string()),
+        ));
+        net.add_arc(PetriArc::input(
+            PlaceId("p_input".to_string()),
+            tb1.clone(),
+            "input",
+        ));
+        net.add_arc(
+            PetriArc::input(PlaceId("p_data".to_string()), tb1.clone(), "d_prod")
+                .with_read(true),
+        );
+        net.add_arc(PetriArc::output(
+            tb1,
+            "output",
+            PlaceId("p_out1".to_string()),
+        ));
+        net
+    }
+
+    fn cascade_marking() -> Marking {
+        // Identical created_at so rule-1 (enabling time) ties for both
+        // branches, isolating the rule-2 vs declared-order question.
+        let ts = chrono::Utc::now();
+        let mut tok_in = Token::new(TokenColor::Data(serde_json::json!({ "k": 1 })));
+        tok_in.created_at = ts;
+        let mut tok_data = Token::new(TokenColor::Data(serde_json::json!({ "score": 10 })));
+        tok_data.created_at = ts;
+        let mut m = Marking::new();
+        m.add_token(PlaceId("p_input".to_string()), tok_in);
+        m.add_token(PlaceId("p_data".to_string()), tok_data);
+        m
+    }
+
+    #[test]
+    fn cascade_keeps_declaration_order_despite_specificity() {
+        let exec = crate::TransitionExecutor::new();
+        let marking = cascade_marking();
+
+        // Compiled cascade form: branch 1 = (its guard) && !(branch 0 guard).
+        // Branch 0's guard is `true`, so branch 1's guard is always false and
+        // branch 1 is never enabled — the topmost branch wins even though it
+        // has FEWER input arcs and the engine's specificity rule would favor
+        // branch 1.
+        let topo = TestTopology(Some(cascade_net("(d_prod.score > 0) && !(true)")));
+        let picked = select_next_transition(&exec, &topo, &marking, None).unwrap();
+        assert_eq!(
+            picked,
+            Some(TransitionId("t_dec_branch_0".to_string())),
+            "cascade must keep declared precedence (branch 0) regardless of arc count"
+        );
+
+        // Pre-fix lowering (no cascade exclusion): branch 1's guard is just
+        // its own condition. Now both are enabled, and the lower-precedence
+        // branch 1 wins purely on rule-2 specificity (2 input arcs > 1),
+        // beating branch 0's higher priority. This is the regression.
+        let topo_buggy = TestTopology(Some(cascade_net("d_prod.score > 0")));
+        let picked_buggy = select_next_transition(&exec, &topo_buggy, &marking, None).unwrap();
+        assert_eq!(
+            picked_buggy,
+            Some(TransitionId("t_dec_branch_1".to_string())),
+            "sanity: without the cascade, specificity overrides declared order"
+        );
+    }
+
+    #[test]
+    fn deadend_throw_is_a_permanent_script_error() {
+        // The synthesized `t_{id}_deadend` transition raises via Rhai `throw`.
+        // execute_script must surface that as a permanent ServiceError so the
+        // firing path emits ErrorOccurred and consumes the token (rather than
+        // stranding it or re-firing forever).
+        let exec = crate::TransitionExecutor::new();
+        let err = exec
+            .execute_script(
+                "throw \"decision X: token matched no branch and no default branch\"",
+                &std::collections::HashMap::new(),
+            )
+            .expect_err("throw must produce an error");
+        assert!(
+            matches!(err, crate::ServiceError::ScriptError { .. }),
+            "expected ScriptError, got {err:?}"
+        );
+        assert!(err.is_permanent(), "dead-end error must be permanent");
     }
 }
 

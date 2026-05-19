@@ -201,7 +201,11 @@
 	});
 	const samplePayload = $derived.by(() =>
 		mappings.length > 0
-			? Object.fromEntries(mappedInputKeys.map((k) => [k, 'example']))
+			? Object.fromEntries(
+						mappedInputKeys
+							.filter((k) => !fileFields.some((f) => f.name === k))
+							.map((k) => [k, 'example'])
+					)
 			: Object.fromEntries(nonFileFields.map((f) => [f.name, sampleValue(f)]))
 	);
 

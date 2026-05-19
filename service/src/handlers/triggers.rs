@@ -364,6 +364,14 @@ async fn build_multipart_payload(
         .map_err(|e| ApiError::bad_request(format!("invalid multipart body: {e}")))?;
 
     let mut payload = serde_json::Map::new();
+    // File parts are collected separately and applied LAST so an uploaded
+    // binary always wins its field name. Previously each part was inserted
+    // inline, making the outcome depend on multipart stream order: a JSON
+    // `payload` part arriving after a file part `extend`-clobbered the file
+    // ref with a colliding scalar (root cause of instance 6f347648 — curl
+    // sent `-F invoice_file=@…` then `-F payload={"invoice_file":"example"}`,
+    // and the scalar silently shadowed the upload).
+    let mut file_parts: Vec<(String, Value)> = Vec::new();
 
     while let Some(field) = multipart
         .next_field()
@@ -423,7 +431,7 @@ async fn build_multipart_payload(
             .await
             .map_err(|e| ApiError::internal(format!("upload failed: {e}")))?;
 
-        payload.insert(
+        file_parts.push((
             name,
             serde_json::json!({
                 "key": key,
@@ -432,7 +440,16 @@ async fn build_multipart_payload(
                 "content_type": content_type,
                 "size": size,
             }),
-        );
+        ));
+    }
+
+    // Apply file refs after the JSON `payload` keys: the multipart file part
+    // is authoritative for its field name, so a colliding scalar in `payload`
+    // cannot shadow the upload regardless of the order parts arrived in. The
+    // strict Start-contract gate at ingestion then rejects the inverse case
+    // (no file part, only a scalar where a `file` field is declared).
+    for (name, fref) in file_parts {
+        payload.insert(name, fref);
     }
 
     Ok(Value::Object(payload))
@@ -679,6 +696,7 @@ fn map_trigger_error(e: TriggerError) -> ApiError {
         TriggerError::Database(_) => ApiError::internal(e.to_string()),
         TriggerError::TargetMissing { .. }
         | TriggerError::PayloadMappingFailed { .. }
+        | TriggerError::StartContractViolation { .. }
         | TriggerError::InstanceFailed(_)
         | TriggerError::SignalFailed(_) => ApiError::bad_request(e.to_string()),
     }

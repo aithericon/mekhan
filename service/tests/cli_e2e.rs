@@ -500,6 +500,7 @@ async fn graph_topology_roundtrip() {
             WorkflowNode {
                 id: "start".to_string(),
                 node_type: "start".to_string(),
+                slug: None,
                 position: Position { x: 250.0, y: 100.0 },
                 data: WorkflowNodeData::Start {
                     label: "Start".to_string(),
@@ -514,6 +515,7 @@ async fn graph_topology_roundtrip() {
             WorkflowNode {
                 id: "process".to_string(),
                 node_type: "automated_step".to_string(),
+                slug: None,
                 position: Position { x: 250.0, y: 200.0 },
                 data: WorkflowNodeData::AutomatedStep {
                     label: "Process Data".to_string(),
@@ -536,6 +538,7 @@ async fn graph_topology_roundtrip() {
             WorkflowNode {
                 id: "end".to_string(),
                 node_type: "end".to_string(),
+                slug: None,
                 position: Position { x: 250.0, y: 300.0 },
                 data: WorkflowNodeData::End {
                     label: "End".to_string(),
@@ -744,6 +747,7 @@ async fn yaml_format_roundtrip() {
                 WorkflowNode {
                     id: "start".to_string(),
                     node_type: "start".to_string(),
+                    slug: None,
                     position: Position { x: 250.0, y: 100.0 },
                     data: WorkflowNodeData::Start {
                         label: "Start".to_string(),
@@ -758,6 +762,7 @@ async fn yaml_format_roundtrip() {
                 WorkflowNode {
                     id: "process".to_string(),
                     node_type: "automated_step".to_string(),
+                    slug: None,
                     position: Position { x: 250.0, y: 250.0 },
                     data: WorkflowNodeData::AutomatedStep {
                         label: "Process Data".to_string(),
@@ -780,6 +785,7 @@ async fn yaml_format_roundtrip() {
                 WorkflowNode {
                     id: "end".to_string(),
                     node_type: "end".to_string(),
+                    slug: None,
                     position: Position { x: 250.0, y: 400.0 },
                     data: WorkflowNodeData::End {
                         label: "End".to_string(),

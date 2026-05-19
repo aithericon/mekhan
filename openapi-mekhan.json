@@ -9,6 +9,37 @@
     "version": "0.1.0"
   },
   "paths": {
+    "/api/analyze": {
+      "post": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "Stateless shape analysis: the editor's single source of truth for guard\nscope + diagnostics. Independent of `compile_to_air` succeeding (no files\nneeded) so feedback lands while editing, not at publish.",
+        "operationId": "analyze_graph",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompileRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Shape-aware scope + diagnostics",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TypeSurfaceResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/auth/tokens": {
       "get": {
         "tags": [
@@ -4693,6 +4724,26 @@
           }
         }
       },
+      "GuardDiagnosticDto": {
+        "type": "object",
+        "description": "Flattened guard diagnostic (`node_id` is highlighted in the editor).",
+        "required": [
+          "kind",
+          "node_id",
+          "message"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "node_id": {
+            "type": "string"
+          }
+        }
+      },
       "HealthResponse": {
         "type": "object",
         "required": [
@@ -6244,6 +6295,36 @@
           }
         }
       },
+      "ScopeEntryDto": {
+        "type": "object",
+        "description": "One reachable, producer-attributed reference the guard picker should\noffer at a node. The single source of truth for editor scope —\nreplaces the deleted client-side `computeScopes` reimplementation.",
+        "required": [
+          "path",
+          "ty",
+          "producer_node",
+          "producer_label",
+          "note"
+        ],
+        "properties": {
+          "note": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string",
+            "description": "What you'd type in a guard, e.g. `input.data.invoice_amount`."
+          },
+          "producer_label": {
+            "type": "string"
+          },
+          "producer_node": {
+            "type": "string"
+          },
+          "ty": {
+            "type": "string",
+            "description": "Type label (`String`, `Number`, `Bool`, `Opaque(..)`, …)."
+          }
+        }
+      },
       "ScopeVar": {
         "type": "object",
         "description": "One identifier available to a trigger's payload-mapping expressions.",
@@ -6989,6 +7070,38 @@
           }
         }
       },
+      "TypeSurfaceResponse": {
+        "type": "object",
+        "description": "Shape-aware analysis surface — per-node scope + diagnostics. Pure and\ngraph-only: works on drafts that can't compile/publish yet.",
+        "required": [
+          "graph_ok",
+          "scopes",
+          "diagnostics"
+        ],
+        "properties": {
+          "diagnostics": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GuardDiagnosticDto"
+            }
+          },
+          "graph_ok": {
+            "type": "boolean"
+          },
+          "scopes": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/ScopeEntryDto"
+              }
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "UpdateTemplateRequest": {
         "type": "object",
         "properties": {
@@ -7299,6 +7412,13 @@
           },
           "position": {
             "$ref": "#/components/schemas/Position"
+          },
+          "slug": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Stable, author-facing namespace for guard references to this node's\nproduced fields: a guard writes `<slug>.<field>` and the compiler\nrebinds it to this node's parked data place. Rhai-identifier-safe and\nunique within a graph. Optional on the wire — when absent the compiler\nderives a deterministic fallback from `id` (clean-cut: no stored\ntemplates to migrate). See [`WorkflowNode::slug`]."
           },
           "type": {
             "type": "string"

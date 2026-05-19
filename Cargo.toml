@@ -27,4 +27,12 @@ exclude = [
     "shared/apalis",
     "shared/file-metadata",
     "deploy",
+    # Git worktrees live under .claude/worktrees/. Because this manifest is a
+    # filesystem ancestor of every worktree, Cargo's workspace-root walk for a
+    # worktree's nested sibling crates (engine/, executor/, shared/apalis/…)
+    # escapes the worktree's own umbrella and gets captured *here* — the
+    # exclude entries above are root-relative and don't match the deeper
+    # `.claude/worktrees/<wt>/shared/apalis` path. Excluding `.claude` keeps
+    # worktree builds resolving against their own in-worktree workspace roots.
+    ".claude",
 ]

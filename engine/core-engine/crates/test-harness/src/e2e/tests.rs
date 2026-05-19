@@ -1556,21 +1556,31 @@ async fn test_script_error_emits_error_occurred_event() {
             .build()
             .await;
 
-    // Should succeed (not Err) — the error is captured as an event
+    // Should succeed (not Err) — a permanent failure stops the pass cleanly
+    // with the failure recorded, instead of propagating an Err the driver
+    // would log-and-retry forever.
     let result = test_ctx
         .service
         .evaluate_until_quiescent(10)
         .await
         .expect("evaluate should not return Err on script failures");
 
-    // Token should still be in A (not consumed, since script failed)
-    let marking = test_ctx.service.get_marking().await;
     assert!(
-        marking.token_count(&a_id) > 0,
-        "Token should remain in A after script error"
+        result.failure_reached.is_some(),
+        "a permanent script failure should set failure_reached"
     );
 
-    // An ErrorOccurred event should have been emitted
+    // Token is CONSUMED (marking advances) so the broken transition is no
+    // longer enabled — this is what breaks the infinite loop.
+    let marking = test_ctx.service.get_marking().await;
+    assert_eq!(
+        marking.token_count(&a_id),
+        0,
+        "Token should be consumed after a permanent script error"
+    );
+
+    // An ErrorOccurred event is still emitted (human-readable visibility for
+    // the event log and `aithericon errors`).
     let has_error_event = result.events.iter().any(|e| {
         matches!(
             &e.event,
@@ -1624,14 +1634,16 @@ async fn test_script_error_preserves_prior_transitions() {
         .await
         .expect("evaluate should not return Err");
 
-    // T1 should have fired (1 step)
+    // T1 should have fired (1 step); T2's permanent failure does not count.
     assert_eq!(result.steps_executed, 1, "Good transition should have fired");
 
-    // Token should be in B (T1 succeeded, T2 failed so token stays in B)
+    // T1's success persists, but T2's permanent failure consumes B's token so
+    // the broken transition cannot be re-selected (loop-breaking behavior).
     let marking = test_ctx.service.get_marking().await;
-    assert!(
-        marking.token_count(&b_id) > 0,
-        "Token should be in B after T1 succeeds and T2 fails"
+    assert_eq!(
+        marking.token_count(&b_id),
+        0,
+        "B's token is consumed by the permanent failure of T2"
     );
 
     // Should have TransitionFired + ErrorOccurred

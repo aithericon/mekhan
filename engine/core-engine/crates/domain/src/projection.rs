@@ -86,6 +86,7 @@ pub fn apply_event_to_marking(marking: &mut Marking, event: &DomainEvent) {
         | DomainEvent::NetCreated { .. }
         | DomainEvent::NetCompleted { .. }
         | DomainEvent::NetCancelled { .. }
+        | DomainEvent::NetFailed { .. }
         // Pre-dispatch hook events are audit-only — Reject/Defer outcomes
         // are non-destructive w.r.t. marking, and Continue's marking
         // effect is captured by the subsequent EffectCompleted event.

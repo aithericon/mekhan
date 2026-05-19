@@ -1,24 +1,19 @@
-// Scope walk for Decision / Loop guards (Phase 3 typed-ports).
+// Guard scope for Decision / Loop editors.
 //
-// The backend's `service/src/compiler/compile.rs::compute_scopes` is the
-// source of truth at publish time. This TS twin lets the editor offer
-// autocomplete, scope chips, and a structured guard builder without an API
-// round-trip per keystroke.
+// SINGLE SOURCE OF TRUTH: the backend shape-aware analyzer
+// (`service/src/compiler/token_shape.rs`, exposed at `POST /api/analyze`) is
+// now the *only* implementation of scope rules. The editor no longer mirrors
+// the lowering — it asks the compiler. This kills the duplicate-scope class
+// of bug: what the picker shows is exactly what the compiler resolves.
 //
-// We mirror the backend rules:
-//   - Topologically walk the DAG (loop_back edges excluded).
-//   - At each node, scope = union of every DAG predecessor's scope + its own
-//     declared output port fields.
-//   - Loop nodes additionally expose `<loop_id>.iteration : number` in their
-//     own scope so `loop_condition` can reference it.
+// `extractQualifiedRefs` stays here: it's a pure Rhai-text utility (find
+// `<ident>.<field>` references for highlighting), not a reimplementation of
+// scope rules.
 
 import type { components } from '$lib/api/schema';
+import { analyzeGraph } from '$lib/api/client';
 
 type WorkflowGraph = components['schemas']['WorkflowGraph'];
-type WorkflowNode = WorkflowGraph['nodes'][number];
-type WorkflowEdge = WorkflowGraph['edges'][number];
-type WorkflowNodeData = WorkflowNode['data'];
-type Port = components['schemas']['Port'];
 type FieldKind = components['schemas']['FieldKind'];
 
 export type ScopeEntry = {
@@ -26,205 +21,71 @@ export type ScopeEntry = {
 	nodeLabel: string;
 	field: string;
 	kind: FieldKind;
-	/** Qualified identifier for code insertion (`<nodeId>.<field>`). */
+	/** Producer-namespaced identifier for code insertion: `<slug>.<field>`
+	 *  for borrowed parked-producer data (e.g. `review.invoice_amount`), or
+	 *  `input.<path>` for genuinely control-token-resident leaves. */
 	qualified: string;
 };
 
-/**
- * Compute the set of in-scope identifiers at every node. Returns a map
- * keyed by node id; each entry is the deduped list of `<upstream>.<field>`
- * identifiers visible at that node.
- *
- * Cycles (only possible via `loop_back` edges, which we already drop) are
- * impossible; on a malformed graph we just return whatever we could resolve.
- */
-export function computeScopes(graph: WorkflowGraph): Map<string, ScopeEntry[]> {
-	const nodes = new Map<string, WorkflowNode>();
-	for (const n of graph.nodes) nodes.set(n.id, n);
-
-	// Build adjacency on the DAG (skip loop_back).
-	const incoming = new Map<string, WorkflowEdge[]>();
-	for (const n of graph.nodes) incoming.set(n.id, []);
-	for (const e of graph.edges) {
-		if (e.type === 'loop_back') continue;
-		incoming.get(e.target)?.push(e);
-	}
-
-	// Topological order via Kahn's algorithm. Anything left over (cycles, or
-	// detached subgraphs) falls into an arbitrary order after the sortable
-	// nodes; their scope will simply not see contributions from un-sorted
-	// upstreams, which matches "best-effort" semantics.
-	const indeg = new Map<string, number>();
-	for (const n of graph.nodes) indeg.set(n.id, 0);
-	for (const e of graph.edges) {
-		if (e.type === 'loop_back') continue;
-		indeg.set(e.target, (indeg.get(e.target) ?? 0) + 1);
-	}
-	const order: string[] = [];
-	const queue: string[] = [];
-	for (const [id, d] of indeg) if (d === 0) queue.push(id);
-	while (queue.length) {
-		const id = queue.shift()!;
-		order.push(id);
-		for (const e of graph.edges) {
-			if (e.type === 'loop_back') continue;
-			if (e.source !== id) continue;
-			const next = (indeg.get(e.target) ?? 0) - 1;
-			indeg.set(e.target, next);
-			if (next === 0) queue.push(e.target);
-		}
-	}
-	// Append any unsorted nodes (shouldn't happen on a valid graph) so they
-	// still get an entry.
-	for (const n of graph.nodes) if (!order.includes(n.id)) order.push(n.id);
-
-	const result = new Map<string, ScopeEntry[]>();
-	const accumulated = new Map<string, Map<string, ScopeEntry>>();
-
-	for (const id of order) {
-		const scope = new Map<string, ScopeEntry>();
-
-		for (const edge of incoming.get(id) ?? []) {
-			const predScope = accumulated.get(edge.source);
-			if (predScope) {
-				for (const [k, v] of predScope) scope.set(k, v);
-			}
-			const pred = nodes.get(edge.source);
-			if (pred) {
-				for (const port of outputPorts(pred.data)) {
-					for (const f of port.fields ?? []) {
-						// Canonical model: guards run against the single `input`
-						// token, so every reachable upstream field is addressed
-						// as `input.<field>`. Same-named fields from different
-						// upstreams collapse (last writer wins), matching the
-						// backend's flat scope.
-						const qualified = `input.${f.name}`;
-						scope.set(qualified, {
-							nodeId: pred.id,
-							nodeLabel: nodeLabel(pred),
-							field: f.name,
-							kind: f.kind,
-							qualified
-						});
-					}
-				}
-			}
-		}
-
-		// Loop's own iteration counter.
-		const self = nodes.get(id);
-		if (self && self.data.type === 'loop') {
-			const qualified = `input.iteration`;
-			scope.set(qualified, {
-				nodeId: id,
-				nodeLabel: nodeLabel(self),
-				field: 'iteration',
-				kind: 'number',
-				qualified
-			});
-		}
-
-		accumulated.set(id, scope);
-		const list = Array.from(scope.values()).sort((a, b) => a.qualified.localeCompare(b.qualified));
-		result.set(id, list);
-	}
-
-	return result;
-}
-
-/**
- * Output ports declared or derived for a node. Mirrors
- * `service/src/models/template.rs::WorkflowNodeData::output_ports`. Phase 4
- * derives ports for HumanTask (from its task fields) and produces pass-through
- * stubs for control-flow blocks so they contribute *nothing* to downstream
- * scope (matching the backend's empty-fields semantics).
- */
-function outputPorts(data: WorkflowNodeData): Port[] {
-	switch (data.type) {
-		case 'start':
-			return data.initial ? [data.initial] : [];
-		case 'automated_step':
-			return data.output ? [data.output] : [];
-		case 'human_task':
-			return [deriveHumanTaskOutputPort(data)];
-		case 'decision':
-		case 'parallel_split':
-		case 'parallel_join':
-		case 'loop':
-		case 'scope':
-		case 'trigger':
-			// Phase 4 stub: pass-through. Contributes no fields to downstream
-			// scope; once a block carries real outputs the editor will pick
-			// them up here without further changes. Triggers fall through too
-			// — they "wear the shape" of the target port and don't contribute
-			// to scope as DAG predecessors.
-			return [{ id: 'out', label: 'Output', fields: [] }];
-		default:
-			return [];
-	}
-}
-
-type HumanTaskNodeData = Extract<WorkflowNodeData, { type: 'human_task' }>;
-type TaskFieldKind = components['schemas']['TaskFieldKind'];
-
-/**
- * Derive a HumanTask's output port from the union of `input` blocks across
- * all steps. First-seen wins on duplicate field names — matches the Rust
- * `derive_human_task_output_port` and the editor's own field-name uniqueness
- * rule.
- */
-function deriveHumanTaskOutputPort(data: HumanTaskNodeData): Port {
-	const seen = new Set<string>();
-	const fields: components['schemas']['PortField'][] = [];
-	for (const step of data.steps ?? []) {
-		for (const block of step.blocks ?? []) {
-			if (block.type !== 'input') continue;
-			const f = block.field;
-			if (seen.has(f.name)) continue;
-			seen.add(f.name);
-			fields.push({
-				name: f.name,
-				label: f.label,
-				kind: taskFieldKindToFieldKind(f.kind),
-				required: f.required ?? false,
-				options: f.options ?? undefined
-			});
-		}
-	}
-	return { id: 'out', label: 'Output', fields };
-}
-
-function taskFieldKindToFieldKind(k: TaskFieldKind): FieldKind {
-	switch (k) {
-		case 'text':
+/** Backend type label → editor `FieldKind`. Non-scalar shapes (Object,
+ *  Array, Any, Opaque) collapse to `json` — addressable but untyped at the
+ *  leaf the picker offers. */
+function tyToFieldKind(ty: string): FieldKind {
+	switch (ty) {
+		case 'String':
 			return 'text';
-		case 'textarea':
-			return 'textarea';
-		case 'number':
+		case 'Number':
 			return 'number';
-		case 'select':
-			return 'select';
-		case 'checkbox':
+		case 'Bool':
 			return 'bool';
-		case 'file':
+		case 'FileRef':
 			return 'file';
-		case 'signature':
-			return 'signature';
+		case 'Timestamp':
+			return 'timestamp';
 		default:
-			return 'text';
+			return 'json';
 	}
 }
 
-function nodeLabel(node: WorkflowNode): string {
-	const d = node.data as { label?: string };
-	return d.label ?? node.id;
+/**
+ * Fetch the in-scope identifiers at every node from the backend analyzer.
+ * Returns a map keyed by node id. Best-effort: on any failure (network, or a
+ * draft too broken to analyze) returns an empty map, matching the previous
+ * "show whatever resolved" behavior — the editor degrades, never throws.
+ */
+export async function fetchNodeScopes(
+	graph: WorkflowGraph
+): Promise<Map<string, ScopeEntry[]>> {
+	const out = new Map<string, ScopeEntry[]>();
+	try {
+		const surface = await analyzeGraph({
+			graph,
+			name: 'editor',
+			description: '',
+			files: {}
+		});
+		for (const [nodeId, entries] of Object.entries(surface.scopes ?? {})) {
+			out.set(
+				nodeId,
+				(entries ?? []).map((e) => ({
+					nodeId: e.producer_node,
+					nodeLabel: e.producer_label,
+					field: e.path.split('.').pop() ?? e.path,
+					kind: tyToFieldKind(e.ty),
+					qualified: e.path
+				}))
+			);
+		}
+	} catch {
+		// best-effort: editor still works without scope chips
+	}
+	return out;
 }
 
 /**
- * Lightweight wrapper around the Rhai scope module: extract every
- * `<ident>.<field>` reference from a guard string. The implementation mirrors
- * `service/src/compiler/rhai_scope.rs::extract_qualified_refs` closely enough
- * for editor-side feedback; the backend remains authoritative at publish.
+ * Extract every `<ident>.<field>` reference from a guard string. Pure
+ * editor-side Rhai text analysis (for highlighting / unknown-ref hints);
+ * the backend remains authoritative for resolution.
  */
 export function extractQualifiedRefs(source: string): { node: string; field: string }[] {
 	const cleaned = stripCommentsAndStrings(source);
@@ -232,8 +93,6 @@ export function extractQualifiedRefs(source: string): { node: string; field: str
 	const out: { node: string; field: string }[] = [];
 	const seen = new Set<string>();
 
-	// Match identifier at a position that is not preceded by `.` or another
-	// identifier char, followed by `.` and another identifier.
 	const re = /(?<![.A-Za-z0-9_])([A-Za-z_][A-Za-z0-9_]*)\s*\.\s*([A-Za-z_][A-Za-z0-9_]*)/g;
 	for (const m of cleaned.matchAll(re)) {
 		const node = m[1];
@@ -248,8 +107,6 @@ export function extractQualifiedRefs(source: string): { node: string; field: str
 }
 
 function stripCommentsAndStrings(src: string): string {
-	// Replace string + comment content with spaces preserving offsets, so
-	// downstream regexes see the same shape as `src` without false matches.
 	let out = '';
 	let i = 0;
 	while (i < src.length) {

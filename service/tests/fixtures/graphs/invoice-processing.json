@@ -31,6 +31,7 @@
 		{
 			"id": "review",
 			"type": "human_task",
+			"slug": "review",
 			"position": { "x": 240, "y": 250 },
 			"data": {
 				"type": "human_task",
@@ -140,7 +141,7 @@
 					{
 						"edgeId": "branch-high",
 						"label": "High Value (> $5,000)",
-						"guard": "input.invoice_amount > 5000"
+						"guard": "review.invoice_amount > 5000"
 					}
 				],
 				"defaultBranch": "default"
@@ -238,7 +239,7 @@
 				"label": "Auto-Validate",
 				"description": "Retry validation up to 3 times",
 				"maxIterations": 3,
-				"loopCondition": "input.verified != true"
+				"loopCondition": "review.verified != true"
 			}
 		},
 		{

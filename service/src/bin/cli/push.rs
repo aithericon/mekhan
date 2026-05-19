@@ -109,11 +109,7 @@ pub(crate) async fn upload_assets(
 
             let form = reqwest::multipart::Form::new().part("file", part);
 
-            let mut rb = client.post(&url).multipart(form);
-            if let Ok(token) = std::env::var("MEKHAN_CLI_TOKEN") {
-                rb = rb.bearer_auth(token);
-            }
-            let resp = rb
+            let resp = crate::http::auth(client.post(&url).multipart(form))
                 .send()
                 .await
                 .with_context(|| format!("failed to upload {}/{}", node_id, filename))?;

@@ -29,6 +29,7 @@
 		buildDateString,
 		parseFileValue,
 		validateFields,
+		coerceFormData,
 		fieldsForStep,
 		type UploadedFile
 	} from './task-form-values.svelte.ts';
@@ -108,7 +109,7 @@
 			}
 			return;
 		}
-		onsubmit(formData);
+		onsubmit(coerceFormData(allFields, formData));
 	}
 
 	function handleCancel() {

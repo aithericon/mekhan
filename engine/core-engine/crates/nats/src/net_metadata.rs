@@ -22,6 +22,9 @@ pub enum NetStatus {
     Running,
     Completed,
     Cancelled,
+    /// A transition failed permanently; the net was torn down. Terminal,
+    /// distinct from `Completed` (success) and `Cancelled` (external request).
+    Failed,
 }
 
 /// Metadata about a net instance, stored in the KV bucket.
@@ -294,6 +297,46 @@ impl MessageHandler for MetadataHandler<'_> {
                 };
                 self.put_metadata(net_id, &meta).await?;
                 tracing::info!(net_id = %net_id, "Metadata projection: net cancelled");
+            }
+
+            petri_domain::DomainEvent::NetFailed {
+                net_id,
+                transition_id,
+                reason,
+                retryable,
+            } => {
+                // Reuse the cancellation fields as the generic "terminal stop"
+                // record (no NetMetadata schema change): `cancel_reason` holds
+                // the failure detail, `cancelled_by` notes it was the engine.
+                let detail = format!(
+                    "transition {} failed permanently (retryable={}): {}",
+                    transition_id, retryable, reason
+                );
+                let meta = match self.get_metadata(net_id).await {
+                    Some(mut existing) => {
+                        existing.status = NetStatus::Failed;
+                        existing.cancelled_at = Some(persisted.timestamp.to_rfc3339());
+                        existing.cancelled_by = Some("engine".to_string());
+                        existing.cancel_reason = Some(detail);
+                        existing
+                    }
+                    None => NetMetadata {
+                        net_id: net_id.clone(),
+                        status: NetStatus::Failed,
+                        template_id: None,
+                        parameters: None,
+                        created_at: persisted.timestamp.to_rfc3339(),
+                        created_by: None,
+                        label: None,
+                        completed_at: None,
+                        exit_code: None,
+                        cancelled_at: Some(persisted.timestamp.to_rfc3339()),
+                        cancelled_by: Some("engine".to_string()),
+                        cancel_reason: Some(detail),
+                    },
+                };
+                self.put_metadata(net_id, &meta).await?;
+                tracing::warn!(net_id = %net_id, "Metadata projection: net failed");
             }
 
             // Ignore all other events

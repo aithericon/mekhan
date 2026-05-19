@@ -393,6 +393,42 @@ impl TriggerDispatcher {
             ));
         }
 
+        // Strict Start-input-contract gate. `validate_token` above is lenient
+        // for `file`/`json` (a `file` field accepts a bare string), so a
+        // malformed entry payload — e.g. `invoice_file: "example"` shadowing an
+        // uploaded file — passes it and is only caught by the strict `Data__*`
+        // schema deep in the net, after human effort is spent (live incident:
+        // instance 6f347648). Re-validate the resolved token against the SSOT
+        // typed shape the foundation derives for the Start `initial` port; on
+        // mismatch fail HERE, before any net is created, with a field-named
+        // 4xx. Scoped to Start (the spawn entry) — signal targets keep the
+        // lenient in-flight-port rule. No coercion: this is genuinely-wrong
+        // data, deliberately decoupled from the Task-#18 coercion path.
+        if matches!(target_node.data, WorkflowNodeData::Start { .. }) {
+            if let Err(v) = crate::compiler::token_shape::validate_token_against_port(
+                &target_port,
+                target_node,
+                &token,
+            ) {
+                let err = TriggerError::StartContractViolation {
+                    field: v.field,
+                    expected: v.expected,
+                    actual: v.actual,
+                };
+                // Record it (history + metric, errored) like the infra-error
+                // arm below, then surface a hard 4xx — a malformed entry
+                // payload is a caller error worth failing loudly, not a
+                // silent 200 dropped fire.
+                let _ = finalize(
+                    FireOutcome::Dropped {
+                        reason: err.to_string(),
+                    },
+                    true,
+                );
+                return Err(err);
+            }
+        }
+
         let (outcome_result, rx): (
             Result<FireOutcome, TriggerError>,
             Option<oneshot::Receiver<TerminalOutcome>>,

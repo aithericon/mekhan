@@ -64,11 +64,10 @@ pub async fn run(_server: &str, directory: &str) -> Result<()> {
         source_ref,
     };
     let client = reqwest::Client::new();
-    let mut req = client.post(&url).json(&body);
-    if let Ok(token) = std::env::var("MEKHAN_CLI_TOKEN") {
-        req = req.bearer_auth(token);
-    }
-    let resp = req.send().await.context("failed to connect to server")?;
+    let resp = crate::http::auth(client.post(&url).json(&body))
+        .send()
+        .await
+        .context("failed to connect to server")?;
 
     let status = resp.status();
     let resp_body: Value = resp.json().await.unwrap_or_default();

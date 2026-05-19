@@ -1301,6 +1301,89 @@ pub async fn compile_graph(
     Ok(Json(air))
 }
 
+/// One reachable, producer-attributed reference the guard picker should
+/// offer at a node. The single source of truth for editor scope —
+/// replaces the deleted client-side `computeScopes` reimplementation.
+#[derive(serde::Serialize, utoipa::ToSchema)]
+pub struct ScopeEntryDto {
+    /// What you'd type in a guard, e.g. `input.data.invoice_amount`.
+    pub path: String,
+    /// Type label (`String`, `Number`, `Bool`, `Opaque(..)`, …).
+    pub ty: String,
+    pub producer_node: String,
+    pub producer_label: String,
+    pub note: String,
+}
+
+/// Flattened guard diagnostic (`node_id` is highlighted in the editor).
+#[derive(serde::Serialize, utoipa::ToSchema)]
+pub struct GuardDiagnosticDto {
+    pub kind: String,
+    pub node_id: String,
+    pub message: String,
+}
+
+/// Shape-aware analysis surface — per-node scope + diagnostics. Pure and
+/// graph-only: works on drafts that can't compile/publish yet.
+#[derive(serde::Serialize, utoipa::ToSchema)]
+pub struct TypeSurfaceResponse {
+    pub graph_ok: bool,
+    pub scopes: HashMap<String, Vec<ScopeEntryDto>>,
+    pub diagnostics: Vec<GuardDiagnosticDto>,
+}
+
+/// Stateless shape analysis: the editor's single source of truth for guard
+/// scope + diagnostics. Independent of `compile_to_air` succeeding (no files
+/// needed) so feedback lands while editing, not at publish.
+#[utoipa::path(
+    post,
+    path = "/api/analyze",
+    request_body = CompileRequest,
+    responses(
+        (status = 200, description = "Shape-aware scope + diagnostics", body = TypeSurfaceResponse),
+    ),
+    tag = "templates",
+)]
+pub async fn analyze_graph(
+    Json(body): Json<CompileRequest>,
+) -> Result<Json<TypeSurfaceResponse>, ApiError> {
+    let s = crate::compiler::surface_types(&body.graph);
+    let scopes = s
+        .scopes
+        .into_iter()
+        .map(|(node_id, entries)| {
+            let mapped = entries
+                .into_iter()
+                .map(|e| ScopeEntryDto {
+                    path: e.path,
+                    ty: e.ty,
+                    producer_node: e.producer_node,
+                    producer_label: e.producer_label,
+                    note: e.note,
+                })
+                .collect();
+            (node_id, mapped)
+        })
+        .collect();
+    let diagnostics = s
+        .diagnostics
+        .iter()
+        .map(|d| {
+            let (kind, node_id, message) = d.dto();
+            GuardDiagnosticDto {
+                kind: kind.to_string(),
+                node_id,
+                message,
+            }
+        })
+        .collect();
+    Ok(Json(TypeSurfaceResponse {
+        graph_ok: s.graph_ok,
+        scopes,
+        diagnostics,
+    }))
+}
+
 #[cfg(test)]
 mod apply_mode_tests {
     use super::{apply_mode, ApplyMode, WorkflowTemplate};

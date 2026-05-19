@@ -1,10 +1,11 @@
 //! `/api/auth/tokens` — embedded per-user automation-token management.
 //!
-//! Every handler takes `user: AuthUser`, which re-runs the **cookie**
-//! authenticator (`auth::extractor::FromRequestParts`) — never introspection.
-//! So even though these routes sit behind `require_auth_middleware`, a Bearer
-//! PAT can't reach them (no cookie ⇒ 401): a token cannot mint more tokens.
-//! The caller's `subject` is the ownership boundary the broker enforces.
+//! Every handler takes [`CookieAuthUser`] — the explicit **cookie-only**
+//! extractor. Other endpoints use the dual-use `AuthUser` (Bearer or cookie),
+//! but here, even though these routes sit behind `require_auth_middleware`, a
+//! Bearer PAT is refused (no session cookie ⇒ 401): a token can never be used
+//! to mint or revoke tokens. The caller's `subject` is the ownership boundary
+//! the broker enforces.
 //!
 //! Token validity lives entirely in Zitadel — these endpoints only broker the
 //! Management API ([`crate::auth::ZitadelMgmt`]); Mekhan stores nothing.
@@ -15,8 +16,8 @@ use axum::{
     Json,
 };
 
+use crate::auth::extractor::CookieAuthUser;
 use crate::auth::mgmt::{MgmtError, ZitadelMgmt};
-use crate::auth::AuthUser;
 use crate::models::auth_token::{CreatedToken, CreateTokenRequest, TokenSummary};
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::AppState;
@@ -56,7 +57,7 @@ fn map_err(e: MgmtError) -> ApiError {
 )]
 pub async fn list_tokens(
     State(state): State<AppState>,
-    user: AuthUser,
+    CookieAuthUser(user): CookieAuthUser,
 ) -> Result<Json<Vec<TokenSummary>>, ApiError> {
     let tokens = broker(&state)?
         .list_tokens(&user.subject)
@@ -80,7 +81,7 @@ pub async fn list_tokens(
 )]
 pub async fn create_token(
     State(state): State<AppState>,
-    user: AuthUser,
+    CookieAuthUser(user): CookieAuthUser,
     Json(req): Json<CreateTokenRequest>,
 ) -> Result<Json<CreatedToken>, ApiError> {
     if req.name.trim().is_empty() {
@@ -113,7 +114,7 @@ pub async fn create_token(
 )]
 pub async fn revoke_token(
     State(state): State<AppState>,
-    user: AuthUser,
+    CookieAuthUser(user): CookieAuthUser,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     broker(&state)?

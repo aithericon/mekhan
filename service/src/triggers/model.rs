@@ -87,6 +87,14 @@ pub enum TriggerError {
     TargetMissing { node_id: String, target: String },
     #[error("payload mapping for field '{field}' failed: {message}")]
     PayloadMappingFailed { field: String, message: String },
+    #[error(
+        "start input contract violation: field '{field}' expected {expected}, got {actual}"
+    )]
+    StartContractViolation {
+        field: String,
+        expected: String,
+        actual: String,
+    },
     #[error("instance creation failed: {0}")]
     InstanceFailed(String),
     #[error("signal publish failed: {0}")]

@@ -629,7 +629,7 @@ test.describe('Test 7: Demo showcase graph lifecycle', () => {
 						type: 'decision',
 						label: 'Amount Check',
 						conditions: [
-							{ edgeId: 'branch-high', label: 'High Value', guard: 'input.invoice_amount > 5000' }
+							{ edgeId: 'branch-high', label: 'High Value', guard: 'review.invoice_amount > 5000' }
 						],
 						defaultBranch: 'default'
 					}

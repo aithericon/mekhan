@@ -137,10 +137,170 @@ pub fn compile_to_air(
     // 9. Apply place merges (rewrite arcs, remove dead places)
     apply_merges(&mut scenario, &alias);
 
+    // 10. Control/data foundation: register typed `#/definitions/*` for the
+    //     parked data + control tokens, schema the split places/ports, and
+    //     synthesize read-arcs (the compiler-as-borrow-checker) so every
+    //     Decision/Loop guard physically `&`-borrows the parked data place
+    //     that owns the field it references. Runs post-merge: place ids final.
+    apply_control_data_foundation(graph, &mut scenario, &fixups)?;
+
     let air_value = serde_json::to_value(&scenario)
         .map_err(|e| CompileError::Compilation(format!("failed to serialize scenario: {e}")))?;
 
     Ok(air_value)
+}
+
+/// Post-merge foundation phase. See call site (step 10).
+fn apply_control_data_foundation(
+    graph: &crate::models::template::WorkflowGraph,
+    scenario: &mut aithericon_sdk::scenario::ScenarioDefinition,
+    fixups: &PostProcess,
+) -> Result<(), CompileError> {
+    use crate::compiler::token_shape::{
+        analyze, ctrl_def_name, data_def_name, def_ref, dynamic_token_definition,
+        guard_readarc_plan,
+    };
+    use aithericon_sdk::scenario::{ScenarioArc, ScenarioPort, TransitionGuard, TransitionLogic};
+
+    let report = analyze(graph)?;
+
+    // (a) Typed definitions for every split node's parked data + control
+    //     token. Data = the producer's full output shape (enforced);
+    //     control = an open object (small, dynamic `_loop_*` keys).
+    let (dyn_name, dyn_schema) = dynamic_token_definition();
+    scenario.definitions.entry(dyn_name).or_insert(dyn_schema);
+    for node_id in fixups.data_places.keys() {
+        if let Some(shape) = report.node_out.get(node_id) {
+            scenario
+                .definitions
+                .insert(data_def_name(node_id), shape.to_json_schema());
+        }
+        scenario.definitions.insert(
+            ctrl_def_name(node_id),
+            serde_json::json!({ "type": "object", "additionalProperties": true }),
+        );
+    }
+
+    // (b) Schema the split places + the yield transition's output ports.
+    for (node_id, data_place) in &fixups.data_places {
+        let data_ref = def_ref(&data_def_name(node_id));
+        let ctrl_ref = def_ref(&ctrl_def_name(node_id));
+        let ctrl_place = format!("p_{node_id}_ctrl");
+        for p in &mut scenario.places {
+            if &p.id == data_place {
+                p.token_schema = Some(data_ref.clone());
+            } else if p.id == ctrl_place {
+                p.token_schema = Some(ctrl_ref.clone());
+            }
+        }
+        let yield_id = format!("t_{node_id}_yield");
+        for t in &mut scenario.transitions {
+            if t.id != yield_id {
+                continue;
+            }
+            for port in &mut t.output_ports {
+                if port.name == "data" {
+                    port.schema_ref = Some(data_ref.clone());
+                } else if port.name == "ctrl" {
+                    port.schema_ref = Some(ctrl_ref.clone());
+                }
+            }
+        }
+    }
+
+    // (c) Read-arc synthesis: lower each logical `input.<path>` reference to a
+    //     physical `&`-borrow of the owning parked data place, rebinding it in
+    //     the consuming transition's guard AND/OR logic. Decision/Loop hold
+    //     the reference in `guard`; End/Failure result-mapping expressions
+    //     (added on main) hold it in `logic` — both are covered.
+    for b in guard_readarc_plan(graph)? {
+        let data_place = format!("p_{}_data", b.producer_node);
+        let var = format!("d_{}", b.producer_node.replace('-', "_"));
+        let new_ref = format!("{var}.{}", b.producer_path);
+        let schema_ref = def_ref(&data_def_name(&b.producer_node));
+        let t_prefix = format!("t_{}_", b.consumer_node_id);
+
+        for t in &mut scenario.transitions {
+            if !t.id.starts_with(&t_prefix) {
+                continue;
+            }
+            let guard_src = match &t.guard {
+                Some(TransitionGuard::Rhai { source }) => Some(source.clone()),
+                _ => None,
+            };
+            let logic_src = match &t.logic {
+                TransitionLogic::Rhai { source } => Some(source.clone()),
+                _ => None,
+            };
+            let in_guard = guard_src
+                .as_deref()
+                .map(|s| s.contains(&b.referenced))
+                .unwrap_or(false);
+            let in_logic = logic_src
+                .as_deref()
+                .map(|s| s.contains(&b.referenced))
+                .unwrap_or(false);
+            if !in_guard && !in_logic {
+                continue;
+            }
+            if !t.input_ports.iter().any(|p| p.name == var) {
+                t.input_ports.push(ScenarioPort {
+                    name: var.clone(),
+                    schema_ref: Some(schema_ref.clone()),
+                    cardinality: "single".to_string(),
+                });
+            }
+            if !t.inputs.iter().any(|a| a.place == data_place && a.read) {
+                t.inputs.push(ScenarioArc {
+                    place: data_place.clone(),
+                    port: var.clone(),
+                    weight: 1,
+                    read: true,
+                });
+            }
+            if in_guard {
+                if let Some(s) = guard_src {
+                    t.guard = Some(TransitionGuard::Rhai {
+                        source: s.replace(&b.referenced, &new_ref),
+                    });
+                }
+            }
+            if in_logic {
+                if let Some(s) = logic_src {
+                    t.logic = TransitionLogic::Rhai {
+                        source: s.replace(&b.referenced, &new_ref),
+                    };
+                }
+            }
+        }
+    }
+
+    // (d) Safety net: any pre-existing schema ref (effect tokens, DynamicToken)
+    //     not in `definitions` gets a permissive `{}` so the runtime
+    //     `SchemaRegistry` resolves every ref (unresolvable refs *fail*).
+    let mut referenced: Vec<String> = Vec::new();
+    for p in &scenario.places {
+        if let Some(s) = &p.token_schema {
+            referenced.push(s.clone());
+        }
+    }
+    for t in &scenario.transitions {
+        for port in t.input_ports.iter().chain(t.output_ports.iter()) {
+            if let Some(s) = &port.schema_ref {
+                referenced.push(s.clone());
+            }
+        }
+    }
+    for r in referenced {
+        if let Some(name) = r.strip_prefix("#/definitions/") {
+            scenario
+                .definitions
+                .entry(name.to_string())
+                .or_insert(serde_json::json!({}));
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -238,6 +398,7 @@ mod tests {
         let node = WorkflowNode {
             id: "review".to_string(),
             node_type: "human_task".to_string(),
+            slug: None,
             position: Position { x: 0.0, y: 0.0 },
             data: WorkflowNodeData::HumanTask {
                 label: "Review".to_string(),
@@ -281,6 +442,7 @@ mod tests {
         WorkflowNode {
             id: id.to_string(),
             node_type: "start".to_string(),
+            slug: None,
             position: Position { x: 0.0, y: 0.0 },
             data: WorkflowNodeData::Start {
                 label: "Start".to_string(),
@@ -298,6 +460,7 @@ mod tests {
         WorkflowNode {
             id: id.to_string(),
             node_type: "end".to_string(),
+            slug: None,
             position: Position { x: 0.0, y: 100.0 },
             data: WorkflowNodeData::End {
                 label: "End".to_string(),
@@ -338,15 +501,18 @@ mod tests {
         let places = air["places"].as_array().unwrap();
         let transitions = air["transitions"].as_array().unwrap();
 
-        // End place merged into Start place = 1 place, 0 transitions
-        assert_eq!(places.len(), 1);
-        assert_eq!(transitions.len(), 0);
+        // Start now forks (`park_outputs`): p_s_ready (seed) + p_s_data
+        // (write-once parked copy, never read here) + p_s_main (token
+        // forwarded; End merges into it) = 3 places, 1 transition (t_s_park).
+        assert_eq!(places.len(), 3);
+        assert_eq!(transitions.len(), 1);
 
-        // Start place absorbs terminal type. With typed ports, initial tokens
-        // are NOT seeded at compile time — `parameterize_air` seeds them at
-        // instance creation. Just verify the place is terminal-typed here.
-        let start_place = places.iter().find(|p| p["id"] == "p_s_ready").unwrap();
-        assert_eq!(start_place["type"], "terminal");
+        // The forwarded place absorbs the terminal type (End merged into
+        // p_s_main); the seed place stays a normal state place. With typed
+        // ports, initial tokens are NOT seeded at compile time —
+        // `parameterize_air` seeds them at instance creation.
+        let main_place = places.iter().find(|p| p["id"] == "p_s_main").unwrap();
+        assert_eq!(main_place["type"], "terminal");
     }
 
     #[test]
@@ -490,6 +656,7 @@ mod tests {
                 WorkflowNode {
                     id: "ht".to_string(),
                     node_type: "human_task".to_string(),
+                    slug: None,
                     position: Position { x: 0.0, y: 50.0 },
                     data: WorkflowNodeData::HumanTask {
                         label: "Review".to_string(),
@@ -516,12 +683,14 @@ mod tests {
         let transitions = air["transitions"].as_array().unwrap();
 
         // HumanTask creates 5 places (input, active, signal, output, errors)
-        // + Start place = 6 (End place merged into HumanTask output)
-        assert_eq!(places.len(), 6);
+        // + the HT foundation split adds parked-data + slim-control = 7.
+        // Start now forks too: p_s_ready + p_s_data + p_s_main = 3 → 10.
+        assert_eq!(places.len(), 10);
 
-        // HumanTask creates 2 transitions (request, finalize) + 1 injection edge (s->ht) = 3
-        // (ht->e edge merged, no pass-through transition)
-        assert_eq!(transitions.len(), 3);
+        // request + finalize + 1 injection edge (s->ht) + the HT yield
+        // transition + Start's t_s_park = 5 (ht->e merged into the control
+        // place).
+        assert_eq!(transitions.len(), 5);
     }
 
     #[test]
@@ -532,6 +701,7 @@ mod tests {
                 WorkflowNode {
                     id: "d".to_string(),
                     node_type: "decision".to_string(),
+                    slug: None,
                     position: Position { x: 0.0, y: 50.0 },
                     data: WorkflowNodeData::Decision {
                         label: "Route".to_string(),
@@ -568,8 +738,9 @@ mod tests {
         let air = result.unwrap();
         let transitions = air["transitions"].as_array().unwrap();
 
-        // 1 branch + 1 default = 2 (3 pass-through edge transitions merged)
-        assert_eq!(transitions.len(), 2);
+        // 1 branch + 1 default + Start's t_s_park = 3 (3 pass-through edge
+        // transitions merged).
+        assert_eq!(transitions.len(), 3);
 
         // Verify the branch has a guard
         let branch = transitions.iter().find(|t| t["id"] == "t_d_branch_0").unwrap();
@@ -580,6 +751,7 @@ mod tests {
         WorkflowNode {
             id: id.to_string(),
             node_type: "end".to_string(),
+            slug: None,
             position: Position { x: 100.0, y: 100.0 },
             data: WorkflowNodeData::End {
                 label: format!("End {id}"),
@@ -663,6 +835,7 @@ mod tests {
         WorkflowNode {
             id: id.to_string(),
             node_type: "automated_step".to_string(),
+            slug: None,
             position: Position { x: 0.0, y: 50.0 },
             data: WorkflowNodeData::AutomatedStep {
                 label: "Run".to_string(),

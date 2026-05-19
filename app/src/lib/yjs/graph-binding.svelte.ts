@@ -95,6 +95,7 @@ export class YjsGraphBinding {
 			const position = posRaw ?? { x: 0, y: 0 };
 
 			const data = this.materializeNodeData(yNode, type);
+			const slug = yNode.get('slug') as string | undefined;
 			const parentId = yNode.get('parentId') as string | undefined;
 			const width = yNode.get('width') as number | undefined;
 			const height = yNode.get('height') as number | undefined;
@@ -104,6 +105,7 @@ export class YjsGraphBinding {
 				type,
 				position,
 				data,
+				...(slug ? { slug } : {}),
 				...(parentId ? { parentId } : {}),
 				...(width != null ? { width } : {}),
 				...(height != null ? { height } : {})
@@ -265,7 +267,8 @@ export class YjsGraphBinding {
 					},
 					concurrency: (config?.concurrency as TriggerNodeData['concurrency']) ?? 'allow',
 					payloadMapping: (config?.payloadMapping as TriggerNodeData['payloadMapping']) ?? [],
-					enabled: (config?.enabled as boolean) ?? false
+					enabled: (config?.enabled as boolean) ?? false,
+					replyDefault: (config?.replyDefault as TriggerNodeData['replyDefault']) ?? undefined
 				};
 		}
 	}
@@ -396,6 +399,18 @@ export class YjsGraphBinding {
 			const yNode = this.yNodes.get(nodeId);
 			if (!yNode || !(yNode instanceof Y.Map)) return;
 			yNode.set('position', position);
+		});
+	}
+
+	/** Node-level author-facing slug — the `<slug>.<field>` guard namespace.
+	 *  Empty/blank clears it (the compiler then derives a default from id). */
+	updateNodeSlug(nodeId: string, slug: string): void {
+		this.doc.transact(() => {
+			const yNode = this.yNodes.get(nodeId);
+			if (!yNode || !(yNode instanceof Y.Map)) return;
+			const trimmed = slug.trim();
+			if (trimmed) yNode.set('slug', trimmed);
+			else yNode.delete('slug');
 		});
 	}
 
@@ -599,6 +614,7 @@ export class YjsGraphBinding {
 				config.set('concurrency', data.concurrency);
 				config.set('payloadMapping', data.payloadMapping ?? []);
 				config.set('enabled', data.enabled ?? false);
+				config.set('replyDefault', data.replyDefault ?? null);
 				break;
 		}
 	}

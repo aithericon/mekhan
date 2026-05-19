@@ -111,6 +111,7 @@ fn event_type_name(event: &DomainEvent) -> &'static str {
         DomainEvent::NetCreated { .. } => "net.created",
         DomainEvent::NetCompleted { .. } => "net.completed",
         DomainEvent::NetCancelled { .. } => "net.cancelled",
+        DomainEvent::NetFailed { .. } => "net.failed",
         DomainEvent::PreDispatchEvaluated { .. } => "pre_dispatch.evaluated",
         DomainEvent::PreDispatchRejected { .. } => "pre_dispatch.rejected",
         DomainEvent::PreDispatchDeferred { .. } => "pre_dispatch.deferred",

@@ -3,18 +3,22 @@
 	import type { ScopeEntry } from '$lib/editor/guard-scope';
 	import Plus from '@lucide/svelte/icons/plus';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
+	import ChevronUp from '@lucide/svelte/icons/chevron-up';
+	import ChevronDown from '@lucide/svelte/icons/chevron-down';
+	import Info from '@lucide/svelte/icons/info';
 	import GuardEditor from './GuardEditor.svelte';
 	import { Input } from '$lib/components/ui/input';
 	import { Button } from '$lib/components/ui/button';
+	import * as Tooltip from '$lib/components/ui/tooltip';
 
 	type Props = {
 		data: DecisionNodeData;
 		readonly?: boolean;
 		onchange: (data: DecisionNodeData) => void;
 		/**
-		 * In-scope identifiers for guards on this node, precomputed by the
-		 * parent panel via `computeScopes(graph).get(nodeId)`. Empty if the
-		 * node is detached or has no typed-port upstreams.
+		 * In-scope identifiers for guards on this node, fetched by the parent
+		 * panel from the backend shape-aware analyzer (`POST /api/analyze`,
+		 * the single source of truth). Empty if detached or unresolvable.
 		 */
 		scope?: ScopeEntry[];
 	};
@@ -54,6 +58,19 @@
 		onchange({ ...data, conditions: updated });
 	}
 
+	// Branch order IS precedence: the compiler lowers branches as a
+	// switch/case cascade (branch i fires only when its guard holds and no
+	// earlier branch matched), so reordering changes which branch wins when
+	// guards overlap. Edge wiring is keyed by the stable edgeId, so a reorder
+	// never drops a drawn edge.
+	function moveBranch(index: number, direction: -1 | 1) {
+		const target = index + direction;
+		if (target < 0 || target >= data.conditions.length) return;
+		const updated = [...data.conditions];
+		[updated[index], updated[target]] = [updated[target], updated[index]];
+		onchange({ ...data, conditions: updated });
+	}
+
 	// The default (else) branch handle id is the literal "default" — it must
 	// match DecisionNode's `<Handle id="default">` and the compiler's default
 	// output place so a drawn edge wires.
@@ -65,7 +82,24 @@
 
 <div class="space-y-2">
 	<div class="flex items-center justify-between">
-		<span class="text-xs font-medium text-muted-foreground">Branches</span>
+		<div class="flex items-center gap-1.5">
+			<span class="text-xs font-medium text-muted-foreground">Branches</span>
+			<Tooltip.Provider delayDuration={150}>
+				<Tooltip.Root>
+					<Tooltip.Trigger
+						class="text-muted-foreground transition-colors hover:text-foreground"
+						aria-label="How branch ordering works"
+					>
+						<Info class="size-4" />
+					</Tooltip.Trigger>
+					<Tooltip.Content side="bottom" class="max-w-xs text-sm leading-snug">
+						Order is precedence: branches are evaluated top-to-bottom and the
+						first matching guard wins. The default (else) branch is always
+						evaluated last.
+					</Tooltip.Content>
+				</Tooltip.Root>
+			</Tooltip.Provider>
+		</div>
 		{#if !readonly}
 			<button
 				type="button"
@@ -82,6 +116,12 @@
 		<div class="rounded-lg border border-border bg-muted/30 p-2 text-[11px]">
 			<div class="space-y-1.5">
 				<div class="flex items-center gap-2">
+					<span
+						class="flex size-4 shrink-0 items-center justify-center rounded-sm bg-muted text-[9px] font-semibold text-muted-foreground"
+						title="Precedence"
+					>
+						{i + 1}
+					</span>
 					<Input
 						type="text"
 						value={condition.label}
@@ -91,6 +131,24 @@
 						class="h-7 px-2 py-1 text-[11px]"
 					/>
 					{#if !readonly}
+						<Button
+							variant="ghost"
+							size="sm"
+							disabled={i === 0}
+							onclick={() => moveBranch(i, -1)}
+							aria-label="Move branch up"
+						>
+							<ChevronUp class="size-3.5" />
+						</Button>
+						<Button
+							variant="ghost"
+							size="sm"
+							disabled={i === data.conditions.length - 1}
+							onclick={() => moveBranch(i, 1)}
+							aria-label="Move branch down"
+						>
+							<ChevronDown class="size-3.5" />
+						</Button>
 						<Button
 							variant="ghost"
 							size="sm"

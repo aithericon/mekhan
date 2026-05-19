@@ -12,6 +12,7 @@
 
 	import type { ScopeEntry } from '$lib/editor/guard-scope';
 	import CodeEditor from '../shared/CodeEditor.svelte';
+	import RefPicker from './RefPicker.svelte';
 	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
 	import Code from '@lucide/svelte/icons/code';
@@ -126,19 +127,19 @@
 
 <div class="space-y-1.5">
 	<div class="flex items-center justify-between">
-		<span class="text-[9px] text-muted-foreground">Guard</span>
+		<span class="text-sm text-muted-foreground">Guard</span>
 		<button
 			type="button"
-			class="flex items-center gap-1 rounded px-1.5 py-0.5 text-[9px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+			class="flex items-center gap-1.5 rounded px-2 py-1 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
 			onclick={() => (sticky_advanced = !advanced)}
 			disabled={readonly}
 			title={advanced ? 'Switch to simple builder' : 'Switch to raw Rhai'}
 		>
 			{#if advanced}
-				<Wrench class="size-3" />
+				<Wrench class="size-4" />
 				Builder
 			{:else}
-				<Code class="size-3" />
+				<Code class="size-4" />
 				Rhai
 			{/if}
 		</button>
@@ -154,54 +155,31 @@
 			onchange={(val) => onchange(val)}
 		/>
 		{#if scope.length > 0}
-			<div class="flex flex-wrap gap-1 pt-1">
-				<span class="text-[9px] text-muted-foreground">In scope:</span>
-				{#each scope as entry (entry.qualified)}
-					<button
-						type="button"
-						class="rounded bg-muted px-1.5 py-0.5 font-mono text-[9px] text-foreground transition-colors hover:bg-accent disabled:cursor-not-allowed"
-						disabled={readonly}
-						title={`${entry.nodeLabel} → ${entry.field} (${entry.kind})`}
-						onclick={() => onchange((guard ? guard + ' ' : '') + entry.qualified)}
-					>
-						{entry.qualified}
-					</button>
-				{/each}
+			<div class="pt-1">
+				<RefPicker
+					{scope}
+					disabled={readonly}
+					placeholder="Insert reference…"
+					onpick={(e) => onchange((guard ? guard + ' ' : '') + e.qualified)}
+				/>
 			</div>
 		{:else}
-			<div class="pt-1 text-[9px] text-muted-foreground italic">
+			<div class="pt-1 text-sm text-muted-foreground italic">
 				No upstream fields in scope. Wire a Start or AutomatedStep upstream and declare its
 				output port to reference fields here.
 			</div>
 		{/if}
 	{:else}
-		<div class="flex items-center gap-1.5">
-			<!-- LHS: qualified field picker -->
-			<div class="flex-1 min-w-0">
-				<Select.Root
-					type="single"
-					value={parsed?.lhs ?? ''}
-					onValueChange={(v) => v && setLhs(v)}
+		<div class="flex items-center gap-2">
+			<!-- LHS: qualified field picker (two-column node → variable) -->
+			<div class="min-w-0 flex-1">
+				<RefPicker
+					{scope}
 					disabled={readonly || scope.length === 0}
-				>
-					<Select.Trigger class="h-7 px-2 text-[11px]">
-						{#if parsed?.lhs}
-							<span class="font-mono">{parsed.lhs}</span>
-						{:else if scope.length === 0}
-							<span class="text-muted-foreground">No scope</span>
-						{:else}
-							<span class="text-muted-foreground">Pick field…</span>
-						{/if}
-					</Select.Trigger>
-					<Select.Content>
-						{#each scope as entry (entry.qualified)}
-							<Select.Item value={entry.qualified} label={entry.qualified}>
-								<span class="font-mono">{entry.qualified}</span>
-								<span class="ml-2 text-[10px] text-muted-foreground">{entry.kind}</span>
-							</Select.Item>
-						{/each}
-					</Select.Content>
-				</Select.Root>
+					selected={parsed?.lhs}
+					placeholder="Pick field…"
+					onpick={(e) => setLhs(e.qualified)}
+				/>
 			</div>
 
 			<!-- Operator -->
@@ -211,14 +189,14 @@
 				onValueChange={(v) => v && setOp(v)}
 				disabled={readonly}
 			>
-				<Select.Trigger class="h-7 w-12 px-1 text-[11px]">
+				<Select.Trigger class="h-9 w-16 px-2 text-sm">
 					<span class="font-mono">{operators.find((o) => o.value === (parsed?.op ?? pendingOp))?.label ?? '='}</span>
 				</Select.Trigger>
 				<Select.Content>
 					{#each operators as op (op.value)}
 						<Select.Item value={op.value} label={op.label}>
 							<span class="font-mono">{op.label}</span>
-							<span class="ml-2 text-[10px] text-muted-foreground">{op.value}</span>
+							<span class="ml-2 text-sm text-muted-foreground">{op.value}</span>
 						</Select.Item>
 					{/each}
 				</Select.Content>
@@ -231,11 +209,11 @@
 				placeholder={parsed && fieldKind(parsed.lhs) === 'bool' ? 'true' : 'value'}
 				disabled={readonly}
 				oninput={(e) => setRhs((e.currentTarget as HTMLInputElement).value)}
-				class="h-7 flex-1 px-2 py-1 text-[11px] font-mono"
+				class="h-9 flex-1 px-3 text-sm font-mono"
 			/>
 		</div>
 		{#if guard.trim().length > 0}
-			<div class="font-mono text-[10px] text-muted-foreground">
+			<div class="font-mono text-sm text-muted-foreground">
 				{guard}
 			</div>
 		{/if}

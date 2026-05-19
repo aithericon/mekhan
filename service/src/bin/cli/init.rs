@@ -12,16 +12,16 @@ pub async fn run(server: &str, name: &str, description: Option<&str>, format: Wo
     // 1. POST /api/templates to create the template
     let url = format!("{}/api/templates", server);
     let client = reqwest::Client::new();
-    let resp = client
-        .post(&url)
-        .json(&json!({
+    let resp = crate::http::auth(
+        client.post(&url).json(&json!({
             "name": name,
             "description": description.unwrap_or(""),
             "author_id": "00000000-0000-0000-0000-000000000000"
-        }))
-        .send()
-        .await
-        .context("failed to connect to server")?;
+        })),
+    )
+    .send()
+    .await
+    .context("failed to connect to server")?;
 
     let status = resp.status();
     let body: Value = resp.json().await.unwrap_or_default();

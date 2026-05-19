@@ -16,13 +16,12 @@ pub async fn run(_server: &str, directory: &str) -> Result<()> {
 
     let url = format!("{}/api/instances", server_url);
     let client = reqwest::Client::new();
-    let mut req = client.post(&url).json(&json!({
+    let resp = crate::http::auth(client.post(&url).json(&json!({
         "template_id": template_id,
-    }));
-    if let Ok(token) = std::env::var("MEKHAN_CLI_TOKEN") {
-        req = req.bearer_auth(token);
-    }
-    let resp = req.send().await.context("failed to connect to server")?;
+    })))
+    .send()
+    .await
+    .context("failed to connect to server")?;
 
     let status = resp.status();
     let body: Value = resp.json().await.unwrap_or_default();
