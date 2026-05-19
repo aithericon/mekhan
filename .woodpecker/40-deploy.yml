@@ -47,6 +47,7 @@ labels:
 steps:
   - name: deploy-dev
     image: forge.aithericon.eu/milanender/mekhan-ci-builder:latest
+    pull: true
     environment:
       VAULT_ADDR: "http://10.20.0.20:8200"
       VAULT_TOKEN:
@@ -79,6 +80,7 @@ steps:
 
   - name: verify-dev
     image: forge.aithericon.eu/milanender/mekhan-ci-builder:latest
+    pull: true
     environment:
       VAULT_ADDR: "http://10.20.0.20:8200"
       VAULT_TOKEN:

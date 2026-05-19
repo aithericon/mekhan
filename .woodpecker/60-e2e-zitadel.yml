@@ -24,6 +24,7 @@ labels:
 steps:
   - name: e2e-zitadel
     image: forge.aithericon.eu/milanender/mekhan-ci-builder:latest
+    pull: true
     environment:
       CARGO_HOME: /var/lib/ci-jobs/cache/cargo
     volumes:

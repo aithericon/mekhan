@@ -28,6 +28,7 @@ labels:
 steps:
   - name: apply-workflows
     image: forge.aithericon.eu/milanender/mekhan-ci-builder:latest
+    pull: true
     environment:
       CARGO_HOME: /var/lib/ci-jobs/cache/cargo
       MEKHAN_CLI_TOKEN:
