@@ -30,7 +30,7 @@
 
 mod common;
 
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -275,6 +275,14 @@ async fn scheduled_automated_step_runs_through_nomad() {
     let pub_body = body_json(resp.into_body()).await;
     assert_eq!(status, StatusCode::OK, "publish: {pub_body}");
 
+    // Capture a Nomad SubmitTime lower bound BEFORE instance creation so the
+    // post-completion Nomad assertion can prove that THIS test's dispatched
+    // child (not a stale one from a prior run) actually processed a job.
+    let submit_after_nanos: i64 = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos() as i64;
+
     // Create an instance — deploys + Running. The Strict bridge gate here is
     // what the well_known.rs fix had to satisfy: the parent's bridge_out must
     // target a *deployed* scheduler-net/job_inbox or this 422s.
@@ -362,6 +370,83 @@ async fn scheduled_automated_step_runs_through_nomad() {
         !place_ids.iter().any(|p| p == "auto/submitted" || p == "auto/inbox"),
         "instance net has inline executor-lifecycle places — the Scheduled \
          step collapsed to Inline. places={place_ids:?}"
+    );
+
+    // Nomad-side guard: a dispatched `petri-executor-worker` child submitted
+    // AFTER this test started must exist and its allocation must have
+    // actually processed a job — not just exited 0 after idling out
+    // (`completed=0`, which is what happens when executor-net publishes to
+    // a different namespace than the Nomad worker listens on, letting the
+    // dev daemon shadow the work). The tightest signal is the executor's
+    // own stdout containing `handling execution job` — only emitted on
+    // genuine job processing.
+    let nomad_url = std::env::var("TEST_NOMAD_URL")
+        .unwrap_or_else(|_| "http://127.0.0.1:4646".to_string());
+    let jobs: Value = reqwest::get(format!("{nomad_url}/v1/jobs?prefix=petri-executor-worker"))
+        .await
+        .expect("fetch Nomad jobs")
+        .json()
+        .await
+        .expect("nomad jobs json");
+    let our_jobs: Vec<&Value> = jobs
+        .as_array()
+        .expect("jobs array")
+        .iter()
+        .filter(|j| j["ParentID"].as_str() == Some("petri-executor-worker"))
+        .filter(|j| j["SubmitTime"].as_i64().unwrap_or(0) > submit_after_nanos)
+        .collect();
+    assert!(
+        !our_jobs.is_empty(),
+        "no petri-executor-worker child dispatched after test start — \
+         scheduler_submit did not fire (or Nomad backend not registered)"
+    );
+    let job_id = our_jobs[0]["ID"].as_str().expect("job id").to_string();
+    // The parent instance reaches `completed` the moment the result token
+    // relays back from the executor (via NATS); the executor OS process is
+    // still draining/exiting at that point, so the Nomad alloc takes a few
+    // more seconds to transition to `complete`. Poll up to 30s.
+    let alloc_deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let alloc: Value = loop {
+        let allocs: Value = reqwest::get(format!("{nomad_url}/v1/job/{job_id}/allocations"))
+            .await
+            .expect("fetch allocs")
+            .json()
+            .await
+            .expect("allocs json");
+        let arr = allocs.as_array().expect("allocs array").clone();
+        if let Some(a) = arr.into_iter().find(|a| {
+            matches!(a["ClientStatus"].as_str(), Some("complete") | Some("failed"))
+        }) {
+            break a;
+        }
+        if std::time::Instant::now() > alloc_deadline {
+            panic!("Nomad alloc for {job_id} never reached terminal state within 30s: {allocs}");
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    };
+    assert_eq!(
+        alloc["ClientStatus"].as_str(),
+        Some("complete"),
+        "Nomad alloc terminated non-complete: {alloc}"
+    );
+    let task_failed = alloc["TaskStates"]["petri-worker"]["Failed"]
+        .as_bool()
+        .unwrap_or(true);
+    assert!(!task_failed, "Nomad task petri-worker reported Failed=true: {alloc}");
+    let alloc_id = alloc["ID"].as_str().expect("alloc id");
+    let stdout = reqwest::get(format!(
+        "{nomad_url}/v1/client/fs/logs/{alloc_id}?task=petri-worker&type=stdout&plain=true"
+    ))
+    .await
+    .expect("fetch alloc stdout")
+    .text()
+    .await
+    .expect("alloc stdout text");
+    assert!(
+        stdout.contains("handling execution job"),
+        "Nomad-dispatched executor never processed a job (idle-out, namespace \
+         mismatch?). stdout tail:\n{}",
+        stdout.lines().rev().take(20).collect::<Vec<_>>().join("\n")
     );
 
     // Sanity: the parent run produced engine events (the bridge fired).

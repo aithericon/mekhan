@@ -348,10 +348,17 @@ scheduler-up:
     #    binary path + the dev S3 (rustfs) storage env so the Nomad-spawned
     #    executor can pull node files mekhan staged at publish time. Bucket
     #    must match mekhan-service's MEKHAN__S3__BUCKET (see up-executor).
+    #    `EXECUTOR_NAMESPACE` MUST match the engine's namespace (`executor`
+    #    in dev — see up-engine) so the Nomad-spawned worker consumes the
+    #    queue executor-net's `executor_submit` publishes to. The upstream
+    #    template ships `executor_jobs` (a GP-era default) which silently
+    #    diverts work to the always-on dev daemon and leaves the Nomad
+    #    worker idle — proven false-Nomad-execution; explicitly override.
     echo "▶ registering petri-executor-worker Nomad job template…"
     jq --arg bin "$exec_bin" --arg ep "{{s3_endpoint}}" \
        '.Job.TaskGroups[0].Tasks[0].Config.command = $bin
         | .Job.TaskGroups[0].Tasks[0].Env += {
+            "EXECUTOR_NAMESPACE": "executor",
             "EXECUTOR_STORAGE__BACKEND": "s3",
             "EXECUTOR_STORAGE__ENDPOINT": $ep,
             "EXECUTOR_STORAGE__BUCKET": "mekhan-artifacts",
@@ -364,7 +371,24 @@ scheduler-up:
       | curl -sf -X POST http://127.0.0.1:4646/v1/jobs -d @- >/dev/null
     echo "  ✓ petri-executor-worker registered (binary: $exec_bin)"
 
-    # 4. Build infra nets, then restart the engine WITH the scheduler env.
+    # 4. Pause the dev daemon — both it and the Nomad-spawned worker would
+    #    consume the same `executor` namespace; the warm daemon races and
+    #    wins, leaving the Nomad worker provably inert. Stopping it makes
+    #    the Nomad-dispatched worker the sole consumer, so a Scheduled run
+    #    genuinely exercises the Nomad path end-to-end (staging + python +
+    #    result). Restored by `scheduler-down`. Consequence: while the
+    #    scheduler layer is up, INLINE AutomatedSteps cannot run.
+    echo "▶ pausing dev executor daemon (Nomad worker takes over `executor` queue)…"
+    just dev::down-executor
+    # Defensively kill any UNTRACKED aithericon-executor-service processes —
+    # `down-executor` only touches the main-repo pidfile, so a stray daemon
+    # left over from a worktree session (see [[feedback_worktree_agent_cwd]])
+    # would still consume jobs off `executor` and silently shadow the Nomad
+    # worker. Nomad-launched executors are short-lived per dispatch and get
+    # respawned on the next scheduler_submit, so killing them is harmless.
+    pkill -f aithericon-executor-service 2>/dev/null || true
+
+    # 5. Build infra nets, then restart the engine WITH the scheduler env.
     echo "▶ building scheduler-net + executor-net examples…"
     (cd engine && cargo build -p aithericon-sdk --example scheduler_net --example executor_net)
     just dev::down-engine
@@ -392,6 +416,9 @@ scheduler-up:
     echo "  nomad        → http://localhost:4646/ui"
     echo "  scheduler-net + executor-net deployed & running on :3030"
     echo "  engine now started with SCHEDULER_BACKEND=nomad (Scheduled steps dispatch)"
+    echo "  dev daemon executor PAUSED — Nomad worker is the sole consumer"
+    echo "    of the 'executor' queue. Inline AutomatedSteps will NOT run"
+    echo "    until you revert."
     echo ""
     echo "  revert : just dev scheduler-down"
 
@@ -411,7 +438,9 @@ scheduler-down:
     echo "▶ restarting engine without scheduler env…"
     just dev::down-engine
     just dev::up-engine
-    echo "  ✓ scheduler layer down; engine back on plain dev config"
+    echo "▶ resuming dev executor daemon…"
+    just dev::up-executor
+    echo "  ✓ scheduler layer down; engine + dev daemon back on plain dev config"
 
 # ── Mekhan service (Rust backend) ────────────────────────────────────────────
 
