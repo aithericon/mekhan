@@ -89,7 +89,7 @@
 </script>
 
 <div class="space-y-1.5">
-	<span class="text-xs font-medium text-muted-foreground">Backend Type</span>
+	<span class="text-sm font-medium text-muted-foreground">Backend Type</span>
 	<Select.Root
 		type="single"
 		value={data.executionSpec.backendType}
@@ -138,13 +138,13 @@
 
 <div class="space-y-2 pt-3 border-t border-border/40">
 	<div class="flex items-center justify-between">
-		<span class="text-xs font-medium text-muted-foreground">Output port</span>
+		<span class="text-sm font-medium text-muted-foreground">Output port</span>
 		{#if !readonly}
 			<Button
 				variant="ghost"
 				size="sm"
 				onclick={resetOutputToBackendDefault}
-				class="h-7 gap-1 px-2 text-xs"
+				class="h-7 gap-1 px-2 text-sm"
 				title="Reset output port to the backend's canonical shape"
 			>
 				<RotateCcw class="size-3.5" />

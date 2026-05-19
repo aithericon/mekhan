@@ -56,9 +56,9 @@
 
 <div class="space-y-2">
 	<div class="flex items-center justify-between">
-		<span class="text-xs font-medium text-muted-foreground">{title}</span>
+		<span class="text-sm font-medium text-muted-foreground">{title}</span>
 		{#if !readonly}
-			<Button variant="ghost" size="sm" onclick={addField} class="h-7 gap-1 px-2 text-xs">
+			<Button variant="ghost" size="sm" onclick={addField} class="h-7 gap-1 px-2 text-sm">
 				<Plus class="size-3.5" />
 				Add field
 			</Button>
@@ -66,7 +66,7 @@
 	</div>
 
 	{#if (port.fields ?? []).length === 0}
-		<p class="rounded-md border border-dashed border-border/50 p-3 text-xs text-muted-foreground">
+		<p class="rounded-md border border-dashed border-border/50 p-3 text-sm text-muted-foreground">
 			{emptyHint}
 		</p>
 	{:else}

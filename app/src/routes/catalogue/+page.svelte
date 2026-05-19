@@ -243,7 +243,7 @@
 				<div class="rounded-lg border border-border bg-card px-4 py-3">
 					<div class="flex items-center gap-2 text-muted-foreground">
 						<FileBox class="size-4" />
-						<span class="text-xs font-medium uppercase tracking-wide">Total artifacts</span>
+						<span class="text-sm font-medium uppercase tracking-wide">Total artifacts</span>
 					</div>
 					<p class="mt-1 text-2xl font-semibold tabular-nums text-foreground">
 						{stats.total_entries.toLocaleString()}
@@ -252,7 +252,7 @@
 				<div class="rounded-lg border border-border bg-card px-4 py-3">
 					<div class="flex items-center gap-2 text-muted-foreground">
 						<HardDrive class="size-4" />
-						<span class="text-xs font-medium uppercase tracking-wide">Total size</span>
+						<span class="text-sm font-medium uppercase tracking-wide">Total size</span>
 					</div>
 					<p class="mt-1 text-2xl font-semibold text-foreground">
 						{formatBytes(stats.total_size_bytes)}
@@ -261,11 +261,11 @@
 				<div class="rounded-lg border border-border bg-card px-4 py-3">
 					<div class="flex items-center gap-2 text-muted-foreground">
 						<BarChart3 class="size-4" />
-						<span class="text-xs font-medium uppercase tracking-wide">Categories</span>
+						<span class="text-sm font-medium uppercase tracking-wide">Categories</span>
 					</div>
 					<div class="mt-1 flex flex-wrap gap-1">
 						{#each stats.by_category as cat}
-							<span class="text-xs text-muted-foreground">
+							<span class="text-sm text-muted-foreground">
 								{cat.category}: <span class="font-semibold text-foreground">{cat.count}</span>
 							</span>
 						{/each}
@@ -393,7 +393,7 @@
 			<div class="flex flex-col items-center justify-center rounded-xl border border-dashed border-border py-16">
 				<Database class="size-10 text-muted-foreground/40" />
 				<p class="mt-3 text-sm text-muted-foreground">No catalogue entries</p>
-				<p class="text-xs text-muted-foreground">
+				<p class="text-sm text-muted-foreground">
 					Artifacts are catalogued when workflow executions produce output
 				</p>
 			</div>
@@ -403,8 +403,8 @@
 			<!-- Active schema filter badge -->
 			{#if schemaFilter}
 				<div class="mb-3 flex items-center gap-2">
-					<span class="text-xs text-muted-foreground">Schema filter:</span>
-					<Badge variant="secondary" class="font-mono text-xs gap-1">
+					<span class="text-sm text-muted-foreground">Schema filter:</span>
+					<Badge variant="secondary" class="font-mono text-sm gap-1">
 						{schemaFilter.slice(0, 12)}
 						<button class="ml-1 hover:text-foreground" onclick={() => { schemaFilter = ''; resetPage(); }}>&times;</button>
 					</Badge>
@@ -428,7 +428,7 @@
 			<!-- Pagination controls -->
 			{#if totalPages > 1}
 				<div class="mt-4 flex items-center justify-between">
-					<p class="text-xs text-muted-foreground">
+					<p class="text-sm text-muted-foreground">
 						Showing {entries.length} of {total.toLocaleString()} entries
 					</p>
 					<div class="flex items-center gap-1">
@@ -440,7 +440,7 @@
 						>
 							<ChevronLeft class="size-4" />
 						</Button>
-						<span class="px-2 text-xs tabular-nums text-muted-foreground">
+						<span class="px-2 text-sm tabular-nums text-muted-foreground">
 							{page + 1} / {totalPages}
 						</span>
 						<Button
@@ -454,7 +454,7 @@
 					</div>
 				</div>
 			{:else if total > 0}
-				<p class="mt-4 text-center text-xs text-muted-foreground">
+				<p class="mt-4 text-center text-sm text-muted-foreground">
 					{total.toLocaleString()} {total === 1 ? 'entry' : 'entries'}
 				</p>
 			{/if}

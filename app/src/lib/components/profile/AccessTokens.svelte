@@ -123,8 +123,8 @@
 			</CardTitle>
 			<CardDescription>
 				Personal tokens for non-interactive use — e.g.
-				<code class="rounded bg-muted px-1 py-0.5 font-mono text-xs">MEKHAN_CLI_TOKEN</code>
-				for <code class="rounded bg-muted px-1 py-0.5 font-mono text-xs">mekhan apply</code>.
+				<code class="rounded bg-muted px-1 py-0.5 font-mono text-sm">MEKHAN_CLI_TOKEN</code>
+				for <code class="rounded bg-muted px-1 py-0.5 font-mono text-sm">mekhan apply</code>.
 				The secret is shown once, on creation.
 			</CardDescription>
 		</CardHeader>
@@ -146,11 +146,11 @@
 							<div class="min-w-0 space-y-0.5">
 								<p class="truncate text-sm font-medium text-foreground">{token.name}</p>
 								{#if token.description}
-									<p class="truncate text-xs text-muted-foreground">
+									<p class="truncate text-sm text-muted-foreground">
 										{token.description}
 									</p>
 								{/if}
-								<p class="text-xs text-muted-foreground">
+								<p class="text-sm text-muted-foreground">
 									Created {fmt(token.created_at)} · Expires {fmt(token.expires_at)}
 								</p>
 							</div>
@@ -179,7 +179,7 @@
 				<div class="space-y-1">
 					<label
 						for="token-name"
-						class="text-xs font-medium uppercase tracking-wide text-muted-foreground"
+						class="text-sm font-medium uppercase tracking-wide text-muted-foreground"
 					>
 						Name
 					</label>
@@ -189,7 +189,7 @@
 					<div class="space-y-1">
 						<label
 							for="token-desc"
-							class="text-xs font-medium uppercase tracking-wide text-muted-foreground"
+							class="text-sm font-medium uppercase tracking-wide text-muted-foreground"
 						>
 							Description <span class="normal-case">(optional)</span>
 						</label>
@@ -202,7 +202,7 @@
 					<div class="space-y-1">
 						<label
 							for="token-exp"
-							class="text-xs font-medium uppercase tracking-wide text-muted-foreground"
+							class="text-sm font-medium uppercase tracking-wide text-muted-foreground"
 						>
 							Expires <span class="normal-case">(optional)</span>
 						</label>
@@ -231,13 +231,13 @@
 					<KeyRound class="size-4" />
 					{revealed?.name}
 				</SheetTitle>
-				<SheetDescription class="text-xs text-muted-foreground">
+				<SheetDescription class="text-sm text-muted-foreground">
 					Copy this now — it is not stored and will never be shown again.
 				</SheetDescription>
 			</div>
 
 			<div
-				class="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-700 dark:text-amber-400"
+				class="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-sm text-amber-700 dark:text-amber-400"
 			>
 				<TriangleAlert class="mt-0.5 size-3.5 shrink-0" />
 				<span>Treat it like a password. Anyone with it can act as you in automation.</span>
@@ -246,7 +246,7 @@
 			{#if revealed}
 				<div class="flex items-center gap-2">
 					<code
-						class="flex-1 break-all rounded bg-muted px-2 py-1.5 font-mono text-xs text-foreground"
+						class="flex-1 break-all rounded bg-muted px-2 py-1.5 font-mono text-sm text-foreground"
 						data-testid="token-secret"
 					>
 						{revealed.secret}

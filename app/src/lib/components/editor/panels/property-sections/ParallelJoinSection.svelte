@@ -37,19 +37,19 @@
 
 <div class="space-y-2">
 	<div class="flex items-center justify-between">
-		<span class="text-xs font-medium text-muted-foreground">Joins branches</span>
-		<span class="text-[10px] uppercase tracking-wide text-muted-foreground/80">
+		<span class="text-sm font-medium text-muted-foreground">Joins branches</span>
+		<span class="text-sm uppercase tracking-wide text-muted-foreground/80">
 			{sources.length} input{sources.length === 1 ? '' : 's'}
 		</span>
 	</div>
 	{#if sources.length === 0}
-		<p class="rounded-md border border-dashed border-border/50 p-2 text-[11px] text-muted-foreground">
+		<p class="rounded-md border border-dashed border-border/50 p-2 text-sm text-muted-foreground">
 			Not connected — draw edges from the parallel branches into this join.
 		</p>
 	{:else}
 		<ul class="space-y-1">
 			{#each sources as label, i (i)}
-				<li class="rounded-md border border-border/60 bg-muted/20 px-2 py-1.5 text-[11px] text-foreground">
+				<li class="rounded-md border border-border/60 bg-muted/20 px-2 py-1.5 text-sm text-foreground">
 					{label}
 				</li>
 			{/each}
@@ -80,7 +80,7 @@
 		</Select.Content>
 	</Select.Root>
 </FormField>
-<p class="text-[10px] italic text-muted-foreground">
+<p class="text-sm italic text-muted-foreground">
 	{strategy === 'deep_merge'
 		? 'Nested object values are merged key-by-key; scalars still take the last branch.'
 		: 'Top-level keys are copied in arrival order — the last branch overwrites collisions.'}

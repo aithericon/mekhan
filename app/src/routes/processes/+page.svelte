@@ -153,7 +153,7 @@
 				<div class="rounded-lg border border-border bg-card px-4 py-3">
 					<div class="flex items-center gap-2 text-muted-foreground">
 						<Layers class="size-4" />
-						<span class="text-xs font-medium uppercase tracking-wide">Total</span>
+						<span class="text-sm font-medium uppercase tracking-wide">Total</span>
 					</div>
 					<p class="mt-1 text-2xl font-semibold tabular-nums text-foreground">
 						{stats.total.toLocaleString()}
@@ -162,7 +162,7 @@
 				<div class="rounded-lg border border-border bg-card px-4 py-3">
 					<div class="flex items-center gap-2 text-green-600 dark:text-green-400">
 						<Zap class="size-4" />
-						<span class="text-xs font-medium uppercase tracking-wide">Active</span>
+						<span class="text-sm font-medium uppercase tracking-wide">Active</span>
 					</div>
 					<p class="mt-1 text-2xl font-semibold tabular-nums text-foreground">
 						{stats.active.toLocaleString()}
@@ -171,7 +171,7 @@
 				<div class="rounded-lg border border-border bg-card px-4 py-3">
 					<div class="flex items-center gap-2 text-blue-600 dark:text-blue-400">
 						<CircleCheck class="size-4" />
-						<span class="text-xs font-medium uppercase tracking-wide">Completed</span>
+						<span class="text-sm font-medium uppercase tracking-wide">Completed</span>
 					</div>
 					<p class="mt-1 text-2xl font-semibold tabular-nums text-foreground">
 						{stats.completed.toLocaleString()}
@@ -180,7 +180,7 @@
 				<div class="rounded-lg border border-border bg-card px-4 py-3">
 					<div class="flex items-center gap-2 text-red-600 dark:text-red-400">
 						<CircleX class="size-4" />
-						<span class="text-xs font-medium uppercase tracking-wide">Failed</span>
+						<span class="text-sm font-medium uppercase tracking-wide">Failed</span>
 					</div>
 					<p class="mt-1 text-2xl font-semibold tabular-nums text-foreground">
 						{stats.failed.toLocaleString()}
@@ -257,7 +257,7 @@
 			<div class="flex flex-col items-center justify-center rounded-xl border border-dashed border-border py-16">
 				<Activity class="size-10 text-muted-foreground/40" />
 				<p class="mt-3 text-sm text-muted-foreground">No processes found</p>
-				<p class="text-xs text-muted-foreground">
+				<p class="text-sm text-muted-foreground">
 					Processes appear here when workflows or campaigns are started
 				</p>
 			</div>
@@ -286,7 +286,7 @@
 									{/if}
 								</div>
 
-								<div class="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
+								<div class="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-sm text-muted-foreground">
 									<span class="font-mono">{process.process_id.slice(0, 12)}...</span>
 									{#if process.owner}
 										<span>Owner: {process.owner}</span>
@@ -305,7 +305,7 @@
 			<!-- Pagination controls -->
 			{#if totalPages > 1}
 				<div class="mt-4 flex items-center justify-between">
-					<p class="text-xs text-muted-foreground">
+					<p class="text-sm text-muted-foreground">
 						Showing {processes.length} of {total.toLocaleString()} processes
 					</p>
 					<div class="flex items-center gap-1">
@@ -317,7 +317,7 @@
 						>
 							<ChevronLeft class="size-4" />
 						</Button>
-						<span class="px-2 text-xs tabular-nums text-muted-foreground">
+						<span class="px-2 text-sm tabular-nums text-muted-foreground">
 							{page + 1} / {totalPages}
 						</span>
 						<Button
@@ -331,7 +331,7 @@
 					</div>
 				</div>
 			{:else if total > 0}
-				<p class="mt-4 text-center text-xs text-muted-foreground">
+				<p class="mt-4 text-center text-sm text-muted-foreground">
 					{total.toLocaleString()} {total === 1 ? 'process' : 'processes'}
 				</p>
 			{/if}

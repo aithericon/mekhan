@@ -54,11 +54,11 @@
 		<div class="text-sm text-red-500">{error}</div>
 	{:else if content !== null}
 		<pre
-			class="max-h-[60vh] overflow-auto rounded-lg border border-border bg-card p-3 font-mono text-xs text-foreground"><code
+			class="max-h-[60vh] overflow-auto rounded-lg border border-border bg-card p-3 font-mono text-sm text-foreground"><code
 				>{content}</code
 			></pre>
 	{/if}
-	<p class="truncate text-xs text-muted-foreground">
+	<p class="truncate text-sm text-muted-foreground">
 		{entry.filename}
 		{#if entry.size_bytes}
 			· {(entry.size_bytes / 1024).toFixed(1)} KB

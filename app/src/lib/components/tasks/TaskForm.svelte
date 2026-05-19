@@ -160,7 +160,7 @@
 			{#each steps as step, i (step.id)}
 				<button
 					type="button"
-					class="flex-1 rounded-full py-1 text-xs font-medium transition-colors {i === activeStep
+					class="flex-1 rounded-full py-1 text-sm font-medium transition-colors {i === activeStep
 						? 'bg-primary text-primary-foreground'
 						: i < activeStep
 							? 'bg-primary/20 text-primary'
@@ -264,7 +264,7 @@
 											variant="ghost"
 											size="sm"
 											type="button"
-											class="h-auto px-1 py-0 text-xs text-destructive hover:text-destructive hover:underline"
+											class="h-auto px-1 py-0 text-sm text-destructive hover:text-destructive hover:underline"
 											onclick={() => removeFile(field.name, uploaded.url)}
 										>
 											remove
@@ -353,7 +353,7 @@
 						{@const rangeMax = field.max ?? 100}
 						{@const rangeStep = field.step ?? 1}
 						<div class="flex max-w-sm items-center gap-3">
-							<span class="text-xs text-muted-foreground">{rangeMin}</span>
+							<span class="text-sm text-muted-foreground">{rangeMin}</span>
 							<input
 								id={fieldId}
 								data-testid={`field-${field.name}`}
@@ -366,7 +366,7 @@
 								oninput={(event) =>
 									setTextValue(field.name, (event.currentTarget as HTMLInputElement).value)}
 							/>
-							<span class="text-xs text-muted-foreground">{rangeMax}</span>
+							<span class="text-sm text-muted-foreground">{rangeMax}</span>
 							<span class="min-w-[2.5rem] rounded-md bg-muted/50 px-2 py-1 text-center text-sm font-medium">
 								{getTextValue(field.name) || rangeMin}
 							</span>

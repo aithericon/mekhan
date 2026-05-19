@@ -22,7 +22,7 @@
 	<div class="flex items-center gap-1">
 		{#each remoteUsers as user}
 			<div
-				class="flex size-5 items-center justify-center rounded-full text-[9px] font-bold text-white"
+				class="flex size-5 items-center justify-center rounded-full text-sm font-bold text-white"
 				style="background-color: {user.color}"
 				title={user.name}
 			>

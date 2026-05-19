@@ -151,15 +151,15 @@
 							<!-- Timestamp left of the line -->
 							<div class="w-[80px] shrink-0 pt-3 pr-3 text-right">
 								{#if ts}
-									<p class="text-[11px] font-medium tabular-nums text-foreground">
+									<p class="text-sm font-medium tabular-nums text-foreground">
 										{formatTime(ts)}
 									</p>
 									{#if prevTs}
-										<p class="text-[10px] text-muted-foreground">
+										<p class="text-sm text-muted-foreground">
 											+{relativeTime(prevTs, ts)}
 										</p>
 									{:else}
-										<p class="text-[10px] text-muted-foreground">
+										<p class="text-sm text-muted-foreground">
 											{formatFullDate(ts)}
 										</p>
 									{/if}
@@ -173,14 +173,14 @@
 							<div class="ml-4 flex-1 rounded-lg border border-border bg-card">
 								<div class="flex items-center gap-3 px-4 py-3 border-b border-border">
 									{#if step.iteration !== null}
-										<span class="inline-flex size-6 items-center justify-center rounded-full bg-primary text-[10px] font-bold text-primary-foreground tabular-nums">
+										<span class="inline-flex size-6 items-center justify-center rounded-full bg-primary text-sm font-bold text-primary-foreground tabular-nums">
 											{step.iteration}
 										</span>
 									{/if}
 									<span class="text-sm font-semibold text-foreground">
 										{step.step}
 									</span>
-									<span class="ml-auto text-xs text-muted-foreground">
+									<span class="ml-auto text-sm text-muted-foreground">
 										{step.artifacts.length} artifact{step.artifacts.length === 1 ? '' : 's'}
 									</span>
 								</div>

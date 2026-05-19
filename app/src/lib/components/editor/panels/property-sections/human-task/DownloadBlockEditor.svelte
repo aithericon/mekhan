@@ -40,7 +40,7 @@
 	<div class="mb-2 flex items-center justify-between">
 		<!-- ui-allow: block-type badge color — no theme token for download/indigo identity -->
 		<span
-			class="rounded bg-indigo-100 px-2 py-0.5 text-xs font-medium text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300"
+			class="rounded bg-indigo-100 px-2 py-0.5 text-sm font-medium text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300"
 		>
 			Download
 		</span>
@@ -68,7 +68,7 @@
 		{#each downloads as item, idx (idx)}
 			<div class="space-y-1.5 rounded-md border border-border bg-muted/20 p-2">
 				<div class="flex items-center justify-between">
-					<span class="text-xs font-medium text-muted-foreground">Download {idx + 1}</span>
+					<span class="text-sm font-medium text-muted-foreground">Download {idx + 1}</span>
 					{#if !readonly}
 						<button
 							type="button"
@@ -85,7 +85,7 @@
 					placeholder={'URL — e.g. {{ invoice_file.url }}'}
 					disabled={readonly}
 					oninput={(e) => updateItem(idx, { url: (e.currentTarget as HTMLInputElement).value })}
-					class="font-mono text-xs"
+					class="font-mono text-sm"
 				/>
 				<div class="grid grid-cols-2 gap-2">
 					<Input
@@ -95,7 +95,7 @@
 						disabled={readonly}
 						oninput={(e) =>
 							updateItem(idx, { filename: (e.currentTarget as HTMLInputElement).value })}
-						class="font-mono text-xs"
+						class="font-mono text-sm"
 					/>
 					<Input
 						type="text"
@@ -106,7 +106,7 @@
 							updateItem(idx, {
 								mime_type: trimOrUndefined((e.currentTarget as HTMLInputElement).value)
 							})}
-						class="font-mono text-xs"
+						class="font-mono text-sm"
 					/>
 				</div>
 				<Input
@@ -127,7 +127,7 @@
 		{#if !readonly}
 			<button
 				type="button"
-				class="flex w-full items-center justify-center gap-1.5 rounded-md border border-dashed border-border py-1.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+				class="flex w-full items-center justify-center gap-1.5 rounded-md border border-dashed border-border py-1.5 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
 				onclick={addItem}
 			>
 				<Plus class="size-3.5" />

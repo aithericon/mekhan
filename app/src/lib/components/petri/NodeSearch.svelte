@@ -116,12 +116,12 @@
 							{i === selectedIdx ? 'bg-accent' : 'hover:bg-accent/50'}"
 						onclick={() => selectResult(item)}
 					>
-						<span class="text-[10px] px-1 rounded font-mono {item.type === 'place' ? 'bg-blue-500/15 text-blue-500' : 'bg-gray-500/15 text-gray-500'}">
+						<span class="text-sm px-1 rounded font-mono {item.type === 'place' ? 'bg-blue-500/15 text-blue-500' : 'bg-gray-500/15 text-gray-500'}">
 							{item.type === 'place' ? 'P' : 'T'}
 						</span>
 						<span class="truncate">{item.name}</span>
 						{#if item.kind && item.kind !== 'internal'}
-							<span class="text-[10px] text-muted-foreground ml-auto shrink-0">{item.kind}</span>
+							<span class="text-sm text-muted-foreground ml-auto shrink-0">{item.kind}</span>
 						{/if}
 					</button>
 				{/each}

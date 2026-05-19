@@ -35,7 +35,7 @@
 
 <div class="flex w-56 flex-col border-r border-sidebar-border bg-sidebar" data-testid="node-palette">
 	<div class="border-b border-sidebar-border px-3 py-2.5">
-		<h2 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Blocks</h2>
+		<h2 class="text-sm font-semibold uppercase tracking-wider text-muted-foreground">Blocks</h2>
 	</div>
 	<div class="flex-1 space-y-1 overflow-y-auto p-2">
 		{#each NODE_PALETTE as item (item.type)}
@@ -57,7 +57,7 @@
 				</div>
 				<div class="min-w-0">
 					<div class="text-sm font-medium text-foreground">{item.label}</div>
-					<div class="truncate text-[10px] leading-tight text-muted-foreground">
+					<div class="truncate text-sm leading-tight text-muted-foreground">
 						{item.description}
 					</div>
 				</div>

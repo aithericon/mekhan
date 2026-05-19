@@ -166,7 +166,7 @@
 		<span class="text-sm font-medium text-foreground">{label}</span>
 	</div>
 	{#if body}
-		<div class="px-3 py-2 text-[11px] text-muted-foreground">
+		<div class="px-3 py-2 text-sm text-muted-foreground">
 			{@render body()}
 		</div>
 	{/if}

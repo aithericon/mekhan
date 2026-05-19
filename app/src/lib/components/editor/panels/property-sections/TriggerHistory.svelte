@@ -70,15 +70,15 @@
 
 <div class="space-y-2">
 	<div class="flex items-center justify-between">
-		<span class="text-xs font-medium text-muted-foreground">Recent fires</span>
+		<span class="text-sm font-medium text-muted-foreground">Recent fires</span>
 		{#if loading}
-			<span class="text-[10px] text-muted-foreground/70">…</span>
+			<span class="text-sm text-muted-foreground/70">…</span>
 		{/if}
 	</div>
 	{#if error}
-		<p class="text-[11px] text-destructive">{error}</p>
+		<p class="text-sm text-destructive">{error}</p>
 	{:else if history.length === 0}
-		<p class="rounded-md border border-dashed border-border/50 p-2 text-[11px] text-muted-foreground">
+		<p class="rounded-md border border-dashed border-border/50 p-2 text-sm text-muted-foreground">
 			No fires yet.
 		</p>
 	{:else}
@@ -86,8 +86,8 @@
 			{#each history.slice().reverse() as result, i (i)}
 				<li class="rounded-md border border-border/60 bg-muted/20 px-2 py-1.5">
 					<div class="flex items-center justify-between gap-2">
-						<span class="text-[10px] text-muted-foreground">{fmt(result.fired_at)}</span>
-						<span class="text-[10px] font-medium">{outcomeLabel(result)}</span>
+						<span class="text-sm text-muted-foreground">{fmt(result.fired_at)}</span>
+						<span class="text-sm font-medium">{outcomeLabel(result)}</span>
 					</div>
 				</li>
 			{/each}

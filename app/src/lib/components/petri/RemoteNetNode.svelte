@@ -50,7 +50,7 @@
 >
 	<!-- Header -->
 	<div class="flex items-center px-2 py-1.5 gap-1.5 min-w-0">
-		<span class="text-xs font-semibold truncate mr-auto min-w-0 header-label">
+		<span class="text-sm font-semibold truncate mr-auto min-w-0 header-label">
 			{data.netId}
 		</span>
 		{#if hasChildren}
@@ -83,7 +83,7 @@
 							class="!bg-teal-400 !w-2 !h-2"
 							style="position: relative;"
 						/>
-						<span class="port-label text-[9px] font-mono truncate max-w-[60px]" title={handle.placeName}>
+						<span class="port-label text-sm font-mono truncate max-w-[60px]" title={handle.placeName}>
 							{handle.placeName}
 						</span>
 					</div>
@@ -96,7 +96,7 @@
 			<div class="flex flex-col justify-center items-end px-1.5 py-1">
 				{#each data.sources as handle (handle.handleId)}
 					<div class="port-row flex items-center gap-1" style="position: relative;">
-						<span class="port-label text-[9px] font-mono truncate max-w-[60px]" title={handle.placeName}>
+						<span class="port-label text-sm font-mono truncate max-w-[60px]" title={handle.placeName}>
 							{handle.placeName}
 						</span>
 						<Handle

@@ -134,7 +134,7 @@
 			<Tooltip.Root>
 				<Tooltip.Trigger>
 					<button
-						class="canvas-toggle flex items-center gap-1.5 px-2 py-1.5 rounded-md text-xs font-medium border transition-colors
+						class="canvas-toggle flex items-center gap-1.5 px-2 py-1.5 rounded-md text-sm font-medium border transition-colors
 							{showCausation
 								? 'bg-orange-50 border-orange-300 text-orange-700 hover:bg-orange-100 dark:bg-orange-950 dark:border-orange-700 dark:text-orange-300 dark:hover:bg-orange-900'
 								: 'bg-card border-border text-muted-foreground hover:bg-accent'}"
@@ -148,14 +148,14 @@
 					</button>
 				</Tooltip.Trigger>
 				<Tooltip.Content side="top">
-					<span class="text-xs">{showCausation ? 'Hide' : 'Show'} causation arcs</span>
+					<span class="text-sm">{showCausation ? 'Hide' : 'Show'} causation arcs</span>
 				</Tooltip.Content>
 			</Tooltip.Root>
 
 			<Tooltip.Root>
 				<Tooltip.Trigger>
 					<button
-						class="canvas-toggle flex items-center gap-1.5 px-2 py-1.5 rounded-md text-xs font-medium border transition-colors
+						class="canvas-toggle flex items-center gap-1.5 px-2 py-1.5 rounded-md text-sm font-medium border transition-colors
 							{showBridges
 								? 'bg-teal-50 border-teal-300 text-teal-700 hover:bg-teal-100 dark:bg-teal-950 dark:border-teal-700 dark:text-teal-300 dark:hover:bg-teal-900'
 								: 'bg-card border-border text-muted-foreground hover:bg-accent'}"
@@ -170,14 +170,14 @@
 					</button>
 				</Tooltip.Trigger>
 				<Tooltip.Content side="top">
-					<span class="text-xs">{showBridges ? 'Hide' : 'Show'} bridge connections</span>
+					<span class="text-sm">{showBridges ? 'Hide' : 'Show'} bridge connections</span>
 				</Tooltip.Content>
 			</Tooltip.Root>
 
 			<Tooltip.Root>
 				<Tooltip.Trigger>
 					<button
-						class="canvas-toggle flex items-center gap-1.5 px-2 py-1.5 rounded-md text-xs font-medium border transition-colors
+						class="canvas-toggle flex items-center gap-1.5 px-2 py-1.5 rounded-md text-sm font-medium border transition-colors
 							{showReadArcs
 								? 'bg-violet-50 border-violet-300 text-violet-700 hover:bg-violet-100 dark:bg-violet-950 dark:border-violet-700 dark:text-violet-300 dark:hover:bg-violet-900'
 								: 'bg-card border-border text-muted-foreground hover:bg-accent'}"
@@ -191,7 +191,7 @@
 					</button>
 				</Tooltip.Trigger>
 				<Tooltip.Content side="top">
-					<span class="text-xs">{showReadArcs ? 'Hide' : 'Show'} read arcs</span>
+					<span class="text-sm">{showReadArcs ? 'Hide' : 'Show'} read arcs</span>
 				</Tooltip.Content>
 			</Tooltip.Root>
 
@@ -199,7 +199,7 @@
 				<Tooltip.Root>
 					<Tooltip.Trigger>
 						<button
-							class="canvas-toggle flex items-center gap-1.5 px-2 py-1.5 rounded-md text-xs font-medium border transition-colors
+							class="canvas-toggle flex items-center gap-1.5 px-2 py-1.5 rounded-md text-sm font-medium border transition-colors
 								{collapseGroups
 									? 'bg-sky-50 border-sky-300 text-sky-700 hover:bg-sky-100 dark:bg-sky-950 dark:border-sky-700 dark:text-sky-300 dark:hover:bg-sky-900'
 									: 'bg-card border-border text-muted-foreground hover:bg-accent'}"
@@ -214,7 +214,7 @@
 						</button>
 					</Tooltip.Trigger>
 					<Tooltip.Content side="top">
-						<span class="text-xs">{collapseGroups ? 'Expand' : 'Collapse'} groups into summary nodes</span>
+						<span class="text-sm">{collapseGroups ? 'Expand' : 'Collapse'} groups into summary nodes</span>
 					</Tooltip.Content>
 				</Tooltip.Root>
 			{/if}

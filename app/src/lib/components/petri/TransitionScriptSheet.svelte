@@ -116,18 +116,18 @@
 			<div class="flex items-center gap-3">
 				<h2 class="text-lg font-semibold text-foreground">{transition.name}</h2>
 				{#if isEffect}
-					<span class="flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded bg-purple-500/15 text-purple-700 dark:text-purple-400">
+					<span class="flex items-center gap-1 px-2 py-0.5 text-sm font-medium rounded bg-purple-500/15 text-purple-700 dark:text-purple-400">
 						<Zap class="w-3 h-3" />
 						Effect
 					</span>
 				{/if}
 				{#if statusText && !isEditing}
-					<span class="px-2 py-0.5 text-xs font-medium rounded {statusText.color}">
+					<span class="px-2 py-0.5 text-sm font-medium rounded {statusText.color}">
 						{statusText.text}
 					</span>
 				{/if}
 				{#if isEditing}
-					<span class="px-2 py-0.5 text-xs font-medium rounded bg-blue-500/15 text-blue-400">
+					<span class="px-2 py-0.5 text-sm font-medium rounded bg-blue-500/15 text-blue-400">
 						Editing
 					</span>
 				{/if}
@@ -184,7 +184,7 @@
 								<div class="flex items-center gap-2 px-2 py-1.5 bg-blue-500/10 rounded text-sm">
 									<span class="w-2 h-2 rounded-full bg-blue-400"></span>
 									<span class="font-mono">{port.name}</span>
-									<span class="text-muted-foreground text-xs">({port.cardinality})</span>
+									<span class="text-muted-foreground text-sm">({port.cardinality})</span>
 								</div>
 							{/each}
 						</div>
@@ -202,7 +202,7 @@
 								<div class="flex items-center gap-2 px-2 py-1.5 bg-green-500/10 rounded text-sm">
 									<span class="w-2 h-2 rounded-full bg-green-400"></span>
 									<span class="font-mono">{port.name}</span>
-									<span class="text-muted-foreground text-xs">({port.cardinality})</span>
+									<span class="text-muted-foreground text-sm">({port.cardinality})</span>
 								</div>
 							{/each}
 						</div>
@@ -229,7 +229,7 @@
 					<div class="px-3 py-2 bg-card rounded border border-border font-mono text-sm text-foreground">
 						{effectHandlerId}
 					</div>
-					<p class="text-xs text-muted-foreground">
+					<p class="text-sm text-muted-foreground">
 						This transition executes a registered effect handler instead of a Rhai script.
 						Effects run side-effects in live mode and replay from stored results during replay.
 					</p>
@@ -241,7 +241,7 @@
 						<h3 class="text-sm font-medium text-foreground/80 mb-2 flex items-center gap-2">
 							Guard Script
 							{#if status === 'disabled_guard_failed'}
-								<span class="text-xs text-red-500">(currently false)</span>
+								<span class="text-sm text-red-500">(currently false)</span>
 							{/if}
 						</h3>
 						<MonacoEditor value={guard} language="rhai" height="80px" readOnly />
@@ -254,7 +254,7 @@
 						<h3 class="text-sm font-medium text-foreground/80 mb-2 flex items-center gap-2">
 							Guard Script
 							{#if !isEditing && status === 'disabled_guard_failed'}
-								<span class="text-xs text-red-500">(currently false)</span>
+								<span class="text-sm text-red-500">(currently false)</span>
 							{/if}
 						</h3>
 						{#if isEditing}
@@ -290,7 +290,7 @@
 				<!-- Script explanation -->
 				<div class="p-3 bg-muted rounded-lg text-sm text-muted-foreground">
 					<p class="font-medium mb-1">How scripts work:</p>
-					<ul class="list-disc list-inside space-y-1 text-xs">
+					<ul class="list-disc list-inside space-y-1 text-sm">
 						<li>Input port data is available as variables (e.g., <code class="bg-secondary px-1 rounded">order</code>, <code class="bg-secondary px-1 rounded">ctx</code>)</li>
 						<li>Guard scripts return <code class="bg-secondary px-1 rounded">true</code>/<code class="bg-secondary px-1 rounded">false</code> to enable/disable the transition</li>
 						<li>Main scripts return a map of output port data: <code class="bg-secondary px-1 rounded">#&#123; out: data &#125;</code></li>

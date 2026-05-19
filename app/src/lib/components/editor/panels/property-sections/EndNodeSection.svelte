@@ -40,7 +40,7 @@
 
 <div class="space-y-1.5">
 	<div class="flex items-center justify-between">
-		<span class="text-xs font-medium text-muted-foreground">Result mapping</span>
+		<span class="text-sm font-medium text-muted-foreground">Result mapping</span>
 		{#if !readonly}
 			<Button variant="ghost" size="sm" onclick={addMapping} data-testid="btn-add-result-mapping">
 				<Plus class="size-3.5" />
@@ -50,7 +50,7 @@
 	</div>
 
 	{#if mappings.length === 0}
-		<p class="rounded-md border border-dashed border-border/50 p-2 text-[11px] text-muted-foreground">
+		<p class="rounded-md border border-dashed border-border/50 p-2 text-sm text-muted-foreground">
 			No result. The workflow completes with no structured return — fully
 			backward-compatible. Add one or more fields to build the success envelope
 			(<code>{'{ ok: true, value }'}</code>) returned to callers.
@@ -96,7 +96,7 @@
 		{/each}
 	{/if}
 
-	<p class="text-[10px] text-muted-foreground">
+	<p class="text-sm text-muted-foreground">
 		Each expression is Rhai evaluated against the inbound token
 		(<code>input.&lt;field&gt;</code>). A <code>Failure</code> node upstream
 		takes precedence — its error envelope is preserved instead of overwritten.

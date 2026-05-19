@@ -19,11 +19,11 @@
 <div class="space-y-4">
 	<Card tone="muted">
 		<h3 class="text-lg font-medium text-foreground">{transitionDetails.transition.name}</h3>
-		<p class="text-xs text-muted-foreground font-mono">{transitionDetails.transition.id}</p>
+		<p class="text-sm text-muted-foreground font-mono">{transitionDetails.transition.id}</p>
 		<div class="flex items-center gap-2 mt-2">
 			{#if transitionDetails.transition.effect_handler_id}
 				<NodeKindBadge kind="effect" />
-				<span class="text-xs font-mono text-muted-foreground">
+				<span class="text-sm font-mono text-muted-foreground">
 					{transitionDetails.transition.effect_handler_id}
 				</span>
 			{:else}
@@ -37,11 +37,11 @@
 	<!-- Effect Handler -->
 	{#if transitionDetails.transition.effect_handler_id}
 		<Card tone="muted">
-			<h4 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Effect Handler</h4>
+			<h4 class="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-2">Effect Handler</h4>
 			<div class="px-3 py-2 rounded text-sm bg-secondary border border-border text-secondary-foreground font-mono">
 				{transitionDetails.transition.effect_handler_id}
 			</div>
-			<p class="text-xs text-muted-foreground mt-2">
+			<p class="text-sm text-muted-foreground mt-2">
 				Runs a registered side-effect handler instead of a Rhai script.
 			</p>
 		</Card>
@@ -53,7 +53,7 @@
 	{#if true}
 		{@const guardScript = transitionDetails.transition.guard}
 		<Card tone="muted">
-			<h4 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Guard Condition</h4>
+			<h4 class="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-2">Guard Condition</h4>
 			<div
 				class="px-3 py-2 rounded text-sm font-mono {guardScript
 					? 'bg-warning/10 border border-warning/30 text-warning-foreground'
@@ -68,7 +68,7 @@
 
 	<!-- Input Places -->
 	<Card tone="muted">
-		<h4 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+		<h4 class="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-2">
 			Input Places ({transitionDetails.inputArcs.length})
 		</h4>
 		{#if transitionDetails.inputArcs.length === 0}
@@ -81,7 +81,7 @@
 							{getPlaceName?.(arc.place_id) ?? arc.place_name ?? arc.place_id}
 						</Button>
 						{#if arc.weight && arc.weight > 1}
-							<span class="text-xs text-muted-foreground">(weight: {arc.weight})</span>
+							<span class="text-sm text-muted-foreground">(weight: {arc.weight})</span>
 						{/if}
 					</li>
 				{/each}
@@ -91,7 +91,7 @@
 
 	<!-- Output Places -->
 	<Card tone="muted">
-		<h4 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+		<h4 class="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-2">
 			Output Places ({transitionDetails.outputArcs.length})
 		</h4>
 		{#if transitionDetails.outputArcs.length === 0}
@@ -104,7 +104,7 @@
 							{getPlaceName?.(arc.place_id) ?? arc.place_name ?? arc.place_id}
 						</Button>
 						{#if arc.weight && arc.weight > 1}
-							<span class="text-xs text-muted-foreground">(weight: {arc.weight})</span>
+							<span class="text-sm text-muted-foreground">(weight: {arc.weight})</span>
 						{/if}
 					</li>
 				{/each}

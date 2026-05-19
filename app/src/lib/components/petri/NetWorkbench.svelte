@@ -246,7 +246,7 @@
 		<div class="w-80 border-l border-border shrink-0 flex flex-col">
 			<div class="flex border-b border-border shrink-0">
 				<button
-					class="flex-1 px-2 py-1.5 text-xs font-medium transition-colors border-b-2
+					class="flex-1 px-2 py-1.5 text-sm font-medium transition-colors border-b-2
 						{rightTab === 'inspector'
 						? 'border-primary text-foreground'
 						: 'border-transparent text-muted-foreground hover:text-foreground'}"
@@ -255,7 +255,7 @@
 					Inspector
 				</button>
 				<button
-					class="flex-1 px-2 py-1.5 text-xs font-medium transition-colors border-b-2
+					class="flex-1 px-2 py-1.5 text-sm font-medium transition-colors border-b-2
 						{rightTab === 'services'
 						? 'border-primary text-foreground'
 						: 'border-transparent text-muted-foreground hover:text-foreground'}"
@@ -264,7 +264,7 @@
 					Services
 				</button>
 				<button
-					class="flex-1 px-2 py-1.5 text-xs font-medium transition-colors border-b-2
+					class="flex-1 px-2 py-1.5 text-sm font-medium transition-colors border-b-2
 						{rightTab === 'analysis'
 						? 'border-primary text-foreground'
 						: 'border-transparent text-muted-foreground hover:text-foreground'}"

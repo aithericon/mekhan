@@ -26,7 +26,7 @@
 	});
 
 	const sizeClass = $derived(size === 'sm' ? 'w-3 h-3' : 'w-4 h-4');
-	const textClass = $derived(size === 'sm' ? 'text-[6px]' : 'text-[8px]');
+	const textClass = $derived(size === 'sm' ? 'text-sm' : 'text-sm');
 
 	const displayValue = $derived.by(() => {
 		if (colorType === 'Unit') return '';
@@ -59,7 +59,7 @@
 		</div>
 	</Tooltip.Trigger>
 	<Tooltip.Content side="top" class="max-w-64 bg-popover text-popover-foreground shadow-lg border border-border">
-		<pre class="text-xs font-mono whitespace-pre-wrap">{tooltipContent}</pre>
+		<pre class="text-sm font-mono whitespace-pre-wrap">{tooltipContent}</pre>
 	</Tooltip.Content>
 </Tooltip.Root>
 

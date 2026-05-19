@@ -96,7 +96,7 @@
 				disabled={readonly}
 				onCheckedChange={(v) => onchange({ ...field, required: v === true })}
 			/>
-			<span class="text-xs text-muted-foreground">Required</span>
+			<span class="text-sm text-muted-foreground">Required</span>
 		</label>
 		{#if !readonly}
 			<button
@@ -113,7 +113,7 @@
 	{#if expanded}
 		<div class="space-y-3 border-t border-border/50 p-3">
 			<div class="space-y-1.5">
-				<Label class="text-xs text-muted-foreground">Field Name (API key)</Label>
+				<Label class="text-sm text-muted-foreground">Field Name (API key)</Label>
 				<Input
 					type="text"
 					value={field.name}
@@ -126,7 +126,7 @@
 			</div>
 
 			<div class="space-y-1.5">
-				<Label class="text-xs text-muted-foreground">Placeholder</Label>
+				<Label class="text-sm text-muted-foreground">Placeholder</Label>
 				<Input
 					type="text"
 					value={field.placeholder ?? ''}
@@ -142,7 +142,7 @@
 
 			{#if field.kind === 'select'}
 				<div class="space-y-1.5">
-					<Label class="text-xs text-muted-foreground">Options</Label>
+					<Label class="text-sm text-muted-foreground">Options</Label>
 					<StringListEditor
 						items={field.options ?? []}
 						{readonly}

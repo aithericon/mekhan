@@ -282,7 +282,7 @@
 	/>
 
 	{#if error}
-		<div class="border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-800">
+		<div class="border-b border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">
 			{error}
 			<button type="button" class="ml-2 underline" onclick={() => (error = null)}>dismiss</button>
 		</div>

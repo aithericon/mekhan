@@ -16,7 +16,7 @@
 		: 'border-node-scope/50 bg-node-scope/5'}"
 	data-testid="node-scope"
 >
-	<span class="absolute left-3 top-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+	<span class="absolute left-3 top-2 text-sm font-medium uppercase tracking-wider text-muted-foreground">
 		{data.label}
 	</span>
 </div>

@@ -57,11 +57,11 @@
 
 <div class="flex h-full flex-col bg-muted/30">
 	<div class="flex items-center justify-between border-b border-border px-3 py-2">
-		<span class="text-xs font-medium text-muted-foreground uppercase tracking-wider">Nets</span>
+		<span class="text-sm font-medium text-muted-foreground uppercase tracking-wider">Nets</span>
 		<div class="flex items-center gap-1">
 			{#if onToggleFilter}
 				<button
-					class="px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors
+					class="px-1.5 py-0.5 rounded text-sm font-medium transition-colors
 						{statusFilter === 'all'
 							? 'bg-primary/10 text-primary'
 							: 'text-muted-foreground hover:text-foreground hover:bg-accent'}"
@@ -94,7 +94,7 @@
 	{@const isActive = activeNetId === node.meta.netId}
 
 	<div
-		class="group relative flex items-center gap-1 px-2 py-0.5 cursor-pointer text-xs
+		class="group relative flex items-center gap-1 px-2 py-0.5 cursor-pointer text-sm
 			{isActive ? 'bg-accent text-accent-foreground font-medium' : 'text-muted-foreground hover:bg-accent/50'}"
 		style="padding-left: {8 + depth * 16}px"
 		role="treeitem"

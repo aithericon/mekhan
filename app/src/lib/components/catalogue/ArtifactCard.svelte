@@ -77,12 +77,12 @@
 				<span class="text-sm font-medium text-foreground truncate">{entry.name}</span>
 				<Badge class={catColor(entry.category)} variant="secondary">{entry.category}</Badge>
 				{#if fm?.format}
-					<Badge variant="outline" class="text-[10px] font-mono">{fm.format}</Badge>
+					<Badge variant="outline" class="text-sm font-mono">{fm.format}</Badge>
 				{:else if entry.mime_type}
-					<Badge variant="outline" class="text-[10px] font-mono">{entry.mime_type}</Badge>
+					<Badge variant="outline" class="text-sm font-mono">{entry.mime_type}</Badge>
 				{/if}
 				{#if entry.job_id}
-					<span class="text-[10px] font-mono text-muted-foreground">{entry.job_id}</span>
+					<span class="text-sm font-mono text-muted-foreground">{entry.job_id}</span>
 				{/if}
 			</div>
 
@@ -198,12 +198,12 @@
 			<!-- Schema columns -->
 			{#if columns && columns.length > 0}
 				<div>
-					<p class="mb-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+					<p class="mb-1.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
 						Schema ({columns.length} columns)
 					</p>
 					<div class="flex flex-wrap gap-1">
 						{#each columns as col}
-							<span class="inline-flex items-center gap-1 rounded border border-border bg-muted/50 px-1.5 py-0.5 text-xs">
+							<span class="inline-flex items-center gap-1 rounded border border-border bg-muted/50 px-1.5 py-0.5 text-sm">
 								<span class="font-medium text-foreground">{col.name}</span>
 								<span class="text-muted-foreground">{typeof col.data_type === 'string' ? col.data_type : JSON.stringify(col.data_type)}</span>
 							</span>
@@ -215,10 +215,10 @@
 			<!-- User metadata -->
 			{#if Object.keys(um).length > 0}
 				<div>
-					<p class="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+					<p class="mb-1 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
 						User metadata
 					</p>
-					<pre class="overflow-x-auto rounded-md bg-muted px-3 py-2 text-[11px] text-foreground">{JSON.stringify(um, null, 2)}</pre>
+					<pre class="overflow-x-auto rounded-md bg-muted px-3 py-2 text-sm text-foreground">{JSON.stringify(um, null, 2)}</pre>
 				</div>
 			{/if}
 		</div>

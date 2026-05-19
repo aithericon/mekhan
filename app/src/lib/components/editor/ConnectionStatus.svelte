@@ -40,7 +40,7 @@
 	);
 </script>
 
-<div class="flex items-center gap-1 text-[10px] text-muted-foreground">
+<div class="flex items-center gap-1 text-sm text-muted-foreground">
 	<Circle class="size-2 {dotClass}" />
 	{label}
 </div>

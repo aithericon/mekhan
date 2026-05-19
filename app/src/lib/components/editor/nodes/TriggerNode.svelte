@@ -34,11 +34,11 @@
 
 {#snippet triggerBody()}
 	<div class="flex items-center justify-between" data-testid="trigger-body">
-		<span class="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+		<span class="text-sm font-medium uppercase tracking-wider text-muted-foreground">
 			{subtitle}
 		</span>
 		{#if !enabled}
-			<span class="rounded-full bg-muted px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-muted-foreground">
+			<span class="rounded-full bg-muted px-1.5 py-0.5 text-sm uppercase tracking-wide text-muted-foreground">
 				Disabled
 			</span>
 		{/if}

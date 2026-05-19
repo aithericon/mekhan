@@ -54,7 +54,7 @@
 	class="rounded-md border border-border/50 border-l-2 bg-background p-3 {borderColors[severity]}"
 >
 	<div class="mb-2 flex items-center justify-between">
-		<span class="rounded px-2 py-0.5 text-xs font-medium {badgeColors[severity]}">
+		<span class="rounded px-2 py-0.5 text-sm font-medium {badgeColors[severity]}">
 			Callout
 		</span>
 		{#if !readonly}

@@ -18,7 +18,7 @@
 </script>
 
 <div class="space-y-1.5">
-	<span class="text-xs font-medium text-muted-foreground">Mode</span>
+	<span class="text-sm font-medium text-muted-foreground">Mode</span>
 	<Select.Root
 		type="single"
 		value={(config.mode as string) ?? 'single'}
@@ -37,14 +37,14 @@
 
 {#if (config.mode as string) === 'batch'}
 	<div class="space-y-1.5">
-		<span class="text-xs font-medium text-muted-foreground">Files (input names)</span>
+		<span class="text-sm font-medium text-muted-foreground">Files (input names)</span>
 		<StringListEditor
 			items={(config.files as string[]) ?? []}
 			{readonly}
 			placeholder="Input name"
 			onchange={(files) => onchange({ ...config, files })}
 		/>
-		<p class="text-[9px] italic text-muted-foreground">Empty = use all staged inputs</p>
+		<p class="text-sm italic text-muted-foreground">Empty = use all staged inputs</p>
 	</div>
 {:else}
 	<FormField label="File (input name)" for="kz-file">
@@ -72,7 +72,7 @@
 	/>
 </FormField>
 
-<label class="flex items-center gap-1.5 text-xs text-muted-foreground">
+<label class="flex items-center gap-1.5 text-sm text-muted-foreground">
 	<Checkbox
 		checked={(config.force_ocr as boolean) ?? false}
 		disabled={readonly}
@@ -83,7 +83,7 @@
 
 <!-- OCR Settings -->
 <div class="space-y-1.5 rounded-lg border border-border bg-muted/30 p-2">
-	<span class="text-[10px] font-medium text-muted-foreground">OCR Settings</span>
+	<span class="text-sm font-medium text-muted-foreground">OCR Settings</span>
 	<Select.Root
 		type="single"
 		value={(ocr?.backend as string) ?? 'tesseract'}
@@ -92,7 +92,7 @@
 		}}
 		disabled={readonly}
 	>
-		<Select.Trigger disabled={readonly} class="h-6 px-1.5 py-0.5 text-[10px]">
+		<Select.Trigger disabled={readonly} class="h-6 px-1.5 py-0.5 text-sm">
 			{(ocr?.backend as string) === 'paddle-ocr' ? 'PaddleOCR' : 'Tesseract'}
 		</Select.Trigger>
 		<Select.Content>
@@ -110,9 +110,9 @@
 				...config,
 				ocr: { ...(ocr ?? {}), language: (e.currentTarget as HTMLInputElement).value }
 			})}
-		class="h-6 px-1.5 py-0.5 text-[10px]"
+		class="h-6 px-1.5 py-0.5 text-sm"
 	/>
-	<label class="flex items-center gap-1 text-[10px] text-muted-foreground">
+	<label class="flex items-center gap-1 text-sm text-muted-foreground">
 		<Checkbox
 			checked={(ocr?.enable_table_detection as boolean) ?? false}
 			disabled={readonly}
@@ -131,8 +131,8 @@
 
 <!-- PDF Settings -->
 <div class="space-y-1.5 rounded-lg border border-border bg-muted/30 p-2">
-	<span class="text-[10px] font-medium text-muted-foreground">PDF Settings</span>
-	<span class="text-[9px] text-muted-foreground">Passwords (for encrypted PDFs)</span>
+	<span class="text-sm font-medium text-muted-foreground">PDF Settings</span>
+	<span class="text-sm text-muted-foreground">Passwords (for encrypted PDFs)</span>
 	<StringListEditor
 		items={(pdf?.passwords as string[]) ?? []}
 		{readonly}

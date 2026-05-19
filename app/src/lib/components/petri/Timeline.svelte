@@ -94,7 +94,7 @@
 			Event <span class="text-primary">{currentIndex + 1}</span> / {events.length}
 			{#if !isAtEnd}
 				<button
-					class="ml-1.5 text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-500 hover:bg-amber-500/25 transition-colors"
+					class="ml-1.5 text-sm px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-500 hover:bg-amber-500/25 transition-colors"
 					onclick={jumpToEnd}
 					title="Jump to latest event"
 				>
@@ -130,7 +130,7 @@
 				</button>
 
 				{#if runMode === 'running'}
-					<span class="text-xs text-emerald-400 animate-pulse">Auto-running...</span>
+					<span class="text-sm text-emerald-400 animate-pulse">Auto-running...</span>
 				{/if}
 
 				{#if onHibernate}
@@ -148,7 +148,7 @@
 	</div>
 
 	{#if currentEvent}
-		<div class="mt-2 text-xs text-muted-foreground">
+		<div class="mt-2 text-sm text-muted-foreground">
 			<span class="font-medium">{currentEvent.event.type}</span>
 			<span class="ml-2">{new Date(currentEvent.timestamp).toLocaleTimeString()}</span>
 		</div>
