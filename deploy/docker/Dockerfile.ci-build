@@ -28,21 +28,6 @@ FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# ── System packages ─────────────────────────────────────────────────────────
-# build-essential + pkg-config + cmake + perl + libssl-dev → generic *-sys
-#                                                            crate build
-# musl-tools / musl-dev                              → local musl headers
-# libhdf5-dev + libnetcdf-dev                        → fmeta `all-backends`
-#                                                      (netcdf-sys →
-#                                                      hdf5-metno-sys)
-# protobuf-compiler                                  → aithericon-executor-ipc
-#                                                      prost-build
-# libpq-dev + postgresql-client                      → sqlx Postgres (offline
-#                                                      mode still wants libpq
-#                                                      headers for some
-#                                                      transitive crates)
-# python3                                            → cargo build scripts
-#                                                      occasionally shell out
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
         ca-certificates \
