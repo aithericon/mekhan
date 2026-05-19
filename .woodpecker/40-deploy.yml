@@ -77,16 +77,16 @@ steps:
       - export TF_VAR_s3_secret_key=$AWS_SECRET_ACCESS_KEY
       - export TF_VAR_state_encryption_passphrase=$(vault kv get -field=state_encryption_passphrase secret/services/mekhan/dev)
 
-      # ── Resolve Patroni primary IP via Consul HTTP API ──
-      # The default `postgres_admin_host` in variables.tf is the operator's
-      # alt-domain (postgres-primary.service.consul.aithericon), which only
-      # resolves from a workstation with the NetBird DNS rules installed. CI
-      # containers have neither Consul DNS nor the alt-domain, so we query
-      # Consul's catalog directly for the node currently tagged `primary`.
-      # Same static-IP pattern as VAULT_ADDR above — works because cax21
-      # runners share the NetBird mesh with the cluster.
-      - export TF_VAR_postgres_admin_host=$(curl -fsS http://10.20.0.10:8500/v1/catalog/service/postgres-primary | jq -r '.[0].Address')
-      - 'echo "  ✓ Secrets loaded from Vault (postgres-primary → $TF_VAR_postgres_admin_host)"'
+      # ── Override Patroni hostname to plain .service.consul ──
+      # variables.tf defaults to the operator alt-domain
+      # (postgres-primary.service.consul.aithericon) which only resolves on
+      # operator workstations with NetBird DNS rules installed. The plain
+      # `postgres-primary.service.consul` form works inside the cax21
+      # container if the host's resolver forwards .consul queries to its
+      # local Consul agent — typical for HashiStack clusters. If this fails
+      # with NXDOMAIN, revert to the Consul HTTP API lookup commit.
+      - export TF_VAR_postgres_admin_host=postgres-primary.service.consul
+      - 'echo "  ✓ Secrets loaded from Vault"'
 
       # TEMPORARY: hardcoded image_tag to the last green build's SHA so the
       # deploy can run without 30-build first. Restore "$CI_COMMIT_SHA" when
