@@ -28,7 +28,7 @@ labels:
 
 steps:
   - name: build-backend
-    image: forge.aithericon.eu/milanender/mekhan-ci-builder:latest
+    image: forge.aithericon.eu/milanender/mekhan-ci-builder@sha256:7e22dc6a5381b94af142da7196a46f5d0c1bf02e4b0280a0f98fa9794b70749d
     environment:
       CARGO_HOME: /var/lib/ci-jobs/cache/cargo
     commands:
@@ -36,7 +36,7 @@ steps:
     depends_on: []
 
   - name: build-frontend
-    image: forge.aithericon.eu/milanender/mekhan-ci-builder:latest
+    image: forge.aithericon.eu/milanender/mekhan-ci-builder@sha256:7e22dc6a5381b94af142da7196a46f5d0c1bf02e4b0280a0f98fa9794b70749d
     environment:
       NPM_CONFIG_CACHE: /var/lib/ci-jobs/cache/npm
     commands:
@@ -44,7 +44,7 @@ steps:
     depends_on: []
 
   - name: package-and-push
-    image: forge.aithericon.eu/milanender/mekhan-ci-builder:latest
+    image: forge.aithericon.eu/milanender/mekhan-ci-builder@sha256:7e22dc6a5381b94af142da7196a46f5d0c1bf02e4b0280a0f98fa9794b70749d
     environment:
       REGISTRY: forge.aithericon.eu/milanender
       # Vault is the canonical source for the Forgejo image-push creds
