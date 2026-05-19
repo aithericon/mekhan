@@ -2,6 +2,10 @@
 name = "mekhan-service"
 version = "0.1.0"
 edition = "2021"
+# Source-available under the Functional Source License (FSL-1.1-ALv2):
+# any use permitted except Competing Use; converts to Apache-2.0 after 2 years.
+# See /LICENSE-FSL and /LICENSING.md.
+license-file = "../LICENSE-FSL"
 
 [[bin]]
 name = "mekhan"

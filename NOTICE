@@ -1,0 +1,25 @@
+Aithericon Platform
+Copyright 2026 Aithericon GmbH
+
+This product includes software developed by Aithericon GmbH and the
+following third-party components.
+
+--------------------------------------------------------------------------------
+apalis  (shared/apalis, including packages/apalis-nats)
+--------------------------------------------------------------------------------
+
+`shared/apalis` is a vendored fork of the upstream `apalis` project:
+
+    apalis — Simple, extensible multithreaded background job processing
+    Copyright (c) 2023 Geoffrey Mureithi <mureithinjuguna@gmail.com>
+    https://github.com/geofmureithi/apalis
+    Licensed under MIT OR Apache-2.0
+
+This fork is heavily modified by Aithericon GmbH and is distributed under
+the same upstream terms (MIT OR Apache-2.0). Modifications include, but are not
+limited to, the NATS-backed job transport layer (`packages/apalis-nats`),
+which does not exist in upstream apalis. The original upstream license text is
+retained at `shared/apalis/LICENSE`.
+
+Credit for the original apalis design and implementation belongs to Geoffrey
+Mureithi and the upstream apalis contributors.
