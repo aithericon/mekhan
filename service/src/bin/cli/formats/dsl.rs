@@ -101,6 +101,7 @@ impl DslWorkflow {
             nodes.push(WorkflowNode {
                 id: key.clone(),
                 node_type: step.step_type.clone(),
+                slug: None,
                 position: Position { x: 0.0, y: 0.0 },
                 data,
                 parent_id: None,
@@ -353,6 +354,7 @@ flow:
                 WorkflowNode {
                     id: "start".to_string(),
                     node_type: "start".to_string(),
+                    slug: None,
                     position: Position { x: 0.0, y: 0.0 },
                     data: WorkflowNodeData::Start {
                         label: "Start".to_string(),
@@ -367,6 +369,7 @@ flow:
                 WorkflowNode {
                     id: "container".to_string(),
                     node_type: "scope".to_string(),
+                    slug: None,
                     position: Position { x: 0.0, y: 0.0 },
                     data: WorkflowNodeData::Scope {
                         label: "Container".to_string(),
@@ -379,6 +382,7 @@ flow:
                 WorkflowNode {
                     id: "task1".to_string(),
                     node_type: "end".to_string(),
+                    slug: None,
                     position: Position { x: 0.0, y: 0.0 },
                     data: WorkflowNodeData::End {
                         label: "Done".to_string(),
@@ -511,6 +515,7 @@ flow:
                 WorkflowNode {
                     id: "start".to_string(),
                     node_type: "start".to_string(),
+                    slug: None,
                     position: Position { x: 0.0, y: 0.0 },
                     data: WorkflowNodeData::Start {
                         label: "Start".to_string(),
@@ -525,6 +530,7 @@ flow:
                 WorkflowNode {
                     id: "review".to_string(),
                     node_type: "human_task".to_string(),
+                    slug: None,
                     position: Position { x: 0.0, y: 0.0 },
                     data: WorkflowNodeData::HumanTask {
                         label: "Review".to_string(),
@@ -565,6 +571,7 @@ flow:
                 WorkflowNode {
                     id: "done".to_string(),
                     node_type: "end".to_string(),
+                    slug: None,
                     position: Position { x: 0.0, y: 0.0 },
                     data: WorkflowNodeData::End {
                         label: "Done".to_string(),
@@ -731,6 +738,7 @@ flow:
                 WorkflowNode {
                     id: "start".to_string(),
                     node_type: "start".to_string(),
+                    slug: None,
                     position: Position { x: 0.0, y: 0.0 },
                     data: WorkflowNodeData::Start {
                         label: "Start".to_string(),
@@ -745,6 +753,7 @@ flow:
                 WorkflowNode {
                     id: "run".to_string(),
                     node_type: "automated_step".to_string(),
+                    slug: None,
                     position: Position { x: 0.0, y: 0.0 },
                     data: WorkflowNodeData::AutomatedStep {
                         label: "Run".to_string(),
@@ -767,6 +776,7 @@ flow:
                 WorkflowNode {
                     id: "done".to_string(),
                     node_type: "end".to_string(),
+                    slug: None,
                     position: Position { x: 0.0, y: 0.0 },
                     data: WorkflowNodeData::End {
                         label: "Done".to_string(),

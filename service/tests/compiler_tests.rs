@@ -22,6 +22,7 @@ fn start_node(id: &str) -> WorkflowNode {
     WorkflowNode {
         id: id.to_string(),
         node_type: "start".to_string(),
+        slug: None,
         position: pos(),
         data: WorkflowNodeData::Start {
             label: "Start".to_string(),
@@ -39,6 +40,7 @@ fn end_node(id: &str) -> WorkflowNode {
     WorkflowNode {
         id: id.to_string(),
         node_type: "end".to_string(),
+        slug: None,
         position: pos(),
         data: WorkflowNodeData::End {
             label: "End".to_string(),
@@ -210,6 +212,7 @@ fn human_task_produces_group_signal_and_transitions() {
             WorkflowNode {
                 id: "ht".to_string(),
                 node_type: "human_task".to_string(),
+                slug: None,
                 position: pos(),
                 data: WorkflowNodeData::HumanTask {
                     label: "Review".to_string(),
@@ -285,6 +288,7 @@ fn automated_step_produces_executor_lifecycle() {
             WorkflowNode {
                 id: "auto".to_string(),
                 node_type: "automated_step".to_string(),
+                slug: None,
                 position: pos(),
                 data: WorkflowNodeData::AutomatedStep {
                     label: "Run Script".to_string(),
@@ -372,6 +376,7 @@ fn decision_produces_guard_transitions() {
             WorkflowNode {
                 id: "dec".to_string(),
                 node_type: "decision".to_string(),
+                slug: None,
                 position: pos(),
                 data: WorkflowNodeData::Decision {
                     label: "Check Amount".to_string(),
@@ -446,6 +451,7 @@ fn parallel_split_join_produces_fork_and_join() {
             WorkflowNode {
                 id: "split".to_string(),
                 node_type: "parallel_split".to_string(),
+                slug: None,
                 position: pos(),
                 data: WorkflowNodeData::ParallelSplit {
                     label: "Fork".to_string(),
@@ -458,6 +464,7 @@ fn parallel_split_join_produces_fork_and_join() {
             WorkflowNode {
                 id: "task_a".to_string(),
                 node_type: "human_task".to_string(),
+                slug: None,
                 position: pos(),
                 data: WorkflowNodeData::HumanTask {
                     label: "Task A".to_string(),
@@ -473,6 +480,7 @@ fn parallel_split_join_produces_fork_and_join() {
             WorkflowNode {
                 id: "task_b".to_string(),
                 node_type: "human_task".to_string(),
+                slug: None,
                 position: pos(),
                 data: WorkflowNodeData::HumanTask {
                     label: "Task B".to_string(),
@@ -488,6 +496,7 @@ fn parallel_split_join_produces_fork_and_join() {
             WorkflowNode {
                 id: "join".to_string(),
                 node_type: "parallel_join".to_string(),
+                slug: None,
                 position: pos(),
                 data: WorkflowNodeData::ParallelJoin {
                     label: "Join".to_string(),
@@ -546,6 +555,7 @@ fn loop_produces_enter_continue_exit() {
             WorkflowNode {
                 id: "lp".to_string(),
                 node_type: "loop".to_string(),
+                slug: None,
                 position: pos(),
                 data: WorkflowNodeData::Loop {
                     label: "Retry Loop".to_string(),
@@ -641,6 +651,7 @@ fn unreachable_node_fails() {
             WorkflowNode {
                 id: "orphan".to_string(),
                 node_type: "human_task".to_string(),
+                slug: None,
                 position: pos(),
                 data: WorkflowNodeData::HumanTask {
                     label: "Orphan".to_string(),
@@ -674,6 +685,7 @@ fn loop_with_zero_iterations_fails() {
             WorkflowNode {
                 id: "lp".to_string(),
                 node_type: "loop".to_string(),
+                slug: None,
                 position: pos(),
                 data: WorkflowNodeData::Loop {
                     label: "Bad Loop".to_string(),
@@ -707,6 +719,7 @@ fn loop_with_empty_condition_fails() {
             WorkflowNode {
                 id: "lp".to_string(),
                 node_type: "loop".to_string(),
+                slug: None,
                 position: pos(),
                 data: WorkflowNodeData::Loop {
                     label: "Bad Loop".to_string(),
@@ -745,6 +758,7 @@ fn decision_with_default_branch() {
             WorkflowNode {
                 id: "dec".to_string(),
                 node_type: "decision".to_string(),
+                slug: None,
                 position: pos(),
                 data: WorkflowNodeData::Decision {
                     label: "Route".to_string(),
@@ -800,6 +814,7 @@ fn cycle_in_non_loop_edges_fails() {
             WorkflowNode {
                 id: "a".to_string(),
                 node_type: "human_task".to_string(),
+                slug: None,
                 position: pos(),
                 data: WorkflowNodeData::HumanTask {
                     label: "A".to_string(),
@@ -815,6 +830,7 @@ fn cycle_in_non_loop_edges_fails() {
             WorkflowNode {
                 id: "b".to_string(),
                 node_type: "human_task".to_string(),
+                slug: None,
                 position: pos(),
                 data: WorkflowNodeData::HumanTask {
                     label: "B".to_string(),
@@ -858,6 +874,7 @@ fn parallel_split_with_one_branch_fails() {
             WorkflowNode {
                 id: "split".to_string(),
                 node_type: "parallel_split".to_string(),
+                slug: None,
                 position: pos(),
                 data: WorkflowNodeData::ParallelSplit {
                     label: "Fork".to_string(),
@@ -896,6 +913,7 @@ fn automated_step_has_scoped_effect_errors() {
             WorkflowNode {
                 id: "auto".to_string(),
                 node_type: "automated_step".to_string(),
+                slug: None,
                 position: pos(),
                 data: WorkflowNodeData::AutomatedStep {
                     label: "Run Script".to_string(),
@@ -938,6 +956,7 @@ fn auto_node(id: &str, label: &str) -> WorkflowNode {
     WorkflowNode {
         id: id.to_string(),
         node_type: "automated_step".to_string(),
+        slug: None,
         position: pos(),
         data: WorkflowNodeData::AutomatedStep {
             label: label.to_string(),
@@ -1142,6 +1161,7 @@ fn parallel_join_merges_per_edge_input_places() {
             WorkflowNode {
                 id: "split".to_string(),
                 node_type: "parallel_split".to_string(),
+                slug: None,
                 position: pos(),
                 data: WorkflowNodeData::ParallelSplit {
                     label: "Fork".to_string(),
@@ -1156,6 +1176,7 @@ fn parallel_join_merges_per_edge_input_places() {
             WorkflowNode {
                 id: "join".to_string(),
                 node_type: "parallel_join".to_string(),
+                slug: None,
                 position: pos(),
                 data: WorkflowNodeData::ParallelJoin {
                     label: "Join".to_string(),
@@ -1249,6 +1270,7 @@ fn multi_input_non_join_retains_pass_through_transitions() {
             WorkflowNode {
                 id: "split".to_string(),
                 node_type: "parallel_split".to_string(),
+                slug: None,
                 position: pos(),
                 data: WorkflowNodeData::ParallelSplit {
                     label: "Fork".to_string(),
@@ -1263,6 +1285,7 @@ fn multi_input_non_join_retains_pass_through_transitions() {
             WorkflowNode {
                 id: "dec".to_string(),
                 node_type: "decision".to_string(),
+                slug: None,
                 position: pos(),
                 data: WorkflowNodeData::Decision {
                     label: "Decide".to_string(),
@@ -1329,6 +1352,7 @@ fn scope_creates_group_in_air() {
             WorkflowNode {
                 id: "my_scope".to_string(),
                 node_type: "scope".to_string(),
+                slug: None,
                 position: pos(),
                 data: WorkflowNodeData::Scope {
                     label: "Approval Process".to_string(),
@@ -1341,6 +1365,7 @@ fn scope_creates_group_in_air() {
             WorkflowNode {
                 id: "ht".to_string(),
                 node_type: "human_task".to_string(),
+                slug: None,
                 position: pos(),
                 data: WorkflowNodeData::HumanTask {
                     label: "Review".to_string(),
@@ -1403,6 +1428,7 @@ fn scope_without_children_compiles() {
             WorkflowNode {
                 id: "empty_scope".to_string(),
                 node_type: "scope".to_string(),
+                slug: None,
                 position: pos(),
                 data: WorkflowNodeData::Scope {
                     label: "Empty".to_string(),
@@ -1468,6 +1494,7 @@ fn edge_type_mismatch_fails_when_target_port_has_required_fields() {
     let typed_end = WorkflowNode {
         id: "e".to_string(),
         node_type: "end".to_string(),
+        slug: None,
         position: pos(),
         data: WorkflowNodeData::End {
             label: "End".to_string(),
@@ -1516,6 +1543,7 @@ fn edge_empty_target_port_accepts_anything() {
     let typed_start = WorkflowNode {
         id: "s".to_string(),
         node_type: "start".to_string(),
+        slug: None,
         position: pos(),
         data: WorkflowNodeData::Start {
             label: "Start".to_string(),
@@ -1576,6 +1604,7 @@ fn start_node_with_bool_field(id: &str, field: &str) -> WorkflowNode {
     WorkflowNode {
         id: id.to_string(),
         node_type: "start".to_string(),
+        slug: None,
         position: pos(),
         data: WorkflowNodeData::Start {
             label: "Start".to_string(),
@@ -1605,6 +1634,7 @@ fn decision_with_guard(id: &str, guard: &str) -> WorkflowNode {
     WorkflowNode {
         id: id.to_string(),
         node_type: "decision".to_string(),
+        slug: None,
         position: pos(),
         data: WorkflowNodeData::Decision {
             label: "Route".to_string(),
@@ -1750,8 +1780,9 @@ fn guard_input_unknown_field_is_rejected() {
 
 #[test]
 fn guard_multi_hop_scope_walk() {
-    // s -> a -> d. The Decision's scope should include `s`'s output fields
-    // even though `s` is two hops upstream.
+    // s -> a -> d. `a` (a token-replacing automated step) is a parked
+    // producer; the Decision two hops downstream resolves `a.processed`
+    // through a synthesized read-arc into `a`'s parked data place.
     use mekhan_service::models::template::{FieldKind, Port, PortField};
 
     let typed_start = start_node_with_bool_field("s", "ok");
@@ -1768,6 +1799,7 @@ fn guard_multi_hop_scope_walk() {
     let automated_a = WorkflowNode {
         id: "a".to_string(),
         node_type: "automated_step".to_string(),
+        slug: None,
         position: pos(),
         data: WorkflowNodeData::AutomatedStep {
             label: "A".to_string(),
@@ -1798,9 +1830,13 @@ fn guard_multi_hop_scope_walk() {
         height: None,
     };
 
-    // Decision guard references the *upstream* start's field (`s.ok`) — must
-    // resolve via the multi-hop scope walk.
-    let decision = decision_with_guard("d", "input.ok && input.processed");
+    // Decision guard references the upstream automated step's parked output
+    // (`a.processed`) producer-namespaced — `a` is two hops upstream and a
+    // token-replacing step, so the borrow model resolves it via a read-arc
+    // into `a`'s parked data place (NOT via a flat multi-hop scope walk; the
+    // Start's `ok` is deliberately unreachable past a token replacement —
+    // Start is not a parked producer).
+    let decision = decision_with_guard("d", "a.processed == true");
 
     let graph = WorkflowGraph {
         nodes: vec![typed_start, automated_a, decision, end_node("ea"), end_node("eb")],
@@ -1815,7 +1851,7 @@ fn guard_multi_hop_scope_walk() {
     let result = compile_to_air(&graph, "phase3-multihop", "", &std::collections::HashMap::new());
     assert!(
         result.is_ok(),
-        "multi-hop scope walk should resolve input.ok and input.processed: {:?}",
+        "decision two hops downstream must resolve the parked producer's `a.processed`: {:?}",
         result.err()
     );
 }
@@ -1830,6 +1866,7 @@ fn loop_condition_can_reference_iteration_local() {
     let loop_node = WorkflowNode {
         id: "lp".to_string(),
         node_type: "loop".to_string(),
+        slug: None,
         position: pos(),
         data: WorkflowNodeData::Loop {
             label: "Retry".to_string(),
@@ -1846,6 +1883,7 @@ fn loop_condition_can_reference_iteration_local() {
     let typed_start = WorkflowNode {
         id: "s".to_string(),
         node_type: "start".to_string(),
+        slug: None,
         position: pos(),
         data: WorkflowNodeData::Start {
             label: "Start".to_string(),
@@ -1928,6 +1966,7 @@ fn human_task_node_with_field(id: &str, field_name: &str, kind: TaskFieldKind) -
     WorkflowNode {
         id: id.to_string(),
         node_type: "human_task".to_string(),
+        slug: None,
         position: pos(),
         data: WorkflowNodeData::HumanTask {
             label: "Review".to_string(),
@@ -2018,6 +2057,7 @@ fn decision_output_ports_one_per_branch_plus_default() {
     let node = WorkflowNode {
         id: "d".to_string(),
         node_type: "decision".to_string(),
+        slug: None,
         position: pos(),
         data: WorkflowNodeData::Decision {
             label: "Route".to_string(),
@@ -2086,7 +2126,7 @@ fn guard_can_reference_human_task_derived_field() {
         nodes: vec![
             start_node("s"),
             human_task_node_with_field("ht", "approved", TaskFieldKind::Checkbox),
-            decision_with_guard("d", "input.approved == true"),
+            decision_with_guard("d", "ht.approved == true"),
             end_node("ea"),
             end_node("eb"),
         ],
@@ -2114,6 +2154,7 @@ fn trigger_node(id: &str, source: mekhan_service::models::template::TriggerSourc
     WorkflowNode {
         id: id.to_string(),
         node_type: "trigger".to_string(),
+        slug: None,
         position: pos(),
         data: WorkflowNodeData::Trigger {
             label: "Trigger".to_string(),
@@ -2541,6 +2582,7 @@ fn start_node_with_fields(
     WorkflowNode {
         id: id.to_string(),
         node_type: "start".to_string(),
+        slug: None,
         position: pos(),
         data: WorkflowNodeData::Start {
             label: "Start".to_string(),
@@ -2748,6 +2790,7 @@ fn phase_update_node(
     WorkflowNode {
         id: id.to_string(),
         node_type: "phase_update".to_string(),
+        slug: None,
         position: pos(),
         data: WorkflowNodeData::PhaseUpdate {
             label: "Phase".to_string(),
@@ -2772,6 +2815,7 @@ fn progress_update_node(
     WorkflowNode {
         id: id.to_string(),
         node_type: "progress_update".to_string(),
+        slug: None,
         position: pos(),
         data: WorkflowNodeData::ProgressUpdate {
             label: "Progress".to_string(),
@@ -3050,6 +3094,7 @@ fn failure_node(id: &str, message: Option<&str>) -> WorkflowNode {
     WorkflowNode {
         id: id.to_string(),
         node_type: "failure".to_string(),
+        slug: None,
         position: pos(),
         data: WorkflowNodeData::Failure {
             label: "Failure".to_string(),

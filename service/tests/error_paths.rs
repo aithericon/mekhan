@@ -42,6 +42,7 @@ fn simple_graph() -> WorkflowGraph {
             WorkflowNode {
                 id: "start".to_string(),
                 node_type: "start".to_string(),
+                slug: None,
                 position: Position { x: 0.0, y: 0.0 },
                 data: WorkflowNodeData::Start {
                     label: "Start".to_string(),
@@ -56,6 +57,7 @@ fn simple_graph() -> WorkflowGraph {
             WorkflowNode {
                 id: "end".to_string(),
                 node_type: "end".to_string(),
+                slug: None,
                 position: Position { x: 200.0, y: 0.0 },
                 data: WorkflowNodeData::End {
                     label: "End".to_string(),
@@ -393,6 +395,7 @@ async fn insert_published_template_with_required_start_field(db: &sqlx::PgPool) 
             WorkflowNode {
                 id: "start".to_string(),
                 node_type: "start".to_string(),
+                slug: None,
                 position: Position { x: 0.0, y: 0.0 },
                 data: WorkflowNodeData::Start {
                     label: "Start".to_string(),
@@ -419,6 +422,7 @@ async fn insert_published_template_with_required_start_field(db: &sqlx::PgPool) 
             WorkflowNode {
                 id: "end".to_string(),
                 node_type: "end".to_string(),
+                slug: None,
                 position: Position { x: 200.0, y: 0.0 },
                 data: WorkflowNodeData::End {
                     label: "End".to_string(),

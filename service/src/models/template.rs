@@ -62,6 +62,14 @@ pub struct WorkflowNode {
     pub id: String,
     #[serde(rename = "type")]
     pub node_type: String,
+    /// Stable, author-facing namespace for guard references to this node's
+    /// produced fields: a guard writes `<slug>.<field>` and the compiler
+    /// rebinds it to this node's parked data place. Rhai-identifier-safe and
+    /// unique within a graph. Optional on the wire — when absent the compiler
+    /// derives a deterministic fallback from `id` (clean-cut: no stored
+    /// templates to migrate). See [`WorkflowNode::slug`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slug: Option<String>,
     pub position: Position,
     pub data: WorkflowNodeData,
     /// Parent scope node id — child positions are relative to the parent.
@@ -73,6 +81,48 @@ pub struct WorkflowNode {
     /// Explicit height (used by scope nodes).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub height: Option<f64>,
+}
+
+impl WorkflowNode {
+    /// Author-facing slug candidate: the explicit `slug` when set and
+    /// non-blank, otherwise a deterministic Rhai-identifier-safe derivation
+    /// from `id`. NOT guaranteed unique on its own — graph-wide uniqueness
+    /// (and collision-suffixing of derived defaults) is enforced by the
+    /// compiler's slug index, the single resolver.
+    pub fn slug(&self) -> String {
+        match self.slug.as_deref() {
+            Some(s) if !s.trim().is_empty() => sanitize_slug(s),
+            _ => sanitize_slug(&self.id),
+        }
+    }
+}
+
+/// Coerce an arbitrary string into a Rhai-identifier-safe slug matching
+/// `^[a-z][a-z0-9_]*$`: lower-cased, every run of non-`[a-z0-9_]` collapsed to
+/// a single `_`, leading/trailing `_` trimmed, a non-alphabetic head prefixed
+/// with `n_`, and the empty result defaulted to `node`. Deterministic so a
+/// missing slug derives stably from the node id.
+pub fn sanitize_slug(raw: &str) -> String {
+    let mut s = String::with_capacity(raw.len());
+    let mut prev_us = false;
+    for c in raw.trim().chars() {
+        let c = c.to_ascii_lowercase();
+        if c.is_ascii_alphanumeric() || c == '_' {
+            s.push(c);
+            prev_us = c == '_';
+        } else if !prev_us {
+            s.push('_');
+            prev_us = true;
+        }
+    }
+    let s = s.trim_matches('_');
+    if s.is_empty() {
+        return "node".to_string();
+    }
+    match s.chars().next() {
+        Some(c) if c.is_ascii_alphabetic() => s.to_string(),
+        _ => format!("n_{s}"),
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -1346,6 +1396,7 @@ impl WorkflowGraph {
                 WorkflowNode {
                     id: "start".to_string(),
                     node_type: "start".to_string(),
+                    slug: None,
                     position: Position { x: 250.0, y: 100.0 },
                     data: WorkflowNodeData::Start {
                         label: "Start".to_string(),
@@ -1360,6 +1411,7 @@ impl WorkflowGraph {
                 WorkflowNode {
                     id: "end".to_string(),
                     node_type: "end".to_string(),
+                    slug: None,
                     position: Position { x: 250.0, y: 300.0 },
                     data: WorkflowNodeData::End {
                         label: "End".to_string(),
@@ -1982,6 +2034,7 @@ mod tests {
         let node = WorkflowNode {
             id: "child".to_string(),
             node_type: "human_task".to_string(),
+            slug: None,
             position: Position { x: 10.0, y: 20.0 },
             data: WorkflowNodeData::HumanTask {
                 label: "Task".to_string(),
@@ -2006,6 +2059,7 @@ mod tests {
         let node = WorkflowNode {
             id: "s1".to_string(),
             node_type: "scope".to_string(),
+            slug: None,
             position: Position { x: 0.0, y: 0.0 },
             data: WorkflowNodeData::Scope {
                 label: "Container".to_string(),
@@ -2031,6 +2085,7 @@ mod tests {
         let node = WorkflowNode {
             id: "n".to_string(),
             node_type: "end".to_string(),
+            slug: None,
             position: Position { x: 0.0, y: 0.0 },
             data: WorkflowNodeData::End {
                 label: "End".to_string(),

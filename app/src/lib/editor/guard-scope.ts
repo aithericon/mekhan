@@ -21,8 +21,9 @@ export type ScopeEntry = {
 	nodeLabel: string;
 	field: string;
 	kind: FieldKind;
-	/** Qualified identifier for code insertion (the real shape path,
-	 *  e.g. `input.data.invoice_amount`). */
+	/** Producer-namespaced identifier for code insertion: `<slug>.<field>`
+	 *  for borrowed parked-producer data (e.g. `review.invoice_amount`), or
+	 *  `input.<path>` for genuinely control-token-resident leaves. */
 	qualified: string;
 };
 

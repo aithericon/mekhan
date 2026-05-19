@@ -156,17 +156,17 @@ fn type_surface_still_works_before_publish() {
     let surface = surface_types(&graph);
     assert!(surface.graph_ok && !surface.scopes.is_empty());
 
-    // Reconciled (Task #20): `check-amount` sits after the token-replacing
+    // Reconciled (Task #20/#22): `check-amount` sits after the token-replacing
     // `extract` step. The picker scope must surface `review`'s parked
-    // `invoice_amount` (borrow-reachable via read-arc) — NOT only the extract
-    // executor envelope, the linear-flow bug — attributed to its real
-    // producer.
+    // `invoice_amount` (borrow-reachable via read-arc) producer-namespaced as
+    // `review.invoice_amount` — NOT only the extract executor envelope (the
+    // linear-flow bug), and NOT the provenance-erasing flat `input.*`.
     let dec = surface
         .scopes
         .get("check-amount")
         .expect("decision scope surfaced");
     assert!(
-        dec.iter().any(|e| e.path == "input.invoice_amount"
+        dec.iter().any(|e| e.path == "review.invoice_amount"
             && e.producer_node == "review"
             && e.ty == "Number"),
         "picker must offer review.invoice_amount at the decision, got: {:?}",

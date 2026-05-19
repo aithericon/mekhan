@@ -500,16 +500,6 @@ pub enum ShapeDiagnostic {
         found: String,
         note: String,
     },
-    /// Two different producers contribute the same leaf name with different
-    /// types into one node's accumulator — the flat last-writer-wins
-    /// ambiguity, surfaced instead of silently resolved.
-    ScopeCollision {
-        node_id: String,
-        node_label: String,
-        leaf: String,
-        a: String,
-        b: String,
-    },
     /// The draft graph isn't structurally analyzable yet (no Start, a cycle,
     /// dangling edge). Reported instead of erroring so the editor still gets
     /// a response on every keystroke.
@@ -557,13 +547,6 @@ impl ShapeDiagnostic {
                 "type_mismatch",
                 node_id.clone(),
                 format!("`{referenced}` is `{found}` but {note}."),
-            ),
-            ShapeDiagnostic::ScopeCollision {
-                node_id, leaf, a, b, ..
-            } => (
-                "scope_collision",
-                node_id.clone(),
-                format!("`{leaf}` is ambiguous: {a} vs {b} (last-writer-wins)."),
             ),
             ShapeDiagnostic::GraphIncomplete { message } => {
                 ("graph_incomplete", String::new(), message.clone())
@@ -809,6 +792,10 @@ fn out_shape(node: &WorkflowNode, in_shape: &TokenShape) -> TokenShape {
 pub fn analyze(graph: &WorkflowGraph) -> Result<ShapeReport, CompileError> {
     let wg = WorkflowDiGraph::build(graph)?;
     let order = topo_order(&wg)?;
+    // Author-facing `<slug>.<field>` namespace — built once; a hard
+    // `SlugConflict` here propagates out (the editor renders it via
+    // `surface_types`'s `GraphIncomplete`, publish blocks via `validate_guards`).
+    let slugs = slug_index(graph)?;
 
     let mut node_in: BTreeMap<String, TokenShape> = BTreeMap::new();
     let mut node_out: BTreeMap<String, TokenShape> = BTreeMap::new();
@@ -861,16 +848,17 @@ pub fn analyze(graph: &WorkflowGraph) -> Result<ShapeReport, CompileError> {
 
     // Per-node scope surface: the *borrow-reachable* references — exactly the
     // set the compiler (`check_guard` / `guard_readarc_plan`) resolves, built
-    // from the same `resolve` / `locate_field` primitives. The old
+    // from the same `resolve` / `resolve_ref` primitives. The old
     // `flatten_scope(node_in)` only saw the linear control token, so every
     // upstream field was hidden behind a token-replacing automated step (the
     // picker showed the executor envelope, never the parked producer's data).
+    let pos = topo_pos(&order, &wg);
     let mut scopes: BTreeMap<String, Vec<ScopeEntry>> = BTreeMap::new();
     let mut diagnostics = Vec::new();
     for node in &graph.nodes {
         scopes.insert(
             node.id.clone(),
-            reachable_scope(node, graph, &node_in, &node_out, &order, &wg),
+            reachable_scope(node, graph, &node_in, &node_out, &order, &wg, &slugs),
         );
     }
 
@@ -894,7 +882,16 @@ pub fn analyze(graph: &WorkflowGraph) -> Result<ShapeReport, CompileError> {
             None => continue,
         };
         for (_label, guard) in guards {
-            check_guard(node, guard, in_shape, &node_out, &order, &wg, &mut diagnostics);
+            check_guard(
+                node,
+                guard,
+                &slugs,
+                graph,
+                in_shape,
+                &node_out,
+                &pos,
+                &mut diagnostics,
+            );
         }
     }
 
@@ -950,108 +947,6 @@ fn is_parked_producer(graph: &WorkflowGraph, id: &str) -> bool {
     })
 }
 
-/// Borrow-reachable scope at a node: exactly the references the compiler
-/// (`check_guard` / `guard_readarc_plan`) resolves — (1) every leaf still on
-/// the node's own inbound control token (resolvable with no read-arc), plus
-/// (2) every leaf an upstream *parked producer* owns, resolved through the
-/// SAME `locate_field` the read-arc synthesis uses (nearest producer wins).
-/// The user types the bare `input.<leaf>`; the compiler rebinds it to the
-/// producer's parked place. Replaces the old `flatten_scope(node_in)`, which
-/// only saw the linear control token and so hid every field produced before a
-/// token-replacing automated step.
-fn reachable_scope(
-    node: &WorkflowNode,
-    graph: &WorkflowGraph,
-    node_in: &BTreeMap<String, TokenShape>,
-    node_out: &BTreeMap<String, TokenShape>,
-    order: &[petgraph::graph::NodeIndex],
-    wg: &WorkflowDiGraph,
-) -> Vec<ScopeEntry> {
-    // leaf -> entry. A control-resident leaf wins: it needs no read-arc and
-    // `check_guard` tries `resolve()` (control token) before `locate_field`.
-    let mut by_leaf: BTreeMap<String, ScopeEntry> = BTreeMap::new();
-
-    // (1) Control-token-resident — Start fields before any task, the slim
-    //     control keys, the envelope an automated step actually forwards.
-    if let Some(in_shape) = node_in.get(&node.id) {
-        let mut leaves = Vec::new();
-        collect_leaves(in_shape, "", None, &mut leaves);
-        for (dotted, ty, prov) in leaves {
-            let leaf = dotted.rsplit('.').next().unwrap_or(&dotted).to_string();
-            by_leaf.insert(
-                leaf,
-                ScopeEntry {
-                    path: format!("input.{dotted}"),
-                    ty,
-                    producer_node: prov.node_id,
-                    producer_label: prov.node_label,
-                    note: prov.note,
-                },
-            );
-        }
-    }
-
-    // (2) Read-arc-reachable — every leaf a strictly-upstream parked producer
-    //     owns. Resolve through `locate_field` (nearest-producer-wins, the
-    //     identical call `guard_readarc_plan` makes) so the picker can never
-    //     offer a path the compiler won't bind, nor hide one it would.
-    let pos = topo_pos(order, wg);
-    let self_pos = pos.get(&node.id).copied();
-    let mut candidates: Vec<String> = Vec::new();
-    if let Some(self_pos) = self_pos {
-        for ni in order.iter() {
-            let prod = *wg.dag.node_weight(*ni).unwrap();
-            if pos.get(&prod.id).copied().unwrap_or(usize::MAX) >= self_pos {
-                continue;
-            }
-            if let Some(shape) = node_out.get(&prod.id) {
-                let mut leaves = Vec::new();
-                collect_leaves(shape, "", None, &mut leaves);
-                for (dotted, _ty, _prov) in leaves {
-                    candidates.push(dotted.rsplit('.').next().unwrap_or(&dotted).to_string());
-                }
-            }
-        }
-    }
-    candidates.sort();
-    candidates.dedup();
-    for leaf in candidates {
-        if by_leaf.contains_key(&leaf) {
-            continue; // already control-resident (resolves without a read-arc)
-        }
-        if is_control_leaf(&format!("input.{leaf}")) {
-            continue; // identity/routing — stays on the slim control token
-        }
-        if let Some(fl) = locate_field(&leaf, node, node_out, order, wg) {
-            if !is_parked_producer(graph, &fl.producer_id) {
-                continue; // owner has no parked place — not borrow-reachable
-            }
-            by_leaf.insert(
-                leaf.clone(),
-                ScopeEntry {
-                    path: format!("input.{leaf}"),
-                    ty: fl.ty,
-                    producer_node: fl.producer_id,
-                    producer_label: fl.producer_label,
-                    note: fl.note,
-                },
-            );
-        }
-    }
-
-    by_leaf.into_values().collect()
-}
-
-/// Where an upstream-produced field actually lives (which node owns it, its
-/// path within that producer's parked token, and its type).
-struct FieldLocation {
-    producer_id: String,
-    producer_label: String,
-    path: String,
-    ty: String,
-    note: String,
-}
-
 fn topo_pos(order: &[petgraph::graph::NodeIndex], wg: &WorkflowDiGraph) -> BTreeMap<String, usize> {
     let mut pos = BTreeMap::new();
     for (i, ni) in order.iter().enumerate() {
@@ -1060,91 +955,362 @@ fn topo_pos(order: &[petgraph::graph::NodeIndex], wg: &WorkflowDiGraph) -> BTree
     pos
 }
 
-/// Find the nearest strictly-upstream producer of `leaf` (the node whose
-/// parked output a read-arc would borrow it from).
-fn locate_field(
-    leaf: &str,
-    node: &WorkflowNode,
-    node_out: &BTreeMap<String, TokenShape>,
-    order: &[petgraph::graph::NodeIndex],
-    wg: &WorkflowDiGraph,
-) -> Option<FieldLocation> {
-    let pos = topo_pos(order, wg);
-    let self_pos = *pos.get(&node.id)?;
+// ─── Slug index: the `<slug>.<field>` ↔ node-id resolver ────────────────────
 
-    let mut producer: Option<(usize, String, String, Provenance)> = None;
-    for ni in order.iter() {
-        let prod = *wg.dag.node_weight(*ni).unwrap();
-        let pp = pos[&prod.id];
-        if pp >= self_pos {
+/// Author-facing slug ↔ node-id resolution, the single source of truth for
+/// `<slug>.<field>` guard references. Built once per `analyze`/readarc pass.
+pub(crate) struct SlugIndex {
+    by_slug: BTreeMap<String, String>,
+    by_node: BTreeMap<String, String>,
+}
+
+impl SlugIndex {
+    fn node_for(&self, slug: &str) -> Option<&str> {
+        self.by_slug.get(slug).map(String::as_str)
+    }
+    fn slug_for(&self, node_id: &str) -> Option<&str> {
+        self.by_node.get(node_id).map(String::as_str)
+    }
+}
+
+/// Resolve every node's author-facing slug. Explicit, user-set slugs claim
+/// their (sanitized) name and a post-sanitize clash between two of them is a
+/// hard [`CompileError::SlugConflict`]. Nodes without an explicit slug derive
+/// one from their id, collision-suffixed (`_2`, `_3`, …) deterministically by
+/// graph order so existing example templates load unchanged (clean-cut: no
+/// stored templates to migrate).
+pub(crate) fn slug_index(graph: &WorkflowGraph) -> Result<SlugIndex, CompileError> {
+    let mut by_slug: BTreeMap<String, String> = BTreeMap::new();
+    let mut by_node: BTreeMap<String, String> = BTreeMap::new();
+
+    for n in &graph.nodes {
+        let explicit = n
+            .slug
+            .as_deref()
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false);
+        if !explicit {
             continue;
         }
-        if let Some(shape) = node_out.get(&prod.id) {
-            if let Some((dotted, ty, prov)) = shape.find_by_leaf(leaf) {
-                if producer.as_ref().map(|(b, ..)| pp > *b).unwrap_or(true) {
-                    producer = Some((pp, dotted, ty, prov));
-                }
+        let s = n.slug();
+        if let Some(other) = by_slug.get(&s) {
+            if other != &n.id {
+                return Err(CompileError::SlugConflict {
+                    slug: s,
+                    node_a: other.clone(),
+                    node_b: n.id.clone(),
+                });
+            }
+        }
+        by_slug.insert(s.clone(), n.id.clone());
+        by_node.insert(n.id.clone(), s);
+    }
+
+    for n in &graph.nodes {
+        if by_node.contains_key(&n.id) {
+            continue;
+        }
+        let base = n.slug();
+        let mut s = base.clone();
+        let mut k = 2usize;
+        while by_slug.contains_key(&s) {
+            s = format!("{base}_{k}");
+            k += 1;
+        }
+        by_slug.insert(s.clone(), n.id.clone());
+        by_node.insert(n.id.clone(), s);
+    }
+
+    Ok(SlugIndex { by_slug, by_node })
+}
+
+// ─── One guard-reference resolver ───────────────────────────────────────────
+
+/// The root of a dotted guard reference.
+#[derive(Debug, Clone)]
+enum RefRoot {
+    /// `input.<path>` — only legitimate for control-token-resident leaves
+    /// (Start fields before any task, `_loop_*`, `task_id`, `status`).
+    Input,
+    /// `<slug>.<path>` — borrowed parked-producer data; `slug` still has to
+    /// resolve to a strictly-upstream parked producer.
+    Qualified(String),
+}
+
+/// One scope reference parsed out of a guard / result-mapping expression.
+struct GuardRef {
+    root: RefRoot,
+    segs: Vec<String>,
+    lit: Option<LitTy>,
+    /// Exactly the substring written in the source — what
+    /// `apply_control_data_foundation` string-replaces with the read-arc var.
+    referenced: String,
+}
+
+/// Parse the scope references out of `src`. The raw [`scan_dotted_refs`]
+/// scanner finds dotted paths + the RHS literal; `rhai_scope` (keyword / local
+/// / string / comment aware) gates which non-`input` roots are real
+/// references, so the picker, the diagnostics and the read-arc synthesis all
+/// see one and the same set.
+fn guard_refs(src: &str) -> Vec<GuardRef> {
+    let legit: std::collections::HashSet<(String, String)> =
+        crate::compiler::rhai_scope::extract_qualified_refs(src)
+            .into_iter()
+            .map(|q| (q.node_id, q.field))
+            .collect();
+    let mut out = Vec::new();
+    for (root, segs, lit) in scan_dotted_refs(src) {
+        let referenced = format!("{root}.{}", segs.join("."));
+        if root == "input" {
+            out.push(GuardRef {
+                root: RefRoot::Input,
+                segs,
+                lit,
+                referenced,
+            });
+        } else if legit.contains(&(root.clone(), segs[0].clone())) {
+            out.push(GuardRef {
+                root: RefRoot::Qualified(root),
+                segs,
+                lit,
+                referenced,
+            });
+        }
+        // else: a Rhai local / keyword / string / comment — not scope.
+    }
+    out
+}
+
+/// Outcome of resolving one [`GuardRef`] against the borrow-reachable model.
+enum RefResolution {
+    /// Stays on the inbound control token — no read-arc.
+    Control,
+    /// Borrowed from an upstream parked producer's `p_{id}_data`.
+    Borrow {
+        producer_id: String,
+        producer_path: String,
+        producer_label: String,
+    },
+    /// Nothing the compiler can bind (non-control `input.*`, unknown slug,
+    /// non-upstream / non-parked producer, or unknown field).
+    Unresolved,
+}
+
+/// The single resolver shared by `reachable_scope`, `check_guard` and
+/// `guard_readarc_plan` — the picker offers exactly what this binds, and no
+/// diagnostic contradicts it.
+fn resolve_ref(
+    gref: &GuardRef,
+    consumer: &WorkflowNode,
+    slugs: &SlugIndex,
+    graph: &WorkflowGraph,
+    in_shape: Option<&TokenShape>,
+    node_out: &BTreeMap<String, TokenShape>,
+    pos: &BTreeMap<String, usize>,
+) -> RefResolution {
+    match &gref.root {
+        RefRoot::Input => {
+            let full = format!("input.{}", gref.segs.join("."));
+            if is_control_leaf(&full)
+                || in_shape
+                    .map(|s| s.resolve(&gref.segs).is_some())
+                    .unwrap_or(false)
+            {
+                RefResolution::Control
+            } else {
+                // Borrowed data must be qualified `<slug>.<field>` — a bare
+                // `input.<field>` that no longer rides the control token is
+                // unbindable (clean-cut: no legacy nearest-wins fallback).
+                RefResolution::Unresolved
+            }
+        }
+        RefRoot::Qualified(root) => {
+            let Some(prod_id) = slugs.node_for(root).map(str::to_string) else {
+                return RefResolution::Unresolved;
+            };
+            if prod_id == consumer.id {
+                return RefResolution::Unresolved;
+            }
+            let up = pos.get(&prod_id).copied().unwrap_or(usize::MAX);
+            let me = pos.get(&consumer.id).copied().unwrap_or(0);
+            if up >= me || !is_parked_producer(graph, &prod_id) {
+                return RefResolution::Unresolved;
+            }
+            let Some(shape) = node_out.get(&prod_id) else {
+                return RefResolution::Unresolved;
+            };
+            // The author writes the simple producer leaf; map it to the
+            // physical path inside that producer's parked token (e.g. a
+            // human-task field lives under `data.`), then append any deeper
+            // sub-path the author addressed. Keeps `producer_path` — and so
+            // the synthesized read-arc — byte-identical to today.
+            let Some((phys, _ty, prov)) = shape.find_by_leaf(&gref.segs[0]) else {
+                return RefResolution::Unresolved;
+            };
+            let mut producer_path = phys;
+            for extra in &gref.segs[1..] {
+                producer_path.push('.');
+                producer_path.push_str(extra);
+            }
+            RefResolution::Borrow {
+                producer_id: prod_id,
+                producer_path,
+                producer_label: prov.node_label,
             }
         }
     }
-    let (_pp, dotted, ty, prov) = producer?;
-    Some(FieldLocation {
-        producer_id: prov.node_id.clone(),
-        producer_label: prov.node_label.clone(),
-        path: format!("input.{dotted}"),
-        ty,
-        note: prov.note.clone(),
-    })
+}
+
+/// Borrow-reachable scope at a node: exactly the references the compiler
+/// (`check_guard` / `guard_readarc_plan`) resolves — (1) every leaf still on
+/// the node's own inbound control token (typed `input.<path>`, no read-arc),
+/// plus (2) every leaf a strictly-upstream *parked producer* owns, typed
+/// `<slug>.<field>` and attributed to its real producer **by provenance** (not
+/// nearest-wins): distinct producers of the same key become distinct paths
+/// (`review.amount` vs `compliance.amount`), and a nearer non-parked node can
+/// never mask a farther parked one.
+fn reachable_scope(
+    node: &WorkflowNode,
+    graph: &WorkflowGraph,
+    node_in: &BTreeMap<String, TokenShape>,
+    node_out: &BTreeMap<String, TokenShape>,
+    order: &[petgraph::graph::NodeIndex],
+    wg: &WorkflowDiGraph,
+    slugs: &SlugIndex,
+) -> Vec<ScopeEntry> {
+    let mut by_path: BTreeMap<String, ScopeEntry> = BTreeMap::new();
+
+    // (1) Genuinely control-token-resident — Start fields before any task,
+    //     the slim control keys (`_*`, `task_id`, `status`). A leaf that
+    //     *rides the token* but is owned by a parked producer (a forwarded
+    //     human-task / automated field) is NOT offered here as the deep
+    //     `input.<envelope.path>` — it is the qualified `<slug>.<field>` in
+    //     phase (2), per spec §2 ("the picker emits the qualified form for
+    //     everything borrowed").
+    if let Some(in_shape) = node_in.get(&node.id) {
+        let mut leaves = Vec::new();
+        collect_leaves(in_shape, "", None, &mut leaves);
+        for (dotted, ty, prov) in leaves {
+            let leaf = dotted.rsplit('.').next().unwrap_or(&dotted);
+            if !is_control_leaf(&format!("input.{leaf}"))
+                && is_parked_producer(graph, &prov.node_id)
+            {
+                continue; // borrowed data on the token → qualified in (2)
+            }
+            by_path
+                .entry(format!("input.{dotted}"))
+                .or_insert(ScopeEntry {
+                    path: format!("input.{dotted}"),
+                    ty,
+                    producer_node: prov.node_id,
+                    producer_label: prov.node_label,
+                    note: prov.note,
+                });
+        }
+    }
+
+    // (2) Borrow-reachable — every leaf a strictly-upstream parked producer
+    //     owns, attributed by provenance (the true owner). Iterating all
+    //     upstream node_outs and keying off provenance means a forwarded copy
+    //     dedupes back to its owner and a non-parked producer of the same key
+    //     simply never qualifies.
+    let pos = topo_pos(order, wg);
+    if let Some(self_pos) = pos.get(&node.id).copied() {
+        for ni in order.iter() {
+            let up = *wg.dag.node_weight(*ni).unwrap();
+            if pos.get(&up.id).copied().unwrap_or(usize::MAX) >= self_pos {
+                continue;
+            }
+            let Some(shape) = node_out.get(&up.id) else {
+                continue;
+            };
+            let mut leaves = Vec::new();
+            collect_leaves(shape, "", None, &mut leaves);
+            for (dotted, ty, prov) in leaves {
+                let owner = prov.node_id.clone();
+                if owner == node.id || !is_parked_producer(graph, &owner) {
+                    continue;
+                }
+                let leaf = dotted.rsplit('.').next().unwrap_or(&dotted).to_string();
+                if is_control_leaf(&format!("input.{leaf}")) {
+                    continue; // identity/routing — slim control token
+                }
+                let slug = slugs.slug_for(&owner).unwrap_or(&owner).to_string();
+                let path = format!("{slug}.{leaf}");
+                by_path.entry(path.clone()).or_insert(ScopeEntry {
+                    path,
+                    ty,
+                    producer_node: owner,
+                    producer_label: prov.node_label,
+                    note: prov.note,
+                });
+            }
+        }
+    }
+
+    by_path.into_values().collect()
 }
 
 #[allow(clippy::too_many_arguments)]
 fn check_guard(
     node: &WorkflowNode,
     guard: &str,
+    slugs: &SlugIndex,
+    graph: &WorkflowGraph,
     in_shape: &TokenShape,
     node_out: &BTreeMap<String, TokenShape>,
-    order: &[petgraph::graph::NodeIndex],
-    wg: &WorkflowDiGraph,
+    pos: &BTreeMap<String, usize>,
     out: &mut Vec<ShapeDiagnostic>,
 ) {
-    for (segs, cmp) in extract_input_paths(guard) {
-        let referenced = format!("input.{}", segs.join("."));
-        match in_shape.resolve(&segs) {
-            Some((shape, _prov)) => {
-                // Resolved — opportunistic scalar/comparison type check.
-                if let (TokenShape::Scalar(ty), Some(lit)) = (shape, cmp) {
-                    if !scalar_satisfies(ty, &lit) {
+    for gref in guard_refs(guard) {
+        match resolve_ref(&gref, node, slugs, graph, Some(in_shape), node_out, pos) {
+            RefResolution::Control => {
+                if let (Some((TokenShape::Scalar(ty), _)), Some(lit)) =
+                    (in_shape.resolve(&gref.segs), &gref.lit)
+                {
+                    if !scalar_satisfies(ty, lit) {
                         out.push(ShapeDiagnostic::GuardTypeMismatch {
                             node_id: node.id.clone(),
                             node_label: node.data.label().to_string(),
                             guard: guard.to_string(),
-                            referenced,
+                            referenced: gref.referenced.clone(),
                             found: ty.label().to_string(),
                             note: format!("compared against a {} literal", lit.label()),
                         });
                     }
                 }
             }
-            None => {
-                // Not on the inbound control token. Post-foundation this is
-                // the *normal, correct* case if an upstream parked producer
-                // owns it: `guard_readarc_plan` synthesizes a non-consuming
-                // read-arc into that producer's `p_{id}_data` and rebinds the
-                // reference. Emitting `DroppedUpstream` here would directly
-                // contradict the compiler (and the picker, which now surfaces
-                // exactly these). Only a reference no upstream node produces
-                // at all is genuinely unresolved. This mirrors
-                // `guard_readarc_plan` so picker ↔ read-arc synthesis ↔ this
-                // diagnostic can never disagree.
-                let leaf = segs.last().cloned().unwrap_or_default();
-                if locate_field(&leaf, node, node_out, order, wg).is_none() {
-                    out.push(ShapeDiagnostic::UnresolvedGuardPath {
-                        node_id: node.id.clone(),
-                        node_label: node.data.label().to_string(),
-                        guard: guard.to_string(),
-                        referenced,
-                    });
+            RefResolution::Borrow {
+                producer_id,
+                producer_path,
+                ..
+            } => {
+                // Opportunistic scalar/comparison type check on the resolved
+                // producer field (same as the control branch, one hop away).
+                if let (Some(shape), Some(lit)) = (node_out.get(&producer_id), &gref.lit) {
+                    let segs: Vec<String> =
+                        producer_path.split('.').map(str::to_string).collect();
+                    if let Some((TokenShape::Scalar(ty), _)) = shape.resolve(&segs) {
+                        if !scalar_satisfies(ty, lit) {
+                            out.push(ShapeDiagnostic::GuardTypeMismatch {
+                                node_id: node.id.clone(),
+                                node_label: node.data.label().to_string(),
+                                guard: guard.to_string(),
+                                referenced: gref.referenced.clone(),
+                                found: ty.label().to_string(),
+                                note: format!("compared against a {} literal", lit.label()),
+                            });
+                        }
+                    }
                 }
+            }
+            RefResolution::Unresolved => {
+                out.push(ShapeDiagnostic::UnresolvedGuardPath {
+                    node_id: node.id.clone(),
+                    node_label: node.data.label().to_string(),
+                    guard: guard.to_string(),
+                    referenced: gref.referenced.clone(),
+                });
             }
         }
     }
@@ -1184,45 +1350,50 @@ fn scalar_satisfies(ty: &ScalarTy, lit: &LitTy) -> bool {
     )
 }
 
-/// Returns each `input.<a>.<b>...` path (segments after `input`) found in the
-/// guard, paired with the literal it is compared against on the immediate RHS
-/// (best-effort, for the type check).
-fn extract_input_paths(src: &str) -> Vec<(Vec<String>, Option<LitTy>)> {
+/// Scan every contiguous `<root>.<a>.<b>...` dotted reference in `src`, paired
+/// with the literal it is compared against on the immediate RHS (best-effort,
+/// for the type check). `<root>` is any identifier — `input` (the control
+/// token) or a node slug (`<slug>.<field>`, borrowed parked-producer data).
+/// This is the single scanner feeding `guard_refs` (and through it
+/// `reachable_scope`, `check_guard` and `guard_readarc_plan`) so the picker,
+/// the read-arc synthesis and the diagnostics can never disagree.
+fn scan_dotted_refs(src: &str) -> Vec<(String, Vec<String>, Option<LitTy>)> {
     let bytes: Vec<char> = src.chars().collect();
     let mut i = 0;
     let mut out = Vec::new();
     while i < bytes.len() {
-        if src[byte_idx(&bytes, i)..].starts_with("input")
-            && (i + 5 >= bytes.len() || bytes[i + 5] == '.')
-            && (i == 0 || !is_ident(bytes[i - 1]))
-        {
-            i += 5;
-            let mut segs = Vec::new();
-            while i < bytes.len() && bytes[i] == '.' {
-                i += 1;
-                let start = i;
-                while i < bytes.len() && is_ident(bytes[i]) {
-                    i += 1;
-                }
-                if i > start {
-                    segs.push(bytes[start..i].iter().collect::<String>());
-                } else {
-                    break;
-                }
-            }
-            if !segs.is_empty() {
-                let lit = sniff_rhs_literal(&bytes, i);
-                out.push((segs, lit));
-            }
-        } else {
+        // A root starts an identifier that is not itself the field half of a
+        // longer chain (`a.b` must not also yield root `b`).
+        let root_start = (bytes[i].is_ascii_alphabetic() || bytes[i] == '_')
+            && (i == 0 || (!is_ident(bytes[i - 1]) && bytes[i - 1] != '.'));
+        if !root_start {
             i += 1;
+            continue;
+        }
+        let rs = i;
+        while i < bytes.len() && is_ident(bytes[i]) {
+            i += 1;
+        }
+        let root: String = bytes[rs..i].iter().collect();
+        let mut segs = Vec::new();
+        while i < bytes.len() && bytes[i] == '.' {
+            i += 1;
+            let start = i;
+            while i < bytes.len() && is_ident(bytes[i]) {
+                i += 1;
+            }
+            if i > start {
+                segs.push(bytes[start..i].iter().collect::<String>());
+            } else {
+                break;
+            }
+        }
+        if !segs.is_empty() {
+            let lit = sniff_rhs_literal(&bytes, i);
+            out.push((root, segs, lit));
         }
     }
     out
-}
-
-fn byte_idx(chars: &[char], char_i: usize) -> usize {
-    chars[..char_i].iter().map(|c| c.len_utf8()).sum()
 }
 
 fn is_ident(c: char) -> bool {
@@ -1373,18 +1544,6 @@ impl ShapeReport {
                          `{referenced}` is `{found}` but {note}.\n\n"
                     ));
                 }
-                ShapeDiagnostic::ScopeCollision {
-                    node_label,
-                    node_id,
-                    leaf,
-                    a,
-                    b,
-                } => {
-                    s.push_str(&format!(
-                        "✖ COLLISION   [{node_label} ({node_id})]\n  `{leaf}` is ambiguous: \
-                         {a} vs {b} (flat accumulator is last-writer-wins).\n\n"
-                    ));
-                }
                 ShapeDiagnostic::GraphIncomplete { message } => {
                     s.push_str(&format!("… GRAPH       not analyzable yet: {message}\n\n"));
                 }
@@ -1504,6 +1663,7 @@ pub fn node_input_field_kinds(
 
 /// One guard reference that must be lowered to a physical read-arc into a
 /// producer's parked data place. The compiler-as-borrow-checker output.
+#[derive(Debug)]
 pub(crate) struct ReadArcBind {
     /// Node whose Decision/Loop guard holds the reference.
     pub consumer_node_id: String,
@@ -1527,6 +1687,8 @@ pub(crate) fn guard_readarc_plan(
     let report = analyze(graph)?;
     let wg = WorkflowDiGraph::build(graph)?;
     let order = topo_order(&wg)?;
+    let pos = topo_pos(&order, &wg);
+    let slugs = slug_index(graph)?;
     let mut binds = Vec::new();
 
     for node in &graph.nodes {
@@ -1559,48 +1721,48 @@ pub(crate) fn guard_readarc_plan(
                 .collect(),
             _ => continue,
         };
+        let in_shape = report.node_in.get(&node.id);
         for guard in &guards {
-            for (segs, _lit) in extract_input_paths(guard) {
-                let referenced = format!("input.{}", segs.join("."));
-                if is_control_leaf(&referenced) {
-                    continue; // stays on the slim control token
-                }
-                let leaf = segs.last().cloned().unwrap_or_default();
-                match locate_field(&leaf, node, &report.node_out, &order, &wg) {
-                    Some(fl) => {
-                        let producer_path = fl
-                            .path
-                            .strip_prefix("input.")
-                            .unwrap_or(&fl.path)
-                            .to_string();
-                        binds.push(ReadArcBind {
-                            consumer_node_id: node.id.clone(),
-                            referenced,
-                            producer_node: fl.producer_id,
-                            producer_path,
-                        });
-                    }
-                    None => {
-                        // No upstream data-yielding producer. If it still
-                        // resolves on the pre-yield control token (a Start
-                        // field before any task), leave it as `input.*`.
-                        let on_control = report
-                            .node_in
+            for gref in guard_refs(guard) {
+                match resolve_ref(
+                    &gref,
+                    node,
+                    &slugs,
+                    graph,
+                    in_shape,
+                    &report.node_out,
+                    &pos,
+                ) {
+                    // Control-resident — stays on the slim control token, no
+                    // read-arc.
+                    RefResolution::Control => {}
+                    // Borrowed — synthesize the read-arc into the owner's
+                    // parked data place. `referenced` is the exact source
+                    // substring so `apply_control_data_foundation`'s
+                    // string-replace targets it.
+                    RefResolution::Borrow {
+                        producer_id,
+                        producer_path,
+                        ..
+                    } => binds.push(ReadArcBind {
+                        consumer_node_id: node.id.clone(),
+                        referenced: gref.referenced.clone(),
+                        producer_node: producer_id,
+                        producer_path,
+                    }),
+                    // Unbindable — hard error (publish blocks; the editor sees
+                    // the matching `UnresolvedGuardPath` via `analyze`).
+                    RefResolution::Unresolved => {
+                        let available = report
+                            .scopes
                             .get(&node.id)
-                            .map(|s| s.resolve(&segs).is_some())
-                            .unwrap_or(false);
-                        if !on_control {
-                            let available = report
-                                .scopes
-                                .get(&node.id)
-                                .map(|v| v.iter().map(|e| e.path.clone()).collect())
-                                .unwrap_or_default();
-                            return Err(CompileError::GuardUnresolved {
-                                node_id: node.id.clone(),
-                                identifier: referenced,
-                                available,
-                            });
-                        }
+                            .map(|v| v.iter().map(|e| e.path.clone()).collect())
+                            .unwrap_or_default();
+                        return Err(CompileError::GuardUnresolved {
+                            node_id: node.id.clone(),
+                            identifier: gref.referenced.clone(),
+                            available,
+                        });
                     }
                 }
             }
@@ -1619,6 +1781,7 @@ mod port_contract_tests {
         WorkflowNode {
             id: "start".to_string(),
             node_type: "start".to_string(),
+            slug: None,
             position: Position { x: 0.0, y: 0.0 },
             data: WorkflowNodeData::Start {
                 label: "Start".to_string(),
@@ -1770,30 +1933,36 @@ mod scope_reachability_tests {
         let g = invoice_graph();
         let report = analyze(&g).expect("analyze");
 
-        // (1) Picker offers the upstream parked producer's field, attributed
-        //     to `review` — not the `extract` envelope it physically arrives
-        //     wrapped in.
+        // (1) Picker offers the upstream parked producer's field,
+        //     producer-namespaced as `review.invoice_amount` — not the
+        //     `extract` envelope it physically arrives wrapped in, and not the
+        //     provenance-erasing flat `input.invoice_amount`.
         let scope = report.scopes.get("check-amount").expect("decision scope");
         let amt = scope
             .iter()
-            .find(|e| e.path == "input.invoice_amount")
+            .find(|e| e.path == "review.invoice_amount")
             .unwrap_or_else(|| {
                 panic!(
-                    "invoice_amount must be pickable at the decision; offered: {:?}",
+                    "review.invoice_amount must be pickable at the decision; offered: {:?}",
                     scope.iter().map(|e| &e.path).collect::<Vec<_>>()
                 )
             });
         assert_eq!(amt.producer_node, "review");
         assert_eq!(amt.ty, "Number");
+        // The flat, provenance-erasing form is gone.
+        assert!(
+            !scope.iter().any(|e| e.path == "input.invoice_amount"),
+            "borrowed data must be slug-qualified, not flat input.*"
+        );
 
         // (2) The read-arc synthesis resolves the IDENTICAL reference to the
         //     same producer (the compiler-as-borrow-checker).
         let binds = guard_readarc_plan(&g).expect("readarc plan");
         assert!(
             binds.iter().any(|b| b.consumer_node_id == "check-amount"
-                && b.referenced == "input.invoice_amount"
+                && b.referenced == "review.invoice_amount"
                 && b.producer_node == "review"),
-            "guard_readarc_plan must bind input.invoice_amount -> review, got {:?}",
+            "guard_readarc_plan must bind review.invoice_amount -> review, got {:?}",
             binds
                 .iter()
                 .map(|b| (&b.consumer_node_id, &b.referenced, &b.producer_node))
@@ -1806,7 +1975,7 @@ mod scope_reachability_tests {
             | ShapeDiagnostic::UnresolvedGuardPath { referenced, .. } = d
             {
                 assert_ne!(
-                    referenced, "input.invoice_amount",
+                    referenced, "review.invoice_amount",
                     "borrow-reachable ref wrongly flagged dropped/unresolved"
                 );
             }
@@ -1826,5 +1995,112 @@ mod scope_reachability_tests {
                 );
             }
         }
+    }
+
+    /// Two upstream parked producers contributing the *same* leaf no longer
+    /// collapse to one nearest-wins entry (the #20 regression): producer
+    /// namespacing makes them distinct paths, an unqualified `input.<key>`
+    /// is unbindable (must qualify), and a nearer non-parked node never masks
+    /// a farther parked one.
+    fn two_producer_graph(decision_guard: &str) -> WorkflowGraph {
+        // Start → reviewA → reviewB → decision. Both human tasks emit a form
+        // field `amount`; `reviewA` is the *farther* parked producer.
+        let step = |field: &str| {
+            format!(
+                r#"{{"id":"s","title":"S","blocks":[{{"type":"input","field":{{"name":"{field}","label":"Amt","kind":"number","required":true}}}}]}}"#
+            )
+        };
+        let ht = |id: &str, slug: &str| {
+            format!(
+                r#"{{"id":"{id}","type":"human_task","slug":"{slug}","position":{{"x":0,"y":0}},"data":{{"type":"human_task","label":"{id}","taskTitle":"{id}","steps":[{}]}}}}"#,
+                step("amount")
+            )
+        };
+        let json = format!(
+            r#"{{"nodes":[
+              {{"id":"start","type":"start","position":{{"x":0,"y":0}},"data":{{"type":"start","label":"Start"}}}},
+              {ha},
+              {hb},
+              {{"id":"dec","type":"decision","position":{{"x":0,"y":0}},"data":{{"type":"decision","label":"D","conditions":[{{"edgeId":"hi","label":"hi","guard":"{decision_guard}"}}],"defaultBranch":"default"}}}},
+              {{"id":"end1","type":"end","position":{{"x":0,"y":0}},"data":{{"type":"end","label":"E1"}}}},
+              {{"id":"end2","type":"end","position":{{"x":0,"y":0}},"data":{{"type":"end","label":"E2"}}}}
+            ],"edges":[
+              {{"id":"e1","source":"start","target":"reviewA","type":"sequence"}},
+              {{"id":"e2","source":"reviewA","target":"reviewB","type":"sequence"}},
+              {{"id":"e3","source":"reviewB","target":"dec","type":"sequence"}},
+              {{"id":"e4","source":"dec","target":"end1","sourceHandle":"hi","type":"sequence"}},
+              {{"id":"e5","source":"dec","target":"end2","sourceHandle":"default","type":"sequence"}}
+            ]}}"#,
+            ha = ht("reviewA", "rev_a"),
+            hb = ht("reviewB", "rev_b"),
+        );
+        serde_json::from_str(&json).expect("deser two-producer graph")
+    }
+
+    #[test]
+    fn collision_distinct_parked_producers_get_distinct_qualified_paths() {
+        let g = two_producer_graph("rev_a.amount > 0");
+        let report = analyze(&g).expect("analyze");
+        let scope = report.scopes.get("dec").expect("decision scope");
+        let paths: std::collections::BTreeSet<&str> =
+            scope.iter().map(|e| e.path.as_str()).collect();
+
+        // Same key, two parked owners → two DISTINCT producer-namespaced
+        // entries (no nearest-wins collapse, no silent loss).
+        assert!(
+            paths.contains("rev_a.amount") && paths.contains("rev_b.amount"),
+            "both producers' `amount` must be distinctly pickable, got: {paths:?}"
+        );
+        let a = scope.iter().find(|e| e.path == "rev_a.amount").unwrap();
+        let b = scope.iter().find(|e| e.path == "rev_b.amount").unwrap();
+        assert_eq!(a.producer_node, "reviewA");
+        assert_eq!(b.producer_node, "reviewB");
+        // The flat form that erased the producer is gone entirely.
+        assert!(
+            !paths.contains("input.amount"),
+            "unqualified borrowed key must not be offered: {paths:?}"
+        );
+
+        // The qualified guard binds to its named producer — the farther one,
+        // proving a nearer parked/forwarding node does not mask it.
+        let binds = guard_readarc_plan(&g).expect("readarc plan");
+        assert!(
+            binds
+                .iter()
+                .any(|x| x.referenced == "rev_a.amount" && x.producer_node == "reviewA"),
+            "rev_a.amount must bind to reviewA, got {:?}",
+            binds
+                .iter()
+                .map(|x| (&x.referenced, &x.producer_node))
+                .collect::<Vec<_>>()
+        );
+
+        // An unqualified, non-control `input.amount` is unbindable: hard
+        // error at compile, naming the qualified forms to use; and the same
+        // node reports it unresolved for the editor.
+        let g2 = two_producer_graph("input.amount > 0");
+        match guard_readarc_plan(&g2) {
+            Err(CompileError::GuardUnresolved {
+                node_id,
+                identifier,
+                available,
+            }) => {
+                assert_eq!(node_id, "dec");
+                assert_eq!(identifier, "input.amount");
+                assert!(
+                    available.iter().any(|p| p == "rev_a.amount")
+                        && available.iter().any(|p| p == "rev_b.amount"),
+                    "the error must name both qualified forms, got: {available:?}"
+                );
+            }
+            other => panic!("expected GuardUnresolved, got {other:?}"),
+        }
+        let report2 = analyze(&g2).expect("analyze g2");
+        assert!(
+            report2.diagnostics.iter().any(|d| matches!(d,
+                ShapeDiagnostic::UnresolvedGuardPath { node_id, referenced, .. }
+                    if node_id == "dec" && referenced == "input.amount")),
+            "editor must see input.amount as unresolved at the decision"
+        );
     }
 }

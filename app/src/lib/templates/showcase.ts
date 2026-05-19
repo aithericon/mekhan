@@ -206,8 +206,9 @@ export const showcaseGraph: WorkflowGraph = {
 				// from Review carries the full form token, more fields than the
 				// step reads, which an explicit subset would reject at compile.
 				// `output` mirrors the keys main.py prints; downstream the
-				// Decision branches on `input.invoice_amount`, which still
-				// resolves transitively from the Review human task's output.
+				// Decision branches on `review.invoice_amount` — producer-
+				// namespaced to the Review human task that owns the field
+				// (read-arced past this token-replacing step).
 				output: {
 					id: 'out',
 					label: 'Extracted',
@@ -233,7 +234,7 @@ export const showcaseGraph: WorkflowGraph = {
 					{
 						edgeId: 'branch-high',
 						label: 'High Value (> $5,000)',
-						guard: 'input.invoice_amount > 5000'
+						guard: 'review.invoice_amount > 5000'
 					}
 				],
 				defaultBranch: 'default'

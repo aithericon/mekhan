@@ -7413,6 +7413,13 @@
           "position": {
             "$ref": "#/components/schemas/Position"
           },
+          "slug": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Stable, author-facing namespace for guard references to this node's\nproduced fields: a guard writes `<slug>.<field>` and the compiler\nrebinds it to this node's parked data place. Rhai-identifier-safe and\nunique within a graph. Optional on the wire — when absent the compiler\nderives a deterministic fallback from `id` (clean-cut: no stored\ntemplates to migrate). See [`WorkflowNode::slug`]."
+          },
           "type": {
             "type": "string"
           },

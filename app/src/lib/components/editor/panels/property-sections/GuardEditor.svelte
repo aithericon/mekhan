@@ -29,6 +29,21 @@
 
 	let { guard, scope, readonly = false, onchange }: Props = $props();
 
+	// Group the picker by producer node ("Review Invoice ▸ invoice_amount,
+	// vendor_name …"), preserving first-seen order so the surface is stable.
+	const groupedScope = $derived.by(() => {
+		const groups: { producer: string; entries: ScopeEntry[] }[] = [];
+		for (const e of scope) {
+			let g = groups.find((x) => x.producer === e.nodeLabel);
+			if (!g) {
+				g = { producer: e.nodeLabel, entries: [] };
+				groups.push(g);
+			}
+			g.entries.push(e);
+		}
+		return groups;
+	});
+
 	// Possible operators. Restricted to a Rhai-safe subset so the simple
 	// builder never round-trips broken syntax.
 	const operators = [
@@ -154,18 +169,22 @@
 			onchange={(val) => onchange(val)}
 		/>
 		{#if scope.length > 0}
-			<div class="flex flex-wrap gap-1 pt-1">
-				<span class="text-[9px] text-muted-foreground">In scope:</span>
-				{#each scope as entry (entry.qualified)}
-					<button
-						type="button"
-						class="rounded bg-muted px-1.5 py-0.5 font-mono text-[9px] text-foreground transition-colors hover:bg-accent disabled:cursor-not-allowed"
-						disabled={readonly}
-						title={`${entry.nodeLabel} → ${entry.field} (${entry.kind})`}
-						onclick={() => onchange((guard ? guard + ' ' : '') + entry.qualified)}
-					>
-						{entry.qualified}
-					</button>
+			<div class="flex flex-col gap-1 pt-1">
+				{#each groupedScope as group (group.producer)}
+					<div class="flex flex-wrap items-center gap-1">
+						<span class="text-[9px] font-medium text-muted-foreground">{group.producer} ▸</span>
+						{#each group.entries as entry (entry.qualified)}
+							<button
+								type="button"
+								class="rounded bg-muted px-1.5 py-0.5 font-mono text-[9px] text-foreground transition-colors hover:bg-accent disabled:cursor-not-allowed"
+								disabled={readonly}
+								title={`${entry.nodeLabel} → ${entry.field} (${entry.kind})`}
+								onclick={() => onchange((guard ? guard + ' ' : '') + entry.qualified)}
+							>
+								{entry.qualified}
+							</button>
+						{/each}
+					</div>
 				{/each}
 			</div>
 		{:else}
@@ -194,11 +213,16 @@
 						{/if}
 					</Select.Trigger>
 					<Select.Content>
-						{#each scope as entry (entry.qualified)}
-							<Select.Item value={entry.qualified} label={entry.qualified}>
-								<span class="font-mono">{entry.qualified}</span>
-								<span class="ml-2 text-[10px] text-muted-foreground">{entry.kind}</span>
-							</Select.Item>
+						{#each groupedScope as group (group.producer)}
+							<Select.Group>
+								<Select.GroupHeading>{group.producer}</Select.GroupHeading>
+								{#each group.entries as entry (entry.qualified)}
+									<Select.Item value={entry.qualified} label={entry.qualified}>
+										<span class="font-mono">{entry.qualified}</span>
+										<span class="ml-2 text-[10px] text-muted-foreground">{entry.kind}</span>
+									</Select.Item>
+								{/each}
+							</Select.Group>
 						{/each}
 					</Select.Content>
 				</Select.Root>

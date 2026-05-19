@@ -2526,6 +2526,15 @@ export interface components {
             /** @description Parent scope node id — child positions are relative to the parent. */
             parentId?: string | null;
             position: components["schemas"]["Position"];
+            /**
+             * @description Stable, author-facing namespace for guard references to this node's
+             *     produced fields: a guard writes `<slug>.<field>` and the compiler
+             *     rebinds it to this node's parked data place. Rhai-identifier-safe and
+             *     unique within a graph. Optional on the wire — when absent the compiler
+             *     derives a deterministic fallback from `id` (clean-cut: no stored
+             *     templates to migrate). See [`WorkflowNode::slug`].
+             */
+            slug?: string | null;
             type: string;
             /**
              * Format: double
