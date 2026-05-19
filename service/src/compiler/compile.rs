@@ -793,13 +793,33 @@ mod tests {
         let air = result.unwrap();
         let transitions = air["transitions"].as_array().unwrap();
 
-        // 1 branch + 1 default + Start's t_s_park = 3 (3 pass-through edge
-        // transitions merged).
-        assert_eq!(transitions.len(), 3);
+        // Start's t_s_park + 1 branch + 1 default + the always-emitted
+        // dead-end (unroutable token -> observable net error) = 4. The 3
+        // pass-through edge transitions (s->d, d->e1, d->e2) are merged.
+        assert_eq!(transitions.len(), 4);
 
-        // Verify the branch has a guard
-        let branch = transitions.iter().find(|t| t["id"] == "t_d_branch_0").unwrap();
+        // The branch fires on its own guard.
+        let branch = transitions
+            .iter()
+            .find(|t| t["id"] == "t_d_branch_0")
+            .unwrap();
         assert!(branch.get("guard").is_some());
+
+        // The default fires only when no branch matched (guarded).
+        let default = transitions
+            .iter()
+            .find(|t| t["id"] == "t_d_default")
+            .unwrap();
+        assert!(default.get("guard").is_some());
+
+        // A token matching neither branch nor default dead-ends into an
+        // explicit error instead of being silently stranded: unguarded,
+        // lowest priority so it only wins when nothing else is enabled.
+        let deadend = transitions
+            .iter()
+            .find(|t| t["id"] == "t_d_deadend")
+            .unwrap();
+        assert!(deadend.get("guard").is_none());
     }
 
     fn end_node_with_id(id: &str) -> WorkflowNode {
