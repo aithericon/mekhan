@@ -1787,17 +1787,22 @@ fn lower_subworkflow(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     // Bridge places — fixed callable contract on the child.
     let reply_place_id = format!("p_{id}_reply");
     let failure_place_id = format!("p_{id}_failure");
-    let p_reply: PlaceHandle<DynamicToken> = ctx.bridge_in_from(
+    // Plain `bridge_in`, NOT `bridge_in_from(child_scenario_name, …)`. The
+    // child is spawned with a dynamic runtime net id — `subworkflow_{id}_child`
+    // is never a statically-deployed net — so a static source-net annotation
+    // makes the engine's Strict bridge check reject the parent instance at the
+    // Running transition (BRIDGE_SOURCE_NET_MISSING). The annotation is UI-only
+    // ("metadata for visualization … does not affect execution" per the SDK):
+    // the spawn handler injects `parent_net_id` + `reply_place`/`failure_place`
+    // so the child's reply_out/fail_out route back here by id at runtime —
+    // exactly why the outbox below uses the dynamic `$result.child_net_id`.
+    let p_reply: PlaceHandle<DynamicToken> = ctx.bridge_in(
         reply_place_id.clone(),
         format!("{label} - Reply"),
-        child_scenario_name.clone(),
-        "reply_out",
     );
-    let p_failure: PlaceHandle<DynamicToken> = ctx.bridge_in_from(
+    let p_failure: PlaceHandle<DynamicToken> = ctx.bridge_in(
         failure_place_id.clone(),
         format!("{label} - Failure"),
-        child_scenario_name.clone(),
-        "fail_out",
     );
     let p_outbox: PlaceHandle<DynamicToken> = ctx.bridge_out_labeled(
         format!("p_{id}_outbox"),

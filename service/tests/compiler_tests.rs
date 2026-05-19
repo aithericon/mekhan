@@ -3527,15 +3527,16 @@ fn automated_step_scheduled_emits_scheduler_bridge() {
     assert!(has_place(&air, "p_auto_sched_failure"), "expected failure reply place");
     assert!(has_transition(&air, "t_auto_prepare"), "expected scheduled prepare");
 
-    // bridge_out targets the well-known scheduler net + job_queue.
+    // bridge_out targets the canonical scheduler-net + its job_inbox place
+    // (must match engine/sdk/examples/common/scheduler_bridge.rs).
     let sched_out = places(&air)
         .iter()
         .find(|p| p["id"] == "p_auto_sched_out")
         .expect("sched_out place");
     assert_eq!(sched_out["type"], "bridge_out");
     let bo = &sched_out["bridge_out"];
-    assert_eq!(bo["target_net_id"], "mekhan-scheduler");
-    assert_eq!(bo["target_place_name"], "job_queue");
+    assert_eq!(bo["target_net_id"], "scheduler-net");
+    assert_eq!(bo["target_place_name"], "job_inbox");
 
     // The submit carries the pinned job template.
     let prepare = transitions(&air)
