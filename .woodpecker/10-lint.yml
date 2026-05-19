@@ -21,10 +21,9 @@ when:
     event: pull_request
   - branch: dev
     event: pull_request
-  - branch: main
-    event: manual
-  - branch: dev
-    event: manual
+  # Manual run from any branch — handy for testing the pipeline on a
+  # feature branch (e.g. `ci-pipeline`) before merging to dev.
+  - event: manual
 
 labels:
   role: lint

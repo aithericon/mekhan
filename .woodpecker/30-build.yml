@@ -17,10 +17,11 @@ when:
     event: push
   - branch: dev
     event: push
-  - branch: main
-    event: manual
-  - branch: dev
-    event: manual
+  # Manual run from any branch — for testing the build pipeline on a
+  # feature branch before merging. Produces images tagged with the
+  # commit SHA + branch slug, so feature-branch images can be deployed
+  # via a manual 40-deploy run.
+  - event: manual
 
 labels:
   role: build

@@ -34,8 +34,11 @@ depends_on:
 when:
   - branch: dev
     event: push
-  - branch: dev
-    event: manual
+  # Manual run from any branch — for end-to-end testing of the deploy
+  # path on a feature branch (e.g. `ci-pipeline`). Deploys whatever
+  # image 30-build just produced on that same branch (depends_on
+  # ensures build finishes first).
+  - event: manual
 
 labels:
   role: deploy
