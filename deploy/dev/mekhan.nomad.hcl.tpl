@@ -137,6 +137,12 @@ EOH
         MEKHAN__AUTH__CLIENT_ID    = "${auth_client_id}"
         MEKHAN__AUTH__AUDIENCE     = "${auth_audience}"
         MEKHAN__AUTH__REDIRECT_URI = "${auth_redirect_uri}"
+        # Used by handlers.rs for both the post-login bounce AND the
+        # `post_logout_redirect_uri` mekhan hands to Zitadel's end_session
+        # endpoint. The latter requires an exact match with one of the
+        # post_logout_redirect_uris we registered (see zitadel.tf), and
+        # Zitadel only allows absolute URLs — so we override the default `/`.
+        MEKHAN__AUTH__POST_LOGIN_REDIRECT = "${auth_post_login_redirect}"
         RUST_LOG                   = "${rust_log}"
       }
 
