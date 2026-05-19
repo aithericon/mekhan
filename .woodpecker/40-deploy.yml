@@ -1,0 +1,96 @@
+# =============================================================================
+# Deploy pool — Terraform/Nomad rollout of mekhan-service
+# =============================================================================
+# Trigger: push to `dev` branch → auto deploy. Manual on `dev` for replays.
+#
+# Single-cluster setup: mekhan-side "dev" deploys to the prod HetznerCluster
+# (10.20.x). When a separate cluster eventually exists for mekhan-prod, add
+# a sibling 41-deploy-prod.yml — don't re-add the path inline here.
+#
+# Image source: 30-build.yml produces `forge.aithericon.eu/milanender/
+# mekhan-service:$CI_COMMIT_SHA`. Workflow-level `depends_on: [30-build]`
+# enforces the ordering so deploy never races a half-finished image push.
+#
+# SECRETS MODEL (mirrors web-platform):
+#   - Single Woodpecker secret: `vault_token`.
+#   - VAULT_ADDR is non-secret, hardcoded.
+#   - Everything else: `export X=$(vault kv get -field=X path)` inline.
+#
+# Vault paths read below:
+#   secret/nomad/bootstrap           — Nomad mgmt token (cluster-managed)
+#   secret/postgres/patroni          — Patroni superuser password
+#   secret/docker/registry           — Forgejo image pull creds
+#   secret/services/mekhan/dev       — Hetzner S3 keys + state passphrase
+#                                      (seed once with `vault kv put`, see
+#                                      deploy/README.md § B)
+#
+# NETWORK NOTE: 10.20.0.* is reachable only over NetBird. The Woodpecker
+# runner picking up `role: deploy` MUST be on the mesh. YAML can't enforce.
+# =============================================================================
+
+depends_on:
+  - 30-build
+
+when:
+  - branch: dev
+    event: push
+  - branch: dev
+    event: manual
+
+labels:
+  role: deploy
+
+steps:
+  - name: deploy-dev
+    image: forge.aithericon.eu/milanender/mekhan-ci-builder:latest
+    environment:
+      VAULT_ADDR: "http://10.20.0.20:8200"
+      VAULT_TOKEN:
+        from_secret: vault_token
+      NOMAD_SKIP_VERIFY: "true"
+    commands:
+      # dev.auto.tfvars is gitignored — CI uses the committed .example.
+      - cp deploy/dev/dev.auto.tfvars.example deploy/dev/dev.auto.tfvars
+
+      # ── Fetch secrets from Vault ──
+      # Vault is the canonical CI source. Everything below comes from there
+      # via the single VAULT_TOKEN above. To rotate any of these you only
+      # touch Vault; CI re-reads on the next run.
+      - export NOMAD_TOKEN=$(vault kv get -field=token secret/nomad/bootstrap)
+      - export TF_VAR_nomad_token=$NOMAD_TOKEN
+      - export TF_VAR_postgres_admin_password=$(vault kv get -field=superuser_password secret/postgres/patroni)
+      - export TF_VAR_registry_user=$(vault kv get -field=username secret/docker/registry)
+      - export TF_VAR_registry_password=$(vault kv get -field=token secret/docker/registry)
+      # Mekhan-specific path holds the Hetzner S3 keypair + state encryption
+      # passphrase (everything else is shared cluster infra).
+      - export AWS_ACCESS_KEY_ID=$(vault kv get -field=hetzner_s3_access_key secret/services/mekhan/dev)
+      - export AWS_SECRET_ACCESS_KEY=$(vault kv get -field=hetzner_s3_secret_key secret/services/mekhan/dev)
+      - export TF_VAR_s3_access_key=$AWS_ACCESS_KEY_ID
+      - export TF_VAR_s3_secret_key=$AWS_SECRET_ACCESS_KEY
+      - export TF_VAR_state_encryption_passphrase=$(vault kv get -field=state_encryption_passphrase secret/services/mekhan/dev)
+      - 'echo "  ✓ Secrets loaded from Vault"'
+
+      - just ci::deploy-dev "$CI_COMMIT_SHA"
+    depends_on: []
+
+  - name: verify-dev
+    image: forge.aithericon.eu/milanender/mekhan-ci-builder:latest
+    environment:
+      VAULT_ADDR: "http://10.20.0.20:8200"
+      VAULT_TOKEN:
+        from_secret: vault_token
+      NOMAD_SKIP_VERIFY: "true"
+    commands:
+      - cp deploy/dev/dev.auto.tfvars.example deploy/dev/dev.auto.tfvars
+
+      # `nomad deployment status` + `tofu output` both need their creds.
+      # Smaller set than deploy-dev — no provisioning, just inspection.
+      - export NOMAD_TOKEN=$(vault kv get -field=token secret/nomad/bootstrap)
+      - export AWS_ACCESS_KEY_ID=$(vault kv get -field=hetzner_s3_access_key secret/services/mekhan/dev)
+      - export AWS_SECRET_ACCESS_KEY=$(vault kv get -field=hetzner_s3_secret_key secret/services/mekhan/dev)
+      - export TF_VAR_state_encryption_passphrase=$(vault kv get -field=state_encryption_passphrase secret/services/mekhan/dev)
+      - export NOMAD_ADDR=$(grep '^nomad_address' deploy/dev/dev.auto.tfvars | cut -d'"' -f2)
+      - 'echo "  ✓ Secrets loaded from Vault"'
+
+      - just ci::verify-deploy dev
+    depends_on: [deploy-dev]

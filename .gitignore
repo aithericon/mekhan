@@ -9,6 +9,11 @@ node_modules/
 app/.output/
 app/.svelte-kit/
 app/build/
+# pnpm content-addressable store. Created at the repo root when `pnpm install`
+# runs inside the CI builder over a bind-mounted workspace — the container
+# treats CWD-relative `.pnpm-store/` as the store path, so it lands here on
+# the host. 20k+ files, 350+ MB — never commit.
+.pnpm-store/
 
 # Python
 __pycache__/

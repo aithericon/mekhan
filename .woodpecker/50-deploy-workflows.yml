@@ -7,6 +7,9 @@
 # each chain from the committed git artifact with commit provenance recorded
 # in `workflow_templates.source_ref`.
 #
+# Distinct from 40-deploy.yml (which rolls out the mekhan-service container).
+# This one only touches workflow_templates rows on an already-running server.
+#
 # Target server: the `server_url` baked into each `.mekhan.json`.
 # Auth: the `mekhan_cli_token` Woodpecker secret (a Zitadel service-user
 # Personal Access Token) is exported as MEKHAN_CLI_TOKEN; the server
@@ -23,13 +26,11 @@ labels:
 
 steps:
   - name: apply-workflows
-    image: 192.168.101.1:5000/nixos/nix:2.32.8
+    image: forge.aithericon.eu/milanender/mekhan-ci-builder:latest
     environment:
-      NIX_CONFIG: "experimental-features = nix-command flakes"
       CARGO_HOME: /var/lib/ci-jobs/cache/cargo
       MEKHAN_CLI_TOKEN:
         from_secret: mekhan_cli_token
     commands:
-      - nix develop --no-write-lock-file --command bash -lc 'just
-        ci::apply-workflows'
+      - just ci::apply-workflows
     depends_on: []

@@ -1,11 +1,11 @@
 # =============================================================================
 # Build pool — cross-musl binary, frontend bundle, package & push image
 # =============================================================================
-# Runs only on push to main/dev (not on PRs — PRs run lint+test but don't
-# produce a registry image). Output is `<registry>/mekhan-service:{sha,branch}`,
-# consumed by the deploy pipelines in PRs 6/7.
+# Runs only on push to main/dev (not on PRs — PRs run lint but don't produce a
+# registry image). Output is `<registry>/mekhan-service:{sha,branch}`,
+# consumed by the deploy pipeline in 40-deploy.yml.
 #
-# Registry: forge.aithericon.eu (Forgejo built-in OCI registry). Auth via the
+# Registry: forge.aithericon.eu (Forgejo built-in OCI). Auth via the
 # `forgejo_registry_user` / `forgejo_registry_password` Woodpecker secrets.
 #
 # `package` does `docker buildx build --platform linux/arm64`, so the build
@@ -27,43 +27,36 @@ labels:
 
 steps:
   - name: build-backend
-    image: 192.168.101.1:5000/nixos/nix:2.32.8
+    image: forge.aithericon.eu/milanender/mekhan-ci-builder:latest
     environment:
-      NIX_CONFIG: "experimental-features = nix-command flakes"
       CARGO_HOME: /var/lib/ci-jobs/cache/cargo
     commands:
-      - nix develop --no-write-lock-file --command bash -lc 'just
-        ci::build-backend'
+      - just ci::build-backend
     depends_on: []
 
   - name: build-frontend
-    image: 192.168.101.1:5000/nixos/nix:2.32.8
+    image: forge.aithericon.eu/milanender/mekhan-ci-builder:latest
     environment:
-      NIX_CONFIG: "experimental-features = nix-command flakes"
       NPM_CONFIG_CACHE: /var/lib/ci-jobs/cache/npm
     commands:
-      - nix develop --no-write-lock-file --command bash -lc 'just
-        ci::build-frontend'
+      - just ci::build-frontend
     depends_on: []
 
   - name: package-and-push
-    image: 192.168.101.1:5000/nixos/nix:2.32.8
+    image: forge.aithericon.eu/milanender/mekhan-ci-builder:latest
     environment:
-      NIX_CONFIG: "experimental-features = nix-command flakes"
-      REGISTRY: forge.aithericon.eu/MilanEnder
-      FORGEJO_REGISTRY_USER:
-        from_secret: forgejo_registry_user
-      FORGEJO_REGISTRY_PASSWORD:
-        from_secret: forgejo_registry_password
+      REGISTRY: forge.aithericon.eu/milanender
+      # Vault is the canonical source for the Forgejo image-push creds
+      # (secret/docker/registry). Same single VAULT_TOKEN as 40-deploy.yml.
+      VAULT_ADDR: "http://10.20.0.20:8200"
+      VAULT_TOKEN:
+        from_secret: vault_token
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     commands:
-      - |
-        nix develop --no-write-lock-file --command bash -lc '
-          set -euo pipefail
-          echo "$FORGEJO_REGISTRY_PASSWORD" \
-            | docker login forge.aithericon.eu -u "$FORGEJO_REGISTRY_USER" --password-stdin
-          just ci::package "$REGISTRY" "$CI_COMMIT_SHA" "$CI_COMMIT_BRANCH"
-          just ci::push    "$REGISTRY" "$CI_COMMIT_SHA" "$CI_COMMIT_BRANCH"
-        '
+      - FORGEJO_REGISTRY_USER=$(vault kv get -field=username secret/docker/registry)
+      - FORGEJO_REGISTRY_PASSWORD=$(vault kv get -field=token   secret/docker/registry)
+      - echo "$FORGEJO_REGISTRY_PASSWORD" | docker login forge.aithericon.eu -u "$FORGEJO_REGISTRY_USER" --password-stdin
+      - just ci::package "$REGISTRY" "$CI_COMMIT_SHA" "$CI_COMMIT_BRANCH"
+      - just ci::push    "$REGISTRY" "$CI_COMMIT_SHA" "$CI_COMMIT_BRANCH"
     depends_on: [build-backend, build-frontend]

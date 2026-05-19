@@ -148,6 +148,12 @@ build-frontend:
     #!/usr/bin/env bash
     cd ../app
     echo "▶ Building SvelteKit static SPA"
+    # CI=true tells pnpm it's running non-interactively. Without it, pnpm
+    # aborts (no TTY) when it detects that existing node_modules came from a
+    # different platform — which is exactly what happens when this recipe
+    # runs in the linux CI builder over a node_modules previously populated
+    # on macOS. With CI=true pnpm silently purges + reinstalls cleanly.
+    export CI=true
     pnpm install --frozen-lockfile
     pnpm run build
     if [ ! -f build/index.html ]; then
@@ -223,16 +229,115 @@ push registry_image commit_sha ref_slug:
     docker push "{{registry_image}}/mekhan-service:{{commit_sha}}"
     docker push "{{registry_image}}/mekhan-service:{{ref_slug}}"
 
-# Build the fat CI builder image and push it to the registry
-# Usage: just ci::build-ci-builder registry.aithericon.eu/mekhan
+# Build the fat CI builder image and push it to the registry.
+#
+# Every .woodpecker/*.yml step uses this image as `image:`, so rebuilding it
+# is how you get a new toolchain / native dep into CI. Rebuild + push when
+# deploy/docker/Dockerfile.ci-build changes.
+#
+# Usage:
+#   docker login forge.aithericon.eu     # one-time, as the registry user
+#   just ci::build-ci-builder forge.aithericon.eu/milanender
+#
+# The image is published as `<registry_image>/mekhan-ci-builder:latest`.
+# `latest` is intentional — the woodpecker YAMLs pin to this tag, so the next
+# pipeline run picks up your update without a coordinated YAML change. If you
+# need atomic rollouts, switch the YAMLs to a SHA tag and produce that here.
 build-ci-builder registry_image:
     #!/usr/bin/env bash
     cd ..
     docker build \
       -f deploy/docker/Dockerfile.ci-build \
-      -t "{{registry_image}}/ci-builder:latest" \
+      -t "{{registry_image}}/mekhan-ci-builder:latest" \
       .
-    docker push "{{registry_image}}/ci-builder:latest"
+    docker push "{{registry_image}}/mekhan-ci-builder:latest"
+
+# ── Deploy (Terraform / Nomad) ──────────────────────────────────────────────
+#
+# Deploys the mekhan-service image to the dev or prod Nomad cluster. State
+# lives in S3-compatible storage (rustfs / MinIO); the backend is configured
+# via `backend.hcl` inside each layer — see deploy/{dev,prod}/backend.hcl.example.
+#
+# Secrets the deploy step expects (sourced from Woodpecker secrets in CI, or
+# from your shell when running locally):
+#
+#   TF_VAR_nomad_token            Nomad ACL token
+#   TF_VAR_registry_user          Forgejo registry username
+#   TF_VAR_registry_password      Forgejo registry password
+#   TF_VAR_database_url           Postgres URL for the target environment
+#   TF_VAR_s3_access_key          rustfs access key (for the artifact bucket)
+#   TF_VAR_s3_secret_key          rustfs secret key
+#   AWS_ACCESS_KEY_ID             For the Terraform S3 *state* backend
+#   AWS_SECRET_ACCESS_KEY         Same
+#
+# Non-secret config lives in {dev,prod}.auto.tfvars (gitignored — copy from
+# the .example next to it).
+
+# Plan + apply against the dev layer.
+# `image_tag` is required; CI sets it to CI_COMMIT_SHA.
+deploy-dev image_tag:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd ../deploy/dev
+    if [ ! -f dev.auto.tfvars ]; then
+      echo "✗ deploy/dev/dev.auto.tfvars missing. Copy dev.auto.tfvars.example." >&2
+      exit 1
+    fi
+    echo "▶ tofu init (dev)"
+    tofu init -input=false
+    echo "▶ tofu plan (image_tag={{image_tag}})"
+    tofu plan -input=false -var="image_tag={{image_tag}}" -out=plan.out
+    echo "▶ tofu apply"
+    tofu apply -input=false plan.out
+    rm -f plan.out
+    echo "✓ dev deploy applied"
+
+# Plan + apply against the prod layer. Same shape as deploy-dev.
+deploy-prod image_tag:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd ../deploy/prod
+    if [ ! -f backend.hcl ]; then
+      echo "✗ deploy/prod/backend.hcl missing." >&2
+      exit 1
+    fi
+    if [ ! -f prod.auto.tfvars ]; then
+      echo "✗ deploy/prod/prod.auto.tfvars missing." >&2
+      exit 1
+    fi
+    echo "▶ tofu init (prod)"
+    tofu init -input=false -backend-config=backend.hcl
+    echo "▶ tofu plan (image_tag={{image_tag}})"
+    tofu plan -input=false -var="image_tag={{image_tag}}" -out=plan.out
+    echo "▶ tofu apply"
+    tofu apply -input=false plan.out
+    rm -f plan.out
+    echo "✓ prod deploy applied"
+
+# Poll Nomad until the latest deployment for the mekhan-service job reaches a
+# terminal state. Used as the post-deploy gate in CI so a failing rollout
+# fails the pipeline. NOMAD_ADDR + NOMAD_TOKEN (and NOMAD_NAMESPACE if set)
+# must already be in the environment.
+verify-deploy env="dev":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd ../deploy/{{env}}
+    job=$(tofu output -raw job_id)
+    ns=$(tofu output -raw job_namespace)
+    echo "▶ waiting for Nomad deployment of $job ($ns) to settle…"
+    deadline=$(( $(date +%s) + 300 ))
+    while :; do
+      status=$(nomad deployment status -namespace="$ns" -latest "$job" 2>/dev/null \
+               | awk '/^Status/ {print $2; exit}')
+      case "$status" in
+        successful)         echo "✓ deployment successful"; exit 0 ;;
+        failed|cancelled)   echo "✗ deployment $status"; exit 1 ;;
+        running|"")         : ;;  # still rolling out
+        *)                  echo "  status=$status (continuing to poll)" ;;
+      esac
+      [ "$(date +%s)" -lt "$deadline" ] || { echo "✗ verify-deploy timed out"; exit 1; }
+      sleep 5
+    done
 
 # ── Convenience ─────────────────────────────────────────────────────────────
 
