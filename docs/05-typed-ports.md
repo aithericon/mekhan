@@ -4,6 +4,9 @@ Status: Proposal
 Author: handoff doc — captures the design conversation, ready for an owner to refine and implement.
 Related: [`03-mvp-architecture.md`](./03-mvp-architecture.md), `service/src/models/template.rs`, `service/src/compiler/compile.rs`, `service/src/petri/instance.rs`
 
+> **Superseded in part — see [`10-control-data-token-model.md`](./10-control-data-token-model.md).**
+> The "magical `input` object" guard problem framed below is now solved and shipped on `main`: guards are producer-namespaced `<slug>.field` references resolved by a compiler-as-borrow-checker against a real, enforced token contract. Read this doc for the original problem framing; read 10 for the implemented model.
+
 ## 1. Problem
 
 The editor's block-graph model (`WorkflowNodeData` in `service/src/models/template.rs:80`) has no first-class data contract. Edges between blocks carry nothing typed. Data shows up in three implicit, unvalidated places:
