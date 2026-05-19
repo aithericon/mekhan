@@ -127,19 +127,19 @@
 
 <div class="space-y-1.5">
 	<div class="flex items-center justify-between">
-		<span class="text-[9px] text-muted-foreground">Guard</span>
+		<span class="text-sm text-muted-foreground">Guard</span>
 		<button
 			type="button"
-			class="flex items-center gap-1 rounded px-1.5 py-0.5 text-[9px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+			class="flex items-center gap-1.5 rounded px-2 py-1 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
 			onclick={() => (sticky_advanced = !advanced)}
 			disabled={readonly}
 			title={advanced ? 'Switch to simple builder' : 'Switch to raw Rhai'}
 		>
 			{#if advanced}
-				<Wrench class="size-3" />
+				<Wrench class="size-4" />
 				Builder
 			{:else}
-				<Code class="size-3" />
+				<Code class="size-4" />
 				Rhai
 			{/if}
 		</button>
@@ -164,13 +164,13 @@
 				/>
 			</div>
 		{:else}
-			<div class="pt-1 text-[9px] text-muted-foreground italic">
+			<div class="pt-1 text-sm text-muted-foreground italic">
 				No upstream fields in scope. Wire a Start or AutomatedStep upstream and declare its
 				output port to reference fields here.
 			</div>
 		{/if}
 	{:else}
-		<div class="flex items-center gap-1.5">
+		<div class="flex items-center gap-2">
 			<!-- LHS: qualified field picker (two-column node → variable) -->
 			<div class="min-w-0 flex-1">
 				<RefPicker
@@ -189,14 +189,14 @@
 				onValueChange={(v) => v && setOp(v)}
 				disabled={readonly}
 			>
-				<Select.Trigger class="h-7 w-12 px-1 text-[11px]">
+				<Select.Trigger class="h-9 w-16 px-2 text-sm">
 					<span class="font-mono">{operators.find((o) => o.value === (parsed?.op ?? pendingOp))?.label ?? '='}</span>
 				</Select.Trigger>
 				<Select.Content>
 					{#each operators as op (op.value)}
 						<Select.Item value={op.value} label={op.label}>
 							<span class="font-mono">{op.label}</span>
-							<span class="ml-2 text-[10px] text-muted-foreground">{op.value}</span>
+							<span class="ml-2 text-sm text-muted-foreground">{op.value}</span>
 						</Select.Item>
 					{/each}
 				</Select.Content>
@@ -209,11 +209,11 @@
 				placeholder={parsed && fieldKind(parsed.lhs) === 'bool' ? 'true' : 'value'}
 				disabled={readonly}
 				oninput={(e) => setRhs((e.currentTarget as HTMLInputElement).value)}
-				class="h-7 flex-1 px-2 py-1 text-[11px] font-mono"
+				class="h-9 flex-1 px-3 text-sm font-mono"
 			/>
 		</div>
 		{#if guard.trim().length > 0}
-			<div class="font-mono text-[10px] text-muted-foreground">
+			<div class="font-mono text-sm text-muted-foreground">
 				{guard}
 			</div>
 		{/if}
