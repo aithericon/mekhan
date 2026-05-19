@@ -76,10 +76,13 @@ steps:
       - export TF_VAR_s3_access_key=$AWS_ACCESS_KEY_ID
       - export TF_VAR_s3_secret_key=$AWS_SECRET_ACCESS_KEY
       - export TF_VAR_state_encryption_passphrase=$(vault kv get -field=state_encryption_passphrase secret/services/mekhan/dev)
-      # Zitadel admin PAT — used by the zitadel TF provider in deploy/dev/
-      # to manage mekhan's project + OIDC SPA application. Same single-token
-      # surface as everything else: rotate in Vault, no CI change needed.
-      - export TF_VAR_zitadel_pat=$(vault kv get -field=token secret/zitadel/iac-pat)
+      # Zitadel JWT machine key — written to /tmp because the zitadel TF
+      # provider's `jwt_profile_file` argument is a FILE PATH, not the key
+      # contents. Same trick HetznerCluster's root.hcl uses (write_zitadel
+      # _jwt_key terragrunt before_hook). The CI container is per-job and
+      # ephemeral so /tmp evaporates between runs.
+      - vault kv get -field=key secret/zitadel/iac-jwt > /tmp/zitadel-iac-jwt.json
+      - export TF_VAR_zitadel_jwt_file=/tmp/zitadel-iac-jwt.json
 
       # ── Override Patroni hostname to plain .service.consul ──
       # variables.tf defaults to the operator alt-domain

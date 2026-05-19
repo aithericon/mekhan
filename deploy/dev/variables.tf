@@ -161,8 +161,8 @@ variable "auth_mode" {
 
 # ── Zitadel ─────────────────────────────────────────────────────────────────
 
-variable "zitadel_pat" {
-  description = "Personal Access Token for the Zitadel IaC service user. Used by the zitadel TF provider to manage mekhan's project + OIDC application. Sourced from Vault at secret/zitadel/iac-pat (field: token)."
+variable "zitadel_jwt_file" {
+  description = "Path to a JWT profile JSON file for the Zitadel IaC service user. The Zitadel TF provider opens this path; it is NOT the JWT contents. CI fetches the key from Vault (secret/zitadel/iac-jwt field: key) and writes it to /tmp before invoking tofu. Locally, paste your own path into .envrc."
   type        = string
   sensitive   = true
 }

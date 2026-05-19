@@ -85,14 +85,17 @@ provider "aws" {
 }
 
 # Zitadel — the cluster runs one instance at id.aithericon.eu shared across
-# all services. `var.zitadel_pat` is a Personal Access Token issued to the
-# IaC service user (stashed in Vault at secret/zitadel/iac-pat → field
-# `token`). The CI step exports it from Vault; locally, paste it into
-# .envrc. Insecure=false (TLS verify on) — Zitadel's cert is from
-# Let's Encrypt via Traefik.
+# all services. Auth is a JWT machine key for the cluster's `iac` service
+# user (IAM_OWNER), same as HetznerCluster's root.hcl uses for 06e.
+#
+# Provider quirk: `jwt_profile_file` is a FILE PATH, not the key contents.
+# The CI step fetches the JSON key from Vault (secret/zitadel/iac-jwt
+# → field `key`) and writes it to a tmpfile before `tofu apply`, then
+# exports TF_VAR_zitadel_jwt_file pointing at that file. Locally, paste a
+# path to your own JWT JSON into .envrc.
 provider "zitadel" {
-  domain   = "id.aithericon.eu"
-  insecure = false
-  port     = "443"
-  token    = var.zitadel_pat
+  domain           = "id.aithericon.eu"
+  insecure         = false
+  port             = "443"
+  jwt_profile_file = var.zitadel_jwt_file
 }
