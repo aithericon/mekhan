@@ -28,11 +28,8 @@
 # runner picking up `role: deploy` MUST be on the mesh. YAML can't enforce.
 # =============================================================================
 
-# TEMPORARY: depends_on commented out so deploy can run standalone while
-# iterating without paying the 30-build wait. Re-enable (and restore
-# "$CI_COMMIT_SHA" below) BEFORE merging this branch.
-# depends_on:
-#   - 30-build
+depends_on:
+  - 30-build
 
 when:
   - branch: dev
@@ -95,10 +92,7 @@ steps:
       - export TF_VAR_postgres_admin_host=postgres-primary.service.consul
       - 'echo "  ✓ Secrets loaded from Vault"'
 
-      # TEMPORARY: hardcoded image_tag to the last green build's SHA so the
-      # deploy can run without 30-build first. Restore "$CI_COMMIT_SHA" when
-      # re-enabling depends_on above.
-      - just ci::deploy-dev "a971ade397b7f28348a91f91b7e24a046b106697"
+      - just ci::deploy-dev "$CI_COMMIT_SHA"
     depends_on: []
 
   - name: verify-dev
