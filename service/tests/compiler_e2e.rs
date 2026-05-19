@@ -47,12 +47,20 @@ fn has_group(air: &Value, id: &str) -> bool {
 }
 
 /// Every transition must have at least one input and one output arc.
+///
+/// Exception: a Decision's synthesized `t_<id>_deadend` is an intentional
+/// error sink — it consumes the unroutable token and raises (permanent
+/// ScriptError -> ErrorOccurred), so it deliberately has no output arc. The
+/// AIR omits an empty `outputs` field entirely (serde skip_if empty).
 fn assert_all_transitions_wired(air: &Value) {
     for t in transitions(air) {
         let id = t["id"].as_str().unwrap();
         let inputs = t["inputs"].as_array().unwrap();
-        let outputs = t["outputs"].as_array().unwrap();
         assert!(!inputs.is_empty(), "transition {id} has no inputs");
+        if id.ends_with("_deadend") {
+            continue;
+        }
+        let outputs = t["outputs"].as_array().unwrap();
         assert!(!outputs.is_empty(), "transition {id} has no outputs");
     }
 }
@@ -69,7 +77,9 @@ fn assert_arcs_reference_existing_places(air: &Value) {
                 "transition {tid} input references nonexistent place {pid}"
             );
         }
-        for arc in t["outputs"].as_array().unwrap() {
+        // `outputs` is omitted from the AIR when empty (serde skip_if), e.g.
+        // a Decision's `t_<id>_deadend` error sink has no output arc.
+        for arc in t["outputs"].as_array().map(Vec::as_slice).unwrap_or(&[]) {
             let pid = arc["place"].as_str().unwrap();
             assert!(
                 place_ids.contains(&pid),

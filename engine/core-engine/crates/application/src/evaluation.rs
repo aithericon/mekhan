@@ -582,6 +582,135 @@ mod tests {
         let marking = Marking::new();
         assert!(check_terminal_state(&topo, &marking).is_none());
     }
+
+    // ── Decision cascade regression ─────────────────────────────────────
+    //
+    // A Decision lowers branches as a switch/case cascade: branch i fires
+    // only when its own guard holds AND no higher-precedence guard did. This
+    // test reproduces the bug class the cascade fixes: a lower-precedence
+    // branch whose guard borrows upstream data gets an extra (read) input
+    // arc, so the engine's rule-2 "specificity" (more input arcs) used to
+    // override the declared order before priority was ever consulted.
+
+    use petri_domain::{Arc as PetriArc, Port, Transition};
+
+    fn cascade_net(branch1_guard: &str) -> PetriNet {
+        let mut net = PetriNet::new();
+        net.add_place(Place::internal("p_input"));
+        net.add_place(Place::internal("p_data"));
+        net.add_place(Place::internal("p_out0"));
+        net.add_place(Place::internal("p_out1"));
+
+        // branch 0: declared first, payload-only, ONE input arc, top priority.
+        net.add_transition(
+            Transition::new("t_dec_branch_0", "#{ output: input }")
+                .with_input_port(Port::new("input"))
+                .with_guard("(true)")
+                .with_priority("4"),
+        );
+        // branch 1: declared second, borrows producer data via a read-arc
+        // (TWO input arcs => higher rule-2 "specificity"), lower priority.
+        net.add_transition(
+            Transition::new("t_dec_branch_1", "#{ output: input }")
+                .with_input_port(Port::new("input"))
+                .with_input_port(Port::new("d_prod"))
+                .with_guard(branch1_guard)
+                .with_priority("3"),
+        );
+
+        let tb0 = TransitionId("t_dec_branch_0".to_string());
+        let tb1 = TransitionId("t_dec_branch_1".to_string());
+        net.add_arc(PetriArc::input(
+            PlaceId("p_input".to_string()),
+            tb0.clone(),
+            "input",
+        ));
+        net.add_arc(PetriArc::output(
+            tb0,
+            "output",
+            PlaceId("p_out0".to_string()),
+        ));
+        net.add_arc(PetriArc::input(
+            PlaceId("p_input".to_string()),
+            tb1.clone(),
+            "input",
+        ));
+        net.add_arc(
+            PetriArc::input(PlaceId("p_data".to_string()), tb1.clone(), "d_prod")
+                .with_read(true),
+        );
+        net.add_arc(PetriArc::output(
+            tb1,
+            "output",
+            PlaceId("p_out1".to_string()),
+        ));
+        net
+    }
+
+    fn cascade_marking() -> Marking {
+        // Identical created_at so rule-1 (enabling time) ties for both
+        // branches, isolating the rule-2 vs declared-order question.
+        let ts = chrono::Utc::now();
+        let mut tok_in = Token::new(TokenColor::Data(serde_json::json!({ "k": 1 })));
+        tok_in.created_at = ts;
+        let mut tok_data = Token::new(TokenColor::Data(serde_json::json!({ "score": 10 })));
+        tok_data.created_at = ts;
+        let mut m = Marking::new();
+        m.add_token(PlaceId("p_input".to_string()), tok_in);
+        m.add_token(PlaceId("p_data".to_string()), tok_data);
+        m
+    }
+
+    #[test]
+    fn cascade_keeps_declaration_order_despite_specificity() {
+        let exec = crate::TransitionExecutor::new();
+        let marking = cascade_marking();
+
+        // Compiled cascade form: branch 1 = (its guard) && !(branch 0 guard).
+        // Branch 0's guard is `true`, so branch 1's guard is always false and
+        // branch 1 is never enabled — the topmost branch wins even though it
+        // has FEWER input arcs and the engine's specificity rule would favor
+        // branch 1.
+        let topo = TestTopology(Some(cascade_net("(d_prod.score > 0) && !(true)")));
+        let picked = select_next_transition(&exec, &topo, &marking, None).unwrap();
+        assert_eq!(
+            picked,
+            Some(TransitionId("t_dec_branch_0".to_string())),
+            "cascade must keep declared precedence (branch 0) regardless of arc count"
+        );
+
+        // Pre-fix lowering (no cascade exclusion): branch 1's guard is just
+        // its own condition. Now both are enabled, and the lower-precedence
+        // branch 1 wins purely on rule-2 specificity (2 input arcs > 1),
+        // beating branch 0's higher priority. This is the regression.
+        let topo_buggy = TestTopology(Some(cascade_net("d_prod.score > 0")));
+        let picked_buggy = select_next_transition(&exec, &topo_buggy, &marking, None).unwrap();
+        assert_eq!(
+            picked_buggy,
+            Some(TransitionId("t_dec_branch_1".to_string())),
+            "sanity: without the cascade, specificity overrides declared order"
+        );
+    }
+
+    #[test]
+    fn deadend_throw_is_a_permanent_script_error() {
+        // The synthesized `t_{id}_deadend` transition raises via Rhai `throw`.
+        // execute_script must surface that as a permanent ServiceError so the
+        // firing path emits ErrorOccurred and consumes the token (rather than
+        // stranding it or re-firing forever).
+        let exec = crate::TransitionExecutor::new();
+        let err = exec
+            .execute_script(
+                "throw \"decision X: token matched no branch and no default branch\"",
+                &std::collections::HashMap::new(),
+            )
+            .expect_err("throw must produce an error");
+        assert!(
+            matches!(err, crate::ServiceError::ScriptError { .. }),
+            "expected ScriptError, got {err:?}"
+        );
+        assert!(err.is_permanent(), "dead-end error must be permanent");
+    }
 }
 
 /// Get the current marking, using a cache to avoid full event replay.

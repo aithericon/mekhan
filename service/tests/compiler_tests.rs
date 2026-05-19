@@ -435,12 +435,34 @@ fn decision_produces_guard_transitions() {
         "expected branch_1 transition"
     );
 
-    // Each branch transition should have a guard
+    // branch_0 = just its own guard; highest priority (N - i + 1 = 3).
     let t0 = get_transition(&air, "t_dec_branch_0").unwrap();
-    assert!(t0.get("guard").is_some(), "branch_0 should have a guard");
+    assert_eq!(t0["guard"]["source"].as_str().unwrap(), "(true)");
+    assert_eq!(t0["priority"]["source"].as_str().unwrap(), "3");
 
+    // branch_1 = own guard AND not branch_0's guard (switch/case cascade).
     let t1 = get_transition(&air, "t_dec_branch_1").unwrap();
-    assert!(t1.get("guard").is_some(), "branch_1 should have a guard");
+    assert_eq!(
+        t1["guard"]["source"].as_str().unwrap(),
+        "(false) && !(true)"
+    );
+    assert_eq!(t1["priority"]["source"].as_str().unwrap(), "2");
+
+    // No default here -> an unguarded, lowest-priority dead-end transition
+    // turns an unroutable token into an explicit error.
+    let dead = get_transition(&air, "t_dec_deadend").unwrap();
+    assert!(
+        dead.get("guard").is_none(),
+        "dead-end transition must be unguarded"
+    );
+    assert_eq!(dead["priority"]["source"].as_str().unwrap(), "0");
+    assert!(
+        dead["logic"]["source"]
+            .as_str()
+            .unwrap()
+            .contains("throw "),
+        "dead-end logic must raise an error"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -791,19 +813,124 @@ fn decision_with_default_branch() {
 
     let air = compile_to_air(&graph, "dec_default_test", "", &std::collections::HashMap::new()).expect("should compile");
 
-    // Guard branch
+    // Guard branch: own guard, highest priority (N - i + 1 = 2 for N=1).
     assert!(has_transition(&air, "t_dec_branch_0"));
+    let t0 = get_transition(&air, "t_dec_branch_0").unwrap();
+    assert_eq!(t0["guard"]["source"].as_str().unwrap(), "(true)");
+    assert_eq!(t0["priority"]["source"].as_str().unwrap(), "2");
 
-    // Default branch (no guard)
+    // Default branch is now the cascade's terminal `else`: enabled only when
+    // no branch guard matched (negated conjunction), priority just below
+    // every branch and above the dead-end.
     assert!(
         has_transition(&air, "t_dec_default"),
         "expected default branch transition"
     );
     let t_default = get_transition(&air, "t_dec_default").unwrap();
-    assert!(
-        t_default.get("guard").is_none(),
-        "default branch should not have a guard"
+    assert_eq!(
+        t_default["guard"]["source"].as_str().unwrap(),
+        "!(true)",
+        "default must be guarded by the negation of all branch guards"
     );
+    assert_eq!(t_default["priority"]["source"].as_str().unwrap(), "1");
+
+    // Dead-end safety net is emitted even when a default exists (covers a
+    // guard that throws at runtime).
+    let dead = get_transition(&air, "t_dec_deadend").unwrap();
+    assert!(dead.get("guard").is_none());
+    assert_eq!(dead["priority"]["source"].as_str().unwrap(), "0");
+}
+
+// ---------------------------------------------------------------------------
+// Decision cascade: overlapping guards -> declaration order is precedence
+// ---------------------------------------------------------------------------
+
+#[test]
+fn decision_lowers_as_switch_cascade() {
+    // Three deliberately overlapping guards (all simultaneously true). Without
+    // the cascade the engine could pick any of them; with it, only branch 0 is
+    // ever enabled, so declaration order is the precedence.
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            WorkflowNode {
+                id: "dec".to_string(),
+                node_type: "decision".to_string(),
+                slug: None,
+                position: pos(),
+                data: WorkflowNodeData::Decision {
+                    label: "Pick".to_string(),
+                    description: None,
+                    conditions: vec![
+                        BranchCondition {
+                            edge_id: "c0".to_string(),
+                            label: "A".to_string(),
+                            guard: "1 < 2".to_string(),
+                        },
+                        BranchCondition {
+                            edge_id: "c1".to_string(),
+                            label: "B".to_string(),
+                            guard: "3 < 4".to_string(),
+                        },
+                        BranchCondition {
+                            edge_id: "c2".to_string(),
+                            label: "C".to_string(),
+                            guard: "5 < 6".to_string(),
+                        },
+                    ],
+                    default_branch: Some("cd".to_string()),
+                },
+                parent_id: None,
+                width: None,
+                height: None,
+            },
+            end_node("ea"),
+            end_node("eb"),
+            end_node("ec"),
+            end_node("ed"),
+        ],
+        edges: vec![
+            edge("e_in", "s", "dec"),
+            edge_with_handle("e0", "dec", "ea", "c0"),
+            edge_with_handle("e1", "dec", "eb", "c1"),
+            edge_with_handle("e2", "dec", "ec", "c2"),
+            edge_with_handle("e3", "dec", "ed", "cd"),
+        ],
+        viewport: None,
+    };
+
+    let air = compile_to_air(&graph, "dec_cascade", "", &std::collections::HashMap::new())
+        .expect("should compile");
+
+    let g = |id: &str| {
+        get_transition(&air, id).unwrap()["guard"]["source"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let p = |id: &str| {
+        get_transition(&air, id).unwrap()["priority"]["source"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+
+    // branch i = own guard AND not any higher-precedence guard (newest-first).
+    assert_eq!(g("t_dec_branch_0"), "(1 < 2)");
+    assert_eq!(g("t_dec_branch_1"), "(3 < 4) && !(1 < 2)");
+    assert_eq!(g("t_dec_branch_2"), "(5 < 6) && !(3 < 4) && !(1 < 2)");
+    // default = none of the branch guards matched.
+    assert_eq!(
+        g("t_dec_default"),
+        "!(1 < 2) && !(3 < 4) && !(5 < 6)"
+    );
+
+    // Descending priority: b0 highest, default just above the dead-end.
+    assert_eq!(p("t_dec_branch_0"), "4");
+    assert_eq!(p("t_dec_branch_1"), "3");
+    assert_eq!(p("t_dec_branch_2"), "2");
+    assert_eq!(p("t_dec_default"), "1");
+    assert_eq!(p("t_dec_deadend"), "0");
 }
 
 // ---------------------------------------------------------------------------

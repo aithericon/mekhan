@@ -138,6 +138,65 @@ describe('YjsGraphBinding', () => {
 		]);
 	});
 
+	it('reordering decision conditions swaps order and keeps wired edges', () => {
+		const decisionData = {
+			...createDefaultNodeData('decision'),
+			conditions: [
+				{ edgeId: 'branch-a', label: 'A', guard: 'g0' },
+				{ edgeId: 'branch-b', label: 'B', guard: 'g1' },
+				{ edgeId: 'branch-c', label: 'C', guard: 'g2' }
+			],
+			defaultBranch: 'default'
+		} as WorkflowNodeData;
+
+		binding.addNode('d1', 'decision', { x: 0, y: 0 }, decisionData);
+		binding.addNode('t1', 'end', { x: 100, y: 0 }, createDefaultNodeData('end'));
+		binding.addNode('t2', 'end', { x: 100, y: 100 }, createDefaultNodeData('end'));
+
+		binding.addEdge({
+			id: 'ea',
+			source: 'd1',
+			target: 't1',
+			type: 'conditional',
+			sourceHandle: 'branch-a'
+		});
+		binding.addEdge({
+			id: 'ec',
+			source: 'd1',
+			target: 't2',
+			type: 'conditional',
+			sourceHandle: 'branch-c'
+		});
+
+		// Move 'C' to the top (the move-up control applied twice == these
+		// array swaps the UI performs).
+		binding.updateNodeData('d1', {
+			type: 'decision',
+			conditions: [
+				{ edgeId: 'branch-c', label: 'C', guard: 'g2' },
+				{ edgeId: 'branch-a', label: 'A', guard: 'g0' },
+				{ edgeId: 'branch-b', label: 'B', guard: 'g1' }
+			],
+			defaultBranch: 'default'
+		} as WorkflowNodeData);
+
+		const node = binding.graph.nodes.find((n) => n.id === 'd1')!;
+		expect(node.data.type).toBe('decision');
+		if (node.data.type === 'decision') {
+			expect(node.data.conditions.map((c) => c.edgeId)).toEqual([
+				'branch-c',
+				'branch-a',
+				'branch-b'
+			]);
+		}
+
+		// Edge wiring is keyed by the stable edgeId, so a reorder must not
+		// drop or rewire any drawn edge.
+		expect(binding.graph.edges.map((e) => e.id).sort()).toEqual(['ea', 'ec']);
+		const ec = binding.graph.edges.find((e) => e.id === 'ec');
+		expect(ec?.sourceHandle).toBe('branch-c');
+	});
+
 	it('updateNodeData prunes the default-branch edge when defaultBranch is disabled', () => {
 		const decisionData = {
 			...createDefaultNodeData('decision'),

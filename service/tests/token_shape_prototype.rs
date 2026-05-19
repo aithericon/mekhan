@@ -103,6 +103,28 @@ fn native_split_is_emitted_with_enforced_schemas() {
         "missing read-arc into p_review_data"
     );
 
+    // 3b. The default branch is now the cascade's terminal `else`: its guard
+    //     is the negation of every branch guard, so it carries the same parked
+    //     reference and therefore the same physical read-arc as branch 0.
+    let dflt = transition(&air, "t_check-amount_default").expect("default branch");
+    let dg = dflt["guard"]["source"].as_str().unwrap_or("");
+    assert!(
+        dg.contains("d_review.data.invoice_amount") && dg.contains("!("),
+        "default guard not the rebound negated conjunction: {dg}"
+    );
+    assert!(
+        dflt["inputs"].as_array().unwrap().iter().any(|a| a["place"]
+            == serde_json::json!("p_review_data")
+            && a["read"] == serde_json::json!(true)),
+        "default branch missing read-arc into p_review_data"
+    );
+
+    // 3c. Unroutable token -> explicit error transition (unguarded, lowest
+    //     priority) instead of a silently stranded token.
+    let dead = transition(&air, "t_check-amount_deadend").expect("dead-end");
+    assert!(dead.get("guard").is_none(), "dead-end must be unguarded");
+    assert_eq!(dead["priority"]["source"].as_str().unwrap_or(""), "0");
+
     // 4. The loop guard has the same disease cured the same way.
     for tid in ["t_auto-validate_continue", "t_auto-validate_exit"] {
         let t = transition(&air, tid).unwrap_or_else(|| panic!("{tid}"));
