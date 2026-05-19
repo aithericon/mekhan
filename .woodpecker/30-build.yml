@@ -33,14 +33,6 @@ steps:
     environment:
       CARGO_HOME: /var/lib/ci-jobs/cache/cargo
     commands:
-      # Diagnostic — confirms runner kernel arch vs gcc binary arch.
-      # If `uname -m` is aarch64 but `file` says x86-64, the image's arm64
-      # variant smuggled amd64 binaries (buildx without QEMU/binfmt). If
-      # uname is x86_64, the runner host isn't actually arm64. Remove this
-      # block once builds are green.
-      - echo "uname -m  → $(uname -m)"
-      - echo "gcc path  → $(readlink -f $(which aarch64-linux-musl-gcc))"
-      - file $(readlink -f $(which aarch64-linux-musl-gcc))
       - just ci::build-backend
     depends_on: []
 
