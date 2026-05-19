@@ -581,6 +581,9 @@ fn input_place_id(node: &WorkflowNode) -> Option<String> {
 fn output_place_ids(node: &WorkflowNode) -> Vec<String> {
     let id = &node.id;
     match &node.data {
+        // Start forks (`park_outputs`): the unchanged token continues on
+        // `p_{id}_main`; `p_{id}_data` is schema'd by the foundation pass.
+        WorkflowNodeData::Start { .. } => vec![format!("p_{id}_main")],
         WorkflowNodeData::HumanTask { .. } => vec![format!("p_{id}_output")],
         WorkflowNodeData::AutomatedStep { .. } => {
             vec![format!("p_{id}_output"), format!("p_{id}_error")]
@@ -933,16 +936,20 @@ fn collect_leaves(
 
 /// A node is a *parked producer* (its business output gets a write-once
 /// `p_{id}_data` place that read-arcs can borrow) iff it is a HumanTask or
-/// AutomatedStep — the only patterns `lower.rs::split_outputs` splits. Start
-/// parks `ProcessStarted`, not its business input, so a Start field is only
-/// reachable while it is still *on the control token* (the control-resident
-/// branch below), never via a synthesized read-arc.
+/// AutomatedStep (`lower.rs::split_outputs`) **or a Start**
+/// (`lower.rs::park_outputs`). Start forks rather than splits — it parks a
+/// write-once copy of its declared inputs to `p_{id}_data` while still
+/// forwarding the full token — so `start.<field>` is borrow-reachable
+/// downstream exactly like `review.<field>`, and the immediately-following
+/// task can still interpolate Start fields off the control token.
 fn is_parked_producer(graph: &WorkflowGraph, id: &str) -> bool {
     graph.nodes.iter().any(|n| {
         n.id == id
             && matches!(
                 n.data,
-                WorkflowNodeData::HumanTask { .. } | WorkflowNodeData::AutomatedStep { .. }
+                WorkflowNodeData::HumanTask { .. }
+                    | WorkflowNodeData::AutomatedStep { .. }
+                    | WorkflowNodeData::Start { .. }
             )
     })
 }
@@ -1191,19 +1198,30 @@ fn reachable_scope(
         let mut leaves = Vec::new();
         collect_leaves(in_shape, "", None, &mut leaves);
         for (dotted, ty, prov) in leaves {
-            let leaf = dotted.rsplit('.').next().unwrap_or(&dotted);
-            if !is_control_leaf(&format!("input.{leaf}"))
-                && is_parked_producer(graph, &prov.node_id)
-            {
+            // Classify by the *top-level* key — what `is_control_leaf` and
+            // `is_parked_producer` reason about — not the deepest segment.
+            let head = dotted.split('.').next().unwrap_or(&dotted);
+            let is_ctrl = is_control_leaf(&format!("input.{head}"));
+            if !is_ctrl && is_parked_producer(graph, &prov.node_id) {
                 continue; // borrowed data on the token → qualified in (2)
             }
+            // Genuine control / identity keys (`_*`, `task_id`, `status`)
+            // ride the slim control token, not a business producer. Group
+            // them under a synthetic "Process" bucket instead of
+            // mis-attributing them to whichever node last forwarded the
+            // token (the `input.status`-under-Extract-Data bug).
+            let (producer_node, producer_label) = if is_ctrl {
+                (String::new(), "Process".to_string())
+            } else {
+                (prov.node_id, prov.node_label)
+            };
             by_path
                 .entry(format!("input.{dotted}"))
                 .or_insert(ScopeEntry {
                     path: format!("input.{dotted}"),
                     ty,
-                    producer_node: prov.node_id,
-                    producer_label: prov.node_label,
+                    producer_node,
+                    producer_label,
                     note: prov.note,
                 });
         }
@@ -2102,5 +2120,102 @@ mod scope_reachability_tests {
                     if node_id == "dec" && referenced == "input.amount")),
             "editor must see input.amount as unresolved at the decision"
         );
+    }
+
+    /// Start is a parked producer (`lower.rs::park_outputs`): its declared
+    /// inputs are borrow-reachable downstream as `<start-slug>.<field>`,
+    /// exactly like a human task's, and genuine control/identity leaves are
+    /// attributed to the synthetic "Process" group instead of whichever node
+    /// last forwarded the token (the `input.status`-under-Extract-Data bug).
+    fn start_producer_graph(decision_guard: &str) -> WorkflowGraph {
+        let v = serde_json::json!({
+            "nodes": [
+                {"id":"start","type":"start","position":{"x":0,"y":0},
+                 "data":{"type":"start","label":"Start",
+                    "initial":{"id":"in","label":"Intake","fields":[
+                        {"name":"note","label":"Note","kind":"text","required":true}]}}},
+                {"id":"dec","type":"decision","position":{"x":0,"y":0},
+                 "data":{"type":"decision","label":"D",
+                    "conditions":[{"edgeId":"hi","label":"hi","guard":decision_guard}],
+                    "defaultBranch":"default"}},
+                {"id":"end1","type":"end","position":{"x":0,"y":0},"data":{"type":"end","label":"E1"}},
+                {"id":"end2","type":"end","position":{"x":0,"y":0},"data":{"type":"end","label":"E2"}}
+            ],
+            "edges": [
+                {"id":"e1","source":"start","target":"dec","type":"sequence"},
+                {"id":"e4","source":"dec","target":"end1","sourceHandle":"hi","type":"sequence"},
+                {"id":"e5","source":"dec","target":"end2","sourceHandle":"default","type":"sequence"}
+            ]
+        });
+        serde_json::from_value(v).expect("deser start-producer graph")
+    }
+
+    #[test]
+    fn start_is_parked_producer_and_control_leaves_grouped_as_process() {
+        let g = start_producer_graph("start.note == \"ok\"");
+        let report = analyze(&g).expect("analyze");
+        let scope = report.scopes.get("dec").expect("decision scope");
+
+        // (1) Start's declared input is borrow-reachable, namespaced by the
+        //     Start's slug (derived from node id `start`) — never flat.
+        let note = scope.iter().find(|e| e.path == "start.note").unwrap_or_else(|| {
+            panic!(
+                "start.note must be pickable at the decision; offered: {:?}",
+                scope.iter().map(|e| &e.path).collect::<Vec<_>>()
+            )
+        });
+        assert_eq!(note.producer_node, "start");
+        assert_eq!(note.ty, "String");
+        assert!(
+            !scope.iter().any(|e| e.path == "input.note"),
+            "Start data must be slug-qualified, not flat input.*"
+        );
+
+        // (2) Genuine control/identity leaves (`_instance_id`) go to the
+        //     synthetic "Process" group, not a business producer.
+        let proc = scope
+            .iter()
+            .find(|e| e.path == "input._instance_id")
+            .expect("control leaf input._instance_id must be offered");
+        assert_eq!(proc.producer_label, "Process");
+        assert_eq!(proc.producer_node, "");
+        assert!(
+            !scope
+                .iter()
+                .any(|e| e.path.starts_with("input.") && e.producer_label != "Process"),
+            "every control leaf must group under Process, got {:?}",
+            scope
+                .iter()
+                .map(|e| (&e.path, &e.producer_label))
+                .collect::<Vec<_>>()
+        );
+
+        // (3) The read-arc synthesis binds the IDENTICAL ref to the Start's
+        //     parked data place (`apply_control_data_foundation` borrows
+        //     `p_start_data`) — picker == compiler.
+        let binds = guard_readarc_plan(&g).expect("readarc plan");
+        assert!(
+            binds.iter().any(|b| b.consumer_node_id == "dec"
+                && b.referenced == "start.note"
+                && b.producer_node == "start"),
+            "guard_readarc_plan must bind start.note -> start, got {:?}",
+            binds
+                .iter()
+                .map(|b| (&b.consumer_node_id, &b.referenced, &b.producer_node))
+                .collect::<Vec<_>>()
+        );
+
+        // (4) The picker never lies: nothing it offers is, at that node,
+        //     reported unresolved.
+        for e in scope {
+            let contradicted = report.diagnostics.iter().any(|d| matches!(d,
+                ShapeDiagnostic::UnresolvedGuardPath { node_id, referenced, .. }
+                    if node_id == "dec" && referenced == &e.path));
+            assert!(
+                !contradicted,
+                "picker offered {} but it is reported unresolved",
+                e.path
+            );
+        }
     }
 }

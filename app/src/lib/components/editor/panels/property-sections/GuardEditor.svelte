@@ -12,6 +12,7 @@
 
 	import type { ScopeEntry } from '$lib/editor/guard-scope';
 	import CodeEditor from '../shared/CodeEditor.svelte';
+	import RefPicker from './RefPicker.svelte';
 	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
 	import Code from '@lucide/svelte/icons/code';
@@ -28,21 +29,6 @@
 	};
 
 	let { guard, scope, readonly = false, onchange }: Props = $props();
-
-	// Group the picker by producer node ("Review Invoice ▸ invoice_amount,
-	// vendor_name …"), preserving first-seen order so the surface is stable.
-	const groupedScope = $derived.by(() => {
-		const groups: { producer: string; entries: ScopeEntry[] }[] = [];
-		for (const e of scope) {
-			let g = groups.find((x) => x.producer === e.nodeLabel);
-			if (!g) {
-				g = { producer: e.nodeLabel, entries: [] };
-				groups.push(g);
-			}
-			g.entries.push(e);
-		}
-		return groups;
-	});
 
 	// Possible operators. Restricted to a Rhai-safe subset so the simple
 	// builder never round-trips broken syntax.
@@ -169,23 +155,13 @@
 			onchange={(val) => onchange(val)}
 		/>
 		{#if scope.length > 0}
-			<div class="flex flex-col gap-1 pt-1">
-				{#each groupedScope as group (group.producer)}
-					<div class="flex flex-wrap items-center gap-1">
-						<span class="text-[9px] font-medium text-muted-foreground">{group.producer} ▸</span>
-						{#each group.entries as entry (entry.qualified)}
-							<button
-								type="button"
-								class="rounded bg-muted px-1.5 py-0.5 font-mono text-[9px] text-foreground transition-colors hover:bg-accent disabled:cursor-not-allowed"
-								disabled={readonly}
-								title={`${entry.nodeLabel} → ${entry.field} (${entry.kind})`}
-								onclick={() => onchange((guard ? guard + ' ' : '') + entry.qualified)}
-							>
-								{entry.qualified}
-							</button>
-						{/each}
-					</div>
-				{/each}
+			<div class="pt-1">
+				<RefPicker
+					{scope}
+					disabled={readonly}
+					placeholder="Insert reference…"
+					onpick={(e) => onchange((guard ? guard + ' ' : '') + e.qualified)}
+				/>
 			</div>
 		{:else}
 			<div class="pt-1 text-[9px] text-muted-foreground italic">
@@ -195,37 +171,15 @@
 		{/if}
 	{:else}
 		<div class="flex items-center gap-1.5">
-			<!-- LHS: qualified field picker -->
-			<div class="flex-1 min-w-0">
-				<Select.Root
-					type="single"
-					value={parsed?.lhs ?? ''}
-					onValueChange={(v) => v && setLhs(v)}
+			<!-- LHS: qualified field picker (two-column node → variable) -->
+			<div class="min-w-0 flex-1">
+				<RefPicker
+					{scope}
 					disabled={readonly || scope.length === 0}
-				>
-					<Select.Trigger class="h-7 px-2 text-[11px]">
-						{#if parsed?.lhs}
-							<span class="font-mono">{parsed.lhs}</span>
-						{:else if scope.length === 0}
-							<span class="text-muted-foreground">No scope</span>
-						{:else}
-							<span class="text-muted-foreground">Pick field…</span>
-						{/if}
-					</Select.Trigger>
-					<Select.Content>
-						{#each groupedScope as group (group.producer)}
-							<Select.Group>
-								<Select.GroupHeading>{group.producer}</Select.GroupHeading>
-								{#each group.entries as entry (entry.qualified)}
-									<Select.Item value={entry.qualified} label={entry.qualified}>
-										<span class="font-mono">{entry.qualified}</span>
-										<span class="ml-2 text-[10px] text-muted-foreground">{entry.kind}</span>
-									</Select.Item>
-								{/each}
-							</Select.Group>
-						{/each}
-					</Select.Content>
-				</Select.Root>
+					selected={parsed?.lhs}
+					placeholder="Pick field…"
+					onpick={(e) => setLhs(e.qualified)}
+				/>
 			</div>
 
 			<!-- Operator -->
