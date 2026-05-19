@@ -325,10 +325,16 @@ verify-deploy env="dev":
     job=$(tofu output -raw job_id)
     ns=$(tofu output -raw job_namespace)
     echo "▶ waiting for Nomad deployment of $job ($ns) to settle…"
+    # NOMAD_ADDR + NOMAD_TOKEN come from the caller's env (set by the
+    # Woodpecker step). The Nomad CLI's `deployment status -latest` flag was
+    # removed in 1.6+ so we query the HTTP API directly — that endpoint
+    # always returns the latest deployment for the job.
     deadline=$(( $(date +%s) + 300 ))
     while :; do
-      status=$(nomad deployment status -namespace="$ns" -latest "$job" 2>/dev/null \
-               | awk '/^Status/ {print $2; exit}')
+      status=$(curl -sk --max-time 10 \
+                 -H "X-Nomad-Token: ${NOMAD_TOKEN:-}" \
+                 "${NOMAD_ADDR}/v1/job/${job}/deployment?namespace=${ns}" \
+               | jq -r '.Status // ""')
       case "$status" in
         successful)         echo "✓ deployment successful"; exit 0 ;;
         failed|cancelled)   echo "✗ deployment $status"; exit 1 ;;
