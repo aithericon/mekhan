@@ -94,31 +94,27 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 RUN rustup component add clippy rustfmt \
     && rustup target add aarch64-unknown-linux-musl
 
-# ── aarch64-musl toolchain (arch-aware) ─────────────────────────────────────
-# musl.cc ships two flavours of the toolchain — pick the one matching the
-# image's host arch so the binaries can actually execute:
-#   - on x86_64 host targeting aarch64-musl  →  `aarch64-linux-musl-cross`
-#     (x86_64 ELF binaries that produce aarch64-musl output)
-#   - on aarch64 host targeting aarch64-musl →  `aarch64-linux-musl-native`
-#     (aarch64 ELF binaries; same output target)
+# ── aarch64-musl toolchain (native, from musl.cc) ───────────────────────────
+# All HetznerCluster nodes are cax21 (ARM64 Ampere Altra), so the Woodpecker
+# worker that runs CI steps is aarch64 and the image must be built as
+# `--platform linux/arm64` (single-arch — do NOT push a multi-arch manifest,
+# Docker daemons end up grabbing the wrong variant and *-sys crates fail with
+# "Exec format error (os error 8)" because gcc doesn't match the runner kernel).
 #
-# Without this branch, building the image on Apple Silicon / arm Linux and
-# running it on x86 (or vice versa) puts a wrong-arch gcc on PATH and every
-# *-sys crate build script fails with "Exec format error (os error 8)".
+# Web-platform uses `aarch64-linux-musl-cross.tgz` (x86_64-host binaries) because
+# their runners are amd64. We're the opposite shape: aarch64 host, aarch64-musl
+# target — so we pull the `-native` tarball, whose binaries are aarch64 ELF and
+# run on cax21 directly.
+#
+# The `-native` tarball ships some binaries under unprefixed names (`bin/ar`,
+# `bin/ld`) and only `gcc`/`g++` reliably have the `aarch64-linux-musl-` prefix.
+# cc-rs invokes the prefixed names unconditionally, so the loop below symlinks
+# the prefixed form to whichever name actually exists in the tarball — and
+# verifies both `gcc` and `ar` resolve so a broken tarball fails the image
+# build, not CI.
 RUN set -eux; \
-    arch="$(uname -m)"; \
-    case "$arch" in \
-        x86_64)  tarball="aarch64-linux-musl-cross";  toolprefix="/opt/aarch64-linux-musl-cross";;  \
-        aarch64) tarball="aarch64-linux-musl-native"; toolprefix="/opt/aarch64-linux-musl-native";; \
-        *)       echo "unsupported host arch: $arch" >&2; exit 1;; \
-    esac; \
-    curl -sL "https://musl.cc/${tarball}.tgz" | tar xz -C /opt; \
-    # The `-native` tarball is built FOR aarch64 hosts, so some of its binaries
-    # ship under unprefixed names (`bin/ar`, `bin/ld`) while only the compiler
-    # drivers (`gcc`, `g++`) reliably have the `aarch64-linux-musl-` prefix.
-    # cc-rs / cargo invoke the prefixed names unconditionally, so symlink the
-    # prefixed form to whichever name actually exists in the tarball. Falls
-    # through cleanly for the `-cross` tarball where every binary is prefixed.
+    curl -sL https://musl.cc/aarch64-linux-musl-native.tgz | tar xz -C /opt; \
+    toolprefix="/opt/aarch64-linux-musl-native"; \
     for tool in gcc g++ ar ld ranlib strip nm objcopy objdump; do \
         if [ -x "${toolprefix}/bin/aarch64-linux-musl-${tool}" ]; then \
             ln -sf "${toolprefix}/bin/aarch64-linux-musl-${tool}" "/usr/local/bin/aarch64-linux-musl-${tool}"; \
