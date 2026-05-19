@@ -11,6 +11,7 @@
 	import Flag from '@lucide/svelte/icons/flag';
 	import Gauge from '@lucide/svelte/icons/gauge';
 	import OctagonX from '@lucide/svelte/icons/octagon-x';
+	import Workflow from '@lucide/svelte/icons/workflow';
 
 	const iconMap: Record<string, typeof Play> = {
 		play: Play,
@@ -23,7 +24,8 @@
 		repeat: Repeat,
 		flag: Flag,
 		gauge: Gauge,
-		'octagon-x': OctagonX
+		'octagon-x': OctagonX,
+		workflow: Workflow
 	};
 
 	function onDragStart(event: DragEvent, nodeType: WorkflowNodeType) {

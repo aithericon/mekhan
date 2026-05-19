@@ -600,7 +600,8 @@ fn output_place_ids(node: &WorkflowNode) -> Vec<String> {
         // `p_{id}_main`; `p_{id}_data` is schema'd by the foundation pass.
         WorkflowNodeData::Start { .. } => vec![format!("p_{id}_main")],
         WorkflowNodeData::HumanTask { .. } => vec![format!("p_{id}_output")],
-        WorkflowNodeData::AutomatedStep { .. } => {
+        WorkflowNodeData::AutomatedStep { .. }
+        | WorkflowNodeData::SubWorkflow { .. } => {
             vec![format!("p_{id}_output"), format!("p_{id}_error")]
         }
         WorkflowNodeData::Decision {
@@ -789,6 +790,22 @@ fn out_shape(node: &WorkflowNode, in_shape: &TokenShape) -> TokenShape {
                 Provenance::new(node, "loop iteration counter (injected by t_*_enter)"),
             );
             o
+        }
+
+        // Sub-workflow: `t_*_join` maps the child's terminal result onto the
+        // workflow token via the declared `output` port. With declared fields
+        // downstream sees exactly those; otherwise the child result is opaque
+        // here (we can't see across the spawned-child boundary at analyze time).
+        WorkflowNodeData::SubWorkflow { output, .. } => {
+            if output.fields.is_empty() {
+                in_shape.clone()
+            } else {
+                port_to_shape(
+                    output,
+                    node,
+                    "declared sub-workflow result (mapped at t_*_join)",
+                )
+            }
         }
 
         // Pure routing / pass-through patterns: token shape unchanged.

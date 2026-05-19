@@ -12,7 +12,8 @@
 		| 'automated'
 		| 'phase-update'
 		| 'progress-update'
-		| 'failure';
+		| 'failure'
+		| 'sub-workflow';
 
 	// tailwind-variants with explicit per-kind classes — Tailwind's JIT
 	// scanner can't expand `border-node-${kind}` dynamically.
@@ -31,6 +32,7 @@
 				'phase-update':    'from-node-phase-update/10    to-node-phase-update/25    border-node-phase-update/60',
 				'progress-update': 'from-node-progress-update/10 to-node-progress-update/25 border-node-progress-update/60',
 				'failure':         'from-node-failure/10         to-node-failure/25         border-node-failure/60',
+				'sub-workflow':    'from-node-sub-workflow/10    to-node-sub-workflow/25    border-node-sub-workflow/60',
 			},
 			selected: {
 				true: 'shadow-md',
@@ -49,6 +51,7 @@
 			{ kind: 'phase-update',    selected: true, class: 'border-node-phase-update' },
 			{ kind: 'progress-update', selected: true, class: 'border-node-progress-update' },
 			{ kind: 'failure',         selected: true, class: 'border-node-failure' },
+			{ kind: 'sub-workflow',    selected: true, class: 'border-node-sub-workflow' },
 		],
 		defaultVariants: {
 			kind: 'start',
@@ -70,6 +73,7 @@
 		'phase-update':    'bg-node-phase-update',
 		'progress-update': 'bg-node-progress-update',
 		'failure':         'bg-node-failure',
+		'sub-workflow':    'bg-node-sub-workflow',
 	};
 
 	const HEADER_BORDER: Record<WorkflowNodeKind, string> = {
@@ -84,6 +88,7 @@
 		'phase-update':    'border-node-phase-update/30',
 		'progress-update': 'border-node-progress-update/30',
 		'failure':         'border-node-failure/30',
+		'sub-workflow':    'border-node-sub-workflow/30',
 	};
 
 	const HANDLE_BORDER: Record<WorkflowNodeKind, string> = {
@@ -98,6 +103,7 @@
 		'phase-update':    '!border-node-phase-update',
 		'progress-update': '!border-node-progress-update',
 		'failure':         '!border-node-failure',
+		'sub-workflow':    '!border-node-sub-workflow',
 	};
 
 	export function workflowNodeIconBg(kind: WorkflowNodeKind): string {

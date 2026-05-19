@@ -11,8 +11,11 @@
 	import LlmConfigPanel from './automated/LlmConfigPanel.svelte';
 	import FileOpsConfigPanel from './automated/FileOpsConfigPanel.svelte';
 	import KreuzbergConfigPanel from './automated/KreuzbergConfigPanel.svelte';
+	import CatalogueQueryConfigPanel from './automated/CatalogueQueryConfigPanel.svelte';
 	import PortsSection from './PortsSection.svelte';
 	import { defaultOutputPort, emptyOutputPort } from '$lib/editor/automated-ports';
+	import { GPU_JOB_TEMPLATES } from '$lib/editor/deployment-targets';
+	import { FormField } from '$lib/components/ui/form-field';
 	import type { YjsGraphBinding } from '$lib/yjs/graph-binding.svelte';
 
 	type Port = components['schemas']['Port'];
@@ -45,7 +48,8 @@
 		http: { method: 'GET', url: '' },
 		llm: { provider: 'openai', model: '', prompt: '' },
 		file_ops: { operation: 'stat', path: '', storage: { backend: 'local', endpoint: '' } },
-		kreuzberg: { mode: 'single' }
+		kreuzberg: { mode: 'single' },
+		catalogue_query: { category: '', limit: 50 }
 	};
 
 	const backendLabels: Record<ExecutionBackendType, string> = {
@@ -55,7 +59,8 @@
 		http: 'HTTP Request',
 		llm: 'LLM (AI Model)',
 		file_ops: 'File Operations',
-		kreuzberg: 'Document Extraction'
+		kreuzberg: 'Document Extraction',
+		catalogue_query: 'Catalogue Query'
 	};
 
 	function isExecutionBackendType(v: string): v is ExecutionBackendType {
@@ -86,6 +91,31 @@
 			executionSpec: { ...data.executionSpec, entrypoint }
 		});
 	}
+
+	// Deployment model — inline (executor lifecycle) vs scheduled (scheduler-net,
+	// Nomad/Slurm GPU). Optional-chained so legacy templates (no field) render
+	// as inline; Rust `#[serde(default)]` covers the wire side.
+	const deploymentMode = $derived(data.deploymentModel?.mode ?? 'inline');
+	const jobTemplate = $derived(
+		data.deploymentModel?.mode === 'scheduled' ? data.deploymentModel.jobTemplate : ''
+	);
+
+	function setDeploymentMode(mode: string) {
+		onchange({
+			...data,
+			deploymentModel:
+				mode === 'scheduled'
+					? {
+							mode: 'scheduled',
+							jobTemplate: jobTemplate || GPU_JOB_TEMPLATES[0].value
+						}
+					: { mode: 'inline' }
+		});
+	}
+
+	function setJobTemplate(v: string) {
+		onchange({ ...data, deploymentModel: { mode: 'scheduled', jobTemplate: v } });
+	}
 </script>
 
 <div class="space-y-1.5">
@@ -107,6 +137,7 @@
 			<Select.Item value="llm" label="LLM (AI Model)" />
 			<Select.Item value="file_ops" label="File Operations" />
 			<Select.Item value="kreuzberg" label="Document Extraction" />
+			<Select.Item value="catalogue_query" label="Catalogue Query" />
 		</Select.Content>
 	</Select.Root>
 </div>
@@ -134,7 +165,57 @@
 	<FileOpsConfigPanel config={data.executionSpec.config as Record<string, unknown>} {readonly} onchange={handleConfigChange} />
 {:else if data.executionSpec.backendType === 'kreuzberg'}
 	<KreuzbergConfigPanel config={data.executionSpec.config as Record<string, unknown>} {readonly} onchange={handleConfigChange} />
+{:else if data.executionSpec.backendType === 'catalogue_query'}
+	<CatalogueQueryConfigPanel config={data.executionSpec.config as Record<string, unknown>} {readonly} onchange={handleConfigChange} />
 {/if}
+
+<div class="space-y-2 pt-3 border-t border-border/40">
+	<span class="text-sm font-medium text-muted-foreground">Deployment</span>
+	<Select.Root
+		type="single"
+		value={deploymentMode}
+		onValueChange={(v) => {
+			if (v) setDeploymentMode(v);
+		}}
+		disabled={readonly}
+	>
+		<Select.Trigger disabled={readonly} data-testid="select-deployment-model">
+			{deploymentMode === 'scheduled'
+				? 'Scheduled (Nomad/Slurm, GPU)'
+				: 'Inline (immediate)'}
+		</Select.Trigger>
+		<Select.Content>
+			<Select.Item value="inline" label="Inline (immediate)" />
+			<Select.Item value="scheduled" label="Scheduled (Nomad/Slurm, GPU)" />
+		</Select.Content>
+	</Select.Root>
+	{#if deploymentMode === 'scheduled'}
+		<FormField label="Job template" for="deployment-job-template">
+			<Select.Root
+				type="single"
+				value={jobTemplate}
+				onValueChange={(v) => {
+					if (v) setJobTemplate(v);
+				}}
+				disabled={readonly}
+			>
+				<Select.Trigger disabled={readonly} data-testid="select-job-template">
+					{GPU_JOB_TEMPLATES.find((t) => t.value === jobTemplate)?.label ??
+						(jobTemplate || 'Select a job template…')}
+				</Select.Trigger>
+				<Select.Content>
+					{#each GPU_JOB_TEMPLATES as t (t.value)}
+						<Select.Item value={t.value} label={t.label} />
+					{/each}
+				</Select.Content>
+			</Select.Root>
+		</FormField>
+		<p class="text-sm text-muted-foreground">
+			Submitted through the scheduler-net, which owns queueing, GPU
+			allocation and retry/backoff.
+		</p>
+	{/if}
+</div>
 
 <div class="space-y-2 pt-3 border-t border-border/40">
 	<div class="flex items-center justify-between">

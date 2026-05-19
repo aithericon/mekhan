@@ -2,14 +2,17 @@
 //! places/transitions via the [`NodeLowering`] trait. [`expand_node`] is the
 //! thin dispatch; the real work lives in one `lower_*` function per variant.
 
+use crate::compiler::compile::SubWorkflowAir;
 use crate::compiler::error::CompileError;
+use crate::compiler::well_known;
 use crate::compiler::rhai_gen::{
     build_join_merge_logic, build_merge_logic, build_retry_topology, interpolate_to_rhai_expr,
     json_to_rhai_literal, rhai_str_escape, with_pluck_prelude,
 };
 use crate::compiler::token_shape::YIELD_LOGIC;
 use crate::models::template::{
-    FieldMapping, PhaseUpdateStatus, WorkflowEdge, WorkflowNode, WorkflowNodeData,
+    DeploymentModel, ExecutionBackendType, FieldMapping, PhaseUpdateStatus, ResourceConfig,
+    WorkflowEdge, WorkflowNode, WorkflowNodeData,
 };
 use aithericon_executor_domain::InputSource;
 use aithericon_sdk::components::executor_lifecycle::{executor_lifecycle, ExecutorBridges};
@@ -83,6 +86,9 @@ pub(crate) struct LoweringCtx<'a, 'c> {
     pub(crate) ports: &'c mut HashMap<String, NodePorts>,
     pub(crate) fixups: &'c mut PostProcess,
     pub(crate) node_files: &'a HashMap<String, InputSource>,
+    /// Pre-resolved child sub-workflow AIR, keyed by SubWorkflow node id.
+    /// Empty unless the publish/preview path populated it.
+    pub(crate) sub_air: &'a SubWorkflowAir,
 }
 
 /// Expand one workflow node into Petri structure.
@@ -105,6 +111,7 @@ impl NodeLowering for WorkflowNode {
             WorkflowNodeData::PhaseUpdate { .. } => lower_phase_update(cx),
             WorkflowNodeData::ProgressUpdate { .. } => lower_progress_update(cx),
             WorkflowNodeData::Failure { .. } => lower_failure(cx),
+            WorkflowNodeData::SubWorkflow { .. } => lower_subworkflow(cx),
             WorkflowNodeData::Trigger { .. } => {
                 // Trigger nodes are NOT compiled into AIR — they are a
                 // pre-compile concern owned by the trigger dispatcher
@@ -125,6 +132,7 @@ pub(crate) fn expand_node(
     ports: &mut HashMap<String, NodePorts>,
     fixups: &mut PostProcess,
     node_files: &HashMap<String, InputSource>,
+    sub_air: &SubWorkflowAir,
 ) -> Result<(), CompileError> {
     let mut cx = LoweringCtx {
         node,
@@ -134,6 +142,7 @@ pub(crate) fn expand_node(
         ports,
         fixups,
         node_files,
+        sub_air,
     };
     node.lower(&mut cx)
 }
@@ -752,6 +761,31 @@ fn lower_human_task(cx: &mut LoweringCtx) -> Result<(), CompileError> {
 }
 
 fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileError> {
+    // Scheduled steps dispatch through the long-lived scheduler-net instead of
+    // the inline executor lifecycle. Delegated early so the inline path below
+    // is byte-identical to pre-feature behaviour (guarded by
+    // `automated_step_inline_unchanged`). `matches!` drops the borrow
+    // immediately so the delegate can take `cx` mutably.
+    if matches!(
+        &cx.node.data,
+        WorkflowNodeData::AutomatedStep {
+            deployment_model: DeploymentModel::Scheduled { .. },
+            ..
+        }
+    ) {
+        return lower_automated_step_scheduled(cx);
+    }
+
+    // Catalogue-query backend: no executor job — lower to the engine's
+    // registered `catalogue_lookup` effect instead of the executor lifecycle.
+    if matches!(
+        &cx.node.data,
+        WorkflowNodeData::AutomatedStep { execution_spec, .. }
+            if execution_spec.backend_type == ExecutionBackendType::CatalogueQuery
+    ) {
+        return lower_catalogue_query(cx);
+    }
+
     let id = &cx.node.id;
     let WorkflowNodeData::AutomatedStep {
         label,
@@ -874,6 +908,198 @@ fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileError> {
             // output. An edge from the node's error handle (source_handle
             // == "error") wires to `p_error` via `find_output_place`; if no
             // error edge exists `p_error` simply has no consumer.
+            output_places: vec![
+                (None, p_ctrl),
+                (Some("error".to_string()), p_error),
+            ],
+            input_places: HashMap::new(),
+        },
+    );
+    Ok(())
+}
+
+/// `Scheduled` AutomatedStep: submit a `SchedulerSubmitInput` to the
+/// long-lived scheduler-net (`well_known::SCHEDULER_NET_ID`) and take the
+/// result / failure back on its named reply channels. The scheduler-net owns
+/// queueing, the Nomad/Slurm job template (`job_template_id`), resource
+/// allocation, and **retry/backoff** for queued execution — so the workflow
+/// net does not re-run a scheduled job itself; a scheduler failure routes
+/// straight to the node's error output. No `scoped_prefix` (the topology is
+/// small and `p_{id}_*` / `t_{id}_*` ids are already node-unique), so the
+/// reply-channel place names line up with `bridge_out_reply_channels`.
+fn lower_automated_step_scheduled(cx: &mut LoweringCtx) -> Result<(), CompileError> {
+    let id = cx.node.id.clone();
+    let WorkflowNodeData::AutomatedStep {
+        label,
+        execution_spec,
+        deployment_model,
+        ..
+    } = &cx.node.data
+    else {
+        unreachable!("lower_automated_step_scheduled on non-AutomatedStep node")
+    };
+    let label = label.clone();
+    let DeploymentModel::Scheduled {
+        job_template,
+        resources,
+    } = deployment_model
+    else {
+        unreachable!("lower_automated_step_scheduled on non-Scheduled step")
+    };
+    let job_template = job_template.clone();
+    let resources: Option<ResourceConfig> = resources.clone();
+    let backend_type = execution_spec.backend_type;
+
+    let (validated_config, staged_inputs) =
+        crate::compiler::backend_configs::validate_and_transform(
+            &backend_type,
+            &execution_spec.config,
+            cx.node_files,
+        )?;
+    let config_rhai = json_to_rhai_literal(&validated_config);
+    let inputs_rhai =
+        json_to_rhai_literal(&serde_json::to_value(&staged_inputs).unwrap_or_default());
+    let resources_rhai = json_to_rhai_literal(
+        &serde_json::to_value(&resources).unwrap_or(serde_json::Value::Null),
+    );
+    let backend_wire = backend_type.as_wire_str();
+    let job_template_lit = rhai_str_escape(&job_template);
+    let id_lit = rhai_str_escape(&id);
+
+    let ctx = &mut *cx.ctx;
+
+    let p_input: PlaceHandle<DynamicToken> =
+        ctx.state(format!("p_{id}_input"), format!("{label} - Input"));
+    let p_output: PlaceHandle<DynamicToken> =
+        ctx.state(format!("p_{id}_output"), format!("{label} - Output"));
+    let p_error: PlaceHandle<DynamicToken> =
+        ctx.state(format!("p_{id}_error"), format!("{label} - Error"));
+
+    // Named reply-channel places the scheduler routes back to.
+    let result_place = format!("p_{id}_sched_result");
+    let failure_place = format!("p_{id}_sched_failure");
+    let sched_result: PlaceHandle<DynamicToken> = ctx.bridge_reply_channel(
+        result_place.clone(),
+        format!("{label} - Scheduler Result"),
+        "result",
+    );
+    let sched_failure: PlaceHandle<DynamicToken> = ctx.bridge_reply_channel(
+        failure_place.clone(),
+        format!("{label} - Scheduler Failure"),
+        "failure",
+    );
+    let sched_out: PlaceHandle<DynamicToken> = ctx.bridge_out_reply_channels(
+        format!("p_{id}_sched_out"),
+        format!("{label} - Submit to Scheduler"),
+        well_known::SCHEDULER_NET_ID,
+        well_known::SCHEDULER_JOB_QUEUE,
+        &[
+            ("result", result_place.as_str()),
+            ("failure", failure_place.as_str()),
+        ],
+    );
+
+    // prepare: snapshot the upstream token into `input.json` and wrap it as a
+    // SchedulerSubmitInput { job_id, model_name, run, retries, max_retries,
+    // job_template_id, spec{ backend, inputs, outputs, config, resources } }.
+    ctx.transition(format!("t_{id}_prepare"), format!("{label} - Prepare"))
+        .auto_input("input", &p_input)
+        .auto_output("job", &sched_out)
+        .logic(format!(
+            r#"let d = #{{}}; d.job_id = "{id_lit}"; d.model_name = "{id_lit}"; d.run = 0; d.retries = 0; d.max_retries = 0; d.job_template_id = "{job_template_lit}"; let job_inputs = {inputs_rhai}; job_inputs.push(#{{ "name": "input.json", "source": #{{ "type": "inline", "value": input }} }}); d.spec = #{{ "backend": "{backend_wire}", "inputs": job_inputs, "outputs": [], "config": {config_rhai}, "resources": {resources_rhai}, "stream_events": ["metric", "progress", "phase", "log"] }}; #{{ job: d }}"#
+        ));
+
+    ctx.transition(format!("t_{id}_to_output"), format!("{label} - To Output"))
+        .auto_input("res", &sched_result)
+        .auto_output("output", &p_output)
+        .logic(r#"#{ output: res }"#);
+
+    ctx.transition(format!("t_{id}_to_error"), format!("{label} - To Error"))
+        .auto_input("fail", &sched_failure)
+        .auto_output("error", &p_error)
+        .logic(r#"#{ error: fail }"#);
+
+    // Same data/control split + port registration tail as the inline path.
+    let (data_place_id, p_ctrl) = split_outputs(ctx, &id, &label, &p_output);
+    cx.fixups.data_places.insert(id.clone(), data_place_id);
+    cx.ports.insert(
+        id.clone(),
+        NodePorts {
+            input_place: p_input,
+            output_places: vec![
+                (None, p_ctrl),
+                (Some("error".to_string()), p_error),
+            ],
+            input_places: HashMap::new(),
+        },
+    );
+    Ok(())
+}
+
+/// `catalogue_query` backend: a point-in-time read of the data catalogue.
+/// No executor job / lifecycle / retry — we build the normalized `query`
+/// token from the editor config and fire the engine's already-registered
+/// `catalogue_lookup` builtin effect (input port `query`, output `results`),
+/// mirroring how `lower_start` emits `catalogue_register`.
+fn lower_catalogue_query(cx: &mut LoweringCtx) -> Result<(), CompileError> {
+    let id = cx.node.id.clone();
+    let WorkflowNodeData::AutomatedStep {
+        label,
+        execution_spec,
+        ..
+    } = &cx.node.data
+    else {
+        unreachable!("lower_catalogue_query on non-AutomatedStep node")
+    };
+    let label = label.clone();
+    let backend_type = execution_spec.backend_type;
+
+    let (query_token, _no_inputs) =
+        crate::compiler::backend_configs::validate_and_transform(
+            &backend_type,
+            &execution_spec.config,
+            cx.node_files,
+        )?;
+    let query_rhai = json_to_rhai_literal(&query_token);
+
+    let ctx = &mut *cx.ctx;
+    let p_input: PlaceHandle<DynamicToken> =
+        ctx.state(format!("p_{id}_input"), format!("{label} - Input"));
+    let p_query: PlaceHandle<DynamicToken> =
+        ctx.state(format!("p_{id}_query"), format!("{label} - Query"));
+    let p_output: PlaceHandle<DynamicToken> =
+        ctx.state(format!("p_{id}_output"), format!("{label} - Results"));
+    let p_error: PlaceHandle<DynamicToken> =
+        ctx.state(format!("p_{id}_error"), format!("{label} - Error"));
+
+    // Build the query token from the (validated) editor config. The inbound
+    // workflow token is consumed but not used — the query is authored, not
+    // data-driven, in v1.
+    ctx.transition(
+        format!("t_{id}_q_build"),
+        format!("{label} - Build Query"),
+    )
+    .auto_input("input", &p_input)
+    .auto_output("query", &p_query)
+    // The inbound token is consumed by the arc; the query is authored, not
+    // data-driven (v1), so the logic ignores `input` and emits the token.
+    .logic(format!("#{{ query: {query_rhai} }}"));
+
+    // Fire the registered catalogue_lookup effect (input "query" → "results").
+    ctx.transition(
+        format!("t_{id}_lookup"),
+        format!("{label} - Catalogue Lookup"),
+    )
+    .auto_input("query", &p_query)
+    .auto_output("results", &p_output)
+    .builtin_effect(&effects::CATALOGUE_LOOKUP);
+
+    let (data_place_id, p_ctrl) = split_outputs(ctx, &id, &label, &p_output);
+    cx.fixups.data_places.insert(id.clone(), data_place_id);
+    cx.ports.insert(
+        id.clone(),
+        NodePorts {
+            input_place: p_input,
             output_places: vec![
                 (None, p_ctrl),
                 (Some("error".to_string()), p_error),
@@ -1465,6 +1691,180 @@ fn lower_failure(cx: &mut LoweringCtx) -> Result<(), CompileError> {
         NodePorts {
             input_place: p_input,
             output_places: vec![(None, p_out)],
+            input_places: HashMap::new(),
+        },
+    );
+    Ok(())
+}
+
+/// Sub-workflow call/return. Reuses the engine's `spawn_net` machinery: the
+/// child template is recursively compiled + made spawn-callable at the
+/// *parent's* publish time and supplied via `cx.sub_air` (frozen per
+/// `version_pin`). We emit the same parent-side topology `Context::spawn`
+/// produces — request → spawn effect (child AIR embedded in `effect_config`)
+/// → `bridge_out` of the mapped initial token to a freshly spawned child,
+/// with the child's terminal result returning on a `bridge_in` reply place
+/// and its failure on a `bridge_in` failure place. The callable contract
+/// guarantees the child exposes the fixed boundary places `inbox`
+/// (bridge_in), `reply_out` (bridge_reply) and `fail_out` (bridge_out_param).
+///
+/// Sequential call/return is the intended pattern (the parent waits for the
+/// child result before continuing — exactly the BO campaign loop). Concurrent
+/// in-flight invocations of the *same* SubWorkflow node are not supported in
+/// v1; reply routing is per parent-instance via `ReplyRouting.reply_to`.
+fn lower_subworkflow(cx: &mut LoweringCtx) -> Result<(), CompileError> {
+    let id = &cx.node.id;
+    let WorkflowNodeData::SubWorkflow {
+        label,
+        template_id,
+        input_mapping,
+        output,
+        ..
+    } = &cx.node.data
+    else {
+        unreachable!("lower_subworkflow on non-SubWorkflow node")
+    };
+
+    // The child AIR is resolved + made-callable + frozen by the publish/preview
+    // handler. Absent ⇒ this graph was compiled through a path that doesn't
+    // resolve sub-workflows (back-compat `compile_to_air`); surface it keyed to
+    // the node so the editor canvas rings it.
+    let resolved = cx
+        .sub_air
+        .get(id)
+        .ok_or_else(|| CompileError::SubWorkflowUnresolved {
+            node_id: id.clone(),
+            template_id: template_id.to_string(),
+        })?;
+    let child_air = resolved.air.clone();
+    let child_scenario_name = format!("subworkflow_{id}_child");
+
+    // input_mapping → the token bridged into the child's Start. Empty ⇒ the
+    // inbound accumulating token passes through unchanged.
+    let (im_lets, im_val) = result_mapping_rhai(input_mapping);
+    let init_expr = if input_mapping.is_empty() {
+        "input".to_string()
+    } else {
+        im_val
+    };
+
+    // Declared output port → how the child's terminal result maps back onto
+    // the workflow token at the join. Empty fields ⇒ pass the child result
+    // through opaquely (consistent with AutomatedStep's envelope semantics).
+    let join_logic = if output.fields.is_empty() {
+        r#"#{ output: reply }"#.to_string()
+    } else {
+        let entries: Vec<String> = output
+            .fields
+            .iter()
+            .map(|f| {
+                let k = serde_json::to_string(&f.name)
+                    .unwrap_or_else(|_| "\"\"".to_string());
+                format!("{k}: reply[{k}]")
+            })
+            .collect();
+        format!("#{{ output: #{{ {} }} }}", entries.join(", "))
+    };
+
+    let ctx = &mut *cx.ctx;
+
+    // Node interface places.
+    let p_input: PlaceHandle<DynamicToken> =
+        ctx.state(format!("p_{id}_input"), format!("{label} - Input"));
+    let p_output: PlaceHandle<DynamicToken> =
+        ctx.state(format!("p_{id}_output"), format!("{label} - Output"));
+    let p_error: PlaceHandle<DynamicToken> =
+        ctx.state(format!("p_{id}_error"), format!("{label} - Error"));
+
+    // Spawn request + confirmation.
+    let p_request: PlaceHandle<DynamicToken> = ctx.state(
+        format!("p_{id}_request"),
+        format!("{label} - Spawn Request"),
+    );
+    let p_spawned: PlaceHandle<DynamicToken> =
+        ctx.state(format!("p_{id}_spawned"), format!("{label} - Spawned"));
+
+    // Bridge places — fixed callable contract on the child.
+    let reply_place_id = format!("p_{id}_reply");
+    let failure_place_id = format!("p_{id}_failure");
+    let p_reply: PlaceHandle<DynamicToken> = ctx.bridge_in_from(
+        reply_place_id.clone(),
+        format!("{label} - Reply"),
+        child_scenario_name.clone(),
+        "reply_out",
+    );
+    let p_failure: PlaceHandle<DynamicToken> = ctx.bridge_in_from(
+        failure_place_id.clone(),
+        format!("{label} - Failure"),
+        child_scenario_name.clone(),
+        "fail_out",
+    );
+    let p_outbox: PlaceHandle<DynamicToken> = ctx.bridge_out_labeled(
+        format!("p_{id}_outbox"),
+        format!("{label} - Outbox"),
+        "$result.child_net_id",
+        "inbox",
+        Some(reply_place_id.clone()),
+        child_scenario_name.clone(),
+    );
+
+    // Shape: upstream token → spawn request { initial_token, target_place }.
+    ctx.transition(
+        format!("t_{id}_shape"),
+        format!("{label} - Prepare Sub-workflow"),
+    )
+    .auto_input("input", &p_input)
+    .auto_output("spawn_request", &p_request)
+    .logic_rhai(with_pluck_prelude(&format!(
+        r#"{im_lets}let __ci = ({init_expr}); #{{ spawn_request: #{{ initial_token: __ci, target_place: "inbox" }} }}"#
+    )))
+    .done();
+
+    // Spawn effect: embed the made-callable child AIR; the handler injects
+    // `parent_net_id` and merges `reply_place`/`failure_place` into the child's
+    // params so its boundary bridges resolve back to this parent instance.
+    let effect_config = json!({
+        "scenario": child_air,
+        "parameters": {
+            "reply_place": reply_place_id,
+            "failure_place": failure_place_id,
+        },
+        "template_id": child_scenario_name,
+    });
+    ctx.transition(format!("t_{id}_spawn"), format!("{label} - Spawn Child"))
+        .auto_input("spawn_request", &p_request)
+        .auto_output("spawned", &p_spawned)
+        .auto_output("bridge", &p_outbox)
+        .effect_with_config(effects::SPAWN_NET.handler_id, effect_config);
+
+    // Join success: child terminal result → node output (declared mapping).
+    ctx.transition(format!("t_{id}_join"), format!("{label} - Join Result"))
+        .auto_input("reply", &p_reply)
+        .auto_output("output", &p_output)
+        .logic(join_logic);
+
+    // Failure: child failure → node error output.
+    ctx.transition(
+        format!("t_{id}_fail"),
+        format!("{label} - On Child Failure"),
+    )
+    .auto_input("reply", &p_failure)
+    .auto_output("error", &p_error)
+    .logic(r#"#{ error: reply }"#);
+
+    // Foundation split: park the child result as write-once data, forward the
+    // slim control token. Identical tail to lower_automated_step.
+    let (data_place_id, p_ctrl) = split_outputs(ctx, id, label, &p_output);
+    cx.fixups.data_places.insert(id.clone(), data_place_id);
+
+    cx.ports.insert(
+        id.clone(),
+        NodePorts {
+            input_place: p_input,
+            output_places: vec![
+                (None, p_ctrl),
+                (Some("error".to_string()), p_error),
+            ],
             input_places: HashMap::new(),
         },
     );

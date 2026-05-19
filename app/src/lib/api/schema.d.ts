@@ -1466,6 +1466,21 @@ export interface components {
             signal_key: string;
         };
         /**
+         * @description Where an `AutomatedStep`'s job runs. Internally tagged on the wire:
+         *     `{"mode":"inline"}` or `{"mode":"scheduled","jobTemplate":"...",
+         *     "resources":{...}}`. Keep the `mode` strings in lockstep with the
+         *     `snake_case` derive.
+         */
+        DeploymentModel: {
+            /** @enum {string} */
+            mode: "inline";
+        } | {
+            jobTemplate: string;
+            /** @enum {string} */
+            mode: "scheduled";
+            resources?: null | components["schemas"]["ResourceConfig"];
+        };
+        /**
          * @description One entry in a `download` task block. Mirrors the frontend `DownloadItem`
          *     (`app/src/lib/hpi/types.ts`) field-for-field on the wire.
          */
@@ -1523,7 +1538,7 @@ export interface components {
          *     `"llm"`, `"file_ops"`, `"kreuzberg"`.
          * @enum {string}
          */
-        ExecutionBackendType: "python" | "process" | "docker" | "http" | "llm" | "file_ops" | "kreuzberg";
+        ExecutionBackendType: "python" | "process" | "docker" | "http" | "llm" | "file_ops" | "kreuzberg" | "catalogue_query";
         ExecutionSpecConfig: {
             backendType: components["schemas"]["ExecutionBackendType"];
             config: unknown;
@@ -2150,6 +2165,15 @@ export interface components {
          * @enum {string}
          */
         ReplyMode: "fire_and_forget" | "wait_for_result" | "sse";
+        /** @description Optional resource hints forwarded to the scheduler for a `Scheduled` step. */
+        ResourceConfig: {
+            /** Format: int32 */
+            cpuMhz?: number | null;
+            /** Format: int32 */
+            gpu?: number | null;
+            /** Format: int32 */
+            memoryMb?: number | null;
+        };
         /**
          * @description Retry behaviour for an `AutomatedStep` whose execution fails or times out.
          *
@@ -2437,6 +2461,23 @@ export interface components {
             graph?: null | components["schemas"]["WorkflowGraph"];
             name?: string | null;
         };
+        /**
+         * @description Which concrete child-template version a `SubWorkflow` embeds. Internally
+         *     tagged on the wire: `{"mode":"latest"}` or `{"mode":"pinned","version":3}`.
+         *     `Latest` is an *authoring* intent only — it is resolved to a concrete
+         *     version at the parent's publish time and the resolved AIR is frozen into
+         *     the parent, so runtime is always deterministic / replay-safe. Keep the
+         *     `mode` strings in lockstep with the `snake_case` derive.
+         */
+        VersionPin: {
+            /** @enum {string} */
+            mode: "latest";
+        } | {
+            /** @enum {string} */
+            mode: "pinned";
+            /** Format: int32 */
+            version: number;
+        };
         Viewport: {
             /** Format: double */
             x: number;
@@ -2593,6 +2634,15 @@ export interface components {
             /** @enum {string} */
             type: "human_task";
         } | {
+            /**
+             * @description Where/how the job is dispatched. `Inline` (default) = the current
+             *     direct executor-lifecycle path. `Scheduled` = submit through the
+             *     long-lived scheduler-net (Nomad/Slurm) for queued / GPU execution,
+             *     optionally pinning a job template + resources. `#[serde(default)]`
+             *     + `Inline` default ⇒ every existing template round-trips unchanged
+             *     (same precedent as `retry_policy`).
+             */
+            deploymentModel?: components["schemas"]["DeploymentModel"];
             description?: string | null;
             executionSpec: components["schemas"]["ExecutionSpecConfig"];
             /**
@@ -2719,6 +2769,39 @@ export interface components {
             source: components["schemas"]["TriggerSource"];
             /** @enum {string} */
             type: "trigger";
+        } | {
+            description?: string | null;
+            /**
+             * @description Parent upstream token → child Start `initial` port fields. Each
+             *     entry's `expression` is a Rhai expression over the inbound token;
+             *     together they assemble the token bridged into the child. Empty
+             *     (the default) passes the inbound token through unchanged.
+             */
+            inputMapping?: components["schemas"]["FieldMapping"][];
+            label: string;
+            /**
+             * @description Declared shape of the child's terminal result, mapped back onto the
+             *     workflow token at the join. Empty fields ⇒ pass the child result
+             *     through unchanged (Json). Authoring can prefill this from the
+             *     child's End `terminal` port.
+             */
+            output?: components["schemas"]["Port"];
+            /**
+             * Format: uuid
+             * @description Stable identity of the child template family (any version row's
+             *     `base_template_id`/`id` — resolution picks the concrete row per
+             *     `version_pin` at publish time).
+             */
+            templateId: string;
+            /** @enum {string} */
+            type: "sub_workflow";
+            /**
+             * @description Which concrete version of the child to embed. `Latest` resolves the
+             *     family's `is_latest` row *at the parent's publish time* and freezes
+             *     that concrete version into the embedded AIR; `Pinned` freezes an
+             *     explicit version. Either way the published parent is deterministic.
+             */
+            versionPin?: components["schemas"]["VersionPin"];
         };
         WorkflowTemplate: {
             air_json?: unknown;

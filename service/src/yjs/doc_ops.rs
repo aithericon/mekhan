@@ -460,6 +460,24 @@ pub fn write_node_config(
             }
             config.insert(txn, "enabled", *enabled);
         }
+        WorkflowNodeData::SubWorkflow {
+            template_id,
+            version_pin,
+            input_mapping,
+            output,
+            ..
+        } => {
+            config.insert(txn, "templateId", template_id.to_string());
+            let vp_val = serde_json::to_value(version_pin).unwrap_or_default();
+            config.insert(txn, "versionPin", json_value_to_any(&vp_val));
+            if !input_mapping.is_empty() {
+                let im_val = serde_json::to_value(input_mapping)
+                    .unwrap_or(serde_json::Value::Array(vec![]));
+                config.insert(txn, "inputMapping", json_value_to_any(&im_val));
+            }
+            let out_val = serde_json::to_value(output).unwrap_or_default();
+            config.insert(txn, "output", json_value_to_any(&out_val));
+        }
     }
 }
 
