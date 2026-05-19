@@ -71,6 +71,7 @@ down:
     @just dev::down-mekhan   || true
     @just dev::down-engine   || true
     @just dev::down-executor || true
+    @just dev::_kill nomad   || true
     @just dev::_infra-down
 
 # Restart the whole stack
@@ -98,7 +99,7 @@ status:
     docker compose ps --format "table {{ '{{.Name}}' }}\t{{ '{{.Status}}' }}\t{{ '{{.Ports}}' }}" 2>/dev/null || echo "  (compose not running)"
     echo ""
     echo "── native daemons ─────────────────────────────────────"
-    for name in executor engine mekhan app; do
+    for name in executor engine nomad mekhan app; do
       pf="{{pid_dir}}/$name.pid"
       if [ -s "$pf" ] && kill -0 "$(cat "$pf")" 2>/dev/null; then
         printf "  %-10s up  (pid %s)\n" "$name" "$(cat "$pf")"
@@ -253,7 +254,13 @@ down-executor:
 
 # ── Engine (engine/core-engine) ──────────────────────────────────────────────
 
-up-engine:
+# scheduler="nomad" additionally wires the engine to a Nomad scheduler
+# backend so `Scheduled` AutomatedSteps (which bridge to the long-lived
+# `scheduler-net`) can actually dispatch. Default "off" keeps dev minimal
+# (the plain `up` path is unchanged). Use `just dev scheduler-up` rather
+# than calling this directly with nomad — it also stands up the agent,
+# registers the job template, and deploys scheduler-net/executor-net.
+up-engine scheduler="off":
     #!/usr/bin/env bash
     set -euo pipefail
     just dev::_dirs
@@ -263,6 +270,18 @@ up-engine:
     fi
     echo "▶ building engine…"
     (cd engine && cargo build -p core-engine)
+
+    # core-engine's default features already include `nomad` + `executor`
+    # (engine/core-engine/Cargo.toml), so no rebuild is needed — the engine
+    # only needs the scheduler env to register the scheduler_submit handler.
+    # Exported (not -i) so the `env` invocation below inherits them.
+    if [ "{{scheduler}}" = "nomad" ]; then
+      echo "  ↳ scheduler: Nomad (SCHEDULER_BACKEND=nomad → scheduler-net)"
+      export SCHEDULER_BACKEND="nomad"
+      export NOMAD_ADDR="http://127.0.0.1:4646"
+      export SCHEDULER_JOB_TEMPLATE="petri-executor-worker"
+      export SCHEDULER_SIGNAL_ROUTES="running:sig_running,completed:sig_completed,failed:sig_failed"
+    fi
 
     echo "▶ starting engine on :3030…"
     nohup env \
@@ -279,6 +298,120 @@ up-engine:
 
 down-engine:
     @just dev::_kill engine
+
+# ── Nomad scheduler layer (for `Scheduled` AutomatedSteps) ───────────────────
+#
+# Stands up the real-Nomad dispatch path on top of a running dev stack so a
+# `Scheduled` AutomatedStep can actually run. The compiled parent net bridges
+# to the long-lived `scheduler-net`:
+#
+#   parent-net ─▶ scheduler-net ─(Nomad dispatch: petri-executor-worker)─▶
+#                 executor-net  ─▶ executor ─▶ result ─▶ back to parent-net
+#
+# Requires `just dev up` already running (reuses its NATS/rustfs + executor
+# binary) and the `nomad` binary on PATH. Restarts the engine with the
+# scheduler env. Reverse with `just dev scheduler-down`. Modeled on the
+# engine's `just demo three-layer` recipe, minus job-net (mekhan's compiled
+# parent net replaces it).
+scheduler-up:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just dev::_dirs
+
+    # 1. Nomad dev agent (pidfile-managed so `down`/`status` track it).
+    if curl -sf --max-time 2 http://127.0.0.1:4646/v1/status/leader >/dev/null 2>&1; then
+      echo "▶ nomad: already running"
+    else
+      command -v nomad >/dev/null 2>&1 || {
+        echo "✗ nomad binary not on PATH — brew install hashicorp/tap/nomad" >&2; exit 1; }
+      echo "▶ starting nomad dev agent…"
+      nohup nomad agent -dev -log-level WARN -config engine/infra/nomad/dev.hcl \
+        > "{{log_dir}}/nomad.log" 2>&1 &
+      echo $! > "{{pid_dir}}/nomad.pid"
+      for _ in $(seq 1 30); do
+        curl -sf --max-time 2 http://127.0.0.1:4646/v1/status/leader >/dev/null 2>&1 && break
+        sleep 1
+      done
+      curl -sf --max-time 2 http://127.0.0.1:4646/v1/status/leader >/dev/null 2>&1 || {
+        echo "✗ nomad did not become ready (log: {{log_dir}}/nomad.log)" >&2; exit 1; }
+      echo "  ✓ nomad (pid $(cat {{pid_dir}}/nomad.pid))  http://localhost:4646"
+    fi
+
+    # 2. Executor binary — reused by Nomad per job (run_to_completion).
+    exec_bin="$PWD/executor/target/debug/aithericon-executor-service"
+    if [ ! -x "$exec_bin" ]; then
+      echo "▶ building executor (features: {{executor_features}})…"
+      (cd executor && cargo build -p aithericon-executor-service --features "{{executor_features}}")
+    fi
+
+    # 3. Register the petri-executor-worker parameterized job: inject the
+    #    binary path + the dev S3 (rustfs) storage env so the Nomad-spawned
+    #    executor can pull node files mekhan staged at publish time. Bucket
+    #    must match mekhan-service's MEKHAN__S3__BUCKET (see up-executor).
+    echo "▶ registering petri-executor-worker Nomad job template…"
+    jq --arg bin "$exec_bin" --arg ep "{{s3_endpoint}}" \
+       '.Job.TaskGroups[0].Tasks[0].Config.command = $bin
+        | .Job.TaskGroups[0].Tasks[0].Env += {
+            "EXECUTOR_STORAGE__BACKEND": "s3",
+            "EXECUTOR_STORAGE__ENDPOINT": $ep,
+            "EXECUTOR_STORAGE__BUCKET": "mekhan-artifacts",
+            "EXECUTOR_STORAGE__REGION": "us-east-1",
+            "EXECUTOR_STORAGE__CREDENTIALS__ACCESS_KEY": "rustfsadmin",
+            "EXECUTOR_STORAGE__CREDENTIALS__SECRET_KEY": "rustfsadmin",
+            "EXECUTOR_PYTHON__ENABLED": "true",
+            "EXECUTOR_PYTHON__PREFER_UV": "true"
+          }' engine/infra/nomad/executor-job-template.json \
+      | curl -sf -X POST http://127.0.0.1:4646/v1/jobs -d @- >/dev/null
+    echo "  ✓ petri-executor-worker registered (binary: $exec_bin)"
+
+    # 4. Build infra nets, then restart the engine WITH the scheduler env.
+    echo "▶ building scheduler-net + executor-net examples…"
+    (cd engine && cargo build -p aithericon-sdk --example scheduler_net --example executor_net)
+    just dev::down-engine
+    just dev::up-engine nomad
+    echo "▶ waiting for engine API…"
+    for _ in $(seq 1 30); do
+      curl -sf http://localhost:3030/api/nets/metadata >/dev/null 2>&1 && break
+      sleep 1
+    done
+    curl -sf http://localhost:3030/api/nets/metadata >/dev/null 2>&1 || {
+      echo "✗ engine did not come back (log: {{log_dir}}/engine.log)" >&2; exit 1; }
+    sleep 2  # let the Nomad + executor watchers connect
+
+    # 5. Deploy BOTH infra nets, THEN activate (every bridge target must be
+    #    deployed before either net transitions to Running — Strict gate).
+    echo "▶ deploying + activating executor-net & scheduler-net…"
+    cd engine
+    ./target/debug/examples/executor_net --bridged --process --deploy --net-id executor-net >/dev/null
+    ./target/debug/examples/scheduler_net --deploy --net-id scheduler-net >/dev/null
+    ./target/debug/aithericon activate executor-net
+    ./target/debug/aithericon activate scheduler-net
+
+    echo ""
+    echo "✓ Nomad scheduler layer up:"
+    echo "  nomad        → http://localhost:4646/ui"
+    echo "  scheduler-net + executor-net deployed & running on :3030"
+    echo "  engine now started with SCHEDULER_BACKEND=nomad (Scheduled steps dispatch)"
+    echo ""
+    echo "  revert : just dev scheduler-down"
+
+# Tear down the Nomad scheduler layer; engine returns to plain dev config.
+scheduler-down:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if curl -sf --max-time 2 http://127.0.0.1:4646/v1/jobs >/dev/null 2>&1; then
+      echo "▶ purging Nomad child jobs…"
+      for jid in $(curl -sf http://127.0.0.1:4646/v1/jobs 2>/dev/null \
+        | jq -r '.[] | select(.ParentID != "") | .ID' 2>/dev/null); do
+        curl -sf -X DELETE "http://127.0.0.1:4646/v1/job/$jid?purge=true" >/dev/null 2>&1 || true
+      done
+    fi
+    just dev::_kill nomad || true
+    pkill -f "nomad agent -dev" 2>/dev/null || true
+    echo "▶ restarting engine without scheduler env…"
+    just dev::down-engine
+    just dev::up-engine
+    echo "  ✓ scheduler layer down; engine back on plain dev config"
 
 # ── Mekhan service (Rust backend) ────────────────────────────────────────────
 

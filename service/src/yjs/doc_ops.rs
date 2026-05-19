@@ -366,10 +366,25 @@ pub fn write_node_config(
             config.insert(txn, "steps", json_value_to_any(&steps_val));
         }
         WorkflowNodeData::AutomatedStep {
-            execution_spec, ..
+            execution_spec,
+            retry_policy,
+            deployment_model,
+            ..
         } => {
             let spec_val = serde_json::to_value(execution_spec).unwrap_or_default();
             config.insert(txn, "executionSpec", json_value_to_any(&spec_val));
+            // `retry_policy` and `deployment_model` are `#[serde(default)]` on
+            // AutomatedStep, so omitting them here makes the graph→Y.Doc seed
+            // (createTemplate) + publish's Y.Doc→graph reconstruction
+            // (`doc_to_graph`) silently reset them to defaults — losing an
+            // authored retry policy and, critically, collapsing a `Scheduled`
+            // step back to `Inline` (it would never reach scheduler-net).
+            // `input`/`output` are deliberately NOT persisted: they are
+            // re-derived from the backend (see their doc comments).
+            let retry_val = serde_json::to_value(retry_policy).unwrap_or_default();
+            config.insert(txn, "retryPolicy", json_value_to_any(&retry_val));
+            let dm_val = serde_json::to_value(deployment_model).unwrap_or_default();
+            config.insert(txn, "deploymentModel", json_value_to_any(&dm_val));
         }
         WorkflowNodeData::Decision {
             conditions,
