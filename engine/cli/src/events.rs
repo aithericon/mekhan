@@ -108,6 +108,7 @@ fn print_event(event: &Value) {
         "TokenCreated" => type_name.blue(),
         "TokenBridgedOut" => type_name.yellow(),
         "ErrorOccurred" => type_name.red().bold(),
+        "NetFailed" => type_name.red().bold(),
         _ => type_name.normal(),
     };
 
@@ -216,6 +217,22 @@ fn format_event_detail(event: &Value, type_name: &str) -> String {
                 .and_then(|v| v.as_str())
                 .unwrap_or("?");
             msg.to_string()
+        }
+        "NetFailed" => {
+            let tid = event
+                .get("transition_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
+            let tid = if tid.len() > 8 && tid.contains('-') {
+                &tid[..8]
+            } else {
+                tid
+            };
+            let reason = event
+                .get("reason")
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
+            format!("{tid}  {reason}")
         }
         _ => String::new(),
     }
