@@ -33,6 +33,14 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 5.0"
     }
+    # Talks directly to the cluster's Zitadel at id.aithericon.eu via its
+    # admin API. Same shape mekhan already uses for cyrilgdn/postgresql —
+    # the service repo owns its OIDC application registration the same way
+    # it owns its Postgres role.
+    zitadel = {
+      source  = "zitadel/zitadel"
+      version = "~> 1.2"
+    }
   }
 }
 
@@ -74,4 +82,17 @@ provider "aws" {
   }
 
   s3_use_path_style = true
+}
+
+# Zitadel — the cluster runs one instance at id.aithericon.eu shared across
+# all services. `var.zitadel_pat` is a Personal Access Token issued to the
+# IaC service user (stashed in Vault at secret/zitadel/iac-pat → field
+# `token`). The CI step exports it from Vault; locally, paste it into
+# .envrc. Insecure=false (TLS verify on) — Zitadel's cert is from
+# Let's Encrypt via Traefik.
+provider "zitadel" {
+  domain   = "id.aithericon.eu"
+  insecure = false
+  port     = "443"
+  token    = var.zitadel_pat
 }

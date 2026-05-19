@@ -159,6 +159,20 @@ variable "auth_mode" {
   }
 }
 
+# ── Zitadel ─────────────────────────────────────────────────────────────────
+
+variable "zitadel_pat" {
+  description = "Personal Access Token for the Zitadel IaC service user. Used by the zitadel TF provider to manage mekhan's project + OIDC application. Sourced from Vault at secret/zitadel/iac-pat (field: token)."
+  type        = string
+  sensitive   = true
+}
+
+variable "zitadel_issuer_url" {
+  description = "Public Zitadel issuer URL — baked into MEKHAN__AUTH__ISSUER_URL on the service."
+  type        = string
+  default     = "https://id.aithericon.eu"
+}
+
 variable "rust_log" {
   description = "RUST_LOG filter passed to the service"
   type        = string

@@ -73,6 +73,10 @@ steps:
       - export TF_VAR_s3_access_key=$AWS_ACCESS_KEY_ID
       - export TF_VAR_s3_secret_key=$AWS_SECRET_ACCESS_KEY
       - export TF_VAR_state_encryption_passphrase=$(vault kv get -field=state_encryption_passphrase secret/services/mekhan/dev)
+      # Zitadel admin PAT — used by the zitadel TF provider in deploy/dev/
+      # to manage mekhan's project + OIDC SPA application. Same single-token
+      # surface as everything else: rotate in Vault, no CI change needed.
+      - export TF_VAR_zitadel_pat=$(vault kv get -field=token secret/zitadel/iac-pat)
 
       # ── Override Patroni hostname to plain .service.consul ──
       # variables.tf defaults to the operator alt-domain

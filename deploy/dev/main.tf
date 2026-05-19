@@ -37,6 +37,12 @@ resource "nomad_job" "mekhan_service" {
     s3_secret_key     = var.s3_secret_key
     auth_mode         = var.auth_mode
     rust_log          = var.rust_log
+    # Zitadel — populated even in dev_noop mode (mekhan's config keys are
+    # tolerated as empty strings; we render them so flipping auth_mode to
+    # "bff" is a one-line tfvars change with no jobspec churn).
+    auth_issuer_url   = var.zitadel_issuer_url
+    auth_client_id    = zitadel_application_oidc.spa.client_id
+    auth_audience     = zitadel_application_oidc.spa.client_id
   })
 
   purge_on_destroy = true

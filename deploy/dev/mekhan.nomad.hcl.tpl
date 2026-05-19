@@ -132,8 +132,11 @@ EOH
         MEKHAN__S3__BUCKET     = "${s3_bucket}"
         MEKHAN__S3__ACCESS_KEY = "${s3_access_key}"
         MEKHAN__S3__SECRET_KEY = "${s3_secret_key}"
-        MEKHAN__AUTH__MODE     = "${auth_mode}"
-        RUST_LOG               = "${rust_log}"
+        MEKHAN__AUTH__MODE         = "${auth_mode}"
+        MEKHAN__AUTH__ISSUER_URL   = "${auth_issuer_url}"
+        MEKHAN__AUTH__CLIENT_ID    = "${auth_client_id}"
+        MEKHAN__AUTH__AUDIENCE     = "${auth_audience}"
+        RUST_LOG                   = "${rust_log}"
       }
 
       resources {
