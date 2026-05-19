@@ -34,7 +34,7 @@ s3_endpoint = "https://fsn1.your-objectstorage.com"
 s3_bucket   = "mekhan-artifacts-dev"
 
 # ── Auth & logging ──────────────────────────────────────────────────────────
-auth_mode = "dev_noop"
+auth_mode = "bff"
 rust_log  = "info,mekhan_service=debug"
 
 # ── Resources ───────────────────────────────────────────────────────────────
