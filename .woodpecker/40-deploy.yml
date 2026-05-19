@@ -42,6 +42,7 @@ when:
 
 labels:
   role: deploy
+  host: worker-hetzner
 
 steps:
   - name: deploy-dev

@@ -19,6 +19,7 @@ when:
 
 labels:
   role: test
+  host: worker-hetzner
 
 steps:
   - name: e2e-zitadel

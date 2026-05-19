@@ -80,23 +80,26 @@ RUN rustup component add clippy rustfmt \
     && rustup target add aarch64-unknown-linux-musl
 
 # ── aarch64-musl toolchain (native, from musl.cc) ───────────────────────────
-# All HetznerCluster nodes are cax21 (ARM64 Ampere Altra), so the Woodpecker
-# worker that runs CI steps is aarch64 and the image must be built as
-# `--platform linux/arm64` (single-arch — do NOT push a multi-arch manifest,
-# Docker daemons end up grabbing the wrong variant and *-sys crates fail with
-# "Exec format error (os error 8)" because gcc doesn't match the runner kernel).
+# Cluster is all-cax21 (ARM64 Ampere Altra) and pipelines pin to that pool via
+# `labels: { host: worker-hetzner }`. The Woodpecker worker is therefore an
+# aarch64 host, so we ship the `-native` tarball (aarch64 ELF binaries that
+# emit aarch64-linux-musl) rather than web-platform's `-cross` tarball (x86_64
+# hosted, used by their amd64 runners).
 #
-# Web-platform uses `aarch64-linux-musl-cross.tgz` (x86_64-host binaries) because
-# their runners are amd64. We're the opposite shape: aarch64 host, aarch64-musl
-# target — so we pull the `-native` tarball, whose binaries are aarch64 ELF and
-# run on cax21 directly.
+# Build this image as `--platform linux/arm64` only. Don't push a multi-arch
+# manifest — Docker daemons end up grabbing the wrong variant under some
+# resolutions and *-sys crates die with "Exec format error (os error 8)".
+# Also: build on a real arm64 host (Apple Silicon Mac or arm64 Linux). If you
+# build `--platform linux/arm64` from x86_64 without QEMU/binfmt registered,
+# buildx will quietly smuggle amd64 binaries under an arm64 manifest label and
+# you'll hit the same Exec format error at CI time.
 #
 # The `-native` tarball ships some binaries under unprefixed names (`bin/ar`,
-# `bin/ld`) and only `gcc`/`g++` reliably have the `aarch64-linux-musl-` prefix.
-# cc-rs invokes the prefixed names unconditionally, so the loop below symlinks
-# the prefixed form to whichever name actually exists in the tarball — and
-# verifies both `gcc` and `ar` resolve so a broken tarball fails the image
-# build, not CI.
+# `bin/ld`) while only `gcc`/`g++` reliably carry the `aarch64-linux-musl-`
+# prefix. cc-rs invokes the prefixed names unconditionally, so the loop below
+# symlinks the prefixed form to whichever name actually exists, then
+# verifies both `gcc` and `ar` resolve — so a broken tarball fails the image
+# build here, not CI.
 RUN set -eux; \
     curl -sL https://musl.cc/aarch64-linux-musl-native.tgz | tar xz -C /opt; \
     toolprefix="/opt/aarch64-linux-musl-native"; \

@@ -23,6 +23,7 @@ when:
 
 labels:
   role: build
+  host: worker-hetzner
 
 steps:
   - name: apply-workflows

@@ -1,0 +1,40 @@
+# =============================================================================
+# Cargo build config — cross-compile to aarch64-unknown-linux-musl
+# =============================================================================
+# Mirrors web-platform/.cargo/config.toml. The two non-obvious bits:
+#
+#   1. linker = "rust-lld" + link-self-contained=yes
+#      Avoids needing the musl gcc on PATH as the final linker. rustc bundles
+#      its own LLD + musl runtime; no PATH coordination with the C toolchain.
+#
+#   2. CC = "gcc" and CXX = "g++" at the bottom
+#      Critical. When ring (or any *-sys crate) compiles its C code, cc-rs
+#      reads CC_<target> for TARGET compilation — that's aarch64-linux-musl-gcc.
+#      But build scripts themselves run on the HOST (x86_64 in CI). Without
+#      this explicit override they'd inherit CC=aarch64-linux-musl-gcc and try
+#      to exec the cross-gcc to build a host binary → fails or produces wrong
+#      arch. CC=gcc forces host build scripts back to the system compiler.
+# =============================================================================
+
+[net]
+git-fetch-with-cli = true
+
+[target.aarch64-unknown-linux-musl]
+linker = "rust-lld"
+rustflags = [
+    "-C", "link-self-contained=yes",
+    "-C", "linker=rust-lld",
+]
+
+[env]
+SQLX_OFFLINE = "true"
+
+# TARGET C compiler — used by cc-rs / *-sys build scripts to compile target C.
+CC_aarch64_unknown_linux_musl  = "aarch64-linux-musl-gcc"
+CXX_aarch64_unknown_linux_musl = "aarch64-linux-musl-g++"
+AR_aarch64_unknown_linux_musl  = "aarch64-linux-musl-ar"
+
+# HOST compiler — explicit so build scripts that run on the x86_64 CI host
+# don't accidentally pick up the cross-gcc above. See header comment.
+CC  = "gcc"
+CXX = "g++"
