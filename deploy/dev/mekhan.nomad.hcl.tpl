@@ -136,6 +136,7 @@ EOH
         MEKHAN__AUTH__ISSUER_URL   = "${auth_issuer_url}"
         MEKHAN__AUTH__CLIENT_ID    = "${auth_client_id}"
         MEKHAN__AUTH__AUDIENCE     = "${auth_audience}"
+        MEKHAN__AUTH__REDIRECT_URI = "${auth_redirect_uri}"
         RUST_LOG                   = "${rust_log}"
       }
 

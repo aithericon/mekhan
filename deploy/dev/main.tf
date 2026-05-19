@@ -43,6 +43,10 @@ resource "nomad_job" "mekhan_service" {
     auth_issuer_url   = var.zitadel_issuer_url
     auth_client_id    = zitadel_application_oidc.spa.client_id
     auth_audience     = zitadel_application_oidc.spa.client_id
+    # MUST match exactly one of zitadel_application_oidc.spa.redirect_uris.
+    # Service falls back to localhost when this env var is unset (see
+    # service/src/main.rs:265) which Zitadel correctly rejects.
+    auth_redirect_uri = "https://${var.hostname}/api/auth/callback"
   })
 
   purge_on_destroy = true
