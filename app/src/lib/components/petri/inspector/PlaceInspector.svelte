@@ -34,11 +34,11 @@
 <div class="space-y-4">
 	<Card tone="muted">
 		<h3 class="text-lg font-medium text-foreground">{placeDetails.place.name}</h3>
-		<p class="text-xs text-muted-foreground font-mono">{placeDetails.place.id}</p>
+		<p class="text-sm text-muted-foreground font-mono">{placeDetails.place.id}</p>
 		<div class="flex items-center gap-2 mt-2">
-			<NodeKindBadge kind={(placeDetails.place.kind ?? 'place') as any} />
+			<NodeKindBadge kind={placeDetails.place.kind ?? 'internal'} />
 			{#if placeDetails.place.capacity}
-				<span class="text-xs text-muted-foreground">
+				<span class="text-sm text-muted-foreground">
 					Capacity: <span class="font-medium">{placeDetails.place.capacity}</span>
 				</span>
 			{/if}
@@ -49,7 +49,7 @@
 
 	<!-- Tokens List -->
 	<Card tone="muted">
-		<h4 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+		<h4 class="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-2">
 			Tokens ({placeDetails.tokens.length})
 		</h4>
 		{#if placeDetails.tokens.length === 0}
@@ -74,11 +74,11 @@
 								{:else if token.color.type === 'Integer'}
 									<span class="text-sm font-mono text-primary font-medium">{token.color.value}</span>
 								{:else if token.color.type === 'Data'}
-									<pre class="text-xs text-foreground/80 truncate">{JSON.stringify(token.color.value)}</pre>
+									<pre class="text-sm text-foreground/80 truncate">{JSON.stringify(token.color.value)}</pre>
 								{/if}
 							</div>
 						</div>
-						<div class="text-[10px] font-mono text-muted-foreground mt-1 truncate">{token.id.slice(0, 8)}...</div>
+						<div class="text-sm font-mono text-muted-foreground mt-1 truncate">{token.id.slice(0, 8)}...</div>
 					</button>
 				{/each}
 			</div>
@@ -89,7 +89,7 @@
 
 	<!-- Token Injection -->
 	<div>
-		<h4 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Inject Token</h4>
+		<h4 class="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-2">Inject Token</h4>
 		<Textarea
 			value={injectJsonInput}
 			oninput={(e) => onInjectInput((e.currentTarget as HTMLTextAreaElement).value)}
@@ -98,10 +98,10 @@
 			spellcheck="false"
 		/>
 		{#if injectError}
-			<p class="text-xs text-destructive mt-1">{injectError}</p>
+			<p class="text-sm text-destructive mt-1">{injectError}</p>
 		{/if}
 		{#if injectSuccess}
-			<p class="text-xs text-success mt-1">Token injected!</p>
+			<p class="text-sm text-success mt-1">Token injected!</p>
 		{/if}
 		<Button onclick={() => onInjectToken?.()} disabled={loading} size="sm" class="mt-2 w-full">
 			{loading ? 'Injecting...' : 'Inject Token'}
