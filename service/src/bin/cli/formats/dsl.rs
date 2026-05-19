@@ -768,6 +768,7 @@ flow:
                             ExecutionBackendType::Python,
                         ),
                         retry_policy: custom_retry,
+                        deployment_model: Default::default(),
                     },
                     parent_id: None,
                     width: None,

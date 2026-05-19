@@ -19,6 +19,7 @@
 	import ProgressUpdateNodeSection from './property-sections/ProgressUpdateNodeSection.svelte';
 	import FailureNodeSection from './property-sections/FailureNodeSection.svelte';
 	import EndNodeSection from './property-sections/EndNodeSection.svelte';
+	import SubWorkflowSection from './property-sections/SubWorkflowSection.svelte';
 	import { fetchNodeScopes, type ScopeEntry } from '$lib/editor/guard-scope';
 	import { outputPortsFor } from '$lib/editor/derived-ports';
 	import { Button } from '$lib/components/ui/button';
@@ -252,6 +253,8 @@
 			<FailureNodeSection {data} {readonly} {onchange} />
 		{:else if data.type === 'end'}
 			<EndNodeSection {data} {readonly} {onchange} />
+		{:else if data.type === 'sub_workflow'}
+			<SubWorkflowSection {data} {readonly} {onchange} {templateId} />
 		{/if}
 
 		<!-- Phase 4: read-only derived port preview for variants whose outputs

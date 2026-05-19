@@ -11,18 +11,75 @@ use crate::compiler::wire::{apply_merges, resolve_aliases, wire_edge};
 use crate::compiler::CompileError;
 use crate::models::template::{WorkflowGraph, WorkflowNodeData};
 use aithericon_executor_domain::InputSource;
-use aithericon_sdk::scenario::ScenarioGroup;
+use aithericon_sdk::scenario::{ScenarioDefinition, ScenarioGroup};
 use aithericon_sdk::Context;
 use serde_json::Value;
 use std::collections::HashMap;
 
-/// Compile a WorkflowGraph to AIR JSON.
+/// A child template, fully compiled + made spawn-callable, resolved at the
+/// *parent's* publish time and frozen into the parent. Keyed by the parent's
+/// `SubWorkflow` node id in [`SubWorkflowAir`]. `lower_subworkflow` embeds
+/// [`air`](Self::air) into the `spawn_net` effect config; the callable
+/// contract guarantees the child exposes the fixed boundary places `inbox`
+/// (bridge_in), `reply_out` (bridge_reply), `fail_out` (bridge_out_param).
+#[derive(Clone, Debug)]
+pub struct ResolvedChild {
+    /// Fully compiled + made-callable child scenario AIR, ready to embed.
+    pub air: Value,
+    /// Concrete child version this resolved to (provenance / pin freeze).
+    pub resolved_version: i32,
+    /// Stable child template id (spawn label / provenance).
+    pub template_id: String,
+}
+
+/// Per-`SubWorkflow`-node resolved child AIR. Empty for every compile path
+/// that has no sub-workflows (preview/tests use the back-compat wrapper); the
+/// publish/preview handlers populate it after recursively compiling +
+/// `make_child_callable`-ing each referenced child template.
+pub type SubWorkflowAir = HashMap<String, ResolvedChild>;
+
+/// Compile a WorkflowGraph to AIR JSON. Back-compat wrapper: no sub-workflow
+/// resolution (a graph containing a `SubWorkflow` node compiles to an
+/// `Unresolved` error here — callers that support sub-workflows use
+/// [`compile_to_air_with_subworkflows`]).
 pub fn compile_to_air(
     graph: &WorkflowGraph,
     name: &str,
     description: &str,
     files: &NodeFiles,
 ) -> Result<Value, CompileError> {
+    let scenario =
+        compile_to_scenario(graph, name, description, files, &SubWorkflowAir::new())?;
+    serde_json::to_value(&scenario)
+        .map_err(|e| CompileError::Compilation(format!("failed to serialize scenario: {e}")))
+}
+
+/// Like [`compile_to_air`] but with pre-resolved child sub-workflow AIR
+/// (built by the publish/preview handlers, frozen at parent publish time).
+pub fn compile_to_air_with_subworkflows(
+    graph: &WorkflowGraph,
+    name: &str,
+    description: &str,
+    files: &NodeFiles,
+    sub_air: &SubWorkflowAir,
+) -> Result<Value, CompileError> {
+    let scenario = compile_to_scenario(graph, name, description, files, sub_air)?;
+    serde_json::to_value(&scenario)
+        .map_err(|e| CompileError::Compilation(format!("failed to serialize scenario: {e}")))
+}
+
+/// Run the full build/validate/lower/wire pipeline and return the typed
+/// [`ScenarioDefinition`] *before* JSON serialization. Recursive child
+/// compilation (publish-time pin resolution) needs the typed scenario so it
+/// can be made spawn-callable, hence this is the real entry point and the
+/// `*_to_air` functions are thin serializing wrappers.
+pub fn compile_to_scenario(
+    graph: &WorkflowGraph,
+    name: &str,
+    description: &str,
+    files: &NodeFiles,
+    sub_air: &SubWorkflowAir,
+) -> Result<ScenarioDefinition, CompileError> {
     // 1. Build directed graph
     let wg = WorkflowDiGraph::build(graph)?;
 
@@ -83,6 +140,7 @@ pub fn compile_to_air(
             &mut node_ports,
             &mut fixups,
             node_files,
+            sub_air,
         )?;
     }
 
@@ -144,10 +202,7 @@ pub fn compile_to_air(
     //     that owns the field it references. Runs post-merge: place ids final.
     apply_control_data_foundation(graph, &mut scenario, &fixups)?;
 
-    let air_value = serde_json::to_value(&scenario)
-        .map_err(|e| CompileError::Compilation(format!("failed to serialize scenario: {e}")))?;
-
-    Ok(air_value)
+    Ok(scenario)
 }
 
 /// Post-merge foundation phase. See call site (step 10).
@@ -848,6 +903,7 @@ mod tests {
                 input: Port::empty_input(),
                 output: default_output_port(ExecutionBackendType::Docker),
                 retry_policy: policy,
+                deployment_model: Default::default(),
             },
             parent_id: None,
             width: None,

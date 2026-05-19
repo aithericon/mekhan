@@ -4,9 +4,9 @@
 
 use mekhan_service::compiler::compile_to_air;
 use mekhan_service::models::template::{
-    BranchCondition, ExecutionBackendType, ExecutionSpecConfig, PhaseUpdateStatus, Port, Position,
-    TaskBlockConfig, TaskFieldConfig, TaskFieldKind, TaskStepConfig, WorkflowEdge, WorkflowGraph,
-    WorkflowNode, WorkflowNodeData,
+    BranchCondition, DeploymentModel, ExecutionBackendType, ExecutionSpecConfig,
+    PhaseUpdateStatus, Port, Position, TaskBlockConfig, TaskFieldConfig, TaskFieldKind,
+    TaskStepConfig, WorkflowEdge, WorkflowGraph, WorkflowNode, WorkflowNodeData,
 };
 use serde_json::{json, Value};
 
@@ -307,6 +307,7 @@ fn automated_step_produces_executor_lifecycle() {
                         mekhan_service::models::template::ExecutionBackendType::Docker,
                     ),
                     retry_policy: Default::default(),
+                    deployment_model: Default::default(),
                 },
                 parent_id: None,
                 width: None,
@@ -1059,6 +1060,7 @@ fn automated_step_has_scoped_effect_errors() {
                         mekhan_service::models::template::ExecutionBackendType::Docker,
                     ),
                     retry_policy: Default::default(),
+                    deployment_model: Default::default(),
                 },
                 parent_id: None,
                 width: None,
@@ -1102,6 +1104,7 @@ fn auto_node(id: &str, label: &str) -> WorkflowNode {
                 mekhan_service::models::template::ExecutionBackendType::Docker,
             ),
             retry_policy: Default::default(),
+            deployment_model: Default::default(),
         },
         parent_id: None,
         width: None,
@@ -1962,6 +1965,7 @@ fn guard_multi_hop_scope_walk() {
                 }],
             },
             retry_policy: Default::default(),
+            deployment_model: Default::default(),
         },
         parent_id: None,
         width: None,
@@ -3438,5 +3442,187 @@ fn failure_passes_token_through_to_end() {
     assert!(
         has_place_of_type(&air, "terminal"),
         "chain with a Failure node should still reach a terminal place"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2: deployment_model (Inline | Scheduled)
+// ---------------------------------------------------------------------------
+
+fn automated_node_with_deployment(id: &str, dm: DeploymentModel) -> WorkflowNode {
+    WorkflowNode {
+        id: id.to_string(),
+        node_type: "automated_step".to_string(),
+        slug: None,
+        position: pos(),
+        data: WorkflowNodeData::AutomatedStep {
+            label: "Run".to_string(),
+            description: None,
+            execution_spec: ExecutionSpecConfig {
+                backend_type: ExecutionBackendType::Docker,
+                entrypoint: None,
+                config: json!({ "image": "alpine:latest" }),
+            },
+            input: Port::empty_input(),
+            output: mekhan_service::models::template::default_output_port(
+                ExecutionBackendType::Docker,
+            ),
+            retry_policy: Default::default(),
+            deployment_model: dm,
+        },
+        parent_id: None,
+        width: None,
+        height: None,
+    }
+}
+
+#[test]
+fn automated_step_inline_unchanged_emits_lifecycle_no_bridge() {
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            automated_node_with_deployment("auto", DeploymentModel::Inline),
+            end_node("e"),
+        ],
+        edges: vec![edge("e1", "s", "auto"), edge("e2", "auto", "e")],
+        viewport: None,
+    };
+    let air = compile_to_air(&graph, "t", "", &std::collections::HashMap::new())
+        .expect("inline should compile");
+
+    // Inline path = executor lifecycle (scoped "auto/prepare"); no scheduler bridge.
+    assert!(
+        has_transition(&air, "auto/prepare"),
+        "inline keeps the executor-lifecycle prepare"
+    );
+    assert!(
+        !has_place(&air, "p_auto_sched_out"),
+        "inline must not emit a scheduler bridge_out"
+    );
+}
+
+#[test]
+fn automated_step_scheduled_emits_scheduler_bridge() {
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            automated_node_with_deployment(
+                "auto",
+                DeploymentModel::Scheduled {
+                    job_template: "petri-mumax3-worker".to_string(),
+                    resources: None,
+                },
+            ),
+            end_node("e"),
+        ],
+        edges: vec![edge("e1", "s", "auto"), edge("e2", "auto", "e")],
+        viewport: None,
+    };
+    let air = compile_to_air(&graph, "t", "", &std::collections::HashMap::new())
+        .expect("scheduled should compile");
+
+    // Scheduler bridge places.
+    assert!(has_place(&air, "p_auto_sched_out"), "expected scheduler bridge_out");
+    assert!(has_place(&air, "p_auto_sched_result"), "expected result reply place");
+    assert!(has_place(&air, "p_auto_sched_failure"), "expected failure reply place");
+    assert!(has_transition(&air, "t_auto_prepare"), "expected scheduled prepare");
+
+    // bridge_out targets the well-known scheduler net + job_queue.
+    let sched_out = places(&air)
+        .iter()
+        .find(|p| p["id"] == "p_auto_sched_out")
+        .expect("sched_out place");
+    assert_eq!(sched_out["type"], "bridge_out");
+    let bo = &sched_out["bridge_out"];
+    assert_eq!(bo["target_net_id"], "mekhan-scheduler");
+    assert_eq!(bo["target_place_name"], "job_queue");
+
+    // The submit carries the pinned job template.
+    let prepare = transitions(&air)
+        .iter()
+        .find(|t| t["id"] == "t_auto_prepare")
+        .expect("prepare transition");
+    let logic = prepare["logic"].to_string();
+    assert!(
+        logic.contains("job_template_id") && logic.contains("petri-mumax3-worker"),
+        "scheduled prepare must thread job_template_id: {logic}"
+    );
+
+    // Scheduled path does NOT use the inline executor lifecycle.
+    assert!(
+        !has_transition(&air, "auto/prepare"),
+        "scheduled must not emit the inline lifecycle prepare"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3: catalogue_query backend
+// ---------------------------------------------------------------------------
+
+#[test]
+fn catalogue_query_emits_lookup_effect_no_executor() {
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            WorkflowNode {
+                id: "cat".to_string(),
+                node_type: "automated_step".to_string(),
+                slug: None,
+                position: pos(),
+                data: WorkflowNodeData::AutomatedStep {
+                    label: "Lookup".to_string(),
+                    description: None,
+                    execution_spec: ExecutionSpecConfig {
+                        backend_type: ExecutionBackendType::CatalogueQuery,
+                        entrypoint: None,
+                        config: json!({ "category": "model", "limit": 10 }),
+                    },
+                    input: Port::empty_input(),
+                    output: mekhan_service::models::template::default_output_port(
+                        ExecutionBackendType::CatalogueQuery,
+                    ),
+                    retry_policy: Default::default(),
+                    deployment_model: Default::default(),
+                },
+                parent_id: None,
+                width: None,
+                height: None,
+            },
+            end_node("e"),
+        ],
+        edges: vec![edge("e1", "s", "cat"), edge("e2", "cat", "e")],
+        viewport: None,
+    };
+    let air = compile_to_air(&graph, "t", "", &std::collections::HashMap::new())
+        .expect("catalogue_query should compile");
+
+    assert!(has_place(&air, "p_cat_query"), "expected query place");
+    assert!(has_transition(&air, "t_cat_lookup"), "expected lookup transition");
+    assert!(has_transition(&air, "t_cat_q_build"), "expected query-build transition");
+
+    // The lookup transition fires the registered `catalogue_lookup` effect.
+    let lookup = transitions(&air)
+        .iter()
+        .find(|t| t["id"] == "t_cat_lookup")
+        .expect("lookup transition");
+    assert!(
+        lookup["logic"].to_string().contains("catalogue_lookup"),
+        "lookup must be a catalogue_lookup effect: {}",
+        lookup["logic"]
+    );
+
+    // No executor lifecycle / no scheduler bridge.
+    assert!(!has_transition(&air, "cat/prepare"), "no executor lifecycle");
+    assert!(!has_place(&air, "p_cat_sched_out"), "no scheduler bridge");
+
+    // The built query carries the editor config.
+    let qb = transitions(&air)
+        .iter()
+        .find(|t| t["id"] == "t_cat_q_build")
+        .expect("q_build transition");
+    let qlogic = qb["logic"].to_string();
+    assert!(
+        qlogic.contains("category") && qlogic.contains("model"),
+        "query token must carry the configured filters: {qlogic}"
     );
 }

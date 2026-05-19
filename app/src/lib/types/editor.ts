@@ -51,6 +51,7 @@ export type PhaseUpdateNodeData = Extract<SchemaWorkflowNodeData, { type: 'phase
 export type ProgressUpdateNodeData = Extract<SchemaWorkflowNodeData, { type: 'progress_update' }>;
 export type FailureNodeData = Extract<SchemaWorkflowNodeData, { type: 'failure' }>;
 export type TriggerNodeData = Extract<SchemaWorkflowNodeData, { type: 'trigger' }>;
+export type SubWorkflowNodeData = Extract<SchemaWorkflowNodeData, { type: 'sub_workflow' }>;
 
 // Convenience aliases for TaskBlockConfig variants used in editor pickers.
 export type InputBlock = Extract<SchemaTaskBlockConfig, { type: 'input' }>;
@@ -164,6 +165,13 @@ export const NODE_PALETTE: NodePaletteItem[] = [
 		description: 'Fires the workflow on cron, catalog, webhook, etc.',
 		icon: 'zap',
 		color: '#fbbf24'
+	},
+	{
+		type: 'sub_workflow',
+		label: 'Sub-workflow',
+		description: 'Call another template and return its typed result',
+		icon: 'workflow',
+		color: '#14b8a6'
 	}
 ];
 
@@ -200,7 +208,8 @@ export function createDefaultNodeData(type: WorkflowNodeType): SchemaWorkflowNod
 					entrypoint: 'main.py',
 					config: {}
 				},
-				retryPolicy: { maxRetries: 3, backoff: 'immediate', baseDelayMs: 0 }
+				retryPolicy: { maxRetries: 3, backoff: 'immediate', baseDelayMs: 0 },
+				deploymentModel: { mode: 'inline' }
 			};
 		case 'decision':
 			return {
@@ -247,6 +256,15 @@ export function createDefaultNodeData(type: WorkflowNodeType): SchemaWorkflowNod
 				concurrency: 'allow',
 				payloadMapping: [],
 				enabled: true
+			};
+		case 'sub_workflow':
+			return {
+				type: 'sub_workflow',
+				label: 'Sub-workflow',
+				templateId: '',
+				versionPin: { mode: 'latest' },
+				inputMapping: [],
+				output: { id: 'out', label: 'Result', fields: [] }
 			};
 	}
 }

@@ -4262,6 +4262,55 @@
           }
         }
       },
+      "DeploymentModel": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Current behaviour: direct executor-lifecycle dispatch (NATS).",
+            "required": [
+              "mode"
+            ],
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "inline"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Submit through the long-lived scheduler-net (Nomad/Slurm) — queued /\nGPU execution. `job_template` selects the scheduler's parameterized\njob (e.g. `petri-mumax3-worker`).",
+            "required": [
+              "jobTemplate",
+              "mode"
+            ],
+            "properties": {
+              "jobTemplate": {
+                "type": "string"
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "scheduled"
+                ]
+              },
+              "resources": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ResourceConfig"
+                  }
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Where an `AutomatedStep`'s job runs. Internally tagged on the wire:\n`{\"mode\":\"inline\"}` or `{\"mode\":\"scheduled\",\"jobTemplate\":\"...\",\n\"resources\":{...}}`. Keep the `mode` strings in lockstep with the\n`snake_case` derive."
+      },
       "DownloadItemConfig": {
         "type": "object",
         "description": "One entry in a `download` task block. Mirrors the frontend `DownloadItem`\n(`app/src/lib/hpi/types.ts`) field-for-field on the wire.",
@@ -4455,7 +4504,8 @@
           "http",
           "llm",
           "file_ops",
-          "kreuzberg"
+          "kreuzberg",
+          "catalogue_query"
         ]
       },
       "ExecutionSpecConfig": {
@@ -6273,6 +6323,36 @@
           "sse"
         ]
       },
+      "ResourceConfig": {
+        "type": "object",
+        "description": "Optional resource hints forwarded to the scheduler for a `Scheduled` step.",
+        "properties": {
+          "cpuMhz": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "gpu": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "memoryMb": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
       "RetryPolicy": {
         "type": "object",
         "description": "Retry behaviour for an `AutomatedStep` whose execution fails or times out.\n\nOn failure the compiler re-dispatches the job (a fresh executor submit)\nwhile `retries < max_retries`, optionally after a `backoff` delay, then\nroutes the exhausted token to the node's error output.",
@@ -7129,6 +7209,46 @@
           }
         }
       },
+      "VersionPin": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Resolve the family's `is_latest` row at parent publish time.",
+            "required": [
+              "mode"
+            ],
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "latest"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Freeze an explicit child version.",
+            "required": [
+              "version",
+              "mode"
+            ],
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "pinned"
+                ]
+              },
+              "version": {
+                "type": "integer",
+                "format": "int32"
+              }
+            }
+          }
+        ],
+        "description": "Which concrete child-template version a `SubWorkflow` embeds. Internally\ntagged on the wire: `{\"mode\":\"latest\"}` or `{\"mode\":\"pinned\",\"version\":3}`.\n`Latest` is an *authoring* intent only — it is resolved to a concrete\nversion at the parent's publish time and the resolved AIR is frozen into\nthe parent, so runtime is always deterministic / replay-safe. Keep the\n`mode` strings in lockstep with the `snake_case` derive."
+      },
       "Viewport": {
         "type": "object",
         "required": [
@@ -7554,6 +7674,10 @@
               "type"
             ],
             "properties": {
+              "deploymentModel": {
+                "$ref": "#/components/schemas/DeploymentModel",
+                "description": "Where/how the job is dispatched. `Inline` (default) = the current\ndirect executor-lifecycle path. `Scheduled` = submit through the\nlong-lived scheduler-net (Nomad/Slurm) for queued / GPU execution,\noptionally pinning a job template + resources. `#[serde(default)]`\n+ `Inline` default ⇒ every existing template round-trips unchanged\n(same precedent as `retry_policy`)."
+              },
               "description": {
                 "type": [
                   "string",
@@ -7917,6 +8041,52 @@
                 "enum": [
                   "trigger"
                 ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Calls another published template as a child net and returns its\nterminal result, correlated per invocation. Compiles (via\n`Context::spawn`) to: a parent-side request/spawn effect, a\n`bridge_out` carrying the mapped initial token to a freshly spawned\nchild instance, and `bridge_in` reply/failure places joined back on a\nsynthesized correlation key. The child template is resolved and its\ncompiled AIR is embedded at the *parent's* publish time (see\n`version_pin`) so a later change to the child does not alter\nalready-published parents.",
+            "required": [
+              "label",
+              "templateId",
+              "type"
+            ],
+            "properties": {
+              "description": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "inputMapping": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/FieldMapping"
+                },
+                "description": "Parent upstream token → child Start `initial` port fields. Each\nentry's `expression` is a Rhai expression over the inbound token;\ntogether they assemble the token bridged into the child. Empty\n(the default) passes the inbound token through unchanged."
+              },
+              "label": {
+                "type": "string"
+              },
+              "output": {
+                "$ref": "#/components/schemas/Port",
+                "description": "Declared shape of the child's terminal result, mapped back onto the\nworkflow token at the join. Empty fields ⇒ pass the child result\nthrough unchanged (Json). Authoring can prefill this from the\nchild's End `terminal` port."
+              },
+              "templateId": {
+                "type": "string",
+                "format": "uuid",
+                "description": "Stable identity of the child template family (any version row's\n`base_template_id`/`id` — resolution picks the concrete row per\n`version_pin` at publish time)."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "sub_workflow"
+                ]
+              },
+              "versionPin": {
+                "$ref": "#/components/schemas/VersionPin",
+                "description": "Which concrete version of the child to embed. `Latest` resolves the\nfamily's `is_latest` row *at the parent's publish time* and freezes\nthat concrete version into the embedded AIR; `Pinned` freezes an\nexplicit version. Either way the published parent is deterministic."
               }
             }
           }
