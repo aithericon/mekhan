@@ -27,6 +27,12 @@ terraform {
       source  = "hashicorp/random"
       version = "~> 3.6"
     }
+    # Hetzner Object Storage is S3-compatible — we use the AWS provider with
+    # the endpoint overridden. Same pattern the tfstate backend already uses.
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
   }
 }
 
@@ -48,4 +54,24 @@ provider "postgresql" {
   password        = var.postgres_admin_password
   sslmode         = "disable"
   connect_timeout = 15
+}
+
+# Hetzner Object Storage — S3-compatible. Region is the Hetzner location code
+# (fsn1 = Falkenstein). The path-style + checksum settings are required: the
+# Hetzner endpoint doesn't support virtual-hosted bucket URLs and rejects the
+# v4 trailing-checksum probes that AWS SDKs added by default.
+provider "aws" {
+  region                      = "fsn1"
+  access_key                  = var.s3_access_key
+  secret_key                  = var.s3_secret_key
+  skip_credentials_validation = true
+  skip_metadata_api_check     = true
+  skip_region_validation      = true
+  skip_requesting_account_id  = true
+
+  endpoints {
+    s3 = var.s3_endpoint
+  }
+
+  s3_use_path_style = true
 }
