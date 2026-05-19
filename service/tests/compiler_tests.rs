@@ -551,10 +551,12 @@ fn loop_produces_enter_continue_exit() {
                     label: "Retry Loop".to_string(),
                     description: None,
                     max_iterations: 5,
-                    // Reference the loop's own iteration counter, which Phase 3
-                    // exposes as `<loop_id>.iteration` in scope. Avoids the
-                    // legacy unqualified `input.X` form.
-                    loop_condition: "input.iteration < 5".to_string(),
+                    // Reference the loop's own iteration counter. The
+                    // control/data foundation injects it as the control-token
+                    // leaf `_loop_<id>_count` (lower.rs `lower_loop` /
+                    // out_shape(Loop)); a `_`-prefixed head is a control leaf
+                    // so the guard SSOT threads it without a read-arc.
+                    loop_condition: "input._loop_lp_count < 5".to_string(),
                 },
                 parent_id: None,
                 width: None,
@@ -1077,20 +1079,48 @@ fn transitive_merge_chain_resolves_correctly() {
         "p_b_input should be merged into p_a_output"
     );
 
-    // E's place (p_e_done) should be merged away (into p_b_output)
+    // Post-foundation, B's downstream output is the slim control token
+    // `p_b_ctrl` (the `split_outputs` half forwarded onward); the edge B->E is
+    // a pure pass-through so `p_e_done` aliases onto `p_b_ctrl`.
     assert!(
         !has_place(&air, "p_e_done"),
-        "p_e_done should be merged into p_b_output"
+        "p_e_done should be merged into p_b_ctrl (B's forwarded control token)"
     );
 
-    // B's output should have become terminal (via alias resolution of p_e_done → p_b_output)
+    // `p_b_output` survives, but post-foundation it is the pre-yield `state`
+    // place consumed by `t_b_yield` (the split transition that parks data and
+    // forwards control) — NOT the terminal. Asserting its topology proves the
+    // chain `p_b_output -> t_b_yield -> {p_b_data, p_b_ctrl}` is intact.
     let b_output = places(&air)
         .iter()
         .find(|p| p["id"] == "p_b_output")
-        .expect("p_b_output should be the surviving terminal place");
+        .expect("p_b_output should survive as the pre-yield state place");
     assert_eq!(
-        b_output["type"], "terminal",
-        "p_b_output should be terminal after merge"
+        b_output["type"], "state",
+        "p_b_output is consumed by t_b_yield, so it is a state place, not terminal"
+    );
+    let t_b_yield =
+        get_transition(&air, "t_b_yield").expect("foundation split transition t_b_yield");
+    let yield_inputs: Vec<&str> = t_b_yield["inputs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["place"].as_str().unwrap())
+        .collect();
+    assert!(
+        yield_inputs.contains(&"p_b_output"),
+        "t_b_yield should consume p_b_output, got: {yield_inputs:?}"
+    );
+
+    // The End's terminal designation resolves through the merge alias chain
+    // (p_e_done -> p_b_ctrl) onto the foundation's surviving control place.
+    let b_ctrl = places(&air)
+        .iter()
+        .find(|p| p["id"] == "p_b_ctrl")
+        .expect("p_b_ctrl should be the surviving terminal place after alias resolution");
+    assert_eq!(
+        b_ctrl["type"], "terminal",
+        "p_b_ctrl should be terminal after p_e_done merges into it"
     );
 }
 
@@ -1100,7 +1130,10 @@ fn transitive_merge_chain_resolves_correctly() {
 
 /// S -> Split -> (AutoA, AutoB) -> Join -> E
 /// The per-edge input places of the Join (p_join_in_0, p_join_in_1) should
-/// be merged into the output places of AutoA and AutoB respectively.
+/// be merged into the surviving downstream output of AutoA and AutoB. Post
+/// control/data foundation, that surviving output is each step's slim
+/// forwarded control token (`p_aa_ctrl` / `p_ab_ctrl`) — `split_outputs`
+/// parks the executor envelope in `p_*_data` and threads only `p_*_ctrl`.
 #[test]
 fn parallel_join_merges_per_edge_input_places() {
     let graph = WorkflowGraph {
@@ -1148,17 +1181,21 @@ fn parallel_join_merges_per_edge_input_places() {
 
     let air = compile_to_air(&graph, "join_merge_test", "", &std::collections::HashMap::new()).expect("should compile");
 
-    // Join's per-edge input places should be merged away
+    // Join's per-edge input places should be merged away into each upstream
+    // step's forwarded control token.
     assert!(
         !has_place(&air, "p_join_in_0"),
-        "p_join_in_0 should be merged into auto A's output"
+        "p_join_in_0 should be merged into auto A's forwarded control token"
     );
     assert!(
         !has_place(&air, "p_join_in_1"),
-        "p_join_in_1 should be merged into auto B's output"
+        "p_join_in_1 should be merged into auto B's forwarded control token"
     );
 
-    // The join transition's input arcs should reference the auto outputs directly
+    // The join transition's input arcs should reference the surviving
+    // upstream outputs directly. Post-foundation each automated step forwards
+    // only its slim control token (`p_*_ctrl`); the executor envelope is
+    // parked write-once in `p_*_data` behind `t_*_yield`.
     let t_join = get_transition(&air, "t_join_join").expect("join transition should exist");
     let input_arcs: Vec<&str> = t_join["inputs"]
         .as_array()
@@ -1168,13 +1205,13 @@ fn parallel_join_merges_per_edge_input_places() {
         .collect();
 
     assert!(
-        input_arcs.contains(&"p_aa_output"),
-        "join input should reference p_aa_output, got: {:?}",
+        input_arcs.contains(&"p_aa_ctrl"),
+        "join input should reference p_aa_ctrl (A's forwarded control token), got: {:?}",
         input_arcs
     );
     assert!(
-        input_arcs.contains(&"p_ab_output"),
-        "join input should reference p_ab_output, got: {:?}",
+        input_arcs.contains(&"p_ab_ctrl"),
+        "join input should reference p_ab_ctrl (B's forwarded control token), got: {:?}",
         input_arcs
     );
 
@@ -1638,7 +1675,11 @@ fn guard_unresolved_identifier_is_reported() {
     let graph = WorkflowGraph {
         nodes: vec![
             start_node_with_bool_field("s", "approved"),
-            decision_with_guard("d", "ghost.field == true"),
+            // Post control/data foundation the guard SSOT only resolves
+            // `input.*` references (a bare non-`input` root is not a guard
+            // path at all). Use an `input.<x>` no upstream node produces so
+            // the real GuardUnresolved path is exercised.
+            decision_with_guard("d", "input.ghost_field == true"),
             end_node("ea"),
             end_node("eb"),
         ],
@@ -1658,7 +1699,7 @@ fn guard_unresolved_identifier_is_reported() {
             available,
         } => {
             assert_eq!(node_id, "d");
-            assert_eq!(identifier, "ghost.field");
+            assert_eq!(identifier, "input.ghost_field");
             // The hint lists the canonical `input.<field>` identifiers so the
             // editor can steer the author to the correct form.
             assert!(
@@ -1782,7 +1823,8 @@ fn guard_multi_hop_scope_walk() {
 #[test]
 fn loop_condition_can_reference_iteration_local() {
     // Loop body's `loop_condition` should be able to reference the loop's own
-    // `<id>.iteration` counter without the upstream Start declaring it.
+    // iteration counter — the foundation injects it as the control-token leaf
+    // `_loop_<id>_count` — without the upstream Start declaring it.
     use mekhan_service::models::template::{FieldKind, Port, PortField};
 
     let loop_node = WorkflowNode {
@@ -1793,7 +1835,7 @@ fn loop_condition_can_reference_iteration_local() {
             label: "Retry".to_string(),
             description: None,
             max_iterations: 5,
-            loop_condition: "input.iteration < 3".to_string(),
+            loop_condition: "input._loop_lp_count < 3".to_string(),
         },
         parent_id: None,
         width: None,
