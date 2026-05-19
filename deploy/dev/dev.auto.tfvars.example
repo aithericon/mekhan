@@ -16,9 +16,10 @@ node_class        = "stateless"
 image_repository = "forge.aithericon.eu/milanender/mekhan-service"
 
 # ── External exposure ───────────────────────────────────────────────────────
-# Distinct hostname so a future mekhan-prod can claim mekhan.aithericon.eu
-# without conflict.
-hostname        = "mekhan.dev.aithericon.eu"
+# Single-cluster setup: there's no separate mekhan-prod, so dev claims the
+# canonical hostname. If a real prod environment ever splits out, move this
+# back to `mekhan.dev.aithericon.eu` (or wire it through prod's tfvars).
+hostname        = "mekhan.aithericon.eu"
 traefik_enabled = true
 
 # ── Runtime endpoints (resolved via Consul DNS on the cluster) ──────────────
