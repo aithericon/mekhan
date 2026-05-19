@@ -94,13 +94,30 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 RUN rustup component add clippy rustfmt \
     && rustup target add aarch64-unknown-linux-musl
 
-# ── aarch64-musl cross-compiler (from musl.cc) ──────────────────────────────
-# Provides aarch64-linux-musl-gcc — used by cargo to link the static binary.
-RUN curl -sL https://musl.cc/aarch64-linux-musl-cross.tgz | tar xz -C /opt \
-    && ln -sf /opt/aarch64-linux-musl-cross/bin/aarch64-linux-musl-gcc /usr/local/bin/ \
-    && ln -sf /opt/aarch64-linux-musl-cross/bin/aarch64-linux-musl-g++ /usr/local/bin/ \
-    && ln -sf /opt/aarch64-linux-musl-cross/bin/aarch64-linux-musl-ar  /usr/local/bin/ \
-    && ln -sf /opt/aarch64-linux-musl-cross/bin/aarch64-linux-musl-ld  /usr/local/bin/
+# ── aarch64-musl toolchain (arch-aware) ─────────────────────────────────────
+# musl.cc ships two flavours of the toolchain — pick the one matching the
+# image's host arch so the binaries can actually execute:
+#   - on x86_64 host targeting aarch64-musl  →  `aarch64-linux-musl-cross`
+#     (x86_64 ELF binaries that produce aarch64-musl output)
+#   - on aarch64 host targeting aarch64-musl →  `aarch64-linux-musl-native`
+#     (aarch64 ELF binaries; same output target)
+#
+# Without this branch, building the image on Apple Silicon / arm Linux and
+# running it on x86 (or vice versa) puts a wrong-arch gcc on PATH and every
+# *-sys crate build script fails with "Exec format error (os error 8)".
+RUN set -eux; \
+    arch="$(uname -m)"; \
+    case "$arch" in \
+        x86_64)  tarball="aarch64-linux-musl-cross";  toolprefix="/opt/aarch64-linux-musl-cross";;  \
+        aarch64) tarball="aarch64-linux-musl-native"; toolprefix="/opt/aarch64-linux-musl-native";; \
+        *)       echo "unsupported host arch: $arch" >&2; exit 1;; \
+    esac; \
+    curl -sL "https://musl.cc/${tarball}.tgz" | tar xz -C /opt; \
+    ln -sf "${toolprefix}/bin/aarch64-linux-musl-gcc" /usr/local/bin/; \
+    ln -sf "${toolprefix}/bin/aarch64-linux-musl-g++" /usr/local/bin/; \
+    ln -sf "${toolprefix}/bin/aarch64-linux-musl-ar"  /usr/local/bin/; \
+    ln -sf "${toolprefix}/bin/aarch64-linux-musl-ld"  /usr/local/bin/; \
+    aarch64-linux-musl-gcc --version | head -1
 
 # ── just (command runner — pipeline shells out to `just ci::*` everywhere) ─
 RUN curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh \
