@@ -488,11 +488,20 @@ let eid = dd.artifact_id;
         prev
     };
 
+    // Foundation fork: park a write-once copy of the Start token so
+    // downstream guards / result-mappings can borrow `start.<field>`
+    // (read-arc), exactly like a HumanTask/AutomatedStep. Unlike
+    // `split_outputs` we do NOT slim the forwarded token — the
+    // immediately-following task still interpolates Start fields off the
+    // control token (`{{ invoice_id }}`), so we fork rather than split.
+    let (data_place_id, p_main) = park_outputs(ctx, id, label, &tail);
+    cx.fixups.data_places.insert(id.clone(), data_place_id);
+
     cx.ports.insert(
         id.clone(),
         NodePorts {
             input_place: ready,
-            output_places: vec![(None, tail)],
+            output_places: vec![(None, p_main)],
             input_places: HashMap::new(),
         },
     );
@@ -646,6 +655,39 @@ fn split_outputs(
     .auto_output("ctrl", &p_ctrl)
     .logic(YIELD_LOGIC);
     (format!("p_{id}_data"), p_ctrl)
+}
+
+/// Foundation (Start variant): park a write-once copy of the producer's
+/// output as `p_{id}_data` so downstream guards / result-mappings can borrow
+/// `<slug>.<field>` via the same read-arc synthesis as `split_outputs` —
+/// **without** slimming the forwarded token. Start is special: the very next
+/// node still reads its inputs off the control token (human-task
+/// `{{ invoice_id }}` interpolation is baked against the inbound token at
+/// compile time), so the token must continue intact. We therefore *fork*
+/// (`#{ data: d, main: d }`) rather than *split*. Returns the parked-data
+/// place id (recorded in `fixups.data_places`) and the place carrying the
+/// unchanged token onward.
+fn park_outputs(
+    ctx: &mut Context,
+    id: &str,
+    label: &str,
+    producer_out: &PlaceHandle<DynamicToken>,
+) -> (String, PlaceHandle<DynamicToken>) {
+    let p_data: PlaceHandle<DynamicToken> = ctx.state(
+        format!("p_{id}_data"),
+        format!("{label} - Parked Data (write-once)"),
+    );
+    let p_main: PlaceHandle<DynamicToken> =
+        ctx.state(format!("p_{id}_main"), format!("{label} - Output"));
+    ctx.transition(
+        format!("t_{id}_park"),
+        format!("{label} - Park Inputs (fork: park data, forward token)"),
+    )
+    .auto_input("tok", producer_out)
+    .auto_output("data", &p_data)
+    .auto_output("main", &p_main)
+    .logic("let d = tok; #{ data: d, main: d }");
+    (format!("p_{id}_data"), p_main)
 }
 
 fn lower_human_task(cx: &mut LoweringCtx) -> Result<(), CompileError> {

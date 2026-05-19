@@ -131,15 +131,18 @@ fn start_to_end_produces_terminal_place() {
 
     let air = compile_to_air(&graph, "test", "desc", &std::collections::HashMap::new()).expect("should compile");
 
-    // End place merged into Start: single terminal place with initial tokens
+    // Start forks (`park_outputs`): p_s_ready (seed) + p_s_data (write-once
+    // parked copy) + p_s_main (forwarded; End merges into it) = 3 places,
+    // 1 t_s_park transition.
     assert!(
         has_place_of_type(&air, "terminal"),
         "expected a terminal place"
     );
-    assert_eq!(places(&air).len(), 1, "expected 1 place after merge");
-    assert!(
-        transitions(&air).is_empty(),
-        "expected no transitions after merge"
+    assert_eq!(places(&air).len(), 3, "expected 3 places (ready/data/main)");
+    assert_eq!(
+        transitions(&air).len(),
+        1,
+        "expected the t_s_park transition"
     );
 }
 
@@ -190,14 +193,15 @@ fn start_to_end_has_correct_structure() {
     assert_eq!(air["name"], "my_workflow");
     assert_eq!(air["description"], "a test workflow");
 
-    // After merge: Start place absorbs End's terminal type. The Start no
-    // longer carries initial_tokens at compile time (parameterize_air seeds
-    // them at instance creation), but it must still be typed as terminal.
-    let start_place = places(&air)
+    // After merge: the forwarded place absorbs End's terminal type (End
+    // merges into p_start_main, not the seed place). The Start no longer
+    // carries initial_tokens at compile time (parameterize_air seeds them
+    // at instance creation).
+    let main_place = places(&air)
         .iter()
-        .find(|p| p["id"] == "p_start_ready")
-        .expect("missing start ready place");
-    assert_eq!(start_place["type"], "terminal", "start place should be terminal after merge");
+        .find(|p| p["id"] == "p_start_main")
+        .expect("missing start main place");
+    assert_eq!(main_place["type"], "terminal", "forwarded place should be terminal after merge");
 }
 
 // ---------------------------------------------------------------------------
@@ -1705,10 +1709,10 @@ fn guard_unresolved_identifier_is_reported() {
     let graph = WorkflowGraph {
         nodes: vec![
             start_node_with_bool_field("s", "approved"),
-            // Post control/data foundation the guard SSOT only resolves
-            // `input.*` references (a bare non-`input` root is not a guard
-            // path at all). Use an `input.<x>` no upstream node produces so
-            // the real GuardUnresolved path is exercised.
+            // `input.<x>` is reserved for control-resident leaves; a
+            // non-control `input.<x>` no node produces is the canonical
+            // GuardUnresolved case (Start data is now the qualified
+            // `s.approved`, never `input.approved`).
             decision_with_guard("d", "input.ghost_field == true"),
             end_node("ea"),
             end_node("eb"),
@@ -1730,11 +1734,12 @@ fn guard_unresolved_identifier_is_reported() {
         } => {
             assert_eq!(node_id, "d");
             assert_eq!(identifier, "input.ghost_field");
-            // The hint lists the canonical `input.<field>` identifiers so the
-            // editor can steer the author to the correct form.
+            // Start is a parked producer now: the hint lists the canonical
+            // producer-qualified `<slug>.<field>` (slug derives from the
+            // node id `s`), steering the author to `s.approved`.
             assert!(
-                available.iter().any(|a| a == "input.approved"),
-                "available should include `input.approved`; got {:?}",
+                available.iter().any(|a| a == "s.approved"),
+                "available should include `s.approved`; got {:?}",
                 available
             );
         }
@@ -1744,9 +1749,10 @@ fn guard_unresolved_identifier_is_reported() {
 
 #[test]
 fn guard_input_unknown_field_is_rejected() {
-    // `input` is the reserved root, but the field must be a real upstream
-    // output. `input.bogus` resolves the root yet not the field → unresolved,
-    // with the available hint listing the canonical `input.<field>` ids.
+    // `input` is the reserved root for control-resident leaves only.
+    // `input.bogus` resolves the root yet no node produces it on the
+    // control token → unresolved; the hint lists the canonical
+    // producer-qualified form (`s.approved`) for the borrowable Start field.
     let graph = WorkflowGraph {
         nodes: vec![
             start_node_with_bool_field("s", "approved"),
@@ -1768,11 +1774,16 @@ fn guard_input_unknown_field_is_rejected() {
             identifier, available, ..
         } => {
             assert_eq!(identifier, "input.bogus");
+            // Borrowable Start data is the producer-qualified `s.approved`,
+            // not `input.approved` (clean-cut: no flat fallback).
             assert!(
-                available.iter().all(|a| a.starts_with("input.")),
-                "available hint must use the input.<field> form; got {available:?}"
+                available.iter().any(|a| a == "s.approved"),
+                "available hint must offer `s.approved`; got {available:?}"
             );
-            assert!(available.iter().any(|a| a == "input.approved"));
+            assert!(
+                !available.iter().any(|a| a == "input.approved"),
+                "stale flat `input.approved` must not be offered; got {available:?}"
+            );
         }
         e => panic!("unexpected: {e:?}"),
     }
@@ -2757,9 +2768,9 @@ fn start_file_field_with_process_name_chains_after_process_start() {
 fn start_no_file_fields_leaves_compiled_output_unchanged() {
     use mekhan_service::models::template::FieldKind;
     // A non-file Start declares typed inputs but no file uploads → no
-    // synthetic catalogue nodes, and the Start→End pass-through still merges
-    // to a single terminal place with zero transitions (identical to the
-    // baseline `start_to_end_produces_terminal_place`).
+    // synthetic catalogue nodes. The Start→End pass-through still has just
+    // the foundation fork (ready/data/main + t_*_park), same as the
+    // baseline `start_to_end_produces_terminal_place`.
     let graph = WorkflowGraph {
         nodes: vec![
             start_node_with_fields("s", &[("note", FieldKind::Text)], None),
@@ -2773,8 +2784,8 @@ fn start_no_file_fields_leaves_compiled_output_unchanged() {
 
     assert!(!has_transition(&air, "t_s_cat_shape_0"), "unexpected catalogue chain");
     assert!(!has_place(&air, "p_s_cat_art_0"), "unexpected artifact place");
-    assert_eq!(places(&air).len(), 1, "expected 1 place after merge");
-    assert!(transitions(&air).is_empty(), "expected no transitions after merge");
+    assert_eq!(places(&air).len(), 3, "ready/data/main only — no catalogue places");
+    assert_eq!(transitions(&air).len(), 1, "only the t_s_park transition");
 }
 
 // ---------------------------------------------------------------------------

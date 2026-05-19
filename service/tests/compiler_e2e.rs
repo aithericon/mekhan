@@ -113,10 +113,12 @@ fn ui_simple_start_end_deserializes_and_compiles() {
 
     let air = compile_to_air(&graph, "simple", "Simple workflow", &std::collections::HashMap::new()).expect("should compile");
 
-    // After merge: 1 terminal place, 0 transitions. No compile-time seeding
-    // (initial tokens are injected per-Start at instance creation).
-    assert_eq!(places(&air).len(), 1);
-    assert!(transitions(&air).is_empty());
+    // Start forks (`park_outputs`): seed + write-once parked copy + the
+    // forwarded place (End merges into the last) = 3 places, 1 t_*_park
+    // transition. No compile-time seeding (initial tokens are injected
+    // per-Start at instance creation).
+    assert_eq!(places(&air).len(), 3);
+    assert_eq!(transitions(&air).len(), 1);
     assert!(has_place_of_type(&air, "terminal"));
     assert_no_seeded_places(&air);
 }
@@ -135,9 +137,9 @@ fn ui_linear_human_task_deserializes_and_compiles() {
     let air = compile_to_air(&graph, "linear", "Linear workflow", &std::collections::HashMap::new()).expect("should compile");
 
     // HumanTask internal: input, active, signal, errors, output = 5 places
-    // + Start place = 6, + the foundation control/data split adds the
-    // write-once parked data place and the slim control place = 8.
-    assert_eq!(places(&air).len(), 8);
+    // + the foundation control/data split adds parked-data + slim-control
+    // = 7. Start now forks too (p_*_ready + p_*_data + p_*_main = 3) = 10.
+    assert_eq!(places(&air).len(), 10);
     assert!(has_place_of_type(&air, "terminal"));
     assert!(has_place_of_type(&air, "signal"));
     assert_no_seeded_places(&air);

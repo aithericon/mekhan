@@ -501,15 +501,18 @@ mod tests {
         let places = air["places"].as_array().unwrap();
         let transitions = air["transitions"].as_array().unwrap();
 
-        // End place merged into Start place = 1 place, 0 transitions
-        assert_eq!(places.len(), 1);
-        assert_eq!(transitions.len(), 0);
+        // Start now forks (`park_outputs`): p_s_ready (seed) + p_s_data
+        // (write-once parked copy, never read here) + p_s_main (token
+        // forwarded; End merges into it) = 3 places, 1 transition (t_s_park).
+        assert_eq!(places.len(), 3);
+        assert_eq!(transitions.len(), 1);
 
-        // Start place absorbs terminal type. With typed ports, initial tokens
-        // are NOT seeded at compile time — `parameterize_air` seeds them at
-        // instance creation. Just verify the place is terminal-typed here.
-        let start_place = places.iter().find(|p| p["id"] == "p_s_ready").unwrap();
-        assert_eq!(start_place["type"], "terminal");
+        // The forwarded place absorbs the terminal type (End merged into
+        // p_s_main); the seed place stays a normal state place. With typed
+        // ports, initial tokens are NOT seeded at compile time —
+        // `parameterize_air` seeds them at instance creation.
+        let main_place = places.iter().find(|p| p["id"] == "p_s_main").unwrap();
+        assert_eq!(main_place["type"], "terminal");
     }
 
     #[test]
@@ -680,13 +683,14 @@ mod tests {
         let transitions = air["transitions"].as_array().unwrap();
 
         // HumanTask creates 5 places (input, active, signal, output, errors)
-        // + Start place = 6, + the control/data foundation split adds the
-        // write-once parked data place and the slim control place = 8.
-        assert_eq!(places.len(), 8);
+        // + the HT foundation split adds parked-data + slim-control = 7.
+        // Start now forks too: p_s_ready + p_s_data + p_s_main = 3 → 10.
+        assert_eq!(places.len(), 10);
 
-        // request + finalize + 1 injection edge (s->ht) + the yield/park
-        // transition = 4 (ht->e edge merged into the control place).
-        assert_eq!(transitions.len(), 4);
+        // request + finalize + 1 injection edge (s->ht) + the HT yield
+        // transition + Start's t_s_park = 5 (ht->e merged into the control
+        // place).
+        assert_eq!(transitions.len(), 5);
     }
 
     #[test]
@@ -734,8 +738,9 @@ mod tests {
         let air = result.unwrap();
         let transitions = air["transitions"].as_array().unwrap();
 
-        // 1 branch + 1 default = 2 (3 pass-through edge transitions merged)
-        assert_eq!(transitions.len(), 2);
+        // 1 branch + 1 default + Start's t_s_park = 3 (3 pass-through edge
+        // transitions merged).
+        assert_eq!(transitions.len(), 3);
 
         // Verify the branch has a guard
         let branch = transitions.iter().find(|t| t["id"] == "t_d_branch_0").unwrap();
