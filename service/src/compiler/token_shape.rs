@@ -344,6 +344,98 @@ fn port_to_shape(port: &Port, node: &WorkflowNode, note: &str) -> TokenShape {
     o
 }
 
+/// A strict, SSOT-derived type violation of a declared port contract.
+///
+/// Complements [`Port::validate_token`], which is *lenient* for `File`/`Json`
+/// (a `file` field accepts a bare string). This carries the typed shape the
+/// foundation derives via [`port_to_shape`] — the same shape
+/// [`TokenShape::to_json_schema`] feeds the engine's strict `Data__*`
+/// schemas — so the trigger boundary can reject exactly what the net would
+/// reject deep inside (e.g. a `file` field arriving as `"example"`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PortShapeViolation {
+    pub field: String,
+    pub expected: String,
+    pub actual: String,
+}
+
+fn json_kind(v: &Value) -> &'static str {
+    match v {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}
+
+/// Validate `token` against `port`'s declared, SSOT-typed shape.
+///
+/// This is the strict counterpart of [`Port::validate_token`]: it consumes the
+/// foundation's own [`port_to_shape`] (the *single* place a `file` field is
+/// defined as an object and a scalar field as its [`ScalarTy`]) rather than
+/// reimplementing field-kind logic. Only *present, non-null* fields are
+/// type-checked — required/absent stays [`Port::validate_token`]'s job, and
+/// permissiveness mirrors [`TokenShape::to_json_schema`] (per-field top-level
+/// type only; extra keys allowed; `Json`/`Any`/`Opaque` are escape hatches).
+/// Returns the first mismatch with an actionable, field-named message.
+pub fn validate_token_against_port(
+    port: &Port,
+    node: &WorkflowNode,
+    token: &Value,
+) -> Result<(), PortShapeViolation> {
+    let TokenShape::Object(fields) = port_to_shape(port, node, "declared port field") else {
+        return Ok(());
+    };
+    let Some(obj) = token.as_object() else {
+        return Err(PortShapeViolation {
+            field: port.id.clone(),
+            expected: "object".to_string(),
+            actual: json_kind(token).to_string(),
+        });
+    };
+    for (name, f) in &fields {
+        let Some(v) = obj.get(name) else {
+            continue; // absent — required/missing is `validate_token`'s job
+        };
+        if v.is_null() {
+            continue; // null — treated as absent (parity with `validate_token`)
+        }
+        let ok = match &f.shape {
+            TokenShape::Object(_) => v.is_object(),
+            TokenShape::Array(_) => v.is_array(),
+            TokenShape::Scalar(ScalarTy::Number) => v.is_number(),
+            TokenShape::Scalar(ScalarTy::Bool) => v.is_boolean(),
+            TokenShape::Scalar(ScalarTy::String)
+            | TokenShape::Scalar(ScalarTy::Timestamp) => v.is_string(),
+            // Escape hatches — deliberately unconstrained, exactly as
+            // `to_json_schema` emits `{}` for these.
+            TokenShape::Scalar(ScalarTy::FileRef)
+            | TokenShape::Scalar(ScalarTy::Json)
+            | TokenShape::Any
+            | TokenShape::Opaque(_) => true,
+        };
+        if !ok {
+            let expected = match &f.shape {
+                // `port_to_shape` maps a `file` field to this object triplet.
+                TokenShape::Object(_) => {
+                    "file reference object { url, filename, content_type }".to_string()
+                }
+                TokenShape::Array(_) => "array".to_string(),
+                TokenShape::Scalar(s) => s.label().to_ascii_lowercase(),
+                _ => "any".to_string(),
+            };
+            return Err(PortShapeViolation {
+                field: name.clone(),
+                expected,
+                actual: json_kind(v).to_string(),
+            });
+        }
+    }
+    Ok(())
+}
+
 // ─── Per-node shape derivation ──────────────────────────────────────────────
 
 /// One reachable, still-live reference the editor variable picker should
@@ -767,32 +859,19 @@ pub fn analyze(graph: &WorkflowGraph) -> Result<ShapeReport, CompileError> {
         }
     }
 
-    // Per-node scope surface (the producer-namespaced replacement for the TS
-    // `computeScopes`) + collision detection.
+    // Per-node scope surface: the *borrow-reachable* references — exactly the
+    // set the compiler (`check_guard` / `guard_readarc_plan`) resolves, built
+    // from the same `resolve` / `locate_field` primitives. The old
+    // `flatten_scope(node_in)` only saw the linear control token, so every
+    // upstream field was hidden behind a token-replacing automated step (the
+    // picker showed the executor envelope, never the parked producer's data).
     let mut scopes: BTreeMap<String, Vec<ScopeEntry>> = BTreeMap::new();
     let mut diagnostics = Vec::new();
     for node in &graph.nodes {
-        if let Some(in_shape) = node_in.get(&node.id) {
-            let entries = flatten_scope(in_shape);
-            // Collisions: same leaf, different producer + different type.
-            let mut by_leaf: BTreeMap<&str, &ScopeEntry> = BTreeMap::new();
-            for e in &entries {
-                let leaf = e.path.rsplit('.').next().unwrap_or(&e.path);
-                if let Some(prev) = by_leaf.get(leaf) {
-                    if prev.producer_node != e.producer_node && prev.ty != e.ty {
-                        diagnostics.push(ShapeDiagnostic::ScopeCollision {
-                            node_id: node.id.clone(),
-                            node_label: node.data.label().to_string(),
-                            leaf: leaf.to_string(),
-                            a: format!("{} ({})", prev.ty, prev.producer_label),
-                            b: format!("{} ({})", e.ty, e.producer_label),
-                        });
-                    }
-                }
-                by_leaf.insert(leaf, e);
-            }
-            scopes.insert(node.id.clone(), entries);
-        }
+        scopes.insert(
+            node.id.clone(),
+            reachable_scope(node, graph, &node_in, &node_out, &order, &wg),
+        );
     }
 
     // Guard re-validation against the real shape.
@@ -828,55 +907,149 @@ pub fn analyze(graph: &WorkflowGraph) -> Result<ShapeReport, CompileError> {
     })
 }
 
-/// Flatten a node's inbound shape into the leaf reference list the editor
-/// variable picker should show — every entry is something you can actually
-/// type in a guard, attributed to the node that produced it.
-fn flatten_scope(shape: &TokenShape) -> Vec<ScopeEntry> {
-    fn walk(
-        shape: &TokenShape,
-        prefix: &str,
-        out: &mut Vec<ScopeEntry>,
-        prov: Option<&Provenance>,
-    ) {
-        match shape {
-            TokenShape::Object(map) if !map.is_empty() => {
-                for (k, f) in map {
-                    let path = if prefix.is_empty() {
-                        k.clone()
-                    } else {
-                        format!("{prefix}.{k}")
-                    };
-                    walk(&f.shape, &path, out, Some(&f.prov));
-                }
+/// Every `(dotted_path, type_label, provenance)` leaf of a shape.
+fn collect_leaves(
+    shape: &TokenShape,
+    prefix: &str,
+    prov: Option<&Provenance>,
+    out: &mut Vec<(String, String, Provenance)>,
+) {
+    match shape {
+        TokenShape::Object(map) if !map.is_empty() => {
+            for (k, f) in map {
+                let path = if prefix.is_empty() {
+                    k.clone()
+                } else {
+                    format!("{prefix}.{k}")
+                };
+                collect_leaves(&f.shape, &path, Some(&f.prov), out);
             }
-            // Leaf: scalar / opaque / any / array / empty object.
-            _ => {
-                if let Some(p) = prov {
-                    out.push(ScopeEntry {
-                        path: format!("input.{prefix}"),
-                        ty: shape.kind_label(),
-                        producer_node: p.node_id.clone(),
-                        producer_label: p.node_label.clone(),
-                        note: p.note.clone(),
-                    });
+        }
+        // Leaf: scalar / opaque / any / array / empty object.
+        _ => {
+            if let Some(p) = prov {
+                out.push((prefix.to_string(), shape.kind_label(), p.clone()));
+            }
+        }
+    }
+}
+
+/// A node is a *parked producer* (its business output gets a write-once
+/// `p_{id}_data` place that read-arcs can borrow) iff it is a HumanTask or
+/// AutomatedStep — the only patterns `lower.rs::split_outputs` splits. Start
+/// parks `ProcessStarted`, not its business input, so a Start field is only
+/// reachable while it is still *on the control token* (the control-resident
+/// branch below), never via a synthesized read-arc.
+fn is_parked_producer(graph: &WorkflowGraph, id: &str) -> bool {
+    graph.nodes.iter().any(|n| {
+        n.id == id
+            && matches!(
+                n.data,
+                WorkflowNodeData::HumanTask { .. } | WorkflowNodeData::AutomatedStep { .. }
+            )
+    })
+}
+
+/// Borrow-reachable scope at a node: exactly the references the compiler
+/// (`check_guard` / `guard_readarc_plan`) resolves — (1) every leaf still on
+/// the node's own inbound control token (resolvable with no read-arc), plus
+/// (2) every leaf an upstream *parked producer* owns, resolved through the
+/// SAME `locate_field` the read-arc synthesis uses (nearest producer wins).
+/// The user types the bare `input.<leaf>`; the compiler rebinds it to the
+/// producer's parked place. Replaces the old `flatten_scope(node_in)`, which
+/// only saw the linear control token and so hid every field produced before a
+/// token-replacing automated step.
+fn reachable_scope(
+    node: &WorkflowNode,
+    graph: &WorkflowGraph,
+    node_in: &BTreeMap<String, TokenShape>,
+    node_out: &BTreeMap<String, TokenShape>,
+    order: &[petgraph::graph::NodeIndex],
+    wg: &WorkflowDiGraph,
+) -> Vec<ScopeEntry> {
+    // leaf -> entry. A control-resident leaf wins: it needs no read-arc and
+    // `check_guard` tries `resolve()` (control token) before `locate_field`.
+    let mut by_leaf: BTreeMap<String, ScopeEntry> = BTreeMap::new();
+
+    // (1) Control-token-resident — Start fields before any task, the slim
+    //     control keys, the envelope an automated step actually forwards.
+    if let Some(in_shape) = node_in.get(&node.id) {
+        let mut leaves = Vec::new();
+        collect_leaves(in_shape, "", None, &mut leaves);
+        for (dotted, ty, prov) in leaves {
+            let leaf = dotted.rsplit('.').next().unwrap_or(&dotted).to_string();
+            by_leaf.insert(
+                leaf,
+                ScopeEntry {
+                    path: format!("input.{dotted}"),
+                    ty,
+                    producer_node: prov.node_id,
+                    producer_label: prov.node_label,
+                    note: prov.note,
+                },
+            );
+        }
+    }
+
+    // (2) Read-arc-reachable — every leaf a strictly-upstream parked producer
+    //     owns. Resolve through `locate_field` (nearest-producer-wins, the
+    //     identical call `guard_readarc_plan` makes) so the picker can never
+    //     offer a path the compiler won't bind, nor hide one it would.
+    let pos = topo_pos(order, wg);
+    let self_pos = pos.get(&node.id).copied();
+    let mut candidates: Vec<String> = Vec::new();
+    if let Some(self_pos) = self_pos {
+        for ni in order.iter() {
+            let prod = *wg.dag.node_weight(*ni).unwrap();
+            if pos.get(&prod.id).copied().unwrap_or(usize::MAX) >= self_pos {
+                continue;
+            }
+            if let Some(shape) = node_out.get(&prod.id) {
+                let mut leaves = Vec::new();
+                collect_leaves(shape, "", None, &mut leaves);
+                for (dotted, _ty, _prov) in leaves {
+                    candidates.push(dotted.rsplit('.').next().unwrap_or(&dotted).to_string());
                 }
             }
         }
     }
-    let mut out = Vec::new();
-    walk(shape, "", &mut out, None);
-    out
+    candidates.sort();
+    candidates.dedup();
+    for leaf in candidates {
+        if by_leaf.contains_key(&leaf) {
+            continue; // already control-resident (resolves without a read-arc)
+        }
+        if is_control_leaf(&format!("input.{leaf}")) {
+            continue; // identity/routing — stays on the slim control token
+        }
+        if let Some(fl) = locate_field(&leaf, node, node_out, order, wg) {
+            if !is_parked_producer(graph, &fl.producer_id) {
+                continue; // owner has no parked place — not borrow-reachable
+            }
+            by_leaf.insert(
+                leaf.clone(),
+                ScopeEntry {
+                    path: format!("input.{leaf}"),
+                    ty: fl.ty,
+                    producer_node: fl.producer_id,
+                    producer_label: fl.producer_label,
+                    note: fl.note,
+                },
+            );
+        }
+    }
+
+    by_leaf.into_values().collect()
 }
 
-/// Where an upstream-produced field actually lives, and what dropped it.
+/// Where an upstream-produced field actually lives (which node owns it, its
+/// path within that producer's parked token, and its type).
 struct FieldLocation {
     producer_id: String,
     producer_label: String,
     path: String,
     ty: String,
     note: String,
-    dropped_by: Option<String>,
-    drop_reason: String,
 }
 
 fn topo_pos(order: &[petgraph::graph::NodeIndex], wg: &WorkflowDiGraph) -> BTreeMap<String, usize> {
@@ -887,32 +1060,8 @@ fn topo_pos(order: &[petgraph::graph::NodeIndex], wg: &WorkflowDiGraph) -> BTree
     pos
 }
 
-/// Why a given node drops fields — keyed off its lowering pattern.
-fn classify_drop(node: &WorkflowNode) -> String {
-    let l = node.data.label();
-    match &node.data {
-        WorkflowNodeData::AutomatedStep { .. } => format!(
-            "the '{l}' automated step replaces the workflow token with its \
-             executor result envelope (the upstream token is consumed into \
-             spec.inputs and not forwarded)"
-        ),
-        WorkflowNodeData::ParallelJoin { .. } => format!(
-            "the '{l}' join did not carry it (merge strategy / arriving branch \
-             did not include it)"
-        ),
-        WorkflowNodeData::Loop { .. } => {
-            format!("the '{l}' loop boundary did not carry it across iterations")
-        }
-        WorkflowNodeData::HumanTask { .. } => {
-            format!("the '{l}' human task output did not include it")
-        }
-        _ => format!("node '{l}' did not forward it"),
-    }
-}
-
-/// Find the nearest strictly-upstream producer of `leaf`, then walk forward
-/// to the first node that no longer carries it — that node is the dropper,
-/// and its kind explains *why*.
+/// Find the nearest strictly-upstream producer of `leaf` (the node whose
+/// parked output a read-arc would borrow it from).
 fn locate_field(
     leaf: &str,
     node: &WorkflowNode,
@@ -938,38 +1087,13 @@ fn locate_field(
             }
         }
     }
-    let (pp, dotted, ty, prov) = producer?;
-
-    let mut dropped_by = None;
-    let mut drop_reason =
-        "it is not on the data path into this node (parallel/sibling branch, or a \
-         token-replacing step in between)"
-            .to_string();
-    for ni in order.iter() {
-        let n = *wg.dag.node_weight(*ni).unwrap();
-        let np = pos[&n.id];
-        if np <= pp || np > self_pos {
-            continue;
-        }
-        let still = node_out
-            .get(&n.id)
-            .map(|s| s.find_by_leaf(leaf).is_some())
-            .unwrap_or(false);
-        if !still {
-            dropped_by = Some(n.data.label().to_string());
-            drop_reason = classify_drop(n);
-            break;
-        }
-    }
-
+    let (_pp, dotted, ty, prov) = producer?;
     Some(FieldLocation {
         producer_id: prov.node_id.clone(),
         producer_label: prov.node_label.clone(),
         path: format!("input.{dotted}"),
         ty,
         note: prov.note.clone(),
-        dropped_by,
-        drop_reason,
     })
 }
 
@@ -1002,48 +1126,24 @@ fn check_guard(
                 }
             }
             None => {
+                // Not on the inbound control token. Post-foundation this is
+                // the *normal, correct* case if an upstream parked producer
+                // owns it: `guard_readarc_plan` synthesizes a non-consuming
+                // read-arc into that producer's `p_{id}_data` and rebinds the
+                // reference. Emitting `DroppedUpstream` here would directly
+                // contradict the compiler (and the picker, which now surfaces
+                // exactly these). Only a reference no upstream node produces
+                // at all is genuinely unresolved. This mirrors
+                // `guard_readarc_plan` so picker ↔ read-arc synthesis ↔ this
+                // diagnostic can never disagree.
                 let leaf = segs.last().cloned().unwrap_or_default();
-                match locate_field(&leaf, node, node_out, order, wg) {
-                    Some(fl) => {
-                        let ref_label = node.data.label().to_string();
-                        let dropper = fl
-                            .dropped_by
-                            .clone()
-                            .unwrap_or_else(|| "the intermediate step".to_string());
-                        let fixes = vec![
-                            format!(
-                                "Declare `{leaf}` on {dropper}'s output port so the step \
-                                 forwards it downstream."
-                            ),
-                            format!(
-                                "Or publish `{leaf}` from '{}' to a context place and \
-                                 read-arc it into '{ref_label}' (non-consuming) — the \
-                                 Petri-correct way to share ancestor state across a \
-                                 token-replacing step.",
-                                fl.producer_label
-                            ),
-                        ];
-                        let _ = fl.note;
-                        out.push(ShapeDiagnostic::DroppedUpstream {
-                            node_id: node.id.clone(),
-                            node_label: ref_label,
-                            guard: guard.to_string(),
-                            referenced,
-                            produced_by: fl.producer_id,
-                            produced_label: fl.producer_label,
-                            produced_path: fl.path,
-                            produced_ty: fl.ty,
-                            dropped_by: fl.dropped_by,
-                            drop_reason: fl.drop_reason,
-                            fixes,
-                        });
-                    }
-                    None => out.push(ShapeDiagnostic::UnresolvedGuardPath {
+                if locate_field(&leaf, node, node_out, order, wg).is_none() {
+                    out.push(ShapeDiagnostic::UnresolvedGuardPath {
                         node_id: node.id.clone(),
                         node_label: node.data.label().to_string(),
                         guard: guard.to_string(),
                         referenced,
-                    }),
+                    });
                 }
             }
         }
@@ -1507,4 +1607,224 @@ pub(crate) fn guard_readarc_plan(
         }
     }
     Ok(binds)
+}
+
+#[cfg(test)]
+mod port_contract_tests {
+    use super::*;
+    use crate::models::template::{PortField, Position};
+    use serde_json::json;
+
+    fn start_node(fields: Vec<PortField>) -> WorkflowNode {
+        WorkflowNode {
+            id: "start".to_string(),
+            node_type: "start".to_string(),
+            position: Position { x: 0.0, y: 0.0 },
+            data: WorkflowNodeData::Start {
+                label: "Start".to_string(),
+                description: None,
+                initial: Port {
+                    id: "in".to_string(),
+                    label: "Input".to_string(),
+                    fields,
+                },
+                process_name: None,
+            },
+            parent_id: None,
+            width: None,
+            height: None,
+        }
+    }
+
+    fn field(name: &str, kind: FieldKind, required: bool) -> PortField {
+        PortField {
+            name: name.to_string(),
+            label: name.to_string(),
+            kind,
+            required,
+            options: None,
+            description: None,
+            accept: None,
+        }
+    }
+
+    fn invoice_port() -> Port {
+        Port {
+            id: "in".to_string(),
+            label: "Input".to_string(),
+            fields: vec![
+                field("invoice_file", FieldKind::File, true),
+                field("invoice_id", FieldKind::Text, true),
+            ],
+        }
+    }
+
+    // The live incident: `invoice_file` resolved to the JSON scalar `"example"`
+    // instead of an uploaded file ref. The lenient `Port::validate_token`
+    // accepts it (a `file` field accepts a string); the strict SSOT gate must
+    // reject it with a field-named, type-specific message — at ingestion,
+    // before any net is created.
+    #[test]
+    fn file_field_as_scalar_string_is_rejected() {
+        let node = start_node(invoice_port().fields);
+        let token = json!({ "invoice_file": "example", "invoice_id": "example" });
+        let v = validate_token_against_port(&invoice_port(), &node, &token)
+            .expect_err("a string for a `file` field must be rejected");
+        assert_eq!(v.field, "invoice_file");
+        assert_eq!(v.actual, "string");
+        assert!(
+            v.expected.contains("file reference object"),
+            "message should name the expected file shape, got: {}",
+            v.expected
+        );
+        // Sanity: the lenient gate is exactly why this slipped to the net.
+        assert!(invoice_port().validate_token(&token).is_ok());
+    }
+
+    #[test]
+    fn valid_uploaded_file_ref_passes() {
+        let node = start_node(invoice_port().fields);
+        let token = json!({
+            "invoice_file": {
+                "key": "blob/abc",
+                "url": "/api/files/blob/abc",
+                "filename": "invoice.png",
+                "content_type": "image/png",
+                "size": 1234
+            },
+            "invoice_id": "INV-1"
+        });
+        assert!(validate_token_against_port(&invoice_port(), &node, &token).is_ok());
+    }
+
+    #[test]
+    fn number_field_as_string_is_rejected() {
+        let port = Port {
+            id: "in".to_string(),
+            label: "Input".to_string(),
+            fields: vec![field("amount", FieldKind::Number, true)],
+        };
+        let node = start_node(port.fields.clone());
+        let v = validate_token_against_port(&port, &node, &json!({ "amount": "13" }))
+            .expect_err("a string for a `number` field must be rejected");
+        assert_eq!(v.field, "amount");
+        assert_eq!(v.expected, "number");
+        assert_eq!(v.actual, "string");
+    }
+
+    #[test]
+    fn absent_field_is_not_a_type_error() {
+        // Required/absent is `Port::validate_token`'s job — this strict gate
+        // is type-only and must stay silent on absence so the two layers
+        // compose without double-reporting.
+        let node = start_node(invoice_port().fields);
+        assert!(
+            validate_token_against_port(&invoice_port(), &node, &json!({ "invoice_id": "x" }))
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn non_object_token_is_rejected() {
+        let node = start_node(invoice_port().fields);
+        let v = validate_token_against_port(&invoice_port(), &node, &json!("not an object"))
+            .expect_err("a non-object token cannot satisfy a field-keyed port");
+        assert_eq!(v.field, "in");
+        assert_eq!(v.actual, "string");
+    }
+
+    #[test]
+    fn json_escape_hatch_accepts_anything() {
+        let port = Port {
+            id: "in".to_string(),
+            label: "Input".to_string(),
+            fields: vec![field("blob", FieldKind::Json, true)],
+        };
+        let node = start_node(port.fields.clone());
+        assert!(validate_token_against_port(&port, &node, &json!({ "blob": "anything" })).is_ok());
+        assert!(validate_token_against_port(&port, &node, &json!({ "blob": 42 })).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod scope_reachability_tests {
+    //! Task #20: the editor picker scope, the read-arc synthesis, and the
+    //! drop diagnostic must be three views of ONE borrow-reachable model.
+    //! Before the fix, `check-amount` (a Decision sitting after the
+    //! token-replacing `extract` automated step) only saw extract's executor
+    //! envelope — `review`'s `invoice_amount` was invisible in the picker yet
+    //! the compiler happily read-arced it, and `check_guard` flagged it
+    //! `DroppedUpstream`: three layers, three answers.
+    use super::*;
+
+    fn invoice_graph() -> WorkflowGraph {
+        // Same fixture the foundation e2e proves the net enforces — so the
+        // picker can't drift from what the compiler binds.
+        let s = std::fs::read_to_string("tests/fixtures/graphs/invoice-processing.json")
+            .expect("read invoice fixture");
+        serde_json::from_str(&s).expect("deser invoice fixture")
+    }
+
+    #[test]
+    fn decision_scope_agrees_with_readarc_synthesis_and_diagnostics() {
+        let g = invoice_graph();
+        let report = analyze(&g).expect("analyze");
+
+        // (1) Picker offers the upstream parked producer's field, attributed
+        //     to `review` — not the `extract` envelope it physically arrives
+        //     wrapped in.
+        let scope = report.scopes.get("check-amount").expect("decision scope");
+        let amt = scope
+            .iter()
+            .find(|e| e.path == "input.invoice_amount")
+            .unwrap_or_else(|| {
+                panic!(
+                    "invoice_amount must be pickable at the decision; offered: {:?}",
+                    scope.iter().map(|e| &e.path).collect::<Vec<_>>()
+                )
+            });
+        assert_eq!(amt.producer_node, "review");
+        assert_eq!(amt.ty, "Number");
+
+        // (2) The read-arc synthesis resolves the IDENTICAL reference to the
+        //     same producer (the compiler-as-borrow-checker).
+        let binds = guard_readarc_plan(&g).expect("readarc plan");
+        assert!(
+            binds.iter().any(|b| b.consumer_node_id == "check-amount"
+                && b.referenced == "input.invoice_amount"
+                && b.producer_node == "review"),
+            "guard_readarc_plan must bind input.invoice_amount -> review, got {:?}",
+            binds
+                .iter()
+                .map(|b| (&b.consumer_node_id, &b.referenced, &b.producer_node))
+                .collect::<Vec<_>>()
+        );
+
+        // (3) No diagnostic contradicts the compiler.
+        for d in &report.diagnostics {
+            if let ShapeDiagnostic::DroppedUpstream { referenced, .. }
+            | ShapeDiagnostic::UnresolvedGuardPath { referenced, .. } = d
+            {
+                assert_ne!(
+                    referenced, "input.invoice_amount",
+                    "borrow-reachable ref wrongly flagged dropped/unresolved"
+                );
+            }
+        }
+
+        // Global invariant: nothing the picker offers is, at that same node,
+        // reported unresolved — the picker never lies about resolvability.
+        for (nid, entries) in &report.scopes {
+            for e in entries {
+                let contradicted = report.diagnostics.iter().any(|d| matches!(d,
+                    ShapeDiagnostic::UnresolvedGuardPath { node_id, referenced, .. }
+                        if node_id == nid && referenced == &e.path));
+                assert!(
+                    !contradicted,
+                    "picker offered {} at {} but it is reported unresolved",
+                    e.path, nid
+                );
+            }
+        }
+    }
 }

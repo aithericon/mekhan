@@ -156,13 +156,89 @@ fn type_surface_still_works_before_publish() {
     let surface = surface_types(&graph);
     assert!(surface.graph_ok && !surface.scopes.is_empty());
 
-    // The shape model still attributes the dropped fields to their producer.
+    // Reconciled (Task #20): `check-amount` sits after the token-replacing
+    // `extract` step. The picker scope must surface `review`'s parked
+    // `invoice_amount` (borrow-reachable via read-arc) — NOT only the extract
+    // executor envelope, the linear-flow bug — attributed to its real
+    // producer.
+    let dec = surface
+        .scopes
+        .get("check-amount")
+        .expect("decision scope surfaced");
+    assert!(
+        dec.iter().any(|e| e.path == "input.invoice_amount"
+            && e.producer_node == "review"
+            && e.ty == "Number"),
+        "picker must offer review.invoice_amount at the decision, got: {:?}",
+        dec.iter()
+            .map(|e| (e.path.as_str(), e.producer_node.as_str()))
+            .collect::<Vec<_>>()
+    );
+
+    // The drop diagnostic must no longer contradict the read-arc synthesis:
+    // a borrow-reachable reference is neither dropped nor unresolved.
     let report = analyze_token_shapes(&graph).expect("analyze");
     assert!(
-        report.diagnostics.iter().any(|d| matches!(
+        !report.diagnostics.iter().any(|d| matches!(
             d,
-            ShapeDiagnostic::DroppedUpstream { produced_by, .. } if produced_by == "review"
+            ShapeDiagnostic::DroppedUpstream { .. } | ShapeDiagnostic::UnresolvedGuardPath { .. }
         )),
-        "shape-aware provenance still available pre-publish"
+        "borrow-reachable guard refs must not be reported dropped/unresolved: {:?}",
+        report.diagnostics
+    );
+}
+
+/// Regression for the live incident on template `cc33d5db` v2 / instance
+/// 6f347648: a faulty trigger curl sent the JSON scalar
+/// `invoice_file:"example"` (shadowing an uploaded file part). The lenient
+/// port gate let it through and the strict `Data__review` schema only caught
+/// it at `t_review_yield`, after a human had filled the review form. The
+/// ingestion guard must reject it at the boundary, deriving the expected
+/// shape from the SAME SSOT this file proves the net enforces
+/// (`native_split_is_emitted_with_enforced_schemas`) — so "what the trigger
+/// accepts" == "what the net enforces", with no gap to slip through.
+#[test]
+fn trigger_ingestion_rejects_file_as_scalar_string() {
+    use mekhan_service::compiler::token_shape::validate_token_against_port;
+    use mekhan_service::models::template::WorkflowNodeData;
+    use serde_json::json;
+
+    let graph = load("invoice-processing.json");
+    let start = graph
+        .nodes
+        .iter()
+        .find(|n| matches!(n.data, WorkflowNodeData::Start { .. }))
+        .expect("invoice net has a Start node");
+    let WorkflowNodeData::Start { initial, .. } = &start.data else {
+        unreachable!()
+    };
+
+    // The exact incident payload (instance 6f347648).
+    let bad = json!({ "invoice_file": "example", "invoice_id": "example" });
+    let v = validate_token_against_port(initial, start, &bad)
+        .expect_err("a string for the required `file` field must be rejected at ingestion");
+    assert_eq!(v.field, "invoice_file");
+    assert_eq!(v.actual, "string");
+    assert!(
+        v.expected.contains("file reference object"),
+        "expected message names the file shape, got: {}",
+        v.expected
+    );
+
+    // Known-good shape (mirrors completed instance b83debd9): the multipart
+    // injection's file-ref object is accepted, so a valid trigger still spawns.
+    let good = json!({
+        "invoice_file": {
+            "key": "tmpl/start/invoice.png",
+            "url": "/api/files/tmpl/start/invoice.png",
+            "filename": "invoice.png",
+            "content_type": "image/png",
+            "size": 20418
+        },
+        "invoice_id": "INV-2026-0042"
+    });
+    assert!(
+        validate_token_against_port(initial, start, &good).is_ok(),
+        "a valid uploaded file ref must pass ingestion"
     );
 }
