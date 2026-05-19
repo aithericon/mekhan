@@ -5,9 +5,11 @@
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import ChevronUp from '@lucide/svelte/icons/chevron-up';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
+	import Info from '@lucide/svelte/icons/info';
 	import GuardEditor from './GuardEditor.svelte';
 	import { Input } from '$lib/components/ui/input';
 	import { Button } from '$lib/components/ui/button';
+	import * as Tooltip from '$lib/components/ui/tooltip';
 
 	type Props = {
 		data: DecisionNodeData;
@@ -80,7 +82,24 @@
 
 <div class="space-y-2">
 	<div class="flex items-center justify-between">
-		<span class="text-xs font-medium text-muted-foreground">Branches</span>
+		<div class="flex items-center gap-1.5">
+			<span class="text-xs font-medium text-muted-foreground">Branches</span>
+			<Tooltip.Provider delayDuration={150}>
+				<Tooltip.Root>
+					<Tooltip.Trigger
+						class="text-muted-foreground transition-colors hover:text-foreground"
+						aria-label="How branch ordering works"
+					>
+						<Info class="size-4" />
+					</Tooltip.Trigger>
+					<Tooltip.Content side="bottom" class="max-w-xs text-sm leading-snug">
+						Order is precedence: branches are evaluated top-to-bottom and the
+						first matching guard wins. The default (else) branch is always
+						evaluated last.
+					</Tooltip.Content>
+				</Tooltip.Root>
+			</Tooltip.Provider>
+		</div>
 		{#if !readonly}
 			<button
 				type="button"
@@ -92,11 +111,6 @@
 			</button>
 		{/if}
 	</div>
-
-	<p class="text-[10px] leading-snug text-muted-foreground">
-		Order is precedence: branches are evaluated top-to-bottom and the first
-		matching guard wins. The default (else) branch is always evaluated last.
-	</p>
 
 	{#each data.conditions as condition, i (condition.edgeId)}
 		<div class="rounded-lg border border-border bg-muted/30 p-2 text-[11px]">
