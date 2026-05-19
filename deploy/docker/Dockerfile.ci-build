@@ -113,11 +113,23 @@ RUN set -eux; \
         *)       echo "unsupported host arch: $arch" >&2; exit 1;; \
     esac; \
     curl -sL "https://musl.cc/${tarball}.tgz" | tar xz -C /opt; \
-    ln -sf "${toolprefix}/bin/aarch64-linux-musl-gcc" /usr/local/bin/; \
-    ln -sf "${toolprefix}/bin/aarch64-linux-musl-g++" /usr/local/bin/; \
-    ln -sf "${toolprefix}/bin/aarch64-linux-musl-ar"  /usr/local/bin/; \
-    ln -sf "${toolprefix}/bin/aarch64-linux-musl-ld"  /usr/local/bin/; \
-    aarch64-linux-musl-gcc --version | head -1
+    # The `-native` tarball is built FOR aarch64 hosts, so some of its binaries
+    # ship under unprefixed names (`bin/ar`, `bin/ld`) while only the compiler
+    # drivers (`gcc`, `g++`) reliably have the `aarch64-linux-musl-` prefix.
+    # cc-rs / cargo invoke the prefixed names unconditionally, so symlink the
+    # prefixed form to whichever name actually exists in the tarball. Falls
+    # through cleanly for the `-cross` tarball where every binary is prefixed.
+    for tool in gcc g++ ar ld ranlib strip nm objcopy objdump; do \
+        if [ -x "${toolprefix}/bin/aarch64-linux-musl-${tool}" ]; then \
+            ln -sf "${toolprefix}/bin/aarch64-linux-musl-${tool}" "/usr/local/bin/aarch64-linux-musl-${tool}"; \
+        elif [ -x "${toolprefix}/bin/${tool}" ]; then \
+            ln -sf "${toolprefix}/bin/${tool}" "/usr/local/bin/aarch64-linux-musl-${tool}"; \
+        else \
+            echo "warn: ${tool} not found in ${toolprefix}/bin (prefixed or unprefixed)" >&2; \
+        fi; \
+    done; \
+    aarch64-linux-musl-gcc --version | head -1; \
+    aarch64-linux-musl-ar  --version | head -1
 
 # ── just (command runner — pipeline shells out to `just ci::*` everywhere) ─
 RUN curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh \
