@@ -12,6 +12,9 @@
 # runner needs either native ARM64 hardware or QEMU + binfmt registered.
 # =============================================================================
 
+depends_on:
+  - 20-test
+
 when:
   # Auto on main — every commit to the canonical branch goes through the
   # full build → deploy → verify chain (40-deploy.yml depends_on this).
