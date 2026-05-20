@@ -297,6 +297,33 @@ impl TransitionGuard {
     }
 }
 
+/// Polymorphic priority expression — evaluated against `port_inputs` at
+/// selection time to produce a numeric score. Higher score = higher priority.
+/// Mirrors `aithericon_sdk::TransitionPriority` and `TransitionGuard`'s shape.
+///
+/// Was previously dropped silently on the API boundary (no field on
+/// `ScenarioTransition`), so cascade-aware lowerings like Decision/Loop fell
+/// back to alphabetical ID tiebreak — `t_dec_deadend` < `t_dec_default`,
+/// so the deadend won the default's tiebreaker when its guard was satisfied.
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum TransitionPriority {
+    /// Rhai script that returns a numeric value
+    Rhai { source: String },
+    /// Wasm module (future)
+    Wasm { module: String, function: String },
+}
+
+impl TransitionPriority {
+    /// Extract the Rhai source if this is a Rhai priority expression
+    pub fn as_rhai_source(&self) -> Option<&str> {
+        match self {
+            TransitionPriority::Rhai { source } => Some(source),
+            _ => None,
+        }
+    }
+}
+
 /// A transition definition in the scenario.
 /// Transitions are "chips" with named input/output ports.
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
@@ -323,6 +350,14 @@ pub struct ScenarioTransition {
     /// Guard condition - optional, must evaluate to bool
     #[serde(skip_serializing_if = "Option::is_none")]
     pub guard: Option<TransitionGuard>,
+    /// Priority expression — selection-time tiebreaker after enabling time
+    /// and input-count specificity. Higher score wins; `None` falls through
+    /// to alphabetical transition-id ordering. Must be plumbed end-to-end
+    /// (api-types → scenario_loader → domain.Transition.priority) or
+    /// cascade-style lowerings (Decision deadend, Loop continue/exit) get
+    /// silently mis-ordered.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub priority: Option<TransitionPriority>,
     /// Polymorphic logic definition
     pub logic: TransitionLogic,
     /// Combined input schema (for Wasm validation)

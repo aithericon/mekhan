@@ -255,7 +255,17 @@ pub(crate) fn select_next_transition(
                             } else if input_count == best_input_count {
                                 // 3. Same inputs - compare token priority
                                 match (priority_score, best_priority) {
+                                    // Strictly higher priority wins outright.
                                     (Some(p), Some(bp)) if p > bp => true,
+                                    // Strictly lower priority loses outright —
+                                    // do NOT fall through to alphabetical id
+                                    // tiebreak (which would otherwise let the
+                                    // Decision `t_dec_deadend` (priority 0) beat
+                                    // `t_dec_default` (priority 1) because the
+                                    // `_` arm runs id-cmp regardless of who is
+                                    // higher). Bug: caught by service-level
+                                    // decision_e2e default-branch routing.
+                                    (Some(p), Some(bp)) if p < bp => false,
                                     (Some(_), None) => true,
                                     (None, Some(_)) => false,
                                     _ => {
