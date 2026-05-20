@@ -74,3 +74,10 @@ export TF_VAR_postgres_admin_password="REPLACE_ME"
 export NOMAD_ADDR="https://10.20.0.10:4646"
 export NOMAD_TOKEN="$TF_VAR_nomad_token"
 export NOMAD_SKIP_VERIFY="true"
+
+# ── Vault (used by deploy/dev/nats.tf + scripts/generate-nats-user.sh) ───────
+# Address is non-secret. Token is the cluster bootstrap token from
+# HetznerCluster/environments/prod/.secrets (or your own scoped policy).
+# The Vault provider in providers.tf reads these from env (no TF var declared).
+export VAULT_ADDR="http://10.20.0.20:8200"
+export VAULT_TOKEN="REPLACE_ME"

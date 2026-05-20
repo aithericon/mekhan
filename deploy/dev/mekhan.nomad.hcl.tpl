@@ -80,9 +80,9 @@ job "mekhan-service" {
     }
 
     # Authenticate to Vault using Nomad workload identity. The `mekhan-dev`
-    # JWT role (provisioned cluster-side once) is bound to nomad_job_id =
-    # "mekhan-service" + namespace = "default" and grants read on the NATS
-    # user creds path below.
+    # JWT role + matching policy live in deploy/dev/nats.tf (this repo) and
+    # are bound to nomad_job_id="mekhan-service" + namespace="default";
+    # together they grant read on the NATS user creds path below.
     vault {
       policies = ["nomad-workloads", "mekhan-dev"]
       role     = "mekhan-dev"
@@ -102,8 +102,9 @@ job "mekhan-service" {
       }
 
       # NATS user credentials, rendered from Vault at alloc-start. The bundle
-      # was provisioned cluster-side via 08a_educational_nats_lab's
-      # generate-lab-user.sh and lives at secret/nats/apps/mekhan/dev/worker.
+      # is provisioned by deploy/dev/scripts/generate-nats-user.sh (run once
+      # in CI before first apply, re-run to rotate) and lives at
+      # secret/nats/apps/mekhan/dev/worker.
       # change_mode=restart so a creds rotation cycles the task automatically.
       template {
         destination = "secrets/nats.creds"

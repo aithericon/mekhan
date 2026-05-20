@@ -41,6 +41,16 @@ terraform {
       source  = "zitadel/zitadel"
       version = "~> 1.2"
     }
+    # Used by deploy/dev/nats.tf to declare the Vault policy + JWT-Nomad
+    # auth role that grant mekhan-service's Nomad workload identity read
+    # access to its NATS user creds at secret/nats/apps/mekhan/dev/worker.
+    # The .creds bundle itself is published by deploy/dev/scripts/
+    # generate-nats-user.sh, which runs out-of-band (CI step + manual
+    # rotation) — same split web-platform uses.
+    vault = {
+      source  = "hashicorp/vault"
+      version = "~> 4.4"
+    }
   }
 }
 
@@ -99,3 +109,11 @@ provider "zitadel" {
   port             = "443"
   jwt_profile_file = var.zitadel_jwt_file
 }
+
+# Vault — used only by deploy/dev/nats.tf for the policy + JWT-Nomad role.
+# Address + token come from VAULT_ADDR / VAULT_TOKEN env vars (no TF var
+# declared on purpose). CI exports both at the workflow level in
+# .woodpecker/40-deploy.yml; locally, direnv sets them from .envrc.
+# Note: dev mekhan deploys to the prod HetznerCluster, so Vault address is
+# the prod Vault (http://10.20.0.20:8200), reachable over NetBird.
+provider "vault" {}
