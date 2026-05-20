@@ -1389,6 +1389,20 @@ fn lower_loop(cx: &mut LoweringCtx) -> Result<(), CompileError> {
         ))
         .done();
 
+    // t_{id}_body_noop — pass-through from body_in to body_out. Without it
+    // tokens dead-end at p_body_in: today the editor can't author a body
+    // node inside a Loop (wire.rs routes through NodePorts, and Loop only
+    // exposes p_input/p_output, so an edge `lp → body` would source from
+    // p_output, not p_body_in). The runnable semantic is "iterate the
+    // counter/guard N times then exit" — a usable retry/delay primitive.
+    // To add body authoring later: suppress this when any node has
+    // `parent_id == self.id`, and expose p_body_in/p_body_out as ports.
+    ctx.transition(format!("t_{id}_body_noop"), format!("{label} - Body"))
+        .auto_input("input", &p_body_in)
+        .auto_output("output", &p_body_out)
+        .logic_rhai("#{ output: input }")
+        .done();
+
     // t_{id}_continue — loop back
     ctx.transition(format!("t_{id}_continue"), format!("{label} - Continue"))
         .auto_input("input", &p_body_out)

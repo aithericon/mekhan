@@ -102,7 +102,11 @@ async fn wait_for_completion(db: &sqlx::PgPool, id: Uuid, timeout: Duration) {
 }
 
 /// `Start → Loop(max=3, "input._loop_lp_count < 3") → End`. The loop has no
-/// body node — it just iterates the count leaf and exits. Tight, deterministic.
+/// body node — `lower_loop` synthesizes a `t_lp_body_noop` passthrough from
+/// p_body_in → p_body_out so the counter/guard cascade fires deterministically:
+/// enter → noop → continue → noop → continue → noop → exit. The End's
+/// resultMapping captures `final_count` so the test can prove iteration
+/// actually happened rather than just that the net completed.
 fn loop_graph() -> Value {
     json!({
         "nodes": [
@@ -118,7 +122,8 @@ fn loop_graph() -> Value {
             { "id": "end", "type": "end", "position": { "x": 480, "y": 0 },
               "data": { "type": "end", "label": "Done",
                         "resultMapping": [
-                            { "targetField": "ran", "expression": "true" }
+                            { "targetField": "final_count",
+                              "expression": "input._loop_lp_count" }
                         ] } }
         ],
         "edges": [
@@ -128,6 +133,17 @@ fn loop_graph() -> Value {
               "targetHandle": "in", "type": "sequence" }
         ]
     })
+}
+
+async fn fetch_result(db: &sqlx::PgPool, id: Uuid) -> Value {
+    sqlx::query_scalar::<_, Option<Value>>(
+        "SELECT result FROM workflow_instances WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_one(db)
+    .await
+    .unwrap()
+    .expect("result column was null — loop produced no End envelope")
 }
 
 async fn publish_and_start(app: &axum::Router, graph: Value) -> Uuid {
@@ -211,4 +227,14 @@ async fn loop_iterates_and_exits() {
 
     let id = publish_and_start(&app, loop_graph()).await;
     wait_for_completion(&db, id, Duration::from_secs(30)).await;
+
+    // Prove the loop actually iterated. max_iterations=3 + `count < 3` guard
+    // means: enter (count=0) → 3× continue (count=1,2,3) → exit when count>=3.
+    // The continue branch fires before exit alphabetically (`continue` < `exit`),
+    // and the guards are mutually exclusive so the cascade is deterministic.
+    let result = fetch_result(&db, id).await;
+    assert_eq!(
+        result["value"]["final_count"], json!(3),
+        "loop should have iterated 3 times before exiting: {result}"
+    );
 }
