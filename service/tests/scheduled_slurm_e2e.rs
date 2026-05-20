@@ -18,32 +18,14 @@
 //!
 //!   just dev slurm-up
 //!
-//! (Docker Slurm cluster running, `mekhan-executor-worker.sh` installed in
-//! the container, engine restarted with `SCHEDULER_BACKEND=slurm`,
-//! scheduler-net + executor-net deployed & running.) The Slurm-spawned
-//! executor pulls the staged main.py from the dev rustfs bucket
-//! `mekhan-artifacts` via `host.docker.internal`, so this test needs the
-//! same S3 overrides as the other executor-backed e2e. Run serially
-//! (`--test-threads=1`) — it shares the live engine/Slurm cluster.
-//!
-//! KNOWN ENGINE-SIDE LIMITATION (2026-05-20): under this exact topology
-//! (parent→scheduler-net→executor-net relay), `executor_submit` on
-//! executor-net does not fire (or does not consume its input) within the
-//! Slurm worker's idle-timeout window — the Slurm-launched executor in
-//! `EXECUTOR_LIFETIME=run_to_completion` mode finds no matching
-//! `target_exec_id` on the NATS apalis queue and exits 75 ("PerJob
-//! orphan"). Live debug showed the token relayed to executor-net's
-//! `exec_queue` with the correct `execution_id` matching the sbatch
-//! `EXECUTOR_TARGET_EXEC_ID`, but the engine emits `Auto-evaluated 1000
-//! transitions, final state: LimitReached` on executor-net — a successful
-//! `executor_submit` firing in a tight loop without consuming its input
-//! (distinct from the permanent-failure infinite-fire fixed in 26e963a).
-//! Same recipe pattern + identical compiler output for Nomad
-//! ([[scheduled_e2e.rs]]) passes — Nomad's faster round-trip apparently
-//! masks the same race. Recipe + test are correct and infrastructure-
-//! complete (Slurm job dispatches, executor launches, target_exec_id
-//! lines up); fix is engine-side. Until then this test panics with
-//! "instance did not complete within 240s (status: running)".
+//! (Docker Slurm cluster running, `mekhan-executor-worker.sh` + the
+//! aithericon Python SDK installed in the container, engine restarted
+//! with `SCHEDULER_BACKEND=slurm`, scheduler-net + executor-net deployed
+//! & running.) The Slurm-spawned executor pulls the staged main.py from
+//! the dev rustfs bucket `mekhan-artifacts` via `host.docker.internal`,
+//! so this test needs the same S3 overrides as the other executor-backed
+//! e2e. Run serially (`--test-threads=1`) — it shares the live engine/
+//! Slurm cluster.
 
 mod common;
 

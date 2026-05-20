@@ -401,9 +401,35 @@ scheduler-up:
     # `down-executor` only touches the main-repo pidfile, so a stray daemon
     # left over from a worktree session (see [[feedback_worktree_agent_cwd]])
     # would still consume jobs off `executor` and silently shadow the Nomad
-    # worker. Nomad-launched executors are short-lived per dispatch and get
-    # respawned on the next scheduler_submit, so killing them is harmless.
-    pkill -f aithericon-executor-service 2>/dev/null || true
+    # worker. SIGTERM first + brief wait so apalis can drop its JetStream
+    # consumers cleanly — SIGKILL leaves them registered, and the broader
+    # filter (`executor.<priority>.>`) blocks the next per-job executor from
+    # claiming its specific `executor.<priority>.<exec_id>` subject ("filtered
+    # consumer not unique on workqueue stream"). Final SIGKILL only if a stray
+    # process refused to terminate. Nomad/Slurm-launched executors are short-
+    # lived per dispatch and respawned per scheduler_submit, so killing them
+    # is harmless.
+    pkill -TERM -f aithericon-executor-service 2>/dev/null || true
+    for _ in $(seq 1 10); do
+      pgrep -f aithericon-executor-service >/dev/null 2>&1 || break
+      sleep 0.5
+    done
+    pkill -KILL -f aithericon-executor-service 2>/dev/null || true
+
+    # Apalis-NATS consumer purge. The dev daemon's executor binary creates
+    # catch-all (`filter_subject=None`) consumers on the `executor_{high,
+    # medium,low}` workqueue streams; apalis does NOT delete them on
+    # SIGTERM, and JetStream's workqueue retention rejects a new consumer
+    # whose filter overlaps with an existing one — so the next per-job
+    # executor's filtered consumer (`executor.<priority>.<exec_id>`) gets
+    # `filtered consumer not unique on workqueue stream (code 400)` and
+    # exits without pulling its job. Drop the catch-alls; apalis recreates
+    # what it needs on next executor boot. Idempotent (404 = already gone).
+    if command -v nats >/dev/null 2>&1; then
+      for stream in executor_high executor_medium executor_low; do
+        nats --server "{{nats_url}}" consumer rm "$stream" "${stream}_consumer" --force 2>/dev/null || true
+      done
+    fi
 
     # 5. Build infra nets, then restart the engine WITH the scheduler env.
     echo "▶ building scheduler-net + executor-net examples…"
@@ -505,22 +531,31 @@ slurm-up:
     if [ ! -f "$exec_bin" ]; then
       echo "✗ Linux executor binary not found at $exec_bin" >&2; exit 1; fi
 
-    # 3. Install the binary into the Slurm container and write a Mekhan-
-    #    specific job template (`mekhan-executor-worker.sh`). We don't
-    #    overwrite the upstream `executor.sh` — that one is owned by the
-    #    engine demos and uses `EXECUTOR_NAMESPACE=executor_jobs` (a GP-era
+    # 3. Install the binary, the aithericon Python SDK, and the Mekhan-
+    #    specific job template (`mekhan-executor-worker.sh`). The SDK
+    #    install matters whenever a Python AutomatedStep uses `sdk: true`
+    #    (the default): the runner imports `aithericon` from
+    #    `AITHERICON_SDK_PATH`; without it, the user script's
+    #    `from _aithericon_io import …` fails at import time and the
+    #    execution exits ~110ms with status=failed. We don't overwrite
+    #    the upstream `executor.sh` — that one is owned by the engine
+    #    demos and uses `EXECUTOR_NAMESPACE=executor_jobs` (a GP-era
     #    default that would silently divert work to the always-on dev
-    #    daemon and leave the Slurm worker idle — the same false-execution
-    #    trap that bit the Nomad recipe). The new template:
+    #    daemon and leave the Slurm worker idle — the same false-
+    #    execution trap that bit the Nomad recipe). The new template:
     #     - sets EXECUTOR_NAMESPACE=executor (matches up-engine)
+    #     - sets AITHERICON_SDK_PATH=/opt/petri/aithericon-sdk
     #     - reaches rustfs S3 + NATS via host.docker.internal (Docker Desktop
     #       maps to the host gateway; see slurm docker-compose extra_hosts)
     #     - bucket mekhan-artifacts (matches mekhan-service's MEKHAN__S3__BUCKET)
-    echo "▶ installing executor + mekhan-executor-worker template into Slurm container…"
+    echo "▶ installing executor + SDK + mekhan-executor-worker template into Slurm container…"
     container="$(cd engine && docker compose -f infra/slurm/docker-compose.yml ps -q slurm)"
     docker exec "$container" mkdir -p /opt/petri/bin /opt/petri/templates
     docker cp "$exec_bin" "$container:/opt/petri/bin/executor"
     docker exec "$container" chmod +x /opt/petri/bin/executor
+    docker exec "$container" rm -rf /opt/petri/aithericon-sdk
+    docker cp executor/packages/aithericon-sdk "$container:/opt/petri/aithericon-sdk"
+    docker exec "$container" chmod -R a+rwX /opt/petri/aithericon-sdk
 
     tpl="$(mktemp)"
     cat > "$tpl" <<'TEMPLATE'
@@ -536,6 +571,7 @@ slurm-up:
     export EXECUTOR_BASE_DIR=/tmp/aithericon-executor-slurm/${SLURM_JOB_ID}
     export EXECUTOR_DEFAULT_TIMEOUT_SECS=60
     export EXECUTOR_IDLE_TIMEOUT_SECS=15
+    export AITHERICON_SDK_PATH=/opt/petri/aithericon-sdk
     export EXECUTOR_STORAGE__BACKEND=s3
     export EXECUTOR_STORAGE__ENDPOINT=http://host.docker.internal:9005
     export EXECUTOR_STORAGE__BUCKET=mekhan-artifacts
@@ -560,12 +596,29 @@ slurm-up:
     # 4. Pause the dev daemon — same reason as scheduler-up (Nomad): both it
     #    and the Slurm-spawned worker would consume the same `executor`
     #    namespace; the warm daemon races and wins, leaving the Slurm worker
-    #    provably inert. Defensively pkill stray executors from worktree
-    #    sessions (down-executor only touches the main-repo pidfile). While
-    #    the layer is up, INLINE AutomatedSteps cannot run.
+    #    provably inert. SIGTERM-first defensive cleanup so apalis can drop
+    #    its JetStream consumers — see scheduler-up's identical block for the
+    #    rationale (SIGKILL leaves stale `executor.<priority>.>` consumers
+    #    that block the next per-job executor's specific filter). While the
+    #    layer is up, INLINE AutomatedSteps cannot run.
     echo "▶ pausing dev executor daemon (Slurm worker takes over `executor` queue)…"
     just dev::down-executor
-    pkill -f aithericon-executor-service 2>/dev/null || true
+    pkill -TERM -f aithericon-executor-service 2>/dev/null || true
+    for _ in $(seq 1 10); do
+      pgrep -f aithericon-executor-service >/dev/null 2>&1 || break
+      sleep 0.5
+    done
+    pkill -KILL -f aithericon-executor-service 2>/dev/null || true
+
+    # Apalis-NATS consumer purge — see scheduler-up's identical block for the
+    # rationale. Without this the Slurm-launched executor's per-job filtered
+    # consumer collides with the dev daemon's catch-all on the workqueue
+    # stream and exits idle. Idempotent (404 = already gone).
+    if command -v nats >/dev/null 2>&1; then
+      for stream in executor_high executor_medium executor_low; do
+        nats --server "{{nats_url}}" consumer rm "$stream" "${stream}_consumer" --force 2>/dev/null || true
+      done
+    fi
 
     # 5. Build infra nets, then restart the engine WITH the Slurm scheduler env.
     echo "▶ building scheduler-net + executor-net examples…"
