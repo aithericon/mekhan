@@ -101,12 +101,12 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     strip /out/aithericon-executor-service || true
 
 # -----------------------------------------------------------------------------
-# Runtime — Debian bookworm slim (glibc; kreuzberg + libtesseract FFI rule out
-# musl). A CUDA variant will be added as a separate Dockerfile when needed.
+# Runtime — Debian trixie slim (glibc; kreuzberg + libtesseract FFI rule out
+# musl). Trixie's glibc 2.40+ matches the builder; on bookworm the executor
+# binary would fail to load with "version `GLIBC_2.39' not found" linking the
+# ONNX shared object. A CUDA variant will be added as a separate Dockerfile
+# when needed.
 # -----------------------------------------------------------------------------
-# Trixie runtime to match builder's glibc — keeps the executor binary
-# loadable; bookworm runtime would error at startup with "version
-# `GLIBC_2.39' not found" linking the ONNX shared object.
 FROM debian:trixie-slim AS runtime
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -134,8 +134,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
         git \
-        libhdf5-103-1 \
-        libnetcdf19 \
+        libhdf5-310 \
+        libnetcdf22 \
         libssl3 \
         libstdc++6 \
         python3 \
@@ -153,9 +153,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         tzdata \
     && rm -rf /var/lib/apt/lists/*
 
-# Pin TESSDATA_PREFIX to a stable path. Debian 12 puts it at
-# /usr/share/tesseract-ocr/5/tessdata; the symlink keeps a future base bump
-# from breaking the ENV below.
+# Pin TESSDATA_PREFIX to a stable path. Trixie ships tesseract 5.5 at
+# /usr/share/tesseract-ocr/5/tessdata (same path as bookworm's 5.3); the
+# symlink keeps a future major version bump from breaking the ENV below.
 RUN ln -sfn "$(find /usr/share/tesseract-ocr -maxdepth 2 -type d -name tessdata | head -n1)" \
             /opt/tessdata
 
