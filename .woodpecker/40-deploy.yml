@@ -32,7 +32,9 @@ depends_on:
   - 30-build
 
 when:
-  - branch: dev
+  # Auto on main — chained off 30-build via the workflow-level depends_on
+  # above. Push to main triggers build → deploy → verify automatically.
+  - branch: main
     event: push
   # Manual run from any branch — for end-to-end testing of the deploy
   # path on a feature branch (e.g. `ci-pipeline`). Deploys whatever

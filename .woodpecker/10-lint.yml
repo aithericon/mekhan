@@ -13,16 +13,11 @@
 # =============================================================================
 
 when:
+  # Auto on main — gates merges by running quality checks on every push.
   - branch: main
     event: push
-  - branch: dev
-    event: push
-  - branch: main
-    event: pull_request
-  - branch: dev
-    event: pull_request
-  # Manual run from any branch — handy for testing the pipeline on a
-  # feature branch (e.g. `ci-pipeline`) before merging to dev.
+  # Manual run from any branch — for spot-checking lint on a feature
+  # branch before opening a PR or merging.
   - event: manual
 
 labels:
