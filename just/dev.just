@@ -282,6 +282,23 @@ up-engine scheduler="off":
       export SCHEDULER_JOB_TEMPLATE="petri-executor-worker"
       export SCHEDULER_SIGNAL_ROUTES="running:sig_running,completed:sig_completed,failed:sig_failed"
     fi
+    if [ "{{scheduler}}" = "slurm" ]; then
+      # Slurm reaches the cluster over SSH against the local docker-compose
+      # cluster (engine/infra/slurm/), polls squeue/sacct, and publishes
+      # signals to scheduler-net via NATS. Reverse the whole layer with
+      # `just dev slurm-down`.
+      echo "  ↳ scheduler: Slurm (SCHEDULER_BACKEND=slurm → scheduler-net)"
+      export SCHEDULER_BACKEND="slurm"
+      export SCHEDULER_JOB_TEMPLATE="mekhan-executor-worker"
+      export SCHEDULER_SIGNAL_ROUTES="running:sig_running,completed:sig_completed,failed:sig_failed,timed_out:sig_failed"
+      export SLURM_SSH_HOST="localhost"
+      export SLURM_SSH_PORT="2222"
+      export SLURM_SSH_USER="testuser"
+      export SLURM_SSH_KEY="$PWD/engine/infra/slurm/ssh/slurm_test"
+      export SLURM_SSH_KNOWN_HOSTS="accept"
+      export SLURM_POLL_INTERVAL_SECS="2"
+      export SLURM_TEMPLATE_DIR="/opt/petri/templates"
+    fi
 
     echo "▶ starting engine on :3030…"
     nohup env \
@@ -441,6 +458,168 @@ scheduler-down:
     echo "▶ resuming dev executor daemon…"
     just dev::up-executor
     echo "  ✓ scheduler layer down; engine + dev daemon back on plain dev config"
+
+# ── Slurm scheduler layer (for `Scheduled` AutomatedSteps via Slurm) ─────────
+#
+# Mirror of `scheduler-up` but using the local docker-compose Slurm cluster
+# (engine/infra/slurm/) instead of Nomad. Net topology is identical — the
+# parent's `bridge_out` still targets `scheduler-net/job_inbox`; only the
+# backend that scheduler-net dispatches to changes:
+#
+#   parent-net ─▶ scheduler-net ─(sbatch over SSH: mekhan-executor-worker)─▶
+#                 executor-net  ─▶ executor (in Slurm job) ─▶ result ─▶ parent
+#
+# Requires `just dev up` already running (reuses NATS/rustfs), docker +
+# cargo-zigbuild on PATH (the executor binary must be Linux x86_64 since
+# Slurm runs inside Docker). Reverse with `just dev slurm-down`.
+slurm-up:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just dev::_dirs
+
+    # 1. Slurm cluster (docker-compose: slurmctld + slurmd + sshd in one
+    #    container). Reuse the engine subrepo's existing recipes — they
+    #    own the image/Dockerfile and the SSH key. Idempotent: `slurm-up`
+    #    is a `docker compose up -d`.
+    echo "▶ starting local Slurm cluster…"
+    (cd engine && just infra slurm-up)
+    (cd engine && just infra slurm-wait)
+
+    # 2. Cross-compile the executor for Linux x86_64. The Slurm container is
+    #    `linux/amd64`, so the host-native macOS binary is unusable — we ship
+    #    a freshly-zigbuilt one. `cargo-zigbuild` is the same toolchain the
+    #    engine demo recipes use (engine/just/demo.just::slurm-three-layer).
+    command -v cargo-zigbuild >/dev/null 2>&1 || {
+      echo "✗ cargo-zigbuild not on PATH — cargo install cargo-zigbuild" >&2; exit 1; }
+    # Trimmed feature set — the host-side daemon uses {{executor_features}}
+    # which adds `docker` and `file-ops`. `docker` is meaningless inside the
+    # Slurm container, and `file-ops` pulls libnetcdf+libhdf5 which would
+    # need cross-compile system libs we don't have (and aren't exercised by
+    # the python-backed e2e). Python + opendal-s3 is what the Scheduled run
+    # actually needs (run main.py + pull staged files from rustfs).
+    echo "▶ cross-compiling executor for x86_64-unknown-linux-gnu (slim features)…"
+    (cd executor && cargo zigbuild -p aithericon-executor-service \
+       --features "python,http,http-cancel,opendal-s3,url-inputs" \
+       --target x86_64-unknown-linux-gnu)
+    exec_bin="$PWD/executor/target/x86_64-unknown-linux-gnu/debug/aithericon-executor-service"
+    if [ ! -f "$exec_bin" ]; then
+      echo "✗ Linux executor binary not found at $exec_bin" >&2; exit 1; fi
+
+    # 3. Install the binary into the Slurm container and write a Mekhan-
+    #    specific job template (`mekhan-executor-worker.sh`). We don't
+    #    overwrite the upstream `executor.sh` — that one is owned by the
+    #    engine demos and uses `EXECUTOR_NAMESPACE=executor_jobs` (a GP-era
+    #    default that would silently divert work to the always-on dev
+    #    daemon and leave the Slurm worker idle — the same false-execution
+    #    trap that bit the Nomad recipe). The new template:
+    #     - sets EXECUTOR_NAMESPACE=executor (matches up-engine)
+    #     - reaches rustfs S3 + NATS via host.docker.internal (Docker Desktop
+    #       maps to the host gateway; see slurm docker-compose extra_hosts)
+    #     - bucket mekhan-artifacts (matches mekhan-service's MEKHAN__S3__BUCKET)
+    echo "▶ installing executor + mekhan-executor-worker template into Slurm container…"
+    container="$(cd engine && docker compose -f infra/slurm/docker-compose.yml ps -q slurm)"
+    docker exec "$container" mkdir -p /opt/petri/bin /opt/petri/templates
+    docker cp "$exec_bin" "$container:/opt/petri/bin/executor"
+    docker exec "$container" chmod +x /opt/petri/bin/executor
+
+    tpl="$(mktemp)"
+    cat > "$tpl" <<'TEMPLATE'
+    #!/bin/bash
+    #SBATCH --output=/tmp/petri-executor-%j.out
+    export EXECUTOR_NATS_URL=nats://host.docker.internal:4333
+    export EXECUTOR_NAMESPACE=executor
+    export EXECUTOR_SOURCE=nats_queue
+    export EXECUTOR_LIFETIME=run_to_completion
+    export EXECUTOR_MAX_JOBS=1
+    export EXECUTOR_CONCURRENCY=1
+    export EXECUTOR_NAME="slurm-executor-${SLURM_JOB_ID}"
+    export EXECUTOR_BASE_DIR=/tmp/aithericon-executor-slurm/${SLURM_JOB_ID}
+    export EXECUTOR_DEFAULT_TIMEOUT_SECS=60
+    export EXECUTOR_IDLE_TIMEOUT_SECS=15
+    export EXECUTOR_STORAGE__BACKEND=s3
+    export EXECUTOR_STORAGE__ENDPOINT=http://host.docker.internal:9005
+    export EXECUTOR_STORAGE__BUCKET=mekhan-artifacts
+    export EXECUTOR_STORAGE__REGION=us-east-1
+    export EXECUTOR_STORAGE__CREDENTIALS__ACCESS_KEY=rustfsadmin
+    export EXECUTOR_STORAGE__CREDENTIALS__SECRET_KEY=rustfsadmin
+    export EXECUTOR_PYTHON__ENABLED=true
+    export EXECUTOR_PYTHON__PREFER_UV=true
+    echo "PETRI_TOKEN_DATA=$PETRI_TOKEN_DATA"
+    echo "Starting executor (SLURM job ${SLURM_JOB_ID})"
+    /opt/petri/bin/executor
+    TEMPLATE
+    docker cp "$tpl" "$container:/opt/petri/templates/mekhan-executor-worker.sh"
+    # Explicit 0755 — `mktemp` creates 0600, and a follow-up `chmod +x` would
+    # add only the execute bits → 0711, leaving the file unreadable by other
+    # users and triggering `sbatch: error: Unable to open file` from inside
+    # the Slurm container.
+    docker exec "$container" chmod 0755 /opt/petri/templates/mekhan-executor-worker.sh
+    rm -f "$tpl"
+    echo "  ✓ mekhan-executor-worker.sh installed (binary: /opt/petri/bin/executor)"
+
+    # 4. Pause the dev daemon — same reason as scheduler-up (Nomad): both it
+    #    and the Slurm-spawned worker would consume the same `executor`
+    #    namespace; the warm daemon races and wins, leaving the Slurm worker
+    #    provably inert. Defensively pkill stray executors from worktree
+    #    sessions (down-executor only touches the main-repo pidfile). While
+    #    the layer is up, INLINE AutomatedSteps cannot run.
+    echo "▶ pausing dev executor daemon (Slurm worker takes over `executor` queue)…"
+    just dev::down-executor
+    pkill -f aithericon-executor-service 2>/dev/null || true
+
+    # 5. Build infra nets, then restart the engine WITH the Slurm scheduler env.
+    echo "▶ building scheduler-net + executor-net examples…"
+    (cd engine && cargo build -p aithericon-sdk --example scheduler_net --example executor_net)
+    just dev::down-engine
+    just dev::up-engine slurm
+    echo "▶ waiting for engine API…"
+    for _ in $(seq 1 30); do
+      curl -sf http://localhost:3030/api/nets/metadata >/dev/null 2>&1 && break
+      sleep 1
+    done
+    curl -sf http://localhost:3030/api/nets/metadata >/dev/null 2>&1 || {
+      echo "✗ engine did not come back (log: {{log_dir}}/engine.log)" >&2; exit 1; }
+    sleep 2  # let the Slurm + executor watchers connect
+
+    # 6. Deploy BOTH infra nets, THEN activate (Strict bridge gate).
+    echo "▶ deploying + activating executor-net & scheduler-net…"
+    cd engine
+    ./target/debug/examples/executor_net --bridged --process --deploy --net-id executor-net >/dev/null
+    ./target/debug/examples/scheduler_net --deploy --net-id scheduler-net >/dev/null
+    ./target/debug/aithericon activate executor-net
+    ./target/debug/aithericon activate scheduler-net
+
+    echo ""
+    echo "✓ Slurm scheduler layer up:"
+    echo "  slurm        → docker compose (login: ssh -p 2222 testuser@localhost)"
+    echo "  scheduler-net + executor-net deployed & running on :3030"
+    echo "  engine now started with SCHEDULER_BACKEND=slurm (Scheduled steps dispatch)"
+    echo "  dev daemon executor PAUSED — Slurm worker is the sole consumer"
+    echo "    of the 'executor' queue. Inline AutomatedSteps will NOT run"
+    echo "    until you revert."
+    echo ""
+    echo "  revert : just dev slurm-down"
+
+# Tear down the Slurm scheduler layer; engine returns to plain dev config.
+slurm-down:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Cancel anything pending/running so the dev cluster doesn't carry state
+    # across runs (idle-out is configured short on our template, but be safe).
+    if (cd engine && docker compose -f infra/slurm/docker-compose.yml ps -q slurm >/dev/null 2>&1); then
+      echo "▶ cancelling Slurm jobs (sacct lookback)…"
+      ssh -o StrictHostKeyChecking=no -o IdentitiesOnly=yes \
+          -i engine/infra/slurm/ssh/slurm_test -p 2222 testuser@localhost \
+          'for j in $(squeue -h -u testuser -o %i); do scancel "$j"; done' \
+          2>/dev/null || true
+      (cd engine && just infra slurm-down) || true
+    fi
+    echo "▶ restarting engine without scheduler env…"
+    just dev::down-engine
+    just dev::up-engine
+    echo "▶ resuming dev executor daemon…"
+    just dev::up-executor
+    echo "  ✓ Slurm layer down; engine + dev daemon back on plain dev config"
 
 # ── Mekhan service (Rust backend) ────────────────────────────────────────────
 
