@@ -62,7 +62,7 @@
 				</Button>
 			</div>
 			{#if demoError}
-				<p class="mt-3 text-xs text-amber-700" data-testid="demo-error">{demoError}</p>
+				<p class="mt-3 text-sm text-amber-700" data-testid="demo-error">{demoError}</p>
 			{/if}
 		</div>
 
@@ -85,7 +85,7 @@
 							>
 								<nt.icon class="size-3.5" />
 							</div>
-							<span class="text-[9px] leading-none text-muted-foreground">{nt.label}</span>
+							<span class="text-sm leading-none text-muted-foreground">{nt.label}</span>
 						</div>
 					{/each}
 				</div>
@@ -99,7 +99,7 @@
 					</div>
 					<span class="text-sm font-medium text-foreground">Live Execution</span>
 				</div>
-				<div class="space-y-2 text-xs text-muted-foreground">
+				<div class="space-y-2 text-sm text-muted-foreground">
 					<div class="flex items-center gap-2">
 						<div class="size-1.5 rounded-full bg-green-500"></div>
 						<span>Petri-Lab engine (Colored Petri Nets)</span>
@@ -127,21 +127,21 @@
 					</div>
 					<span class="text-sm font-medium text-foreground">Full Lifecycle</span>
 				</div>
-				<div class="space-y-2 text-xs text-muted-foreground">
+				<div class="space-y-2 text-sm text-muted-foreground">
 					<div class="flex items-center gap-2">
-						<span class="flex size-4 items-center justify-center rounded bg-muted text-[9px] font-semibold text-muted-foreground">1</span>
+						<span class="flex size-4 items-center justify-center rounded bg-muted text-sm font-semibold text-muted-foreground">1</span>
 						<span>Design with drag-and-drop editor</span>
 					</div>
 					<div class="flex items-center gap-2">
-						<span class="flex size-4 items-center justify-center rounded bg-muted text-[9px] font-semibold text-muted-foreground">2</span>
+						<span class="flex size-4 items-center justify-center rounded bg-muted text-sm font-semibold text-muted-foreground">2</span>
 						<span>Compile to AIR and publish</span>
 					</div>
 					<div class="flex items-center gap-2">
-						<span class="flex size-4 items-center justify-center rounded bg-muted text-[9px] font-semibold text-muted-foreground">3</span>
+						<span class="flex size-4 items-center justify-center rounded bg-muted text-sm font-semibold text-muted-foreground">3</span>
 						<span>Deploy to Petri-Lab for execution</span>
 					</div>
 					<div class="flex items-center gap-2">
-						<span class="flex size-4 items-center justify-center rounded bg-muted text-[9px] font-semibold text-muted-foreground">4</span>
+						<span class="flex size-4 items-center justify-center rounded bg-muted text-sm font-semibold text-muted-foreground">4</span>
 						<span>Monitor live state and transitions</span>
 					</div>
 				</div>

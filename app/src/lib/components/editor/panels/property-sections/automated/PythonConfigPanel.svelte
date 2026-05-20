@@ -74,11 +74,11 @@
 
 <div class="space-y-1.5">
 	<div class="flex items-center justify-between">
-		<span class="text-xs font-medium text-muted-foreground">Files</span>
+		<span class="text-sm font-medium text-muted-foreground">Files</span>
 		{#if !readonly && binding && nodeId}
 			<button
 				type="button"
-				class="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+				class="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
 				onclick={handleCreateFile}
 			>
 				<Plus class="size-3" />
@@ -88,7 +88,7 @@
 	</div>
 
 	{#if filenames.length === 0}
-		<p class="text-[11px] italic text-muted-foreground">
+		<p class="text-sm italic text-muted-foreground">
 			No files yet. Add one (or open the IDE editor) — the entrypoint must exist.
 		</p>
 	{:else}
@@ -96,7 +96,7 @@
 			{#each filenames as filename (filename)}
 				{@const href = fileHref(filename)}
 				<div
-					class="group flex items-center gap-1 rounded border px-2 py-1 text-xs transition-colors {filename ===
+					class="group flex items-center gap-1 rounded border px-2 py-1 text-sm transition-colors {filename ===
 					entrypoint
 						? 'border-primary bg-primary/5 text-foreground'
 						: 'border-border text-muted-foreground hover:bg-accent/30'}"
@@ -112,13 +112,13 @@
 						<span class="flex-1 truncate font-mono">{filename}</span>
 					{/if}
 					{#if filename === entrypoint}
-						<span class="rounded bg-primary/10 px-1 py-px text-[9px] uppercase tracking-wider text-primary">
+						<span class="rounded bg-primary/10 px-1 py-px text-sm uppercase tracking-wider text-primary">
 							entry
 						</span>
 					{:else if !readonly}
 						<button
 							type="button"
-							class="rounded px-1 py-px text-[9px] uppercase tracking-wider text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+							class="rounded px-1 py-px text-sm uppercase tracking-wider text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
 							onclick={() => handleEntrypoint(filename)}
 						>
 							set entry
@@ -171,7 +171,7 @@
 </FormField>
 
 <div class="space-y-1.5">
-	<span class="text-xs font-medium text-muted-foreground">Pip Requirements</span>
+	<span class="text-sm font-medium text-muted-foreground">Pip Requirements</span>
 	<StringListEditor
 		items={(config.requirements as string[]) ?? []}
 		{readonly}
@@ -181,7 +181,7 @@
 </div>
 
 <div class="flex flex-wrap items-center gap-3">
-	<label class="flex items-center gap-1.5 text-xs text-muted-foreground">
+	<label class="flex items-center gap-1.5 text-sm text-muted-foreground">
 		<Checkbox
 			checked={(config.virtualenv as boolean) ?? false}
 			disabled={readonly}
@@ -189,7 +189,7 @@
 		/>
 		Virtualenv
 	</label>
-	<label class="flex items-center gap-1.5 text-xs text-muted-foreground">
+	<label class="flex items-center gap-1.5 text-sm text-muted-foreground">
 		<Checkbox
 			checked={(config.sdk as boolean) ?? true}
 			disabled={readonly}
@@ -197,7 +197,7 @@
 		/>
 		SDK
 	</label>
-	<label class="flex items-center gap-1.5 text-xs text-muted-foreground">
+	<label class="flex items-center gap-1.5 text-sm text-muted-foreground">
 		<Checkbox
 			checked={(config.inherit_env as boolean) ?? true}
 			disabled={readonly}
@@ -208,7 +208,7 @@
 </div>
 
 <div class="space-y-1.5">
-	<span class="text-xs font-medium text-muted-foreground">Environment Variables</span>
+	<span class="text-sm font-medium text-muted-foreground">Environment Variables</span>
 	<KeyValueEditor
 		entries={(config.env as Record<string, unknown>) ?? {}}
 		{readonly}

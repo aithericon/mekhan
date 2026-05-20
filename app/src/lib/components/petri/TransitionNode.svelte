@@ -60,13 +60,6 @@
 		}
 	}
 
-	// Calculate port position offset for stacking
-	function getPortOffset(index: number, total: number): number {
-		const spacing = 16;
-		const totalHeight = (total - 1) * spacing;
-		return index * spacing - totalHeight / 2;
-	}
-
 	const hasGuard = $derived(!!data.guard);
 	const isEffect = $derived(data.logicType === 'effect');
 	const hasCausedSignals = $derived((data.causedSignals?.length || 0) > 0);
@@ -96,7 +89,7 @@
 			<div
 				id="transition-{data.label.toLowerCase().replace(/\s+/g, '-')}"
 				data-testid="transition-node"
-				class="transition-chip flex flex-col border-2 rounded-lg cursor-pointer w-[200px]
+				class="transition-chip flex flex-col border-2 rounded-lg cursor-pointer min-w-[200px] w-max
 					{hasGuard ? 'border-amber-500' : ''}
 					{isEffect && data.enabled ? 'border-purple-400 bg-purple-50 hover:bg-purple-100 dark:border-purple-600 dark:bg-purple-900 dark:hover:bg-purple-800' : ''}
 					{isEffect && !data.enabled ? 'border-purple-300 bg-purple-50/60 hover:bg-purple-100 dark:border-purple-500/60 dark:bg-purple-950 dark:hover:bg-purple-900' : ''}
@@ -118,7 +111,7 @@
 				<!-- Header: Transition name + badges + fire button -->
 				<div class="flex items-center px-2 py-1 min-w-0 gap-1">
 					<span
-						class="text-xs font-semibold truncate mr-auto min-w-0
+						class="text-sm font-semibold truncate mr-auto min-w-0
 						{data.enabled ? 'text-gray-900 dark:text-white' : 'text-gray-600 dark:text-gray-400'}"
 					>
 						{data.label}
@@ -127,13 +120,13 @@
 						<Tooltip.Root>
 							<Tooltip.Trigger>
 								<div
-									class="guard-badge shrink-0 px-1.5 py-0.5 text-[10px] font-mono font-semibold bg-amber-100 text-amber-900 dark:bg-amber-900 dark:text-amber-200 border border-amber-300 dark:border-amber-700 rounded whitespace-nowrap"
+									class="guard-badge shrink-0 px-1.5 py-0.5 text-sm font-mono font-semibold bg-amber-100 text-amber-900 dark:bg-amber-900 dark:text-amber-200 border border-amber-300 dark:border-amber-700 rounded whitespace-nowrap"
 								>
 									G
 								</div>
 							</Tooltip.Trigger>
 							<Tooltip.Content side="top" class="max-w-xs">
-								<div class="text-xs font-mono">{data.guard}</div>
+								<div class="text-sm font-mono">{data.guard}</div>
 							</Tooltip.Content>
 						</Tooltip.Root>
 					{/if}
@@ -141,14 +134,14 @@
 						<Tooltip.Root>
 							<Tooltip.Trigger>
 								<div
-									class="effect-badge shrink-0 flex items-center gap-0.5 px-1.5 py-0.5 text-[10px] font-mono font-semibold bg-purple-100 text-purple-900 dark:bg-purple-800 dark:text-purple-200 border border-purple-300 dark:border-purple-600 rounded whitespace-nowrap"
+									class="effect-badge shrink-0 flex items-center gap-0.5 px-1.5 py-0.5 text-sm font-mono font-semibold bg-purple-100 text-purple-900 dark:bg-purple-800 dark:text-purple-200 border border-purple-300 dark:border-purple-600 rounded whitespace-nowrap"
 								>
 									<Zap class="w-2.5 h-2.5" />
 									FX
 								</div>
 							</Tooltip.Trigger>
 							<Tooltip.Content side="top" class="max-w-xs">
-								<div class="text-xs font-mono">Effect: {data.handlerId ?? 'unknown'}</div>
+								<div class="text-sm font-mono">Effect: {data.handlerId ?? 'unknown'}</div>
 							</Tooltip.Content>
 						</Tooltip.Root>
 					{/if}
@@ -168,7 +161,7 @@
 					<!-- Input ports -->
 					<div class="input-ports flex flex-col justify-center items-start relative px-1 py-1">
 						{#if data.inputPorts && data.inputPorts.length > 0}
-							{#each data.inputPorts as port, i (port.name)}
+							{#each data.inputPorts as port (port.name)}
 								<div
 									class="port-row flex items-center gap-1"
 									style="position: relative;"
@@ -178,11 +171,11 @@
 										position={Position.Left}
 										id={port.name}
 										class="!bg-blue-400 !w-2 !h-2"
-										style="top: {getPortOffset(i, data.inputPorts.length)}px; position: relative;"
+										style="position: relative;"
 									/>
 									{#if hasMultiplePorts}
 										<span
-											class="port-label text-[10px] font-mono
+											class="port-label text-sm font-mono whitespace-nowrap
 											{data.enabled ? 'text-gray-600 dark:text-gray-200' : 'text-gray-500 dark:text-gray-400'}"
 										>
 											{port.name}
@@ -200,14 +193,14 @@
 					<!-- Output ports -->
 					<div class="output-ports flex flex-col justify-center items-end relative px-1 py-1">
 						{#if data.outputPorts && data.outputPorts.length > 0}
-							{#each data.outputPorts as port, i (port.name)}
+							{#each data.outputPorts as port (port.name)}
 								<div
 									class="port-row flex items-center gap-1"
 									style="position: relative;"
 								>
 									{#if hasMultiplePorts}
 										<span
-											class="port-label text-[10px] font-mono
+											class="port-label text-sm font-mono whitespace-nowrap
 											{port.name === '_error' ? 'text-red-400/70' : data.enabled ? 'text-gray-600 dark:text-gray-200' : 'text-gray-500 dark:text-gray-400'}"
 										>
 											{port.name}
@@ -218,7 +211,7 @@
 										position={Position.Right}
 										id={port.name}
 										class="!bg-green-400 !w-2 !h-2"
-										style="top: {getPortOffset(i, data.outputPorts.length)}px; position: relative;"
+										style="position: relative;"
 									/>
 								</div>
 							{/each}
@@ -233,7 +226,7 @@
 									style="position: relative;"
 								>
 									<span
-										class="port-label text-[10px] font-mono text-orange-500 dark:text-orange-400"
+										class="port-label text-sm font-mono whitespace-nowrap text-orange-500 dark:text-orange-400"
 									>
 										{sig.name}
 									</span>
@@ -252,7 +245,7 @@
 			</div>
 		</Tooltip.Trigger>
 		<Tooltip.Content side="bottom" class="max-w-sm">
-			<div class="text-xs">
+			<div class="text-sm">
 				<span class="font-medium">{data.label}</span>
 				{#if data.enabled}
 					<div class="mt-1 text-green-600">Click to inspect, or press play to fire</div>
@@ -265,11 +258,11 @@
 				{/if}
 			</div>
 			{#if isEffect}
-				<div class="mt-1 text-[10px] font-mono text-purple-600">
+				<div class="mt-1 text-sm font-mono text-purple-600">
 					Effect: {data.handlerId ?? 'unknown'}
 				</div>
 			{:else if data.script}
-				<div class="mt-1 text-[10px] font-mono text-gray-500 truncate">
+				<div class="mt-1 text-sm font-mono text-gray-500 truncate">
 					Script: {data.script.slice(0, 40)}...
 				</div>
 			{/if}
@@ -302,7 +295,7 @@
 	}
 
 	.port-row {
-		height: 14px;
+		min-height: 22px;
 	}
 
 	.input-ports,

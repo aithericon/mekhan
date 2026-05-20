@@ -87,7 +87,7 @@
 
 	<!-- Label header above the circle (absolute positioned) -->
 	<span
-		class="place-label absolute -top-4 left-1/2 -translate-x-1/2 text-[10px] font-semibold text-foreground text-center whitespace-nowrap max-w-28 truncate"
+		class="place-label absolute -top-4 left-1/2 -translate-x-1/2 text-sm font-semibold text-foreground text-center whitespace-nowrap max-w-28 truncate"
 		title={data.label}
 	>
 		{data.label}
@@ -116,7 +116,7 @@
 				</button>
 			{/each}
 			{#if data.tokens.length + data.bridgedOutTokens.length > 5}
-				<span class="text-[8px] text-muted-foreground font-medium">
+				<span class="text-sm text-muted-foreground font-medium">
 					+{data.tokens.length + data.bridgedOutTokens.length - 5}
 				</span>
 			{/if}
@@ -130,24 +130,24 @@
 		<Tooltip.Root>
 			<Tooltip.Trigger class="absolute -bottom-5 left-1/2 -translate-x-1/2 z-10">
 				{#if data.kind === 'bridge_out'}
-					<div class="bridge-badge flex items-center gap-0.5 px-1 py-0.5 text-[9px] font-mono font-semibold bg-rose-500/15 text-rose-700 dark:text-rose-400 border border-rose-500/30 rounded whitespace-nowrap">
+					<div class="bridge-badge flex items-center gap-0.5 px-1 py-0.5 text-sm font-mono font-semibold bg-rose-500/15 text-rose-700 dark:text-rose-400 border border-rose-500/30 rounded whitespace-nowrap">
 						<ArrowUpRight class="w-2.5 h-2.5" />
 						OUT
 					</div>
 				{:else if data.kind === 'bridge_in'}
-					<div class="bridge-badge flex items-center gap-0.5 px-1 py-0.5 text-[9px] font-mono font-semibold bg-teal-500/15 text-teal-700 dark:text-teal-400 border border-teal-500/30 rounded whitespace-nowrap">
+					<div class="bridge-badge flex items-center gap-0.5 px-1 py-0.5 text-sm font-mono font-semibold bg-teal-500/15 text-teal-700 dark:text-teal-400 border border-teal-500/30 rounded whitespace-nowrap">
 						<Inbox class="w-2.5 h-2.5" />
 						IN
 					</div>
 				{:else}
-					<div class="bridge-badge flex items-center gap-0.5 px-1 py-0.5 text-[9px] font-mono font-semibold bg-indigo-500/15 text-indigo-700 dark:text-indigo-400 border border-indigo-500/30 rounded whitespace-nowrap">
+					<div class="bridge-badge flex items-center gap-0.5 px-1 py-0.5 text-sm font-mono font-semibold bg-indigo-500/15 text-indigo-700 dark:text-indigo-400 border border-indigo-500/30 rounded whitespace-nowrap">
 						<Reply class="w-2.5 h-2.5" />
 						REPLY
 					</div>
 				{/if}
 			</Tooltip.Trigger>
 			<Tooltip.Content side="bottom" class="max-w-xs">
-				<div class="text-xs">{bridgeTooltip}</div>
+				<div class="text-sm">{bridgeTooltip}</div>
 			</Tooltip.Content>
 		</Tooltip.Root>
 	{/if}

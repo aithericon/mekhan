@@ -52,14 +52,14 @@
 			onchange({ ...data, failureMessage: v === '' ? undefined : v });
 		}}
 	/>
-	<p class="mt-1 text-[10px] text-muted-foreground">
+	<p class="mt-1 text-sm text-muted-foreground">
 		Supports <code>{'{{ field }}'}</code> placeholders resolved against the inbound token.
 	</p>
 </FormField>
 
 <div class="space-y-1.5">
 	<div class="flex items-center justify-between">
-		<span class="text-xs font-medium text-muted-foreground">Error result (optional)</span>
+		<span class="text-sm font-medium text-muted-foreground">Error result (optional)</span>
 		{#if !readonly}
 			<Button
 				variant="ghost"
@@ -73,7 +73,7 @@
 		{/if}
 	</div>
 	{#if errorMappings.length === 0}
-		<p class="rounded-md border border-dashed border-border/50 p-2 text-[11px] text-muted-foreground">
+		<p class="rounded-md border border-dashed border-border/50 p-2 text-sm text-muted-foreground">
 			The error envelope still carries the failure message as
 			<code>error.reason</code>. Add fields to attach a structured
 			<code>error.value</code>.
@@ -120,7 +120,7 @@
 	{/if}
 </div>
 
-<p class="text-[10px] italic text-muted-foreground">
+<p class="text-sm italic text-muted-foreground">
 	Marks the process failed but the workflow continues to its End. Effective only within a named
 	process (a Start with a Process Name upstream); outside one this node passes the token through
 	with no effect.

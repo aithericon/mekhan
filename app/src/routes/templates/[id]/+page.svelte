@@ -232,7 +232,7 @@
 		/>
 
 		{#if error}
-			<div class="border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-800">
+			<div class="border-b border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">
 				{error}
 				<button
 					type="button"
@@ -272,14 +272,14 @@
 		{#if airPreview}
 			<div class="border-t border-border bg-muted/50" data-testid="air-preview-panel">
 				<div class="flex items-center justify-between px-3 py-1.5">
-					<span class="text-xs font-medium text-muted-foreground">AIR Preview</span>
+					<span class="text-sm font-medium text-muted-foreground">AIR Preview</span>
 					<button
 						type="button"
-						class="text-xs text-muted-foreground underline"
+						class="text-sm text-muted-foreground underline"
 						onclick={() => (airPreview = null)}>close</button
 					>
 				</div>
-				<pre class="max-h-64 overflow-auto px-3 pb-2 font-mono text-[10px] text-foreground">
+				<pre class="max-h-64 overflow-auto px-3 pb-2 font-mono text-sm text-foreground">
 {JSON.stringify(airPreview, null, 2)}
 				</pre>
 			</div>

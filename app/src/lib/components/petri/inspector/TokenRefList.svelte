@@ -37,12 +37,12 @@
 
 {#if refs && refs.length > 0}
 	<div>
-		<h4 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1">
+		<h4 class="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-1">
 			{HEADINGS[kind]} ({refs.length})
 		</h4>
 		<div class="space-y-0.5">
 			{#each refs as ref (tokenId(ref))}
-				<div class="flex items-center gap-2 text-xs">
+				<div class="flex items-center gap-2 text-sm">
 					<span class={SYMBOL_CLASS[kind]}>{SYMBOLS[kind]}</span>
 					<Button variant="link" size="inline" onclick={() => onSelectPlace?.(ref.placeId)}>
 						{ref.placeName}

@@ -72,7 +72,7 @@
 
 		<!-- Net legend -->
 		{#if netIds.length > 1}
-			<div class="absolute bottom-4 left-4 rounded-md border bg-white/90 px-3 py-2 text-xs shadow-sm dark:bg-zinc-900/90">
+			<div class="absolute bottom-4 left-4 rounded-md border bg-white/90 px-3 py-2 text-sm shadow-sm dark:bg-zinc-900/90">
 				<div class="font-semibold text-zinc-500 mb-1">Nets</div>
 				{#each netIds as netId}
 					<div class="text-zinc-600 dark:text-zinc-300 truncate max-w-[200px]">{netId}</div>

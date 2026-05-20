@@ -171,7 +171,7 @@
 <div class="flex flex-col gap-3">
 	<!-- Controls row -->
 	<div class="flex flex-wrap items-center gap-3">
-		<div class="flex items-center gap-1 text-xs">
+		<div class="flex items-center gap-1 text-sm">
 			<span class="inline-block size-2 rounded-full {statusDotClass}"></span>
 			<span class="text-muted-foreground">{statusLabel}</span>
 		</div>
@@ -191,7 +191,7 @@
 		<div class="flex items-center gap-2">
 			<Input
 				placeholder="signal_key (optional)"
-				class="h-8 w-52 text-xs"
+				class="h-8 w-52 text-sm"
 				bind:value={signalKeyInput}
 				onkeydown={(e: KeyboardEvent) => e.key === 'Enter' && applySignalKey()}
 			/>
@@ -206,7 +206,7 @@
 				<Button
 					size="sm"
 					variant={selectedKeys.includes(k) ? 'default' : 'outline'}
-					class="h-7 font-mono text-xs"
+					class="h-7 font-mono text-sm"
 					onclick={() => toggleKey(k)}
 				>
 					{k}
@@ -226,12 +226,12 @@
 	</div>
 
 	{#if store.metrics.bucketSeconds > 0}
-		<p class="text-xs text-muted-foreground">
+		<p class="text-sm text-muted-foreground">
 			Downsampled to {store.metrics.bucketSeconds}s buckets for backfill window.
 		</p>
 	{/if}
 
 	{#if store.error}
-		<p class="text-xs text-red-500">{store.error}</p>
+		<p class="text-sm text-red-500">{store.error}</p>
 	{/if}
 </div>

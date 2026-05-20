@@ -34,7 +34,7 @@
 </FormField>
 
 <div class="space-y-1.5">
-	<span class="text-xs font-medium text-muted-foreground">Command</span>
+	<span class="text-sm font-medium text-muted-foreground">Command</span>
 	<StringListEditor
 		items={(config.command as string[]) ?? []}
 		{readonly}
@@ -44,7 +44,7 @@
 </div>
 
 <div class="space-y-1.5">
-	<span class="text-xs font-medium text-muted-foreground">Entrypoint (optional)</span>
+	<span class="text-sm font-medium text-muted-foreground">Entrypoint (optional)</span>
 	<StringListEditor
 		items={(config.entrypoint as string[]) ?? []}
 		{readonly}
@@ -54,7 +54,7 @@
 </div>
 
 <div class="space-y-1.5">
-	<span class="text-xs font-medium text-muted-foreground">Pull Policy</span>
+	<span class="text-sm font-medium text-muted-foreground">Pull Policy</span>
 	<Select.Root
 		type="single"
 		value={(config.pull_policy as string) ?? 'if_not_present'}
@@ -85,7 +85,7 @@
 </FormField>
 
 <div class="space-y-1.5">
-	<span class="text-xs font-medium text-muted-foreground">Environment Variables</span>
+	<span class="text-sm font-medium text-muted-foreground">Environment Variables</span>
 	<KeyValueEditor
 		entries={(config.env as Record<string, unknown>) ?? {}}
 		{readonly}
@@ -96,7 +96,7 @@
 </div>
 
 <div class="space-y-1.5">
-	<span class="text-xs font-medium text-muted-foreground">Extra Volumes</span>
+	<span class="text-sm font-medium text-muted-foreground">Extra Volumes</span>
 	<StringListEditor
 		items={(config.extra_volumes as string[]) ?? []}
 		{readonly}
@@ -105,7 +105,7 @@
 	/>
 </div>
 
-<label class="flex items-center gap-1.5 text-xs text-muted-foreground">
+<label class="flex items-center gap-1.5 text-sm text-muted-foreground">
 	<Checkbox
 		checked={(config.remove_container as boolean) ?? true}
 		disabled={readonly}

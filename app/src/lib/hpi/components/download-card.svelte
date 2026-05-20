@@ -60,9 +60,9 @@
 				>
 					{item.filename}
 				</a>
-				<div class="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+				<div class="mt-0.5 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
 					{#if item.mime_type}
-						<span class="rounded-md bg-muted/50 px-1.5 py-0.5 text-[10px] font-medium uppercase">
+						<span class="rounded-md bg-muted/50 px-1.5 py-0.5 text-sm font-medium uppercase">
 							{mimeLabel(item.mime_type)}
 						</span>
 					{/if}
@@ -71,7 +71,7 @@
 					{/if}
 				</div>
 				{#if item.description}
-					<p class="mt-1 text-xs text-muted-foreground">{item.description}</p>
+					<p class="mt-1 text-sm text-muted-foreground">{item.description}</p>
 				{/if}
 			</div>
 		</div>

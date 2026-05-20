@@ -54,11 +54,11 @@
 >
 	<!-- Header -->
 	<div class="meta-header px-3 py-1.5" class:spawn-header={data.isSpawn}>
-		<div class="text-xs font-bold truncate meta-title flex items-center gap-1">
+		<div class="text-sm font-bold truncate meta-title flex items-center gap-1">
 			{#if data.isSpawn}<span class="spawn-badge" title="Spawned subnet">&#x21BB;</span>{/if}
 			{data.label}
 		</div>
-		<div class="meta-summary text-[10px] font-mono">
+		<div class="meta-summary text-sm font-mono">
 			{#if data.isSpawn && data.spawnInstanceCount != null}
 				{data.spawnInstanceCount} instance{data.spawnInstanceCount !== 1 ? 's' : ''}
 				{#if data.tokenCount > 0}<span class="meta-token-count"> · {data.tokenCount} tok</span>{/if}
@@ -82,7 +82,7 @@
 							class="!bg-blue-400 !w-2 !h-2"
 							style="position: relative;"
 						/>
-						<span class="port-label text-[9px] font-mono truncate max-w-[70px]" title={port.label}>
+						<span class="port-label text-sm font-mono truncate max-w-[70px]" title={port.label}>
 							{port.label}
 						</span>
 					</div>
@@ -95,7 +95,7 @@
 			<div class="flex flex-col justify-center items-end px-1.5 py-1">
 				{#each data.outputPorts as port (port.id)}
 					<div class="port-row flex items-center gap-1" style="position: relative;">
-						<span class="port-label text-[9px] font-mono truncate max-w-[70px]" title={port.label}>
+						<span class="port-label text-sm font-mono truncate max-w-[70px]" title={port.label}>
 							{port.label}
 						</span>
 						<Handle

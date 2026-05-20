@@ -215,7 +215,7 @@
 		<div class="flex items-center justify-between border-b border-border px-5 py-4">
 			<div>
 				<SheetTitle class="text-lg font-semibold">Create instance</SheetTitle>
-				<SheetDescription class="text-xs text-muted-foreground">
+				<SheetDescription class="text-sm text-muted-foreground">
 					Provide initial token values for each Start block.
 				</SheetDescription>
 			</div>
@@ -237,7 +237,7 @@
 						<div class="rounded-md border border-border/50 p-3">
 							<h3 class="mb-2 text-sm font-medium">{start.label}</h3>
 							{#if (start.initial.fields ?? []).length === 0}
-								<p class="text-xs text-muted-foreground">
+								<p class="text-sm text-muted-foreground">
 									This Start has no declared fields — will seed with an empty token.
 								</p>
 							{:else}
@@ -306,7 +306,7 @@
 												>
 													<FileDropZone.Trigger />
 												</FileDropZone.Root>
-												<p class="mt-1 text-xs text-muted-foreground">
+												<p class="mt-1 text-sm text-muted-foreground">
 													Accepted formats: {formatAccept(acceptSpec)}
 												</p>
 												{#if fileVal}
@@ -318,7 +318,7 @@
 															variant="ghost"
 															size="sm"
 															type="button"
-															class="h-auto px-1 py-0 text-xs text-destructive hover:text-destructive hover:underline"
+															class="h-auto px-1 py-0 text-sm text-destructive hover:text-destructive hover:underline"
 															onclick={() => clearFile(start.id, field.name)}
 														>
 															remove
@@ -326,7 +326,7 @@
 													</div>
 												{/if}
 												{#if uploadError[errKey]}
-													<p class="mt-1 text-xs text-destructive">
+													<p class="mt-1 text-sm text-destructive">
 														{uploadError[errKey]}
 													</p>
 												{/if}

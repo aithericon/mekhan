@@ -134,7 +134,7 @@
 		<div class="flex items-center justify-between px-4 py-3 border-b border-border bg-muted">
 			<div class="flex items-center gap-3">
 				<h2 class="text-lg font-semibold text-foreground">Token</h2>
-				<span class="px-2 py-0.5 text-xs font-medium rounded {typeBadgeClass}">
+				<span class="px-2 py-0.5 text-sm font-medium rounded {typeBadgeClass}">
 					{colorType}
 				</span>
 				<span class="text-sm text-muted-foreground">
@@ -155,34 +155,34 @@
 			<!-- Metadata -->
 			<div class="shrink-0 grid grid-cols-2 gap-4">
 				<div>
-					<h3 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1">Token ID</h3>
+					<h3 class="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-1">Token ID</h3>
 					<div class="flex items-center gap-1">
-						<span class="text-xs font-mono text-foreground/80 break-all">{token.id}</span>
+						<span class="text-sm font-mono text-foreground/80 break-all">{token.id}</span>
 						<CopyButton text={token.id} />
 					</div>
 				</div>
 				<div>
-					<h3 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1">Created</h3>
+					<h3 class="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-1">Created</h3>
 					<span class="text-sm text-foreground">
 						{new Date(token.created_at).toLocaleString()}
 					</span>
 				</div>
 				{#if token.created_by_event != null}
 					<div>
-						<h3 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1">Created by Event</h3>
-						<span class="text-xs font-mono text-foreground/80">#{token.created_by_event}</span>
+						<h3 class="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-1">Created by Event</h3>
+						<span class="text-sm font-mono text-foreground/80">#{token.created_by_event}</span>
 					</div>
 				{/if}
 			</div>
 
 			{#if provenance}
 				<div class="shrink-0 border border-blue-500/20 rounded-lg p-3 bg-blue-500/5">
-					<h3 class="text-xs font-semibold uppercase tracking-wider text-blue-500 mb-2">Provenance</h3>
+					<h3 class="text-sm font-semibold uppercase tracking-wider text-blue-500 mb-2">Provenance</h3>
 					<div class="grid grid-cols-2 gap-3">
 						<div>
-							<span class="text-[10px] uppercase tracking-wider text-muted-foreground">Origin</span>
-							<div class="text-xs text-foreground/80">
-								<span class="px-1.5 py-0.5 rounded text-[10px] font-medium
+							<span class="text-sm uppercase tracking-wider text-muted-foreground">Origin</span>
+							<div class="text-sm text-foreground/80">
+								<span class="px-1.5 py-0.5 rounded text-sm font-medium
 									{provenance.eventType === 'TokenCreated' ? 'bg-green-500/15 text-green-500'
 									: provenance.eventType === 'EffectCompleted' ? 'bg-emerald-500/15 text-emerald-500'
 									: provenance.eventType === 'TransitionFired' ? 'bg-amber-500/15 text-amber-500'
@@ -194,41 +194,41 @@
 							</div>
 						</div>
 						<div>
-							<span class="text-[10px] uppercase tracking-wider text-muted-foreground">When</span>
-							<div class="text-xs text-foreground/80">{new Date(provenance.timestamp).toLocaleString()}</div>
+							<span class="text-sm uppercase tracking-wider text-muted-foreground">When</span>
+							<div class="text-sm text-foreground/80">{new Date(provenance.timestamp).toLocaleString()}</div>
 						</div>
 						{#if provenance.transitionName}
 							<div>
-								<span class="text-[10px] uppercase tracking-wider text-muted-foreground">Transition</span>
-								<div class="text-xs font-medium text-foreground/80">{provenance.transitionName}</div>
+								<span class="text-sm uppercase tracking-wider text-muted-foreground">Transition</span>
+								<div class="text-sm font-medium text-foreground/80">{provenance.transitionName}</div>
 							</div>
 						{/if}
 						{#if provenance.effectHandlerId}
 							<div>
-								<span class="text-[10px] uppercase tracking-wider text-muted-foreground">Effect Handler</span>
-								<div class="text-xs font-mono text-foreground/80">{provenance.effectHandlerId}</div>
+								<span class="text-sm uppercase tracking-wider text-muted-foreground">Effect Handler</span>
+								<div class="text-sm font-mono text-foreground/80">{provenance.effectHandlerId}</div>
 							</div>
 						{/if}
 						{#if provenance.sourcePlaceName}
 							<div>
-								<span class="text-[10px] uppercase tracking-wider text-muted-foreground">Place</span>
-								<div class="text-xs font-medium text-foreground/80">{provenance.sourcePlaceName}</div>
+								<span class="text-sm uppercase tracking-wider text-muted-foreground">Place</span>
+								<div class="text-sm font-medium text-foreground/80">{provenance.sourcePlaceName}</div>
 							</div>
 						{/if}
 						{#if provenance.signalKey}
 							<div>
-								<span class="text-[10px] uppercase tracking-wider text-muted-foreground">Signal Key</span>
+								<span class="text-sm uppercase tracking-wider text-muted-foreground">Signal Key</span>
 								<div class="flex items-center gap-1">
-									<span class="text-xs font-mono text-foreground/80 break-all">{provenance.signalKey}</span>
+									<span class="text-sm font-mono text-foreground/80 break-all">{provenance.signalKey}</span>
 									<CopyButton text={provenance.signalKey} />
 								</div>
 							</div>
 						{/if}
 						{#if provenance.workflowId}
 							<div>
-								<span class="text-[10px] uppercase tracking-wider text-muted-foreground">Workflow ID</span>
+								<span class="text-sm uppercase tracking-wider text-muted-foreground">Workflow ID</span>
 								<div class="flex items-center gap-1">
-									<span class="text-xs font-mono text-foreground/80 break-all">{provenance.workflowId}</span>
+									<span class="text-sm font-mono text-foreground/80 break-all">{provenance.workflowId}</span>
 									<CopyButton text={provenance.workflowId} />
 								</div>
 							</div>
@@ -239,13 +239,13 @@
 
 			{#if token.reply_routing}
 				<div class="shrink-0 border border-rose-500/20 rounded-lg p-3 bg-rose-500/5">
-					<h3 class="text-xs font-semibold uppercase tracking-wider text-rose-500 mb-2">Reply Routing</h3>
+					<h3 class="text-sm font-semibold uppercase tracking-wider text-rose-500 mb-2">Reply Routing</h3>
 					<div class="grid grid-cols-2 gap-3">
 						{#if token.reply_routing.reply_to}
 							<div class="col-span-2">
-								<span class="text-[10px] uppercase tracking-wider text-muted-foreground">Reply To (default channel)</span>
+								<span class="text-sm uppercase tracking-wider text-muted-foreground">Reply To (default channel)</span>
 								<div class="flex items-center gap-1">
-									<span class="text-xs font-mono text-foreground/80">
+									<span class="text-sm font-mono text-foreground/80">
 										{token.reply_routing.reply_to.net_id} / {token.reply_routing.reply_to.place_name}
 									</span>
 									<CopyButton text="{token.reply_routing.reply_to.net_id}/{token.reply_routing.reply_to.place_name}" />
@@ -255,9 +255,9 @@
 						{#if token.reply_routing.reply_channels}
 							{#each Object.entries(token.reply_routing.reply_channels) as [channel, addr] (channel)}
 								<div>
-									<span class="text-[10px] uppercase tracking-wider text-muted-foreground">Channel: {channel}</span>
+									<span class="text-sm uppercase tracking-wider text-muted-foreground">Channel: {channel}</span>
 									<div class="flex items-center gap-1">
-										<span class="text-xs font-mono text-foreground/80">
+										<span class="text-sm font-mono text-foreground/80">
 											{addr.net_id} / {addr.place_name}
 										</span>
 										<CopyButton text="{addr.net_id}/{addr.place_name}" />

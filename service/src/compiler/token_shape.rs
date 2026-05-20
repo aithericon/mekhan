@@ -1,48 +1,63 @@
-//! PROTOTYPE — compiler-derived, shape-aware per-place token schema.
+//! Compiler-derived, shape-aware token model — the **native, only**
+//! representation of "what does the token look like here". This is no longer a
+//! prototype: the old flat scope model (Rust `validate.rs::compute_scopes`,
+//! the TS `guard-scope.ts::computeScopes`) is **deleted**; `compile_to_air`
+//! itself emits the control/data split natively via
+//! `compile.rs::apply_control_data_foundation`.
 //!
-//! # Why this exists
+//! Full architecture narrative: `docs/10-control-data-token-model.md`.
+//! Supersedes parts of `docs/05-typed-ports.md` and
+//! `docs/07-runtime-port-enforcement.md`.
 //!
-//! Today three independent representations of "what does the token look like
-//! here" coexist and nothing forces them to agree:
+//! # The model (control token vs data token)
 //!
-//! 1. The editor's design-time scope model (`app/.../guard-scope.ts`
-//!    `computeScopes`) — a TS reimplementation that flattens *declared*
-//!    upstream output-port fields into `input.<field>`.
-//! 2. The compiler's lowering (`lower.rs` / `rhai_gen.rs`) — what actually
-//!    happens to the token JSON (the `data` wrapper a human task introduces,
-//!    the executor envelope an automated step wraps everything in, the
-//!    `_`-prefixed metadata, the loop counter).
-//! 3. The runtime token (`DynamicToken(serde_json::Value)`); places carry a
-//!    `token_schema` but for every business place it is `DynamicToken` (=any).
+//! A node's business output is **parked**, write-once, in a `p_{id}_data`
+//! place; only a slim **control token** (`_`-prefixed metadata, `task_id`,
+//! `status`, loop counter) is threaded by-move down the net. A guard / result
+//! mapping that needs an upstream field gets a non-consuming **read-arc**
+//! (`ScenarioArc{read:true}`) into the owning parked place. This is Rust's
+//! ownership model: parked data ≡ a `let` owned by the place; a read-arc ≡ a
+//! `&T` shared borrow; a consuming arc ≡ a move; the control token ≡ a
+//! `let mut` threaded by-move. The compiler is the **borrow-checker**:
+//! provenance proves which parked place owns a referenced field and
+//! synthesizes the borrow; a reference nothing reachable owns is a hard
+//! `CompileError`, not a silently-missed branch (the original bug class).
 //!
-//! Phase-3 guard validation (`validate.rs::compute_scopes`) is a *flat union
-//! of declared port field names*. It will happily accept
-//! `input.invoice_amount > 5000` even though, at the place where that guard
-//! runs, the token is the `extract` step's executor envelope and
-//! `invoice_amount` only ever existed as a *human-task form field nested
-//! under `.data`*. The guard silently never matches → the default branch is
-//! taken → the run reports "completed" while having done the wrong thing.
+//! Lowering (`lower.rs`): data-yielders (HumanTask / AutomatedStep) →
+//! `split_outputs` (`p_{id}_data` parked + slim `p_{id}_ctrl` +
+//! `t_{id}_yield` running [`YIELD_LOGIC`]). Start → `park_outputs`, an
+//! *additive* fork (`p_{id}_data` for downstream borrows **plus**
+//! `p_{id}_main` carrying the full token onward, so the next task can still
+//! interpolate Start fields off the control token) — not a split.
 //!
-//! # What this module does
+//! # References & scope (single source of truth)
 //!
-//! Make the **compiler** the single source of truth. Walk the lowered graph
-//! and, for each node, compute a *structural* [`TokenShape`] for the token
-//! arriving at / leaving that node, modelling the **real** per-pattern JSON
-//! transformations the lowerer performs (verified against `lower.rs`,
-//! `rhai_gen.rs::build_merge_logic`, `effect_tokens.rs::HumanTaskResponse`,
-//! and a live instance token dump). Then:
+//! Borrowed data is addressed `<slug>.<field>`, where `slug` is the
+//! producer node's user-defined, Rhai-safe key ([`slug_index`];
+//! explicit collisions → [`CompileError::SlugConflict`]; unset slugs derive a
+//! collision-suffixed default). `input.<path>` is reserved for genuinely
+//! control-token-resident leaves (Start fields before any task, `_loop_*`,
+//! `task_id`, `status`); control/identity leaves are attributed to a
+//! synthetic "Process" group, not whichever node last forwarded the token.
+//! Clean-cut: there is no legacy unqualified-`input` nearest-wins fallback.
 //!
-//! * attach the derived shape to the matching AIR place's `token_schema`
-//!   (replacing the useless `#/definitions/DynamicToken`), and
-//! * re-validate every Decision/Loop guard against the *real* shape, with
-//!   provenance-aware diagnostics ("`invoice_amount` is not present here; it
-//!   last existed as `input.data.invoice_amount: String`, introduced by the
-//!   'Review Invoice' human task, and was dropped when the 'Extract Data'
-//!   automated step replaced the token with its executor envelope").
+//! One resolver — [`guard_refs`] (scanner + `rhai_scope` gating) →
+//! `resolve_ref` — is shared by [`reachable_scope`] (the editor picker),
+//! `check_guard` (diagnostics) and [`guard_readarc_plan`] (read-arc
+//! synthesis), so the picker offers exactly what the compiler binds and no
+//! diagnostic contradicts it. Distinct producers of the same key are distinct
+//! paths (`review.amount` vs `compliance.amount`) — no silent collision.
 //!
-//! This is a prototype: it lives alongside the existing Phase-3 pass (it does
-//! not rip it out), `analyze()` is pure, and `compile_to_air` is unchanged
-//! unless a caller opts in via [`compile_to_air_with_shapes`].
+//! # Runtime enforcement
+//!
+//! [`analyze`] derives a structural [`TokenShape`] per node; [`to_json_schema`]
+//! lowers it to real AIR `#/definitions/*` (`Data__{id}` enforced producer
+//! shape, `Ctrl__{id}` open object, `DynamicToken` permissive catch-all). The
+//! engine `SchemaRegistry` validates every token crossing a schemed
+//! place/port; an unresolvable `$ref` *fails* (not bypasses). [`analyze`] is
+//! pure; [`compile_to_air_with_shapes`] additionally returns the
+//! [`ShapeReport`] and annotates the AIR. The editor consumes the same
+//! `analyze` via `surface_types` → `POST /api/analyze`.
 
 use std::collections::BTreeMap;
 
@@ -585,7 +600,8 @@ fn output_place_ids(node: &WorkflowNode) -> Vec<String> {
         // `p_{id}_main`; `p_{id}_data` is schema'd by the foundation pass.
         WorkflowNodeData::Start { .. } => vec![format!("p_{id}_main")],
         WorkflowNodeData::HumanTask { .. } => vec![format!("p_{id}_output")],
-        WorkflowNodeData::AutomatedStep { .. } => {
+        WorkflowNodeData::AutomatedStep { .. }
+        | WorkflowNodeData::SubWorkflow { .. } => {
             vec![format!("p_{id}_output"), format!("p_{id}_error")]
         }
         WorkflowNodeData::Decision {
@@ -774,6 +790,22 @@ fn out_shape(node: &WorkflowNode, in_shape: &TokenShape) -> TokenShape {
                 Provenance::new(node, "loop iteration counter (injected by t_*_enter)"),
             );
             o
+        }
+
+        // Sub-workflow: `t_*_join` maps the child's terminal result onto the
+        // workflow token via the declared `output` port. With declared fields
+        // downstream sees exactly those; otherwise the child result is opaque
+        // here (we can't see across the spawned-child boundary at analyze time).
+        WorkflowNodeData::SubWorkflow { output, .. } => {
+            if output.fields.is_empty() {
+                in_shape.clone()
+            } else {
+                port_to_shape(
+                    output,
+                    node,
+                    "declared sub-workflow result (mapped at t_*_join)",
+                )
+            }
         }
 
         // Pure routing / pass-through patterns: token shape unchanged.

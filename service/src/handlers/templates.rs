@@ -10,7 +10,9 @@ use uuid::Uuid;
 use aithericon_executor_domain::InputSource;
 
 use crate::auth::AuthUser;
-use crate::compiler::{compile_to_air, generate_py_io_files, node_input_scopes};
+use crate::compiler::{
+    compile_to_air, compile_to_air_with_subworkflows, generate_py_io_files, node_input_scopes,
+};
 use crate::lifecycle::cleanup_net;
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::template::{
@@ -18,7 +20,7 @@ use crate::models::template::{
     ListTemplatesQuery, PaginatedResponse, UpdateTemplateRequest, WorkflowGraph, WorkflowNodeData,
     WorkflowTemplate,
 };
-use crate::process::publish::{CompiledArtifacts, PublishService};
+use crate::process::publish::{resolve_subworkflow_air, CompiledArtifacts, PublishService};
 use crate::AppState;
 
 /// POST /api/templates
@@ -479,14 +481,17 @@ pub async fn publish_template(
     let CompiledArtifacts {
         air_json,
         graph_json,
-    } = publisher.compile_artifacts(
-        &graph,
-        &existing.name,
-        &existing.description,
-        id,
-        existing.version,
-        &mut ydoc_files,
-    )?;
+    } = publisher
+        .compile_artifacts(
+            &graph,
+            &existing.name,
+            &existing.description,
+            id,
+            existing.version,
+            Some(existing.base_template_id.unwrap_or(existing.id)),
+            &mut ydoc_files,
+        )
+        .await?;
 
     // Upload node file contents to S3 so the executor can stage them at
     // runtime. Non-fatal for UI publish (legacy behavior).
@@ -945,14 +950,17 @@ pub async fn apply_template(
     let CompiledArtifacts {
         air_json,
         graph_json,
-    } = publisher.compile_artifacts(
-        &graph,
-        &latest.name,
-        &latest.description,
-        target_id,
-        target_version,
-        &mut files_map,
-    )?;
+    } = publisher
+        .compile_artifacts(
+            &graph,
+            &latest.name,
+            &latest.description,
+            target_id,
+            target_version,
+            Some(latest.base_template_id.unwrap_or(latest.id)),
+            &mut files_map,
+        )
+        .await?;
     let source_ref_json = req
         .source_ref
         .as_ref()
@@ -1165,11 +1173,23 @@ pub async fn compile_preview(
     };
     let files = storage_path_files(id, existing.version, &ydoc_files);
 
-    let air = compile_to_air(&graph, &existing.name, &existing.description, &files)
-        .map_err(|e| {
-            let view = e.to_view();
-            ApiError::compile(format!("compilation failed: {e}"), vec![view])
-        })?;
+    // Resolve + freeze SubWorkflow children so the preview AIR matches what
+    // publish would emit (DB-backed; the stateless `/api/compile` path cannot
+    // and correctly surfaces `SubWorkflowUnresolved` instead).
+    let publishing_family = Some(existing.base_template_id.unwrap_or(existing.id));
+    let sub_air = resolve_subworkflow_air(&state, publishing_family, &graph).await?;
+
+    let air = compile_to_air_with_subworkflows(
+        &graph,
+        &existing.name,
+        &existing.description,
+        &files,
+        &sub_air,
+    )
+    .map_err(|e| {
+        let view = e.to_view();
+        ApiError::compile(format!("compilation failed: {e}"), vec![view])
+    })?;
 
     Ok(Json(air))
 }

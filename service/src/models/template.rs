@@ -217,6 +217,14 @@ pub enum WorkflowNodeData {
         /// templates keep their prior semantics without re-authoring.
         #[serde(rename = "retryPolicy", default)]
         retry_policy: RetryPolicy,
+        /// Where/how the job is dispatched. `Inline` (default) = the current
+        /// direct executor-lifecycle path. `Scheduled` = submit through the
+        /// long-lived scheduler-net (Nomad/Slurm) for queued / GPU execution,
+        /// optionally pinning a job template + resources. `#[serde(default)]`
+        /// + `Inline` default ⇒ every existing template round-trips unchanged
+        /// (same precedent as `retry_policy`).
+        #[serde(rename = "deploymentModel", default)]
+        deployment_model: DeploymentModel,
     },
     #[serde(rename = "decision")]
     Decision {
@@ -362,6 +370,48 @@ pub enum WorkflowNodeData {
         #[serde(default)]
         enabled: bool,
     },
+    /// Calls another published template as a child net and returns its
+    /// terminal result, correlated per invocation. Compiles (via
+    /// `Context::spawn`) to: a parent-side request/spawn effect, a
+    /// `bridge_out` carrying the mapped initial token to a freshly spawned
+    /// child instance, and `bridge_in` reply/failure places joined back on a
+    /// synthesized correlation key. The child template is resolved and its
+    /// compiled AIR is embedded at the *parent's* publish time (see
+    /// `version_pin`) so a later change to the child does not alter
+    /// already-published parents.
+    #[serde(rename = "sub_workflow")]
+    SubWorkflow {
+        label: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+        /// Stable identity of the child template family (any version row's
+        /// `base_template_id`/`id` — resolution picks the concrete row per
+        /// `version_pin` at publish time).
+        #[serde(rename = "templateId")]
+        template_id: Uuid,
+        /// Which concrete version of the child to embed. `Latest` resolves the
+        /// family's `is_latest` row *at the parent's publish time* and freezes
+        /// that concrete version into the embedded AIR; `Pinned` freezes an
+        /// explicit version. Either way the published parent is deterministic.
+        #[serde(rename = "versionPin", default)]
+        version_pin: VersionPin,
+        /// Parent upstream token → child Start `initial` port fields. Each
+        /// entry's `expression` is a Rhai expression over the inbound token;
+        /// together they assemble the token bridged into the child. Empty
+        /// (the default) passes the inbound token through unchanged.
+        #[serde(
+            rename = "inputMapping",
+            default,
+            skip_serializing_if = "Vec::is_empty"
+        )]
+        input_mapping: Vec<FieldMapping>,
+        /// Declared shape of the child's terminal result, mapped back onto the
+        /// workflow token at the join. Empty fields ⇒ pass the child result
+        /// through unchanged (Json). Authoring can prefill this from the
+        /// child's End `terminal` port.
+        #[serde(default = "default_subworkflow_output_port")]
+        output: Port,
+    },
 }
 
 impl WorkflowNodeData {
@@ -379,7 +429,8 @@ impl WorkflowNodeData {
             | Self::PhaseUpdate { label, .. }
             | Self::ProgressUpdate { label, .. }
             | Self::Failure { label, .. }
-            | Self::Trigger { label, .. } => label,
+            | Self::Trigger { label, .. }
+            | Self::SubWorkflow { label, .. } => label,
         }
     }
 
@@ -398,6 +449,7 @@ impl WorkflowNodeData {
             Self::ProgressUpdate { .. } => "progress_update",
             Self::Failure { .. } => "failure",
             Self::Trigger { .. } => "trigger",
+            Self::SubWorkflow { .. } => "sub_workflow",
         }
     }
 
@@ -415,7 +467,8 @@ impl WorkflowNodeData {
             | Self::PhaseUpdate { description, .. }
             | Self::ProgressUpdate { description, .. }
             | Self::Failure { description, .. }
-            | Self::Trigger { description, .. } => description.as_deref(),
+            | Self::Trigger { description, .. }
+            | Self::SubWorkflow { description, .. } => description.as_deref(),
         }
     }
 
@@ -446,7 +499,11 @@ impl WorkflowNodeData {
             | Self::Scope { .. }
             | Self::PhaseUpdate { .. }
             | Self::ProgressUpdate { .. }
-            | Self::Failure { .. } => vec![Port::empty_input()],
+            | Self::Failure { .. }
+            // SubWorkflow accepts the single anonymous upstream token; its
+            // `input_mapping` shapes it into the child Start input at compile
+            // time, so the parent-side input port is a Json pass-through.
+            | Self::SubWorkflow { .. } => vec![Port::empty_input()],
 
             // Trigger nodes are never edge targets — the editor refuses to draw
             // an edge into a Trigger node. Return empty so any malformed graph
@@ -478,6 +535,18 @@ impl WorkflowNodeData {
             // so wiring it to any handler/End type-checks. The compiler maps
             // this to the node's `p_{id}_error` place.
             Self::AutomatedStep { output, .. } => vec![
+                output.clone(),
+                Port {
+                    id: "error".to_string(),
+                    label: "On error".to_string(),
+                    fields: vec![],
+                },
+            ],
+
+            // Declared child-result success output + an always-present
+            // "error" output (child failure / spawn failure). Mirrors
+            // AutomatedStep; the compiler maps "error" to `p_{id}_error`.
+            Self::SubWorkflow { output, .. } => vec![
                 output.clone(),
                 Port {
                     id: "error".to_string(),
@@ -770,6 +839,76 @@ impl Default for RetryPolicy {
     }
 }
 
+/// Which concrete child-template version a `SubWorkflow` embeds. Internally
+/// tagged on the wire: `{"mode":"latest"}` or `{"mode":"pinned","version":3}`.
+/// `Latest` is an *authoring* intent only — it is resolved to a concrete
+/// version at the parent's publish time and the resolved AIR is frozen into
+/// the parent, so runtime is always deterministic / replay-safe. Keep the
+/// `mode` strings in lockstep with the `snake_case` derive.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+pub enum VersionPin {
+    /// Resolve the family's `is_latest` row at parent publish time.
+    Latest,
+    /// Freeze an explicit child version.
+    Pinned { version: i32 },
+}
+
+impl Default for VersionPin {
+    fn default() -> Self {
+        Self::Latest
+    }
+}
+
+/// Deserialization default for `SubWorkflow.output` — an empty `out` port
+/// (Json pass-through of the child's terminal result). Authoring can prefill
+/// fields from the child's End `terminal` port.
+pub fn default_subworkflow_output_port() -> Port {
+    Port {
+        id: "out".to_string(),
+        label: "Result".to_string(),
+        fields: vec![],
+    }
+}
+
+/// Where an `AutomatedStep`'s job runs. Internally tagged on the wire:
+/// `{"mode":"inline"}` or `{"mode":"scheduled","jobTemplate":"...",
+/// "resources":{...}}`. Keep the `mode` strings in lockstep with the
+/// `snake_case` derive.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+pub enum DeploymentModel {
+    /// Current behaviour: direct executor-lifecycle dispatch (NATS).
+    Inline,
+    /// Submit through the long-lived scheduler-net (Nomad/Slurm) — queued /
+    /// GPU execution. `job_template` selects the scheduler's parameterized
+    /// job (e.g. `petri-mumax3-worker`).
+    Scheduled {
+        #[serde(rename = "jobTemplate")]
+        job_template: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        resources: Option<ResourceConfig>,
+    },
+}
+
+impl Default for DeploymentModel {
+    fn default() -> Self {
+        Self::Inline
+    }
+}
+
+/// Optional resource hints forwarded to the scheduler for a `Scheduled` step.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_mhz: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_mb: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gpu: Option<u32>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct TaskFieldConfig {
     pub name: String,
@@ -985,6 +1124,12 @@ pub fn default_output_port(backend: ExecutionBackendType) -> Port {
         ExecutionBackendType::Kreuzberg => vec![
             port_field("text", "Text", FieldKind::Textarea),
             port_field("metadata", "Metadata", FieldKind::Json),
+        ],
+        // Matches the engine `catalogue_lookup` handler's result token.
+        ExecutionBackendType::CatalogueQuery => vec![
+            port_field("artifacts", "Artifacts", FieldKind::Json),
+            port_field("total_count", "Total", FieldKind::Number),
+            port_field("source_process_ids", "Source Process IDs", FieldKind::Json),
         ],
     };
     Port {
@@ -1250,6 +1395,10 @@ pub enum ExecutionBackendType {
     Llm,
     FileOps,
     Kreuzberg,
+    /// Point-in-time read of the data catalogue. Does NOT dispatch an executor
+    /// job — the compiler lowers it to the engine's registered
+    /// `catalogue_lookup` effect (input port `query`, output `results`).
+    CatalogueQuery,
 }
 
 impl ExecutionBackendType {
@@ -1265,6 +1414,7 @@ impl ExecutionBackendType {
             Self::Llm => "llm",
             Self::FileOps => "file_ops",
             Self::Kreuzberg => "kreuzberg",
+            Self::CatalogueQuery => "catalogue_query",
         }
     }
 }
@@ -1447,9 +1597,9 @@ impl WorkflowGraph {
 /// DSL→model direction can't silently swallow a known type.
 pub mod dsl {
     use super::{
-        default_output_port, default_terminal_port, BranchCondition, ExecutionBackendType,
-        ExecutionSpecConfig, Port, RetryPolicy, TaskBlockConfig, TaskStepConfig, WorkflowNode,
-        WorkflowNodeData,
+        default_output_port, default_terminal_port, BranchCondition, DeploymentModel,
+        ExecutionBackendType, ExecutionSpecConfig, Port, RetryPolicy, TaskBlockConfig,
+        TaskStepConfig, WorkflowNode, WorkflowNodeData,
     };
     use serde::{Deserialize, Serialize};
 
@@ -1708,6 +1858,8 @@ pub mod dsl {
                         // immediate retries; otherwise round-trip the
                         // authored policy.
                         retry_policy: exec.retry_policy.unwrap_or_default(),
+                        // DSL does not model deployment topology — inline.
+                        deployment_model: DeploymentModel::default(),
                     })
                 }
                 "decision" => {
@@ -1932,10 +2084,11 @@ pub mod dsl {
                     // DSL doesn't model the process-control nodes — GUI-authored
                     // for now. Same lossy-drop behaviour as triggers.
                 }
-                WorkflowNodeData::Trigger { .. } => {
-                    // DSL doesn't model triggers — declared in the GUI for now.
-                    // Round-trip through DSL drops them, matching how legacy
-                    // DSL templates behave.
+                WorkflowNodeData::Trigger { .. }
+                | WorkflowNodeData::SubWorkflow { .. } => {
+                    // DSL doesn't model triggers or sub-workflows — declared in
+                    // the GUI for now. Round-trip through DSL drops them,
+                    // matching how legacy DSL templates behave.
                 }
             }
 

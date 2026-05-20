@@ -374,4 +374,12 @@ impl<C: EventRepository + 'static> EventRepository for NatsEventStore<C> {
     async fn current_sequence(&self) -> u64 {
         self.cache.current_sequence().await
     }
+
+    async fn len(&self) -> usize {
+        self.cache.len().await
+    }
+
+    async fn events_from(&self, idx: usize) -> Vec<PersistedEvent> {
+        self.cache.events_from(idx).await
+    }
 }

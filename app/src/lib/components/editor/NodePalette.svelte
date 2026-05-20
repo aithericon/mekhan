@@ -11,6 +11,7 @@
 	import Flag from '@lucide/svelte/icons/flag';
 	import Gauge from '@lucide/svelte/icons/gauge';
 	import OctagonX from '@lucide/svelte/icons/octagon-x';
+	import Workflow from '@lucide/svelte/icons/workflow';
 
 	const iconMap: Record<string, typeof Play> = {
 		play: Play,
@@ -23,7 +24,8 @@
 		repeat: Repeat,
 		flag: Flag,
 		gauge: Gauge,
-		'octagon-x': OctagonX
+		'octagon-x': OctagonX,
+		workflow: Workflow
 	};
 
 	function onDragStart(event: DragEvent, nodeType: WorkflowNodeType) {
@@ -35,7 +37,7 @@
 
 <div class="flex w-56 flex-col border-r border-sidebar-border bg-sidebar" data-testid="node-palette">
 	<div class="border-b border-sidebar-border px-3 py-2.5">
-		<h2 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Blocks</h2>
+		<h2 class="text-sm font-semibold uppercase tracking-wider text-muted-foreground">Blocks</h2>
 	</div>
 	<div class="flex-1 space-y-1 overflow-y-auto p-2">
 		{#each NODE_PALETTE as item (item.type)}
@@ -57,7 +59,7 @@
 				</div>
 				<div class="min-w-0">
 					<div class="text-sm font-medium text-foreground">{item.label}</div>
-					<div class="truncate text-[10px] leading-tight text-muted-foreground">
+					<div class="truncate text-sm leading-tight text-muted-foreground">
 						{item.description}
 					</div>
 				</div>

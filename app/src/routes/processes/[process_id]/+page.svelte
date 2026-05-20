@@ -159,13 +159,13 @@
 						</Badge>
 					{/if}
 					{#if detail.owner}
-						<span class="text-xs text-muted-foreground">Owner: {detail.owner}</span>
+						<span class="text-sm text-muted-foreground">Owner: {detail.owner}</span>
 					{/if}
 				</div>
 
-				<p class="font-mono text-xs text-muted-foreground mb-1">{detail.process_id}</p>
+				<p class="font-mono text-sm text-muted-foreground mb-1">{detail.process_id}</p>
 				{#if detail.instance_id}
-					<div class="mb-1 flex flex-wrap items-center gap-1.5 text-xs">
+					<div class="mb-1 flex flex-wrap items-center gap-1.5 text-sm">
 						<span class="text-muted-foreground">Origin:</span>
 						<a
 							href="/instances/{detail.instance_id}"
@@ -187,7 +187,7 @@
 						{/if}
 					</div>
 				{/if}
-				<div class="flex items-center gap-4 text-xs text-muted-foreground">
+				<div class="flex items-center gap-4 text-sm text-muted-foreground">
 					<span>Created {formatDate(detail.created_at)}</span>
 					<span>Updated {relativeTime(detail.updated_at)}</span>
 				</div>

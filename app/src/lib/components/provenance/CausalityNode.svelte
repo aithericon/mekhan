@@ -75,10 +75,10 @@
 		</span>
 	</div>
 
-	<div class="mt-1 flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400">
+	<div class="mt-1 flex items-center gap-1.5 text-sm text-zinc-500 dark:text-zinc-400">
 		{#if handlerLabel}
 			<span
-				class="rounded px-1 py-0.5 text-[10px] font-medium"
+				class="rounded px-1 py-0.5 text-sm font-medium"
 				style="background: {color}20; color: {color};"
 			>
 				{handlerLabel}
@@ -93,7 +93,7 @@
 	</div>
 
 	{#if consumedPlaces.length > 0 || producedPlaces.length > 0}
-		<div class="mt-1 flex items-center gap-1 text-[10px] text-zinc-500 dark:text-zinc-400">
+		<div class="mt-1 flex items-center gap-1 text-sm text-zinc-500 dark:text-zinc-400">
 			{#if consumedPlaces.length > 0}
 				<span class="text-red-400">{consumedPlaces.join(', ')}</span>
 			{/if}
@@ -107,7 +107,7 @@
 	{/if}
 
 	{#if data.net_id}
-		<div class="mt-0.5 text-[10px] text-zinc-400 dark:text-zinc-500 truncate">
+		<div class="mt-0.5 text-sm text-zinc-400 dark:text-zinc-500 truncate">
 			{data.net_id}
 		</div>
 	{/if}

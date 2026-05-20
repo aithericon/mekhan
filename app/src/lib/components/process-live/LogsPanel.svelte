@@ -165,7 +165,7 @@
 <div class="flex flex-col gap-3">
 	<!-- Top row: status + level filters + follow-tail -->
 	<div class="flex flex-wrap items-center gap-3">
-		<div class="flex items-center gap-1 text-xs">
+		<div class="flex items-center gap-1 text-sm">
 			<span class="inline-block size-2 rounded-full {statusDotClass}"></span>
 			<span class="text-muted-foreground">{statusLabel}</span>
 		</div>
@@ -182,7 +182,7 @@
 			{/each}
 		</div>
 
-		<label class="flex cursor-pointer items-center gap-1 text-xs text-muted-foreground">
+		<label class="flex cursor-pointer items-center gap-1 text-sm text-muted-foreground">
 			<input type="checkbox" bind:checked={followTail} class="size-3.5 accent-primary" />
 			Follow tail
 		</label>
@@ -192,7 +192,7 @@
 	<div class="flex flex-wrap items-center gap-2">
 		<Input
 			placeholder="search message…"
-			class="h-8 w-64 text-xs"
+			class="h-8 w-64 text-sm"
 			bind:value={searchInput}
 			onkeydown={(e: KeyboardEvent) => e.key === 'Enter' && applySearch()}
 		/>
@@ -200,7 +200,7 @@
 
 		<Input
 			placeholder="signal_key (optional)"
-			class="h-8 w-52 text-xs"
+			class="h-8 w-52 text-sm"
 			bind:value={signalKeyInput}
 			onkeydown={(e: KeyboardEvent) => e.key === 'Enter' && applySignalKey()}
 		/>
@@ -228,7 +228,7 @@
 					{@const hasDetail = !!log.detail && Object.keys(log.detail).length > 0}
 					<button
 						type="button"
-						class="flex w-full items-start gap-2 px-4 py-1.5 text-left text-xs hover:bg-accent/30 focus:bg-accent/40 focus:outline-none"
+						class="flex w-full items-start gap-2 px-4 py-1.5 text-left text-sm hover:bg-accent/30 focus:bg-accent/40 focus:outline-none"
 						onclick={() => toggleExpand(log.id)}
 					>
 						<ChevronRight
@@ -246,37 +246,37 @@
 							<span class="shrink-0 pt-0.5 font-mono text-muted-foreground">{log.source}</span>
 						{/if}
 						{#if iter}
-							<Badge variant="outline" class="h-5 px-1.5 text-[10px] font-normal">
+							<Badge variant="outline" class="h-5 px-1.5 text-sm font-normal">
 								iter {iter}
 							</Badge>
 						{/if}
 						<span class="break-all pt-0.5 text-foreground">{log.message}</span>
 						{#if log.repeat > 1}
 							<span
-								class="ml-auto shrink-0 pt-0.5 tabular-nums text-[11px] font-medium text-muted-foreground/70"
+								class="ml-auto shrink-0 pt-0.5 tabular-nums text-sm font-medium text-muted-foreground/70"
 							>
 								×{log.repeat}
 							</span>
 						{/if}
 					</button>
 					{#if isExpanded && hasDetail}
-						<div class="bg-muted/40 px-10 py-2 text-xs">
+						<div class="bg-muted/40 px-10 py-2 text-sm">
 							<pre
-								class="overflow-x-auto font-mono text-[11px] text-foreground">{JSON.stringify(
+								class="overflow-x-auto font-mono text-sm text-foreground">{JSON.stringify(
 									extra ?? log.detail,
 									null,
 									2
 								)}</pre>
 						</div>
 					{:else if isExpanded}
-						<div class="bg-muted/40 px-10 py-2 text-xs text-muted-foreground">
+						<div class="bg-muted/40 px-10 py-2 text-sm text-muted-foreground">
 							No structured detail.
 						</div>
 					{/if}
 				{/each}
 			</div>
 		</div>
-		<p class="text-xs text-muted-foreground">
+		<p class="text-sm text-muted-foreground">
 			{folded.length} row{folded.length === 1 ? '' : 's'}
 			{#if folded.length !== store.logs.length}
 				· {store.logs.length} raw entries
@@ -285,6 +285,6 @@
 	{/if}
 
 	{#if store.error}
-		<p class="text-xs text-red-500">{store.error}</p>
+		<p class="text-sm text-red-500">{store.error}</p>
 	{/if}
 </div>

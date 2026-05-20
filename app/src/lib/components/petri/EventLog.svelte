@@ -254,7 +254,7 @@
 <div class="event-log h-full bg-card border-l border-border overflow-hidden flex flex-col">
 	<div class="px-3 py-2 border-b border-border bg-muted flex items-center justify-between">
 		<h3 class="font-semibold text-foreground text-sm">Event Log</h3>
-		<span class="text-xs text-muted-foreground tabular-nums">
+		<span class="text-sm text-muted-foreground tabular-nums">
 			{#if hasFilters}
 				{filteredEvents.length} / {events.length}
 			{:else}
@@ -289,7 +289,7 @@
 		<Input
 			bind:value={textSearch}
 			placeholder="Search events..."
-			class="h-7 text-xs"
+			class="h-7 text-sm"
 		/>
 	</div>
 
@@ -308,24 +308,24 @@
 							<span class={`flex-shrink-0 ${summary.iconColor}`}>
 								<Icon class="w-3.5 h-3.5" />
 							</span>
-							<span class="flex-shrink-0 text-[10px] font-mono font-medium text-muted-foreground bg-muted px-1 rounded">
+							<span class="flex-shrink-0 text-sm font-mono font-medium text-muted-foreground bg-muted px-1 rounded">
 								{summary.title}
 							</span>
 							{#if summary.signalType}
-								<span class="flex-shrink-0 text-[9px] font-medium px-1 rounded {summary.signalBadgeClass}">
+								<span class="flex-shrink-0 text-sm font-medium px-1 rounded {summary.signalBadgeClass}">
 									{summary.signalType}
 								</span>
 							{/if}
-							<span class="text-xs text-foreground truncate flex-1" title={summary.detail}>
+							<span class="text-sm text-foreground truncate flex-1" title={summary.detail}>
 								{summary.detail}
 							</span>
 						</div>
 						<div class="flex items-center gap-1 mt-0.5 ml-5">
-							<span class="text-[10px] text-muted-foreground tabular-nums">
+							<span class="text-sm text-muted-foreground tabular-nums">
 								#{event.sequence}
 							</span>
-							<span class="text-[10px] text-muted-foreground/50">•</span>
-							<span class="text-[10px] text-muted-foreground tabular-nums">
+							<span class="text-sm text-muted-foreground/50">•</span>
+							<span class="text-sm text-muted-foreground tabular-nums">
 								{formatTime(event.timestamp)}
 							</span>
 						</div>

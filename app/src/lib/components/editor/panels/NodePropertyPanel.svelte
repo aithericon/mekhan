@@ -19,6 +19,7 @@
 	import ProgressUpdateNodeSection from './property-sections/ProgressUpdateNodeSection.svelte';
 	import FailureNodeSection from './property-sections/FailureNodeSection.svelte';
 	import EndNodeSection from './property-sections/EndNodeSection.svelte';
+	import SubWorkflowSection from './property-sections/SubWorkflowSection.svelte';
 	import { fetchNodeScopes, type ScopeEntry } from '$lib/editor/guard-scope';
 	import { outputPortsFor } from '$lib/editor/derived-ports';
 	import { Button } from '$lib/components/ui/button';
@@ -123,7 +124,7 @@
 	data-testid="node-property-panel"
 >
 	<div class="flex items-center justify-between border-b border-border px-3 py-2.5">
-		<h2 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+		<h2 class="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
 			{readonly ? 'Inspector' : 'Properties'}
 		</h2>
 		<div class="flex items-center gap-0.5">
@@ -190,11 +191,11 @@
 					oninput={(e) => updateSlug((e.currentTarget as HTMLInputElement).value)}
 				/>
 				{#if slugError}
-					<p class="mt-1 text-xs text-destructive" data-testid="node-slug-error">
+					<p class="mt-1 text-sm text-destructive" data-testid="node-slug-error">
 						{slugError}
 					</p>
 				{:else}
-					<p class="mt-1 text-xs text-muted-foreground">
+					<p class="mt-1 text-sm text-muted-foreground">
 						Referenced in guards as <code>{(slugValue.trim() || slugPlaceholder)}.&lt;field&gt;</code>.
 						Blank derives from the node id.
 					</p>
@@ -209,11 +210,11 @@
 			{#if templateId && nodeId}
 				<div class="space-y-3">
 					<div class="rounded-lg border border-border bg-muted/30 p-3">
-						<p class="text-xs text-muted-foreground">
+						<p class="text-sm text-muted-foreground">
 							{data.steps.length} step{data.steps.length !== 1 ? 's' : ''} configured
 						</p>
 						{#if data.taskTitle}
-							<p class="mt-1 truncate text-xs font-medium text-foreground">{data.taskTitle}</p>
+							<p class="mt-1 truncate text-sm font-medium text-foreground">{data.taskTitle}</p>
 						{/if}
 					</div>
 					<Button
@@ -252,6 +253,8 @@
 			<FailureNodeSection {data} {readonly} {onchange} />
 		{:else if data.type === 'end'}
 			<EndNodeSection {data} {readonly} {onchange} />
+		{:else if data.type === 'sub_workflow'}
+			<SubWorkflowSection {data} {readonly} {onchange} {templateId} />
 		{/if}
 
 		<!-- Phase 4: read-only derived port preview for variants whose outputs

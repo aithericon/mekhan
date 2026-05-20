@@ -27,10 +27,10 @@
 <div class="space-y-4">
 	<Card tone="muted">
 		<h3 class="text-lg font-medium text-foreground">{groupDetails.group.name}</h3>
-		<p class="text-xs text-muted-foreground font-mono">{groupDetails.group.id}</p>
+		<p class="text-sm text-muted-foreground font-mono">{groupDetails.group.id}</p>
 		<div class="flex items-center gap-2 mt-2">
 			<NodeKindBadge kind="group" />
-			<span class="text-xs text-muted-foreground">
+			<span class="text-sm text-muted-foreground">
 				{groupDetails.places.length} places · {groupDetails.transitions.length} transitions
 			</span>
 		</div>
@@ -39,7 +39,7 @@
 	{#if groupDetails.childGroups.length > 0}
 		<Separator />
 		<Card tone="muted">
-			<h4 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+			<h4 class="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-2">
 				Sub-groups ({groupDetails.childGroups.length})
 			</h4>
 			<div class="space-y-1">
@@ -48,7 +48,7 @@
 						class="w-full text-left px-2 py-1 rounded border border-border hover:border-primary/50 hover:bg-primary/10 transition-colors"
 						onclick={() => onSelectGroup?.(child.id)}
 					>
-						<span class="text-xs font-medium text-foreground">{child.name}</span>
+						<span class="text-sm font-medium text-foreground">{child.name}</span>
 					</button>
 				{/each}
 			</div>
@@ -59,7 +59,7 @@
 
 	<!-- Places in group -->
 	<Card tone="muted">
-		<h4 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+		<h4 class="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-2">
 			Places ({groupDetails.places.length})
 		</h4>
 		<div class="space-y-1 max-h-40 overflow-y-auto">
@@ -69,9 +69,9 @@
 					class="w-full text-left px-2 py-1 rounded border border-border hover:border-primary/50 hover:bg-primary/10 transition-colors flex items-center gap-2"
 					onclick={() => onSelectPlace?.(place.id)}
 				>
-					<span class="text-xs font-medium text-foreground truncate">{place.name}</span>
+					<span class="text-sm font-medium text-foreground truncate">{place.name}</span>
 					{#if count > 0}
-						<span class="ml-auto text-[10px] font-mono px-1.5 py-0.5 rounded-full bg-primary/15 text-primary shrink-0">
+						<span class="ml-auto text-sm font-mono px-1.5 py-0.5 rounded-full bg-primary/15 text-primary shrink-0">
 							{count}
 						</span>
 					{/if}
@@ -84,7 +84,7 @@
 
 	<!-- Tokens across all places -->
 	<Card tone="muted">
-		<h4 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+		<h4 class="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-2">
 			Tokens ({groupDetails.allTokens.length})
 		</h4>
 		{#if groupDetails.allTokens.length === 0}
@@ -97,20 +97,20 @@
 						onclick={() => onSelectToken?.(placeId, token.id)}
 					>
 						<div class="flex items-start gap-2">
-							<span class="text-xs px-1.5 py-0.5 rounded bg-muted text-muted-foreground font-medium shrink-0">
+							<span class="text-sm px-1.5 py-0.5 rounded bg-muted text-muted-foreground font-medium shrink-0">
 								{token.color.type}
 							</span>
 							<div class="flex-1 min-w-0">
 								{#if token.color.type === 'Unit'}
 									<span class="text-sm text-muted-foreground italic">empty</span>
 								{:else if token.color.type === 'Data'}
-									<pre class="text-xs text-foreground/80 truncate">{JSON.stringify(token.color.value)}</pre>
+									<pre class="text-sm text-foreground/80 truncate">{JSON.stringify(token.color.value)}</pre>
 								{:else}
 									<span class="text-sm font-mono text-primary">{token.color.value}</span>
 								{/if}
 							</div>
 						</div>
-						<div class="text-[10px] font-mono text-muted-foreground mt-1">
+						<div class="text-sm font-mono text-muted-foreground mt-1">
 							<span class="text-primary/60">{placeName}</span> · {token.id.slice(0, 8)}...
 						</div>
 					</button>
@@ -123,7 +123,7 @@
 
 	<!-- Transitions in group -->
 	<Card tone="muted">
-		<h4 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+		<h4 class="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-2">
 			Transitions ({groupDetails.transitions.length})
 		</h4>
 		<div class="space-y-1 max-h-40 overflow-y-auto">
@@ -132,7 +132,7 @@
 					class="w-full text-left px-2 py-1 rounded border border-border hover:border-primary/50 hover:bg-primary/10 transition-colors flex items-center gap-2"
 					onclick={() => onSelectTransition?.(transition.id)}
 				>
-					<span class="text-xs font-medium text-foreground truncate">{transition.name}</span>
+					<span class="text-sm font-medium text-foreground truncate">{transition.name}</span>
 					{#if transition.effect_handler_id}
 						<Badge variant="secondary" size="xs" class="ml-auto font-mono shrink-0">FX</Badge>
 					{/if}

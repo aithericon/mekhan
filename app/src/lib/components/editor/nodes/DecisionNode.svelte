@@ -46,11 +46,11 @@
 					title={branch.label}
 				>
 					<span
-						class="flex size-4 shrink-0 items-center justify-center rounded-sm bg-node-decision/70 text-[9px] font-semibold text-white"
+						class="flex size-4 shrink-0 items-center justify-center rounded-sm bg-node-decision/70 text-sm font-semibold text-white"
 					>
 						{i + 1}
 					</span>
-					<span class="flex-1 truncate text-[11px] font-medium text-foreground">
+					<span class="flex-1 truncate text-sm font-medium text-foreground">
 						{branch.label}
 					</span>
 					<Handle

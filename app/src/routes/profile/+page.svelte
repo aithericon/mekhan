@@ -77,19 +77,19 @@
 				<CardContent class="space-y-5">
 					<dl class="grid gap-4 sm:grid-cols-2">
 						<div class="space-y-1">
-							<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+							<dt class="text-sm font-medium uppercase tracking-wide text-muted-foreground">
 								Display name
 							</dt>
 							<dd class="text-sm text-foreground">{user.displayName ?? '—'}</dd>
 						</div>
 						<div class="space-y-1">
-							<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+							<dt class="text-sm font-medium uppercase tracking-wide text-muted-foreground">
 								Email
 							</dt>
 							<dd class="text-sm text-foreground">{user.email ?? '—'}</dd>
 						</div>
 						<div class="space-y-1">
-							<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+							<dt class="text-sm font-medium uppercase tracking-wide text-muted-foreground">
 								Organization
 							</dt>
 							<dd class="text-sm text-foreground" data-testid="profile-org">
@@ -97,11 +97,11 @@
 							</dd>
 						</div>
 						<div class="space-y-1 sm:col-span-2">
-							<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+							<dt class="text-sm font-medium uppercase tracking-wide text-muted-foreground">
 								Subject (OIDC <code>sub</code>)
 							</dt>
 							<dd
-								class="break-all rounded-md bg-muted px-2 py-1 font-mono text-xs text-foreground"
+								class="break-all rounded-md bg-muted px-2 py-1 font-mono text-sm text-foreground"
 								data-testid="profile-subject"
 							>
 								{user.subject}
@@ -112,7 +112,7 @@
 					<Separator />
 
 					<div class="space-y-2">
-						<div class="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+						<div class="text-sm font-medium uppercase tracking-wide text-muted-foreground">
 							Roles
 						</div>
 						{#if user.roles.length > 0}
@@ -131,7 +131,7 @@
 			</Card>
 
 			<div class="mt-6 flex items-center justify-between gap-3">
-				<p class="text-xs text-muted-foreground">
+				<p class="text-sm text-muted-foreground">
 					Tokens never reach the browser — the session is held server-side (BFF).
 				</p>
 				<Button

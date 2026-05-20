@@ -75,12 +75,12 @@
 			onchange({ ...data, message: v === '' ? undefined : v });
 		}}
 	/>
-	<p class="mt-1 text-[10px] text-muted-foreground">
+	<p class="mt-1 text-sm text-muted-foreground">
 		Supports <code>{'{{ field }}'}</code> placeholders resolved against the inbound token.
 	</p>
 </FormField>
 
-<p class="text-[10px] italic text-muted-foreground">
+<p class="text-sm italic text-muted-foreground">
 	Effective only within a named process (a Start with a Process Name upstream). Outside one
 	this node passes the token through with no effect.
 </p>

@@ -110,7 +110,7 @@
 		oninput={(e) =>
 			handleProcessNameChange((e.currentTarget as HTMLInputElement).value)}
 	/>
-	<p class="text-xs text-muted-foreground">
+	<p class="text-sm text-muted-foreground">
 		Optional. When set, each instance registers a named process (shown in the
 		process list and completed when the workflow ends). Use
 		<code>{'{{ field }}'}</code> to interpolate an initial-token field below — e.g.
@@ -129,7 +129,7 @@
 {#if binding && nodeId}
 	<div class="space-y-1.5" data-testid="start-entrypoints">
 		<div class="flex items-center justify-between">
-			<span class="text-xs font-medium text-muted-foreground">Entrypoints</span>
+			<span class="text-sm font-medium text-muted-foreground">Entrypoints</span>
 			{#if canEditGraph}
 				<Button variant="ghost" size="sm" onclick={addTrigger} data-testid="btn-add-trigger">
 					<Plus class="size-3.5" />
@@ -139,7 +139,7 @@
 		</div>
 
 		{#if feedingTriggers.length === 0}
-			<p class="rounded-md border border-dashed border-border/50 p-2 text-[11px] text-muted-foreground">
+			<p class="rounded-md border border-dashed border-border/50 p-2 text-sm text-muted-foreground">
 				No triggers. This Start only runs when an instance is created manually
 				(Run button / API). Add a trigger to fire it on a schedule, webhook,
 				catalogue event, or another workflow's completion.
@@ -156,16 +156,16 @@
 						>
 							<span class="flex items-center gap-2 truncate">
 								<Zap class="size-3.5 shrink-0 text-node-decision" />
-								<span class="truncate text-[11px] font-medium text-foreground">
+								<span class="truncate text-sm font-medium text-foreground">
 									{t.label}
 								</span>
-								<span class="text-[10px] uppercase tracking-wide text-muted-foreground/70">
+								<span class="text-sm uppercase tracking-wide text-muted-foreground/70">
 									{sourceKindLabels[t.kind] ?? t.kind}
 								</span>
 							</span>
 							{#if !t.enabled}
 								<span
-									class="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-muted-foreground"
+									class="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-sm uppercase tracking-wide text-muted-foreground"
 								>
 									Disabled
 								</span>

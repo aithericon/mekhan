@@ -6,7 +6,9 @@ import type {
 	WorkflowEdge,
 	WorkflowEdgeType,
 	TriggerNodeData,
-	PhaseUpdateNodeData
+	PhaseUpdateNodeData,
+	SubWorkflowNodeData,
+	AutomatedStepNodeData
 } from '$lib/types/editor';
 
 /**
@@ -191,12 +193,16 @@ export class YjsGraphBinding {
 				const output = config?.output as
 					| { id: string; label: string; fields: unknown[] }
 					| undefined;
+				const deploymentModel = config?.deploymentModel as
+					| AutomatedStepNodeData['deploymentModel']
+					| undefined;
 				return {
 					...base,
 					type: 'automated_step',
 					executionSpec: { entrypoint: 'main.py', ...spec },
 					...(output ? { output: output as never } : {}),
-					retryPolicy
+					retryPolicy,
+					...(deploymentModel ? { deploymentModel } : {})
 				};
 			}
 			case 'decision':
@@ -269,6 +275,28 @@ export class YjsGraphBinding {
 					payloadMapping: (config?.payloadMapping as TriggerNodeData['payloadMapping']) ?? [],
 					enabled: (config?.enabled as boolean) ?? false,
 					replyDefault: (config?.replyDefault as TriggerNodeData['replyDefault']) ?? undefined
+				};
+			case 'sub_workflow':
+				return {
+					...base,
+					type: 'sub_workflow',
+					templateId: (config?.templateId as string) ?? '',
+					versionPin:
+						(config?.versionPin as SubWorkflowNodeData['versionPin']) ?? {
+							mode: 'latest'
+						},
+					...(config?.inputMapping
+						? {
+								inputMapping:
+									config.inputMapping as SubWorkflowNodeData['inputMapping']
+							}
+						: {}),
+					output:
+						(config?.output as SubWorkflowNodeData['output']) ?? {
+							id: 'out',
+							label: 'Result',
+							fields: []
+						}
 				};
 		}
 	}
@@ -559,6 +587,7 @@ export class YjsGraphBinding {
 					'retryPolicy',
 					data.retryPolicy ?? { maxRetries: 3, backoff: 'immediate', baseDelayMs: 0 }
 				);
+				config.set('deploymentModel', data.deploymentModel ?? { mode: 'inline' });
 				break;
 			case 'decision':
 				config.set('conditions', data.conditions);
@@ -615,6 +644,19 @@ export class YjsGraphBinding {
 				config.set('payloadMapping', data.payloadMapping ?? []);
 				config.set('enabled', data.enabled ?? false);
 				config.set('replyDefault', data.replyDefault ?? null);
+				break;
+			case 'sub_workflow':
+				config.set('templateId', data.templateId);
+				config.set('versionPin', data.versionPin ?? { mode: 'latest' });
+				if (data.inputMapping && data.inputMapping.length > 0) {
+					config.set('inputMapping', data.inputMapping);
+				} else {
+					config.delete('inputMapping');
+				}
+				config.set(
+					'output',
+					data.output ?? { id: 'out', label: 'Result', fields: [] }
+				);
 				break;
 		}
 	}

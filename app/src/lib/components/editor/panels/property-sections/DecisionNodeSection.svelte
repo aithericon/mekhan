@@ -83,7 +83,7 @@
 <div class="space-y-2">
 	<div class="flex items-center justify-between">
 		<div class="flex items-center gap-1.5">
-			<span class="text-xs font-medium text-muted-foreground">Branches</span>
+			<span class="text-sm font-medium text-muted-foreground">Branches</span>
 			<Tooltip.Provider delayDuration={150}>
 				<Tooltip.Root>
 					<Tooltip.Trigger
@@ -103,7 +103,7 @@
 		{#if !readonly}
 			<button
 				type="button"
-				class="flex items-center gap-1 rounded-md px-2 py-0.5 text-[10px] font-medium text-primary transition-colors hover:bg-accent"
+				class="flex items-center gap-1 rounded-md px-2 py-0.5 text-sm font-medium text-primary transition-colors hover:bg-accent"
 				onclick={addBranch}
 			>
 				<Plus class="size-3" />
@@ -113,11 +113,11 @@
 	</div>
 
 	{#each data.conditions as condition, i (condition.edgeId)}
-		<div class="rounded-lg border border-border bg-muted/30 p-2 text-[11px]">
+		<div class="rounded-lg border border-border bg-muted/30 p-2 text-sm">
 			<div class="space-y-1.5">
 				<div class="flex items-center gap-2">
 					<span
-						class="flex size-4 shrink-0 items-center justify-center rounded-sm bg-muted text-[9px] font-semibold text-muted-foreground"
+						class="flex size-4 shrink-0 items-center justify-center rounded-sm bg-muted text-sm font-semibold text-muted-foreground"
 						title="Precedence"
 					>
 						{i + 1}
@@ -128,7 +128,7 @@
 						placeholder="Branch label"
 						disabled={readonly}
 						oninput={(e) => updateConditionLabel(i, (e.currentTarget as HTMLInputElement).value)}
-						class="h-7 px-2 py-1 text-[11px]"
+						class="h-7 px-2 py-1 text-sm"
 					/>
 					{#if !readonly}
 						<Button
@@ -170,7 +170,7 @@
 	{/each}
 
 	<label
-		class="flex items-center gap-2 rounded-lg border border-dashed border-border p-2 text-[11px] text-muted-foreground"
+		class="flex items-center gap-2 rounded-lg border border-dashed border-border p-2 text-sm text-muted-foreground"
 	>
 		<input
 			type="checkbox"

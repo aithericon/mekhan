@@ -41,7 +41,7 @@
 			&larr; {previousSelection?.type === 'event' ? `Back to Event #${previousSelection.sequence}` : `Back to ${tokenDetails.placeName}`}
 		</Button>
 		<h3 class="text-lg font-medium text-foreground">Token</h3>
-		<p class="text-xs text-muted-foreground font-mono">{tokenDetails.token.id}</p>
+		<p class="text-sm text-muted-foreground font-mono">{tokenDetails.token.id}</p>
 	</Card>
 
 	<div class="flex items-center gap-2">

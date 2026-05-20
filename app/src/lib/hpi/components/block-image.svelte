@@ -48,7 +48,7 @@
 			class="flex flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-destructive/40 bg-destructive/5 px-4 py-8 text-center"
 		>
 			<span class="text-sm font-medium text-destructive">Image unavailable</span>
-			<span class="text-xs text-muted-foreground">
+			<span class="text-sm text-muted-foreground">
 				{url ? 'The file could not be loaded (missing, moved, or access denied).' : 'No file was provided for this block.'}
 			</span>
 		</div>
@@ -63,7 +63,7 @@
 	{:else}
 		<div
 			data-testid="block-image-loading"
-			class="flex items-center justify-center px-4 py-8 text-xs text-muted-foreground"
+			class="flex items-center justify-center px-4 py-8 text-sm text-muted-foreground"
 		>
 			Loading…
 		</div>

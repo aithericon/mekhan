@@ -12,6 +12,7 @@ import PhaseUpdateNode from './PhaseUpdateNode.svelte';
 import ProgressUpdateNode from './ProgressUpdateNode.svelte';
 import FailureNode from './FailureNode.svelte';
 import TriggerNode from './TriggerNode.svelte';
+import SubWorkflowNode from './SubWorkflowNode.svelte';
 
 export const nodeTypes: NodeTypes = {
 	start: StartNode as any,
@@ -26,5 +27,6 @@ export const nodeTypes: NodeTypes = {
 	phase_update: PhaseUpdateNode as any,
 	progress_update: ProgressUpdateNode as any,
 	failure: FailureNode as any,
-	trigger: TriggerNode as any
+	trigger: TriggerNode as any,
+	sub_workflow: SubWorkflowNode as any
 };

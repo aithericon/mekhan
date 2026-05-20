@@ -57,9 +57,20 @@ pub async fn create_test_db() -> PgPool {
 const DEFAULT_TEST_S3_ENDPOINT: &str = "http://localhost:9099";
 
 /// Build a test AppConfig pointing to the shared test infrastructure.
+///
+/// For executor-backed e2e against a live `just dev` stack the published
+/// node-file bucket/creds MUST match what the running executor reads
+/// (`mekhan-artifacts` + the rustfs creds), or staging 404s and the net
+/// hangs. Override via `TEST_S3_{ENDPOINT,BUCKET,ACCESS_KEY,SECRET_KEY}`.
 pub fn test_config() -> AppConfig {
     let s3_endpoint = std::env::var("TEST_S3_ENDPOINT")
         .unwrap_or_else(|_| DEFAULT_TEST_S3_ENDPOINT.to_string());
+    let s3_bucket =
+        std::env::var("TEST_S3_BUCKET").unwrap_or_else(|_| "mekhan-test".to_string());
+    let s3_access_key =
+        std::env::var("TEST_S3_ACCESS_KEY").unwrap_or_else(|_| "testadmin".to_string());
+    let s3_secret_key =
+        std::env::var("TEST_S3_SECRET_KEY").unwrap_or_else(|_| "testadmin".to_string());
 
     AppConfig {
         host: "127.0.0.1".to_string(),
@@ -72,9 +83,9 @@ pub fn test_config() -> AppConfig {
         wait_timeout_secs: 30,
         s3: S3Config {
             endpoint: s3_endpoint,
-            bucket: "mekhan-test".to_string(),
-            access_key: "testadmin".to_string(),
-            secret_key: "testadmin".to_string(),
+            bucket: s3_bucket,
+            access_key: s3_access_key,
+            secret_key: s3_secret_key,
             region: "us-east-1".to_string(),
         },
         artifact_s3: None,

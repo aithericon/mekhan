@@ -38,7 +38,7 @@
 <div class="rounded-md border border-border/50 border-l-2 border-l-sky-400 bg-background p-3">
 	<div class="mb-2 flex items-center justify-between">
 		<!-- ui-allow: block-type badge color — no theme token for file/sky identity -->
-		<span class="rounded bg-sky-100 px-2 py-0.5 text-xs font-medium text-sky-700 dark:bg-sky-900/30 dark:text-sky-300">
+		<span class="rounded bg-sky-100 px-2 py-0.5 text-sm font-medium text-sky-700 dark:bg-sky-900/30 dark:text-sky-300">
 			File
 		</span>
 		{#if !readonly}
@@ -86,7 +86,7 @@
 				<div class="flex items-center gap-2 rounded-md border border-border bg-muted/30 px-3 py-2">
 					<FileText class="size-5 shrink-0 text-muted-foreground" />
 					<span class="flex-1 truncate font-mono text-sm">{filename}</span>
-					<span class="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+					<span class="rounded bg-muted px-1.5 py-0.5 text-sm font-medium text-muted-foreground">
 						{getExtension(filename)}
 					</span>
 				</div>

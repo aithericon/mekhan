@@ -25,7 +25,7 @@
 </script>
 
 <div class="space-y-1.5">
-	<span class="text-xs font-medium text-muted-foreground">Provider</span>
+	<span class="text-sm font-medium text-muted-foreground">Provider</span>
 	<Select.Root
 		type="single"
 		value={(config.provider as string) ?? 'openai'}
@@ -87,7 +87,7 @@
 </FormField>
 
 <div class="space-y-1.5">
-	<span class="text-xs font-medium text-muted-foreground">System Prompt (optional)</span>
+	<span class="text-sm font-medium text-muted-foreground">System Prompt (optional)</span>
 	<Textarea
 		value={(config.system_prompt as string) ?? ''}
 		placeholder="System instructions..."
@@ -102,7 +102,7 @@
 </div>
 
 <div class="space-y-1.5">
-	<span class="text-xs font-medium text-muted-foreground">Prompt</span>
+	<span class="text-sm font-medium text-muted-foreground">Prompt</span>
 	<Textarea
 		value={(config.prompt as string) ?? ''}
 		placeholder={'User prompt (supports {{variable}} templates)...'}
@@ -147,7 +147,7 @@
 </div>
 
 <div class="space-y-1.5">
-	<span class="text-xs font-medium text-muted-foreground">Response Format</span>
+	<span class="text-sm font-medium text-muted-foreground">Response Format</span>
 	<Select.Root
 		type="single"
 		value={responseFormatType}
@@ -179,7 +179,7 @@
 
 {#if responseFormatType === 'json_schema'}
 	<div class="space-y-1.5">
-		<span class="text-xs font-medium text-muted-foreground">JSON Schema</span>
+		<span class="text-sm font-medium text-muted-foreground">JSON Schema</span>
 		<CodeEditor
 			value={JSON.stringify(
 				(config.response_format as Record<string, unknown>)?.schema ?? {},

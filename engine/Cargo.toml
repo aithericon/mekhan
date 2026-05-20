@@ -22,8 +22,8 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-license = "MIT"
-authors = ["Aithericon Research"]
+license = "Apache-2.0"
+authors = ["Aithericon GmbH"]
 
 [workspace.dependencies]
 # Serialization

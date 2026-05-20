@@ -13,7 +13,7 @@
 	class="flex items-center gap-2 rounded-md border border-border/50 bg-background px-3 py-2"
 >
 	<hr class="flex-1 border-border" />
-	<span class="text-xs text-muted-foreground">Divider</span>
+	<span class="text-sm text-muted-foreground">Divider</span>
 	<hr class="flex-1 border-border" />
 	{#if !readonly}
 		<button

@@ -129,6 +129,26 @@ pub enum CompileError {
         node_id: String,
         missing: Vec<String>,
     },
+
+    // --- Sub-workflow errors (call/return composition). Resolution + cycle
+    //     detection run at the parent's publish time (they need DB access to
+    //     resolve the child template version chain); `Unresolved` also fires
+    //     in the compiler when a `SubWorkflow` node reaches lowering with no
+    //     pre-resolved child AIR. All carry the offending node_id so the
+    //     editor canvas can ring it.
+    #[error(
+        "sub-workflow node '{node_id}' references template '{template_id}' which is not published / not found"
+    )]
+    SubWorkflowUnresolved {
+        node_id: String,
+        template_id: String,
+    },
+
+    #[error("sub-workflow cycle detected: {chain:?}")]
+    SubWorkflowCycle { chain: Vec<String> },
+
+    #[error("sub-workflow nesting too deep (limit {limit}) at node '{node_id}'")]
+    SubWorkflowDepthExceeded { node_id: String, limit: usize },
 }
 
 impl CompileError {
@@ -154,6 +174,9 @@ impl CompileError {
             Self::TriggerEmptyMappingRequiredFields { .. } => {
                 "trigger_empty_mapping_required_fields"
             }
+            Self::SubWorkflowUnresolved { .. } => "subworkflow_unresolved",
+            Self::SubWorkflowCycle { .. } => "subworkflow_cycle",
+            Self::SubWorkflowDepthExceeded { .. } => "subworkflow_depth_exceeded",
         }
     }
 
@@ -183,7 +206,9 @@ impl CompileError {
             | Self::TriggerMappingSyntax { node_id, .. }
             | Self::TriggerCronInvalid { node_id, .. }
             | Self::TriggerUnresolvedRef { node_id, .. }
-            | Self::TriggerEmptyMappingRequiredFields { node_id, .. } => Some(node_id),
+            | Self::TriggerEmptyMappingRequiredFields { node_id, .. }
+            | Self::SubWorkflowUnresolved { node_id, .. }
+            | Self::SubWorkflowDepthExceeded { node_id, .. } => Some(node_id),
             _ => None,
         }
     }

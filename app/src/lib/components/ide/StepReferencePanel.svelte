@@ -67,7 +67,7 @@
 
 <details class="group border-b border-border" open>
 	<summary
-		class="flex list-none cursor-pointer select-none items-center justify-between px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden"
+		class="flex list-none cursor-pointer select-none items-center justify-between px-3 py-2 text-sm font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden"
 	>
 		<span>Reference</span>
 		<span class="text-muted-foreground transition-transform group-open:rotate-90">›</span>
@@ -76,7 +76,7 @@
 	<div class="max-h-[45vh] space-y-4 overflow-y-auto px-3 pb-3">
 		{#if unmergedFanIn}
 			<div
-				class="rounded-md border border-amber-300 bg-amber-50 px-2.5 py-2 text-[11px] leading-snug text-amber-900"
+				class="rounded-md border border-amber-300 bg-amber-50 px-2.5 py-2 text-sm leading-snug text-amber-900"
 			>
 				<span class="font-semibold">⚠ Unmerged fan-in ({incomingCount} inputs).</span>
 				This step isn't a Parallel Join, so it <strong>runs once per upstream
@@ -88,13 +88,13 @@
 		{/if}
 		<div class="space-y-1.5">
 			<div class="flex items-center justify-between gap-2">
-				<div class="text-xs font-medium text-foreground">
+				<div class="text-sm font-medium text-foreground">
 					Token fields <span class="font-normal text-muted-foreground">— read via <code class="font-mono">token.&lt;name&gt;</code></span>
 				</div>
 				{#if onRefresh}
 					<button
 						type="button"
-						class="shrink-0 rounded px-1.5 py-0.5 text-[10px] text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50"
+						class="shrink-0 rounded px-1.5 py-0.5 text-sm text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50"
 						disabled={busy}
 						onclick={() => onRefresh?.()}
 						title="Recompute scope from the live graph"
@@ -106,35 +106,35 @@
 			{#if fields.length > 0}
 				<ul class="space-y-0.5">
 					{#each fields as f (f.name)}
-						<li class="flex items-baseline justify-between gap-2 text-xs">
+						<li class="flex items-baseline justify-between gap-2 text-sm">
 							<code class="font-mono text-foreground">token.{f.name}</code>
-							<span class="shrink-0 text-[10px] text-muted-foreground">{f.kind}</span>
+							<span class="shrink-0 text-sm text-muted-foreground">{f.kind}</span>
 						</li>
 					{/each}
 				</ul>
 			{:else}
-				<p class="text-xs text-muted-foreground">{emptyReason}</p>
-				<p class="text-[10px] text-muted-foreground/70">
+				<p class="text-sm text-muted-foreground">{emptyReason}</p>
+				<p class="text-sm text-muted-foreground/70">
 					Dynamic access always works: <code class="font-mono">token["field"]</code>.
 				</p>
 			{/if}
 		</div>
 
 		<div class="space-y-1.5">
-			<div class="text-xs font-medium text-foreground">
+			<div class="text-sm font-medium text-foreground">
 				SDK helpers <span class="font-normal text-muted-foreground">— injected, no import</span>
 			</div>
 			<ul class="space-y-1.5">
 				{#each SDK_HELPERS as h (h.sig)}
-					<li class="text-xs">
+					<li class="text-sm">
 						<code class="font-mono text-foreground">{h.sig}</code>
-						<p class="mt-0.5 text-[11px] leading-snug text-muted-foreground">{h.doc}</p>
+						<p class="mt-0.5 text-sm leading-snug text-muted-foreground">{h.doc}</p>
 					</li>
 				{/each}
 			</ul>
 		</div>
 
-		<p class="text-[11px] leading-snug text-muted-foreground">
+		<p class="text-sm leading-snug text-muted-foreground">
 			Don't call <code class="font-mono">aithericon.init()</code> / <code class="font-mono">shutdown()</code> —
 			the runner manages the IPC lifecycle. Fields update on publish from the live graph.
 		</p>

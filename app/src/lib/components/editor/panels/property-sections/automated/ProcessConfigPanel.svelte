@@ -27,7 +27,7 @@
 </FormField>
 
 <div class="space-y-1.5">
-	<span class="text-xs font-medium text-muted-foreground">Arguments</span>
+	<span class="text-sm font-medium text-muted-foreground">Arguments</span>
 	<StringListEditor
 		items={(config.args as string[]) ?? []}
 		{readonly}
@@ -49,7 +49,7 @@
 	/>
 </FormField>
 
-<label class="flex items-center gap-1.5 text-xs text-muted-foreground">
+<label class="flex items-center gap-1.5 text-sm text-muted-foreground">
 	<Checkbox
 		checked={(config.inherit_env as boolean) ?? true}
 		disabled={readonly}
@@ -59,7 +59,7 @@
 </label>
 
 <div class="space-y-1.5">
-	<span class="text-xs font-medium text-muted-foreground">Environment Variables</span>
+	<span class="text-sm font-medium text-muted-foreground">Environment Variables</span>
 	<KeyValueEditor
 		entries={(config.env as Record<string, unknown>) ?? {}}
 		{readonly}

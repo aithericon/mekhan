@@ -51,6 +51,13 @@ export function defaultOutputPort(backend: ExecutionBackendType): Port {
 		case 'kreuzberg':
 			fields = [f('text', 'Text', 'textarea'), f('metadata', 'Metadata', 'json')];
 			break;
+		case 'catalogue_query':
+			fields = [
+				f('artifacts', 'Artifacts', 'json'),
+				f('total_count', 'Total', 'number'),
+				f('source_process_ids', 'Source Process IDs', 'json')
+			];
+			break;
 		default:
 			fields = [];
 	}

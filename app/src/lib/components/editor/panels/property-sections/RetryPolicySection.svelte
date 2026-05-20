@@ -33,7 +33,7 @@
 </script>
 
 <div class="space-y-3 border-t border-border/40 pt-3">
-	<span class="text-xs font-medium text-muted-foreground">Retry policy</span>
+	<span class="text-sm font-medium text-muted-foreground">Retry policy</span>
 
 	<FormField label="Max retries" for="retry-max">
 		<Input
@@ -96,13 +96,13 @@
 					})}
 			/>
 		</FormField>
-		<p class="text-[10px] italic text-muted-foreground">
+		<p class="text-sm italic text-muted-foreground">
 			{policy.backoff === 'exponential'
 				? 'Delay = base × 2^attempt (0-based).'
 				: 'Fixed delay before every retry.'}
 		</p>
 	{/if}
-	<p class="text-[10px] italic text-muted-foreground">
+	<p class="text-sm italic text-muted-foreground">
 		After retries are exhausted the token flows to the step's error output.
 	</p>
 </div>

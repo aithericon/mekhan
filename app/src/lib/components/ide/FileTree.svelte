@@ -81,7 +81,7 @@
 
 <div class="flex h-full flex-col overflow-y-auto border-r border-border bg-card" data-testid="file-tree">
 	<div class="border-b border-border px-3 py-2">
-		<span class="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Files</span>
+		<span class="text-sm font-semibold uppercase tracking-wider text-muted-foreground">Files</span>
 	</div>
 
 	<div class="flex-1 overflow-y-auto py-1">
@@ -90,7 +90,7 @@
 			{@const isExpanded = expandedNodes.has(node.id)}
 			<div>
 				<div
-					class="flex w-full items-center gap-1 px-2 py-1 text-xs transition-colors hover:bg-accent {selectedNodeId === node.id && !selectedFile ? 'bg-accent text-foreground' : 'text-foreground'}"
+					class="flex w-full items-center gap-1 px-2 py-1 text-sm transition-colors hover:bg-accent {selectedNodeId === node.id && !selectedFile ? 'bg-accent text-foreground' : 'text-foreground'}"
 				>
 					<button
 						type="button"
@@ -126,11 +126,11 @@
 
 				{#if isExpanded}
 					{#if files.size === 0}
-						<div class="py-1 pl-7 text-[10px] italic text-muted-foreground">No files</div>
+						<div class="py-1 pl-7 text-sm italic text-muted-foreground">No files</div>
 					{:else}
 						{#each [...files.keys()] as filename (filename)}
 							<div
-								class="group flex items-center gap-1 py-0.5 pl-6 pr-2 text-xs transition-colors {isSelected(node.id, filename)
+								class="group flex items-center gap-1 py-0.5 pl-6 pr-2 text-sm transition-colors {isSelected(node.id, filename)
 									? 'bg-accent text-foreground'
 									: 'text-muted-foreground hover:bg-accent/50 hover:text-foreground'}"
 							>

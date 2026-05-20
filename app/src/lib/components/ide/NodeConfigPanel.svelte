@@ -64,13 +64,13 @@
 
 <div class="flex h-full flex-col border-l border-border bg-card">
 	<div class="border-b border-border px-3 py-2">
-		<span class="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Node Config</span>
+		<span class="text-sm font-semibold uppercase tracking-wider text-muted-foreground">Node Config</span>
 	</div>
 
 	{#if nodeData}
 		<div class="flex-1 space-y-4 overflow-y-auto p-3">
 			<div class="space-y-1.5">
-				<label for="ide-node-label" class="text-xs font-medium text-muted-foreground">Label</label>
+				<label for="ide-node-label" class="text-sm font-medium text-muted-foreground">Label</label>
 				<input
 					id="ide-node-label"
 					type="text"
@@ -82,7 +82,7 @@
 			</div>
 
 			<div class="space-y-1.5">
-				<label for="ide-node-desc" class="text-xs font-medium text-muted-foreground">Description</label>
+				<label for="ide-node-desc" class="text-sm font-medium text-muted-foreground">Description</label>
 				<textarea
 					id="ide-node-desc"
 					value={nodeData.description ?? ''}
@@ -97,7 +97,7 @@
 				<StartNodeSection data={nodeData} {readonly} onchange={handleChange} />
 			{:else if nodeData.type === 'human_task'}
 				<div class="rounded-lg border border-dashed border-border bg-muted/20 p-3">
-					<p class="text-xs text-muted-foreground">
+					<p class="text-sm text-muted-foreground">
 						Task form is edited in the center panel
 					</p>
 				</div>

@@ -58,7 +58,7 @@
 	{:else}
 		<div class="text-sm text-muted-foreground">Loading…</div>
 	{/if}
-	<p class="truncate text-xs text-muted-foreground">
+	<p class="truncate text-sm text-muted-foreground">
 		{entry.filename}
 		{#if entry.size_bytes}
 			· {(entry.size_bytes / 1024).toFixed(1)} KB

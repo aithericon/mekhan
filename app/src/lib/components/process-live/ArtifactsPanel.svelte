@@ -108,9 +108,9 @@
 			<FileBox class="size-4 text-muted-foreground" />
 			<h3 class="text-sm font-medium">Live artifact viewer</h3>
 			<span class="inline-block size-2 rounded-full {statusDotClass}"></span>
-			<span class="text-xs text-muted-foreground">{statusLabel}</span>
+			<span class="text-sm text-muted-foreground">{statusLabel}</span>
 		</div>
-		<p class="text-xs text-muted-foreground">
+		<p class="text-sm text-muted-foreground">
 			{store.artifacts.length} artifact{store.artifacts.length === 1 ? '' : 's'}
 		</p>
 	</div>
@@ -132,10 +132,10 @@
 			<div class="flex flex-col gap-2 rounded-xl border border-border bg-background p-3">
 				<div class="flex flex-wrap items-center justify-between gap-2">
 					<div class="flex items-center gap-2">
-						<Badge variant="secondary" class="font-mono text-xs">{g.label}</Badge>
-						<span class="text-xs text-muted-foreground">{entry.name}</span>
+						<Badge variant="secondary" class="font-mono text-sm">{g.label}</Badge>
+						<span class="text-sm text-muted-foreground">{entry.name}</span>
 						{#if entry.process_step}
-							<Badge variant="outline" class="text-xs">step {entry.process_step}</Badge>
+							<Badge variant="outline" class="text-sm">step {entry.process_step}</Badge>
 						{/if}
 					</div>
 
@@ -191,7 +191,7 @@
 							>
 								<SkipForward class="size-4" />
 							</Button>
-							<span class="ml-1 text-xs tabular-nums text-muted-foreground">
+							<span class="ml-1 text-sm tabular-nums text-muted-foreground">
 								{idx + 1} / {g.entries.length}
 							</span>
 						</div>
@@ -211,6 +211,6 @@
 	{/if}
 
 	{#if store.error}
-		<p class="text-xs text-red-500">{store.error}</p>
+		<p class="text-sm text-red-500">{store.error}</p>
 	{/if}
 </section>

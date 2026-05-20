@@ -2,12 +2,13 @@
 	import type { BadgeVariant, BadgeSize } from "$lib/components/ui/badge";
 
 	export type NodeKind =
-		// Place kinds
-		| "place"
+		// Place kinds — must stay in sync with PlaceKind in $lib/types/petri
+		| "internal"
 		| "signal"
 		| "bridge_out"
 		| "bridge_in"
 		| "bridge_reply"
+		| "terminal"
 		// Transition kinds
 		| "effect"
 		| "rhai"
@@ -37,11 +38,12 @@
 	// can use semantic Badge variants instead of literal Tailwind palette colors.
 	const KIND_MAP: Record<NodeKind, KindSpec> = {
 		// Place kinds — map to functional roles
-		place:         { variant: "info",        label: "internal" },
+		internal:      { variant: "info",        label: "internal" },
 		signal:        { variant: "warning",     label: "signal" },
 		bridge_out:    { variant: "destructive", label: "bridge out" },
 		bridge_in:     { variant: "success",     label: "bridge in" },
 		bridge_reply:  { variant: "secondary",   label: "bridge reply" },
+		terminal:      { variant: "muted",       label: "terminal" },
 
 		// Transition kinds
 		effect: { variant: "secondary", label: "Effect" },
@@ -89,7 +91,9 @@
 		class?: string;
 	} = $props();
 
-	const spec = $derived(KIND_MAP[kind]);
+	// `kind` is passed `as any` from untyped backend strings in some consumers,
+	// so an unrecognized value must degrade instead of crashing the inspector.
+	const spec = $derived(KIND_MAP[kind] ?? { variant: "muted" as BadgeVariant, label: kind });
 </script>
 
 <Badge variant={spec.variant} {size} class={className}>
