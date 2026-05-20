@@ -98,7 +98,7 @@ steps:
 
       # TEMP: pinned to f8478a5 (last image built before 30-build was
       # disabled). Restore `"$CI_COMMIT_SHA"` once 30-build.yml is back.
-      - just ci::deploy-dev "f8478a50c8cdaa528e61907cf591127eb2109f2b"
+      - just ci::deploy-dev "0db220076451a456b303081bdcec92ffd4339d46"
     depends_on: []
 
   - name: verify-dev
