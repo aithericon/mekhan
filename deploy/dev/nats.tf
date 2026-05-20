@@ -31,17 +31,11 @@ locals {
   nats_user_kv_path = "nats/apps/mekhan/dev/worker"
   nats_vault_policy = "mekhan-dev"
   nats_vault_role   = "mekhan-dev"
-  # Both mekhan-service AND engine (Petri-net execution coordinator) consume
-  # the same NATS account. Vault JWT bound_claims accepts a list with OR
-  # semantics, so either Nomad job presents a matching workload identity.
+
   nats_nomad_job_ids = ["mekhan-service", "engine"]
 }
 
-# Least-privilege: read-only access to ONE KV v2 entry. The `data/` and
-# `metadata/` segments are KV v2's API path layout (mount=secret,
-# name=nats/apps/mekhan/dev/worker → API paths secret/data/... and
-# secret/metadata/...). Nomad templates only need `data/`; `metadata/` is
-# included so `vault kv get` works for operator debugging.
+
 resource "vault_policy" "mekhan_dev_nats" {
   name = local.nats_vault_policy
 

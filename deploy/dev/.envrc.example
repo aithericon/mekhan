@@ -6,10 +6,6 @@
 # from this directory. Every `tofu` / `just ci::deploy-dev` invocation will
 # then have these vars in its environment.
 #
-# Reference: HetznerCluster/environments/prod/.secrets — most values can be
-# copy-pasted from there (Hetzner S3 keypair, encryption passphrase, registry
-# password). The Nomad token + Postgres URL are mekhan-specific and have to
-# be provisioned on the cluster side first (see deploy/README.md § A).
 # =============================================================================
 
 # ── Hetzner Object Storage (for tfstate backend) ─────────────────────────────
@@ -24,15 +20,12 @@ export AWS_SECRET_ACCESS_KEY="REPLACE_ME"
 export TF_VAR_state_encryption_passphrase="REPLACE_ME"
 
 # ── mekhan-service artifact bucket creds ─────────────────────────────────────
-# Same Hetzner Object Storage account, distinct bucket (mekhan-artifacts-dev).
-# Easiest: reuse the same keypair as AWS_* above. Issue a scoped keypair
-# later if/when you want least-privilege.
+
 export TF_VAR_s3_access_key="REPLACE_ME"
 export TF_VAR_s3_secret_key="REPLACE_ME"
 
 # ── Forgejo registry (image pull on Nomad clients) ───────────────────────────
-# Username is non-secret (in HetznerCluster env.hcl). Password is the
-# `TF_VAR_docker_registry_password` field of .secrets.
+
 export TF_VAR_registry_user="MilanEnder"
 export TF_VAR_registry_password="REPLACE_ME"
 
@@ -49,12 +42,8 @@ export TF_VAR_registry_password="REPLACE_ME"
 # Paste the SecretID it prints below.
 export TF_VAR_nomad_token="REPLACE_ME"
 
-# ── Patroni superuser password (one-time fetch from Vault) ───────────────────
-# This is the ONLY cluster credential mekhan's deploy needs. The postgresql
-# provider in providers.tf uses it to CREATE ROLE / CREATE DATABASE for
-# mekhan_dev; once mekhan is provisioned, the Nomad allocation talks to
-# Postgres as `mekhan_dev`, not as superuser.
-#
+
+
 # Fetch once:
 #     export VAULT_ADDR=http://10.20.0.20:8200
 #     export VAULT_TOKEN=<your hvs.… token from HetznerCluster/.../.secrets>
@@ -63,21 +52,11 @@ export TF_VAR_nomad_token="REPLACE_ME"
 # Paste the result:
 export TF_VAR_postgres_admin_password="REPLACE_ME"
 
-# NOTE: TF_VAR_database_url no longer exists. The URL is computed at apply
-# time from random_password.mekhan_dev + the Postgres host vars, and lives
-# in the encrypted tfstate. `tofu output -raw database_url` to see it.
 
-# ── Nomad CLI convenience (used by `just ci::verify-deploy dev`) ─────────────
-# Also picked up by the Terraform `nomad` provider. NOMAD_SKIP_VERIFY=true
-# bypasses TLS cert verification — the cluster's Nomad API is signed by an
-# internal CA we don't trust on operator machines.
 export NOMAD_ADDR="https://10.20.0.10:4646"
 export NOMAD_TOKEN="$TF_VAR_nomad_token"
 export NOMAD_SKIP_VERIFY="true"
 
-# ── Vault (used by deploy/dev/nats.tf + scripts/generate-nats-user.sh) ───────
-# Address is non-secret. Token is the cluster bootstrap token from
-# HetznerCluster/environments/prod/.secrets (or your own scoped policy).
-# The Vault provider in providers.tf reads these from env (no TF var declared).
+
 export VAULT_ADDR="http://10.20.0.20:8200"
 export VAULT_TOKEN="REPLACE_ME"

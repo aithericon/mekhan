@@ -47,12 +47,9 @@ resource "nomad_job" "mekhan_service" {
     # Service falls back to localhost when this env var is unset (see
     # service/src/main.rs:265) which Zitadel correctly rejects.
     auth_redirect_uri = "https://${var.hostname}/api/auth/callback"
-    # MUST match exactly one of zitadel_application_oidc.spa
-    # .post_logout_redirect_uris — Zitadel rejects mismatches at logout time
-    # the same way it does at login time. The trailing slash is significant.
+
     auth_post_login_redirect = "https://${var.hostname}/"
-    # Executor (sibling task in the same group). Same image_tag as the
-    # service — both built from the same monorepo commit.
+  
     executor_image       = "${var.executor_image_repository}:${var.image_tag}"
     executor_cpu_mhz     = var.executor_cpu_mhz
     executor_memory_mb   = var.executor_memory_mb

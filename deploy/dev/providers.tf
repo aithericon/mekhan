@@ -94,14 +94,6 @@ provider "aws" {
   s3_use_path_style = true
 }
 
-# Zitadel — the cluster runs one instance at id.aithericon.eu shared across
-# all services. Auth is a JWT machine key for the cluster's `iac` service
-# user (IAM_OWNER), same as HetznerCluster's root.hcl uses for 06e.
-#
-# Provider quirk: `jwt_profile_file` is a FILE PATH, not the key contents.
-# The CI step fetches the JSON key from Vault (secret/zitadel/iac-jwt
-# → field `key`) and writes it to a tmpfile before `tofu apply`, then
-# exports TF_VAR_zitadel_jwt_file pointing at that file. Locally, paste a
 # path to your own JWT JSON into .envrc.
 provider "zitadel" {
   domain           = "id.aithericon.eu"
@@ -110,10 +102,5 @@ provider "zitadel" {
   jwt_profile_file = var.zitadel_jwt_file
 }
 
-# Vault — used only by deploy/dev/nats.tf for the policy + JWT-Nomad role.
-# Address + token come from VAULT_ADDR / VAULT_TOKEN env vars (no TF var
-# declared on purpose). CI exports both at the workflow level in
-# .woodpecker/40-deploy.yml; locally, direnv sets them from .envrc.
-# Note: dev mekhan deploys to the prod HetznerCluster, so Vault address is
-# the prod Vault (http://10.20.0.20:8200), reachable over NetBird.
+
 provider "vault" {}
