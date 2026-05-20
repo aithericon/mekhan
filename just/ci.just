@@ -53,7 +53,8 @@ openapi-drift:
     cd ..
     echo "▶ Rebuilding mekhan CLI and dumping spec…"
     cargo build --bin mekhan
-    ./target/debug/mekhan openapi > /tmp/openapi-mekhan.regen.json
+    target_dir="${CARGO_TARGET_DIR:-target}"
+    "$target_dir/debug/mekhan" openapi > /tmp/openapi-mekhan.regen.json
     if ! diff -u openapi-mekhan.json /tmp/openapi-mekhan.regen.json; then
       echo "✗ openapi-mekhan.json is stale. Run \`just dev::openapi\` and commit." >&2
       exit 1
@@ -140,7 +141,11 @@ build-backend:
       --target {{target_triple}} \
       --manifest-path service/Cargo.toml \
       --bin mekhan-service
-    ls -lh target/{{target_triple}}/release/mekhan-service
+    # CARGO_TARGET_DIR is set in CI (.woodpecker/30-build.yml) so target/
+    # persists outside the per-run workspace; locally it's unset and cargo
+    # defaults to ./target. Same fallback shape as the `package` recipe.
+    target_dir="${CARGO_TARGET_DIR:-target}"
+    ls -lh "$target_dir/{{target_triple}}/release/mekhan-service"
 
 # Build the SvelteKit static SPA bundle
 # Output: app/build/index.html + assets
@@ -176,7 +181,8 @@ apply-workflows dir="workflows":
     echo "▶ Building mekhan CLI"
     SQLX_OFFLINE=true cargo build --release \
       --manifest-path service/Cargo.toml --bin mekhan
-    bin=target/release/mekhan
+    target_dir="${CARGO_TARGET_DIR:-target}"
+    bin="$target_dir/release/mekhan"
     shopt -s nullglob
     found=0
     for d in {{dir}}/*/; do
