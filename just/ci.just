@@ -205,10 +205,15 @@ package registry_image commit_sha ref_slug:
     ref_tag="{{ref_slug}}"
     ctx="/tmp/mekhan-build-context"
 
+    # CARGO_TARGET_DIR points outside the workspace in CI (set in
+    # .woodpecker/30-build.yml so target/ persists across runs); locally
+    # it's usually unset, in which case cargo defaults to ./target.
+    target_dir="${CARGO_TARGET_DIR:-target}"
+
     rm -rf "$ctx"
     mkdir -p "$ctx/frontend"
 
-    cp "target/{{target_triple}}/release/mekhan-service" "$ctx/mekhan-service"
+    cp "$target_dir/{{target_triple}}/release/mekhan-service" "$ctx/mekhan-service"
     cp -r app/build "$ctx/frontend/build"
 
     echo "▶ docker buildx build → {{registry_image}}/mekhan-service:$sha_tag"

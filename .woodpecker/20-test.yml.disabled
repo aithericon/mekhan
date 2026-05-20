@@ -37,6 +37,12 @@ steps:
     pull: true
     environment:
       CARGO_HOME: /var/lib/ci-jobs/cache/cargo
+      # Same target dir as build-backend — release vs test profiles use
+      # different subdirs under target/, so cargo handles them side by
+      # side without invalidating each other.
+      CARGO_TARGET_DIR: /var/lib/ci-jobs/cache/target/mekhan
+    volumes:
+      - /var/lib/ci-jobs/cache:/var/lib/ci-jobs/cache
     commands:
       - just ci::test-rust
     depends_on: []
@@ -48,6 +54,8 @@ steps:
     pull: true
     environment:
       NPM_CONFIG_CACHE: /var/lib/ci-jobs/cache/npm
+    volumes:
+      - /var/lib/ci-jobs/cache:/var/lib/ci-jobs/cache
     commands:
       - just ci::test-frontend-unit
     depends_on: []

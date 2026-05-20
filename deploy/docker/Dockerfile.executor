@@ -88,8 +88,12 @@ COPY shared/    /build/shared/
 # the cache mount enough to OOM small Docker Desktop VMs. Slower wall time,
 # stable disk footprint.
 ARG CARGO_BUILD_JOBS=2
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
+# `sharing=locked` on the cargo registry/git caches — Dockerfile.engine uses
+# the same cache paths, so building both images in parallel without this
+# races on unpacking shared crates. The /target cache is per-image and
+# stays `sharing=shared` (the default).
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=cache,target=/build/executor/target \
     set -eux; \
     cd /build/executor; \

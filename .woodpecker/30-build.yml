@@ -36,6 +36,14 @@ steps:
     pull: true
     environment:
       CARGO_HOME: /var/lib/ci-jobs/cache/cargo
+      # Persist target/ outside the (per-run) workspace so dependency
+      # compilation is reused. Same path is reused by test-rust + the
+      # package step's cp, so they all see incremental builds.
+      CARGO_TARGET_DIR: /var/lib/ci-jobs/cache/target/mekhan
+    volumes:
+      # Host bind on cax21 — survives across CI runs, gives real cargo
+      # caching. First run creates the dir; subsequent runs reuse it.
+      - /var/lib/ci-jobs/cache:/var/lib/ci-jobs/cache
     commands:
       - just ci::build-backend
     depends_on: []
@@ -45,6 +53,8 @@ steps:
     pull: true
     environment:
       NPM_CONFIG_CACHE: /var/lib/ci-jobs/cache/npm
+    volumes:
+      - /var/lib/ci-jobs/cache:/var/lib/ci-jobs/cache
     commands:
       - just ci::build-frontend
     depends_on: []
@@ -62,8 +72,13 @@ steps:
       VAULT_ADDR: "http://10.20.0.20:8200"
       VAULT_TOKEN:
         from_secret: vault_token
+      # Must match build-backend's CARGO_TARGET_DIR so `just ci::package`
+      # finds the freshly-built mekhan-service binary the upstream step
+      # wrote outside the per-run workspace.
+      CARGO_TARGET_DIR: /var/lib/ci-jobs/cache/target/mekhan
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - /var/lib/ci-jobs/cache:/var/lib/ci-jobs/cache
     commands:
       - FORGEJO_REGISTRY_USER=$(vault kv get -field=username secret/docker/registry)
       - FORGEJO_REGISTRY_PASSWORD=$(vault kv get -field=token   secret/docker/registry)

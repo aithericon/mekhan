@@ -69,8 +69,13 @@ COPY shared/    /build/shared/
 # Cargo cache mounts + final binary copied out of the cache mount before the
 # layer is committed. Same pattern as Dockerfile.executor.
 ARG CARGO_BUILD_JOBS=2
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
+# `sharing=locked` serializes parallel access to the cargo registry /git
+# caches — Dockerfile.executor uses the same cache paths, so building both
+# images in parallel without this races on unpacking shared crates (e.g.
+# `failed to open .cargo-ok: File exists (os error 17)`). The /target cache
+# is per-image and stays `sharing=shared` (the default).
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=cache,target=/build/engine/target \
     set -eux; \
     cd /build/engine; \
