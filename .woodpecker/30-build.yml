@@ -65,3 +65,23 @@ steps:
       - just ci::package "$REGISTRY" "$CI_COMMIT_SHA" "$CI_COMMIT_BRANCH"
       - just ci::push    "$REGISTRY" "$CI_COMMIT_SHA" "$CI_COMMIT_BRANCH"
     depends_on: [build-backend, build-frontend]
+
+  # The executor builds Rust inside its own Docker layer (Dockerfile.executor
+  # is multi-stage), so no dependency on build-backend / build-frontend.
+  # Runs in parallel with `package-and-push` to keep total pipeline time down.
+  - name: package-and-push-executor
+    image: forge.aithericon.eu/milanender/mekhan-ci-builder:latest
+    pull: true
+    environment:
+      REGISTRY: forge.aithericon.eu/milanender
+      VAULT_ADDR: "http://10.20.0.20:8200"
+      VAULT_TOKEN:
+        from_secret: vault_token
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    commands:
+      - FORGEJO_REGISTRY_USER=$(vault kv get -field=username secret/docker/registry)
+      - FORGEJO_REGISTRY_PASSWORD=$(vault kv get -field=token   secret/docker/registry)
+      - echo "$FORGEJO_REGISTRY_PASSWORD" | docker login forge.aithericon.eu -u "$FORGEJO_REGISTRY_USER" --password-stdin
+      - just ci::package-and-push-executor "$REGISTRY" "$CI_COMMIT_SHA" "$CI_COMMIT_BRANCH"
+    depends_on: []

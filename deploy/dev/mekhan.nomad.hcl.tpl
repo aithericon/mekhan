@@ -151,6 +151,62 @@ EOH
         memory = ${memory_mb}
       }
     }
+
+    # ── Executor — sibling task in the same group ─────────────────────────
+    # Co-resident with `service` (always same Nomad client, shared network
+    # namespace, lifecycle-bound). Communicates with the cluster via NATS
+    # (work-pickup over JetStream subjects), not directly with `service`, so
+    # the only thing co-location buys us here is shared lifecycle + the same
+    # NATS creds file path layout. If executor concurrency ever needs to
+    # diverge from service count, split this into its own Nomad job.
+    task "executor" {
+      driver = "docker"
+
+      config {
+        image = "${executor_image}"
+        # No port mapping — executor is NATS-driven, cancel HTTP is opt-in
+        # via EXECUTOR_CANCEL__HTTP=true and not enabled here.
+        auth {
+          username = "${registry_user}"
+          password = "${registry_password}"
+        }
+      }
+
+      # NATS user credentials — same Vault path as the service task. Each
+      # task gets its own /secrets dir, so we render the bundle twice rather
+      # than try to share a single file across tasks.
+      template {
+        destination = "secrets/nats.creds"
+        change_mode = "restart"
+        perms       = "0644"
+        data        = <<-EOH
+{{- with secret "secret/data/nats/apps/mekhan/dev/worker" -}}
+{{ .Data.data.creds }}
+{{- end -}}
+EOH
+      }
+
+      env {
+        # Executor reads EXECUTOR_* (not MEKHAN__*) — see Dockerfile.executor
+        # lines 175-185. The NATS URL is the cluster's well-known Consul DNS
+        # name; same value the service task uses.
+        EXECUTOR_NATS_URL       = "${nats_url}"
+        EXECUTOR_NATS_CREDS     = "$${NOMAD_SECRETS_DIR}/nats.creds"
+        EXECUTOR_BASE_DIR       = "/var/lib/aithericon/executor"
+        EXECUTOR_CONCURRENCY    = "${executor_concurrency}"
+        EXECUTOR_PYTHON__ENABLED   = "true"
+        EXECUTOR_PYTHON__PREFER_UV = "true"
+        # Cancel HTTP off by default — turn on + add a port stanza above
+        # if the service ever needs to cancel executor jobs synchronously.
+        EXECUTOR_CANCEL__HTTP = "false"
+        RUST_LOG              = "${rust_log}"
+      }
+
+      resources {
+        cpu    = ${executor_cpu_mhz}
+        memory = ${executor_memory_mb}
+      }
+    }
   }
 
   meta {

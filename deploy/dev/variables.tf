@@ -193,6 +193,32 @@ variable "memory_mb" {
   default     = 512
 }
 
+# ── Executor (sibling task in the same group) ───────────────────────────────
+
+variable "executor_image_repository" {
+  description = "Registry path for the executor image, tagged with image_tag (= mekhan-service's SHA — both ship from the same monorepo commit)."
+  type        = string
+  default     = "forge.aithericon.eu/milanender/aithericon-executor"
+}
+
+variable "executor_cpu_mhz" {
+  description = "Executor CPU reservation. Heavier than the service: kreuzberg + tesseract + python venvs are CPU-hungry."
+  type        = number
+  default     = 1000
+}
+
+variable "executor_memory_mb" {
+  description = "Executor memory reservation. HDF5 / NetCDF parsers + Python venvs need headroom."
+  type        = number
+  default     = 1024
+}
+
+variable "executor_concurrency" {
+  description = "EXECUTOR_CONCURRENCY env var — number of parallel work items the executor processes."
+  type        = number
+  default     = 4
+}
+
 variable "service_port" {
   description = "Port mekhan-service listens on (matches MEKHAN__PORT in the image)"
   type        = number
