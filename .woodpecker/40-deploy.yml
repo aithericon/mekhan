@@ -28,11 +28,9 @@
 # runner picking up `role: deploy` MUST be on the mesh. YAML can't enforce.
 # =============================================================================
 
-# TEMP: 30-build.yml is disabled (renamed to .disabled) while we test the
-# deploy pipeline in isolation. Re-add `depends_on: [30-build]` here when
-# 30-build.yml is re-enabled. CAUTION: with this gone, deploy reuses the
-# image tag already in the registry under $CI_COMMIT_SHA — make sure
-# 30-build has produced one for this commit before triggering a deploy.
+depends_on:
+  - 30-build
+
 when:
   # Auto on main — chained off 30-build via the workflow-level depends_on
   # above. Push to main triggers build → deploy → verify automatically.
@@ -96,11 +94,7 @@ steps:
       - export TF_VAR_postgres_admin_host=postgres-primary.service.consul
       - 'echo "  ✓ Secrets loaded from Vault"'
 
-      # TEMP: pinned to f8478a50 — the only SHA in the registry that has
-      # all three images (mekhan-service, aithericon-executor,
-      # aithericon-engine). Restore `"$CI_COMMIT_SHA"` once 30-build.yml
-      # is back so deploys use freshly-built images per commit.
-      - just ci::deploy-dev "f8478a50c8cdaa528e61907cf591127eb2109f2b"
+      - just ci::deploy-dev "$CI_COMMIT_SHA"
     depends_on: []
 
   - name: verify-dev
