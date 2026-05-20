@@ -1,11 +1,9 @@
 # =============================================================================
 # Layer-2 e2e — real Zitadel PAT introspection
 # =============================================================================
-# Gated: MANUAL only. This is the repo's first integration-test-running lane
-# (the test pool still does `cargo check`, not `cargo test` — see 20-test.yml),
-# it is Docker-heavy (brings up the full compose stack incl. Zitadel), and is
-# unproven on the CI runner. Keep it opt-in until validated; do NOT make it a
-# PR/push gate.
+# Gated: MANUAL only. Docker-heavy (brings up the full compose stack incl.
+# Zitadel) and unproven on the CI runner. Keep it opt-in until validated; do
+# NOT make it a PR/push gate.
 #
 # Brings the stack up, runs deploy/zitadel/bootstrap.sh (provisions the
 # introspection API app + writes mekhan.local.toml), then runs the
@@ -21,16 +19,16 @@ when:
 
 labels:
   role: test
+  host: worker-hetzner
 
 steps:
   - name: e2e-zitadel
-    image: 192.168.101.1:5000/nixos/nix:2.32.8
+    image: forge.aithericon.eu/milanender/mekhan-ci-builder:latest
+    pull: true
     environment:
-      NIX_CONFIG: "experimental-features = nix-command flakes"
       CARGO_HOME: /var/lib/ci-jobs/cache/cargo
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     commands:
-      - nix develop --no-write-lock-file --command bash -lc 'just
-        ci::test-e2e-zitadel'
+      - just ci::test-e2e-zitadel
     depends_on: []

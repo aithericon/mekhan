@@ -9,6 +9,7 @@ app/.svelte-kit/
 app/.output/
 app/playwright-report/
 app/test-results/
+.pnpm-store/
 
 # Git
 .git/
