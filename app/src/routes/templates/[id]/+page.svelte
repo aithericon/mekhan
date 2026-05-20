@@ -159,6 +159,14 @@
 		}
 	}
 
+	function handleReparentNodes(
+		changes: Array<{ id: string; parentId: string | null; position?: { x: number; y: number } }>
+	) {
+		for (const { id, parentId, position } of changes) {
+			binding.setNodeParent(id, parentId, position);
+		}
+	}
+
 	function handleAddEdge(edge: WorkflowEdge) {
 		binding.addEdge(edge);
 	}
@@ -250,6 +258,7 @@
 				onAddNode={handleAddNode}
 				onRemoveNodes={handleRemoveNodes}
 				onMoveNodes={handleMoveNodes}
+				onReparentNodes={handleReparentNodes}
 				onAddEdge={handleAddEdge}
 				onRemoveEdges={handleRemoveEdges}
 			/>

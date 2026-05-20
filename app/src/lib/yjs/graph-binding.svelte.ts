@@ -430,6 +430,30 @@ export class YjsGraphBinding {
 		});
 	}
 
+	/**
+	 * Set or clear a node's container parent. Used by the drag-into-container
+	 * gesture (Scope, Loop) — when a node is dropped inside a container the
+	 * position passed here must already be **relative to the parent**, mirroring
+	 * Svelte Flow's parent-relative child coordinates. Pass `null` to remove
+	 * the parent (parent_id is dropped from the Y.Map entirely).
+	 */
+	setNodeParent(
+		nodeId: string,
+		parentId: string | null,
+		position?: { x: number; y: number }
+	): void {
+		this.doc.transact(() => {
+			const yNode = this.yNodes.get(nodeId);
+			if (!yNode || !(yNode instanceof Y.Map)) return;
+			if (parentId) {
+				yNode.set('parentId', parentId);
+			} else {
+				yNode.delete('parentId');
+			}
+			if (position) yNode.set('position', position);
+		});
+	}
+
 	/** Node-level author-facing slug — the `<slug>.<field>` guard namespace.
 	 *  Empty/blank clears it (the compiler then derives a default from id). */
 	updateNodeSlug(nodeId: string, slug: string): void {
