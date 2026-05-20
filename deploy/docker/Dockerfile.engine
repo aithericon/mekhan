@@ -27,12 +27,35 @@ FROM rust:${RUST_VERSION}-trixie AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Build-time system deps: minimal — engine is pure Rust + rustls. pkg-config
-# is defensive for any transitive *-sys crate that probes the system.
+# Build-time system deps:
+#   build-essential + pkg-config            — every *-sys crate baseline
+#   libhdf5-dev + libnetcdf-dev             — engine pulls fmeta's all-backends
+#                                              via ../executor/crates/executor-
+#                                              storage → hdf5-metno-sys
+#   libtesseract-dev + libleptonica-dev     — engine depends on executor-worker
+#                                              which (in this monorepo) pulls
+#                                              kreuzberg-tesseract transitively
+#   libclang-dev                            — bindgen for tesseract FFI
+#   libssl-dev                              — fallback for any sys crate
+#                                              probing OpenSSL (most use rustls)
+#   protobuf-compiler                       — defensive for any prost-build dep
+#
+# Yes this is most of Dockerfile.executor's deps — the engine workspace has
+# `path = "../executor/crates/*"` deps so cargo compiles them as part of
+# core-engine even though core-engine itself doesn't use them directly. If
+# fmeta/all-backends is later trimmed from the executor-storage dep, the
+# HDF5 lines can come out of here.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
         ca-certificates \
+        libclang-dev \
+        libhdf5-dev \
+        libleptonica-dev \
+        libnetcdf-dev \
+        libssl-dev \
+        libtesseract-dev \
         pkg-config \
+        protobuf-compiler \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
@@ -67,9 +90,18 @@ ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8
 
+# Runtime system deps. Even though core-engine doesn't *call* HDF5/tesseract
+# at runtime, the binary's NEEDED list includes them because the executor-
+# storage / executor-worker path deps are linked in. Same set as the executor
+# runtime, minus the user-facing tools (python, uv, tessdata lang packs).
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
+        libhdf5-310 \
+        libleptonica6 \
+        libnetcdf22 \
+        libssl3 \
         libstdc++6 \
+        libtesseract5 \
         tzdata \
     && rm -rf /var/lib/apt/lists/*
 
