@@ -58,6 +58,18 @@ pub(crate) fn wire_edge(
                     edge.target, edge.id
                 ))
             })?
+    } else if let Some(handle) = edge.target_handle.as_deref() {
+        // Named inbound port (e.g. Loop's `body_out`). Fall through to the
+        // default `input_place` if the handle isn't a registered named port —
+        // most nodes only declare an implicit "in" handle (cosmetic, satisfies
+        // xyflow + the typed-ports invariant) and the compiler models that as
+        // the single `input_place`. Mirror of the source-handle fallback in
+        // `find_output_place`.
+        target_ports
+            .input_handles
+            .get(handle)
+            .cloned()
+            .unwrap_or_else(|| target_ports.input_place.clone())
     } else {
         target_ports.input_place.clone()
     };

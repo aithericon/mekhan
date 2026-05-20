@@ -576,6 +576,30 @@ fn parallel_split_join_produces_fork_and_join() {
 
 #[test]
 fn loop_produces_enter_continue_exit() {
+    // The body is a single HumanTask child of the loop. `parent_id == "lp"`
+    // satisfies the new LoopEmpty check; the explicit `body_in`/`body_out`
+    // handle edges route the iteration token through the body each pass.
+    let body_in_edge = WorkflowEdge {
+        id: "e_body_in".to_string(),
+        source: "lp".to_string(),
+        target: "body".to_string(),
+        source_handle: Some("body_in".to_string()),
+        target_handle: Some("in".to_string()),
+        label: None,
+        edge_type: "sequence".to_string(),
+    };
+    // body → loop is a back-edge in the DAG: it closes the cycle through the
+    // body. Tag it `loop_back` so topo sort/cycle detection excludes it
+    // (engine still executes it via p_body_out's t_continue/t_exit dispatch).
+    let body_out_edge = WorkflowEdge {
+        id: "e_body_out".to_string(),
+        source: "body".to_string(),
+        target: "lp".to_string(),
+        source_handle: None,
+        target_handle: Some("body_out".to_string()),
+        label: None,
+        edge_type: "loop_back".to_string(),
+    };
     let graph = WorkflowGraph {
         nodes: vec![
             start_node("s"),
@@ -599,9 +623,30 @@ fn loop_produces_enter_continue_exit() {
                 width: None,
                 height: None,
             },
+            WorkflowNode {
+                id: "body".to_string(),
+                node_type: "human_task".to_string(),
+                slug: None,
+                position: pos(),
+                data: WorkflowNodeData::HumanTask {
+                    label: "Body".to_string(),
+                    description: None,
+                    task_title: "Body".to_string(),
+                    instructions_mdsvex: None,
+                    steps: vec![],
+                },
+                parent_id: Some("lp".to_string()),
+                width: None,
+                height: None,
+            },
             end_node("e"),
         ],
-        edges: vec![edge("e1", "s", "lp"), edge("e2", "lp", "e")],
+        edges: vec![
+            edge("e1", "s", "lp"),
+            body_in_edge,
+            body_out_edge,
+            edge("e2", "lp", "e"),
+        ],
         viewport: None,
     };
 
@@ -2048,10 +2093,52 @@ fn loop_condition_can_reference_iteration_local() {
         accept: None,
     }); // silence "unused import" if test layout shifts
 
+    // Minimal body child — required to satisfy the LoopEmpty check. The body
+    // is a HumanTask wired through `body_in`/`body_out` handles so the loop
+    // iterates the counter through user code instead of dead-ending.
+    let body_node = WorkflowNode {
+        id: "body".to_string(),
+        node_type: "human_task".to_string(),
+        slug: None,
+        position: pos(),
+        data: WorkflowNodeData::HumanTask {
+            label: "Body".to_string(),
+            description: None,
+            task_title: "Body".to_string(),
+            instructions_mdsvex: None,
+            steps: vec![],
+        },
+        parent_id: Some("lp".to_string()),
+        width: None,
+        height: None,
+    };
+    let body_in_edge = WorkflowEdge {
+        id: "e_body_in".to_string(),
+        source: "lp".to_string(),
+        target: "body".to_string(),
+        source_handle: Some("body_in".to_string()),
+        target_handle: Some("in".to_string()),
+        label: None,
+        edge_type: "sequence".to_string(),
+    };
+    // body → loop is a back-edge in the DAG: it closes the cycle through the
+    // body. Tag it `loop_back` so topo sort/cycle detection excludes it
+    // (engine still executes it via p_body_out's t_continue/t_exit dispatch).
+    let body_out_edge = WorkflowEdge {
+        id: "e_body_out".to_string(),
+        source: "body".to_string(),
+        target: "lp".to_string(),
+        source_handle: None,
+        target_handle: Some("body_out".to_string()),
+        label: None,
+        edge_type: "loop_back".to_string(),
+    };
     let graph = WorkflowGraph {
-        nodes: vec![typed_start, loop_node, end_node("e")],
+        nodes: vec![typed_start, loop_node, body_node, end_node("e")],
         edges: vec![
             edge("e_in", "s", "lp"),
+            body_in_edge,
+            body_out_edge,
             edge("e_out", "lp", "e"),
         ],
         viewport: None,
@@ -2234,18 +2321,12 @@ fn decision_output_ports_one_per_branch_plus_default() {
 }
 
 #[test]
-fn parallel_split_join_loop_scope_have_single_pass_through_output() {
+fn parallel_split_join_scope_have_single_pass_through_output() {
     use mekhan_service::models::template::WorkflowNodeData;
 
     for data in [
         WorkflowNodeData::ParallelSplit { label: "x".into(), description: None },
         WorkflowNodeData::ParallelJoin { label: "x".into(), description: None, merge_strategy: Default::default() },
-        WorkflowNodeData::Loop {
-            label: "x".into(),
-            description: None,
-            max_iterations: 5,
-            loop_condition: "true".into(),
-        },
         WorkflowNodeData::Scope { label: "x".into(), description: None },
     ] {
         let ports = data.output_ports();
@@ -2256,6 +2337,66 @@ fn parallel_split_join_loop_scope_have_single_pass_through_output() {
             "{:?} should be pass-through",
             data.type_name()
         );
+    }
+}
+
+#[test]
+fn loop_exposes_outer_out_and_body_in_handles() {
+    // Loop is a container: its outer `out` is the post-exit handle; the
+    // `body_in` source handle feeds body children. Body children connect back
+    // via the `body_out` target handle (declared in input_ports).
+    use mekhan_service::models::template::WorkflowNodeData;
+
+    let lp = WorkflowNodeData::Loop {
+        label: "x".into(),
+        description: None,
+        max_iterations: 5,
+        loop_condition: "true".into(),
+    };
+    let out_ports = lp.output_ports();
+    let outs: Vec<&str> = out_ports.iter().map(|p| p.id.as_str()).collect();
+    assert_eq!(outs, vec!["out", "body_in"], "loop outer + body_in handles");
+    let in_ports = lp.input_ports();
+    let ins: Vec<&str> = in_ports.iter().map(|p| p.id.as_str()).collect();
+    assert_eq!(ins, vec!["in", "body_out"], "loop outer in + body_out handle");
+}
+
+#[test]
+fn empty_loop_fails_with_loop_empty_error() {
+    // A Loop with no body child (no node has `parent_id == loop.id`) is
+    // rejected at compile time. The empty-loop-as-counter semantic was
+    // intentionally dropped; an iterate-N-times-doing-nothing workflow isn't
+    // useful and conflated two semantics.
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            WorkflowNode {
+                id: "lp".to_string(),
+                node_type: "loop".to_string(),
+                slug: None,
+                position: pos(),
+                data: WorkflowNodeData::Loop {
+                    label: "Empty".to_string(),
+                    description: None,
+                    max_iterations: 3,
+                    loop_condition: "true".to_string(),
+                },
+                parent_id: None,
+                width: None,
+                height: None,
+            },
+            end_node("e"),
+        ],
+        edges: vec![edge("e1", "s", "lp"), edge("e2", "lp", "e")],
+        viewport: None,
+    };
+    let err = compile_to_air(&graph, "empty-loop", "", &std::collections::HashMap::new())
+        .expect_err("empty Loop should fail");
+    match err {
+        mekhan_service::compiler::CompileError::LoopEmpty { node_id } => {
+            assert_eq!(node_id, "lp");
+        }
+        other => panic!("expected LoopEmpty, got: {other:?}"),
     }
 }
 

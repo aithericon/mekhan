@@ -149,6 +149,12 @@ pub enum CompileError {
 
     #[error("sub-workflow nesting too deep (limit {limit}) at node '{node_id}'")]
     SubWorkflowDepthExceeded { node_id: String, limit: usize },
+
+    /// Loop has no body — no child node has `parent_id == loop.id`. An empty
+    /// Loop is a config error (an iterating-counter-with-no-work workflow is
+    /// not a useful primitive; use a dedicated Delay node if/when needed).
+    #[error("loop '{node_id}' has no body — add at least one node inside the loop container")]
+    LoopEmpty { node_id: String },
 }
 
 impl CompileError {
@@ -177,6 +183,7 @@ impl CompileError {
             Self::SubWorkflowUnresolved { .. } => "subworkflow_unresolved",
             Self::SubWorkflowCycle { .. } => "subworkflow_cycle",
             Self::SubWorkflowDepthExceeded { .. } => "subworkflow_depth_exceeded",
+            Self::LoopEmpty { .. } => "loop_empty",
         }
     }
 
@@ -208,7 +215,8 @@ impl CompileError {
             | Self::TriggerUnresolvedRef { node_id, .. }
             | Self::TriggerEmptyMappingRequiredFields { node_id, .. }
             | Self::SubWorkflowUnresolved { node_id, .. }
-            | Self::SubWorkflowDepthExceeded { node_id, .. } => Some(node_id),
+            | Self::SubWorkflowDepthExceeded { node_id, .. }
+            | Self::LoopEmpty { node_id } => Some(node_id),
             _ => None,
         }
     }

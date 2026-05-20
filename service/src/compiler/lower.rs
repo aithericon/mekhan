@@ -73,6 +73,12 @@ pub(crate) struct NodePorts {
     /// For ParallelJoin nodes: maps incoming edge_id -> input place.
     /// Empty for all other node types.
     pub(crate) input_places: HashMap<String, PlaceHandle<DynamicToken>>,
+    /// Named inbound ports keyed by `target_handle`. wire.rs checks this before
+    /// falling back to `input_place`. Used by Loop's `body_out` so a body
+    /// child's outgoing edge with `targetHandle: "body_out"` routes to the
+    /// loop's `p_body_out` rather than its main `p_input`. Empty for any node
+    /// type without named inbound ports.
+    pub(crate) input_handles: HashMap<String, PlaceHandle<DynamicToken>>,
 }
 
 /// Everything a single node's lowering needs: the shared build `ctx`, the
@@ -82,6 +88,11 @@ pub(crate) struct LoweringCtx<'a, 'c> {
     pub(crate) node: &'a WorkflowNode,
     pub(crate) outgoing_edges: &'a [&'a WorkflowEdge],
     pub(crate) incoming_edges: &'a [&'a WorkflowEdge],
+    /// Container children — nodes whose `parent_id == self.node.id`. Empty for
+    /// non-container nodes and for empty containers. Used by `lower_loop` to
+    /// reject empty Loops; other lowering paths ignore it today (Scope has its
+    /// own group-based traversal).
+    pub(crate) children: &'a [&'a WorkflowNode],
     pub(crate) ctx: &'c mut Context,
     pub(crate) ports: &'c mut HashMap<String, NodePorts>,
     pub(crate) fixups: &'c mut PostProcess,
@@ -128,6 +139,7 @@ pub(crate) fn expand_node(
     node: &WorkflowNode,
     outgoing_edges: &[&WorkflowEdge],
     incoming_edges: &[&WorkflowEdge],
+    children: &[&WorkflowNode],
     ctx: &mut Context,
     ports: &mut HashMap<String, NodePorts>,
     fixups: &mut PostProcess,
@@ -138,6 +150,7 @@ pub(crate) fn expand_node(
         node,
         outgoing_edges,
         incoming_edges,
+        children,
         ctx,
         ports,
         fixups,
@@ -512,6 +525,7 @@ let eid = dd.artifact_id;
             input_place: ready,
             output_places: vec![(None, p_main)],
             input_places: HashMap::new(),
+            input_handles: HashMap::new(),
         },
     );
     Ok(())
@@ -630,6 +644,7 @@ fn lower_end(cx: &mut LoweringCtx) -> Result<(), CompileError> {
             input_place: done,
             output_places: vec![],
             input_places: HashMap::new(),
+            input_handles: HashMap::new(),
         },
     );
     Ok(())
@@ -755,6 +770,7 @@ fn lower_human_task(cx: &mut LoweringCtx) -> Result<(), CompileError> {
             input_place: p_input,
             output_places: vec![(None, p_ctrl)],
             input_places: HashMap::new(),
+            input_handles: HashMap::new(),
         },
     );
     Ok(())
@@ -913,6 +929,7 @@ fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileError> {
                 (Some("error".to_string()), p_error),
             ],
             input_places: HashMap::new(),
+            input_handles: HashMap::new(),
         },
     );
     Ok(())
@@ -1031,6 +1048,7 @@ fn lower_automated_step_scheduled(cx: &mut LoweringCtx) -> Result<(), CompileErr
                 (Some("error".to_string()), p_error),
             ],
             input_places: HashMap::new(),
+            input_handles: HashMap::new(),
         },
     );
     Ok(())
@@ -1105,6 +1123,7 @@ fn lower_catalogue_query(cx: &mut LoweringCtx) -> Result<(), CompileError> {
                 (Some("error".to_string()), p_error),
             ],
             input_places: HashMap::new(),
+            input_handles: HashMap::new(),
         },
     );
     Ok(())
@@ -1231,6 +1250,7 @@ fn lower_decision(cx: &mut LoweringCtx) -> Result<(), CompileError> {
             input_place: p_input,
             output_places,
             input_places: HashMap::new(),
+            input_handles: HashMap::new(),
         },
     );
     Ok(())
@@ -1283,6 +1303,7 @@ fn lower_parallel_split(cx: &mut LoweringCtx) -> Result<(), CompileError> {
             input_place: p_input,
             output_places,
             input_places: HashMap::new(),
+            input_handles: HashMap::new(),
         },
     );
     Ok(())
@@ -1350,6 +1371,7 @@ fn lower_parallel_join(cx: &mut LoweringCtx) -> Result<(), CompileError> {
             input_place: default_input,
             output_places: vec![(None, p_output)],
             input_places: join_input_map,
+            input_handles: HashMap::new(),
         },
     );
     Ok(())
@@ -1366,6 +1388,18 @@ fn lower_loop(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     else {
         unreachable!("lower_loop on non-Loop node")
     };
+
+    // A Loop must contain at least one body node — a child with
+    // `parent_id == loop.id`. An empty Loop (iterate-N-times-doing-nothing)
+    // isn't a useful workflow primitive; reject it at publish so the editor
+    // can ring the offending container. If a delay/heartbeat is ever needed,
+    // add a dedicated Delay node — don't fold two semantics into Loop.
+    if cx.children.is_empty() {
+        return Err(CompileError::LoopEmpty {
+            node_id: id.clone(),
+        });
+    }
+
     let scope_group = cx.fixups.scope_groups.get(id).cloned();
     let ctx = &mut *cx.ctx;
 
@@ -1380,7 +1414,12 @@ fn lower_loop(cx: &mut LoweringCtx) -> Result<(), CompileError> {
 
     let counter_key = format!("_loop_{id}_count");
 
-    // t_{id}_enter — initialize loop counter
+    // t_{id}_enter — initialize loop counter, hand off to body via p_body_in.
+    // Body children's outgoing edges back to the loop carry
+    // `targetHandle: "body_out"` (wire.rs routes those to p_body_out via
+    // `input_handles`); the body's incoming edge from the loop carries
+    // `sourceHandle: "body_in"` (wire.rs routes from p_body_in via the
+    // matching entry in `output_places`).
     ctx.transition(format!("t_{id}_enter"), format!("{label} - Enter Loop"))
         .auto_input("input", &p_input)
         .auto_output("body", &p_body_in)
@@ -1389,21 +1428,8 @@ fn lower_loop(cx: &mut LoweringCtx) -> Result<(), CompileError> {
         ))
         .done();
 
-    // t_{id}_body_noop — pass-through from body_in to body_out. Without it
-    // tokens dead-end at p_body_in: today the editor can't author a body
-    // node inside a Loop (wire.rs routes through NodePorts, and Loop only
-    // exposes p_input/p_output, so an edge `lp → body` would source from
-    // p_output, not p_body_in). The runnable semantic is "iterate the
-    // counter/guard N times then exit" — a usable retry/delay primitive.
-    // To add body authoring later: suppress this when any node has
-    // `parent_id == self.id`, and expose p_body_in/p_body_out as ports.
-    ctx.transition(format!("t_{id}_body_noop"), format!("{label} - Body"))
-        .auto_input("input", &p_body_in)
-        .auto_output("output", &p_body_out)
-        .logic_rhai("#{ output: input }")
-        .done();
-
-    // t_{id}_continue — loop back
+    // t_{id}_continue — loop back: fires while the guard holds, increments
+    // the counter, returns the token to p_body_in for another body pass.
     ctx.transition(format!("t_{id}_continue"), format!("{label} - Continue"))
         .auto_input("input", &p_body_out)
         .auto_output("body", &p_body_in)
@@ -1429,12 +1455,19 @@ fn lower_loop(cx: &mut LoweringCtx) -> Result<(), CompileError> {
         .groups
         .push((format!("grp_{id}"), label.clone(), scope_group));
 
+    let mut input_handles = HashMap::new();
+    input_handles.insert("body_out".to_string(), p_body_out);
+
     cx.ports.insert(
         id.clone(),
         NodePorts {
             input_place: p_input,
-            output_places: vec![(None, p_output)],
+            // Two source-handle outputs: default (None) is the loop's outer
+            // `out` (post-exit); "body_in" is the inner handle that feeds
+            // body children when they receive a token from the loop.
+            output_places: vec![(None, p_output), (Some("body_in".to_string()), p_body_in)],
             input_places: HashMap::new(),
+            input_handles,
         },
     );
     Ok(())
@@ -1537,6 +1570,7 @@ fn lower_phase_update(cx: &mut LoweringCtx) -> Result<(), CompileError> {
             input_place: p_input,
             output_places: vec![(None, p_out)],
             input_places: HashMap::new(),
+            input_handles: HashMap::new(),
         },
     );
     Ok(())
@@ -1621,6 +1655,7 @@ fn lower_progress_update(cx: &mut LoweringCtx) -> Result<(), CompileError> {
             input_place: p_input,
             output_places: vec![(None, p_out)],
             input_places: HashMap::new(),
+            input_handles: HashMap::new(),
         },
     );
     Ok(())
@@ -1706,6 +1741,7 @@ fn lower_failure(cx: &mut LoweringCtx) -> Result<(), CompileError> {
             input_place: p_input,
             output_places: vec![(None, p_out)],
             input_places: HashMap::new(),
+            input_handles: HashMap::new(),
         },
     );
     Ok(())
@@ -1885,6 +1921,7 @@ fn lower_subworkflow(cx: &mut LoweringCtx) -> Result<(), CompileError> {
                 (Some("error".to_string()), p_error),
             ],
             input_places: HashMap::new(),
+            input_handles: HashMap::new(),
         },
     );
     Ok(())

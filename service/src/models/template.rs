@@ -495,7 +495,6 @@ impl WorkflowNodeData {
             | Self::Decision { .. }
             | Self::ParallelSplit { .. }
             | Self::ParallelJoin { .. }
-            | Self::Loop { .. }
             | Self::Scope { .. }
             | Self::PhaseUpdate { .. }
             | Self::ProgressUpdate { .. }
@@ -504,6 +503,17 @@ impl WorkflowNodeData {
             // `input_mapping` shapes it into the child Start input at compile
             // time, so the parent-side input port is a Json pass-through.
             | Self::SubWorkflow { .. } => vec![Port::empty_input()],
+
+            // Loop accepts the outer `in` and a `body_out` handle from its
+            // body children. Both are Json pass-throughs.
+            Self::Loop { .. } => vec![
+                Port::empty_input(),
+                Port {
+                    id: "body_out".to_string(),
+                    label: "Body Out".to_string(),
+                    fields: vec![],
+                },
+            ],
 
             // Trigger nodes are never edge targets — the editor refuses to draw
             // an edge into a Trigger node. Return empty so any malformed graph
@@ -578,7 +588,6 @@ impl WorkflowNodeData {
 
             Self::ParallelSplit { .. }
             | Self::ParallelJoin { .. }
-            | Self::Loop { .. }
             | Self::Scope { .. }
             | Self::PhaseUpdate { .. }
             | Self::ProgressUpdate { .. }
@@ -587,6 +596,22 @@ impl WorkflowNodeData {
                 label: "Output".to_string(),
                 fields: vec![],
             }],
+
+            // Loop exposes its outer `out` plus a `body_in` handle that feeds
+            // body children. Body children's outgoing edges back into the
+            // loop carry `targetHandle: "body_out"` (declared in `input_ports`).
+            Self::Loop { .. } => vec![
+                Port {
+                    id: "out".to_string(),
+                    label: "Output".to_string(),
+                    fields: vec![],
+                },
+                Port {
+                    id: "body_in".to_string(),
+                    label: "Body In".to_string(),
+                    fields: vec![],
+                },
+            ],
 
             // End has no output port — tokens terminate here.
             Self::End { .. } => vec![],

@@ -9,7 +9,7 @@ use crate::compiler::validate::{
 };
 use crate::compiler::wire::{apply_merges, resolve_aliases, wire_edge};
 use crate::compiler::CompileError;
-use crate::models::template::{WorkflowGraph, WorkflowNodeData};
+use crate::models::template::{WorkflowGraph, WorkflowNode, WorkflowNodeData};
 use aithericon_executor_domain::InputSource;
 use aithericon_sdk::scenario::{ScenarioDefinition, ScenarioGroup};
 use aithericon_sdk::Context;
@@ -126,16 +126,35 @@ pub fn compile_to_scenario(
         }
     }
 
+    // Pre-index container children: node_id -> [child nodes]. Cheap O(n)
+    // pass; consumed by `lower_loop` to reject empty Loops, ignored by other
+    // lowerings today. Keyed by parent id (not every node lives in a
+    // container, so most lookups return an empty slice).
+    let mut children_by_parent: HashMap<&str, Vec<&WorkflowNode>> = HashMap::new();
+    for node in &graph.nodes {
+        if let Some(ref pid) = node.parent_id {
+            children_by_parent
+                .entry(pid.as_str())
+                .or_default()
+                .push(node);
+        }
+    }
+
     let empty_files: HashMap<String, InputSource> = HashMap::new();
+    let empty_children: Vec<&WorkflowNode> = Vec::new();
     for ni in &sorted {
         let node = *wg.full.node_weight(*ni).unwrap();
         let outgoing = wg.outgoing(&node.id);
         let incoming = wg.incoming(&node.id);
         let node_files = files.get(&node.id).unwrap_or(&empty_files);
+        let children = children_by_parent
+            .get(node.id.as_str())
+            .unwrap_or(&empty_children);
         expand_node(
             node,
             &outgoing,
             &incoming,
+            children,
             &mut ctx,
             &mut node_ports,
             &mut fixups,

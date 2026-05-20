@@ -1,9 +1,11 @@
-//! End-to-end coverage for the Loop node — live engine iterates the body
-//! until `_loop_<id>_count` exceeds `max_iterations`, then exits.
+//! End-to-end coverage for the Loop node — live engine iterates a real body
+//! node N times then exits, capturing `_loop_<id>_count` into the End result.
 //!
-//! Loop lowering is compiler-unit-covered, but until this file there was zero
-//! runtime proof that the enter/continue/exit cascade actually fires correctly
-//! against the live engine.
+//! The body is a 1-step HumanTask that gets auto-completed each iteration —
+//! proves the token actually flows through user code each pass (not just that
+//! the counter cascade fires). After the empty-loop noop semantic was retired
+//! (Loop now requires a body via `parent_id == loop.id`), this is the
+//! canonical Loop runtime test.
 //!
 //! Requires `just dev up` (engine :3030 sharing the dev NATS broker). Run
 //! serially (`--test-threads=1`) — the lifecycle listener writes back to the
@@ -101,12 +103,20 @@ async fn wait_for_completion(db: &sqlx::PgPool, id: Uuid, timeout: Duration) {
     }
 }
 
-/// `Start → Loop(max=3, "input._loop_lp_count < 3") → End`. The loop has no
-/// body node — `lower_loop` synthesizes a `t_lp_body_noop` passthrough from
-/// p_body_in → p_body_out so the counter/guard cascade fires deterministically:
-/// enter → noop → continue → noop → continue → noop → exit. The End's
-/// resultMapping captures `final_count` so the test can prove iteration
-/// actually happened rather than just that the net completed.
+/// `Start → Loop(max=3, "input._loop_lp_count < 3", body=PhaseUpdate) → End`.
+///
+/// The PhaseUpdate body sits inside the loop (`parent_id == "lp"`) and is
+/// wired via the `body_in`/`body_out` handles so each iteration routes
+/// through it. PhaseUpdate is a pass-through for the data token (the
+/// `_loop_lp_count` control leaf is preserved); its phase signal is a no-op
+/// outside a registered process, so the test doesn't need a process to be
+/// running — just proves the loop iterates user code three times then exits.
+///
+/// Topology per iteration: enter → body → continue/exit, where body =
+/// PhaseUpdate. Counter increments at `t_lp_continue`; after the 3rd pass
+/// the guard `count < 3` flips false and `t_lp_exit` fires. The End's
+/// `resultMapping` captures `final_count` so the test asserts iteration
+/// (not just completion).
 fn loop_graph() -> Value {
     json!({
         "nodes": [
@@ -119,6 +129,16 @@ fn loop_graph() -> Value {
                         // Control-token leaf injected by lower_loop: `_loop_<id>_count`
                         // rides the slim control token so it resolves without a read-arc.
                         "loopCondition": "input._loop_lp_count < 3" } },
+            // Loop body — a PhaseUpdate passthrough. `parent_id == "lp"`
+            // satisfies the LoopEmpty check; the body_in/body_out handle
+            // edges route the iteration through it. PhaseUpdate's `out` is
+            // its `input` verbatim, so the counter rides through unchanged.
+            { "id": "body", "type": "phase_update",
+              "position": { "x": 360, "y": 80 },
+              "parentId": "lp",
+              "data": { "type": "phase_update", "label": "Body",
+                        "phaseName": "iteration",
+                        "status": "running" } },
             { "id": "end", "type": "end", "position": { "x": 480, "y": 0 },
               "data": { "type": "end", "label": "Done",
                         "resultMapping": [
@@ -129,6 +149,14 @@ fn loop_graph() -> Value {
         "edges": [
             { "id": "e1", "source": "start", "target": "lp",
               "targetHandle": "in", "type": "sequence" },
+            // Loop → body via the body_in source handle.
+            { "id": "e_body_in", "source": "lp", "target": "body",
+              "sourceHandle": "body_in", "targetHandle": "in",
+              "type": "sequence" },
+            // body → Loop via the body_out target handle. Tagged `loop_back`
+            // so topo sort/cycle detection excludes it from the DAG.
+            { "id": "e_body_out", "source": "body", "target": "lp",
+              "targetHandle": "body_out", "type": "loop_back" },
             { "id": "e2", "source": "lp", "target": "end",
               "targetHandle": "in", "type": "sequence" }
         ]

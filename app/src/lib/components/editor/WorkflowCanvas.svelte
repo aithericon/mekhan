@@ -46,13 +46,21 @@
 	let nodes = $state.raw<Node[]>(toFlowNodes(graph));
 	let edges = $state.raw<Edge[]>(toFlowEdges(graph, readonly));
 
+	// Container kinds — must come before their children in the node array so
+	// Svelte Flow can resolve `parentId` on child mount. Currently `scope`
+	// (free-form grouping) and `loop` (body authoring); future container
+	// kinds (e.g. SubWorkflow inline) get added here.
+	function isContainer(t: string): boolean {
+		return t === 'scope' || t === 'loop';
+	}
+	function containerSort<T extends { type: string }>(a: T, b: T): number {
+		if (isContainer(a.type) && !isContainer(b.type)) return -1;
+		if (!isContainer(a.type) && isContainer(b.type)) return 1;
+		return 0;
+	}
+
 	function toFlowNodes(g: WorkflowGraph): Node[] {
-		// Scope/group nodes must come before their children in the array
-		const sorted = [...g.nodes].sort((a, b) => {
-			if (a.type === 'scope' && b.type !== 'scope') return -1;
-			if (a.type !== 'scope' && b.type === 'scope') return 1;
-			return 0;
-		});
+		const sorted = [...g.nodes].sort(containerSort);
 		return sorted.map((n) => ({
 			id: n.id,
 			type: n.type,
@@ -83,12 +91,7 @@
 		if (graph !== lastGraphRef) {
 			lastGraphRef = graph;
 			const currentNodes = new Map(nodes.map((n) => [n.id, n]));
-			// Scope nodes must come before their children
-			const sorted = [...graph.nodes].sort((a, b) => {
-				if (a.type === 'scope' && b.type !== 'scope') return -1;
-				if (a.type !== 'scope' && b.type === 'scope') return 1;
-				return 0;
-			});
+			const sorted = [...graph.nodes].sort(containerSort);
 			nodes = sorted.map((n) => {
 				const existing = currentNodes.get(n.id);
 				return {
