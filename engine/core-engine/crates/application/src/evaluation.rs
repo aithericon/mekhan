@@ -339,8 +339,11 @@ pub(crate) async fn evaluate_until_quiescent<
                 let wf_id = *workflow_id_lock.read().unwrap();
                 // Snapshot the log position so a permanent failure can collect
                 // the audit events the firing layer appended (EffectFailed /
-                // ErrorOccurred / TokenRemoved) into the EvaluateResult.
-                let seq_before = events.current_sequence().await;
+                // ErrorOccurred / TokenRemoved) into the EvaluateResult. Use
+                // the storage-order index (events.len()) and positional
+                // slicing — the `.sequence` field is not safe to compare
+                // across hydrated multi-session logs (see get_marking_cached).
+                let idx_before = events.len().await;
                 // Fire the transition
                 let result = fire_transition::<E, T, S>(
                     events,
@@ -384,7 +387,7 @@ pub(crate) async fn evaluate_until_quiescent<
                         // Surface the audit events the firing layer appended
                         // (so callers/tests see them in EvaluateResult.events;
                         // the driver also re-reads the store for SSE).
-                        events_generated.extend(events.events_since(seq_before).await);
+                        events_generated.extend(events.events_from(idx_before).await);
                         return Ok(EvaluateResult {
                             steps_executed,
                             transitions_fired,
@@ -692,6 +695,205 @@ mod tests {
         );
     }
 
+    /// Regression for [[engine-loop-dup-seq]]: when the event log holds
+    /// hydrated events whose `.sequence` field restarts at 0 across
+    /// sessions, `get_marking_cached` must still satisfy
+    /// `marking == project(all_events())` after every live append. The
+    /// pre-fix implementation cursored by `.sequence`, so the Stale path
+    /// silently dropped any newly-appended event whose `.sequence` happened
+    /// to fall below the cursor — the cache then permanently disagreed with
+    /// the event log and the eval loop re-fired the same transition on a
+    /// stale binding.
+    #[tokio::test]
+    async fn get_marking_cached_matches_full_projection_under_dup_sequences() {
+        use petri_domain::{DomainEvent, PersistedEvent, PlaceId, Token, TokenColor, TokenId};
+
+        /// Test repo that lets us inject events with arbitrary `.sequence`
+        /// (simulating hydration of a multi-session NATS stream) AND uses
+        /// `Vec`-position semantics for `len`/`events_from`. This is the
+        /// shape `MemoryEventStore` has after the fix.
+        struct DupSeqRepo {
+            events: std::sync::RwLock<Vec<PersistedEvent>>,
+            next_seq: std::sync::Mutex<u64>,
+        }
+        impl DupSeqRepo {
+            fn new() -> Self {
+                Self {
+                    events: std::sync::RwLock::new(Vec::new()),
+                    next_seq: std::sync::Mutex::new(0),
+                }
+            }
+            fn load(&self, ev: PersistedEvent) {
+                self.events.write().unwrap().push(ev);
+            }
+        }
+        #[async_trait::async_trait]
+        impl crate::EventRepository for DupSeqRepo {
+            async fn append(
+                &self,
+                event: DomainEvent,
+            ) -> Result<PersistedEvent, crate::EventStoreError> {
+                let mut next = self.next_seq.lock().unwrap();
+                let seq = *next;
+                *next += 1;
+                let mut events = self.events.write().unwrap();
+                let prev_hash = events.last().map(|e| e.hash.clone());
+                let p = PersistedEvent::new(seq, event, prev_hash);
+                events.push(p.clone());
+                Ok(p)
+            }
+            async fn all_events(&self) -> Vec<PersistedEvent> {
+                self.events.read().unwrap().clone()
+            }
+            async fn events_since(&self, sequence: u64) -> Vec<PersistedEvent> {
+                self.events
+                    .read()
+                    .unwrap()
+                    .iter()
+                    .filter(|e| e.sequence >= sequence)
+                    .cloned()
+                    .collect()
+            }
+            async fn reset(&self) {
+                self.events.write().unwrap().clear();
+                *self.next_seq.lock().unwrap() = 0;
+            }
+            async fn current_sequence(&self) -> u64 {
+                self.events.read().unwrap().len() as u64
+            }
+            async fn len(&self) -> usize {
+                self.events.read().unwrap().len()
+            }
+            async fn events_from(&self, idx: usize) -> Vec<PersistedEvent> {
+                let g = self.events.read().unwrap();
+                let s = idx.min(g.len());
+                g[s..].to_vec()
+            }
+        }
+
+        struct Proj;
+        impl crate::StateProjection for Proj {
+            fn project(&self, events: &[PersistedEvent]) -> Marking {
+                let mut m = Marking::new();
+                for p in events {
+                    crate::apply_event_to_marking(&mut m, &p.event);
+                }
+                m
+            }
+        }
+
+        let repo = DupSeqRepo::new();
+        let proj = Proj;
+        let cache = std::sync::RwLock::new(None);
+        let place = PlaceId::named("p");
+
+        // -- Hydration phase: two prior sessions, sequences restart at 0.
+        let mk_create = |seq: u64, tid: TokenId| {
+            PersistedEvent::new(
+                seq,
+                DomainEvent::TokenCreated {
+                    token: Token {
+                        id: tid,
+                        color: TokenColor::Unit,
+                        created_at: chrono::Utc::now(),
+                        created_by_event: None,
+                        reply_routing: None,
+                    },
+                    place_id: place.clone(),
+                    place_name: None,
+                    workflow_id: None,
+                    signal_key: None,
+                    dedup_id: None,
+                },
+                None,
+            )
+        };
+        let mk_consume = |seq: u64, tid: TokenId| {
+            PersistedEvent::new(
+                seq,
+                DomainEvent::TransitionFired {
+                    transition_id: TransitionId::named("t"),
+                    transition_name: None,
+                    consumed_tokens: vec![(place.clone(), tid)],
+                    produced_tokens: vec![],
+                    read_tokens: vec![],
+                    process_step_started: None,
+                    process_step_completed: None,
+                },
+                None,
+            )
+        };
+
+        let tok_a = TokenId::new();
+        let tok_b = TokenId::new();
+        // Session 1: create-then-consume, sequences 0,1
+        repo.load(mk_create(0, tok_a.clone()));
+        repo.load(mk_consume(1, tok_a));
+        // Session 2: create-then-consume, sequences 0,1 AGAIN (overlap)
+        repo.load(mk_create(0, tok_b.clone()));
+        repo.load(mk_consume(1, tok_b));
+
+        // -- First call: Miss path projects all 4 events → marking should be
+        // empty (both creates consumed in-session). This is where the cursor
+        // gets seeded.
+        let m0 = get_marking_cached(&repo, &proj, &cache).await;
+        assert_eq!(m0.token_count(&place), 0, "hydrated sessions cancel out");
+
+        // -- Session 3 begins: a fresh live append seeds a token. Crucially,
+        // its `.sequence` is FAR BELOW the cursor (cursor is 4, this event
+        // has next_seq=0 because the test repo restarts). The Stale path
+        // must still pick it up.
+        let new_tok = TokenId::new();
+        repo.append(DomainEvent::TokenCreated {
+            token: Token {
+                id: new_tok.clone(),
+                color: TokenColor::Unit,
+                created_at: chrono::Utc::now(),
+                created_by_event: None,
+                reply_routing: None,
+            },
+            place_id: place.clone(),
+            place_name: None,
+            workflow_id: None,
+            signal_key: None,
+            dedup_id: None,
+        })
+        .await
+        .expect("append");
+
+        let m1 = get_marking_cached(&repo, &proj, &cache).await;
+        let full = proj.project(&repo.all_events().await);
+        assert_eq!(
+            m1.token_count(&place),
+            full.token_count(&place),
+            "marking = f(events) invariant must hold across the Stale path even when live appends carry a `.sequence` below the cursor (this fails with the pre-fix events_since-based cursor)"
+        );
+        assert_eq!(m1.token_count(&place), 1);
+
+        // -- Same again: a consume should retract the token, regardless of
+        // its `.sequence` field relative to the cursor.
+        repo.append(DomainEvent::TransitionFired {
+            transition_id: TransitionId::named("t"),
+            transition_name: None,
+            consumed_tokens: vec![(place.clone(), new_tok)],
+            produced_tokens: vec![],
+            read_tokens: vec![],
+            process_step_started: None,
+            process_step_completed: None,
+        })
+        .await
+        .expect("append");
+
+        let m2 = get_marking_cached(&repo, &proj, &cache).await;
+        let full2 = proj.project(&repo.all_events().await);
+        assert_eq!(
+            m2.token_count(&place),
+            full2.token_count(&place),
+            "Stale path must reach quiescence after consume"
+        );
+        assert_eq!(m2.token_count(&place), 0);
+    }
+
     #[test]
     fn deadend_throw_is_a_permanent_script_error() {
         // The synthesized `t_{id}_deadend` transition raises via Rhai `throw`.
@@ -714,17 +916,28 @@ mod tests {
 }
 
 /// Get the current marking, using a cache to avoid full event replay.
+///
+/// The cache cursor is the **storage-order count** of the event log
+/// (`events.len()`), and incremental updates use positional slicing
+/// (`events.events_from(idx)`). Filtering by the `.sequence` field is
+/// unsafe here: a cache hydrated from a multi-session NATS stream may
+/// hold events whose `.sequence` numbering restarts at 0 each session, so
+/// a sequence-field filter silently drops live appends whose `.sequence`
+/// happens to fall below the cursor — the cached marking then drifts away
+/// from `f(events)` and the eval loop re-fires the same transition on a
+/// stale binding (the executor-net infinite-fire bug, see
+/// [[engine-loop-dup-seq]]).
 pub(crate) async fn get_marking_cached<E: EventRepository, S: StateProjection>(
     events: &E,
     projection: &S,
     cached_state: &RwLock<Option<(u64, Marking)>>,
 ) -> Marking {
-    let current_seq = events.current_sequence().await;
+    let current_idx = events.len().await as u64;
 
     enum CacheState {
         Hit(Marking),
         Stale {
-            cached_seq: u64,
+            cached_idx: u64,
             cached_marking: Marking,
         },
         Miss,
@@ -733,11 +946,11 @@ pub(crate) async fn get_marking_cached<E: EventRepository, S: StateProjection>(
     let state = {
         let cache = cached_state.read().unwrap();
         match &*cache {
-            Some((cached_seq, cached_marking)) if *cached_seq == current_seq => {
+            Some((cached_idx, cached_marking)) if *cached_idx == current_idx => {
                 CacheState::Hit(cached_marking.clone())
             }
-            Some((cached_seq, cached_marking)) => CacheState::Stale {
-                cached_seq: *cached_seq,
+            Some((cached_idx, cached_marking)) => CacheState::Stale {
+                cached_idx: *cached_idx,
                 cached_marking: cached_marking.clone(),
             },
             None => CacheState::Miss,
@@ -747,20 +960,20 @@ pub(crate) async fn get_marking_cached<E: EventRepository, S: StateProjection>(
     match state {
         CacheState::Hit(marking) => marking,
         CacheState::Stale {
-            cached_seq,
+            cached_idx,
             mut cached_marking,
         } => {
-            let new_events = events.events_since(cached_seq).await;
+            let new_events = events.events_from(cached_idx as usize).await;
             for persisted in &new_events {
                 crate::apply_event_to_marking(&mut cached_marking, &persisted.event);
             }
-            *cached_state.write().unwrap() = Some((current_seq, cached_marking.clone()));
+            *cached_state.write().unwrap() = Some((current_idx, cached_marking.clone()));
             cached_marking
         }
         CacheState::Miss => {
             let all = events.all_events().await;
             let marking = projection.project(&all);
-            *cached_state.write().unwrap() = Some((current_seq, marking.clone()));
+            *cached_state.write().unwrap() = Some((current_idx, marking.clone()));
             marking
         }
     }

@@ -92,6 +92,14 @@ impl<E: EventRepository + 'static> EventRepository for MockNatsPublisher<E> {
     async fn current_sequence(&self) -> u64 {
         self.inner.current_sequence().await
     }
+
+    async fn len(&self) -> usize {
+        self.inner.len().await
+    }
+
+    async fn events_from(&self, idx: usize) -> Vec<PersistedEvent> {
+        self.inner.events_from(idx).await
+    }
 }
 
 /// Get a string representation of an event type for NATS subject naming.

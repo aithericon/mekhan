@@ -21,17 +21,59 @@ pub trait EventRepository: Send + Sync {
     /// May fail if the underlying store is unavailable (e.g., NATS down).
     async fn append(&self, event: DomainEvent) -> Result<PersistedEvent, EventStoreError>;
 
-    /// Get all events in sequence order.
+    /// Get all events in storage order.
     async fn all_events(&self) -> Vec<PersistedEvent>;
 
-    /// Get events starting from a sequence number.
+    /// Get events whose `.sequence` field is `>= sequence`.
+    ///
+    /// Filters by the *content* of `PersistedEvent.sequence`. This is **not**
+    /// safe to use for incremental cache cursoring when the log can contain
+    /// events with non-monotonic `.sequence` (e.g. hydrated old sessions whose
+    /// numbering overlaps with the current run). Prefer
+    /// [`events_from`](Self::events_from) for cache/cursor use cases.
     async fn events_since(&self, sequence: u64) -> Vec<PersistedEvent>;
 
     /// Clear all events (for testing/reset).
     async fn reset(&self);
 
-    /// Get the current sequence number (next event will have this number).
+    /// Get the current sequence number that the next live append will use.
+    ///
+    /// Implementations backed only by an in-memory `Vec` return `len()` here,
+    /// which coincides with "next sequence" only when sequences are monotonic
+    /// 0..len. For cache/cursor logic, prefer [`len`](Self::len) which is
+    /// always the storage-order count.
     async fn current_sequence(&self) -> u64;
+
+    /// Number of events currently in the log (storage-order count).
+    ///
+    /// This is the correct cursor for incremental projection: pair it with
+    /// [`events_from`](Self::events_from) to slice the events appended since
+    /// a remembered position. It is always monotonic w.r.t. live appends,
+    /// even if the cache was hydrated with events carrying overlapping
+    /// `.sequence` fields.
+    ///
+    /// Default goes through `all_events().len()` — correct for any impl,
+    /// but allocates. Override with a direct length read where possible.
+    async fn len(&self) -> usize {
+        self.all_events().await.len()
+    }
+
+    /// Slice the log from the given storage-order index to the end.
+    ///
+    /// Unlike [`events_since`](Self::events_since) this filters by *position*
+    /// in the log, not by the `.sequence` field. Use this — paired with
+    /// [`len`](Self::len) — to drive incremental marking cache updates: a
+    /// remembered index `i` plus `events_from(i)` always yields exactly the
+    /// events appended after `i`, regardless of whether their `.sequence`
+    /// values overlap with earlier hydrated events.
+    ///
+    /// Default slices `all_events()` — correct for any impl, but copies the
+    /// full log. Override with a direct positional slice where possible.
+    async fn events_from(&self, idx: usize) -> Vec<PersistedEvent> {
+        let all = self.all_events().await;
+        let start = idx.min(all.len());
+        all[start..].to_vec()
+    }
 }
 
 /// Port for topology storage (outbound).
