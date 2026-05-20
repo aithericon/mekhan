@@ -61,8 +61,9 @@ job "engine" {
 
     # Same NATS account as mekhan-service / executor — engine subscribes to
     # the workflow-event JetStream and publishes execution events. The
-    # mekhan-dev policy at HetznerCluster/layers/10_mekhan_nats already
-    # grants this Nomad workload identity read access to the worker creds.
+    # `mekhan-dev` Vault role + policy live in deploy/dev/nats.tf (this
+    # repo); its bound_claims list both "mekhan-service" and "engine" as
+    # acceptable nomad_job_id values, so both jobs assume the same role.
     vault {
       policies = ["nomad-workloads", "mekhan-dev"]
       role     = "mekhan-dev"
