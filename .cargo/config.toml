@@ -24,6 +24,11 @@ linker = "rust-lld"
 rustflags = [
     "-C", "link-self-contained=yes",
     "-C", "linker=rust-lld",
+    # Target Ampere Altra (Neoverse-N1, ARMv8.2-A) explicitly. Without this
+    # the compiler / cc-rs assume the build host's CPU features, which can
+    # include ARMv8.4+ instructions Ampere doesn't support — runtime SIGILL
+    # (exit 132). aws-lc-sys's aarch64 assembly is the usual culprit.
+    "-C", "target-cpu=neoverse-n1",
 ]
 
 [env]
@@ -33,6 +38,13 @@ SQLX_OFFLINE = "true"
 CC_aarch64_unknown_linux_musl  = "aarch64-linux-musl-gcc"
 CXX_aarch64_unknown_linux_musl = "aarch64-linux-musl-g++"
 AR_aarch64_unknown_linux_musl  = "aarch64-linux-musl-ar"
+
+# Tell the target C/C++ compiler to limit itself to Ampere's instruction set
+# (Neoverse-N1 / ARMv8.2-A). Without this, *-sys crates compile C with the
+# build host's broader feature set baked in → runtime SIGILL on Ampere.
+# Mirrors the `-C target-cpu=neoverse-n1` we set for rustc above.
+CFLAGS_aarch64_unknown_linux_musl   = "-mcpu=neoverse-n1"
+CXXFLAGS_aarch64_unknown_linux_musl = "-mcpu=neoverse-n1"
 
 # HOST compiler — explicit so build scripts that run on the x86_64 CI host
 # don't accidentally pick up the cross-gcc above. See header comment.
