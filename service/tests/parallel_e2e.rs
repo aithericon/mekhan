@@ -148,12 +148,28 @@ fn parallel_graph() -> Value {
                         "initial": { "id": "in", "label": "In", "fields": [] } } },
             { "id": "split", "type": "parallel_split", "position": { "x": 200, "y": 0 },
               "data": { "type": "parallel_split", "label": "Fork" } },
+            // HumanTask requires at least one step with at least one block —
+            // the engine's HumanTaskHandler rejects empty `steps` (see
+            // engine/core-engine/.../human_handlers.rs:78). Without a block
+            // here the effect fails immediately and no hpi_tasks row appears.
             { "id": "ta", "type": "human_task", "position": { "x": 400, "y": -80 },
               "data": { "type": "human_task", "label": "Task A",
-                        "taskTitle": "Do A", "steps": [] } },
+                        "taskTitle": "Do A",
+                        "steps": [{
+                            "id": "s1", "title": "Approve",
+                            "blocks": [{ "type": "input", "field": {
+                                "name": "ok", "label": "OK",
+                                "kind": "checkbox", "required": true } }]
+                        }] } },
             { "id": "tb", "type": "human_task", "position": { "x": 400, "y": 80 },
               "data": { "type": "human_task", "label": "Task B",
-                        "taskTitle": "Do B", "steps": [] } },
+                        "taskTitle": "Do B",
+                        "steps": [{
+                            "id": "s1", "title": "Approve",
+                            "blocks": [{ "type": "input", "field": {
+                                "name": "ok", "label": "OK",
+                                "kind": "checkbox", "required": true } }]
+                        }] } },
             { "id": "join", "type": "parallel_join", "position": { "x": 600, "y": 0 },
               "data": { "type": "parallel_join", "label": "Join" } },
             { "id": "e", "type": "end", "position": { "x": 800, "y": 0 },
