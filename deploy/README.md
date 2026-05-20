@@ -84,7 +84,20 @@ These have to happen **once, by hand**, before CI can deploy. They split between
    vault kv get secret/services/mekhan/dev
    ```
 
-2. **Local TF init files** — these are gitignored, copy them once per workstation:
+3. **Bootstrap the NATS user** — once, before the first `tofu apply`. Mints the `mekhan-dev-worker` user on the shared NATS broker and publishes its .creds bundle to Vault at `secret/nats/apps/mekhan/dev/worker`, which mekhan-service's Nomad alloc reads at startup. Same VPN + Vault env as step 2:
+
+   ```bash
+   export VAULT_ADDR=http://10.20.0.20:8200
+   export VAULT_TOKEN=hvs.…   # cluster bootstrap token from .secrets
+
+   ./deploy/dev/scripts/generate-nats-user.sh
+   ```
+
+   Re-run any time you want to rotate the user's creds — the helper deletes and recreates the user idempotently. The matching Vault policy + JWT-Nomad role are created by `tofu apply` from `deploy/dev/nats.tf`; the script and the TF are split this way (same as web-platform) so credential rotation never requires touching state.
+
+   Requires `nsc`, `vault`, and `jq` on PATH.
+
+4. **Local TF init files** — these are gitignored, copy them once per workstation:
 
    ```bash
    # dev — backend config is inlined in backend.tf, only tfvars needed
@@ -97,14 +110,14 @@ These have to happen **once, by hand**, before CI can deploy. They split between
 
    The `.example` files are pre-filled with the right Hetzner endpoints — usually only `image_repository` and the resource sizes need tweaking.
 
-3. **CI builder image** — must exist in the registry before `10-lint.yml` / `30-build.yml` / `40-deploy.yml` can pull it:
+5. **CI builder image** — must exist in the registry before `10-lint.yml` / `30-build.yml` / `40-deploy.yml` can pull it:
 
    ```bash
    docker login forge.aithericon.eu
    just ci::build-ci-builder forge.aithericon.eu/milanender
    ```
 
-4. **Bootstrap TF state** — run once from each layer to create the encrypted state object:
+6. **Bootstrap TF state** — run once from each layer to create the encrypted state object:
 
    ```bash
    # On a machine that can reach Hetzner S3 (no VPN needed for this part).
@@ -157,6 +170,6 @@ just ci::verify-deploy prod
 
 ## What's deliberately NOT in this scaffold
 
-- **Vault integration**. Every other service in HetznerCluster reads its runtime secrets from Vault at `secret/<service>/...` via a `vault { policies = [...]; role = "..." }` block in the jobspec. Mekhan currently passes everything through TF variables sourced from Woodpecker secrets — simpler for first iteration. To migrate: create a `secret/mekhan/runtime` KV in Vault (one-time, in HetznerCluster), create a Vault policy + JWT auth role, add a `vault {}` block + `template {}` stanzas to the jobspec rendering `MEKHAN__*` env vars from Vault data. The CI builder image already has the `vault` CLI baked in.
+- **Full Vault integration for runtime config**. The NATS creds bundle now flows through Vault — see `deploy/dev/nats.tf` for the policy + JWT-Nomad role and `deploy/dev/scripts/generate-nats-user.sh` for the bootstrap. Everything else (`MEKHAN__DATABASE_URL`, `MEKHAN__S3__*`, registry creds, etc.) still passes through TF variables sourced from Woodpecker secrets. To finish the migration: extend `nats.tf`'s `vault_policy.mekhan_dev_nats` (or add a sibling) to grant read on a `secret/services/mekhan/runtime` KV, seed that path, add `template {}` stanzas to the jobspec, and drop the corresponding `env {}` lines. The CI builder image already has the `vault` CLI baked in.
 - **engine + executor Nomad jobs**. The `Dockerfile.executor` is built and ready, but no TF layer deploys it. When you're ready, mirror the `dev/` / `prod/` structure with new layers next to it.
 - **Smoke tests post-deploy**. web-platform runs a `ci-smoke-test.yaml` after dev deploys; we don't have one yet.
