@@ -27,7 +27,8 @@ job "engine" {
 
     network {
       port "http" {
-        to = ${service_port}
+        static = ${service_port}
+        to     = ${service_port}
       }
     }
 
