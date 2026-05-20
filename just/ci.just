@@ -53,7 +53,8 @@ openapi-drift:
     cd ..
     echo "▶ Rebuilding mekhan CLI and dumping spec…"
     cargo build --bin mekhan
-    ./target/debug/mekhan openapi > /tmp/openapi-mekhan.regen.json
+    target_dir="${CARGO_TARGET_DIR:-target}"
+    "$target_dir/debug/mekhan" openapi > /tmp/openapi-mekhan.regen.json
     if ! diff -u openapi-mekhan.json /tmp/openapi-mekhan.regen.json; then
       echo "✗ openapi-mekhan.json is stale. Run \`just dev::openapi\` and commit." >&2
       exit 1
@@ -140,7 +141,11 @@ build-backend:
       --target {{target_triple}} \
       --manifest-path service/Cargo.toml \
       --bin mekhan-service
-    ls -lh target/{{target_triple}}/release/mekhan-service
+    # CARGO_TARGET_DIR is set in CI (.woodpecker/30-build.yml) so target/
+    # persists outside the per-run workspace; locally it's unset and cargo
+    # defaults to ./target. Same fallback shape as the `package` recipe.
+    target_dir="${CARGO_TARGET_DIR:-target}"
+    ls -lh "$target_dir/{{target_triple}}/release/mekhan-service"
 
 # Build the SvelteKit static SPA bundle
 # Output: app/build/index.html + assets
@@ -148,6 +153,12 @@ build-frontend:
     #!/usr/bin/env bash
     cd ../app
     echo "▶ Building SvelteKit static SPA"
+    # CI=true tells pnpm it's running non-interactively. Without it, pnpm
+    # aborts (no TTY) when it detects that existing node_modules came from a
+    # different platform — which is exactly what happens when this recipe
+    # runs in the linux CI builder over a node_modules previously populated
+    # on macOS. With CI=true pnpm silently purges + reinstalls cleanly.
+    export CI=true
     pnpm install --frozen-lockfile
     pnpm run build
     if [ ! -f build/index.html ]; then
@@ -170,7 +181,8 @@ apply-workflows dir="workflows":
     echo "▶ Building mekhan CLI"
     SQLX_OFFLINE=true cargo build --release \
       --manifest-path service/Cargo.toml --bin mekhan
-    bin=target/release/mekhan
+    target_dir="${CARGO_TARGET_DIR:-target}"
+    bin="$target_dir/release/mekhan"
     shopt -s nullglob
     found=0
     for d in {{dir}}/*/; do
@@ -199,10 +211,15 @@ package registry_image commit_sha ref_slug:
     ref_tag="{{ref_slug}}"
     ctx="/tmp/mekhan-build-context"
 
+    # CARGO_TARGET_DIR points outside the workspace in CI (set in
+    # .woodpecker/30-build.yml so target/ persists across runs); locally
+    # it's usually unset, in which case cargo defaults to ./target.
+    target_dir="${CARGO_TARGET_DIR:-target}"
+
     rm -rf "$ctx"
     mkdir -p "$ctx/frontend"
 
-    cp "target/{{target_triple}}/release/mekhan-service" "$ctx/mekhan-service"
+    cp "$target_dir/{{target_triple}}/release/mekhan-service" "$ctx/mekhan-service"
     cp -r app/build "$ctx/frontend/build"
 
     echo "▶ docker buildx build → {{registry_image}}/mekhan-service:$sha_tag"
@@ -223,16 +240,168 @@ push registry_image commit_sha ref_slug:
     docker push "{{registry_image}}/mekhan-service:{{commit_sha}}"
     docker push "{{registry_image}}/mekhan-service:{{ref_slug}}"
 
-# Build the fat CI builder image and push it to the registry
-# Usage: just ci::build-ci-builder registry.aithericon.eu/mekhan
+# Build + push the aithericon-executor image.
+#
+# Unlike `ci::package`, this builds Rust INSIDE the Docker image (multi-stage
+# Dockerfile.executor) rather than from a prebuilt artifact — kreuzberg's
+# native deps (tesseract, hdf5, …) make the cross-musl path painful, and the
+# executor runs glibc-Debian in production anyway. Heavier build, ~5-8 min.
+#
+# Uses `docker buildx --push` so the push happens inline (no separate
+# `push-executor` recipe needed). Caller still has to `docker login` first.
+package-and-push-executor registry_image commit_sha ref_slug:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd ..
+    sha_tag="{{commit_sha}}"
+    ref_tag="{{ref_slug}}"
+
+    echo "▶ docker buildx build + push → {{registry_image}}/aithericon-executor:$sha_tag"
+    docker buildx build \
+      --platform {{platform}} \
+      --push \
+      -t "{{registry_image}}/aithericon-executor:$sha_tag" \
+      -t "{{registry_image}}/aithericon-executor:$ref_tag" \
+      -f deploy/docker/Dockerfile.executor \
+      .
+
+# Build + push the aithericon-engine image.
+#
+# Engine is much simpler than the executor: pure-Rust + rustls, no native FFI,
+# no ONNX. Build is still inside Docker (~3-5 min cold) for the same reason
+# the executor is — the engine workspace has path deps on ../executor and
+# ../shared, so the build context must be the monorepo root.
+package-and-push-engine registry_image commit_sha ref_slug:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd ..
+    sha_tag="{{commit_sha}}"
+    ref_tag="{{ref_slug}}"
+
+    echo "▶ docker buildx build + push → {{registry_image}}/aithericon-engine:$sha_tag"
+    docker buildx build \
+      --platform {{platform}} \
+      --push \
+      -t "{{registry_image}}/aithericon-engine:$sha_tag" \
+      -t "{{registry_image}}/aithericon-engine:$ref_tag" \
+      -f deploy/docker/Dockerfile.engine \
+      .
+
+# Build the fat CI builder image and push it to the registry.
+#
+# Every .woodpecker/*.yml step uses this image as `image:`, so rebuilding it
+# is how you get a new toolchain / native dep into CI. Rebuild + push when
+# deploy/docker/Dockerfile.ci-build changes.
+#
+# Usage:
+#   docker login forge.aithericon.eu     # one-time, as the registry user
+#   just ci::build-ci-builder forge.aithericon.eu/milanender
+#
+# The image is published as `<registry_image>/mekhan-ci-builder:latest`.
+# `latest` is intentional — the woodpecker YAMLs pin to this tag, so the next
+# pipeline run picks up your update without a coordinated YAML change. If you
+# need atomic rollouts, switch the YAMLs to a SHA tag and produce that here.
 build-ci-builder registry_image:
     #!/usr/bin/env bash
     cd ..
     docker build \
       -f deploy/docker/Dockerfile.ci-build \
-      -t "{{registry_image}}/ci-builder:latest" \
+      -t "{{registry_image}}/mekhan-ci-builder:latest" \
       .
-    docker push "{{registry_image}}/ci-builder:latest"
+    docker push "{{registry_image}}/mekhan-ci-builder:latest"
+
+# ── Deploy (Terraform / Nomad) ──────────────────────────────────────────────
+#
+# Deploys the mekhan-service image to the dev or prod Nomad cluster. State
+# lives in S3-compatible storage (rustfs / MinIO); the backend is configured
+# via `backend.hcl` inside each layer — see deploy/{dev,prod}/backend.hcl.example.
+#
+# Secrets the deploy step expects (sourced from Woodpecker secrets in CI, or
+# from your shell when running locally):
+#
+#   TF_VAR_nomad_token            Nomad ACL token
+#   TF_VAR_registry_user          Forgejo registry username
+#   TF_VAR_registry_password      Forgejo registry password
+#   TF_VAR_database_url           Postgres URL for the target environment
+#   TF_VAR_s3_access_key          rustfs access key (for the artifact bucket)
+#   TF_VAR_s3_secret_key          rustfs secret key
+#   AWS_ACCESS_KEY_ID             For the Terraform S3 *state* backend
+#   AWS_SECRET_ACCESS_KEY         Same
+#
+# Non-secret config lives in {dev,prod}.auto.tfvars (gitignored — copy from
+# the .example next to it).
+
+# Plan + apply against the dev layer.
+# `image_tag` is required; CI sets it to CI_COMMIT_SHA.
+deploy-dev image_tag:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd ../deploy/dev
+    if [ ! -f dev.auto.tfvars ]; then
+      echo "✗ deploy/dev/dev.auto.tfvars missing. Copy dev.auto.tfvars.example." >&2
+      exit 1
+    fi
+    echo "▶ tofu init (dev)"
+    tofu init -input=false
+    echo "▶ tofu plan (image_tag={{image_tag}})"
+    tofu plan -input=false -var="image_tag={{image_tag}}" -out=plan.out
+    echo "▶ tofu apply"
+    tofu apply -input=false plan.out
+    rm -f plan.out
+    echo "✓ dev deploy applied"
+
+# Plan + apply against the prod layer. Same shape as deploy-dev.
+deploy-prod image_tag:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd ../deploy/prod
+    if [ ! -f backend.hcl ]; then
+      echo "✗ deploy/prod/backend.hcl missing." >&2
+      exit 1
+    fi
+    if [ ! -f prod.auto.tfvars ]; then
+      echo "✗ deploy/prod/prod.auto.tfvars missing." >&2
+      exit 1
+    fi
+    echo "▶ tofu init (prod)"
+    tofu init -input=false -backend-config=backend.hcl
+    echo "▶ tofu plan (image_tag={{image_tag}})"
+    tofu plan -input=false -var="image_tag={{image_tag}}" -out=plan.out
+    echo "▶ tofu apply"
+    tofu apply -input=false plan.out
+    rm -f plan.out
+    echo "✓ prod deploy applied"
+
+# Poll Nomad until the latest deployment for the mekhan-service job reaches a
+# terminal state. Used as the post-deploy gate in CI so a failing rollout
+# fails the pipeline. NOMAD_ADDR + NOMAD_TOKEN (and NOMAD_NAMESPACE if set)
+# must already be in the environment.
+verify-deploy env="dev":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd ../deploy/{{env}}
+    job=$(tofu output -raw job_id)
+    ns=$(tofu output -raw job_namespace)
+    echo "▶ waiting for Nomad deployment of $job ($ns) to settle…"
+    # NOMAD_ADDR + NOMAD_TOKEN come from the caller's env (set by the
+    # Woodpecker step). The Nomad CLI's `deployment status -latest` flag was
+    # removed in 1.6+ so we query the HTTP API directly — that endpoint
+    # always returns the latest deployment for the job.
+    deadline=$(( $(date +%s) + 300 ))
+    while :; do
+      status=$(curl -sk --max-time 10 \
+                 -H "X-Nomad-Token: ${NOMAD_TOKEN:-}" \
+                 "${NOMAD_ADDR}/v1/job/${job}/deployment?namespace=${ns}" \
+               | jq -r '.Status // ""')
+      case "$status" in
+        successful)         echo "✓ deployment successful"; exit 0 ;;
+        failed|cancelled)   echo "✗ deployment $status"; exit 1 ;;
+        running|"")         : ;;  # still rolling out
+        *)                  echo "  status=$status (continuing to poll)" ;;
+      esac
+      [ "$(date +%s)" -lt "$deadline" ] || { echo "✗ verify-deploy timed out"; exit 1; }
+      sleep 5
+    done
 
 # ── Convenience ─────────────────────────────────────────────────────────────
 

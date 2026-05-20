@@ -1,0 +1,146 @@
+# =============================================================================
+# Dockerfile.ci-build — Mekhan CI builder image
+# =============================================================================
+# All toolchain + native build deps baked in. Every .woodpecker step runs
+# inside this image so steps don't pay the per-job cost of `nix develop`
+# evaluation or apt-installing HDF5/NetCDF/protoc on a fresh runner.
+#
+# Model: web-platform/deploy/docker/Dockerfile.ci-build, trimmed to mekhan's
+# actual needs (single aarch64-musl target, no playwright/sqlx-cli/x86 musl).
+#
+# Build (locally, on the build pool, or via `just ci::build-ci-builder`):
+#   docker build -f deploy/docker/Dockerfile.ci-build \
+#                -t forge.aithericon.eu/milanender/mekhan-ci-builder:latest .
+#   docker push forge.aithericon.eu/milanender/mekhan-ci-builder:latest
+#
+# Use (CI):
+#   image: forge.aithericon.eu/milanender/mekhan-ci-builder:latest
+#   commands:
+#     - just ci::quality-rust
+#
+# Use (local one-off):
+#   docker run --rm -v $(pwd):/workspace -w /workspace \
+#     forge.aithericon.eu/milanender/mekhan-ci-builder:latest \
+#     just ci::build-backend
+# =============================================================================
+
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        cmake \
+        curl \
+        git \
+        gnupg \
+        libclang-dev \
+        libhdf5-dev \
+        libnetcdf-dev \
+        libpq-dev \
+        libssl-dev \
+        lsb-release \
+        musl-dev \
+        musl-tools \
+        openssh-client \
+        perl \
+        pkg-config \
+        postgresql-client \
+        protobuf-compiler \
+        python3 \
+        unzip \
+        wget \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── Docker CLI + buildx (for `just ci::package` → `docker buildx build`) ────
+RUN curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+        | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" \
+       > /etc/apt/sources.list.d/docker.list \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        docker-ce-cli \
+        docker-buildx-plugin \
+        docker-compose-plugin \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── Node.js 22 + pnpm 10.33 (matches app/package.json pin) ──────────────────
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/* \
+    && corepack enable \
+    && corepack prepare pnpm@10.33.0 --activate
+
+# ── Rust toolchain (stable) ─────────────────────────────────────────────────
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+        | sh -s -- -y --default-toolchain stable --profile minimal
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+RUN rustup component add clippy rustfmt \
+    && rustup target add aarch64-unknown-linux-musl
+
+# ── aarch64-musl toolchain (native, from musl.cc) ───────────────────────────
+# Cluster is all-cax21 (ARM64 Ampere Altra) and pipelines pin to that pool via
+# `labels: { host: worker-hetzner }`. The Woodpecker worker is therefore an
+# aarch64 host, so we ship the `-native` tarball (aarch64 ELF binaries that
+# emit aarch64-linux-musl) rather than web-platform's `-cross` tarball (x86_64
+# hosted, used by their amd64 runners).
+#
+# Build this image as `--platform linux/arm64` only. Don't push a multi-arch
+# manifest — Docker daemons end up grabbing the wrong variant under some
+# resolutions and *-sys crates die with "Exec format error (os error 8)".
+# Also: build on a real arm64 host (Apple Silicon Mac or arm64 Linux). If you
+# build `--platform linux/arm64` from x86_64 without QEMU/binfmt registered,
+# buildx will quietly smuggle amd64 binaries under an arm64 manifest label and
+# you'll hit the same Exec format error at CI time.
+#
+# The `-native` tarball ships some binaries under unprefixed names (`bin/ar`,
+# `bin/ld`) while only `gcc`/`g++` reliably carry the `aarch64-linux-musl-`
+# prefix. cc-rs invokes the prefixed names unconditionally, so the loop below
+# symlinks the prefixed form to whichever name actually exists, then
+# verifies both `gcc` and `ar` resolve — so a broken tarball fails the image
+# build here, not CI.
+RUN set -eux; \
+    curl -sL https://musl.cc/aarch64-linux-musl-native.tgz | tar xz -C /opt; \
+    toolprefix="/opt/aarch64-linux-musl-native"; \
+    for tool in gcc g++ ar ld ranlib strip nm objcopy objdump; do \
+        if [ -x "${toolprefix}/bin/aarch64-linux-musl-${tool}" ]; then \
+            ln -sf "${toolprefix}/bin/aarch64-linux-musl-${tool}" "/usr/local/bin/aarch64-linux-musl-${tool}"; \
+        elif [ -x "${toolprefix}/bin/${tool}" ]; then \
+            ln -sf "${toolprefix}/bin/${tool}" "/usr/local/bin/aarch64-linux-musl-${tool}"; \
+        else \
+            echo "warn: ${tool} not found in ${toolprefix}/bin (prefixed or unprefixed)" >&2; \
+        fi; \
+    done; \
+    aarch64-linux-musl-gcc --version | head -1; \
+    aarch64-linux-musl-ar  --version | head -1
+
+# ── just (command runner — pipeline shells out to `just ci::*` everywhere) ─
+RUN curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh \
+        | bash -s -- --to /usr/local/bin
+
+# ── OpenTofu + Nomad + Vault CLIs (Phase 2 deploy) ──────────────────────────
+ENV TOFU_VERSION=1.9.0
+ENV VAULT_VERSION=1.15.4
+ENV NOMAD_VERSION=1.11.2
+RUN ARCH=$(dpkg --print-architecture) \
+    && curl -fsSL "https://github.com/opentofu/opentofu/releases/download/v${TOFU_VERSION}/tofu_${TOFU_VERSION}_${ARCH}.deb" -o /tmp/tofu.deb \
+    && dpkg -i /tmp/tofu.deb && rm /tmp/tofu.deb \
+    && curl -fsSL "https://releases.hashicorp.com/vault/${VAULT_VERSION}/vault_${VAULT_VERSION}_linux_${ARCH}.zip" -o /tmp/vault.zip \
+    && unzip /tmp/vault.zip -d /usr/local/bin/ && rm /tmp/vault.zip \
+    && curl -fsSL "https://releases.hashicorp.com/nomad/${NOMAD_VERSION}/nomad_${NOMAD_VERSION}_linux_${ARCH}.zip" -o /tmp/nomad.zip \
+    && unzip -o /tmp/nomad.zip -d /usr/local/bin/ && rm /tmp/nomad.zip \
+    && apt-get update && apt-get install -y --no-install-recommends jq \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── Cross-compile env (matches .cargo/config.toml conventions) ──────────────
+ENV CC_aarch64_unknown_linux_musl=aarch64-linux-musl-gcc \
+    CXX_aarch64_unknown_linux_musl=aarch64-linux-musl-g++ \
+    AR_aarch64_unknown_linux_musl=aarch64-linux-musl-ar \
+    CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-musl-gcc \
+    PKG_CONFIG_ALLOW_CROSS=1 \
+    SQLX_OFFLINE=true
+
+WORKDIR /workspace
+
+CMD ["bash"]
