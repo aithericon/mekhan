@@ -34,7 +34,11 @@ ARG RUST_VERSION=1.91
 # -----------------------------------------------------------------------------
 # Builder — glibc-based; kreuzberg + libtesseract FFI rules out musl.
 # -----------------------------------------------------------------------------
-FROM rust:${RUST_VERSION}-bookworm AS builder
+# Trixie (Debian 13) — glibc 2.40+ / GCC 14. bookworm's glibc 2.36 is too
+# old for the prebuilt ONNX runtime binaries the `ort` crate pulls in via
+# kreuzberg-paddle-ocr (link fails with undefined `__isoc23_strtol` and
+# `__cxa_call_terminate`).
+FROM rust:${RUST_VERSION}-trixie AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -100,7 +104,10 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 # Runtime — Debian bookworm slim (glibc; kreuzberg + libtesseract FFI rule out
 # musl). A CUDA variant will be added as a separate Dockerfile when needed.
 # -----------------------------------------------------------------------------
-FROM debian:bookworm-slim AS runtime
+# Trixie runtime to match builder's glibc — keeps the executor binary
+# loadable; bookworm runtime would error at startup with "version
+# `GLIBC_2.39' not found" linking the ONNX shared object.
+FROM debian:trixie-slim AS runtime
 
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \

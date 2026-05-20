@@ -229,15 +229,15 @@ push registry_image commit_sha ref_slug:
     docker push "{{registry_image}}/mekhan-service:{{commit_sha}}"
     docker push "{{registry_image}}/mekhan-service:{{ref_slug}}"
 
-# Build + push the aithericon-executor image in one shot.
+# Build + push the aithericon-executor image.
 #
 # Unlike `ci::package`, this builds Rust INSIDE the Docker image (multi-stage
 # Dockerfile.executor) rather than from a prebuilt artifact — kreuzberg's
 # native deps (tesseract, hdf5, …) make the cross-musl path painful, and the
 # executor runs glibc-Debian in production anyway. Heavier build, ~5-8 min.
 #
-# Uses `--push` directly so we don't have to materialize the multi-arch image
-# locally (the build runner is single-arch arm64, matches the Nomad client).
+# Uses `docker buildx --push` so the push happens inline (no separate
+# `push-executor` recipe needed). Caller still has to `docker login` first.
 package-and-push-executor registry_image commit_sha ref_slug:
     #!/usr/bin/env bash
     set -euo pipefail

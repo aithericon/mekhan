@@ -46,7 +46,10 @@ steps:
       - just ci::build-frontend
     depends_on: []
 
-  - name: package-and-push
+  # Builds the mekhan-service OCI image from the prebuilt binary + frontend
+  # bundle produced by build-backend / build-frontend, then pushes both
+  # SHA and branch tags to the Forgejo registry.
+  - name: package-and-push-service
     image: forge.aithericon.eu/milanender/mekhan-ci-builder:latest
     pull: true
     environment:
@@ -66,9 +69,12 @@ steps:
       - just ci::push    "$REGISTRY" "$CI_COMMIT_SHA" "$CI_COMMIT_BRANCH"
     depends_on: [build-backend, build-frontend]
 
-  # The executor builds Rust inside its own Docker layer (Dockerfile.executor
-  # is multi-stage), so no dependency on build-backend / build-frontend.
-  # Runs in parallel with `package-and-push` to keep total pipeline time down.
+  # Builds the aithericon-executor OCI image. The executor's Dockerfile is
+  # multi-stage (Rust compile happens INSIDE Docker via BuildKit cache
+  # mounts), so this step doesn't need build-backend / build-frontend
+  # outputs. Runs in parallel with package-and-push-service to keep wall
+  # time down. Slower (~5-8 min) because kreuzberg + tesseract drag in
+  # heavy native deps.
   - name: package-and-push-executor
     image: forge.aithericon.eu/milanender/mekhan-ci-builder:latest
     pull: true
