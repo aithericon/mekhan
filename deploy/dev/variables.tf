@@ -219,6 +219,32 @@ variable "executor_concurrency" {
   default     = 4
 }
 
+# ── Engine (separate Nomad job; reached via engine.service.consul:3030) ─────
+
+variable "engine_image_repository" {
+  description = "Registry path for the engine image, tagged with image_tag (same SHA as service + executor — all three ship from the same monorepo commit)."
+  type        = string
+  default     = "forge.aithericon.eu/milanender/aithericon-engine"
+}
+
+variable "engine_service_port" {
+  description = "Port the engine binary listens on. Must match PORT env var; mekhan-service hard-codes :3030 in default_petri_lab_url."
+  type        = number
+  default     = 3030
+}
+
+variable "engine_cpu_mhz" {
+  description = "Engine CPU reservation. Lighter than executor — no kreuzberg/tesseract."
+  type        = number
+  default     = 500
+}
+
+variable "engine_memory_mb" {
+  description = "Engine memory reservation."
+  type        = number
+  default     = 512
+}
+
 variable "service_port" {
   description = "Port mekhan-service listens on (matches MEKHAN__PORT in the image)"
   type        = number

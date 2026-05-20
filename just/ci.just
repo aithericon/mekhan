@@ -254,6 +254,28 @@ package-and-push-executor registry_image commit_sha ref_slug:
       -f deploy/docker/Dockerfile.executor \
       .
 
+# Build + push the aithericon-engine image.
+#
+# Engine is much simpler than the executor: pure-Rust + rustls, no native FFI,
+# no ONNX. Build is still inside Docker (~3-5 min cold) for the same reason
+# the executor is — the engine workspace has path deps on ../executor and
+# ../shared, so the build context must be the monorepo root.
+package-and-push-engine registry_image commit_sha ref_slug:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd ..
+    sha_tag="{{commit_sha}}"
+    ref_tag="{{ref_slug}}"
+
+    echo "▶ docker buildx build + push → {{registry_image}}/aithericon-engine:$sha_tag"
+    docker buildx build \
+      --platform {{platform}} \
+      --push \
+      -t "{{registry_image}}/aithericon-engine:$sha_tag" \
+      -t "{{registry_image}}/aithericon-engine:$ref_tag" \
+      -f deploy/docker/Dockerfile.engine \
+      .
+
 # Build the fat CI builder image and push it to the registry.
 #
 # Every .woodpecker/*.yml step uses this image as `image:`, so rebuilding it
