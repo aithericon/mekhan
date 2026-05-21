@@ -432,6 +432,62 @@ pub async fn test_app_waiters(
     (router, db, result_waiters)
 }
 
+/// Like [`test_app_with_petri_url`] but also returns the `Arc<TriggerDispatcher>`
+/// from the constructed `AppState`. The same `Arc` must be handed to the
+/// `start_lifecycle_listener` task so the `on_instance_terminal` hook (used
+/// for `SingleActiveCoalesce` follow-up fires) talks to the same dispatcher
+/// the fire handler uses — two separate dispatchers would each hold their
+/// own `concurrency` DashMap and never converge.
+pub async fn test_app_with_petri_url_and_triggers(
+    nats_url: &str,
+    petri_url: &str,
+) -> (
+    Router,
+    PgPool,
+    Arc<mekhan_service::triggers::TriggerDispatcher>,
+) {
+    let db = create_test_db().await;
+    let mut config = test_config();
+    config.nats_url = nats_url.to_string();
+    config.petri_lab_url = petri_url.to_string();
+
+    let petri = PetriClient::new(petri_url);
+
+    let nats = MekhanNats::connect(nats_url, None)
+        .await
+        .unwrap_or_else(|e| panic!("failed to connect to NATS at {nats_url}: {e}"));
+
+    let yjs_persistence = YjsPersistence::new(db.clone());
+    let yjs_manager = Arc::new(YjsManager::new(yjs_persistence));
+    let artifact_store = Arc::new(ArtifactStore::new(&config.s3));
+    let session_store: Arc<dyn SessionStore> = Arc::new(PgSessionStore::new(db.clone()));
+
+    let triggers = test_triggers(db.clone(), petri.clone(), nats.clone());
+    let state = AppState {
+        db: db.clone(),
+        petri,
+        nats,
+        config: config.clone(),
+        yjs: yjs_manager,
+        s3: artifact_store,
+        artifact_s3: None,
+        catalogue_repo: Arc::new(PgCatalogueRepository::new(db.clone())),
+        live: LiveBroadcasts::new(),
+        authenticator: Arc::new(NoopAuthenticator::default()),
+        session_store,
+        oidc: None,
+        token_verifier: Arc::new(NoopTokenVerifier::default()),
+        principal_resolver: Arc::new(StaticPrincipalResolver),
+        introspection: None,
+        zitadel_mgmt: None,
+        triggers: triggers.clone(),
+        result_waiters: mekhan_service::triggers::ResultWaiters::new(),
+    };
+
+    let router = build_router(state);
+    (router, db, triggers)
+}
+
 /// Start the full Axum server on a random port for WebSocket tests.
 /// Returns `(SocketAddr, PgPool)` — the address to connect to and the pool for assertions.
 pub async fn start_test_server() -> (SocketAddr, PgPool) {

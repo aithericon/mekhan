@@ -160,15 +160,30 @@ pub fn doc_to_graph(doc: &Doc) -> Result<WorkflowGraph, String> {
         Some(Viewport { x, y, zoom })
     });
 
+    // -- instance_concurrency: read the top-level Y.Map written by
+    // graph_to_doc_with_files. Absent → default (Unlimited).
+    let instance_concurrency = txn
+        .get_map("instanceConcurrency")
+        .and_then(|m| {
+            let mut obj = serde_json::Map::new();
+            for (k, v) in m.iter(&txn) {
+                obj.insert(k.to_string(), yrs_value_to_json(&v, &txn));
+            }
+            if obj.is_empty() {
+                return None;
+            }
+            serde_json::from_value::<crate::models::template::InstanceConcurrencyPolicy>(
+                serde_json::Value::Object(obj),
+            )
+            .ok()
+        })
+        .unwrap_or_default();
+
     Ok(WorkflowGraph {
         nodes,
         edges,
         viewport,
-        // Yjs documents don't currently round-trip the template-level
-        // `instance_concurrency` policy — read it from the published `graph`
-        // JSON column instead. Default here keeps existing Yjs round-trips
-        // legacy-compatible.
-        instance_concurrency: Default::default(),
+        instance_concurrency,
     })
 }
 
@@ -326,6 +341,29 @@ pub fn graph_to_doc_with_files(
             vp_map.insert(&mut txn, "x", vp.x);
             vp_map.insert(&mut txn, "y", vp.y);
             vp_map.insert(&mut txn, "zoom", vp.zoom);
+        }
+
+        // -- instance_concurrency: top-level Y.Map ----------------------
+        // Round-trips the template-level policy so publish (which reads the
+        // graph back via doc_to_graph) doesn't silently downgrade
+        // `SingleActiveCoalesce` to the `Unlimited` default. Stored under
+        // `instanceConcurrency` (camelCase to match the frontend's existing
+        // Y.Map key convention). Default elided so legacy docs keep parsing.
+        if !matches!(
+            graph.instance_concurrency,
+            crate::models::template::InstanceConcurrencyPolicy::Unlimited
+        ) {
+            let ic_val = serde_json::to_value(graph.instance_concurrency)
+                .unwrap_or(serde_json::Value::Object(Default::default()));
+            let ic_map = txn.get_or_insert_map("instanceConcurrency");
+            // Write each key from the tagged enum object directly into the
+            // map (e.g. `mode: "single_active_coalesce"`) so future variants
+            // with additional fields round-trip without code changes here.
+            if let serde_json::Value::Object(obj) = ic_val {
+                for (k, v) in obj {
+                    ic_map.insert(&mut txn, k.as_str(), json_value_to_any(&v));
+                }
+            }
         }
     }
     doc
