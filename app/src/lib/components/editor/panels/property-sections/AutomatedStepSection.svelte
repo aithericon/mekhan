@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { AutomatedStepNodeData, ExecutionBackendType } from '$lib/types/editor';
 	import type { components } from '$lib/api/schema';
+	import type { ScopeEntry } from '$lib/editor/guard-scope';
 	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
 	import RotateCcw from '@lucide/svelte/icons/rotate-ccw';
@@ -27,9 +28,18 @@
 		binding?: YjsGraphBinding;
 		nodeId?: string;
 		templateId?: string;
+		scope?: ScopeEntry[];
 	};
 
-	let { data, readonly = false, onchange, binding, nodeId, templateId }: Props = $props();
+	let {
+		data,
+		readonly = false,
+		onchange,
+		binding,
+		nodeId,
+		templateId,
+		scope = []
+	}: Props = $props();
 
 	const outputPort = $derived<Port>(data.output ?? emptyOutputPort());
 
@@ -152,6 +162,7 @@
 		{binding}
 		{nodeId}
 		{templateId}
+		{scope}
 	/>
 {:else if data.executionSpec.backendType === 'docker'}
 	<DockerConfigPanel config={data.executionSpec.config as Record<string, unknown>} {readonly} onchange={handleConfigChange} />

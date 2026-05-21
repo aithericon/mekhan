@@ -7,16 +7,16 @@
 	import DecisionNodeSection from '$lib/components/editor/panels/property-sections/DecisionNodeSection.svelte';
 	import LoopNodeSection from '$lib/components/editor/panels/property-sections/LoopNodeSection.svelte';
 	import StepReferencePanel from '$lib/components/ide/StepReferencePanel.svelte';
-	import type { StepScopeField } from '$lib/api/client';
+	import type { ScopeEntry } from '$lib/editor/guard-scope';
 
 	type Props = {
 		binding: YjsGraphBinding;
 		nodeId: string;
 		readonly?: boolean;
-		/** This node's input scope (from getStepScopes); drives the reference panel. */
-		scopeFields?: StepScopeField[];
-		/** Why the scope is what it is (lets an empty panel explain itself). */
-		scopeDiagnostic?: string;
+		/** This node's in-scope refs (from `/api/analyze`). Drives the
+		 *  reference panel for Python steps and every nested section that
+		 *  embeds a RefPicker (Decision, Loop, AutomatedStep, HumanTask). */
+		scope?: ScopeEntry[];
 		scopeBusy?: boolean;
 		onRefreshScope?: () => void;
 	};
@@ -25,8 +25,7 @@
 		binding,
 		nodeId,
 		readonly = false,
-		scopeFields = [],
-		scopeDiagnostic = 'ok',
+		scope = [],
 		scopeBusy = false,
 		onRefreshScope
 	}: Props = $props();
@@ -94,7 +93,7 @@
 			</div>
 
 			{#if nodeData.type === 'start'}
-				<StartNodeSection data={nodeData} {readonly} onchange={handleChange} />
+				<StartNodeSection data={nodeData} {readonly} onchange={handleChange} {scope} />
 			{:else if nodeData.type === 'human_task'}
 				<div class="rounded-lg border border-dashed border-border bg-muted/20 p-3">
 					<p class="text-sm text-muted-foreground">
@@ -102,18 +101,17 @@
 					</p>
 				</div>
 			{:else if nodeData.type === 'automated_step'}
-				<AutomatedStepSection data={nodeData} {readonly} onchange={handleChange} {binding} {nodeId} />
+				<AutomatedStepSection data={nodeData} {readonly} onchange={handleChange} {binding} {nodeId} {scope} />
 			{:else if nodeData.type === 'decision'}
-				<DecisionNodeSection data={nodeData} {readonly} onchange={handleChange} />
+				<DecisionNodeSection data={nodeData} {readonly} onchange={handleChange} {scope} />
 			{:else if nodeData.type === 'loop'}
-				<LoopNodeSection data={nodeData} {readonly} onchange={handleChange} />
+				<LoopNodeSection data={nodeData} {readonly} onchange={handleChange} {scope} />
 			{/if}
 		</div>
 
 		{#if isPythonStep}
 			<StepReferencePanel
-				fields={scopeFields}
-				diagnostic={scopeDiagnostic}
+				{scope}
 				busy={scopeBusy}
 				{incomingCount}
 				onRefresh={onRefreshScope}

@@ -342,14 +342,15 @@ export class YjsGraphBinding {
 						[
 							'# Python step — runs on the Aithericon executor.',
 							'# `token`, `set_output` and `log_*` are injected by the runner',
-							'# (no imports, no init/shutdown). `token` is the workflow token;',
-							'# see the Reference panel for the fields you can read here.',
+							'# (no imports, no init/shutdown). The Reference panel on the right',
+							'# lists the qualified refs in scope here (`<slug>.<field>` for',
+							'# borrowed upstream data, `input.<path>` for control-token leaves).',
 							'',
 							'log_info("step started")',
 							'',
 							'# Each set_output(name, value) adds a field to this node’s output',
-							'# port, readable as token.<name> by downstream steps.',
-							'# set_output("result", token.some_field)',
+							'# port. Downstream steps borrow it as <this-node-slug>.<name>.',
+							'# set_output("result", token["some_field"])',
 							''
 						].join('\n')
 					)

@@ -1,44 +1,43 @@
 <script lang="ts">
-	// Read-only authoring reference for a Python automated step: the token
-	// fields readable here (this node's input scope, the same `input.<field>`
-	// set the generated `.pyi` types) plus the SDK helpers the runner injects.
-	// Purely presentational — data comes from `getStepScopes()`.
-	import type { StepScopeField } from '$lib/api/client';
+	// Read-only authoring reference for a Python automated step: the qualified
+	// fields readable here (this node's in-scope refs from the same
+	// `/api/analyze` source the Decision branch picker uses) plus the SDK
+	// helpers the runner injects.
+	//
+	// Renders `<slug>.<field>` / `input.<path>` qualified identifiers — the
+	// clean-cut model. The Python runner still injects a `token` object, so a
+	// footer reminds authors `token["field"]` works for dynamic access.
+	import type { ScopeEntry } from '$lib/editor/guard-scope';
 
 	type Props = {
-		/** This node's input scope: fields readable as `token.<name>`. */
-		fields: StepScopeField[];
-		/** Server diagnostic, so an empty list explains itself. */
-		diagnostic?: string;
+		/** This node's in-scope refs, grouped by producer in render. */
+		scope: ScopeEntry[];
 		busy?: boolean;
 		/** Edges into this step. >1 (non-Join) ⇒ unmerged fan-in. */
 		incomingCount?: number;
 		onRefresh?: () => void;
 	};
 
-	let {
-		fields,
-		diagnostic = 'ok',
-		busy = false,
-		incomingCount = 0,
-		onRefresh
-	}: Props = $props();
+	let { scope, busy = false, incomingCount = 0, onRefresh }: Props = $props();
 
 	const unmergedFanIn = $derived(incomingCount > 1);
 
-	// Turn the raw server diagnostic into a one-liner for the empty state.
-	const emptyReason = $derived.by(() => {
-		if (fields.length > 0) return null;
-		if (diagnostic.startsWith('ydoc_unreadable'))
-			return "Couldn't read the live graph — your edits aren't lost; try Refresh in a moment.";
-		if (diagnostic.startsWith('graph_not_scopable'))
-			return 'The graph isn’t a complete flow yet (missing Start, a cycle, or a dangling edge). Wire this step to an upstream node, then Refresh.';
-		if (diagnostic.startsWith('request_failed'))
-			return 'Scope request failed. Try Refresh.';
-		if (diagnostic === 'no_ydoc_using_saved_graph')
-			return 'Showing the last saved graph. Open/edit this template in the editor so the live scope can be computed.';
-		// diagnostic === 'ok' (or unknown): genuinely no upstream fields.
-		return 'No upstream fields reach this step yet. Connect it after a Start/step that emits fields (or use token["x"] for dynamic data).';
+	// Group entries by producer in stable first-seen order, with the synthetic
+	// "Process" bucket pushed last (control/identity, not business data) —
+	// mirrors the RefPicker grouping in the canvas Decision picker.
+	type Group = { key: string; label: string; isProcess: boolean; entries: ScopeEntry[] };
+	const groups = $derived.by(() => {
+		const out: Group[] = [];
+		for (const e of scope) {
+			const key = `${e.nodeId} ${e.nodeLabel}`;
+			let g = out.find((x) => x.key === key);
+			if (!g) {
+				g = { key, label: e.nodeLabel, isProcess: e.nodeLabel === 'Process', entries: [] };
+				out.push(g);
+			}
+			g.entries.push(e);
+		}
+		return out.sort((a, b) => Number(a.isProcess) - Number(b.isProcess));
 	});
 
 	// The runner auto-imports the SDK and injects these into step scope
@@ -47,11 +46,15 @@
 	const SDK_HELPERS: { sig: string; doc: string }[] = [
 		{
 			sig: 'token',
-			doc: 'The accumulating workflow token — ready to use, no import. Read fields as token.<name> (see below).'
+			doc: 'The accumulating workflow token — ready to use, no import. Read fields with the qualified paths above (e.g. token["review"]["invoice_amount"]).'
+		},
+		{
+			sig: 'load_inputs()',
+			doc: 'Typed helper that returns the inputs staged for this step (mirrors the qualified refs shown above).'
 		},
 		{
 			sig: 'set_output(name, value)',
-			doc: "Emit one field on this node's output port. Downstream steps read it off the token."
+			doc: "Emit one field on this node's output port. Downstream steps borrow it as <slug>.<name>."
 		},
 		{ sig: 'log_info(msg, **fields)', doc: 'Structured info log. Extra kwargs become log fields.' },
 		{ sig: 'log_warn(msg, **fields)', doc: 'Structured warning log.' },
@@ -89,7 +92,11 @@
 		<div class="space-y-1.5">
 			<div class="flex items-center justify-between gap-2">
 				<div class="text-sm font-medium text-foreground">
-					Token fields <span class="font-normal text-muted-foreground">— read via <code class="font-mono">token.&lt;name&gt;</code></span>
+					In-scope refs
+					<span class="font-normal text-muted-foreground">
+						— qualified <code class="font-mono">&lt;slug&gt;.&lt;field&gt;</code> or
+						<code class="font-mono">input.&lt;path&gt;</code>
+					</span>
 				</div>
 				{#if onRefresh}
 					<button
@@ -103,19 +110,35 @@
 					</button>
 				{/if}
 			</div>
-			{#if fields.length > 0}
-				<ul class="space-y-0.5">
-					{#each fields as f (f.name)}
-						<li class="flex items-baseline justify-between gap-2 text-sm">
-							<code class="font-mono text-foreground">token.{f.name}</code>
-							<span class="shrink-0 text-sm text-muted-foreground">{f.kind}</span>
+			{#if groups.length > 0}
+				<ul class="space-y-3">
+					{#each groups as g (g.key)}
+						<li class="space-y-0.5">
+							<div
+								class="text-sm uppercase tracking-wider {g.isProcess
+									? 'italic text-muted-foreground'
+									: 'text-muted-foreground'}"
+							>
+								{g.label}
+							</div>
+							<ul class="space-y-0.5">
+								{#each g.entries as e (e.qualified)}
+									<li class="flex items-baseline justify-between gap-2 text-sm">
+										<code class="font-mono text-foreground">{e.qualified}</code>
+										<span class="shrink-0 text-sm text-muted-foreground">{e.kind}</span>
+									</li>
+								{/each}
+							</ul>
 						</li>
 					{/each}
 				</ul>
 			{:else}
-				<p class="text-sm text-muted-foreground">{emptyReason}</p>
+				<p class="text-sm text-muted-foreground">
+					No upstream fields reach this step yet. Wire a Start or AutomatedStep upstream and
+					declare its output port to reference fields here.
+				</p>
 				<p class="text-sm text-muted-foreground/70">
-					Dynamic access always works: <code class="font-mono">token["field"]</code>.
+					Dynamic access always works at runtime: <code class="font-mono">token["field"]</code>.
 				</p>
 			{/if}
 		</div>

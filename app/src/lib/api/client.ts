@@ -281,7 +281,10 @@ export async function getIoStubs(
 	return res.generated ?? {};
 }
 
-/** A field readable as `token.<name>` at a Python step (its input scope). */
+/** A leaf field at a Python step's input scope. Picker UIs render this as
+ *  the qualified `<slug>.<field>` / `input.<path>` form via `/api/analyze`;
+ *  at runtime the Python SDK reads it off the injected `token` (dict or
+ *  attribute access). Kept for the io-stubs `.pyi` overlay generator. */
 export type StepScopeField = { name: string; kind: string };
 
 /**

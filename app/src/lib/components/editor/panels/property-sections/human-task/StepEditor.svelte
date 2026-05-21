@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { TaskStepConfig, TaskBlockConfig, TaskFieldConfig } from '$lib/types/editor';
 	import type { YjsGraphBinding } from '$lib/yjs/graph-binding.svelte';
+	import type { ScopeEntry } from '$lib/editor/guard-scope';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import { Input } from '$lib/components/ui/input';
 	import { Textarea } from '$lib/components/ui/textarea';
@@ -13,17 +14,27 @@
 	import PdfBlockEditor from './PdfBlockEditor.svelte';
 	import DownloadBlockEditor from './DownloadBlockEditor.svelte';
 	import BlockTypePicker from './BlockTypePicker.svelte';
+	import InsertRefButton from '../InsertRefButton.svelte';
 
 	type Props = {
 		step: TaskStepConfig;
 		readonly?: boolean;
 		binding?: YjsGraphBinding;
 		nodeId?: string;
+		scope?: ScopeEntry[];
 		onchange: (step: TaskStepConfig) => void;
 		onremove: () => void;
 	};
 
-	let { step, readonly = false, binding, nodeId, onchange, onremove }: Props = $props();
+	let {
+		step,
+		readonly = false,
+		binding,
+		nodeId,
+		scope = [],
+		onchange,
+		onremove
+	}: Props = $props();
 
 	function updateTitle(title: string) {
 		onchange({ ...step, title });
@@ -31,6 +42,11 @@
 
 	function updateDescription(descriptionMdsvex: string) {
 		onchange({ ...step, descriptionMdsvex: descriptionMdsvex || undefined });
+	}
+
+	function appendToDescription(snippet: string) {
+		const curr = step.descriptionMdsvex ?? '';
+		updateDescription(curr ? `${curr} ${snippet}` : snippet);
 	}
 
 	function addBlock(block: TaskBlockConfig) {
@@ -69,7 +85,7 @@
 	</div>
 
 	<!-- Step description -->
-	<div class="mb-3">
+	<div class="mb-3 space-y-1.5">
 		<Textarea
 			value={step.descriptionMdsvex ?? ''}
 			placeholder="Step description (Markdown)..."
@@ -77,6 +93,9 @@
 			oninput={(e) => updateDescription((e.currentTarget as HTMLTextAreaElement).value)}
 			rows={2}
 		/>
+		{#if scope.length > 0}
+			<InsertRefButton {scope} disabled={readonly} oninsert={appendToDescription} />
+		{/if}
 	</div>
 
 	<!-- Blocks -->
@@ -93,6 +112,7 @@
 				<MdsvexBlockEditor
 					content={block.content}
 					{readonly}
+					{scope}
 					onchange={(content) => updateBlock(blockIdx, { type: 'mdsvex', content })}
 					onremove={() => removeBlock(blockIdx)}
 				/>
@@ -102,6 +122,7 @@
 					title={block.title ?? undefined}
 					content={block.content}
 					{readonly}
+					{scope}
 					onchange={(updated) =>
 						updateBlock(blockIdx, { type: 'callout', ...updated })}
 					onremove={() => removeBlock(blockIdx)}
