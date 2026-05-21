@@ -139,8 +139,13 @@ impl<'a> PublishService<'a> {
     /// Make the just-published template's triggers live in the in-memory
     /// dispatcher immediately (it is otherwise only filled by `hydrate()` at
     /// startup). Returns the number registered for the caller's log line.
+    ///
+    /// Passes `do_backfill = true` so newly-added Catalog triggers whose
+    /// `backfill` flag is set walk historical catalogue entries on first
+    /// registration. Republishing an existing template won't re-fire
+    /// backfill because the dispatcher snapshots prior trigger ids.
     pub async fn register_triggers(&self, template: &WorkflowTemplate) -> usize {
-        self.state.triggers.register_template(template).await
+        self.state.triggers.register_template(template, true).await
     }
 }
 

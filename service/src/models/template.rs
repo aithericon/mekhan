@@ -48,6 +48,42 @@ pub struct WorkflowGraph {
     pub edges: Vec<WorkflowEdge>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub viewport: Option<Viewport>,
+    /// How concurrent fires (from triggers / manual / API) interact with
+    /// already-running instances of this template. Defaults to `Unlimited`
+    /// so existing templates load unchanged.
+    ///
+    /// Distinct from the per-`Trigger`-node `ConcurrencyPolicy` (which
+    /// gates *fires* by Skip/Queue/DedupKey before they reach this
+    /// template-level check). `InstanceConcurrencyPolicy` operates at the
+    /// instance lifecycle layer — it sees a fire that already passed the
+    /// per-trigger gate and decides whether to spawn now or coalesce.
+    #[serde(default, skip_serializing_if = "is_default_instance_concurrency")]
+    pub instance_concurrency: InstanceConcurrencyPolicy,
+}
+
+fn is_default_instance_concurrency(c: &InstanceConcurrencyPolicy) -> bool {
+    matches!(c, InstanceConcurrencyPolicy::Unlimited)
+}
+
+/// Template-level instance concurrency policy. Read by the trigger
+/// dispatcher on fire and the lifecycle listener on instance terminal.
+///
+/// Tagged on the wire as `{"mode": "unlimited"}` / `{"mode":
+/// "single_active_coalesce"}` so future variants (e.g. queue, locked)
+/// can land without breaking the existing wire shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+pub enum InstanceConcurrencyPolicy {
+    /// Every fire spawns a new instance. Default — matches legacy behaviour.
+    #[default]
+    Unlimited,
+    /// At most one active instance at a time. While an instance is running,
+    /// additional fires are *coalesced*: the dispatcher records that a fire
+    /// was missed and dispatches exactly one follow-up after the active
+    /// instance terminates. Right for state-mutating workflows whose body
+    /// re-reads its inputs (e.g., BO retrain reading the catalogue) where
+    /// a single follow-up absorbs N missed-while-busy fires.
+    SingleActiveCoalesce,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -1609,6 +1645,7 @@ impl WorkflowGraph {
                 edge_type: "sequence".to_string(),
             }],
             viewport: None,
+            instance_concurrency: Default::default(),
         }
     }
 }

@@ -572,7 +572,7 @@ async fn graph_topology_roundtrip() {
                 edge_type: "sequence".to_string(),
             },
         ],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(),
     };
 
     // -----------------------------------------------------------------------
@@ -820,7 +820,7 @@ async fn yaml_format_roundtrip() {
                     edge_type: "sequence".to_string(),
                 },
             ],
-            viewport: None,
+            viewport: None, instance_concurrency: Default::default(),
         }
     };
 

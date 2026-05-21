@@ -155,9 +155,11 @@ pub async fn start_lifecycle_listener(
                 subscription_manager.cleanup_net_subscriptions(net_id).await;
 
                 // Phase 5d: NetCompletion triggers fire on terminal status.
+                // SingleActiveCoalesce: dispatch coalesced follow-up if any.
                 if let Some(ref disp) = triggers {
                     crate::triggers::sources::net_completion::evaluate(disp, &db, net_id, "completed")
                         .await;
+                    disp.on_instance_terminal(net_id).await;
                 }
             }
             "cancelled" => {
@@ -219,6 +221,7 @@ pub async fn start_lifecycle_listener(
                 if let Some(ref disp) = triggers {
                     crate::triggers::sources::net_completion::evaluate(disp, &db, net_id, "cancelled")
                         .await;
+                    disp.on_instance_terminal(net_id).await;
                 }
             }
             "failed" => {
@@ -246,6 +249,7 @@ pub async fn start_lifecycle_listener(
                 if let Some(ref disp) = triggers {
                     crate::triggers::sources::net_completion::evaluate(disp, &db, net_id, "failed")
                         .await;
+                    disp.on_instance_terminal(net_id).await;
                 }
             }
             _ => {

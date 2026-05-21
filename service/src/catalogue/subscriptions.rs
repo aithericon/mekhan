@@ -496,7 +496,11 @@ fn matches_filters(sub: &CatalogueSubscription, entry: &CatalogueEntry) -> bool 
 }
 
 /// Convert subscription filters to `QueryParams` for backfill queries.
-fn filters_to_query_params(
+///
+/// Reused by `triggers::sources::catalog::backfill_one` so subscription and
+/// Catalog-trigger backfill share one filter→query translation; if the
+/// filter grammar grows new operators, both paths pick them up.
+pub(crate) fn filters_to_query_params(
     filters: &HashMap<String, HashMap<String, String>>,
 ) -> crate::query::extractor::QueryParams {
     use crate::query::filter::{Filter, FilterCondition, FilterOperator, FilterValue};

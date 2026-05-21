@@ -164,6 +164,11 @@ pub fn doc_to_graph(doc: &Doc) -> Result<WorkflowGraph, String> {
         nodes,
         edges,
         viewport,
+        // Yjs documents don't currently round-trip the template-level
+        // `instance_concurrency` policy — read it from the published `graph`
+        // JSON column instead. Default here keeps existing Yjs round-trips
+        // legacy-compatible.
+        instance_concurrency: Default::default(),
     })
 }
 
@@ -538,7 +543,7 @@ mod tests {
                 },
             ],
             edges: vec![],
-            viewport: None,
+            viewport: None, instance_concurrency: Default::default(),
         };
 
         let doc = graph_to_doc(&graph);
@@ -598,7 +603,7 @@ mod tests {
                     height: None,
                 }],
                 edges: vec![],
-                viewport: None,
+                viewport: None, instance_concurrency: Default::default(),
             }
         }
 

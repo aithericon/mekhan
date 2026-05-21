@@ -576,8 +576,11 @@ pub async fn set_trigger_enabled(
 
     // Refresh the in-memory registry so the change is live without a restart.
     // `register_template` clears this template+version's prior records first,
-    // so this is idempotent.
-    state.triggers.register_template(&updated).await;
+    // so this is idempotent. We pass `do_backfill = true` because this path
+    // also handles toggling a Catalog trigger from disabled→enabled, where
+    // backfill might legitimately be wanted — the dispatcher's prior-id
+    // snapshot still suppresses re-fires for triggers that didn't change.
+    state.triggers.register_template(&updated, true).await;
 
     let view = state
         .triggers
