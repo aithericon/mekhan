@@ -320,6 +320,9 @@ async fn live_catalogue_register_event_fires_catalog_trigger() {
         common::test_app_with_petri_url_and_triggers(&nats_url, &engine_url()).await;
     let nats = MekhanNats::connect(&nats_url, None).await.expect("nats");
     clean_slate(&nats).await;
+    // Clean baseline so the projection-failure assertion at the end is
+    // about THIS test, not a previous run that drifted shapes.
+    mekhan_service::causality::ingest::reset_projection_failures();
     let _consumers = spawn_consumers(nats.clone(), db.clone(), triggers).await;
 
     let category = format!("test_live_ingest_{}", Uuid::new_v4().simple());
@@ -378,4 +381,76 @@ async fn live_catalogue_register_event_fires_catalog_trigger() {
     let (_, got_category) =
         cat_row.expect("catalogue_entries should hold the row ingest projected");
     assert_eq!(got_category, category);
+
+    // Regression guard: any silent projection drop in this test run would
+    // mean a synthetic event was malformed in a way we didn't catch. The
+    // first iteration of this test hit exactly that — `created_at` missing
+    // → ingest warn + return Ok, no catalogue row, no trigger fire — and
+    // the only visible symptom was the timeout above. With loud failures
+    // wired, that bug now also bumps `projection_failures()`.
+    assert_eq!(
+        mekhan_service::causality::ingest::projection_failures(),
+        0,
+        "projection failures occurred during this test — \
+         check error logs targeted at `mekhan_service::causality::projection_failure` \
+         for the structured details"
+    );
+}
+
+/// Proof-of-loudness: publish a deliberately malformed `catalogue_register`
+/// event (missing the required `created_at`) and verify that
+/// `projection_failures()` bumps. Catches future regressions where someone
+/// "helpfully" adds a fallback or removes the error-level log — anything
+/// that silently absorbs the drop without bumping the counter.
+#[tokio::test]
+async fn malformed_catalogue_register_bumps_projection_failures() {
+    if !engine_available().await {
+        panic!(
+            "engine not available at {} — start the stack with `just dev up`",
+            engine_url()
+        );
+    }
+    let nats_url = engine_nats_url();
+    let (_app, _db, triggers) =
+        common::test_app_with_petri_url_and_triggers(&nats_url, &engine_url()).await;
+    let nats = MekhanNats::connect(&nats_url, None).await.expect("nats");
+    clean_slate(&nats).await;
+    mekhan_service::causality::ingest::reset_projection_failures();
+    let db = _db;
+    let _consumers = spawn_consumers(nats.clone(), db.clone(), triggers).await;
+
+    let baseline = mekhan_service::causality::ingest::projection_failures();
+    assert_eq!(baseline, 0, "reset should leave counter at 0");
+
+    // Build an EffectCompleted event whose effect_result is missing the
+    // required `created_at` field on CatalogueRegisterCommand.
+    let net_id = format!("mekhan-fake-malformed-{}", Uuid::new_v4());
+    let bad_cmd = json!({
+        "execution_id": "x",
+        "job_id": "y",
+        "artifact_id": "z",
+        "name": "Bad",
+        "category": "wont_fire_anyway",
+        "filename": "x.bin"
+        // created_at intentionally omitted
+    });
+    let event = catalogue_register_event(1, bad_cmd);
+    publish_event(&nats.jetstream(), &net_id, "effect_completed", &event).await;
+
+    // Wait for ingest to consume and the counter to bump.
+    let start = std::time::Instant::now();
+    while start.elapsed() < Duration::from_secs(10) {
+        if mekhan_service::causality::ingest::projection_failures() > baseline {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
+    let after = mekhan_service::causality::ingest::projection_failures();
+    assert!(
+        after > baseline,
+        "malformed catalogue_register event should bump projection_failures \
+         (baseline={baseline}, after={after}) — if this fails, either the \
+         loud-failure wiring at `record_projection_failure` was removed or \
+         the projector grew a silent fallback that swallows malformed shapes"
+    );
 }

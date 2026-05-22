@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -14,6 +15,47 @@ use crate::catalogue::subscriptions::SubscriptionManager;
 use crate::causality::live::LiveBroadcasts;
 use crate::nats::MekhanNats;
 use crate::triggers::TriggerDispatcher;
+
+// ── Loud-failure counter for projection drops ─────────────────────────────
+//
+// The causality ingest pipeline can't NAK a malformed message back into the
+// queue — deserialization failures are deterministic, so retry would loop
+// forever. We ACK + log + increment this counter so:
+//   - Production: alerting can watch the counter (or grep the structured
+//     `projection_failure` log target).
+//   - Tests: integration tests assert `projection_failures() == 0` at
+//     teardown to catch the silent-drop pattern that historically masked
+//     bugs like the missing `created_at` on `CatalogueRegisterCommand`.
+//
+// Process-wide (not per-consumer) — a single canonical "something went
+// sideways" signal. Tests that need a clean baseline call
+// `reset_projection_failures()` explicitly.
+static PROJECTION_FAILURES: AtomicU64 = AtomicU64::new(0);
+
+/// Total projection drops since process start (or last reset). Tests read
+/// this as a regression guard against silent malformed-event drops.
+pub fn projection_failures() -> u64 {
+    PROJECTION_FAILURES.load(Ordering::Relaxed)
+}
+
+/// Reset the projection failure counter — exclusively for tests that want a
+/// clean baseline. Production code should never call this.
+pub fn reset_projection_failures() {
+    PROJECTION_FAILURES.store(0, Ordering::Relaxed);
+}
+
+/// Record one drop with structured context. The `kind` tag distinguishes
+/// envelope-level drops (`event_envelope`, `bridge_transfer`) from
+/// per-handler effect_result drops (`catalogue_register`, …).
+fn record_projection_failure(kind: &str, error: &dyn std::fmt::Display) {
+    PROJECTION_FAILURES.fetch_add(1, Ordering::Relaxed);
+    tracing::error!(
+        target: "mekhan_service::causality::projection_failure",
+        kind = kind,
+        error = %error,
+        "projection failure — malformed event ACKed and dropped"
+    );
+}
 
 /// Slim serde type for CrossNetTokenTransfer messages on `petri.bridge.>`.
 /// Avoids depending on `petri-nats` crate.
@@ -110,7 +152,7 @@ async fn process_bridge_transfer(
     let transfer: CrossNetTokenTransfer = match serde_json::from_slice(payload) {
         Ok(t) => t,
         Err(e) => {
-            tracing::warn!("causality: failed to deserialize bridge transfer: {e}");
+            record_projection_failure("bridge_transfer", &e);
             return Ok(());
         }
     };
@@ -161,7 +203,7 @@ async fn process_domain_event(
     let persisted: PersistedEvent = match serde_json::from_slice(payload) {
         Ok(p) => p,
         Err(e) => {
-            tracing::warn!("causality: failed to deserialize event: {e}");
+            record_projection_failure("event_envelope", &e);
             return Ok(());
         }
     };
@@ -1474,7 +1516,7 @@ async fn register_catalogue_entry(
     let cmd: CatalogueRegisterCommand = match serde_json::from_value(effect_result.clone()) {
         Ok(c) => c,
         Err(e) => {
-            tracing::warn!("catalogue_register: failed to deserialize effect_result: {e}");
+            record_projection_failure("catalogue_register", &e);
             return Ok(());
         }
     };
