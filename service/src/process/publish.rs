@@ -17,7 +17,7 @@ use uuid::Uuid;
 
 use crate::compiler::{
     compile_to_air_with_subworkflows, generate_py_io_files, make_child_callable,
-    node_input_scopes, CompileError, ResolvedChild, SubWorkflowAir,
+    node_input_scopes, node_namespace_scopes, CompileError, ResolvedChild, SubWorkflowAir,
 };
 use crate::models::error::ApiError;
 use crate::models::template::{
@@ -183,13 +183,19 @@ fn synthesize_py_io_files(
     graph: &WorkflowGraph,
     ydoc_files: &mut HashMap<String, HashMap<String, String>>,
 ) {
+    let ns_scopes = node_namespace_scopes(graph).ok();
     if let Ok(scopes) = node_input_scopes(graph) {
         for node in &graph.nodes {
             if let WorkflowNodeData::AutomatedStep { execution_spec, .. } = &node.data {
                 if execution_spec.backend_type == ExecutionBackendType::Python {
                     if let Some(scope) = scopes.get(&node.id) {
                         let entry = ydoc_files.entry(node.id.clone()).or_default();
-                        for (filename, source) in generate_py_io_files(scope) {
+                        let empty = std::collections::BTreeMap::new();
+                        let ns = ns_scopes
+                            .as_ref()
+                            .and_then(|m| m.get(&node.id))
+                            .unwrap_or(&empty);
+                        for (filename, source) in generate_py_io_files(scope, ns) {
                             entry.insert(filename.to_string(), source);
                         }
                     }

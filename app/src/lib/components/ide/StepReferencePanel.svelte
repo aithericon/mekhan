@@ -43,17 +43,15 @@
 		return out.sort((a, b) => Number(a.isProcess) - Number(b.isProcess));
 	});
 
-	// Turn a qualified ref into the Python dict-access form the SDK expects.
-	//   "review.invoice_amount" → token["review"]["invoice_amount"]
-	//   "input.amount"          → token["amount"]   (the `input.` prefix is
-	//                                                implicit at the runtime
-	//                                                token root)
+	// The runner exposes each upstream `<slug>` as a Python global and
+	// `token`/`input` for the slim control token, so a qualified ref
+	// inserts as the literal attribute-access expression — no
+	// `token[...]` wrapping. `input.<field>` stays addressed off the
+	// control-token loader (which is also accessible as `input`).
+	//   "review.invoice_amount" → review.invoice_amount
+	//   "input.invoice_id"      → input.invoice_id
 	function refToPythonAccess(qualified: string): string {
-		const stripped = qualified.startsWith('input.')
-			? qualified.slice('input.'.length)
-			: qualified;
-		const parts = stripped.split('.');
-		return parts.reduce((acc, p) => `${acc}["${p}"]`, 'token');
+		return qualified;
 	}
 
 	function insert(entry: ScopeEntry) {

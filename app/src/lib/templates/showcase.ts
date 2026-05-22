@@ -481,16 +481,15 @@ const showcaseFiles: Record<string, Record<string, string>> = {
 # 'define_phases' declares the process layout the user watches live; each
 # 'update_phase' / 'update_progress' / 'log_*' call streams to the process
 # view via the executor → causality → hpi_logs/hpi_metrics pipeline.
-# 'load_input()' returns the workflow token; the generated _aithericon_io.pyi
-# types each leaf so the IDE's Reference panel mirrors the picker's
-# '<slug>.<field>' / 'input.<path>' scope.
+#
+# Upstream data is available as plain Python globals — one per slug. The
+# compiler detects every <slug>.<field> access here and stages the
+# producer's parked data alongside the job, so 'review' below is the
+# upstream HumanTask's full form token. No imports, no token[...].
 import time
 
-from _aithericon_io import load_input
-
-token = load_input()
-vendor = token["vendor_name"] or ""
-amount = token["invoice_amount"] or 0
+vendor = review.vendor_name or ""
+amount = review.invoice_amount or 0
 
 # Process layout / definition surfaced to the user for this step.
 define_phases(["Load document", "OCR scan", "NLP extraction", "Validate", "Emit"])
@@ -544,10 +543,15 @@ update_phase("Emit", "completed")
 # form + Extract output).
 import time
 
-from _aithericon_io import load_input
-
-token = load_input()
-amount = token["amount"] if token.get("amount") is not None else (token["invoice_amount"] or 0)
+# Each upstream slug is a Python global. The compiler stages exactly the
+# producers referenced here ('extract.amount', 'review.invoice_amount')
+# as <slug>.json so this just works — no imports, no token[...]. A
+# missing attribute is None at runtime; the .pyi types it Optional[T].
+amount = (
+    extract.amount
+    if getattr(extract, "amount", None) is not None
+    else (review.invoice_amount or 0)
+)
 
 # Process layout / definition surfaced to the user for this step.
 define_phases(["Load token", "Sanctions screening", "Fraud scoring", "Decision"])

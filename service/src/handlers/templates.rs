@@ -11,7 +11,8 @@ use aithericon_executor_domain::InputSource;
 
 use crate::auth::AuthUser;
 use crate::compiler::{
-    compile_to_air, compile_to_air_with_subworkflows, generate_py_io_files, node_input_scopes,
+    compile_to_air, compile_to_air_with_subworkflows, generate_py_io_files,
+    node_input_scopes, node_namespace_scopes,
 };
 use crate::lifecycle::cleanup_net;
 use crate::models::error::{ApiError, ErrorResponse};
@@ -1252,6 +1253,7 @@ pub async fn io_stubs(
     // (BTreeMap) for stable display.
     let mut scopes_out: HashMap<String, Vec<serde_json::Value>> = HashMap::new();
     if let Some(graph) = graph {
+        let ns_scopes = node_namespace_scopes(&graph).ok();
         match node_input_scopes(&graph) {
             Ok(scopes) => {
                 for node in &graph.nodes {
@@ -1259,7 +1261,12 @@ pub async fn io_stubs(
                         if execution_spec.backend_type == ExecutionBackendType::Python {
                             if let Some(scope) = scopes.get(&node.id) {
                                 let entry = generated.entry(node.id.clone()).or_default();
-                                for (filename, source) in generate_py_io_files(scope) {
+                                let empty = std::collections::BTreeMap::new();
+                                let ns = ns_scopes
+                                    .as_ref()
+                                    .and_then(|m| m.get(&node.id))
+                                    .unwrap_or(&empty);
+                                for (filename, source) in generate_py_io_files(scope, ns) {
                                     entry.insert(filename.to_string(), source);
                                 }
                                 scopes_out.insert(

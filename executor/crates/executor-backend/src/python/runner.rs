@@ -4,16 +4,24 @@ use aithericon_executor_domain::ExecutorError;
 
 /// Write the Python runner template that wraps user code.
 ///
-/// The runner provides:
-/// 1. `token` — the accumulating workflow token, usable as `token.<field>`
-///    with no import (rich SDK `Token` when the SDK is present, plain dict
-///    otherwise). This is the primary input surface.
-/// 2. `inputs` dict — the raw staged-file map from `AITHERICON_INPUTS_DIR`
-///    (escape hatch for named / binary files).
-/// 3. `set_output(name, value)` — file-based output that writes JSON to `AITHERICON_OUTPUTS_DIR`
-/// 4. If the `aithericon` SDK is installed, upgrades `token`/`set_output` and
-///    adds IPC-backed artifacts, progress, logging, and metrics.
-/// 5. Executes the user code file with all helpers available in scope.
+/// The runner exposes upstream workflow data as plain Python globals — one
+/// per `<slug>.json` staged input (e.g. an upstream `review` AutomatedStep
+/// becomes a `review` namespace; `review.invoice_amount` is a normal
+/// attribute lookup). The compiler synthesizes a read-arc + stages the
+/// producer's parked envelope whenever a `<slug>.<attr>` access is
+/// detected in user source, so authors never write `token[...]` or call
+/// the SDK to read borrowed data.
+///
+/// Still injected for compatibility / SDK helpers:
+/// 1. `token` / `input` — the slim control token (Start fields + metadata),
+///    loaded from `input.json`.
+/// 2. `inputs` — raw staged-file map (escape hatch for binary or named
+///    files).
+/// 3. `set_output(name, value)` — file-based output that writes JSON to
+///    `AITHERICON_OUTPUTS_DIR`.
+/// 4. If the `aithericon` SDK is installed, upgrades `set_output` + adds
+///    IPC-backed artifacts, progress, logging, and metrics (`token` stays
+///    the dict view; the SDK path doesn't replace it any more).
 pub async fn write_runner(
     runner_path: &Path,
     user_code_path: &Path,
@@ -37,6 +45,32 @@ _inputs_dir = os.environ.get("AITHERICON_INPUTS_DIR")
 if _inputs_dir:
     sys.path.insert(0, _inputs_dir)
 os.chdir(_run_dir)
+
+# --- Attribute-accessible dict ---
+class _AccessibleDict(dict):
+    """A dict that also supports attribute access for its keys, so a
+    workflow producer envelope staged as `<slug>.json` can be read as
+    `<slug>.<field>` from user code without any wrapper. Nested dicts and
+    list elements are wrapped recursively. Falls back to AttributeError
+    (not KeyError) for missing attrs to keep Python's `hasattr` /
+    `getattr(obj, key, default)` semantics intact."""
+    def __getattr__(self, key):
+        try:
+            return self[key]
+        except KeyError:
+            raise AttributeError(f"{{type(self).__name__}} has no attribute {{key!r}}")
+
+    def __setattr__(self, key, value):
+        self[key] = value
+
+
+def _accessible(value):
+    if isinstance(value, dict):
+        return _AccessibleDict({{k: _accessible(v) for k, v in value.items()}})
+    if isinstance(value, list):
+        return [_accessible(v) for v in value]
+    return value
+
 
 # --- Load inputs ---
 def _load_inputs():
@@ -63,10 +97,37 @@ def _load_inputs():
 
 inputs = _load_inputs()
 
-# The accumulating workflow token, ready to use as `token.<field>` with no
-# import (upgraded to the rich SDK Token below when the SDK is present).
-# Plain-dict fallback keeps `token` defined even without the SDK.
-token = inputs.get("input.json", {{}}) if isinstance(inputs, dict) else {{}}
+# Slim control token (Start fields + `_*` metadata + `task_id`/`status`),
+# loaded from the staged `input.json`. Available as both `token` (legacy
+# name) and `input` (the natural reading: "this is the inbound token").
+# Wrapped so `token.<field>` works the same way as upstream slug
+# namespaces, no `token["field"]` ceremony needed.
+_input_raw = inputs.get("input.json", {{}}) if isinstance(inputs, dict) else {{}}
+token = _accessible(_input_raw) if isinstance(_input_raw, dict) else _input_raw
+input = token  # noqa: A001  the natural Python reading; shadowing the
+               # builtin is acceptable inside a workflow step where the
+               # input is the central named value.
+
+# Expose each `<slug>.json` staged input as a top-level Python global so
+# `<slug>.<field>` is a plain attribute lookup. The compiler stages one
+# producer envelope per upstream `<slug>.<attr>` reference detected in
+# this step's source (see service/src/compiler/python_refs.rs). Names that
+# would clash with the runner's own SDK helpers are skipped — the picker
+# warns at edit time but the runtime stays correct.
+_RESERVED_GLOBALS = {{
+    "token", "input", "inputs", "set_output", "load_inputs",
+    "log_info", "log_warn", "log_error", "log_debug", "log_metric",
+    "log_artifact", "update_progress", "define_phases", "update_phase",
+    "aithericon", "sys", "os", "json",
+}}
+for _name, _value in (inputs.items() if isinstance(inputs, dict) else []):
+    if not isinstance(_name, str) or not _name.endswith(".json") or _name == "input.json":
+        continue
+    _slug = _name[:-5]
+    if not _slug or not _slug.isidentifier() or _slug in _RESERVED_GLOBALS:
+        continue
+    globals()[_slug] = _accessible(_value)
+
 
 # --- Output helper (file-based fallback) ---
 def set_output(name, value):
@@ -77,6 +138,7 @@ def set_output(name, value):
         with open(os.path.join(outputs_dir, name + ".json"), "w") as f:
             json.dump(value, f)
 
+
 # --- Try to upgrade to SDK (IPC-backed) ---
 try:
     import aithericon
@@ -85,8 +147,10 @@ try:
     print(f"[runner] SDK imported, socket={{_ipc_sock}}, python={{_sys.executable}}", file=_sys.stderr)
     aithericon.init()
     print(f"[runner] SDK init ok, connected={{aithericon._client.is_connected()}}", file=_sys.stderr)
-    inputs = aithericon.load_inputs() or inputs
-    token = aithericon.token()
+    # The dict view of `token` is the authoritative one for the new direct
+    # slug-access model — don't swap it for an IPC handle here, or
+    # `token.field` would stop working. SDK still upgrades the
+    # side-effectful helpers.
     set_output = aithericon.set_output
     log_artifact = aithericon.log_artifact
     update_progress = aithericon.update_progress
