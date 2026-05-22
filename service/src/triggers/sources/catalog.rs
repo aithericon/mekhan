@@ -158,36 +158,135 @@ pub async fn backfill_one(
     );
 }
 
-/// Re-implementation of `subscriptions::matches_filters` over the same wire
-/// shape but accepting the dispatcher-side `HashMap` directly. Currently only
-/// `eq` is supported, matching the existing subscription contract.
+/// Source-of-truth predicate: does this catalogue entry match every filter
+/// the trigger declares? Walked twice — once on every live ingest, and once
+/// per entry during backfill. Has to match the DB-side
+/// `filters_to_query_params` semantics; when the DB returns a superset (e.g.
+/// because we can't translate an operator to SQL) this post-filter is what
+/// makes the actual decision.
+///
+/// ## Grammar
+///
+/// Each filter is `{field: {operator: value}}`. Top-level multiple fields
+/// are ANDed; multiple operators on the same field are also ANDed.
+///
+/// **Fields:**
+/// - Bare names map to direct `CatalogueEntry` columns: `category`,
+///   `source_net`, `source_place`, `process_id`, `process_step`, `name`,
+///   `filename`.
+/// - Dotted paths `user_metadata.<key>` and `file_metadata.<key>` read one
+///   level into the respective JSONB column. Deeper paths are not supported
+///   (keep the surface flat; if you need richer queries, encode them in a
+///   sentinel category).
+///
+/// **Operators:**
+/// - `eq`, `ne` — string equality / inequality (compares the JSON value's
+///   rendered string for jsonb fields)
+/// - `lt`, `lte`, `gt`, `gte` — numeric ordering; both sides parse to f64.
+///   If either side isn't a parseable number the filter fails closed (no
+///   match), which is the safer default.
+///
+/// Unknown operators or unknown bare fields fail closed.
 fn matches_filters(
     filters: &HashMap<String, HashMap<String, String>>,
     entry: &CatalogueEntry,
 ) -> bool {
     for (field, ops) in filters {
+        let actual = resolve_field(field, entry);
         for (operator, expected) in ops {
-            if operator != "eq" {
-                tracing::debug!(field, operator, "unsupported filter operator");
+            if !apply_op(operator, actual.as_ref(), expected) {
                 return false;
-            }
-            let actual: Option<&str> = match field.as_str() {
-                "category" => Some(&entry.category),
-                "source_net" => entry.source_net.as_deref(),
-                "source_place" => entry.source_place.as_deref(),
-                "process_id" => entry.process_id.as_deref(),
-                "process_step" => entry.process_step.as_deref(),
-                "name" => Some(&entry.name),
-                "filename" => Some(&entry.filename),
-                _ => return false,
-            };
-            match actual {
-                Some(v) if v == expected.as_str() => {}
-                _ => return false,
             }
         }
     }
     true
+}
+
+/// Resolve a filter field to an opaque JSON value (or None if the field is
+/// unknown / absent on this entry). Operators interpret the value
+/// themselves; equality / numeric semantics depend on the operator.
+fn resolve_field(field: &str, entry: &CatalogueEntry) -> Option<Value> {
+    // JSONB metadata access: `user_metadata.<key>` / `file_metadata.<key>`
+    // — one level deep, matching the catalogue's flat-metadata convention.
+    if let Some(key) = field.strip_prefix("user_metadata.") {
+        return entry.user_metadata.get(key).cloned();
+    }
+    if let Some(key) = field.strip_prefix("file_metadata.") {
+        return entry.file_metadata.get(key).cloned();
+    }
+    let s = match field {
+        "category" => Some(entry.category.clone()),
+        "source_net" => entry.source_net.clone(),
+        "source_place" => entry.source_place.clone(),
+        "process_id" => entry.process_id.clone(),
+        "process_step" => entry.process_step.clone(),
+        "name" => Some(entry.name.clone()),
+        "filename" => Some(entry.filename.clone()),
+        _ => None, // unknown bare field — fail closed
+    };
+    s.map(Value::String)
+}
+
+/// Apply a single operator. `actual` is the resolved field value (None if
+/// the entry doesn't carry that field — equality/ordering always fail
+/// closed in that case; `ne` is the natural exception and is the only op
+/// that flips that default).
+fn apply_op(operator: &str, actual: Option<&Value>, expected: &str) -> bool {
+    match operator {
+        "eq" => actual
+            .and_then(value_as_compare_string)
+            .map(|s| s == expected)
+            .unwrap_or(false),
+        "ne" => actual
+            .and_then(value_as_compare_string)
+            .map(|s| s != expected)
+            // Field absent → "not equal to anything" — treat as match so
+            // filters like `{user_metadata.failed: {ne: "yes"}}` accept
+            // entries that don't carry the metadata key at all.
+            .unwrap_or(true),
+        "lt" | "lte" | "gt" | "gte" => {
+            let lhs = actual.and_then(value_as_number);
+            let rhs = expected.parse::<f64>().ok();
+            match (lhs, rhs) {
+                (Some(a), Some(e)) => match operator {
+                    "lt" => a < e,
+                    "lte" => a <= e,
+                    "gt" => a > e,
+                    "gte" => a >= e,
+                    _ => unreachable!(),
+                },
+                _ => false, // unparseable on either side → fail closed
+            }
+        }
+        unknown => {
+            tracing::debug!(operator = unknown, "unsupported filter operator");
+            false
+        }
+    }
+}
+
+/// Render a JSON value as a string for `eq`/`ne`. Numbers / booleans
+/// stringify so a user can author `{user_metadata.step: {eq: "0"}}`
+/// against a JSON `0` and still match — predictability beats strict typing
+/// for an authoring surface.
+fn value_as_compare_string(v: &Value) -> Option<String> {
+    match v {
+        Value::String(s) => Some(s.clone()),
+        Value::Number(n) => Some(n.to_string()),
+        Value::Bool(b) => Some(b.to_string()),
+        Value::Null => None,
+        // Composite values (Object/Array) aren't comparable as strings
+        // here; users should target a leaf via a dotted path.
+        _ => None,
+    }
+}
+
+fn value_as_number(v: &Value) -> Option<f64> {
+    match v {
+        Value::Number(n) => n.as_f64(),
+        Value::String(s) => s.parse::<f64>().ok(),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -237,11 +336,13 @@ mod tests {
     }
 
     #[test]
-    fn no_match_on_unsupported_operator() {
+    fn unknown_operator_fails_closed() {
+        // `foo` isn't in our grammar — fail closed so a typo can't silently
+        // turn into "match everything".
         let mut filters = HashMap::new();
-        let mut ne = HashMap::new();
-        ne.insert("ne".to_string(), "invoice".to_string());
-        filters.insert("category".to_string(), ne);
+        let mut ops = HashMap::new();
+        ops.insert("foo".to_string(), "invoice".to_string());
+        filters.insert("category".to_string(), ops);
         assert!(!matches_filters(&filters, &entry()));
     }
 
@@ -249,5 +350,154 @@ mod tests {
     fn empty_filters_match_everything() {
         let filters = HashMap::new();
         assert!(matches_filters(&filters, &entry()));
+    }
+
+    // ── Extended grammar (BO-driven additions) ────────────────────────
+
+    fn entry_with_metadata(user_meta: Value, file_meta: Value) -> CatalogueEntry {
+        CatalogueEntry {
+            user_metadata: user_meta,
+            file_metadata: file_meta,
+            ..entry()
+        }
+    }
+
+    #[test]
+    fn ne_matches_when_field_differs() {
+        let mut filters = HashMap::new();
+        let mut ops = HashMap::new();
+        ops.insert("ne".to_string(), "invoice".to_string());
+        filters.insert("category".to_string(), ops);
+        assert!(matches_filters(&filters, &entry()));
+    }
+
+    #[test]
+    fn ne_matches_when_jsonb_field_absent() {
+        // Filtering "exclude failed observations" — entries without the
+        // metadata key at all should still match (ne against absent).
+        let mut filters = HashMap::new();
+        let mut ops = HashMap::new();
+        ops.insert("ne".to_string(), "yes".to_string());
+        filters.insert("user_metadata.failed".to_string(), ops);
+        assert!(matches_filters(&filters, &entry()));
+    }
+
+    #[test]
+    fn user_metadata_eq_matches_jsonb_string_leaf() {
+        let user_meta = serde_json::json!({ "campaign": "alpha", "step": 7 });
+        let mut filters = HashMap::new();
+        let mut ops = HashMap::new();
+        ops.insert("eq".to_string(), "alpha".to_string());
+        filters.insert("user_metadata.campaign".to_string(), ops);
+        assert!(matches_filters(
+            &filters,
+            &entry_with_metadata(user_meta, Value::Null)
+        ));
+    }
+
+    #[test]
+    fn user_metadata_eq_matches_jsonb_number_coerced_to_string() {
+        // Numbers stringify so authors don't have to remember the underlying
+        // JSON type when writing eq filters.
+        let user_meta = serde_json::json!({ "step": 7 });
+        let mut filters = HashMap::new();
+        let mut ops = HashMap::new();
+        ops.insert("eq".to_string(), "7".to_string());
+        filters.insert("user_metadata.step".to_string(), ops);
+        assert!(matches_filters(
+            &filters,
+            &entry_with_metadata(user_meta, Value::Null)
+        ));
+    }
+
+    #[test]
+    fn user_metadata_gt_compares_numbers() {
+        // BO's "skip observations before bootstrap is complete":
+        //   user_metadata.step > 5
+        let user_meta = serde_json::json!({ "step": 10 });
+        let mut filters = HashMap::new();
+        let mut ops = HashMap::new();
+        ops.insert("gt".to_string(), "5".to_string());
+        filters.insert("user_metadata.step".to_string(), ops);
+        assert!(matches_filters(
+            &filters,
+            &entry_with_metadata(user_meta.clone(), Value::Null)
+        ));
+
+        // Boundary cases for the four ordering ops.
+        let mut at_threshold = HashMap::new();
+        at_threshold.insert("gt".to_string(), "10".to_string());
+        let mut at = HashMap::new();
+        at.insert("user_metadata.step".to_string(), at_threshold);
+        assert!(
+            !matches_filters(&at, &entry_with_metadata(user_meta.clone(), Value::Null)),
+            "gt should be strict (10 > 10 is false)"
+        );
+
+        let mut gte_at = HashMap::new();
+        gte_at.insert("gte".to_string(), "10".to_string());
+        let mut gte = HashMap::new();
+        gte.insert("user_metadata.step".to_string(), gte_at);
+        assert!(matches_filters(
+            &gte,
+            &entry_with_metadata(user_meta, Value::Null)
+        ));
+    }
+
+    #[test]
+    fn lt_lte_fail_closed_when_field_missing() {
+        // No `step` → ordering ops can't decide → fail closed (safer than
+        // accepting all entries that happen to lack the field).
+        let user_meta = serde_json::json!({});
+        let mut filters = HashMap::new();
+        let mut ops = HashMap::new();
+        ops.insert("lt".to_string(), "10".to_string());
+        filters.insert("user_metadata.step".to_string(), ops);
+        assert!(!matches_filters(
+            &filters,
+            &entry_with_metadata(user_meta, Value::Null)
+        ));
+    }
+
+    #[test]
+    fn multiple_operators_on_same_field_are_anded() {
+        // `5 < step <= 10`
+        let user_meta = serde_json::json!({ "step": 10 });
+        let mut ops = HashMap::new();
+        ops.insert("gt".to_string(), "5".to_string());
+        ops.insert("lte".to_string(), "10".to_string());
+        let mut filters = HashMap::new();
+        filters.insert("user_metadata.step".to_string(), ops);
+        assert!(matches_filters(
+            &filters,
+            &entry_with_metadata(user_meta, Value::Null)
+        ));
+    }
+
+    #[test]
+    fn unparseable_number_fails_ordering_op_closed() {
+        let user_meta = serde_json::json!({ "step": "ten" });
+        let mut filters = HashMap::new();
+        let mut ops = HashMap::new();
+        ops.insert("gt".to_string(), "5".to_string());
+        filters.insert("user_metadata.step".to_string(), ops);
+        assert!(!matches_filters(
+            &filters,
+            &entry_with_metadata(user_meta, Value::Null)
+        ));
+    }
+
+    #[test]
+    fn file_metadata_path_works_too() {
+        // Parity with user_metadata — same dotted grammar.
+        let file_meta = serde_json::json!({ "mime": "application/json" });
+        let mut filters = HashMap::new();
+        let mut ops = HashMap::new();
+        ops.insert("eq".to_string(), "application/json".to_string());
+        filters.insert("file_metadata.mime".to_string(), ops);
+        assert!(matches_filters(
+            &filters,
+            &entry_with_metadata(Value::Null, file_meta)
+        ));
     }
 }
