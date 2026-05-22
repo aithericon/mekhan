@@ -130,42 +130,46 @@ impl EffectHandler for HttpInferenceHandler {
 
         let system_prompt = config.get("system_prompt").and_then(|v| v.as_str());
 
-        // 3. Build the inference request.
-        //    Token fields from p_input: file_b64, mime_type, document_id.
-        //    Maps to Item 1's POST /v1/inference shape:
-        //    { model, system_prompt?, prompt, images:[{base64, mime_type}] }
-        let images: JsonValue = {
-            let file_b64 = job_data.get("file_b64").and_then(|v| v.as_str());
-            let mime_type = job_data
-                .get("mime_type")
-                .and_then(|v| v.as_str())
-                .unwrap_or("image/png");
-            if let Some(b64) = file_b64 {
-                serde_json::json!([{ "base64": b64, "mime_type": mime_type }])
-            } else {
-                serde_json::json!([])
+        // 3. Build the inference request — task_kind-dispatched body-builder
+        //    (#126.3). Replaces the DI-shape-hardcoded prompt at this site
+        //    with a per-task_kind body shape; the prior session's Sections
+        //    D/E/F (letter / patient_qa / context-cite / clinical_validation)
+        //    failed under the hardcoded path because Chat-style scenarios
+        //    were silently fed a DI-extraction prompt + empty images.
+        //
+        //    task_kind values clinic uses (per server/data/petri-nets/*.json
+        //    inventory 2026-05-22): "Vision", "Chat", "Agent",
+        //    "StructuredOutput", "Asr", "Embeddings". The first four route
+        //    through `/v1/inference`; "Asr" and "Embeddings" run on different
+        //    executor handlers (not this dispatch path) and surface as a hard
+        //    Fatal here so misconfigured routing fails loudly.
+        let task_kind = config
+            .get("task_kind")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                EffectError::Fatal(
+                    "HttpInferenceHandler requires task_kind in effect_config".into(),
+                )
+            })?;
+
+        let mut inference_body = match task_kind {
+            "Vision" => build_vision_body(required_model, job_data),
+            "Chat" | "Agent" | "StructuredOutput" => {
+                build_chat_body(required_model, job_data, config)?
+            }
+            "Embeddings" | "Asr" => {
+                return Err(EffectError::Fatal(format!(
+                    "HttpInferenceHandler: task_kind '{task_kind}' is not served by /v1/inference; \
+                     route to the appropriate executor handler"
+                )));
+            }
+            other => {
+                return Err(EffectError::Fatal(format!(
+                    "HttpInferenceHandler: unrecognized task_kind '{other}'"
+                )));
             }
         };
 
-        let document_id = job_data
-            .get("document_id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-
-        let prompt = if document_id.is_empty() {
-            "Extract structured fields from the attached image.".to_string()
-        } else {
-            format!(
-                "Extract structured fields from the attached image. document_id={}",
-                document_id
-            )
-        };
-
-        let mut inference_body = serde_json::json!({
-            "model": required_model,
-            "prompt": prompt,
-            "images": images,
-        });
         if let Some(sp) = system_prompt {
             if let Some(obj) = inference_body.as_object_mut() {
                 obj.insert("system_prompt".to_string(), JsonValue::String(sp.to_string()));
@@ -238,6 +242,109 @@ impl EffectHandler for HttpInferenceHandler {
                 "#/definitions/HttpInferenceSubmitted".into(),
             )]),
         })
+    }
+}
+
+/// Build a Vision-style inference body: extracts `file_b64` + `mime_type` +
+/// `document_id` from the input token and authors the DI-extraction prompt.
+/// This is the historical path; #126.3 preserves it verbatim and routes via
+/// `task_kind == "Vision"`.
+fn build_vision_body(required_model: &str, job_data: &JsonValue) -> JsonValue {
+    let file_b64 = job_data.get("file_b64").and_then(|v| v.as_str());
+    let mime_type = job_data
+        .get("mime_type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("image/png");
+    let images: JsonValue = if let Some(b64) = file_b64 {
+        serde_json::json!([{ "base64": b64, "mime_type": mime_type }])
+    } else {
+        serde_json::json!([])
+    };
+
+    let document_id = job_data
+        .get("document_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    let prompt = if document_id.is_empty() {
+        "Extract structured fields from the attached image.".to_string()
+    } else {
+        format!(
+            "Extract structured fields from the attached image. document_id={}",
+            document_id
+        )
+    };
+
+    serde_json::json!({
+        "model": required_model,
+        "prompt": prompt,
+        "images": images,
+    })
+}
+
+/// Build a Chat-style inference body for `Chat` / `Agent` / `StructuredOutput`
+/// task_kinds. The user prompt is the JSON-serialized input token with
+/// system fields (`_instance_id` / `_template_id` / `_template_version` /
+/// `_created_at` / `_created_by` — injected by `parameterize_*`) stripped so
+/// the LLM sees only the clinical-domain payload. For `Agent`, an optional
+/// `tool_catalogue` in effect_config is forwarded into the request body as
+/// `tools` — executor-llm passes it through to the underlying provider.
+///
+/// No images: Chat/Agent/StructuredOutput scenarios don't bear image inputs;
+/// if a scenario does, it belongs on the Vision branch.
+fn build_chat_body(
+    required_model: &str,
+    job_data: &JsonValue,
+    config: &JsonValue,
+) -> Result<JsonValue, EffectError> {
+    let stripped = strip_system_fields(job_data);
+    let user_prompt = serde_json::to_string(&stripped).map_err(|e| {
+        EffectError::Fatal(format!(
+            "HttpInferenceHandler: failed to serialize input token as prompt JSON: {e}"
+        ))
+    })?;
+    if user_prompt.is_empty() || user_prompt == "{}" || user_prompt == "null" {
+        return Err(EffectError::Fatal(
+            "HttpInferenceHandler: chat-style task_kind requires a non-empty input token \
+             (system fields stripped — token had no domain payload)"
+                .into(),
+        ));
+    }
+
+    let mut body = serde_json::json!({
+        "model": required_model,
+        "prompt": user_prompt,
+    });
+    if let Some(tools) = config.get("tool_catalogue") {
+        if let Some(obj) = body.as_object_mut() {
+            obj.insert("tools".to_string(), tools.clone());
+        }
+    }
+    Ok(body)
+}
+
+/// Strip the system fields `parameterize_air` / `parameterize_for_place`
+/// inject into every seeded token. Keep this list in sync with those
+/// functions in mekhan-service's `petri::instance` module.
+fn strip_system_fields(token: &JsonValue) -> JsonValue {
+    const SYSTEM_FIELDS: &[&str] = &[
+        "_instance_id",
+        "_template_id",
+        "_template_version",
+        "_created_at",
+        "_created_by",
+    ];
+    match token {
+        JsonValue::Object(map) => {
+            let mut clean = serde_json::Map::new();
+            for (k, v) in map {
+                if !SYSTEM_FIELDS.contains(&k.as_str()) {
+                    clean.insert(k.clone(), v.clone());
+                }
+            }
+            JsonValue::Object(clean)
+        }
+        other => other.clone(),
     }
 }
 
@@ -379,6 +486,7 @@ mod tests {
             "base_url": format!("http://{}", addr),
             "lease_token": "Bearer-test-token-xyz",
             "required_model": "test-model-a",
+            "task_kind": "Vision",
         });
         let token_data = json!({
             "file_b64": "aGVsbG8=",
@@ -422,6 +530,7 @@ mod tests {
             "base_url": format!("http://{}", addr),
             "lease_token": "tok-error",
             "required_model": "test-model-b",
+            "task_kind": "Vision",
         });
         let input = make_input_with_config("job", json!({"document_id": "x"}), Some(config));
         let err = handler.execute(input).await.unwrap_err();
@@ -447,6 +556,7 @@ mod tests {
             "base_url": format!("http://{}", addr),
             "lease_token": "tok-img",
             "required_model": "test-model-a",
+            "task_kind": "Vision",
         });
         let token = json!({
             "file_b64": "aW1hZ2VkYXRh",
@@ -466,6 +576,183 @@ mod tests {
         let first = images.get(0).expect("at least one image entry");
         assert_eq!(first["base64"], "aW1hZ2VkYXRh");
         assert_eq!(first["mime_type"], "image/jpeg");
+    }
+
+    // ── #126.3 task_kind dispatch tests ──────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_handler_rejects_missing_task_kind() {
+        let handler = HttpInferenceHandler::new("job", "submitted");
+        let config = json!({
+            "base_url": "http://127.0.0.1:9999",
+            "lease_token": "tok",
+            "required_model": "test-model-a",
+        });
+        let input = make_input_with_config("job", json!({}), Some(config));
+        let err = handler.execute(input).await.unwrap_err();
+        assert!(
+            matches!(err, EffectError::Fatal(ref msg) if msg.contains("task_kind")),
+            "expected Fatal with task_kind mention, got: {:?}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handler_rejects_unrecognized_task_kind() {
+        let handler = HttpInferenceHandler::new("job", "submitted");
+        let config = json!({
+            "base_url": "http://127.0.0.1:9999",
+            "lease_token": "tok",
+            "required_model": "test-model-a",
+            "task_kind": "Telepathy",
+        });
+        let input = make_input_with_config("job", json!({"x": 1}), Some(config));
+        let err = handler.execute(input).await.unwrap_err();
+        assert!(
+            matches!(err, EffectError::Fatal(ref msg) if msg.contains("Telepathy")),
+            "expected Fatal naming the bad task_kind, got: {:?}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handler_rejects_embeddings_task_kind() {
+        let handler = HttpInferenceHandler::new("job", "submitted");
+        let config = json!({
+            "base_url": "http://127.0.0.1:9999",
+            "lease_token": "tok",
+            "required_model": "test-model-a",
+            "task_kind": "Embeddings",
+        });
+        let input = make_input_with_config("job", json!({"text": "embed me"}), Some(config));
+        let err = handler.execute(input).await.unwrap_err();
+        assert!(
+            matches!(err, EffectError::Fatal(ref msg)
+                if msg.contains("Embeddings") && msg.contains("/v1/inference")),
+            "expected Fatal flagging the routing mismatch, got: {:?}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handler_chat_serializes_token_as_prompt_without_images() {
+        let captured_headers = Arc::new(Mutex::new(Vec::new()));
+        let captured_body = Arc::new(Mutex::new(None::<String>));
+        let canned = r#"{"output":"letter generated","model":"test-model-a"}"#;
+        let addr = spawn_stub_server(200, canned, captured_headers, captured_body.clone());
+
+        let handler = HttpInferenceHandler::new("job", "submitted");
+        let config = json!({
+            "base_url": format!("http://{}", addr),
+            "lease_token": "tok-chat",
+            "required_model": "test-model-a",
+            "task_kind": "Chat",
+            "system_prompt": "You are a clinical assistant.",
+        });
+        // System fields (_instance_id, etc.) are normally injected by
+        // `parameterize_*`; include them here to verify the handler strips
+        // them before serializing into the user prompt.
+        let token = json!({
+            "letter_type": "discharge",
+            "patient_context": { "id": "p-001", "name": "Test" },
+            "_instance_id": "instance-abc",
+            "_template_id": "template-xyz",
+            "_template_version": 1,
+            "_created_at": "2026-05-22T10:00:00Z",
+            "_created_by": "user-001",
+        });
+        let input = make_input_with_config("job", token, Some(config));
+        let _ = handler.execute(input).await.expect("Chat path must succeed");
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let body_str = captured_body.lock().unwrap().clone().expect("captured body");
+        let parsed: JsonValue = serde_json::from_str(&body_str).expect("valid JSON");
+
+        // No images: Chat path doesn't bear image inputs.
+        let images = parsed.get("images").and_then(|v| v.as_array());
+        assert!(
+            images.is_none() || images.unwrap().is_empty(),
+            "Chat task_kind must not carry images, got: {:?}",
+            images
+        );
+
+        // The user prompt is the JSON-serialized token with system fields
+        // stripped — letter_type + patient_context survive; _instance_id etc.
+        // are stripped.
+        let prompt = parsed["prompt"].as_str().expect("prompt is a string");
+        assert!(
+            prompt.contains("letter_type") && prompt.contains("discharge"),
+            "prompt must serialize the domain payload; got: {prompt}"
+        );
+        assert!(
+            !prompt.contains("_instance_id") && !prompt.contains("_template_id"),
+            "system fields must be stripped from the prompt; got: {prompt}"
+        );
+        assert_eq!(parsed["system_prompt"], "You are a clinical assistant.");
+    }
+
+    #[tokio::test]
+    async fn test_handler_agent_forwards_tool_catalogue() {
+        let captured_headers = Arc::new(Mutex::new(Vec::new()));
+        let captured_body = Arc::new(Mutex::new(None::<String>));
+        let canned = r#"{"output":"validated","model":"test-model-a"}"#;
+        let addr = spawn_stub_server(200, canned, captured_headers, captured_body.clone());
+
+        let handler = HttpInferenceHandler::new("job", "submitted");
+        let config = json!({
+            "base_url": format!("http://{}", addr),
+            "lease_token": "tok-agent",
+            "required_model": "test-model-a",
+            "task_kind": "Agent",
+            "tool_catalogue": [
+                {
+                    "name": "lookup_drug",
+                    "description": "Look up drug information by name.",
+                    "input_schema": { "type": "object", "properties": { "name": { "type": "string" } } }
+                }
+            ],
+        });
+        let token = json!({ "claims": [{ "claim": "patient has diabetes" }] });
+        let input = make_input_with_config("job", token, Some(config));
+        let _ = handler.execute(input).await.expect("Agent path must succeed");
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let body_str = captured_body.lock().unwrap().clone().expect("captured body");
+        let parsed: JsonValue = serde_json::from_str(&body_str).expect("valid JSON");
+
+        let tools = parsed.get("tools").expect("tools field forwarded for Agent");
+        let arr = tools.as_array().expect("tools is an array");
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["name"], "lookup_drug");
+        // Domain payload survives in the prompt.
+        let prompt = parsed["prompt"].as_str().expect("prompt is a string");
+        assert!(prompt.contains("diabetes"), "got: {prompt}");
+    }
+
+    #[tokio::test]
+    async fn test_handler_chat_rejects_empty_domain_token() {
+        let handler = HttpInferenceHandler::new("job", "submitted");
+        let config = json!({
+            "base_url": "http://127.0.0.1:9999",
+            "lease_token": "tok",
+            "required_model": "test-model-a",
+            "task_kind": "Chat",
+        });
+        // Only system fields present — domain payload is empty.
+        let token = json!({
+            "_instance_id": "x",
+            "_template_id": "y",
+            "_template_version": 1,
+            "_created_at": "z",
+            "_created_by": "u",
+        });
+        let input = make_input_with_config("job", token, Some(config));
+        let err = handler.execute(input).await.unwrap_err();
+        assert!(
+            matches!(err, EffectError::Fatal(ref msg) if msg.contains("non-empty")),
+            "expected Fatal flagging empty domain token, got: {:?}",
+            err
+        );
     }
 
     #[test]
