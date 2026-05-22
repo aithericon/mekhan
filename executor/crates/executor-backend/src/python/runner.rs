@@ -515,6 +515,237 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn user_script_not_promoted_as_global() {
+        skip_if_env_unsupported!();
+        // The production staging layout puts `main.py` alongside the
+        // staged `<slug>.json` envelopes in AITHERICON_INPUTS_DIR. The
+        // slug-globals loop must ONLY promote `.json` files — the user's
+        // own `main.py` source must not appear as a global named `main`
+        // or shadow anything.
+        let (stdout, stderr, code) = run_runner(
+            "print('main' in globals(), type(inputs.get('main.py')).__name__)",
+            &[("input.json", "{}")],
+        )
+        .await;
+        assert_eq!(code, 0, "stderr: {stderr}");
+        // `main` not promoted; runner *does* load main.py text into the
+        // inputs dict (escape hatch — user can inspect their own source).
+        assert_eq!(stdout.trim(), "False str");
+    }
+
+    #[tokio::test]
+    async fn invalid_json_slug_falls_back_to_raw_string_global() {
+        skip_if_env_unsupported!();
+        // `<slug>.json` whose content isn't valid JSON falls back to the
+        // raw string (see `_load_inputs`). The slug-globals loop still
+        // promotes it — `_accessible(str)` returns the string unchanged,
+        // so `notes` is just the file contents. Locks down the fallback
+        // semantics so a corrupt envelope doesn't crash the runner.
+        let (stdout, stderr, code) = run_runner(
+            "print(type(notes).__name__, len(notes) > 0)",
+            &[("notes.json", "this is not json")],
+        )
+        .await;
+        assert_eq!(code, 0, "stderr: {stderr}");
+        assert_eq!(stdout.trim(), "str True");
+    }
+
+    #[tokio::test]
+    async fn empty_inputs_dir_does_not_crash() {
+        skip_if_env_unsupported!();
+        // The no-borrow case: compile-time `automated_step_borrow_plan`
+        // detected zero `<slug>.<attr>` reads, so the executor stages no
+        // envelopes — just the user script. Runner must boot with `token`
+        // / `input` as empty dicts and run user code without error.
+        let (stdout, stderr, code) = run_runner(
+            "print(type(token).__name__, len(token), 'review' in globals())",
+            &[],
+        )
+        .await;
+        assert_eq!(code, 0, "stderr: {stderr}");
+        // _AccessibleDict is a dict subclass; len(empty) == 0; no slug global.
+        assert_eq!(stdout.trim(), "_AccessibleDict 0 False");
+    }
+
+    #[tokio::test]
+    async fn binary_file_in_inputs_skipped_gracefully() {
+        skip_if_env_unsupported!();
+        // The runner's _load_inputs catches UnicodeDecodeError on binary
+        // files (e.g. `.npy`) and leaves them on disk — user code opens
+        // by path. This test stages a real binary blob; the runner must
+        // not crash and the named global must not exist (it's not .json,
+        // and even if it were, the bytes wouldn't decode).
+        use std::io::Write;
+        let temp = TempDir::new().unwrap();
+        let run_dir = temp.path();
+        let inputs_dir = run_dir.join("inputs");
+        std::fs::create_dir_all(&inputs_dir).unwrap();
+
+        let mut bin = std::fs::File::create(inputs_dir.join("blob.npy")).unwrap();
+        bin.write_all(&[0x93, 0x4E, 0x55, 0x4D, 0x50, 0x59, 0x01, 0x00, 0xFF, 0xFE])
+            .unwrap();
+        std::fs::write(inputs_dir.join("input.json"), "{}").unwrap();
+
+        let user_path = inputs_dir.join("main.py");
+        std::fs::write(
+            &user_path,
+            "import os\n\
+             print(os.path.isfile(os.path.join(os.environ['AITHERICON_INPUTS_DIR'], 'blob.npy')))\n\
+             print('blob' in globals())",
+        )
+        .unwrap();
+        let runner_path = run_dir.join("__runner__.py");
+        write_runner(&runner_path, &user_path).await.unwrap();
+
+        let outputs_dir = run_dir.join("outputs");
+        std::fs::create_dir_all(&outputs_dir).unwrap();
+
+        let output = Command::new("python3")
+            .arg(&runner_path)
+            .env("AITHERICON_RUN_DIR", run_dir)
+            .env("AITHERICON_INPUTS_DIR", &inputs_dir)
+            .env("AITHERICON_OUTPUTS_DIR", &outputs_dir)
+            .env("PYTHONDONTWRITEBYTECODE", "1")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "stderr: {stderr}");
+        // Binary file: kept on disk, NOT promoted.
+        assert_eq!(stdout.trim(), "True\nFalse");
+    }
+
+    #[tokio::test]
+    async fn slug_global_with_top_level_list_passes_through() {
+        skip_if_env_unsupported!();
+        // Top-level list-shaped envelope: `_accessible` wraps inner dicts
+        // but leaves the outer list as a list. The compiler emits these
+        // for upstream nodes whose output is naturally a sequence.
+        let (stdout, stderr, code) = run_runner(
+            "print(len(records), records[0].id, records[1].id)",
+            &[("records.json", r#"[{"id": "a"}, {"id": "b"}]"#)],
+        )
+        .await;
+        assert_eq!(code, 0, "stderr: {stderr}");
+        assert_eq!(stdout.trim(), "2 a b");
+    }
+
+    #[tokio::test]
+    async fn empty_slug_envelope_promotes_as_empty_namespace() {
+        skip_if_env_unsupported!();
+        // `<slug>.json` containing `{}` (producer emitted no fields)
+        // still promotes — user code may do `getattr(slug, 'x', default)`
+        // or `'x' in slug` without NameError. Lock down the empty-dict
+        // contract since the borrow planner can stage an envelope whose
+        // producer emitted nothing of value.
+        let (stdout, stderr, code) = run_runner(
+            r#"print(len(review), review.get("missing", "default"), "x" in review)"#,
+            &[("review.json", "{}")],
+        )
+        .await;
+        assert_eq!(code, 0, "stderr: {stderr}");
+        assert_eq!(stdout.trim(), "0 default False");
+    }
+
+    #[tokio::test]
+    async fn nested_directory_in_inputs_is_ignored() {
+        skip_if_env_unsupported!();
+        // `_load_inputs` only iterates files (`os.path.isfile`). If the
+        // executor stages a subdirectory under inputs/ (e.g. a structured
+        // artifact bundle), it must NOT cause a crash and must NOT be
+        // promoted as a global.
+        let temp = TempDir::new().unwrap();
+        let run_dir = temp.path();
+        let inputs_dir = run_dir.join("inputs");
+        std::fs::create_dir_all(inputs_dir.join("artifacts")).unwrap();
+        std::fs::write(
+            inputs_dir.join("artifacts").join("nested.json"),
+            r#"{"x": 1}"#,
+        )
+        .unwrap();
+        std::fs::write(inputs_dir.join("input.json"), "{}").unwrap();
+
+        let user_path = inputs_dir.join("main.py");
+        std::fs::write(&user_path, "print('artifacts' in globals())").unwrap();
+        let runner_path = run_dir.join("__runner__.py");
+        write_runner(&runner_path, &user_path).await.unwrap();
+
+        let outputs_dir = run_dir.join("outputs");
+        std::fs::create_dir_all(&outputs_dir).unwrap();
+
+        let output = Command::new("python3")
+            .arg(&runner_path)
+            .env("AITHERICON_RUN_DIR", run_dir)
+            .env("AITHERICON_INPUTS_DIR", &inputs_dir)
+            .env("AITHERICON_OUTPUTS_DIR", &outputs_dir)
+            .env("PYTHONDONTWRITEBYTECODE", "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "False");
+    }
+
+    #[tokio::test]
+    async fn inputs_dir_env_unset_runs_with_empty_token() {
+        skip_if_env_unsupported!();
+        // The executor always sets AITHERICON_INPUTS_DIR in production,
+        // but the runner must not require it: if unset, _load_inputs
+        // returns `{}` and the runner falls through to an empty token —
+        // proving the contract that the runner template alone can boot
+        // in an isolated env (smoke testing, perf benchmarking).
+        let temp = TempDir::new().unwrap();
+        let run_dir = temp.path();
+        let user_path = run_dir.join("main.py");
+        std::fs::write(
+            &user_path,
+            "print(len(inputs), len(token), 'review' in globals())",
+        )
+        .unwrap();
+        let runner_path = run_dir.join("__runner__.py");
+        write_runner(&runner_path, &user_path).await.unwrap();
+
+        let output = Command::new("python3")
+            .arg(&runner_path)
+            .env("AITHERICON_RUN_DIR", run_dir)
+            .env_remove("AITHERICON_INPUTS_DIR")
+            .env_remove("AITHERICON_OUTPUTS_DIR")
+            .env("PYTHONDONTWRITEBYTECODE", "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            "0 0 False"
+        );
+    }
+
+    #[tokio::test]
+    async fn slug_name_matching_input_stem_does_not_collide() {
+        skip_if_env_unsupported!();
+        // Edge: `input.json` is the slim token; the slug-promotion loop
+        // explicitly excludes it. So a producer slug NAMED "input" would
+        // collide; the borrow planner reserves the name. Make sure that
+        // even if such a file slipped through (or `input.json` were the
+        // ONLY file), `input` keeps pointing at the token, not at itself
+        // promoted as a global.
+        let (stdout, stderr, code) = run_runner(
+            "print(input.invoice_id, callable(input.get))",
+            &[("input.json", r#"{"invoice_id": "INV-7"}"#)],
+        )
+        .await;
+        assert_eq!(code, 0, "stderr: {stderr}");
+        assert_eq!(stdout.trim(), "INV-7 True");
+    }
+
+    #[tokio::test]
     async fn set_output_writes_outputs_file() {
         skip_if_env_unsupported!();
         // Verify the file-based set_output fallback still works. The
