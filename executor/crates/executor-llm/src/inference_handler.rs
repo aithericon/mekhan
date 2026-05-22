@@ -30,7 +30,9 @@ use serde::{Deserialize, Serialize};
 use crate::adapters::ollama::base_url_for_subprocess;
 use crate::config::Role;
 use crate::ollama_subprocess::OllamaSubprocess;
-use crate::port::{CompletionPort, CompletionRequest, ImageData, LlmError, Message, ResponseFormat};
+use crate::port::{
+    CompletionPort, CompletionRequest, ImageData, LlmError, Message, ResponseFormat, ToolDefinition,
+};
 
 /// Axum state injected into the inference handler via `.with_state()`.
 #[derive(Clone)]
@@ -54,6 +56,14 @@ pub struct InferenceRequest {
     pub max_tokens: Option<u64>,
     #[serde(default)]
     pub response_format: Option<crate::config::ResponseFormat>,
+    /// Tool catalogue passed through to the underlying provider for
+    /// `task_kind == "Agent"` inference. The wire shape is the provider's
+    /// native tool spec (currently OpenAI-style function-calling); this
+    /// handler is opaque to the contents and forwards them verbatim into
+    /// the `CompletionRequest.tools` field. Added in #126.3 — Agent tool
+    /// catalogue forwarding from `HttpInferenceHandler`'s task_kind dispatch.
+    #[serde(default)]
+    pub tools: Vec<serde_json::Value>,
 }
 
 /// A base64-encoded image included with an inference request.
@@ -153,13 +163,29 @@ pub(crate) async fn run_completion(
     });
 
     let response_format = req.response_format.unwrap_or(ResponseFormat::Text);
+    // Deserialize each opaque-JSON tool spec into the typed `ToolDefinition`
+    // the port layer consumes. `HttpInferenceHandler` (engine-side) forwards
+    // clinic's `tool_catalogue` here as raw `serde_json::Value`s; this is
+    // where they get typed for downstream provider-adapter normalization.
+    let tools = req
+        .tools
+        .into_iter()
+        .map(|raw| {
+            serde_json::from_value::<ToolDefinition>(raw).map_err(|e| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    format!("invalid tool definition: {e}"),
+                )
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let completion_req = CompletionRequest {
         model: req.model.clone(),
         messages,
         temperature: req.temperature,
         max_tokens: req.max_tokens,
         response_format,
-        tools: vec![],
+        tools,
     };
 
     let completion = port.complete(&completion_req, env).await.map_err(|e| {
@@ -413,6 +439,7 @@ mod tests {
             temperature: None,
             max_tokens: None,
             response_format: None,
+            tools: vec![],
         };
         let result = run_completion(&*port, req, &empty_env()).await;
         assert_eq!(result.unwrap_err().0, StatusCode::BAD_REQUEST);
@@ -429,6 +456,7 @@ mod tests {
             temperature: None,
             max_tokens: None,
             response_format: None,
+            tools: vec![],
         };
         let result = run_completion(&*port, req, &empty_env()).await;
         assert_eq!(result.unwrap_err().0, StatusCode::BAD_REQUEST);
@@ -445,6 +473,7 @@ mod tests {
             temperature: Some(0.3),
             max_tokens: Some(256),
             response_format: None,
+            tools: vec![],
         };
         let resp = run_completion(&*port, req, &empty_env())
             .await
@@ -470,6 +499,7 @@ mod tests {
             temperature: None,
             max_tokens: None,
             response_format: None,
+            tools: vec![],
         };
         let result = run_completion(&*port, req, &empty_env()).await;
         assert_eq!(result.unwrap_err().0, StatusCode::UNPROCESSABLE_ENTITY);
