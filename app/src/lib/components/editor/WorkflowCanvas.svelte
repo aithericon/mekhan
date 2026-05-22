@@ -11,10 +11,12 @@
 	} from '@xyflow/svelte';
 	import '@xyflow/svelte/dist/style.css';
 
+	import { setContext } from 'svelte';
 	import { nodeTypes } from './nodes';
 	import { edgeTypes } from './edges';
 	import NodePalette from './NodePalette.svelte';
 	import DropHandler from './DropHandler.svelte';
+	import { RESIZE_REPORT_CONTEXT_KEY, type ResizeReport } from './nodes/resize-context';
 	import {
 		createDefaultNodeData,
 		type WorkflowNodeData,
@@ -43,11 +45,50 @@
 		) => void;
 		onAddEdge?: (edge: WorkflowEdge) => void;
 		onRemoveEdges?: (ids: string[]) => void;
+		/**
+		 * Emitted when a resizable container node (Scope, Loop) finishes a
+		 * resize gesture. `position` is only set when the gesture moved the
+		 * node's top-left corner (top/left-edge resize); pure bottom-right
+		 * resizes omit it.
+		 */
+		onResizeNodes?: (
+			changes: Array<{
+				id: string;
+				width: number;
+				height: number;
+				position?: { x: number; y: number };
+			}>
+		) => void;
 	};
 
-	let { graph, readonly = false, onchange, onselect, onAddNode, onRemoveNodes, onMoveNodes, onReparentNodes, onAddEdge, onRemoveEdges }: Props = $props();
+	let { graph, readonly = false, onchange, onselect, onAddNode, onRemoveNodes, onMoveNodes, onReparentNodes, onAddEdge, onRemoveEdges, onResizeNodes }: Props = $props();
 
-	const useGranular = $derived(!!(onAddNode || onRemoveNodes || onMoveNodes || onReparentNodes || onAddEdge || onRemoveEdges));
+	const useGranular = $derived(!!(onAddNode || onRemoveNodes || onMoveNodes || onReparentNodes || onAddEdge || onRemoveEdges || onResizeNodes));
+
+	// Container nodes report resize gesture-end through this context. xyflow's
+	// NodeResizer has already mutated the bound `nodes` array with the new
+	// dims/pos by the time `onResizeEnd` fires, so the canvas just forwards
+	// the change to the granular sink or runs the bulk serializer.
+	const reportResize: ResizeReport = (id, params) => {
+		if (readonly) return;
+		const change = {
+			id,
+			width: params.width,
+			height: params.height,
+			// Position only travels with the change when xyflow moved it
+			// (top/left-edge resize). For bottom-right resizes x/y match the
+			// node's pre-gesture position, but we still pass them through
+			// since the binding writes `position` only when present and the
+			// extra write is a no-op against an unchanged value.
+			position: { x: params.x, y: params.y }
+		};
+		if (useGranular && onResizeNodes) {
+			onResizeNodes([change]);
+		} else {
+			serializeAndEmit();
+		}
+	};
+	setContext<ResizeReport>(RESIZE_REPORT_CONTEXT_KEY, reportResize);
 
 	// Track graph identity to avoid re-syncing our own changes
 	let lastGraphRef: WorkflowGraph | null = graph;

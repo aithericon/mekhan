@@ -432,6 +432,26 @@ export class YjsGraphBinding {
 	}
 
 	/**
+	 * Resize a container node. NodeResizer fires on gesture end with the final
+	 * `{x, y, width, height}` (top/left-edge resizes shift `x`/`y` as well as
+	 * size, so we accept an optional `position`). One transaction so coauthors
+	 * never observe a partial mid-resize state. Mirrors the size fields written
+	 * at `addNode` time so the Y.Map round-trips identically.
+	 */
+	resizeNode(
+		nodeId: string,
+		change: { position?: { x: number; y: number }; width: number; height: number }
+	): void {
+		this.doc.transact(() => {
+			const yNode = this.yNodes.get(nodeId);
+			if (!yNode || !(yNode instanceof Y.Map)) return;
+			if (change.position) yNode.set('position', change.position);
+			yNode.set('width', change.width);
+			yNode.set('height', change.height);
+		});
+	}
+
+	/**
 	 * Set or clear a node's container parent. Used by the drag-into-container
 	 * gesture (Scope, Loop) — when a node is dropped inside a container the
 	 * position passed here must already be **relative to the parent**, mirroring

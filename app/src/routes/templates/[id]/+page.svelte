@@ -167,6 +167,19 @@
 		}
 	}
 
+	function handleResizeNodes(
+		changes: Array<{
+			id: string;
+			width: number;
+			height: number;
+			position?: { x: number; y: number };
+		}>
+	) {
+		for (const { id, width, height, position } of changes) {
+			binding.resizeNode(id, { width, height, position });
+		}
+	}
+
 	function handleAddEdge(edge: WorkflowEdge) {
 		binding.addEdge(edge);
 	}
@@ -259,6 +272,7 @@
 				onRemoveNodes={handleRemoveNodes}
 				onMoveNodes={handleMoveNodes}
 				onReparentNodes={handleReparentNodes}
+				onResizeNodes={handleResizeNodes}
 				onAddEdge={handleAddEdge}
 				onRemoveEdges={handleRemoveEdges}
 			/>

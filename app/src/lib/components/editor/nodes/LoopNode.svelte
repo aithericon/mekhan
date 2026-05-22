@@ -1,10 +1,19 @@
 <script lang="ts">
+	import { getContext } from 'svelte';
 	import { Handle, NodeResizer, Position } from '@xyflow/svelte';
 	import type { LoopNodeData } from '$lib/types/editor';
 	import Repeat from '@lucide/svelte/icons/repeat';
 	import { workflowNodeHandleClass } from './WorkflowNodeCard.svelte';
+	import {
+		RESIZE_REPORT_CONTEXT_KEY,
+		type ResizeReport
+	} from './resize-context';
 
-	let { data, selected }: { data: LoopNodeData; selected?: boolean } = $props();
+	let { id, data, selected }: { id: string; data: LoopNodeData; selected?: boolean } = $props();
+
+	// Absent on readonly canvases / standalone previews — fall back to no-op
+	// so the resizer never crashes if rendered outside WorkflowCanvas.
+	const reportResize = getContext<ResizeReport | undefined>(RESIZE_REPORT_CONTEXT_KEY);
 
 	// Header reads as `while {cond} · max N`. The default condition is the
 	// literal `true` — render that as "forever" so the safety cap reads as
@@ -26,9 +35,10 @@
 	`in`/`out` handles sit on the perimeter and connect to the parent flow.
 -->
 <NodeResizer
-	isVisible={selected}
+	isVisible={selected && !!reportResize}
 	minWidth={220}
 	minHeight={140}
+	onResizeEnd={(_e, params) => reportResize?.(id, params)}
 />
 
 <!--
