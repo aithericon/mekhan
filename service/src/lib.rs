@@ -103,7 +103,13 @@ fn build_openapi_router() -> OpenApiRouter<AppState> {
             handlers::auth_tokens::create_token
         ))
         .routes(routes!(handlers::auth_tokens::revoke_token))
-        // Templates
+        // Templates — `apply_air_template` (POST /api/templates/apply-air)
+        // MUST be registered BEFORE the `{id}` routes; matchit/axum match
+        // literal segments only when they're seen first against a wildcard
+        // already in the trie at the same position. Otherwise `apply-air`
+        // gets routed to `GET/PUT/DELETE /api/templates/{id}` (with
+        // `id = "apply-air"`) and POST returns 405 (#126.4.1 cert finding).
+        .routes(routes!(handlers::templates::apply_air_template))
         .routes(routes!(
             handlers::templates::list_templates,
             handlers::templates::create_template
@@ -116,7 +122,6 @@ fn build_openapi_router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::templates::publish_template))
         .routes(routes!(handlers::templates::new_version))
         .routes(routes!(handlers::templates::apply_template))
-        .routes(routes!(handlers::templates::apply_air_template))
         .routes(routes!(handlers::templates::list_versions))
         .routes(routes!(handlers::templates::get_air))
         .routes(routes!(handlers::templates::compile_preview))
