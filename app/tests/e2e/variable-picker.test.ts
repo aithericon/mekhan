@@ -138,6 +138,40 @@ test.describe('Variable picker (RefPicker / InsertRefButton)', () => {
 		await expect(panel.getByText('inbound token')).toHaveCount(0);
 	});
 
+	test('IDE banner surfaces when the analyzer says graph is not scopable', async ({ page }) => {
+		// Re-route /api/analyze to return graph_ok:false with a synthetic
+		// diagnostic, then navigate to the IDE side. The banner should be the
+		// canonical "why is the picker empty?" affordance.
+		await page.unroute('**/api/analyze');
+		await page.route('**/api/analyze', async (route) => {
+			await route.fulfill({
+				status: 200,
+				contentType: 'application/json',
+				body: JSON.stringify({
+					graph_ok: false,
+					diagnostics: [
+						{ kind: 'graph_not_scopable', message: 'dangling edge from Start', node_id: 'start' }
+					],
+					scopes: {}
+				})
+			});
+		});
+
+		// Same demo template, /ide route. The IDE's $effect kicks off the
+		// initial refreshScopes on mount; banner should appear shortly after.
+		await page.goto('/templates/demo-template-test/ide');
+
+		const banner = page.getByTestId('ide-analyzer-banner');
+		await expect(banner).toBeVisible({ timeout: 5000 });
+		await expect(banner).toContainText('Variable references unavailable');
+		await expect(banner).toContainText('1 diagnostic');
+
+		// Diagnostic detail is collapsible — open it and confirm the message.
+		await banner.getByRole('group').or(banner.locator('details')).first().click();
+		await expect(banner).toContainText('graph_not_scopable');
+		await expect(banner).toContainText('dangling edge from Start');
+	});
+
 	test('PhaseUpdate hides RefPicker affordance when no scope is in scope', async ({ page }) => {
 		// Mock /api/analyze to return empty scope for everything.
 		await page.unroute('**/api/analyze');

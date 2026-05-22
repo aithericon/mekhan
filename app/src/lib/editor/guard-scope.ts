@@ -15,6 +15,7 @@ import { analyzeGraph } from '$lib/api/client';
 
 type WorkflowGraph = components['schemas']['WorkflowGraph'];
 type FieldKind = components['schemas']['FieldKind'];
+type GuardDiagnosticDto = components['schemas']['GuardDiagnosticDto'];
 
 export type ScopeEntry = {
 	nodeId: string;
@@ -25,6 +26,19 @@ export type ScopeEntry = {
 	 *  for borrowed parked-producer data (e.g. `review.invoice_amount`), or
 	 *  `input.<path>` for genuinely control-token-resident leaves. */
 	qualified: string;
+};
+
+/** Result of one `/api/analyze` round-trip. `graphOk: false` means the
+ *  compiler refused to scope the graph (dangling edge, missing End, cycle),
+ *  in which case `scopes` is empty and `diagnostics` carries the reasons.
+ *  Picker UIs should grey themselves out and surface the diagnostic. */
+export type ScopeAnalysis = {
+	scopes: Map<string, ScopeEntry[]>;
+	graphOk: boolean;
+	diagnostics: GuardDiagnosticDto[];
+	/** True when the analyzer call itself failed (network / 5xx). Distinct
+	 *  from `graphOk: false`, which is a deliberate compiler verdict. */
+	requestFailed: boolean;
 };
 
 /** Backend type label → editor `FieldKind`. Non-scalar shapes (Object,
@@ -49,13 +63,13 @@ function tyToFieldKind(ty: string): FieldKind {
 
 /**
  * Fetch the in-scope identifiers at every node from the backend analyzer.
- * Returns a map keyed by node id. Best-effort: on any failure (network, or a
- * draft too broken to analyze) returns an empty map, matching the previous
- * "show whatever resolved" behavior — the editor degrades, never throws.
+ * Returns the scope map keyed by node id, plus the `graph_ok` flag and any
+ * diagnostics — both surfaceable by the IDE so an empty picker explains
+ * itself. Best-effort: on any failure (network, 5xx) returns
+ * `{ scopes: empty, graphOk: false, requestFailed: true }` — the editor
+ * degrades, never throws.
  */
-export async function fetchNodeScopes(
-	graph: WorkflowGraph
-): Promise<Map<string, ScopeEntry[]>> {
+export async function fetchNodeScopes(graph: WorkflowGraph): Promise<ScopeAnalysis> {
 	const out = new Map<string, ScopeEntry[]>();
 	try {
 		const surface = await analyzeGraph({
@@ -76,10 +90,15 @@ export async function fetchNodeScopes(
 				}))
 			);
 		}
+		return {
+			scopes: out,
+			graphOk: surface.graph_ok ?? false,
+			diagnostics: surface.diagnostics ?? [],
+			requestFailed: false
+		};
 	} catch {
-		// best-effort: editor still works without scope chips
+		return { scopes: out, graphOk: false, diagnostics: [], requestFailed: true };
 	}
-	return out;
 }
 
 /**

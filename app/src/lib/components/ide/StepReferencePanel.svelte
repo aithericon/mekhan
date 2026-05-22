@@ -1,13 +1,13 @@
 <script lang="ts">
-	// Read-only authoring reference for a Python automated step: the qualified
-	// fields readable here (this node's in-scope refs from the same
-	// `/api/analyze` source the Decision branch picker uses) plus the SDK
-	// helpers the runner injects.
+	// Read + click-to-insert authoring reference for a Python automated step.
 	//
-	// Renders `<slug>.<field>` / `input.<path>` qualified identifiers — the
-	// clean-cut model. The Python runner still injects a `token` object, so a
-	// footer reminds authors `token["field"]` works for dynamic access.
+	// Renders the qualified refs in scope (clean-cut `<slug>.<field>` or
+	// `input.<path>`) plus the SDK helpers the runner injects. When the
+	// parent provides `oninsertref`, every chip becomes a button that drops
+	// the Python access form (`token["<part>"]`...) at the active editor's
+	// cursor — same scope source the canvas Decision branch picker uses.
 	import type { ScopeEntry } from '$lib/editor/guard-scope';
+	import RefPicker from '$lib/components/editor/panels/property-sections/RefPicker.svelte';
 
 	type Props = {
 		/** This node's in-scope refs, grouped by producer in render. */
@@ -16,9 +16,12 @@
 		/** Edges into this step. >1 (non-Join) ⇒ unmerged fan-in. */
 		incomingCount?: number;
 		onRefresh?: () => void;
+		/** When provided, every ref becomes a click-to-insert button. The
+		 *  parent wires this to the active code editor's `insertAtCursor`. */
+		oninsertref?: (snippet: string) => void;
 	};
 
-	let { scope, busy = false, incomingCount = 0, onRefresh }: Props = $props();
+	let { scope, busy = false, incomingCount = 0, onRefresh, oninsertref }: Props = $props();
 
 	const unmergedFanIn = $derived(incomingCount > 1);
 
@@ -39,6 +42,23 @@
 		}
 		return out.sort((a, b) => Number(a.isProcess) - Number(b.isProcess));
 	});
+
+	// Turn a qualified ref into the Python dict-access form the SDK expects.
+	//   "review.invoice_amount" → token["review"]["invoice_amount"]
+	//   "input.amount"          → token["amount"]   (the `input.` prefix is
+	//                                                implicit at the runtime
+	//                                                token root)
+	function refToPythonAccess(qualified: string): string {
+		const stripped = qualified.startsWith('input.')
+			? qualified.slice('input.'.length)
+			: qualified;
+		const parts = stripped.split('.');
+		return parts.reduce((acc, p) => `${acc}["${p}"]`, 'token');
+	}
+
+	function insert(entry: ScopeEntry) {
+		oninsertref?.(refToPythonAccess(entry.qualified));
+	}
 
 	// The runner auto-imports the SDK and injects these into step scope
 	// (executor PythonBackend runner template). Everything else is reachable
@@ -89,6 +109,18 @@
 				inputs into one token.
 			</div>
 		{/if}
+
+		{#if scope.length > 0 && oninsertref}
+			<!-- Compact searchable picker on top — same component the canvas's
+			     Decision branch editor uses. Picking an entry inserts the
+			     Python dict-access form at the active editor's cursor. -->
+			<RefPicker
+				{scope}
+				placeholder="Insert variable…"
+				onpick={(e) => insert(e)}
+			/>
+		{/if}
+
 		<div class="space-y-1.5">
 			<div class="flex items-center justify-between gap-2">
 				<div class="text-sm font-medium text-foreground">
@@ -105,6 +137,7 @@
 						disabled={busy}
 						onclick={() => onRefresh?.()}
 						title="Recompute scope from the live graph"
+						data-testid="step-reference-refresh"
 					>
 						{busy ? 'Refreshing…' : 'Refresh'}
 					</button>
@@ -123,9 +156,24 @@
 							</div>
 							<ul class="space-y-0.5">
 								{#each g.entries as e (e.qualified)}
-									<li class="flex items-baseline justify-between gap-2 text-sm">
-										<code class="font-mono text-foreground">{e.qualified}</code>
-										<span class="shrink-0 text-sm text-muted-foreground">{e.kind}</span>
+									<li>
+										{#if oninsertref}
+											<button
+												type="button"
+												class="flex w-full items-baseline justify-between gap-2 rounded px-1.5 py-0.5 text-left text-sm transition-colors hover:bg-accent hover:text-foreground"
+												onclick={() => insert(e)}
+												title={`Insert ${refToPythonAccess(e.qualified)} at cursor`}
+												data-testid="step-reference-entry"
+											>
+												<code class="font-mono text-foreground">{e.qualified}</code>
+												<span class="shrink-0 text-sm text-muted-foreground">{e.kind}</span>
+											</button>
+										{:else}
+											<div class="flex items-baseline justify-between gap-2 text-sm">
+												<code class="font-mono text-foreground">{e.qualified}</code>
+												<span class="shrink-0 text-sm text-muted-foreground">{e.kind}</span>
+											</div>
+										{/if}
 									</li>
 								{/each}
 							</ul>
