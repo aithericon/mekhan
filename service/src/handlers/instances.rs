@@ -91,6 +91,11 @@ pub async fn create_instance(
             air_json: &air_json,
             graph: &graph,
             start_tokens: &req.start_tokens,
+            // User POST path does not surface ablation today; #126.2's
+            // ablation surface lives at the trigger boundary (research
+            // harness drives via fire_trigger). Plain create-instance →
+            // empty dispatch options.
+            dispatch_options: petri_api_types::DispatchOptions::default(),
         })
         .await
         .map_err(|e| match e {

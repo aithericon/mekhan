@@ -255,13 +255,17 @@ impl TriggerDispatcher {
 
     /// Fire a trigger, discarding any WaitForResult handle. The path used by
     /// every background source (cron/catalog/lifecycle/webhook) and by
-    /// FireAndForget callers.
+    /// FireAndForget callers. `dispatch_options` threads γ.mekhan ablation
+    /// (`skip_mask` + `stage_overrides`) into the engine envelope; background
+    /// sources pass `DispatchOptions::default()` since they don't synthesize
+    /// ablation themselves (#126.2).
     pub async fn fire(
         &self,
         node_id: &str,
         event_payload: Value,
+        dispatch_options: petri_api_types::DispatchOptions,
     ) -> Result<FireResult, TriggerError> {
-        self.fire_impl(node_id, event_payload, None)
+        self.fire_impl(node_id, event_payload, dispatch_options, None)
             .await
             .map(|(result, _rx)| result)
     }
@@ -273,9 +277,11 @@ impl TriggerDispatcher {
         &self,
         node_id: &str,
         event_payload: Value,
+        dispatch_options: petri_api_types::DispatchOptions,
         waiters: &ResultWaiters,
     ) -> Result<(FireResult, Option<oneshot::Receiver<TerminalOutcome>>), TriggerError> {
-        self.fire_impl(node_id, event_payload, Some(waiters)).await
+        self.fire_impl(node_id, event_payload, dispatch_options, Some(waiters))
+            .await
     }
 
     /// Core fire path. Resolves the trigger, evaluates `payload_mapping`
@@ -286,6 +292,7 @@ impl TriggerDispatcher {
         &self,
         node_id: &str,
         event_payload: Value,
+        dispatch_options: petri_api_types::DispatchOptions,
         wait: Option<&ResultWaiters>,
     ) -> Result<(FireResult, Option<oneshot::Receiver<TerminalOutcome>>), TriggerError> {
         let record = self
@@ -462,7 +469,7 @@ impl TriggerDispatcher {
         ) = match record.kind {
             TriggerKind::Spawn => {
                 match self
-                    .fire_spawn(&record, &template, &graph, token, wait)
+                    .fire_spawn(&record, &template, &graph, token, dispatch_options, wait)
                     .await
                 {
                     Ok((outcome, rx)) => (Ok(outcome), rx),
@@ -494,6 +501,7 @@ impl TriggerDispatcher {
         template: &WorkflowTemplate,
         graph: &WorkflowGraph,
         token: Value,
+        dispatch_options: petri_api_types::DispatchOptions,
         wait: Option<&ResultWaiters>,
     ) -> Result<(FireOutcome, Option<oneshot::Receiver<TerminalOutcome>>), TriggerError> {
         let air_json = template
@@ -536,6 +544,7 @@ impl TriggerDispatcher {
                         air_json: &air_json,
                         air_target_place_id: place_id,
                         token: &token,
+                        dispatch_options,
                     })
                     .await
             }
@@ -555,6 +564,7 @@ impl TriggerDispatcher {
                         air_json: &air_json,
                         graph,
                         start_tokens: &start_tokens,
+                        dispatch_options,
                     })
                     .await
             }

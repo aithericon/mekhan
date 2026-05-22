@@ -4838,6 +4838,21 @@
                 "description": "Optional per-request reply mode (lowest of the explicit selectors —\noverridden by `?reply=` / `Prefer`, overrides the node default)."
               }
             ]
+          },
+          "skip_mask": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Per-run ablation: transition IDs to skip at evaluate-time.\nThreaded through the dispatcher into the engine's\n`LoadScenarioRequest.skip_mask` (γ.mekhan wire). Empty by default\n— research-harness ablation flows surface this; ordinary fires omit.\n#126.2: extends the previously-always-empty trigger-boundary stub."
+          },
+          "stage_overrides": {
+            "type": "object",
+            "description": "Per-run ablation: per-transition JSON merge-patch keyed by\ntransition_id. Threaded into `LoadScenarioRequest.stage_overrides`.\nSame surface + provenance as `skip_mask`. #126.2.",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
           }
         }
       },

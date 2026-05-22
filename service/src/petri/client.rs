@@ -1,4 +1,7 @@
-use petri_api_types::{RunMode, SetRunModeRequest, StateResponse, TopologyResponse};
+use petri_api_types::{
+    DispatchOptions, LoadScenarioRequest, RunMode, ScenarioDefinition, SetRunModeRequest,
+    StateResponse, TopologyResponse,
+};
 use reqwest::Client;
 use serde_json::Value;
 
@@ -26,22 +29,43 @@ impl PetriClient {
 
     /// Deploy a scenario (AIR JSON) to a net.
     ///
-    /// Wire shape: `LoadScenarioRequest` envelope `{ "scenario": <air_json> }`
-    /// (sub-phase 2.5e-γ.mekhan-S3 cutover; the bare-scenario request shape was
-    /// retired with the scaffold envelope cutover on the engine side per
+    /// Wire shape: `LoadScenarioRequest` envelope
+    /// `{ "scenario": <air_json>, "skip_mask": [...], "stage_overrides": {...} }`
+    /// — γ.mekhan cutover; the bare-scenario request shape was retired per
     /// `feedback_no_backward_compat_hedging_in_migration_waves` +
-    /// `feedback_delete_superseded_code`). Mekhan-service itself does not drive
-    /// ablation, so `skip_mask` + `stage_overrides` are always empty here; the
-    /// envelope's serde-skip-if-empty defaults render the wire body as
-    /// `{"scenario": <air_json>}` — still the envelope shape, just with no
-    /// additive keys.
+    /// `feedback_delete_superseded_code`.
+    ///
+    /// `dispatch_options` is the per-run ablation envelope: `skip_mask`
+    /// (transition IDs to skip at evaluate-time) and `stage_overrides`
+    /// (per-transition JSON merge-patch keyed by transition_id). #126.2
+    /// extends this beyond the previous `Vec::new()/HashMap::new()` stub —
+    /// trigger-fire callers thread caller-supplied dispatch options from the
+    /// `FireTriggerRequest` body. Empty fields serialize-skip per the
+    /// envelope's `skip_serializing_if`, so a fire without ablation renders
+    /// as `{"scenario": <air_json>}` on the wire byte-identically to the
+    /// prior shape.
     pub async fn deploy_scenario(
         &self,
         net_id: &str,
         air_json: &Value,
+        dispatch_options: DispatchOptions,
     ) -> Result<(), PetriError> {
         let url = format!("{}/api/nets/{}/scenario", self.base_url, net_id);
-        let envelope = serde_json::json!({ "scenario": air_json });
+        // The engine consumes a typed `ScenarioDefinition`; the launcher's
+        // `parameterize_*` step produces opaque JSON. Convert here so the
+        // envelope's request body is one strongly-typed shape, not two
+        // half-serialized halves.
+        let scenario: ScenarioDefinition = serde_json::from_value(air_json.clone()).map_err(
+            |e| PetriError::Response {
+                status: 0,
+                body: format!("parameterized AIR is not a valid ScenarioDefinition: {e}"),
+            },
+        )?;
+        let envelope = LoadScenarioRequest {
+            scenario,
+            skip_mask: dispatch_options.skip_mask,
+            stage_overrides: dispatch_options.stage_overrides,
+        };
         let resp = self.client.post(&url).json(&envelope).send().await?;
         if !resp.status().is_success() {
             let status = resp.status().as_u16();

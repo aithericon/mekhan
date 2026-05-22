@@ -13,6 +13,7 @@
 //! free functions. [`InstanceLauncher`] owns the sequence once; both callers
 //! depend on this seam instead of re-implementing it.
 
+use petri_api_types::DispatchOptions;
 use serde_json::Value;
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -78,6 +79,12 @@ pub enum LaunchSpec<'a> {
         air_json: &'a Value,
         graph: &'a WorkflowGraph,
         start_tokens: &'a [StartToken],
+        /// Per-run ablation envelope (#126.2): `skip_mask` +
+        /// `stage_overrides` threaded into the engine's
+        /// `LoadScenarioRequest`. Defaults to empty on caller side via
+        /// `DispatchOptions::default()` when the create-instance handler
+        /// does not surface ablation.
+        dispatch_options: DispatchOptions,
     },
     PreAir {
         instance_id: Uuid,
@@ -95,6 +102,11 @@ pub enum LaunchSpec<'a> {
         /// (task_kind / required_capabilities / system_prompt live in
         /// `transition.logic.config`); no port-shape validation here.
         token: &'a Value,
+        /// Per-run ablation envelope (#126.2). Surfaced by the
+        /// trigger-fire boundary so research-harness ablation flows
+        /// through trigger-fired runs identically to the prior
+        /// scenario-submit path.
+        dispatch_options: DispatchOptions,
     },
 }
 
@@ -120,57 +132,85 @@ impl<'a> InstanceLauncher<'a> {
     /// completes before this returns; a deploy failure deletes the row before
     /// the error propagates so lifecycle never sees a phantom.
     pub async fn launch(&self, spec: LaunchSpec<'_>) -> Result<WorkflowInstance, LaunchError> {
-        // Per-variant: parameterize and capture the row-write inputs in a
-        // single tuple so the DB-write / deploy / rollback tail is shared
+        // Per-variant: parameterize and capture the row-write + deploy inputs
+        // in a single tuple so the DB-write / deploy / rollback tail is shared
         // byte-for-byte across both paths (the launcher's load-bearing
         // invariant — see the doc-comment above).
-        let (parameterized, instance_id, net_id, template_id, template_version, created_by, metadata) =
-            match spec {
-                LaunchSpec::Templated {
+        let (
+            parameterized,
+            instance_id,
+            net_id,
+            template_id,
+            template_version,
+            created_by,
+            metadata,
+            dispatch_options,
+        ) = match spec {
+            LaunchSpec::Templated {
+                instance_id,
+                net_id,
+                template_id,
+                template_version,
+                created_by,
+                metadata,
+                air_json,
+                graph,
+                start_tokens,
+                dispatch_options,
+            } => {
+                let parameterized = parameterize_air(
+                    air_json,
                     instance_id,
-                    net_id,
                     template_id,
                     template_version,
                     created_by,
-                    metadata,
-                    air_json,
                     graph,
                     start_tokens,
-                } => {
-                    let parameterized = parameterize_air(
-                        air_json,
-                        instance_id,
-                        template_id,
-                        template_version,
-                        created_by,
-                        graph,
-                        start_tokens,
-                    )?;
-                    (parameterized, instance_id, net_id, template_id, template_version, created_by, metadata)
-                }
-                LaunchSpec::PreAir {
+                )?;
+                (
+                    parameterized,
                     instance_id,
                     net_id,
                     template_id,
                     template_version,
                     created_by,
                     metadata,
+                    dispatch_options,
+                )
+            }
+            LaunchSpec::PreAir {
+                instance_id,
+                net_id,
+                template_id,
+                template_version,
+                created_by,
+                metadata,
+                air_json,
+                air_target_place_id,
+                token,
+                dispatch_options,
+            } => {
+                let parameterized = parameterize_for_place(
                     air_json,
+                    instance_id,
+                    template_id,
+                    template_version,
+                    created_by,
                     air_target_place_id,
                     token,
-                } => {
-                    let parameterized = parameterize_for_place(
-                        air_json,
-                        instance_id,
-                        template_id,
-                        template_version,
-                        created_by,
-                        air_target_place_id,
-                        token,
-                    )?;
-                    (parameterized, instance_id, net_id, template_id, template_version, created_by, metadata)
-                }
-            };
+                )?;
+                (
+                    parameterized,
+                    instance_id,
+                    net_id,
+                    template_id,
+                    template_version,
+                    created_by,
+                    metadata,
+                    dispatch_options,
+                )
+            }
+        };
 
         let instance = sqlx::query_as::<_, WorkflowInstance>(
             r#"
@@ -192,7 +232,7 @@ impl<'a> InstanceLauncher<'a> {
             LaunchError::Database(e.to_string())
         })?;
 
-        if let Err(e) = deploy_instance(self.petri, &net_id, &parameterized).await {
+        if let Err(e) = deploy_instance(self.petri, &net_id, &parameterized, dispatch_options).await {
             tracing::error!("failed to deploy instance to petri-lab: {e}");
             // Roll the row back so lifecycle never observes a phantom /
             // never-deployed instance.

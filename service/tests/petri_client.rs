@@ -71,7 +71,7 @@ async fn deploy_and_get_state() {
 
     // Deploy scenario
     client
-        .deploy_scenario(&net_id, &minimal_scenario())
+        .deploy_scenario(&net_id, &minimal_scenario(), petri_api_types::DispatchOptions::default())
         .await
         .expect("deploy_scenario should succeed");
 
@@ -104,7 +104,7 @@ async fn set_run_mode_typed() {
     let net_id = format!("test-{}", Uuid::new_v4().simple());
 
     client
-        .deploy_scenario(&net_id, &minimal_scenario())
+        .deploy_scenario(&net_id, &minimal_scenario(), petri_api_types::DispatchOptions::default())
         .await
         .expect("deploy");
 
@@ -136,7 +136,7 @@ async fn get_topology_typed() {
     let net_id = format!("test-{}", Uuid::new_v4().simple());
 
     client
-        .deploy_scenario(&net_id, &minimal_scenario())
+        .deploy_scenario(&net_id, &minimal_scenario(), petri_api_types::DispatchOptions::default())
         .await
         .expect("deploy");
 
@@ -174,7 +174,7 @@ async fn delete_net_is_idempotent() {
     let net_id = format!("test-{}", Uuid::new_v4().simple());
 
     client
-        .deploy_scenario(&net_id, &minimal_scenario())
+        .deploy_scenario(&net_id, &minimal_scenario(), petri_api_types::DispatchOptions::default())
         .await
         .expect("deploy");
 
@@ -191,7 +191,7 @@ async fn terminate_net_stops_then_deletes() {
     let net_id = format!("test-{}", Uuid::new_v4().simple());
 
     client
-        .deploy_scenario(&net_id, &minimal_scenario())
+        .deploy_scenario(&net_id, &minimal_scenario(), petri_api_types::DispatchOptions::default())
         .await
         .expect("deploy");
 

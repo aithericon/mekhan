@@ -293,15 +293,16 @@ pub fn parameterize_for_place(
 /// Deploy a workflow instance to petri-lab.
 ///
 /// 1. Parameterize AIR JSON
-/// 2. Deploy scenario to petri-lab
+/// 2. Deploy scenario + dispatch options to petri-lab
 /// 3. Set run mode to "running"
 pub async fn deploy_instance(
     client: &PetriClient,
     net_id: &str,
     air_json: &Value,
+    dispatch_options: petri_api_types::DispatchOptions,
 ) -> Result<(), PetriError> {
     // Deploy the scenario
-    client.deploy_scenario(net_id, air_json).await?;
+    client.deploy_scenario(net_id, air_json, dispatch_options).await?;
 
     // Start execution
     client
