@@ -68,6 +68,23 @@
 		return 0;
 	}
 
+	// World position of a node, walking up the parent chain. Used by drop
+	// hit-testing AND the drag-stop reparent logic — keep it module-local so
+	// both call sites agree on the coordinate system.
+	function worldPosOf(n: { position: { x: number; y: number }; parentId?: string }): { x: number; y: number } {
+		let x = n.position.x;
+		let y = n.position.y;
+		let pid = n.parentId;
+		while (pid) {
+			const p = nodes.find((m) => m.id === pid);
+			if (!p) break;
+			x += p.position.x;
+			y += p.position.y;
+			pid = p.parentId;
+		}
+		return { x, y };
+	}
+
 	/**
 	 * Find the topmost container node whose bounds contain the given flow
 	 * position. Skips the candidate node itself (a container can't parent
@@ -101,20 +118,6 @@
 			}
 		}
 
-		function worldPos(n: Node): { x: number; y: number } {
-			let x = n.position.x;
-			let y = n.position.y;
-			let pid = n.parentId;
-			while (pid) {
-				const p = nodes.find((m) => m.id === pid);
-				if (!p) break;
-				x += p.position.x;
-				y += p.position.y;
-				pid = p.parentId;
-			}
-			return { x, y };
-		}
-
 		let best: Node | null = null;
 		for (const n of nodes) {
 			if (!isContainer(n.type)) continue;
@@ -122,7 +125,7 @@
 			const w = n.width;
 			const h = n.height;
 			if (w == null || h == null) continue;
-			const { x, y } = worldPos(n);
+			const { x, y } = worldPosOf(n);
 			if (flowPos.x >= x && flowPos.x <= x + w && flowPos.y >= y && flowPos.y <= y + h) {
 				// Prefer the deepest container at this point (innermost
 				// matches win) — naive depth via parent-chain length.
@@ -159,7 +162,11 @@
 			type: n.type,
 			position: n.position,
 			data: n.data,
-			...(n.parentId ? { parentId: n.parentId, extent: 'parent' as const } : {}),
+			// NOTE: no `extent: 'parent'` — that locks a child inside its
+			// container's bounds, which kills the drag-OUT gesture. Children
+			// still follow their parent on parent-drag because their
+			// `position` is parent-relative regardless of `extent`.
+			...(n.parentId ? { parentId: n.parentId } : {}),
 			...(n.width != null ? { width: n.width } : {}),
 			...(n.height != null ? { height: n.height } : {})
 		}));
@@ -192,7 +199,7 @@
 					type: n.type,
 					position: existing?.position ?? n.position,
 					data: n.data,
-					...(n.parentId ? { parentId: n.parentId, extent: 'parent' as const } : {}),
+					...(n.parentId ? { parentId: n.parentId } : {}),
 					...(n.width != null ? { width: n.width } : {}),
 					...(n.height != null ? { height: n.height } : {}),
 					...(existing?.selected != null ? { selected: existing.selected } : {})
@@ -270,10 +277,13 @@
 	}
 
 	function handleNodeDragStop({ nodes: draggedNodes }: { nodes: Node[] }) {
-		// Detect drag-into-container: a node that isn't itself a container
-		// might have crossed into (or out of) one. With `extent: 'parent'`,
-		// a child can't leave its current parent via dragging — so today
-		// reparenting only happens for previously-unparented nodes.
+		// On drag-stop we re-hit-test every dragged non-container node against
+		// the container set:
+		//   - new container == current parent → pure move (no reparent)
+		//   - new container != current parent → reparent (covers drag-IN
+		//     from top level, drag-OUT to top level, and drag-across between
+		//     containers in a single branch)
+		// Containers themselves never auto-reparent today (no nesting UX).
 		const reparents: Array<{
 			id: string;
 			parentId: string | null;
@@ -281,43 +291,48 @@
 		}> = [];
 		const moves: Array<{ id: string; position: { x: number; y: number } }> = [];
 		for (const n of draggedNodes) {
-			if (isContainer(n.type) || n.parentId) {
-				// Containers move freely; already-parented children are
-				// locked by `extent: 'parent'`. Both cases are pure moves.
+			if (isContainer(n.type)) {
 				moves.push({ id: n.id, position: n.position });
 				continue;
 			}
-			// `position` for a top-level node is already in world coordinates.
-			const container = findContainerAt(n.position, n.id);
-			if (container) {
-				// Reparent: store the child's position relative to the parent
-				// (Svelte Flow convention). Update both nodes[] and emit.
-				const containerWorld = (() => {
-					let x = container.position.x;
-					let y = container.position.y;
-					let pid = container.parentId;
-					while (pid) {
-						const p = nodes.find((m) => m.id === pid);
-						if (!p) break;
-						x += p.position.x;
-						y += p.position.y;
-						pid = p.parentId;
-					}
-					return { x, y };
-				})();
-				const relPos = {
-					x: n.position.x - containerWorld.x,
-					y: n.position.y - containerWorld.y
-				};
-				nodes = nodes.map((m) =>
-					m.id === n.id
-						? { ...m, parentId: container.id, extent: 'parent' as const, position: relPos }
-						: m
-				);
-				reparents.push({ id: n.id, parentId: container.id, position: relPos });
-			} else {
+
+			// Compute the dragged node's current world position. xyflow keeps
+			// `position` parent-relative for parented children and absolute
+			// for top-level nodes, so we resolve through `worldPosOf` either
+			// way.
+			const childWorld = worldPosOf(n);
+			const newContainer = findContainerAt(childWorld, n.id);
+			const oldParentId = n.parentId ?? null;
+			const newParentId = newContainer?.id ?? null;
+
+			if (newParentId === oldParentId) {
 				moves.push({ id: n.id, position: n.position });
+				continue;
 			}
+
+			// Reparent. Position becomes relative when entering a container,
+			// absolute (world) when leaving to top level.
+			let newPosition: { x: number; y: number };
+			if (newContainer) {
+				const containerWorld = worldPosOf(newContainer);
+				newPosition = {
+					x: childWorld.x - containerWorld.x,
+					y: childWorld.y - containerWorld.y
+				};
+			} else {
+				newPosition = childWorld;
+			}
+
+			nodes = nodes.map((m) => {
+				if (m.id !== n.id) return m;
+				// Rebuild without parentId so it's truly cleared on drag-OUT;
+				// a `parentId: undefined` spread won't drop the key.
+				const { parentId: _p, ...rest } = m;
+				return newParentId
+					? { ...rest, parentId: newParentId, position: newPosition }
+					: { ...rest, position: newPosition };
+			});
+			reparents.push({ id: n.id, parentId: newParentId, position: newPosition });
 		}
 
 		if (useGranular) {
@@ -427,7 +442,7 @@
 			type: nodeType,
 			position,
 			data,
-			...(parentId ? { parentId, extent: 'parent' as const } : {}),
+			...(parentId ? { parentId } : {}),
 			...sizeOpts
 		};
 
