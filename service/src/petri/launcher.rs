@@ -20,7 +20,10 @@ use uuid::Uuid;
 use crate::models::instance::{StartToken, WorkflowInstance};
 use crate::models::template::WorkflowGraph;
 use crate::petri::client::PetriClient;
-use crate::petri::instance::{deploy_instance, parameterize_air, ParameterizeError};
+use crate::petri::instance::{
+    deploy_instance, parameterize_air, parameterize_for_place, ParameterizeError,
+    ParameterizeForPlaceError,
+};
 
 /// Why a launch failed. Each caller maps these to its own surface:
 /// `create_instance` turns [`LaunchError::Parameterize`] into a 400 and
@@ -33,6 +36,11 @@ pub enum LaunchError {
     #[error(transparent)]
     Parameterize(#[from] ParameterizeError),
 
+    /// `parameterize_for_place` rejected the pre-AIR direct-place seeding
+    /// (place id not found in AIR, or AIR has no `places` array).
+    #[error(transparent)]
+    ParameterizeForPlace(#[from] ParameterizeForPlaceError),
+
     /// The instance row could not be inserted. Nothing was deployed.
     #[error("instance row insert failed: {0}")]
     Database(String),
@@ -44,25 +52,55 @@ pub enum LaunchError {
     Deploy(String),
 }
 
-/// What the caller wants run. `created_by` and `metadata` are the only inputs
-/// that genuinely differ between the user-POST and trigger-fire paths, so they
-/// stay parameters; everything else (parameterize → insert → deploy →
-/// rollback) is owned by the launcher.
-pub struct LaunchSpec<'a> {
-    pub instance_id: Uuid,
-    pub net_id: String,
-    pub template_id: Uuid,
-    pub template_version: i32,
-    pub created_by: Uuid,
-    /// Audit-only blob stored on the instance row (not merged into tokens).
-    pub metadata: Value,
-    pub air_json: &'a Value,
-    pub graph: &'a WorkflowGraph,
-    pub start_tokens: &'a [StartToken],
+/// What the caller wants run.
+///
+/// Two variants, one per authoring path:
+/// - [`LaunchSpec::Templated`] — graph-authored template (`Start` blocks,
+///   typed ports, payload-mapping validated at the launcher boundary). The
+///   path the visual editor produces; consumed by `create_instance` and
+///   by graph-authored triggers in `fire_spawn`.
+/// - [`LaunchSpec::PreAir`] — clinic-style headless template. The trigger
+///   names an AIR place id directly (no `Start`, no graph-level port
+///   shape). Consumed by `fire_spawn` when the trigger record carries
+///   `air_target_place_id`. Per
+///   `feedback_no_mode_framing_for_the_direction` this is a first-class
+///   variant, not an `Option<&WorkflowGraph>` mode-flag on the templated
+///   path.
+pub enum LaunchSpec<'a> {
+    Templated {
+        instance_id: Uuid,
+        net_id: String,
+        template_id: Uuid,
+        template_version: i32,
+        created_by: Uuid,
+        /// Audit-only blob stored on the instance row (not merged into tokens).
+        metadata: Value,
+        air_json: &'a Value,
+        graph: &'a WorkflowGraph,
+        start_tokens: &'a [StartToken],
+    },
+    PreAir {
+        instance_id: Uuid,
+        net_id: String,
+        template_id: Uuid,
+        template_version: i32,
+        created_by: Uuid,
+        metadata: Value,
+        air_json: &'a Value,
+        /// The AIR place id whose `initial_tokens` will be seeded with the
+        /// supplied token + system fields. Resolved at the trigger
+        /// boundary from the Trigger node's `air_target_place_id`.
+        air_target_place_id: &'a str,
+        /// Opaque payload. Clinic AIR transitions consume opaque tokens
+        /// (task_kind / required_capabilities / system_prompt live in
+        /// `transition.logic.config`); no port-shape validation here.
+        token: &'a Value,
+    },
 }
 
 /// Owns the deploy-an-instance sequence. Behavior-identical to the code that
-/// was inlined in `create_instance` and `fire_spawn` — pure relocation.
+/// was inlined in `create_instance` and `fire_spawn` — pure relocation, now
+/// extended with the pre-AIR variant.
 #[derive(Clone, Copy)]
 pub struct InstanceLauncher<'a> {
     db: &'a PgPool,
@@ -82,15 +120,57 @@ impl<'a> InstanceLauncher<'a> {
     /// completes before this returns; a deploy failure deletes the row before
     /// the error propagates so lifecycle never sees a phantom.
     pub async fn launch(&self, spec: LaunchSpec<'_>) -> Result<WorkflowInstance, LaunchError> {
-        let parameterized = parameterize_air(
-            spec.air_json,
-            spec.instance_id,
-            spec.template_id,
-            spec.template_version,
-            spec.created_by,
-            spec.graph,
-            spec.start_tokens,
-        )?;
+        // Per-variant: parameterize and capture the row-write inputs in a
+        // single tuple so the DB-write / deploy / rollback tail is shared
+        // byte-for-byte across both paths (the launcher's load-bearing
+        // invariant — see the doc-comment above).
+        let (parameterized, instance_id, net_id, template_id, template_version, created_by, metadata) =
+            match spec {
+                LaunchSpec::Templated {
+                    instance_id,
+                    net_id,
+                    template_id,
+                    template_version,
+                    created_by,
+                    metadata,
+                    air_json,
+                    graph,
+                    start_tokens,
+                } => {
+                    let parameterized = parameterize_air(
+                        air_json,
+                        instance_id,
+                        template_id,
+                        template_version,
+                        created_by,
+                        graph,
+                        start_tokens,
+                    )?;
+                    (parameterized, instance_id, net_id, template_id, template_version, created_by, metadata)
+                }
+                LaunchSpec::PreAir {
+                    instance_id,
+                    net_id,
+                    template_id,
+                    template_version,
+                    created_by,
+                    metadata,
+                    air_json,
+                    air_target_place_id,
+                    token,
+                } => {
+                    let parameterized = parameterize_for_place(
+                        air_json,
+                        instance_id,
+                        template_id,
+                        template_version,
+                        created_by,
+                        air_target_place_id,
+                        token,
+                    )?;
+                    (parameterized, instance_id, net_id, template_id, template_version, created_by, metadata)
+                }
+            };
 
         let instance = sqlx::query_as::<_, WorkflowInstance>(
             r#"
@@ -99,12 +179,12 @@ impl<'a> InstanceLauncher<'a> {
             RETURNING *
             "#,
         )
-        .bind(spec.instance_id)
-        .bind(spec.template_id)
-        .bind(spec.template_version)
-        .bind(&spec.net_id)
-        .bind(spec.created_by)
-        .bind(&spec.metadata)
+        .bind(instance_id)
+        .bind(template_id)
+        .bind(template_version)
+        .bind(&net_id)
+        .bind(created_by)
+        .bind(&metadata)
         .fetch_one(self.db)
         .await
         .map_err(|e| {
@@ -112,12 +192,12 @@ impl<'a> InstanceLauncher<'a> {
             LaunchError::Database(e.to_string())
         })?;
 
-        if let Err(e) = deploy_instance(self.petri, &spec.net_id, &parameterized).await {
+        if let Err(e) = deploy_instance(self.petri, &net_id, &parameterized).await {
             tracing::error!("failed to deploy instance to petri-lab: {e}");
             // Roll the row back so lifecycle never observes a phantom /
             // never-deployed instance.
             let _ = sqlx::query("DELETE FROM workflow_instances WHERE id = $1")
-                .bind(spec.instance_id)
+                .bind(instance_id)
                 .execute(self.db)
                 .await;
             return Err(LaunchError::Deploy(e.to_string()));

@@ -369,6 +369,18 @@ pub enum WorkflowNodeData {
         /// Disabled triggers are stored but the dispatcher ignores them.
         #[serde(default)]
         enabled: bool,
+        /// Pre-AIR direct target. When set, the trigger fires by seeding the
+        /// named AIR place with the supplied payload, bypassing graph-edge
+        /// resolution. Mutually exclusive with an outgoing edge in the graph:
+        /// pre-AIR templates carry a Trigger-only stub graph (no Start, no
+        /// edges). Used by clinic-style headless templates pushed through
+        /// `POST /api/templates/apply-air`.
+        #[serde(
+            rename = "airTargetPlaceId",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
+        air_target_place_id: Option<String>,
     },
     /// Calls another published template as a child net and returns its
     /// terminal result, correlated per invocation. Compiles (via

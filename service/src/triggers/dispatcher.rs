@@ -134,11 +134,37 @@ impl TriggerDispatcher {
                 source,
                 enabled,
                 reply_default,
+                air_target_place_id,
                 ..
             } = &node.data
             else {
                 continue;
             };
+
+            // Pre-AIR direct-target path (clinic-style headless templates):
+            // trigger has no outgoing edge; the AIR place id is named
+            // directly on the node. Spawn-kind by construction.
+            if let Some(place_id) = air_target_place_id {
+                let record = TriggerRecord {
+                    template_id: template.id,
+                    template_version: template.version,
+                    node_id: node.id.clone(),
+                    kind: TriggerKind::Spawn,
+                    // For pre-AIR records, target_node_id mirrors the AIR place
+                    // id (used as `start_block_id` in `LaunchSpec::PreAir`).
+                    target_node_id: place_id.clone(),
+                    target_handle: String::new(),
+                    source: source.clone(),
+                    reply_default: *reply_default,
+                    enabled: *enabled,
+                    registered_at: Utc::now(),
+                    air_target_place_id: Some(place_id.clone()),
+                };
+                self.triggers.insert(node.id.clone(), record);
+                registered += 1;
+                continue;
+            }
+
             let Some((_, edge)) = locate_trigger(&graph.nodes, &graph.edges, &node.id) else {
                 tracing::warn!(
                     template_id = %template.id,
@@ -171,6 +197,7 @@ impl TriggerDispatcher {
                 reply_default: *reply_default,
                 enabled: *enabled,
                 registered_at: Utc::now(),
+                air_target_place_id: None,
             };
             self.triggers.insert(node.id.clone(), record);
             registered += 1;
@@ -483,11 +510,6 @@ impl TriggerDispatcher {
         let instance_id = Uuid::new_v4();
         let net_id = format!("mekhan-{instance_id}");
 
-        let start_tokens = vec![StartToken {
-            start_block_id: record.target_node_id.clone(),
-            token,
-        }];
-
         // Audit metadata: who triggered this and which template version.
         let metadata = json!({
             "triggered_by": record.node_id,
@@ -497,21 +519,47 @@ impl TriggerDispatcher {
         // Same parameterize → insert → deploy → rollback sequence as the user
         // POST path, owned by the launcher. A spawn folds every launch failure
         // into InstanceFailed (the dropped-fire is recorded by the caller).
+        // Pre-AIR triggers (clinic-style headless templates) construct the
+        // `PreAir` variant and seed the named AIR place directly; graph-edge
+        // resolved triggers stay on the `Templated` path.
         let launcher = InstanceLauncher::new(&self.db, &self.petri);
-        let instance = launcher
-            .launch(LaunchSpec {
-                instance_id,
-                net_id,
-                template_id: template.id,
-                template_version: template.version,
-                created_by,
-                metadata,
-                air_json: &air_json,
-                graph,
-                start_tokens: &start_tokens,
-            })
-            .await
-            .map_err(|e| TriggerError::InstanceFailed(e.to_string()))?;
+        let launch_result = match &record.air_target_place_id {
+            Some(place_id) => {
+                launcher
+                    .launch(LaunchSpec::PreAir {
+                        instance_id,
+                        net_id,
+                        template_id: template.id,
+                        template_version: template.version,
+                        created_by,
+                        metadata,
+                        air_json: &air_json,
+                        air_target_place_id: place_id,
+                        token: &token,
+                    })
+                    .await
+            }
+            None => {
+                let start_tokens = vec![StartToken {
+                    start_block_id: record.target_node_id.clone(),
+                    token,
+                }];
+                launcher
+                    .launch(LaunchSpec::Templated {
+                        instance_id,
+                        net_id,
+                        template_id: template.id,
+                        template_version: template.version,
+                        created_by,
+                        metadata,
+                        air_json: &air_json,
+                        graph,
+                        start_tokens: &start_tokens,
+                    })
+                    .await
+            }
+        };
+        let instance = launch_result.map_err(|e| TriggerError::InstanceFailed(e.to_string()))?;
 
         // WaitForResult: register the waiter, then close the
         // create→deploy→terminal race. The net may already be terminal (the

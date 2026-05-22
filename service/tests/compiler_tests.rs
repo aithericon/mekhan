@@ -2447,6 +2447,7 @@ fn trigger_node(id: &str, source: mekhan_service::models::template::TriggerSourc
             payload_mapping: vec![],
             reply_default: None,
             enabled: true,
+            air_target_place_id: None,
         },
         parent_id: None,
         width: None,

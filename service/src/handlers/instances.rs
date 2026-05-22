@@ -81,7 +81,7 @@ pub async fn create_instance(
     // engine fault (502).
     let launcher = InstanceLauncher::new(&state.db, &state.petri);
     let instance = launcher
-        .launch(LaunchSpec {
+        .launch(LaunchSpec::Templated {
             instance_id,
             net_id,
             template_id: template.id,
@@ -95,6 +95,7 @@ pub async fn create_instance(
         .await
         .map_err(|e| match e {
             LaunchError::Parameterize(pe) => ApiError::bad_request(pe.to_string()),
+            LaunchError::ParameterizeForPlace(pe) => ApiError::bad_request(pe.to_string()),
             LaunchError::Database(msg) => ApiError::internal(msg),
             LaunchError::Deploy(msg) => ApiError::new(
                 StatusCode::BAD_GATEWAY,
