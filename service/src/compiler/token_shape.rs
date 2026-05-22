@@ -1821,6 +1821,194 @@ pub(crate) fn guard_readarc_plan(
     Ok(binds)
 }
 
+/// One Python AutomatedStep borrow into an upstream parked place.
+///
+/// Distinct from [`ReadArcBind`] (which is for Rhai-source guards on
+/// Decision/Loop/End/Failure transitions): the AutomatedStep doesn't
+/// reference upstream data in Rhai — it references it from Python source
+/// (e.g. `a = review.invoice_amount`). The lowering target is also
+/// different: instead of string-replacing transition source, the
+/// `prepare` transition's `job_inputs` list is extended so the runtime
+/// stages the producer's full parked envelope as `<slug>.json` and the
+/// Python runner exposes `<slug>` as a module global namespace.
+///
+/// One borrow per `(consumer, producer)` pair — the runtime stages the
+/// whole producer envelope as one staged file regardless of how many
+/// fields the user reads off it (attr lookups happen client-side via
+/// the runner's AccessibleDict wrapper).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AutomatedStepDataBorrow {
+    /// Python AutomatedStep that authors the borrow in its source.
+    pub consumer_node_id: String,
+    /// Slug the author wrote (`review` in `review.invoice_amount`). Also
+    /// the staged filename stem (`review.json`) and the Python global.
+    pub slug: String,
+    /// Resolved upstream node id whose parked data the borrow reaches.
+    pub producer_node: String,
+}
+
+/// For every Python AutomatedStep, scan its entrypoint source and resolve
+/// every `<slug>.<attr>` access into an upstream parked place. Returns one
+/// [`AutomatedStepDataBorrow`] per `(consumer, producer)` pair.
+///
+/// Best-effort: a head identifier that isn't a known graph slug is
+/// silently ignored (could be `os.path`, a local var, an imported module).
+/// A slug whose producer isn't strictly upstream or isn't a parked
+/// producer is likewise ignored — the runtime would just NameError, but
+/// the picker already steers authors away. Files whose source is not
+/// inline (`Raw` or string `Inline`) are skipped — publish-time callers
+/// must materialize storage paths before reaching this point or the
+/// borrow will silently miss.
+pub(crate) fn automated_step_borrow_plan(
+    graph: &WorkflowGraph,
+    files: &crate::compiler::lower::NodeFiles,
+) -> Result<Vec<AutomatedStepDataBorrow>, CompileError> {
+    use crate::models::template::ExecutionBackendType;
+
+    let wg = WorkflowDiGraph::build(graph)?;
+    let order = topo_order(&wg)?;
+    let pos = topo_pos(&order, &wg);
+    let slugs = slug_index(graph)?;
+
+    let mut out: Vec<AutomatedStepDataBorrow> = Vec::new();
+    let mut seen: std::collections::BTreeSet<(String, String)> = std::collections::BTreeSet::new();
+
+    for node in &graph.nodes {
+        let WorkflowNodeData::AutomatedStep { execution_spec, .. } = &node.data else {
+            continue;
+        };
+        if execution_spec.backend_type != ExecutionBackendType::Python {
+            continue;
+        }
+        let entrypoint = execution_spec
+            .config
+            .get("entrypoint")
+            .and_then(|v| v.as_str())
+            .unwrap_or("main.py")
+            .to_string();
+        let Some(node_files) = files.get(&node.id) else {
+            continue;
+        };
+        let Some(source) = node_files.get(&entrypoint).and_then(input_source_text) else {
+            continue;
+        };
+
+        for r in crate::compiler::python_refs::extract_python_refs(&source) {
+            let Some(prod_id) = slugs.node_for(&r.head).map(str::to_string) else {
+                continue;
+            };
+            if prod_id == node.id {
+                continue;
+            }
+            let up = pos.get(&prod_id).copied().unwrap_or(usize::MAX);
+            let me = pos.get(&node.id).copied().unwrap_or(0);
+            if up >= me {
+                continue;
+            }
+            if !is_parked_producer(graph, &prod_id) {
+                continue;
+            }
+            let key = (node.id.clone(), prod_id.clone());
+            if !seen.insert(key) {
+                continue;
+            }
+            out.push(AutomatedStepDataBorrow {
+                consumer_node_id: node.id.clone(),
+                slug: r.head,
+                producer_node: prod_id,
+            });
+        }
+    }
+    Ok(out)
+}
+
+fn input_source_text(src: &aithericon_executor_domain::InputSource) -> Option<String> {
+    use aithericon_executor_domain::InputSource;
+    match src {
+        InputSource::Raw { content } => Some(content.clone()),
+        InputSource::Inline { value } => {
+            if let serde_json::Value::String(s) = value {
+                Some(s.clone())
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Per-node, per-slug field map — the picker model pivoted from a flat
+/// list to `slug → fields`. Drives the Python `.pyi` overlay's one
+/// `class _<Slug>NS:` per upstream producer so the IDE autocompletes
+/// `review.invoice_amount` against the same shape the borrow planner
+/// will resolve at compile time.
+///
+/// Skips entries that aren't slug-qualified (the legacy `input.<path>`
+/// control-token references and the synthetic `Process` bucket — those
+/// are emitted as direct `Token` class attrs in the existing flat path,
+/// not as their own namespace).
+pub fn node_namespace_scopes(
+    graph: &WorkflowGraph,
+) -> Result<
+    std::collections::HashMap<String, BTreeMap<String, BTreeMap<String, FieldKind>>>,
+    CompileError,
+> {
+    let report = analyze(graph)?;
+    let slugs = slug_index(graph)?;
+    let mut out: std::collections::HashMap<
+        String,
+        BTreeMap<String, BTreeMap<String, FieldKind>>,
+    > = std::collections::HashMap::new();
+    for (node_id, entries) in &report.scopes {
+        let mut by_slug: BTreeMap<String, BTreeMap<String, FieldKind>> = BTreeMap::new();
+        for e in entries {
+            if e.path.starts_with("input.") || e.producer_label == "Process" {
+                continue;
+            }
+            // Prefer the slug index over splitting the path — keeps this
+            // robust when a producer's slug differs from the path prefix
+            // (e.g. a future collision-suffix rule).
+            let slug = slugs
+                .slug_for(&e.producer_node)
+                .map(str::to_string)
+                .unwrap_or_else(|| {
+                    e.path
+                        .split_once('.')
+                        .map(|(s, _)| s.to_string())
+                        .unwrap_or_default()
+                });
+            if slug.is_empty() {
+                continue;
+            }
+            let field_path = e
+                .path
+                .strip_prefix(&format!("{slug}."))
+                .unwrap_or(&e.path);
+            let leaf = field_path.split('.').next().unwrap_or(field_path).to_string();
+            if leaf.is_empty() {
+                continue;
+            }
+            let kind = ty_label_to_field_kind(&e.ty);
+            by_slug.entry(slug).or_default().insert(leaf, kind);
+        }
+        out.insert(node_id.clone(), by_slug);
+    }
+    // Unreachable nodes still need an entry (callers may .get().unwrap_or_default).
+    for n in &graph.nodes {
+        out.entry(n.id.clone()).or_default();
+    }
+    Ok(out)
+}
+
+fn ty_label_to_field_kind(ty: &str) -> FieldKind {
+    match ty {
+        "Number" => FieldKind::Number,
+        "Boolean" | "Bool" => FieldKind::Bool,
+        "Json" | "Object" | "Array" | "Any" => FieldKind::Json,
+        _ => FieldKind::Text,
+    }
+}
+
 #[cfg(test)]
 mod port_contract_tests {
     use super::*;
@@ -2249,5 +2437,164 @@ mod scope_reachability_tests {
                 e.path
             );
         }
+    }
+
+    /// A Python AutomatedStep that reads `review.invoice_amount` in its
+    /// source must produce exactly one [`AutomatedStepDataBorrow`] from
+    /// the consumer (the AutomatedStep) to the producer (the upstream
+    /// HumanTask `review`) — the same borrow-checker model the
+    /// Decision/Loop branch already uses, just sourced from Python AST
+    /// instead of Rhai.
+    #[test]
+    fn python_automated_step_review_field_emits_borrow() {
+        use crate::compiler::lower::NodeFiles;
+        use aithericon_executor_domain::InputSource;
+        use std::collections::HashMap;
+
+        // Start → review (HumanTask, slug "review", produces `invoice_amount`)
+        //       → extract (Python AutomatedStep) → end
+        let json = r#"{
+          "nodes":[
+            {"id":"start","type":"start","position":{"x":0,"y":0},
+             "data":{"type":"start","label":"Start"}},
+            {"id":"review","type":"human_task","slug":"review","position":{"x":0,"y":0},
+             "data":{"type":"human_task","label":"Review","taskTitle":"Review",
+                     "steps":[{"id":"s","title":"S","blocks":[
+                       {"type":"input","field":{"name":"invoice_amount","label":"Amt","kind":"number","required":true}}
+                     ]}]}},
+            {"id":"extract","type":"automated_step","slug":"extract","position":{"x":0,"y":0},
+             "data":{"type":"automated_step","label":"Extract",
+                     "executionSpec":{"backendType":"python","entrypoint":"main.py","config":{"entrypoint":"main.py","python":"python3","sdk":true}},
+                     "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
+                     "deploymentModel":{"mode":"inline"}}},
+            {"id":"end","type":"end","position":{"x":0,"y":0},
+             "data":{"type":"end","label":"End"}}
+          ],
+          "edges":[
+            {"id":"e1","source":"start","target":"review","type":"sequence"},
+            {"id":"e2","source":"review","target":"extract","type":"sequence"},
+            {"id":"e3","source":"extract","target":"end","type":"sequence"}
+          ]
+        }"#;
+        let g: WorkflowGraph = serde_json::from_str(json).expect("deser borrow graph");
+
+        let mut files: NodeFiles = HashMap::new();
+        let mut step_files = HashMap::new();
+        step_files.insert(
+            "main.py".to_string(),
+            InputSource::Raw {
+                content: "amount = review.invoice_amount\nprint(amount)\n".to_string(),
+            },
+        );
+        files.insert("extract".to_string(), step_files);
+
+        let borrows = automated_step_borrow_plan(&g, &files).expect("borrow plan");
+        assert_eq!(
+            borrows.len(),
+            1,
+            "exactly one borrow expected; got: {borrows:?}"
+        );
+        assert_eq!(borrows[0].consumer_node_id, "extract");
+        assert_eq!(borrows[0].slug, "review");
+        assert_eq!(borrows[0].producer_node, "review");
+    }
+
+    /// Multiple accesses to the SAME producer collapse to one borrow per
+    /// `(consumer, producer)` pair — the runtime stages the whole
+    /// envelope once and the user reads any number of fields off it.
+    #[test]
+    fn python_borrow_dedupes_per_producer() {
+        use crate::compiler::lower::NodeFiles;
+        use aithericon_executor_domain::InputSource;
+        use std::collections::HashMap;
+
+        let json = r#"{
+          "nodes":[
+            {"id":"start","type":"start","position":{"x":0,"y":0},
+             "data":{"type":"start","label":"Start"}},
+            {"id":"review","type":"human_task","slug":"review","position":{"x":0,"y":0},
+             "data":{"type":"human_task","label":"Review","taskTitle":"Review",
+                     "steps":[{"id":"s","title":"S","blocks":[
+                       {"type":"input","field":{"name":"invoice_amount","label":"Amt","kind":"number","required":true}},
+                       {"type":"input","field":{"name":"vendor_name","label":"V","kind":"text","required":true}}
+                     ]}]}},
+            {"id":"extract","type":"automated_step","slug":"extract","position":{"x":0,"y":0},
+             "data":{"type":"automated_step","label":"Extract",
+                     "executionSpec":{"backendType":"python","entrypoint":"main.py","config":{"entrypoint":"main.py","python":"python3","sdk":true}},
+                     "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
+                     "deploymentModel":{"mode":"inline"}}},
+            {"id":"end","type":"end","position":{"x":0,"y":0},
+             "data":{"type":"end","label":"End"}}
+          ],
+          "edges":[
+            {"id":"e1","source":"start","target":"review","type":"sequence"},
+            {"id":"e2","source":"review","target":"extract","type":"sequence"},
+            {"id":"e3","source":"extract","target":"end","type":"sequence"}
+          ]
+        }"#;
+        let g: WorkflowGraph = serde_json::from_str(json).expect("deser borrow graph");
+
+        let mut files: NodeFiles = HashMap::new();
+        let mut step_files = HashMap::new();
+        step_files.insert(
+            "main.py".to_string(),
+            InputSource::Raw {
+                content: "a = review.invoice_amount\nb = review.vendor_name\nc = review.invoice_amount\n".to_string(),
+            },
+        );
+        files.insert("extract".to_string(), step_files);
+
+        let borrows = automated_step_borrow_plan(&g, &files).expect("borrow plan");
+        // Three accesses on `review` → one borrow.
+        assert_eq!(
+            borrows.len(),
+            1,
+            "borrow plan must dedupe per (consumer, producer); got: {borrows:?}"
+        );
+    }
+
+    /// An identifier that isn't a known slug (stdlib module, local var,
+    /// typo) is silently ignored — no borrow, no hard error, no false
+    /// positive against `os.path` and friends.
+    #[test]
+    fn python_unknown_head_is_silently_ignored() {
+        use crate::compiler::lower::NodeFiles;
+        use aithericon_executor_domain::InputSource;
+        use std::collections::HashMap;
+
+        let json = r#"{
+          "nodes":[
+            {"id":"start","type":"start","position":{"x":0,"y":0},
+             "data":{"type":"start","label":"Start"}},
+            {"id":"extract","type":"automated_step","slug":"extract","position":{"x":0,"y":0},
+             "data":{"type":"automated_step","label":"Extract",
+                     "executionSpec":{"backendType":"python","entrypoint":"main.py","config":{"entrypoint":"main.py","python":"python3","sdk":true}},
+                     "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
+                     "deploymentModel":{"mode":"inline"}}},
+            {"id":"end","type":"end","position":{"x":0,"y":0},
+             "data":{"type":"end","label":"End"}}
+          ],
+          "edges":[
+            {"id":"e1","source":"start","target":"extract","type":"sequence"},
+            {"id":"e2","source":"extract","target":"end","type":"sequence"}
+          ]
+        }"#;
+        let g: WorkflowGraph = serde_json::from_str(json).expect("deser graph");
+
+        let mut files: NodeFiles = HashMap::new();
+        let mut step_files = HashMap::new();
+        step_files.insert(
+            "main.py".to_string(),
+            InputSource::Raw {
+                content: "import os\np = os.path.join('a', 'b')\nlocal_var = {'k': 1}\nv = local_var.get('k')\n".to_string(),
+            },
+        );
+        files.insert("extract".to_string(), step_files);
+
+        let borrows = automated_step_borrow_plan(&g, &files).expect("borrow plan");
+        assert!(
+            borrows.is_empty(),
+            "stdlib + locals must not become borrows; got: {borrows:?}"
+        );
     }
 }

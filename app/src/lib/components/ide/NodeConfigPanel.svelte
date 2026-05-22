@@ -19,6 +19,9 @@
 		scope?: ScopeEntry[];
 		scopeBusy?: boolean;
 		onRefreshScope?: () => void;
+		/** Insert a snippet at the active code editor's cursor. When
+		 *  undefined, the reference panel renders refs as static text. */
+		oninsertref?: (snippet: string) => void;
 	};
 
 	let {
@@ -27,7 +30,8 @@
 		readonly = false,
 		scope = [],
 		scopeBusy = false,
-		onRefreshScope
+		onRefreshScope,
+		oninsertref
 	}: Props = $props();
 
 	const nodeData = $derived(
@@ -115,6 +119,7 @@
 				busy={scopeBusy}
 				{incomingCount}
 				onRefresh={onRefreshScope}
+				{oninsertref}
 			/>
 		{/if}
 	{:else}

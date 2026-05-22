@@ -109,8 +109,8 @@
 		}
 		let cancelled = false;
 		const timer = setTimeout(async () => {
-			const all = await fetchNodeScopes(g);
-			if (!cancelled) scope = all.get(id) ?? [];
+			const result = await fetchNodeScopes(g);
+			if (!cancelled) scope = result.scopes.get(id) ?? [];
 		}, 250);
 		return () => {
 			cancelled = true;

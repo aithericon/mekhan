@@ -23,11 +23,42 @@ use aithericon_sdk::{
 use serde_json::json;
 use std::collections::HashMap;
 
-/// Per-node, per-filename input source map. Built by the publish handler from
-/// the node's Y.Doc files (resolved to S3 keys via `InputSource::StoragePath`)
-/// or, for the stateless preview compile, materialized from inline content via
-/// `InputSource::Raw`.
+/// Per-node, per-filename input source map. Code files are always inline
+/// (`InputSource::Raw`) — the executor stages the source from the AIR's job
+/// spec directly, the borrow planner needs the source text to detect
+/// `<slug>.<field>` references, and the published-AIR ↔ S3 split is
+/// otherwise a footgun. Use [`node_files_inline`] to build one from the
+/// canonical `node_id → filename → content` map every caller already has
+/// in memory.
 pub type NodeFiles = HashMap<String, HashMap<String, InputSource>>;
+
+/// Wrap inline `node_id → filename → content` into the [`NodeFiles`] shape
+/// the compiler consumes. Single source of truth — replaces the legacy
+/// `storage_path_files` helpers in publish/handlers, which used to emit
+/// `InputSource::StoragePath` and required publish-time S3 keys to keep
+/// the executor working at runtime. Everything is `Raw` now (see
+/// [`NodeFiles`] for rationale).
+pub fn node_files_inline(
+    inline: &HashMap<String, HashMap<String, String>>,
+) -> NodeFiles {
+    inline
+        .iter()
+        .map(|(node_id, files)| {
+            let sources = files
+                .iter()
+                .map(|(filename, content)| {
+                    (
+                        filename.clone(),
+                        InputSource::Raw {
+                            content: content.clone(),
+                        },
+                    )
+                })
+                .collect();
+            (node_id.clone(), sources)
+        })
+        .collect()
+}
 
 /// Instruction to merge `dead` place into `survivor` place.
 /// All references to `dead` become references to `survivor`, then `dead` is removed.
@@ -855,11 +886,19 @@ fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileError> {
         // streams nothing, so the lifecycle's process_log_* effects
         // (enabled via `process: true` below) would never fire and
         // user metrics/logs would not reach hpi_metrics / hpi_logs.
+        // The `/*__BORROWED_INPUTS__*/` marker is a Rhai block comment
+        // (no-op until rewritten). For Python AutomatedSteps, post-merge
+        // `apply_control_data_foundation` replaces it with one
+        // `job_inputs.push(#{ name: "<slug>.json", source: { inline, d_<producer> } })`
+        // per `<slug>.<field>` reference detected in the Python source —
+        // so the runtime stages the producer's parked data alongside
+        // `input.json` and the runner exposes `<slug>` as a Python global.
+        // The sentinel survives a no-op replacement (empty pushes) cleanly.
         ctx.transition("prepare", format!("{label} - Prepare"))
             .auto_input("input", &p_input)
             .auto_output("job", &exec_inbox)
             .logic(format!(
-                r#"let d = input; d.job_id = "{id}"; d.run = 0; d.retries = 0; d.max_retries = {max_retries}; let job_inputs = {inputs_rhai}; job_inputs.push(#{{ "name": "input.json", "source": #{{ "type": "inline", "value": input }} }}); d.spec = #{{ "backend": "{backend_type}", "inputs": job_inputs, "outputs": [], "config": {config_rhai}, "stream_events": ["metric", "progress", "phase", "log"] }}; #{{ job: d }}"#
+                r#"let d = input; d.job_id = "{id}"; d.run = 0; d.retries = 0; d.max_retries = {max_retries}; let job_inputs = {inputs_rhai}; job_inputs.push(#{{ "name": "input.json", "source": #{{ "type": "inline", "value": input }} }}); /*__BORROWED_INPUTS__*/ d.spec = #{{ "backend": "{backend_type}", "inputs": job_inputs, "outputs": [], "config": {config_rhai}, "stream_events": ["metric", "progress", "phase", "log"] }}; #{{ job: d }}"#
             ));
 
         let lc = executor_lifecycle(
@@ -1019,11 +1058,13 @@ fn lower_automated_step_scheduled(cx: &mut LoweringCtx) -> Result<(), CompileErr
     // prepare: snapshot the upstream token into `input.json` and wrap it as a
     // SchedulerSubmitInput { job_id, model_name, run, retries, max_retries,
     // job_template_id, spec{ backend, inputs, outputs, config, resources } }.
+    // See `lower_automated_step` for the `/*__BORROWED_INPUTS__*/` marker —
+    // same Python-slug staging story for the scheduled lifecycle.
     ctx.transition(format!("t_{id}_prepare"), format!("{label} - Prepare"))
         .auto_input("input", &p_input)
         .auto_output("job", &sched_out)
         .logic(format!(
-            r#"let d = #{{}}; d.job_id = "{id_lit}"; d.model_name = "{id_lit}"; d.run = 0; d.retries = 0; d.max_retries = 0; d.job_template_id = "{job_template_lit}"; let job_inputs = {inputs_rhai}; job_inputs.push(#{{ "name": "input.json", "source": #{{ "type": "inline", "value": input }} }}); d.spec = #{{ "backend": "{backend_wire}", "inputs": job_inputs, "outputs": [], "config": {config_rhai}, "resources": {resources_rhai}, "stream_events": ["metric", "progress", "phase", "log"] }}; #{{ job: d }}"#
+            r#"let d = #{{}}; d.job_id = "{id_lit}"; d.model_name = "{id_lit}"; d.run = 0; d.retries = 0; d.max_retries = 0; d.job_template_id = "{job_template_lit}"; let job_inputs = {inputs_rhai}; job_inputs.push(#{{ "name": "input.json", "source": #{{ "type": "inline", "value": input }} }}); /*__BORROWED_INPUTS__*/ d.spec = #{{ "backend": "{backend_wire}", "inputs": job_inputs, "outputs": [], "config": {config_rhai}, "resources": {resources_rhai}, "stream_events": ["metric", "progress", "phase", "log"] }}; #{{ job: d }}"#
         ));
 
     ctx.transition(format!("t_{id}_to_output"), format!("{label} - To Output"))

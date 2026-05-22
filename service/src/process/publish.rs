@@ -12,12 +12,12 @@
 
 use std::collections::HashMap;
 
-use aithericon_executor_domain::InputSource;
 use uuid::Uuid;
 
 use crate::compiler::{
     compile_to_air_with_subworkflows, generate_py_io_files, make_child_callable,
-    node_input_scopes, CompileError, ResolvedChild, SubWorkflowAir,
+    node_files_inline, node_input_scopes, node_namespace_scopes, CompileError, ResolvedChild,
+    SubWorkflowAir,
 };
 use crate::models::error::ApiError;
 use crate::models::template::{
@@ -70,8 +70,6 @@ impl<'a> PublishService<'a> {
         graph: &WorkflowGraph,
         name: &str,
         description: &str,
-        template_id: Uuid,
-        version: i32,
         publishing_family: Option<Uuid>,
         files: &mut HashMap<String, HashMap<String, String>>,
     ) -> Result<CompiledArtifacts, ApiError> {
@@ -80,7 +78,7 @@ impl<'a> PublishService<'a> {
         let sub_air =
             resolve_subworkflow_air(self.state, publishing_family, graph).await?;
 
-        let air_files = storage_path_files(template_id, version, files);
+        let air_files = node_files_inline(files);
         let air_json = compile_to_air_with_subworkflows(
             graph,
             name,
@@ -149,36 +147,6 @@ impl<'a> PublishService<'a> {
     }
 }
 
-/// Build the per-node `name -> InputSource::StoragePath` map the compiler uses
-/// to emit executor inputs. Mirrors the S3 layout written by
-/// [`PublishService::upload_files`].
-fn storage_path_files(
-    template_id: Uuid,
-    version: i32,
-    ydoc_files: &HashMap<String, HashMap<String, String>>,
-) -> HashMap<String, HashMap<String, InputSource>> {
-    ydoc_files
-        .iter()
-        .map(|(node_id, files)| {
-            let sources = files
-                .keys()
-                .map(|filename| {
-                    let path =
-                        format!("templates/{template_id}/v{version}/{node_id}/{filename}");
-                    (
-                        filename.clone(),
-                        InputSource::StoragePath {
-                            path,
-                            storage: None,
-                        },
-                    )
-                })
-                .collect();
-            (node_id.clone(), sources)
-        })
-        .collect()
-}
-
 /// Inject the `_aithericon_io` `.py`/`.pyi` pair into every Python automated
 /// step from its computed input scope, mutating `ydoc_files` in place. Shared
 /// verbatim by publish and apply so git-authored and UI-authored Python steps
@@ -188,13 +156,19 @@ fn synthesize_py_io_files(
     graph: &WorkflowGraph,
     ydoc_files: &mut HashMap<String, HashMap<String, String>>,
 ) {
+    let ns_scopes = node_namespace_scopes(graph).ok();
     if let Ok(scopes) = node_input_scopes(graph) {
         for node in &graph.nodes {
             if let WorkflowNodeData::AutomatedStep { execution_spec, .. } = &node.data {
                 if execution_spec.backend_type == ExecutionBackendType::Python {
                     if let Some(scope) = scopes.get(&node.id) {
                         let entry = ydoc_files.entry(node.id.clone()).or_default();
-                        for (filename, source) in generate_py_io_files(scope) {
+                        let empty = std::collections::BTreeMap::new();
+                        let ns = ns_scopes
+                            .as_ref()
+                            .and_then(|m| m.get(&node.id))
+                            .unwrap_or(&empty);
+                        for (filename, source) in generate_py_io_files(scope, ns) {
                             entry.insert(filename.to_string(), source);
                         }
                     }

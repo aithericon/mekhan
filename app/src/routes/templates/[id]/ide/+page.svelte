@@ -20,6 +20,10 @@
 		type Template
 	} from '$lib/api/client';
 	import { fetchNodeScopes, type ScopeEntry } from '$lib/editor/guard-scope';
+	import type { CodeEditorApi } from '$lib/components/editor/panels/shared/CollabCodeEditor.svelte';
+	import type { components } from '$lib/api/schema';
+
+	type GuardDiagnosticDto = components['schemas']['GuardDiagnosticDto'];
 
 	const templateId = $derived(page.params.id!);
 
@@ -33,14 +37,30 @@
 	// so what the picker shows is exactly what the compiler resolves.
 	let nodeScopes = $state<Map<string, ScopeEntry[]>>(new Map());
 	let scopeBusy = $state(false);
+	// Surfaced from the analyzer so an empty picker can explain itself: when
+	// `graphOk` is false (dangling edge, missing End, …) or the request
+	// failed, the IDE renders a banner instead of letting the user wonder why
+	// no refs appear.
+	let graphOk = $state(true);
+	let scopeRequestFailed = $state(false);
+	let scopeDiagnostics = $state<GuardDiagnosticDto[]>([]);
 	async function refreshScopes() {
 		scopeBusy = true;
 		try {
-			nodeScopes = await fetchNodeScopes(binding.graph);
+			const result = await fetchNodeScopes(binding.graph);
+			nodeScopes = result.scopes;
+			graphOk = result.graphOk;
+			scopeRequestFailed = result.requestFailed;
+			scopeDiagnostics = result.diagnostics;
 		} finally {
 			scopeBusy = false;
 		}
 	}
+
+	// Active editor's insert-at-cursor API. Re-registered on each tab switch
+	// (each tab mounts a fresh CollabCodeEditor via {#key activeTab}). When
+	// null, the reference panel disables its "insert" affordance.
+	let editorApi = $state<CodeEditorApi | null>(null);
 
 	// Yjs session
 	const session = getSession(templateId);
@@ -285,6 +305,46 @@
 		</div>
 	{/if}
 
+	<!-- Analyzer status: surfaced so an empty reference panel is explained.
+	     `graphOk: false` is a compiler verdict (dangling edge, missing End,
+	     cycle, …); `scopeRequestFailed` is a transport-level fault. -->
+	{#if !scopeBusy && (!graphOk || scopeRequestFailed)}
+		<div
+			class="flex items-center justify-between gap-3 border-b border-amber-200 bg-amber-50 px-4 py-1.5 text-sm text-amber-900"
+			data-testid="ide-analyzer-banner"
+		>
+			<span>
+				{#if scopeRequestFailed}
+					<strong>Variable references unavailable</strong> — the analyzer didn't
+					respond. Click Refresh in the Reference panel to retry.
+				{:else}
+					<strong>Variable references unavailable</strong> — the graph isn't a
+					complete flow yet
+					{#if scopeDiagnostics.length > 0}
+						({scopeDiagnostics.length} diagnostic{scopeDiagnostics.length === 1 ? '' : 's'})
+					{/if}.
+					Wire every node to a Start/End, resolve dangling edges, then it
+					recomputes automatically.
+				{/if}
+			</span>
+			{#if scopeDiagnostics.length > 0}
+				<details class="text-sm">
+					<summary class="cursor-pointer underline">Show diagnostics</summary>
+					<ul class="mt-1 space-y-0.5">
+						{#each scopeDiagnostics as d, i (`${d.node_id}:${i}`)}
+							<li>
+								<code class="font-mono">{d.kind}</code> · {d.message}
+								{#if d.node_id}
+									<span class="text-muted-foreground">({d.node_id})</span>
+								{/if}
+							</li>
+						{/each}
+					</ul>
+				</details>
+			{/if}
+		</div>
+	{/if}
+
 	<div class="flex flex-1 overflow-hidden">
 		<div class="w-[200px] shrink-0">
 			<FileTree
@@ -316,6 +376,7 @@
 					provider={session.provider}
 					onCloseTab={handleCloseTab}
 					onSelectTab={handleSelectTab}
+					onEditorReady={(api) => (editorApi = api)}
 				/>
 			{/if}
 		</div>
@@ -329,6 +390,7 @@
 					scope={nodeScopes.get(selectedNodeId) ?? []}
 					scopeBusy={scopeBusy}
 					onRefreshScope={refreshScopes}
+					oninsertref={editorApi ? (s) => editorApi?.insertAtCursor(s) : undefined}
 				/>
 			{:else}
 				<div class="flex h-full items-center justify-center border-l border-border bg-card text-sm text-muted-foreground">

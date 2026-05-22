@@ -341,16 +341,23 @@ export class YjsGraphBinding {
 					new Y.Text(
 						[
 							'# Python step — runs on the Aithericon executor.',
-							'# `token`, `set_output` and `log_*` are injected by the runner',
-							'# (no imports, no init/shutdown). The Reference panel on the right',
-							'# lists the qualified refs in scope here (`<slug>.<field>` for',
-							'# borrowed upstream data, `input.<path>` for control-token leaves).',
+							'# Each upstream node is available as a Python global named after',
+							'# its slug — no imports, no `token[...]`. Just write the access',
+							'# directly: the compiler detects `<slug>.<field>` in this source',
+							'# and stages the producer\'s data automatically.',
+							'#',
+							'#   amount = review.invoice_amount      # borrowed from upstream "review"',
+							'#   vendor = review.vendor_name',
+							'#',
+							'# Helpers `set_output`, `log_*`, `update_progress` are injected by',
+							'# the runner. The Reference panel on the right lists every',
+							'# `<slug>.<field>` in scope at this node.',
 							'',
 							'log_info("step started")',
 							'',
-							'# Each set_output(name, value) adds a field to this node’s output',
-							'# port. Downstream steps borrow it as <this-node-slug>.<name>.',
-							'# set_output("result", token["some_field"])',
+							'# set_output(name, value) adds a field to this node\'s output port.',
+							'# Downstream steps borrow it as <this-node-slug>.<name>.',
+							'# set_output("result", { "ok": True })',
 							''
 						].join('\n')
 					)

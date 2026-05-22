@@ -219,7 +219,7 @@ pub fn compile_to_scenario(
     //     synthesize read-arcs (the compiler-as-borrow-checker) so every
     //     Decision/Loop guard physically `&`-borrows the parked data place
     //     that owns the field it references. Runs post-merge: place ids final.
-    apply_control_data_foundation(graph, &mut scenario, &fixups)?;
+    apply_control_data_foundation(graph, &mut scenario, &fixups, files)?;
 
     Ok(scenario)
 }
@@ -229,10 +229,11 @@ fn apply_control_data_foundation(
     graph: &crate::models::template::WorkflowGraph,
     scenario: &mut aithericon_sdk::scenario::ScenarioDefinition,
     fixups: &PostProcess,
+    files: &NodeFiles,
 ) -> Result<(), CompileError> {
     use crate::compiler::token_shape::{
-        analyze, ctrl_def_name, data_def_name, def_ref, dynamic_token_definition,
-        guard_readarc_plan,
+        analyze, automated_step_borrow_plan, ctrl_def_name, data_def_name, def_ref,
+        dynamic_token_definition, guard_readarc_plan,
     };
     use aithericon_sdk::scenario::{ScenarioArc, ScenarioPort, TransitionGuard, TransitionLogic};
 
@@ -345,6 +346,75 @@ fn apply_control_data_foundation(
                         source: s.replace(&b.referenced, &new_ref),
                     };
                 }
+            }
+        }
+    }
+
+    // (c2) Python AutomatedStep direct slug access: for every
+    //      `<slug>.<field>` access in a Python step's source, stage the
+    //      producer's parked envelope as `<slug>.json` alongside
+    //      `input.json` (the runner exposes `<slug>` as a Python global so
+    //      `review.invoice_amount` is a plain attribute lookup — no
+    //      `token[...]` ceremony, no IPC). The borrow plan resolves the
+    //      slug to the parked producer via the same machinery as guards.
+    let borrows = automated_step_borrow_plan(graph, files)?;
+    let mut by_consumer: std::collections::HashMap<String, Vec<_>> =
+        std::collections::HashMap::new();
+    for b in borrows {
+        by_consumer
+            .entry(b.consumer_node_id.clone())
+            .or_default()
+            .push(b);
+    }
+
+    const BORROW_MARKER: &str = "/*__BORROWED_INPUTS__*/";
+    for (consumer_id, consumer_borrows) in &by_consumer {
+        // Two prepare-transition ID conventions: the inline AutomatedStep
+        // wraps `prepare` under `scoped_prefix({id})` so the id is
+        // `{id}/prepare`; the scheduled lifecycle emits `t_{id}_prepare`
+        // directly. Match either.
+        let prepare_a = format!("{}/prepare", consumer_id);
+        let prepare_b = format!("t_{}_prepare", consumer_id);
+        for t in &mut scenario.transitions {
+            if t.id != prepare_a && t.id != prepare_b {
+                continue;
+            }
+            let mut pushes = String::new();
+            for b in consumer_borrows {
+                let var = format!("d_{}", b.producer_node.replace('-', "_"));
+                let data_place = format!("p_{}_data", b.producer_node);
+                if !t.input_ports.iter().any(|p| p.name == var) {
+                    t.input_ports.push(ScenarioPort {
+                        name: var.clone(),
+                        schema_ref: Some(def_ref(&data_def_name(&b.producer_node))),
+                        cardinality: "single".to_string(),
+                    });
+                }
+                if !t.inputs.iter().any(|a| a.place == data_place && a.read) {
+                    t.inputs.push(ScenarioArc {
+                        place: data_place.clone(),
+                        port: var.clone(),
+                        weight: 1,
+                        read: true,
+                    });
+                }
+                pushes.push_str(&format!(
+                    r#"job_inputs.push(#{{ "name": "{}.json", "source": #{{ "type": "inline", "value": {} }} }}); "#,
+                    b.slug, var
+                ));
+            }
+            if let TransitionLogic::Rhai { source } = &t.logic {
+                let new_source = source.replace(BORROW_MARKER, &pushes);
+                t.logic = TransitionLogic::Rhai { source: new_source };
+            }
+        }
+    }
+    // Strip leftover markers from prepare transitions that had no borrows.
+    for t in &mut scenario.transitions {
+        if let TransitionLogic::Rhai { source } = &t.logic {
+            if source.contains(BORROW_MARKER) {
+                let new_source = source.replace(BORROW_MARKER, "");
+                t.logic = TransitionLogic::Rhai { source: new_source };
             }
         }
     }
@@ -1024,7 +1094,8 @@ mod tests {
         // Non-identifier: dropped from the typed surface, still item-accessible.
         fields.insert("bad-name".to_string(), FieldKind::Text);
 
-        let files = generate_py_io_files(&fields);
+        let empty_ns = std::collections::BTreeMap::new();
+        let files = generate_py_io_files(&fields, &empty_ns);
         let map: std::collections::HashMap<_, _> = files.iter().cloned().collect();
 
         let stub = &map["_aithericon_io.pyi"];
@@ -1045,7 +1116,10 @@ mod tests {
         assert!(!runtime.contains("Input"));
 
         // Pass-through node: still a valid stub, no field decls.
-        let empty = generate_py_io_files(&std::collections::BTreeMap::new());
+        let empty = generate_py_io_files(
+            &std::collections::BTreeMap::new(),
+            &std::collections::BTreeMap::new(),
+        );
         let empty_map: std::collections::HashMap<_, _> = empty.iter().cloned().collect();
         assert!(empty_map["_aithericon_io.pyi"].contains("class Token(dict): ..."));
         assert!(empty_map["_aithericon_io.py"].contains("aithericon.token()"));
@@ -1075,6 +1149,146 @@ mod tests {
         let s = air.to_string();
         // The error place must feed the error-handler branch.
         assert!(s.contains("p_a_error"), "error output place missing");
+    }
+
+    /// Python AutomatedStep that reads `<slug>.<field>` in its source
+    /// emits a scenario with (1) a read-arc into the producer's parked
+    /// data place, (2) a `d_<producer>` input port on the prepare
+    /// transition, and (3) a `job_inputs.push(... "<slug>.json" ... d_<producer> ...)`
+    /// snippet in the prepare Rhai source. That triplet is the complete
+    /// runtime contract for the direct-slug-access model.
+    #[test]
+    fn python_step_direct_slug_access_wires_into_scenario() {
+        use aithericon_executor_domain::InputSource;
+        use serde_json::json;
+        use std::collections::HashMap;
+
+        // Start → review (HumanTask, slug "review") → extract (Python AS) → end.
+        // Python source reads `review.invoice_amount` so the compiler must
+        // synthesize a borrow into review's parked data place.
+        let graph_json = json!({
+          "nodes": [
+            {"id":"start","type":"start","position":{"x":0,"y":0},
+             "data":{"type":"start","label":"Start"}},
+            {"id":"review","type":"human_task","slug":"review",
+             "position":{"x":0,"y":0},
+             "data":{"type":"human_task","label":"Review","taskTitle":"Review",
+                     "steps":[{"id":"s","title":"S","blocks":[
+                       {"type":"input","field":{"name":"invoice_amount","label":"Amt","kind":"number","required":true}}
+                     ]}]}},
+            {"id":"extract","type":"automated_step","slug":"extract",
+             "position":{"x":0,"y":0},
+             "data":{"type":"automated_step","label":"Extract",
+                     "executionSpec":{"backendType":"python","entrypoint":"main.py","config":{"entrypoint":"main.py","python":"python3","sdk":true}},
+                     "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
+                     "deploymentModel":{"mode":"inline"}}},
+            {"id":"end","type":"end","position":{"x":0,"y":0},
+             "data":{"type":"end","label":"End"}}
+          ],
+          "edges":[
+            {"id":"e1","source":"start","target":"review","targetHandle":"in","type":"sequence"},
+            {"id":"e2","source":"review","target":"extract","targetHandle":"in","type":"sequence"},
+            {"id":"e3","source":"extract","target":"end","targetHandle":"in","type":"sequence"}
+          ]
+        });
+        let graph: WorkflowGraph =
+            serde_json::from_value(graph_json).expect("graph deser");
+
+        let mut step_files = HashMap::new();
+        step_files.insert(
+            "main.py".to_string(),
+            InputSource::Raw {
+                content: "amount = review.invoice_amount\nprint(amount)\n".to_string(),
+            },
+        );
+        let mut files: HashMap<String, HashMap<String, InputSource>> = HashMap::new();
+        files.insert("extract".to_string(), step_files);
+
+        let scenario = crate::compiler::compile_to_scenario(
+            &graph,
+            "borrow-test",
+            "test",
+            &files,
+            &crate::compiler::SubWorkflowAir::new(),
+        )
+        .expect("compile direct-slug graph");
+
+        // (1) The prepare transition has been rewritten with the borrow.
+        let prepare = scenario
+            .transitions
+            .iter()
+            .find(|t| t.id == "extract/prepare")
+            .expect("prepare transition exists");
+
+        // (1a) Sentinel has been replaced; no marker remains.
+        match &prepare.logic {
+            aithericon_sdk::scenario::TransitionLogic::Rhai { source } => {
+                assert!(
+                    !source.contains("__BORROWED_INPUTS__"),
+                    "marker should be substituted; source: {source}"
+                );
+                assert!(
+                    source.contains(r#""name": "review.json""#),
+                    "prepare must stage review.json; source: {source}"
+                );
+                assert!(
+                    source.contains("d_review"),
+                    "prepare must reference the d_review read-arc var; source: {source}"
+                );
+            }
+            other => panic!("expected Rhai logic, got {other:?}"),
+        }
+
+        // (1b) The read-arc port + arc landed on the prepare transition.
+        assert!(
+            prepare.input_ports.iter().any(|p| p.name == "d_review"),
+            "d_review input port missing on prepare; got: {:?}",
+            prepare.input_ports
+        );
+        assert!(
+            prepare
+                .inputs
+                .iter()
+                .any(|a| a.place == "p_review_data" && a.read),
+            "read-arc into p_review_data missing; got: {:?}",
+            prepare.inputs
+        );
+    }
+
+    /// Non-Python AutomatedStep (e.g. Docker) must still have the marker
+    /// stripped — leaving no residual `/*__BORROWED_INPUTS__*/` comment
+    /// in the published scenario.
+    #[test]
+    fn non_python_prepare_has_marker_stripped() {
+        let graph = WorkflowGraph {
+            nodes: vec![
+                start_node("s"),
+                automated_step_with_retry("a", RetryPolicy::default()),
+                end_node("e"),
+            ],
+            edges: vec![edge("e0", "s", "a"), edge("e1", "a", "e")],
+            viewport: None,
+        };
+        let scenario = crate::compiler::compile_to_scenario(
+            &graph,
+            "no-borrow",
+            "test",
+            &std::collections::HashMap::new(),
+            &crate::compiler::SubWorkflowAir::new(),
+        )
+        .expect("compile");
+
+        let prepare = scenario
+            .transitions
+            .iter()
+            .find(|t| t.id == "a/prepare")
+            .expect("prepare exists");
+        if let aithericon_sdk::scenario::TransitionLogic::Rhai { source } = &prepare.logic {
+            assert!(
+                !source.contains("__BORROWED_INPUTS__"),
+                "marker must be stripped even when no borrows; source: {source}"
+            );
+        }
     }
 
     #[test]

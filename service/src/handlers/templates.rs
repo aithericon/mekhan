@@ -7,11 +7,10 @@ use axum::{
 };
 use uuid::Uuid;
 
-use aithericon_executor_domain::InputSource;
-
 use crate::auth::AuthUser;
 use crate::compiler::{
-    compile_to_air, compile_to_air_with_subworkflows, generate_py_io_files, node_input_scopes,
+    compile_to_air, compile_to_air_with_subworkflows, generate_py_io_files,
+    node_files_inline, node_input_scopes, node_namespace_scopes,
 };
 use crate::lifecycle::cleanup_net;
 use crate::models::error::{ApiError, ErrorResponse};
@@ -486,8 +485,6 @@ pub async fn publish_template(
             &graph,
             &existing.name,
             &existing.description,
-            id,
-            existing.version,
             Some(existing.base_template_id.unwrap_or(existing.id)),
             &mut ydoc_files,
         )
@@ -567,62 +564,6 @@ async fn reconstruct_graph_from_ydoc(
     .map_err(|e| format!("spawn_blocking: {e}"))??;
 
     Ok(Some(result))
-}
-
-/// Build the per-node `name -> InputSource::StoragePath` map that the compiler
-/// uses to emit executor inputs. Mirrors the S3 layout written by
-/// [`crate::process::publish::PublishService::upload_files`]. Used by the
-/// stateful preview compile (`compile_preview`).
-fn storage_path_files(
-    template_id: Uuid,
-    version: i32,
-    ydoc_files: &HashMap<String, HashMap<String, String>>,
-) -> HashMap<String, HashMap<String, InputSource>> {
-    ydoc_files
-        .iter()
-        .map(|(node_id, files)| {
-            let sources = files
-                .keys()
-                .map(|filename| {
-                    let path =
-                        format!("templates/{template_id}/v{version}/{node_id}/{filename}");
-                    (
-                        filename.clone(),
-                        InputSource::StoragePath {
-                            path,
-                            storage: None,
-                        },
-                    )
-                })
-                .collect();
-            (node_id.clone(), sources)
-        })
-        .collect()
-}
-
-/// Materialize a per-node `name -> InputSource::Raw` map straight from inline
-/// file contents. Used by the stateless preview compile, where files haven't
-/// been uploaded to S3 yet.
-fn inline_files(
-    inline: &HashMap<String, HashMap<String, String>>,
-) -> HashMap<String, HashMap<String, InputSource>> {
-    inline
-        .iter()
-        .map(|(node_id, files)| {
-            let sources = files
-                .iter()
-                .map(|(filename, content)| {
-                    (
-                        filename.clone(),
-                        InputSource::Raw {
-                            content: content.clone(),
-                        },
-                    )
-                })
-                .collect();
-            (node_id.clone(), sources)
-        })
-        .collect()
 }
 
 /// Mark a template row as no longer the latest in its version chain. Generic
@@ -955,8 +896,6 @@ pub async fn apply_template(
             &graph,
             &latest.name,
             &latest.description,
-            target_id,
-            target_version,
             Some(latest.base_template_id.unwrap_or(latest.id)),
             &mut files_map,
         )
@@ -1171,7 +1110,7 @@ pub async fn compile_preview(
         Ok(Some((_, f))) => f,
         _ => HashMap::new(),
     };
-    let files = storage_path_files(id, existing.version, &ydoc_files);
+    let files = node_files_inline(&ydoc_files);
 
     // Resolve + freeze SubWorkflow children so the preview AIR matches what
     // publish would emit (DB-backed; the stateless `/api/compile` path cannot
@@ -1252,6 +1191,7 @@ pub async fn io_stubs(
     // (BTreeMap) for stable display.
     let mut scopes_out: HashMap<String, Vec<serde_json::Value>> = HashMap::new();
     if let Some(graph) = graph {
+        let ns_scopes = node_namespace_scopes(&graph).ok();
         match node_input_scopes(&graph) {
             Ok(scopes) => {
                 for node in &graph.nodes {
@@ -1259,7 +1199,12 @@ pub async fn io_stubs(
                         if execution_spec.backend_type == ExecutionBackendType::Python {
                             if let Some(scope) = scopes.get(&node.id) {
                                 let entry = generated.entry(node.id.clone()).or_default();
-                                for (filename, source) in generate_py_io_files(scope) {
+                                let empty = std::collections::BTreeMap::new();
+                                let ns = ns_scopes
+                                    .as_ref()
+                                    .and_then(|m| m.get(&node.id))
+                                    .unwrap_or(&empty);
+                                for (filename, source) in generate_py_io_files(scope, ns) {
                                     entry.insert(filename.to_string(), source);
                                 }
                                 scopes_out.insert(
@@ -1312,7 +1257,7 @@ pub async fn compile_graph(
     Json(body): Json<CompileRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let description = body.description.as_deref().unwrap_or("");
-    let files = inline_files(&body.files);
+    let files = node_files_inline(&body.files);
     let air = compile_to_air(&body.graph, &body.name, description, &files)
         .map_err(|e| {
             let view = e.to_view();
