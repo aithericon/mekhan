@@ -50,15 +50,26 @@ os.chdir(_run_dir)
 class _AccessibleDict(dict):
     """A dict that also supports attribute access for its keys, so a
     workflow producer envelope staged as `<slug>.json` can be read as
-    `<slug>.<field>` from user code without any wrapper. Nested dicts and
-    list elements are wrapped recursively. Falls back to AttributeError
-    (not KeyError) for missing attrs to keep Python's `hasattr` /
-    `getattr(obj, key, default)` semantics intact."""
-    def __getattr__(self, key):
-        try:
-            return self[key]
-        except KeyError:
-            raise AttributeError(f"{{type(self).__name__}} has no attribute {{key!r}}")
+    `<slug>.<field>` from user code without any wrapper. Nested dicts
+    and list elements are wrapped recursively.
+
+    Lookup precedence: non-dunder keys in the dict win over inherited
+    dict methods (so `batch.items[0]` reads a user `items` field, not
+    `dict.items` the method). If no key matches, normal attribute lookup
+    proceeds — so `review.keys()` still works as the dict method when
+    `review` has no `keys` field. To call a dict method on a wrapper
+    that DOES have a shadowing key, use `dict.<method>(wrapper)`.
+
+    Missing attribute access (no key + no inherited method) raises
+    AttributeError, so `hasattr` / `getattr(obj, key, default)` keep
+    their documented semantics."""
+    def __getattribute__(self, key):
+        if not key.startswith('_'):
+            try:
+                return dict.__getitem__(self, key)
+            except KeyError:
+                pass
+        return super().__getattribute__(key)
 
     def __setattr__(self, key, value):
         self[key] = value
@@ -180,4 +191,366 @@ except NameError:
     tokio::fs::write(runner_path, template)
         .await
         .map_err(|e| ExecutorError::StagingFailed(format!("failed to write runner template: {e}")))
+}
+
+#[cfg(test)]
+mod tests {
+    //! Runner-template behaviour tests.
+    //!
+    //! These prove the contract the compiler-side relies on: every
+    //! `<slug>.json` staged in `AITHERICON_INPUTS_DIR` becomes a Python
+    //! global the user's `exec`-loaded code can read by attribute (and
+    //! by item) access. The compiler-side `automated_step_borrow_plan`
+    //! decides *which* slugs get staged; this layer proves they reach
+    //! user code intact.
+    //!
+    //! Strategy: write the runner to a temp dir, populate inputs/,
+    //! invoke `python3` on it with a small user script, capture stdout
+    //! and assert. No NATS, no IPC sidecar, no SDK — these tests
+    //! deliberately drive the non-SDK path. The SDK-upgraded path is
+    //! exercised by live dev (see the `executor-separate-binary`
+    //! memory).
+    //!
+    //! Skipped at runtime when either:
+    //!   - `python3` is not on PATH (CI Linux containers without it)
+    //!   - the system `python3` can `import aithericon` (the runner
+    //!     would then call `aithericon.init()` and try to connect to
+    //!     a non-existent IPC socket, which is out of scope here)
+    use super::*;
+    use std::process::Command;
+    use tempfile::TempDir;
+
+    /// `true` when `python3` is missing — caller skips the test.
+    fn skip_no_python3() -> bool {
+        Command::new("python3")
+            .arg("--version")
+            .output()
+            .map(|o| !o.status.success())
+            .unwrap_or(true)
+    }
+
+    /// `true` when system python3 has `aithericon` importable — the
+    /// runner would init the SDK and try to connect to a missing IPC
+    /// socket. Skip in that case; the SDK path is verified by live
+    /// dev, not by these unit tests.
+    fn skip_with_sdk() -> bool {
+        Command::new("python3")
+            .args(["-c", "import aithericon"])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+
+    /// Stage `<inputs>/main.py` plus any extra inputs, write the runner
+    /// template, invoke `python3 <runner>` with the env vars the
+    /// executor sets, return `(stdout, stderr, exit_code)`.
+    async fn run_runner(
+        user_script: &str,
+        inputs: &[(&str, &str)],
+    ) -> (String, String, i32) {
+        let temp = TempDir::new().expect("temp dir");
+        let run_dir = temp.path();
+        let inputs_dir = run_dir.join("inputs");
+        std::fs::create_dir_all(&inputs_dir).unwrap();
+
+        let user_path = inputs_dir.join("main.py");
+        std::fs::write(&user_path, user_script).unwrap();
+
+        for (name, content) in inputs {
+            std::fs::write(inputs_dir.join(name), content).unwrap();
+        }
+
+        let runner_path = run_dir.join("__runner__.py");
+        write_runner(&runner_path, &user_path)
+            .await
+            .expect("write_runner");
+
+        let outputs_dir = run_dir.join("outputs");
+        std::fs::create_dir_all(&outputs_dir).unwrap();
+
+        let output = Command::new("python3")
+            .arg(&runner_path)
+            .env("AITHERICON_RUN_DIR", run_dir)
+            .env("AITHERICON_INPUTS_DIR", &inputs_dir)
+            .env("AITHERICON_OUTPUTS_DIR", &outputs_dir)
+            .env("PYTHONDONTWRITEBYTECODE", "1")
+            .output()
+            .expect("python3 invocation");
+
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        let code = output.status.code().unwrap_or(-1);
+        drop(temp);
+        (stdout, stderr, code)
+    }
+
+    /// Skip the body when the environment can't run runner tests.
+    macro_rules! skip_if_env_unsupported {
+        () => {
+            if skip_no_python3() {
+                eprintln!("skipped: python3 not on PATH");
+                return;
+            }
+            if skip_with_sdk() {
+                eprintln!(
+                    "skipped: aithericon importable in system python3; \
+                     runner would try to connect to an IPC socket"
+                );
+                return;
+            }
+        };
+    }
+
+    #[tokio::test]
+    async fn slug_global_resolves_via_attribute_access() {
+        skip_if_env_unsupported!();
+        let (stdout, stderr, code) = run_runner(
+            "print(review.invoice_amount)",
+            &[
+                ("input.json", "{}"),
+                (
+                    "review.json",
+                    r#"{"invoice_amount": 1234.5, "vendor_name": "ACME"}"#,
+                ),
+            ],
+        )
+        .await;
+        assert_eq!(code, 0, "stdout: {stdout}\nstderr: {stderr}");
+        assert_eq!(stdout.trim(), "1234.5");
+    }
+
+    #[tokio::test]
+    async fn slug_global_supports_item_access_too() {
+        skip_if_env_unsupported!();
+        let (stdout, stderr, code) = run_runner(
+            r#"print(review["vendor_name"])"#,
+            &[("review.json", r#"{"vendor_name": "ACME"}"#)],
+        )
+        .await;
+        assert_eq!(code, 0, "stderr: {stderr}");
+        assert_eq!(stdout.trim(), "ACME");
+    }
+
+    #[tokio::test]
+    async fn nested_dict_recursively_accessible() {
+        skip_if_env_unsupported!();
+        let (stdout, stderr, code) = run_runner(
+            "print(extract.result.amount, extract.result.vendor)",
+            &[(
+                "extract.json",
+                r#"{"result": {"amount": 100, "vendor": "X"}}"#,
+            )],
+        )
+        .await;
+        assert_eq!(code, 0, "stderr: {stderr}");
+        assert_eq!(stdout.trim(), "100 X");
+    }
+
+    #[tokio::test]
+    async fn list_elements_wrapped_recursively() {
+        skip_if_env_unsupported!();
+        let (stdout, stderr, code) = run_runner(
+            "print(batch.items[0].id, batch.items[1].id)",
+            &[("batch.json", r#"{"items": [{"id": "a"}, {"id": "b"}]}"#)],
+        )
+        .await;
+        assert_eq!(code, 0, "stderr: {stderr}");
+        assert_eq!(stdout.trim(), "a b");
+    }
+
+    #[tokio::test]
+    async fn missing_attribute_raises_attribute_error_not_keyerror() {
+        skip_if_env_unsupported!();
+        // hasattr / getattr-with-default both rely on AttributeError
+        // semantics — if we raised KeyError, neither would work as
+        // documented.
+        let (stdout, stderr, code) = run_runner(
+            "print('has' if hasattr(review, 'present') else 'no')\n\
+             print(getattr(review, 'missing', 'fallback'))",
+            &[("review.json", r#"{"present": 1}"#)],
+        )
+        .await;
+        assert_eq!(code, 0, "stderr: {stderr}");
+        assert_eq!(stdout.trim(), "has\nfallback");
+    }
+
+    #[tokio::test]
+    async fn reserved_global_names_are_not_shadowed() {
+        skip_if_env_unsupported!();
+        // A staged file named "set_output.json" must NOT overwrite the
+        // runner-injected helper. The reserved-globals guard in the
+        // template skips slug names that would clash.
+        let (stdout, stderr, code) = run_runner(
+            "print(callable(set_output))",
+            &[
+                ("input.json", "{}"),
+                ("set_output.json", r#"{"shadow": "boom"}"#),
+            ],
+        )
+        .await;
+        assert_eq!(code, 0, "stderr: {stderr}");
+        assert_eq!(stdout.trim(), "True");
+    }
+
+    #[tokio::test]
+    async fn input_json_loaded_as_both_token_and_input() {
+        skip_if_env_unsupported!();
+        // The slim control token (Start fields + identity/metadata) is
+        // available under BOTH names so legacy `token` code keeps
+        // working AND `input.<field>` reads naturally.
+        let (stdout, stderr, code) = run_runner(
+            "print(token.invoice_id, input.invoice_id)",
+            &[("input.json", r#"{"invoice_id": "INV-42"}"#)],
+        )
+        .await;
+        assert_eq!(code, 0, "stderr: {stderr}");
+        assert_eq!(stdout.trim(), "INV-42 INV-42");
+    }
+
+    #[tokio::test]
+    async fn non_identifier_filename_silently_skipped() {
+        skip_if_env_unsupported!();
+        // A filename like "weird-name.json" cannot be a Python global
+        // (the `-` breaks the identifier rule). The runner must skip
+        // it without crashing — user code just won't see a global by
+        // that name, and `inputs["weird-name.json"]` stays available
+        // as the escape hatch.
+        let (stdout, stderr, code) = run_runner(
+            r#"print("ok", "weird-name.json" in inputs)"#,
+            &[
+                ("input.json", "{}"),
+                ("weird-name.json", r#"{"x": 1}"#),
+            ],
+        )
+        .await;
+        assert_eq!(code, 0, "stderr: {stderr}");
+        assert_eq!(stdout.trim(), "ok True");
+    }
+
+    #[tokio::test]
+    async fn non_dict_top_level_value_passes_through_unwrapped() {
+        skip_if_env_unsupported!();
+        // A `<slug>.json` whose top-level is a scalar / list still
+        // binds the global — just without the AccessibleDict wrapper
+        // (wrapping a non-dict would be wrong; the value IS the value).
+        let (stdout, stderr, code) = run_runner(
+            "print(scalar, type(scalar).__name__)",
+            &[("scalar.json", "42")],
+        )
+        .await;
+        assert_eq!(code, 0, "stderr: {stderr}");
+        assert_eq!(stdout.trim(), "42 int");
+    }
+
+    #[tokio::test]
+    async fn missing_input_json_yields_empty_token() {
+        skip_if_env_unsupported!();
+        // No input.json staged — `token` and `input` exist as empty
+        // dicts so `token.get('x', default)` still works and
+        // `'x' in token` returns False instead of NameError.
+        let (stdout, stderr, code) = run_runner(
+            r#"print(token.get("x", "default"), "x" in token)"#,
+            &[],
+        )
+        .await;
+        assert_eq!(code, 0, "stderr: {stderr}");
+        assert_eq!(stdout.trim(), "default False");
+    }
+
+    #[tokio::test]
+    async fn multiple_slug_globals_coexist() {
+        skip_if_env_unsupported!();
+        // The compile-side borrow planner emits one stage entry per
+        // (consumer, producer); the runner must promote *all* of them
+        // to globals independently.
+        let (stdout, stderr, code) = run_runner(
+            "print(review.invoice_amount, scan.text, extract.amount)",
+            &[
+                ("input.json", "{}"),
+                ("review.json", r#"{"invoice_amount": 100}"#),
+                ("scan.json", r#"{"text": "hello"}"#),
+                ("extract.json", r#"{"amount": 42}"#),
+            ],
+        )
+        .await;
+        assert_eq!(code, 0, "stderr: {stderr}");
+        assert_eq!(stdout.trim(), "100 hello 42");
+    }
+
+    #[tokio::test]
+    async fn dict_methods_still_work_when_no_shadowing_key() {
+        skip_if_env_unsupported!();
+        // The AccessibleDict's getattribute prefers keys over inherited
+        // dict methods. When NO shadowing key exists, the normal dict
+        // method must still be reachable so `for k in review.keys()`,
+        // `review.get('x', default)`, etc. behave like a normal dict.
+        let (stdout, stderr, code) = run_runner(
+            "ks = list(review.keys())\n\
+             ks.sort()\n\
+             print(','.join(ks))\n\
+             print(review.get('missing_field', 'fallback'))",
+            &[("review.json", r#"{"alpha": 1, "beta": 2}"#)],
+        )
+        .await;
+        assert_eq!(code, 0, "stderr: {stderr}");
+        assert_eq!(stdout.trim(), "alpha,beta\nfallback");
+    }
+
+    #[tokio::test]
+    async fn key_shadowing_dict_method_returns_value_not_method() {
+        skip_if_env_unsupported!();
+        // When a user field name shadows a dict method (`items`, `keys`,
+        // `values`, ...), attribute access must return the VALUE — the
+        // alternative would silently mask user data behind the inherited
+        // method, the precise footgun the AccessibleDict guards against.
+        // The dict method is still reachable via `dict.<method>(d)`.
+        let (stdout, stderr, code) = run_runner(
+            "print(batch.items)\n\
+             print(sorted(dict.items(batch)))",
+            &[("batch.json", r#"{"items": [1, 2, 3]}"#)],
+        )
+        .await;
+        assert_eq!(code, 0, "stderr: {stderr}");
+        assert_eq!(stdout.trim(), "[1, 2, 3]\n[('items', [1, 2, 3])]");
+    }
+
+    #[tokio::test]
+    async fn set_output_writes_outputs_file() {
+        skip_if_env_unsupported!();
+        // Verify the file-based set_output fallback still works. The
+        // SDK-upgraded path uses IPC; this is the safety net for the
+        // no-SDK case (also what these tests exercise).
+        let temp = TempDir::new().unwrap();
+        let run_dir = temp.path();
+        let inputs_dir = run_dir.join("inputs");
+        let outputs_dir = run_dir.join("outputs");
+        std::fs::create_dir_all(&inputs_dir).unwrap();
+        std::fs::create_dir_all(&outputs_dir).unwrap();
+
+        let user_path = inputs_dir.join("main.py");
+        std::fs::write(&user_path, r#"set_output("result", {"ok": True, "n": 7})"#)
+            .unwrap();
+        let runner_path = run_dir.join("__runner__.py");
+        write_runner(&runner_path, &user_path).await.unwrap();
+
+        let output = Command::new("python3")
+            .arg(&runner_path)
+            .env("AITHERICON_RUN_DIR", run_dir)
+            .env("AITHERICON_INPUTS_DIR", &inputs_dir)
+            .env("AITHERICON_OUTPUTS_DIR", &outputs_dir)
+            .env("PYTHONDONTWRITEBYTECODE", "1")
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let written =
+            std::fs::read_to_string(outputs_dir.join("result.json")).expect("result.json");
+        let parsed: serde_json::Value = serde_json::from_str(&written).unwrap();
+        assert_eq!(parsed["ok"], serde_json::json!(true));
+        assert_eq!(parsed["n"], serde_json::json!(7));
+    }
 }
