@@ -11,6 +11,7 @@ use futures::StreamExt;
 use petri_domain::PersistedEvent;
 
 use crate::nats::MekhanNats;
+use crate::observability::record_silent_drop;
 
 /// Fetch all persisted events for a net from NATS JetStream.
 ///
@@ -58,10 +59,9 @@ pub async fn fetch_events(
     loop {
         match tokio::time::timeout(read_timeout, messages.next()).await {
             Ok(Some(Ok(msg))) => {
-                if let Ok(event) = serde_json::from_slice::<PersistedEvent>(&msg.payload) {
-                    events.push(event);
-                } else {
-                    tracing::warn!("Failed to deserialize event from JetStream");
+                match serde_json::from_slice::<PersistedEvent>(&msg.payload) {
+                    Ok(event) => events.push(event),
+                    Err(e) => record_silent_drop("petri_events_history", &e),
                 }
                 if let Err(e) = msg.ack().await {
                     tracing::warn!(error = %e, "Failed to ack event message");

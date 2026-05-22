@@ -11,6 +11,7 @@ pub mod handlers;
 pub mod lifecycle;
 pub mod models;
 pub mod nats;
+pub mod observability;
 pub mod openapi;
 pub mod petri;
 pub mod process;

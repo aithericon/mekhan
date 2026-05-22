@@ -11,6 +11,7 @@ use petri_domain::{DomainEvent, PersistedEvent};
 use crate::catalogue::subscriptions::SubscriptionManager;
 use crate::config::CleanupConfig;
 use crate::nats::MekhanNats;
+use crate::observability::record_silent_drop;
 use crate::petri::client::PetriClient;
 use crate::triggers::{ResultWaiters, TerminalOutcome, TriggerDispatcher};
 
@@ -95,7 +96,14 @@ pub async fn start_lifecycle_listener(
         let parts: Vec<&str> = subject.split('.').collect();
 
         if parts.len() < 5 {
-            tracing::warn!("unexpected lifecycle subject format: {subject}");
+            // Subject doesn't match the `petri.events.{net_id}.net.{event_type}`
+            // shape this consumer is bound to — either a producer drift or a
+            // subject filter misconfiguration. Either way the message will
+            // never be processable, so ACK + loud.
+            record_silent_drop(
+                "lifecycle_subject",
+                &format!("unexpected subject: {subject}"),
+            );
             let _ = msg.ack().await;
             continue;
         }
@@ -104,10 +112,21 @@ pub async fn start_lifecycle_listener(
         let event_type = parts[parts.len() - 1];
 
         // The subject carries the terminal status; the payload carries the
-        // structured result envelope (`NetCompleted.exit_code`). Best-effort:
-        // a malformed/absent payload simply leaves `result` NULL (tolerant —
-        // bare-terminal workflows have no `exit_code` and stay NULL).
-        let persisted: Option<PersistedEvent> = serde_json::from_slice(&msg.payload).ok();
+        // structured result envelope (`NetCompleted.exit_code`). An *empty*
+        // payload is intentional (bare-terminal workflows have no
+        // `exit_code` — `result` stays NULL); a *garbage* payload is a
+        // producer drift bug we want to surface.
+        let persisted: Option<PersistedEvent> = if msg.payload.is_empty() {
+            None
+        } else {
+            match serde_json::from_slice(&msg.payload) {
+                Ok(p) => Some(p),
+                Err(e) => {
+                    record_silent_drop("lifecycle_envelope", &e);
+                    None
+                }
+            }
+        };
 
         match event_type {
             "completed" => {

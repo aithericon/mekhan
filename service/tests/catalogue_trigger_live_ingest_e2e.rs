@@ -322,7 +322,7 @@ async fn live_catalogue_register_event_fires_catalog_trigger() {
     clean_slate(&nats).await;
     // Clean baseline so the projection-failure assertion at the end is
     // about THIS test, not a previous run that drifted shapes.
-    mekhan_service::causality::ingest::reset_projection_failures();
+    mekhan_service::observability::reset_silent_drops();
     let _consumers = spawn_consumers(nats.clone(), db.clone(), triggers).await;
 
     let category = format!("test_live_ingest_{}", Uuid::new_v4().simple());
@@ -387,23 +387,23 @@ async fn live_catalogue_register_event_fires_catalog_trigger() {
     // first iteration of this test hit exactly that — `created_at` missing
     // → ingest warn + return Ok, no catalogue row, no trigger fire — and
     // the only visible symptom was the timeout above. With loud failures
-    // wired, that bug now also bumps `projection_failures()`.
+    // wired, that bug now also bumps `silent_drops()`.
     assert_eq!(
-        mekhan_service::causality::ingest::projection_failures(),
+        mekhan_service::observability::silent_drops(),
         0,
-        "projection failures occurred during this test — \
-         check error logs targeted at `mekhan_service::causality::projection_failure` \
+        "silent drops occurred during this test — \
+         check error logs targeted at `mekhan_service::observability::silent_drop` \
          for the structured details"
     );
 }
 
 /// Proof-of-loudness: publish a deliberately malformed `catalogue_register`
 /// event (missing the required `created_at`) and verify that
-/// `projection_failures()` bumps. Catches future regressions where someone
+/// `silent_drops()` bumps. Catches future regressions where someone
 /// "helpfully" adds a fallback or removes the error-level log — anything
 /// that silently absorbs the drop without bumping the counter.
 #[tokio::test]
-async fn malformed_catalogue_register_bumps_projection_failures() {
+async fn malformed_catalogue_register_bumps_silent_drops() {
     if !engine_available().await {
         panic!(
             "engine not available at {} — start the stack with `just dev up`",
@@ -415,11 +415,11 @@ async fn malformed_catalogue_register_bumps_projection_failures() {
         common::test_app_with_petri_url_and_triggers(&nats_url, &engine_url()).await;
     let nats = MekhanNats::connect(&nats_url, None).await.expect("nats");
     clean_slate(&nats).await;
-    mekhan_service::causality::ingest::reset_projection_failures();
+    mekhan_service::observability::reset_silent_drops();
     let db = _db;
     let _consumers = spawn_consumers(nats.clone(), db.clone(), triggers).await;
 
-    let baseline = mekhan_service::causality::ingest::projection_failures();
+    let baseline = mekhan_service::observability::silent_drops();
     assert_eq!(baseline, 0, "reset should leave counter at 0");
 
     // Build an EffectCompleted event whose effect_result is missing the
@@ -440,17 +440,17 @@ async fn malformed_catalogue_register_bumps_projection_failures() {
     // Wait for ingest to consume and the counter to bump.
     let start = std::time::Instant::now();
     while start.elapsed() < Duration::from_secs(10) {
-        if mekhan_service::causality::ingest::projection_failures() > baseline {
+        if mekhan_service::observability::silent_drops() > baseline {
             break;
         }
         tokio::time::sleep(Duration::from_millis(150)).await;
     }
-    let after = mekhan_service::causality::ingest::projection_failures();
+    let after = mekhan_service::observability::silent_drops();
     assert!(
         after > baseline,
-        "malformed catalogue_register event should bump projection_failures \
+        "malformed catalogue_register event should bump silent_drops \
          (baseline={baseline}, after={after}) — if this fails, either the \
-         loud-failure wiring at `record_projection_failure` was removed or \
+         loud-failure wiring at `record_silent_drop` was removed or \
          the projector grew a silent fallback that swallows malformed shapes"
     );
 }

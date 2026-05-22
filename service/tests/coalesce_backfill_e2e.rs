@@ -418,7 +418,7 @@ async fn backfill_with_single_active_coalesces_overlapping_fires() {
     clean_slate(&nats).await;
     // Reset so the projection-failure assertion at the end is about THIS
     // test, not residual drift from a prior run.
-    mekhan_service::causality::ingest::reset_projection_failures();
+    mekhan_service::observability::reset_silent_drops();
     let _consumers = spawn_consumers(nats, db.clone(), triggers).await;
 
     // Unique per-run category so the trigger's filter selects only the
@@ -510,9 +510,9 @@ async fn backfill_with_single_active_coalesces_overlapping_fires() {
     // flow through the ingest pipeline; a malformed shape anywhere would
     // bump this counter (with an `error!`-level structured log).
     assert_eq!(
-        mekhan_service::causality::ingest::projection_failures(),
+        mekhan_service::observability::silent_drops(),
         0,
-        "projection failures occurred during this test — \
-         check error logs targeted at `mekhan_service::causality::projection_failure`"
+        "silent drops occurred during this test — \
+         check error logs targeted at `mekhan_service::observability::silent_drop`"
     );
 }

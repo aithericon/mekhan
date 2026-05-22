@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use super::model::{CatalogueEntry, CatalogueRegisterCommand};
 use super::protocol::SubscribeRequest;
 use super::repository::CatalogueRepository;
+use crate::observability::record_silent_drop;
 
 /// A persisted catalogue subscription.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,7 +90,14 @@ impl SubscriptionManager {
                             self.cache.insert(sub.subscription_id.clone(), sub);
                         }
                         Err(e) => {
-                            tracing::warn!(key = %key, "failed to deserialize subscription: {e}");
+                            // KV row is now poisoned — won't be recoverable
+                            // until something rewrites the key. Loud so an
+                            // operator sees they've got a stranded
+                            // subscription, not a quietly-missing trigger.
+                            record_silent_drop(
+                                "catalogue_subscription_hydrate",
+                                &format!("key={key}: {e}"),
+                            );
                         }
                     }
                 }
