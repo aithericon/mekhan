@@ -7,12 +7,10 @@ use axum::{
 };
 use uuid::Uuid;
 
-use aithericon_executor_domain::InputSource;
-
 use crate::auth::AuthUser;
 use crate::compiler::{
     compile_to_air, compile_to_air_with_subworkflows, generate_py_io_files,
-    node_input_scopes, node_namespace_scopes,
+    node_files_inline, node_input_scopes, node_namespace_scopes,
 };
 use crate::lifecycle::cleanup_net;
 use crate::models::error::{ApiError, ErrorResponse};
@@ -487,8 +485,6 @@ pub async fn publish_template(
             &graph,
             &existing.name,
             &existing.description,
-            id,
-            existing.version,
             Some(existing.base_template_id.unwrap_or(existing.id)),
             &mut ydoc_files,
         )
@@ -568,62 +564,6 @@ async fn reconstruct_graph_from_ydoc(
     .map_err(|e| format!("spawn_blocking: {e}"))??;
 
     Ok(Some(result))
-}
-
-/// Build the per-node `name -> InputSource::Raw` map for the stateful
-/// preview compile. Code files are inline strings in the Y.Doc; we embed
-/// them in the AIR so (1) the borrow planner can scan Python source for
-/// `<slug>.<field>` references and (2) preview is self-contained
-/// (no S3 dependency, no path-format coupling with the upload step).
-/// Mirrors the [`crate::process::publish::PublishService`] choice.
-#[allow(clippy::ptr_arg)]
-fn storage_path_files(
-    _unused_template_id: Uuid,
-    _unused_version: i32,
-    ydoc_files: &HashMap<String, HashMap<String, String>>,
-) -> HashMap<String, HashMap<String, InputSource>> {
-    ydoc_files
-        .iter()
-        .map(|(node_id, files)| {
-            let sources = files
-                .iter()
-                .map(|(filename, content)| {
-                    (
-                        filename.clone(),
-                        InputSource::Raw {
-                            content: content.clone(),
-                        },
-                    )
-                })
-                .collect();
-            (node_id.clone(), sources)
-        })
-        .collect()
-}
-
-/// Materialize a per-node `name -> InputSource::Raw` map straight from inline
-/// file contents. Used by the stateless preview compile, where files haven't
-/// been uploaded to S3 yet.
-fn inline_files(
-    inline: &HashMap<String, HashMap<String, String>>,
-) -> HashMap<String, HashMap<String, InputSource>> {
-    inline
-        .iter()
-        .map(|(node_id, files)| {
-            let sources = files
-                .iter()
-                .map(|(filename, content)| {
-                    (
-                        filename.clone(),
-                        InputSource::Raw {
-                            content: content.clone(),
-                        },
-                    )
-                })
-                .collect();
-            (node_id.clone(), sources)
-        })
-        .collect()
 }
 
 /// Mark a template row as no longer the latest in its version chain. Generic
@@ -956,8 +896,6 @@ pub async fn apply_template(
             &graph,
             &latest.name,
             &latest.description,
-            target_id,
-            target_version,
             Some(latest.base_template_id.unwrap_or(latest.id)),
             &mut files_map,
         )
@@ -1172,7 +1110,7 @@ pub async fn compile_preview(
         Ok(Some((_, f))) => f,
         _ => HashMap::new(),
     };
-    let files = storage_path_files(id, existing.version, &ydoc_files);
+    let files = node_files_inline(&ydoc_files);
 
     // Resolve + freeze SubWorkflow children so the preview AIR matches what
     // publish would emit (DB-backed; the stateless `/api/compile` path cannot
@@ -1319,7 +1257,7 @@ pub async fn compile_graph(
     Json(body): Json<CompileRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let description = body.description.as_deref().unwrap_or("");
-    let files = inline_files(&body.files);
+    let files = node_files_inline(&body.files);
     let air = compile_to_air(&body.graph, &body.name, description, &files)
         .map_err(|e| {
             let view = e.to_view();

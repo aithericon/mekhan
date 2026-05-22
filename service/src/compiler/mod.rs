@@ -18,6 +18,7 @@ pub use compile::{
     SubWorkflowAir,
 };
 pub use error::{CompileError, CompileErrorView};
+pub use lower::node_files_inline;
 pub use pyio::generate_py_io_files;
 pub use subworkflow::{make_child_callable, CHILD_FAIL_OUT, CHILD_INBOX, CHILD_REPLY_OUT};
 pub use token_shape::{

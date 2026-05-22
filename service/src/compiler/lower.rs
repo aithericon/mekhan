@@ -23,11 +23,42 @@ use aithericon_sdk::{
 use serde_json::json;
 use std::collections::HashMap;
 
-/// Per-node, per-filename input source map. Built by the publish handler from
-/// the node's Y.Doc files (resolved to S3 keys via `InputSource::StoragePath`)
-/// or, for the stateless preview compile, materialized from inline content via
-/// `InputSource::Raw`.
+/// Per-node, per-filename input source map. Code files are always inline
+/// (`InputSource::Raw`) — the executor stages the source from the AIR's job
+/// spec directly, the borrow planner needs the source text to detect
+/// `<slug>.<field>` references, and the published-AIR ↔ S3 split is
+/// otherwise a footgun. Use [`node_files_inline`] to build one from the
+/// canonical `node_id → filename → content` map every caller already has
+/// in memory.
 pub type NodeFiles = HashMap<String, HashMap<String, InputSource>>;
+
+/// Wrap inline `node_id → filename → content` into the [`NodeFiles`] shape
+/// the compiler consumes. Single source of truth — replaces the legacy
+/// `storage_path_files` helpers in publish/handlers, which used to emit
+/// `InputSource::StoragePath` and required publish-time S3 keys to keep
+/// the executor working at runtime. Everything is `Raw` now (see
+/// [`NodeFiles`] for rationale).
+pub fn node_files_inline(
+    inline: &HashMap<String, HashMap<String, String>>,
+) -> NodeFiles {
+    inline
+        .iter()
+        .map(|(node_id, files)| {
+            let sources = files
+                .iter()
+                .map(|(filename, content)| {
+                    (
+                        filename.clone(),
+                        InputSource::Raw {
+                            content: content.clone(),
+                        },
+                    )
+                })
+                .collect();
+            (node_id.clone(), sources)
+        })
+        .collect()
+}
 
 /// Instruction to merge `dead` place into `survivor` place.
 /// All references to `dead` become references to `survivor`, then `dead` is removed.

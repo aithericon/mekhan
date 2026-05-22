@@ -12,12 +12,12 @@
 
 use std::collections::HashMap;
 
-use aithericon_executor_domain::InputSource;
 use uuid::Uuid;
 
 use crate::compiler::{
     compile_to_air_with_subworkflows, generate_py_io_files, make_child_callable,
-    node_input_scopes, node_namespace_scopes, CompileError, ResolvedChild, SubWorkflowAir,
+    node_files_inline, node_input_scopes, node_namespace_scopes, CompileError, ResolvedChild,
+    SubWorkflowAir,
 };
 use crate::models::error::ApiError;
 use crate::models::template::{
@@ -70,8 +70,6 @@ impl<'a> PublishService<'a> {
         graph: &WorkflowGraph,
         name: &str,
         description: &str,
-        template_id: Uuid,
-        version: i32,
         publishing_family: Option<Uuid>,
         files: &mut HashMap<String, HashMap<String, String>>,
     ) -> Result<CompiledArtifacts, ApiError> {
@@ -80,7 +78,7 @@ impl<'a> PublishService<'a> {
         let sub_air =
             resolve_subworkflow_air(self.state, publishing_family, graph).await?;
 
-        let air_files = storage_path_files(template_id, version, files);
+        let air_files = node_files_inline(files);
         let air_json = compile_to_air_with_subworkflows(
             graph,
             name,
@@ -142,49 +140,6 @@ impl<'a> PublishService<'a> {
     pub async fn register_triggers(&self, template: &WorkflowTemplate) -> usize {
         self.state.triggers.register_template(template).await
     }
-}
-
-/// Build the per-node `name -> InputSource::Raw` map the compiler uses
-/// to emit executor inputs. Code files are small text already inline in
-/// the Y.Doc; we embed them directly in the AIR rather than referencing
-/// `templates/{template_id}/v{version}/{node_id}/{filename}` on S3.
-///
-/// Why inline (not StoragePath):
-///   1. The compiler's `automated_step_borrow_plan` scans Python source
-///      to synthesize read-arcs into upstream parked data — that scan
-///      requires the source text, which a StoragePath only resolves at
-///      executor stage time.
-///   2. AIR becomes self-contained for code: no S3 round-trip at job
-///      stage, no failure modes from missing keys / mis-uploaded paths.
-///
-/// The S3 upload still happens via [`PublishService::upload_files`] for
-/// version-history viewing — it's just no longer the executor's source
-/// of truth at runtime. The `_unused_template_id` / `_unused_version`
-/// parameters stay on the signature to keep callers' shape stable;
-/// remove them in a follow-up sweep.
-#[allow(clippy::ptr_arg)]
-fn storage_path_files(
-    _unused_template_id: Uuid,
-    _unused_version: i32,
-    ydoc_files: &HashMap<String, HashMap<String, String>>,
-) -> HashMap<String, HashMap<String, InputSource>> {
-    ydoc_files
-        .iter()
-        .map(|(node_id, files)| {
-            let sources = files
-                .iter()
-                .map(|(filename, content)| {
-                    (
-                        filename.clone(),
-                        InputSource::Raw {
-                            content: content.clone(),
-                        },
-                    )
-                })
-                .collect();
-            (node_id.clone(), sources)
-        })
-        .collect()
 }
 
 /// Inject the `_aithericon_io` `.py`/`.pyi` pair into every Python automated
