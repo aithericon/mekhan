@@ -342,26 +342,6 @@ impl TriggerDispatcher {
             });
         };
 
-        // Resolve the port the trigger feeds. Shared with the compiler's
-        // `validate_triggers` publish-time check so the two can't drift.
-        let target_node = graph
-            .nodes
-            .iter()
-            .find(|n| n.id == record.target_node_id)
-            .ok_or_else(|| TriggerError::TargetMissing {
-                node_id: node_id.to_string(),
-                target: format!("target node '{}' missing in graph", record.target_node_id),
-            })?;
-        let target_port =
-            crate::compiler::resolve_trigger_target_port(target_node, &record.target_handle)
-                .ok_or_else(|| TriggerError::TargetMissing {
-                    node_id: node_id.to_string(),
-                    target: format!(
-                        "target port '{}' missing on node '{}'",
-                        record.target_handle, record.target_node_id
-                    ),
-                })?;
-
         let source_kind = record.source.kind().to_string();
         let locator = TriggerLocator {
             template_id: record.template_id,
@@ -383,6 +363,66 @@ impl TriggerDispatcher {
             self.record_history(&record.node_id, result.clone());
             result
         };
+
+        // Pre-AIR direct-target path (#126.1-fixup). The clinic-style headless
+        // template has a stub graph (the Trigger node only, no edges, no Start
+        // node) and addresses the AIR place id directly. None of the graph-
+        // walk / typed-port / Start-contract gates below apply — they all
+        // assume a graph edge into a typed Start. Evaluate payload_mapping in
+        // pass-through mode (no typed port to validate against) and route
+        // straight to `fire_spawn`, which already dispatches to
+        // `LaunchSpec::PreAir`.
+        if record.air_target_place_id.is_some() {
+            let token = match evaluate_mapping(payload_mapping, &event_payload, true) {
+                Ok(t) => t,
+                Err(e) => {
+                    return Ok((
+                        finalize(
+                            FireOutcome::Dropped {
+                                reason: format!("payload mapping failed: {e}"),
+                            },
+                            false,
+                        ),
+                        None,
+                    ));
+                }
+            };
+            return match self
+                .fire_spawn(&record, &template, &graph, token, dispatch_options, wait)
+                .await
+            {
+                Ok((outcome, rx)) => Ok((finalize(outcome, false), rx)),
+                Err(e) => {
+                    let _ = finalize(
+                        FireOutcome::Dropped {
+                            reason: format!("fire failed: {e}"),
+                        },
+                        true,
+                    );
+                    Err(e)
+                }
+            };
+        }
+
+        // Resolve the port the trigger feeds. Shared with the compiler's
+        // `validate_triggers` publish-time check so the two can't drift.
+        let target_node = graph
+            .nodes
+            .iter()
+            .find(|n| n.id == record.target_node_id)
+            .ok_or_else(|| TriggerError::TargetMissing {
+                node_id: node_id.to_string(),
+                target: format!("target node '{}' missing in graph", record.target_node_id),
+            })?;
+        let target_port =
+            crate::compiler::resolve_trigger_target_port(target_node, &record.target_handle)
+                .ok_or_else(|| TriggerError::TargetMissing {
+                    node_id: node_id.to_string(),
+                    target: format!(
+                        "target port '{}' missing on node '{}'",
+                        record.target_handle, record.target_node_id
+                    ),
+                })?;
 
         // Build the token: bind each source-scope identifier as its own Rhai
         // variable and evaluate the mappings. A failed mapping is a trigger

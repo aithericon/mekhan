@@ -269,6 +269,56 @@ async fn apply_air_rejects_missing_air_target_place() {
 }
 
 #[tokio::test]
+async fn fire_pre_air_trigger_passes_graph_walk_gate() {
+    // #126.1-fixup regression test: firing a pre-AIR trigger must NOT explode
+    // at the dispatcher's graph-walk / typed-port / Start-contract gates.
+    // Pre-AIR records have `air_target_place_id = Some(...)` and
+    // `target_node_id` mirrors the AIR place id, which is NOT a graph node;
+    // the pre-fixup `fire_impl` looked it up in the graph and returned
+    // `TargetMissing { target: "target node '<place>' missing in graph" }`.
+    // After the fixup, `fire_impl` early-branches to `fire_spawn` which routes
+    // to `LaunchSpec::PreAir`. There is no live petri-lab in this test
+    // context, so the launcher's deploy step fails — but `parameterize_for_place`
+    // runs before deploy and must succeed; only the deploy stage may error.
+    // The assertion is that the pre-fixup graph-walk symptom is absent.
+    let (app, _db) = common::test_app().await;
+
+    let seed = apply_air(
+        &app,
+        request_body("preair-fire", "trg_fire", "p_input", true),
+    )
+    .await;
+    assert_eq!(seed.status(), StatusCode::OK);
+
+    let fire = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/triggers/trg_fire/fire")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({ "payload": {}, "reply_mode": "nowait" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let status = fire.status();
+    let body = body_json(fire.into_body()).await;
+    let body_str = body.to_string();
+    assert!(
+        !body_str.contains("missing in graph"),
+        "fire_impl regressed to graph-walk gate for pre-AIR record: status={status} body={body_str}"
+    );
+    assert!(
+        !body_str.contains("missing on node"),
+        "fire_impl regressed to target-port gate for pre-AIR record: status={status} body={body_str}"
+    );
+}
+
+#[tokio::test]
 async fn apply_air_rejects_non_object_air() {
     let (app, _db) = common::test_app().await;
 
