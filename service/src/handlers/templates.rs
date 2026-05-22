@@ -570,28 +570,28 @@ async fn reconstruct_graph_from_ydoc(
     Ok(Some(result))
 }
 
-/// Build the per-node `name -> InputSource::StoragePath` map that the compiler
-/// uses to emit executor inputs. Mirrors the S3 layout written by
-/// [`crate::process::publish::PublishService::upload_files`]. Used by the
-/// stateful preview compile (`compile_preview`).
+/// Build the per-node `name -> InputSource::Raw` map for the stateful
+/// preview compile. Code files are inline strings in the Y.Doc; we embed
+/// them in the AIR so (1) the borrow planner can scan Python source for
+/// `<slug>.<field>` references and (2) preview is self-contained
+/// (no S3 dependency, no path-format coupling with the upload step).
+/// Mirrors the [`crate::process::publish::PublishService`] choice.
+#[allow(clippy::ptr_arg)]
 fn storage_path_files(
-    template_id: Uuid,
-    version: i32,
+    _unused_template_id: Uuid,
+    _unused_version: i32,
     ydoc_files: &HashMap<String, HashMap<String, String>>,
 ) -> HashMap<String, HashMap<String, InputSource>> {
     ydoc_files
         .iter()
         .map(|(node_id, files)| {
             let sources = files
-                .keys()
-                .map(|filename| {
-                    let path =
-                        format!("templates/{template_id}/v{version}/{node_id}/{filename}");
+                .iter()
+                .map(|(filename, content)| {
                     (
                         filename.clone(),
-                        InputSource::StoragePath {
-                            path,
-                            storage: None,
+                        InputSource::Raw {
+                            content: content.clone(),
                         },
                     )
                 })

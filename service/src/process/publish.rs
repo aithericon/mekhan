@@ -144,27 +144,40 @@ impl<'a> PublishService<'a> {
     }
 }
 
-/// Build the per-node `name -> InputSource::StoragePath` map the compiler uses
-/// to emit executor inputs. Mirrors the S3 layout written by
-/// [`PublishService::upload_files`].
+/// Build the per-node `name -> InputSource::Raw` map the compiler uses
+/// to emit executor inputs. Code files are small text already inline in
+/// the Y.Doc; we embed them directly in the AIR rather than referencing
+/// `templates/{template_id}/v{version}/{node_id}/{filename}` on S3.
+///
+/// Why inline (not StoragePath):
+///   1. The compiler's `automated_step_borrow_plan` scans Python source
+///      to synthesize read-arcs into upstream parked data — that scan
+///      requires the source text, which a StoragePath only resolves at
+///      executor stage time.
+///   2. AIR becomes self-contained for code: no S3 round-trip at job
+///      stage, no failure modes from missing keys / mis-uploaded paths.
+///
+/// The S3 upload still happens via [`PublishService::upload_files`] for
+/// version-history viewing — it's just no longer the executor's source
+/// of truth at runtime. The `_unused_template_id` / `_unused_version`
+/// parameters stay on the signature to keep callers' shape stable;
+/// remove them in a follow-up sweep.
+#[allow(clippy::ptr_arg)]
 fn storage_path_files(
-    template_id: Uuid,
-    version: i32,
+    _unused_template_id: Uuid,
+    _unused_version: i32,
     ydoc_files: &HashMap<String, HashMap<String, String>>,
 ) -> HashMap<String, HashMap<String, InputSource>> {
     ydoc_files
         .iter()
         .map(|(node_id, files)| {
             let sources = files
-                .keys()
-                .map(|filename| {
-                    let path =
-                        format!("templates/{template_id}/v{version}/{node_id}/{filename}");
+                .iter()
+                .map(|(filename, content)| {
                     (
                         filename.clone(),
-                        InputSource::StoragePath {
-                            path,
-                            storage: None,
+                        InputSource::Raw {
+                            content: content.clone(),
                         },
                     )
                 })
