@@ -32,13 +32,22 @@
 		onAddNode?: (id: string, type: WorkflowNodeType, position: { x: number; y: number }, data: WorkflowNodeData, opts?: { parentId?: string; width?: number; height?: number }) => void;
 		onRemoveNodes?: (ids: string[]) => void;
 		onMoveNodes?: (moves: Array<{ id: string; position: { x: number; y: number } }>) => void;
+		/**
+		 * Emitted when a node's container parent changes (drag-into / drag-out
+		 * of a Scope/Loop container). `parentId: null` clears the parent.
+		 * `position` is the new **parent-relative** position when entering a
+		 * container, or the absolute position when leaving one.
+		 */
+		onReparentNodes?: (
+			changes: Array<{ id: string; parentId: string | null; position?: { x: number; y: number } }>
+		) => void;
 		onAddEdge?: (edge: WorkflowEdge) => void;
 		onRemoveEdges?: (ids: string[]) => void;
 	};
 
-	let { graph, readonly = false, onchange, onselect, onAddNode, onRemoveNodes, onMoveNodes, onAddEdge, onRemoveEdges }: Props = $props();
+	let { graph, readonly = false, onchange, onselect, onAddNode, onRemoveNodes, onMoveNodes, onReparentNodes, onAddEdge, onRemoveEdges }: Props = $props();
 
-	const useGranular = $derived(!!(onAddNode || onRemoveNodes || onMoveNodes || onAddEdge || onRemoveEdges));
+	const useGranular = $derived(!!(onAddNode || onRemoveNodes || onMoveNodes || onReparentNodes || onAddEdge || onRemoveEdges));
 
 	// Track graph identity to avoid re-syncing our own changes
 	let lastGraphRef: WorkflowGraph | null = graph;
@@ -46,13 +55,105 @@
 	let nodes = $state.raw<Node[]>(toFlowNodes(graph));
 	let edges = $state.raw<Edge[]>(toFlowEdges(graph, readonly));
 
+	// Container kinds — must come before their children in the node array so
+	// Svelte Flow can resolve `parentId` on child mount. Currently `scope`
+	// (free-form grouping) and `loop` (body authoring); future container
+	// kinds (e.g. SubWorkflow inline) get added here.
+	function isContainer(t: string | undefined): boolean {
+		return t === 'scope' || t === 'loop';
+	}
+	function containerSort<T extends { type: string }>(a: T, b: T): number {
+		if (isContainer(a.type) && !isContainer(b.type)) return -1;
+		if (!isContainer(a.type) && isContainer(b.type)) return 1;
+		return 0;
+	}
+
+	/**
+	 * Find the topmost container node whose bounds contain the given flow
+	 * position. Skips the candidate node itself (a container can't parent
+	 * itself) and any descendant of the candidate (no recursive parenting).
+	 *
+	 * Bounds come from `width`/`height` (resizable containers) — if absent,
+	 * we don't try to compute them: a container with no explicit size isn't
+	 * a valid drop target. World coordinates are computed by walking up the
+	 * parent chain so nested containers in the future Just Work.
+	 */
+	function findContainerAt(
+		flowPos: { x: number; y: number },
+		skipId?: string
+	): Node | null {
+		// Build a parent-id → child-ids index once for descendant skipping.
+		const childrenOf = new Map<string, Set<string>>();
+		for (const n of nodes) {
+			if (n.parentId) {
+				if (!childrenOf.has(n.parentId)) childrenOf.set(n.parentId, new Set());
+				childrenOf.get(n.parentId)!.add(n.id);
+			}
+		}
+		const descendants = new Set<string>();
+		if (skipId) {
+			const stack = [skipId];
+			while (stack.length) {
+				const id = stack.pop()!;
+				descendants.add(id);
+				const kids = childrenOf.get(id);
+				if (kids) for (const k of kids) stack.push(k);
+			}
+		}
+
+		function worldPos(n: Node): { x: number; y: number } {
+			let x = n.position.x;
+			let y = n.position.y;
+			let pid = n.parentId;
+			while (pid) {
+				const p = nodes.find((m) => m.id === pid);
+				if (!p) break;
+				x += p.position.x;
+				y += p.position.y;
+				pid = p.parentId;
+			}
+			return { x, y };
+		}
+
+		let best: Node | null = null;
+		for (const n of nodes) {
+			if (!isContainer(n.type)) continue;
+			if (descendants.has(n.id)) continue;
+			const w = n.width;
+			const h = n.height;
+			if (w == null || h == null) continue;
+			const { x, y } = worldPos(n);
+			if (flowPos.x >= x && flowPos.x <= x + w && flowPos.y >= y && flowPos.y <= y + h) {
+				// Prefer the deepest container at this point (innermost
+				// matches win) — naive depth via parent-chain length.
+				let depth = 0;
+				let pid = n.parentId;
+				while (pid) {
+					depth += 1;
+					const p = nodes.find((m) => m.id === pid);
+					if (!p) break;
+					pid = p.parentId;
+				}
+				if (best == null) {
+					best = n;
+				} else {
+					let bestDepth = 0;
+					let bpid = best.parentId;
+					while (bpid) {
+						bestDepth += 1;
+						const p = nodes.find((m) => m.id === bpid);
+						if (!p) break;
+						bpid = p.parentId;
+					}
+					if (depth > bestDepth) best = n;
+				}
+			}
+		}
+		return best;
+	}
+
 	function toFlowNodes(g: WorkflowGraph): Node[] {
-		// Scope/group nodes must come before their children in the array
-		const sorted = [...g.nodes].sort((a, b) => {
-			if (a.type === 'scope' && b.type !== 'scope') return -1;
-			if (a.type !== 'scope' && b.type === 'scope') return 1;
-			return 0;
-		});
+		const sorted = [...g.nodes].sort(containerSort);
 		return sorted.map((n) => ({
 			id: n.id,
 			type: n.type,
@@ -83,12 +184,7 @@
 		if (graph !== lastGraphRef) {
 			lastGraphRef = graph;
 			const currentNodes = new Map(nodes.map((n) => [n.id, n]));
-			// Scope nodes must come before their children
-			const sorted = [...graph.nodes].sort((a, b) => {
-				if (a.type === 'scope' && b.type !== 'scope') return -1;
-				if (a.type !== 'scope' && b.type === 'scope') return 1;
-				return 0;
-			});
+			const sorted = [...graph.nodes].sort(containerSort);
 			nodes = sorted.map((n) => {
 				const existing = currentNodes.get(n.id);
 				return {
@@ -174,8 +270,63 @@
 	}
 
 	function handleNodeDragStop({ nodes: draggedNodes }: { nodes: Node[] }) {
-		if (useGranular && onMoveNodes) {
-			onMoveNodes(draggedNodes.map((n) => ({ id: n.id, position: n.position })));
+		// Detect drag-into-container: a node that isn't itself a container
+		// might have crossed into (or out of) one. With `extent: 'parent'`,
+		// a child can't leave its current parent via dragging — so today
+		// reparenting only happens for previously-unparented nodes.
+		const reparents: Array<{
+			id: string;
+			parentId: string | null;
+			position?: { x: number; y: number };
+		}> = [];
+		const moves: Array<{ id: string; position: { x: number; y: number } }> = [];
+		for (const n of draggedNodes) {
+			if (isContainer(n.type) || n.parentId) {
+				// Containers move freely; already-parented children are
+				// locked by `extent: 'parent'`. Both cases are pure moves.
+				moves.push({ id: n.id, position: n.position });
+				continue;
+			}
+			// `position` for a top-level node is already in world coordinates.
+			const container = findContainerAt(n.position, n.id);
+			if (container) {
+				// Reparent: store the child's position relative to the parent
+				// (Svelte Flow convention). Update both nodes[] and emit.
+				const containerWorld = (() => {
+					let x = container.position.x;
+					let y = container.position.y;
+					let pid = container.parentId;
+					while (pid) {
+						const p = nodes.find((m) => m.id === pid);
+						if (!p) break;
+						x += p.position.x;
+						y += p.position.y;
+						pid = p.parentId;
+					}
+					return { x, y };
+				})();
+				const relPos = {
+					x: n.position.x - containerWorld.x,
+					y: n.position.y - containerWorld.y
+				};
+				nodes = nodes.map((m) =>
+					m.id === n.id
+						? { ...m, parentId: container.id, extent: 'parent' as const, position: relPos }
+						: m
+				);
+				reparents.push({ id: n.id, parentId: container.id, position: relPos });
+			} else {
+				moves.push({ id: n.id, position: n.position });
+			}
+		}
+
+		if (useGranular) {
+			if (moves.length && onMoveNodes) onMoveNodes(moves);
+			if (reparents.length && onReparentNodes) onReparentNodes(reparents);
+			// If reparents fired but the consumer didn't wire onReparentNodes,
+			// fall through to the bulk serializer so Yjs still observes the
+			// state change.
+			if (reparents.length && !onReparentNodes) serializeAndEmit();
 		} else {
 			serializeAndEmit();
 		}
@@ -231,27 +382,65 @@
 
 		event.preventDefault();
 
-		const position = screenToFlowPos({ x: event.clientX, y: event.clientY });
+		const dropPos = screenToFlowPos({ x: event.clientX, y: event.clientY });
 		const nodeId = `node-${Date.now()}`;
 		const data = createDefaultNodeData(nodeType);
-		const opts = nodeType === 'scope' ? { width: 400, height: 200 } : undefined;
+
+		// Container kinds get a default initial size so they're a valid drop
+		// target for future drag-into operations. Scope and Loop both behave
+		// as resizable containers.
+		const sizeOpts: { width?: number; height?: number } =
+			isContainer(nodeType) ? { width: 400, height: 200 } : {};
+
+		// If dropped inside a container (and the new node is not itself a
+		// container), parent it. A container dropped inside another container
+		// is a future case (nesting); not supported in the UX today.
+		const container = !isContainer(nodeType) ? findContainerAt(dropPos) : null;
+		let position = dropPos;
+		let parentId: string | undefined;
+		if (container) {
+			const containerWorld = (() => {
+				let x = container.position.x;
+				let y = container.position.y;
+				let pid = container.parentId;
+				while (pid) {
+					const p = nodes.find((m) => m.id === pid);
+					if (!p) break;
+					x += p.position.x;
+					y += p.position.y;
+					pid = p.parentId;
+				}
+				return { x, y };
+			})();
+			position = { x: dropPos.x - containerWorld.x, y: dropPos.y - containerWorld.y };
+			parentId = container.id;
+		}
+
+		const opts: { parentId?: string; width?: number; height?: number } = {
+			...sizeOpts,
+			...(parentId ? { parentId } : {})
+		};
+		const optsForEmit = Object.keys(opts).length ? opts : undefined;
+
 		const newNode: Node = {
 			id: nodeId,
 			type: nodeType,
 			position,
 			data,
-			...(opts ?? {})
+			...(parentId ? { parentId, extent: 'parent' as const } : {}),
+			...sizeOpts
 		};
 
-		// Scope nodes must come before their children
-		if (nodeType === 'scope') {
+		// Containers must come before their children in the array (Svelte
+		// Flow resolves parentId on mount in order).
+		if (isContainer(nodeType)) {
 			nodes = [newNode, ...nodes];
 		} else {
 			nodes = [...nodes, newNode];
 		}
 
 		if (useGranular && onAddNode) {
-			onAddNode(nodeId, nodeType, position, data, opts);
+			onAddNode(nodeId, nodeType, position, data, optsForEmit);
 		} else {
 			serializeAndEmit();
 		}

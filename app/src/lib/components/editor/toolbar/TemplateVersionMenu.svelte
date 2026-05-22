@@ -76,26 +76,26 @@
 	<DropdownMenuTrigger
 		data-testid="btn-version-menu"
 		title="Version history"
-		class="inline-flex h-6 items-center gap-1 rounded-md border border-border bg-background px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground data-[state=open]:bg-accent"
+		class="inline-flex h-6 items-center gap-1 rounded-md border border-border bg-background px-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground data-[state=open]:bg-accent"
 	>
 		<History class="size-3" />
 		v{currentVersion}
 		<ChevronDown class="size-3 opacity-60" />
 	</DropdownMenuTrigger>
 	<DropdownMenuContent align="start" class="w-64">
-		<div class="px-2 py-1.5 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+		<div class="px-2 py-1.5 text-sm font-medium tracking-wide text-muted-foreground uppercase">
 			Version history
 		</div>
 		{#if loading}
-			<div class="px-2 py-3 text-xs text-muted-foreground" data-testid="version-menu-loading">
+			<div class="px-2 py-3 text-sm text-muted-foreground" data-testid="version-menu-loading">
 				Loading versions…
 			</div>
 		{:else if loadError}
-			<div class="px-2 py-3 text-xs text-destructive" data-testid="version-menu-error">
+			<div class="px-2 py-3 text-sm text-destructive" data-testid="version-menu-error">
 				{loadError}
 			</div>
 		{:else if versions.length === 0}
-			<div class="px-2 py-3 text-xs text-muted-foreground">No versions found</div>
+			<div class="px-2 py-3 text-sm text-muted-foreground">No versions found</div>
 		{:else}
 			{#each versions as v (v.id)}
 				{@const isCurrent = v.version === currentVersion}
@@ -111,19 +111,19 @@
 						<span class="flex items-center gap-1.5">
 							<span class="font-medium text-foreground">v{v.version}</span>
 							<span
-								class="rounded px-1 text-[10px] {v.published
+								class="rounded px-1 text-sm {v.published
 									? 'bg-green-100 text-green-700'
 									: 'bg-amber-100 text-amber-700'}"
 							>
 								{v.published ? 'Published' : 'Draft'}
 							</span>
 							{#if v.is_latest}
-								<span class="rounded bg-accent px-1 text-[10px] text-muted-foreground">
+								<span class="rounded bg-accent px-1 text-sm text-muted-foreground">
 									latest
 								</span>
 							{/if}
 						</span>
-						<span class="mt-0.5 block text-[10px] text-muted-foreground">
+						<span class="mt-0.5 block text-sm text-muted-foreground">
 							{v.published && v.published_at
 								? `Published ${fmtDate(v.published_at)}`
 								: `Updated ${fmtDate(v.updated_at)}`}

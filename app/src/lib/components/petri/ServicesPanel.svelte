@@ -36,7 +36,7 @@
 					</button>
 				{/if}
 				{#if services}
-					<span class="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-purple-500/15 text-purple-500">
+					<span class="text-sm font-medium px-1.5 py-0.5 rounded-full bg-purple-500/15 text-purple-500">
 						{services.handlers.length}
 					</span>
 				{/if}
@@ -54,12 +54,12 @@
 			<div class="space-y-3">
 				{#each Object.entries(services.categories) as [category, handlers] (category)}
 					<div>
-						<span class="text-[10px] font-medium px-1.5 py-0.5 rounded-full {colorFor(category)}">
+						<span class="text-sm font-medium px-1.5 py-0.5 rounded-full {colorFor(category)}">
 							{category}
 						</span>
 						<div class="mt-1.5 space-y-0.5 pl-1">
 							{#each handlers as handler (handler)}
-								<div class="text-xs font-mono text-muted-foreground py-0.5 px-1.5 rounded hover:bg-muted transition-colors">
+								<div class="text-sm font-mono text-muted-foreground py-0.5 px-1.5 rounded hover:bg-muted transition-colors">
 									{handler}
 								</div>
 							{/each}

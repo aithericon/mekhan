@@ -18,7 +18,9 @@
 	import PhaseUpdateNodeSection from './property-sections/PhaseUpdateNodeSection.svelte';
 	import ProgressUpdateNodeSection from './property-sections/ProgressUpdateNodeSection.svelte';
 	import FailureNodeSection from './property-sections/FailureNodeSection.svelte';
-	import { computeScopes, type ScopeEntry } from '$lib/editor/guard-scope';
+	import EndNodeSection from './property-sections/EndNodeSection.svelte';
+	import SubWorkflowSection from './property-sections/SubWorkflowSection.svelte';
+	import { fetchNodeScopes, type ScopeEntry } from '$lib/editor/guard-scope';
 	import { outputPortsFor } from '$lib/editor/derived-ports';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -59,14 +61,61 @@
 		onchange({ ...data, [key]: value } as WorkflowNodeData);
 	}
 
-	// Compute the in-scope identifiers at the currently-selected node so the
-	// Decision/Loop guard editors can offer typed pickers + autocomplete. We
-	// re-run on every change to `binding.graph` (cheap — O(nodes + edges) and
-	// the editor is already paying for full Y.Doc rerenders).
-	const scope: ScopeEntry[] = $derived.by(() => {
-		if (!binding || !nodeId) return [];
-		const all = computeScopes(binding.graph);
-		return all.get(nodeId) ?? [];
+	// ── Node slug — the author-facing `<slug>.<field>` guard namespace. It is
+	//    a node-level prop (not in `data`), so it round-trips through the Yjs
+	//    binding. Blank ⇒ the compiler derives a deterministic default from
+	//    the node id (shown as the placeholder).
+	function sanitizeSlug(raw: string): string {
+		const s = raw
+			.trim()
+			.toLowerCase()
+			.replace(/[^a-z0-9_]+/g, '_')
+			.replace(/_+/g, '_')
+			.replace(/^_+|_+$/g, '');
+		if (!s) return 'node';
+		return /^[a-z]/.test(s) ? s : `n_${s}`;
+	}
+
+	const currentNode = $derived(binding?.graph.nodes.find((n) => n.id === nodeId));
+	const slugValue = $derived(currentNode?.slug ?? '');
+	const slugPlaceholder = $derived(nodeId ? sanitizeSlug(nodeId) : 'slug');
+	// Inline validation: Rhai-identifier-safe + unique across the graph.
+	const slugError = $derived.by(() => {
+		const v = slugValue.trim();
+		if (!v) return null; // empty ⇒ derived default, always valid
+		if (!/^[a-z][a-z0-9_]*$/.test(v))
+			return 'Lowercase letter, then letters/digits/underscore (e.g. review_step).';
+		const clash = binding?.graph.nodes.some(
+			(n) => n.id !== nodeId && (n.slug ?? '').trim() === v
+		);
+		return clash ? `Slug "${v}" is already used by another node.` : null;
+	});
+
+	function updateSlug(value: string) {
+		if (binding && nodeId) binding.updateNodeSlug(nodeId, value);
+	}
+
+	// In-scope identifiers at the selected node for the Decision/Loop guard
+	// pickers. Single source of truth: the backend shape-aware analyzer
+	// (`POST /api/analyze`). Debounced so a burst of graph edits collapses to
+	// one round-trip; best-effort (stale/empty on failure — never throws).
+	let scope = $state<ScopeEntry[]>([]);
+	$effect(() => {
+		const g = binding?.graph;
+		const id = nodeId;
+		if (!g || !id) {
+			scope = [];
+			return;
+		}
+		let cancelled = false;
+		const timer = setTimeout(async () => {
+			const all = await fetchNodeScopes(g);
+			if (!cancelled) scope = all.get(id) ?? [];
+		}, 250);
+		return () => {
+			cancelled = true;
+			clearTimeout(timer);
+		};
 	});
 </script>
 
@@ -75,7 +124,7 @@
 	data-testid="node-property-panel"
 >
 	<div class="flex items-center justify-between border-b border-border px-3 py-2.5">
-		<h2 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+		<h2 class="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
 			{readonly ? 'Inspector' : 'Properties'}
 		</h2>
 		<div class="flex items-center gap-0.5">
@@ -127,6 +176,33 @@
 			/>
 		</FormField>
 
+		<!-- Common: Slug — author-facing `<slug>.<field>` guard namespace.
+		     Node-level, so it needs the Yjs binding. -->
+		{#if binding && nodeId}
+			<FormField label="Slug" for="node-slug">
+				<Input
+					id="node-slug"
+					type="text"
+					value={slugValue}
+					placeholder={slugPlaceholder}
+					disabled={readonly}
+					aria-invalid={slugError ? 'true' : undefined}
+					data-testid="input-node-slug"
+					oninput={(e) => updateSlug((e.currentTarget as HTMLInputElement).value)}
+				/>
+				{#if slugError}
+					<p class="mt-1 text-sm text-destructive" data-testid="node-slug-error">
+						{slugError}
+					</p>
+				{:else}
+					<p class="mt-1 text-sm text-muted-foreground">
+						Referenced in guards as <code>{(slugValue.trim() || slugPlaceholder)}.&lt;field&gt;</code>.
+						Blank derives from the node id.
+					</p>
+				{/if}
+			</FormField>
+		{/if}
+
 		<!-- Type-specific sections -->
 		{#if data.type === 'start'}
 			<StartNodeSection {data} {readonly} {onchange} {binding} {nodeId} {onselectnode} />
@@ -134,11 +210,11 @@
 			{#if templateId && nodeId}
 				<div class="space-y-3">
 					<div class="rounded-lg border border-border bg-muted/30 p-3">
-						<p class="text-xs text-muted-foreground">
+						<p class="text-sm text-muted-foreground">
 							{data.steps.length} step{data.steps.length !== 1 ? 's' : ''} configured
 						</p>
 						{#if data.taskTitle}
-							<p class="mt-1 truncate text-xs font-medium text-foreground">{data.taskTitle}</p>
+							<p class="mt-1 truncate text-sm font-medium text-foreground">{data.taskTitle}</p>
 						{/if}
 					</div>
 					<Button
@@ -175,6 +251,10 @@
 			<ProgressUpdateNodeSection {data} {readonly} {onchange} />
 		{:else if data.type === 'failure'}
 			<FailureNodeSection {data} {readonly} {onchange} />
+		{:else if data.type === 'end'}
+			<EndNodeSection {data} {readonly} {onchange} />
+		{:else if data.type === 'sub_workflow'}
+			<SubWorkflowSection {data} {readonly} {onchange} {templateId} />
 		{/if}
 
 		<!-- Phase 4: read-only derived port preview for variants whose outputs

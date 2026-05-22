@@ -24,11 +24,11 @@
 
 <div class="flex h-full flex-col">
 	<div class="flex items-center border-b border-border bg-card px-4 py-2">
-		<span class="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+		<span class="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
 			Task Form Editor
 		</span>
 		{#if nodeData}
-			<span class="ml-2 text-xs text-muted-foreground">— {nodeData.label}</span>
+			<span class="ml-2 text-sm text-muted-foreground">— {nodeData.label}</span>
 		{/if}
 	</div>
 

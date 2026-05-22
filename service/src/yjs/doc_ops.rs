@@ -89,6 +89,10 @@ pub fn doc_to_graph(doc: &Doc) -> Result<WorkflowGraph, String> {
             serde_json::from_value(serde_json::Value::Object(data_json))
                 .map_err(|e| format!("deserialize node data for {}: {}", node_id, e))?;
 
+        let slug = match node_map.get(&txn, "slug") {
+            Some(yrs::Out::Any(Any::String(s))) => Some(s.to_string()),
+            _ => None,
+        };
         let parent_id = match node_map.get(&txn, "parentId") {
             Some(yrs::Out::Any(Any::String(s))) => Some(s.to_string()),
             _ => None,
@@ -105,6 +109,7 @@ pub fn doc_to_graph(doc: &Doc) -> Result<WorkflowGraph, String> {
         nodes.push(WorkflowNode {
             id: node_id.to_string(),
             node_type,
+            slug,
             position,
             data,
             parent_id,
@@ -339,7 +344,13 @@ pub fn write_node_config(
                 config.insert(txn, "processName", pn.to_string());
             }
         }
-        WorkflowNodeData::End { .. } => {}
+        WorkflowNodeData::End { result_mapping, .. } => {
+            if !result_mapping.is_empty() {
+                let rm_val = serde_json::to_value(result_mapping)
+                    .unwrap_or(serde_json::Value::Array(vec![]));
+                config.insert(txn, "resultMapping", json_value_to_any(&rm_val));
+            }
+        }
         WorkflowNodeData::HumanTask {
             task_title,
             instructions_mdsvex,
@@ -355,10 +366,25 @@ pub fn write_node_config(
             config.insert(txn, "steps", json_value_to_any(&steps_val));
         }
         WorkflowNodeData::AutomatedStep {
-            execution_spec, ..
+            execution_spec,
+            retry_policy,
+            deployment_model,
+            ..
         } => {
             let spec_val = serde_json::to_value(execution_spec).unwrap_or_default();
             config.insert(txn, "executionSpec", json_value_to_any(&spec_val));
+            // `retry_policy` and `deployment_model` are `#[serde(default)]` on
+            // AutomatedStep, so omitting them here makes the graph→Y.Doc seed
+            // (createTemplate) + publish's Y.Doc→graph reconstruction
+            // (`doc_to_graph`) silently reset them to defaults — losing an
+            // authored retry policy and, critically, collapsing a `Scheduled`
+            // step back to `Inline` (it would never reach scheduler-net).
+            // `input`/`output` are deliberately NOT persisted: they are
+            // re-derived from the backend (see their doc comments).
+            let retry_val = serde_json::to_value(retry_policy).unwrap_or_default();
+            config.insert(txn, "retryPolicy", json_value_to_any(&retry_val));
+            let dm_val = serde_json::to_value(deployment_model).unwrap_or_default();
+            config.insert(txn, "deploymentModel", json_value_to_any(&dm_val));
         }
         WorkflowNodeData::Decision {
             conditions,
@@ -415,16 +441,24 @@ pub fn write_node_config(
             }
         }
         WorkflowNodeData::Failure {
-            failure_message, ..
+            failure_message,
+            error_result_mapping,
+            ..
         } => {
             if let Some(m) = failure_message {
                 config.insert(txn, "failureMessage", m.clone());
+            }
+            if !error_result_mapping.is_empty() {
+                let erm_val = serde_json::to_value(error_result_mapping)
+                    .unwrap_or(serde_json::Value::Array(vec![]));
+                config.insert(txn, "errorResultMapping", json_value_to_any(&erm_val));
             }
         }
         WorkflowNodeData::Trigger {
             source,
             concurrency,
             payload_mapping,
+            reply_default,
             enabled,
             ..
         } => {
@@ -435,7 +469,29 @@ pub fn write_node_config(
             let mapping_val =
                 serde_json::to_value(payload_mapping).unwrap_or(serde_json::Value::Array(vec![]));
             config.insert(txn, "payloadMapping", json_value_to_any(&mapping_val));
+            if let Some(rd) = reply_default {
+                let rd_val = serde_json::to_value(rd).unwrap_or_default();
+                config.insert(txn, "replyDefault", json_value_to_any(&rd_val));
+            }
             config.insert(txn, "enabled", *enabled);
+        }
+        WorkflowNodeData::SubWorkflow {
+            template_id,
+            version_pin,
+            input_mapping,
+            output,
+            ..
+        } => {
+            config.insert(txn, "templateId", template_id.to_string());
+            let vp_val = serde_json::to_value(version_pin).unwrap_or_default();
+            config.insert(txn, "versionPin", json_value_to_any(&vp_val));
+            if !input_mapping.is_empty() {
+                let im_val = serde_json::to_value(input_mapping)
+                    .unwrap_or(serde_json::Value::Array(vec![]));
+                config.insert(txn, "inputMapping", json_value_to_any(&im_val));
+            }
+            let out_val = serde_json::to_value(output).unwrap_or_default();
+            config.insert(txn, "output", json_value_to_any(&out_val));
         }
     }
 }
@@ -451,6 +507,7 @@ mod tests {
                 WorkflowNode {
                     id: "scope1".to_string(),
                     node_type: "scope".to_string(),
+                    slug: None,
                     position: Position { x: 50.0, y: 100.0 },
                     data: WorkflowNodeData::Scope {
                         label: "My Group".to_string(),
@@ -463,6 +520,7 @@ mod tests {
                 WorkflowNode {
                     id: "child1".to_string(),
                     node_type: "end".to_string(),
+                    slug: None,
                     position: Position { x: 100.0, y: 200.0 },
                     data: WorkflowNodeData::End {
                         label: "Done".to_string(),
@@ -472,6 +530,7 @@ mod tests {
                             label: "Terminal".to_string(),
                             fields: vec![],
                         },
+                        result_mapping: Vec::new(),
                     },
                     parent_id: Some("scope1".to_string()),
                     width: None,
@@ -522,6 +581,7 @@ mod tests {
                 nodes: vec![WorkflowNode {
                     id: "s".to_string(),
                     node_type: "start".to_string(),
+                    slug: None,
                     position: Position { x: 0.0, y: 0.0 },
                     data: WorkflowNodeData::Start {
                         label: "Start".to_string(),

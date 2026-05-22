@@ -9,12 +9,12 @@
 
 <div class="flex h-full flex-col">
 	<div class="flex items-center justify-between border-b border-border bg-card px-4 py-2">
-		<span class="text-xs font-medium text-muted-foreground">{filename}</span>
+		<span class="text-sm font-medium text-muted-foreground">{filename}</span>
 		<a
 			href={src}
 			target="_blank"
 			rel="noopener noreferrer"
-			class="text-xs text-muted-foreground underline transition-colors hover:text-foreground"
+			class="text-sm text-muted-foreground underline transition-colors hover:text-foreground"
 		>
 			Open in new tab
 		</a>

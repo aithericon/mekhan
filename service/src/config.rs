@@ -17,6 +17,11 @@ pub struct AppConfig {
     pub nats_creds: Option<String>,
     #[serde(default)]
     pub cleanup: CleanupConfig,
+    /// Upper bound (seconds) a `?reply=wait` fire holds the HTTP connection
+    /// before degrading to `202 { instance_id }`. Bounds connection/pool
+    /// pressure; SSE is the path for genuinely long workflows.
+    #[serde(default = "default_wait_timeout_secs")]
+    pub wait_timeout_secs: u64,
     #[serde(default)]
     pub s3: S3Config,
     #[serde(default)]
@@ -97,6 +102,14 @@ pub struct AuthConfig {
     /// call). Provisioned by `deploy/zitadel/bootstrap.sh`.
     #[serde(default)]
     pub introspection_client_secret: Option<String>,
+    /// Personal Access Token of the dedicated `mekhan-token-broker` Zitadel
+    /// service user. Mekhan presents this as a Bearer when brokering the
+    /// embedded `/api/auth/tokens` feature (creating the per-token machine
+    /// users + their PATs via the Management API). Provisioned by
+    /// `deploy/zitadel/bootstrap.sh`. Unset ⇒ token management is disabled
+    /// (the endpoints 503 and the UI hides the section).
+    #[serde(default)]
+    pub broker_pat: Option<String>,
 }
 
 impl Default for AuthConfig {
@@ -115,6 +128,7 @@ impl Default for AuthConfig {
             cors_origins: Vec::new(),
             introspection_client_id: None,
             introspection_client_secret: None,
+            broker_pat: None,
         }
     }
 }
@@ -201,6 +215,10 @@ impl Default for CleanupConfig {
             purge_events: default_purge_events(),
         }
     }
+}
+
+fn default_wait_timeout_secs() -> u64 {
+    30
 }
 
 fn default_host() -> String {

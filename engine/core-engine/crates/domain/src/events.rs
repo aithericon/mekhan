@@ -261,6 +261,21 @@ pub enum DomainEvent {
         cancelled_by: Option<String>,
     },
 
+    /// A transition failed permanently and the net cannot make progress.
+    /// Emitted by the eval-loop driver after the firing layer consumed the
+    /// offending tokens (see `firing.rs`); the net is torn down. Distinct from
+    /// `NetCompleted` (success) and `NetCancelled` (external request).
+    NetFailed {
+        net_id: String,
+        /// The transition whose firing failed permanently.
+        transition_id: TransitionId,
+        /// Human-readable failure reason (the `ServiceError` display string).
+        reason: String,
+        /// Whether the underlying error was classified retryable. Audit only:
+        /// the net fails regardless — retry is authored via an `_error` port.
+        retryable: bool,
+    },
+
     /// A pre-dispatch hook chain was evaluated for an effect transition
     /// (see `pre-dispatch-hook.md` § 9). Emitted on every dispatch attempt
     /// regardless of outcome — one event per attempted dispatch.

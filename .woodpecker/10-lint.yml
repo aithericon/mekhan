@@ -1,46 +1,33 @@
 # =============================================================================
-# Lint pool — fmt, clippy, svelte-check
+# Lint pool — fmt + clippy (single light gate)
 # =============================================================================
 # Fast feedback loop. Runs on every push to main/dev and every PR targeting
-# them. Scheduled on the lint pool (8 concurrent slots on titan).
+# them. Scheduled on the lint pool.
 #
-# Recipes live in just/ci.just; the pipeline just shells out to them inside a
-# `nix develop` shell so the toolchain is whatever flake.lock pins.
+# Recipes live in just/ci.just; this YAML just invokes them. The CI builder
+# image carries the rust toolchain + native build deps (HDF5, NetCDF, protoc)
+# so the same recipes work here and locally without a nix develop wrapper.
+#
+# Tests + frontend quality intentionally deferred — see CI roadmap. Once those
+# are wired we re-add web-quality, rust-check, vitest as separate pools.
 # =============================================================================
 
 when:
-    - branch: main
-      event: push
-    - branch: dev
-      event: push
-    - branch: main
-      event: pull_request
-    - branch: dev
-      event: pull_request
-    - branch: main
-      event: manual
-    - branch: dev
-      event: manual
+  # Auto on main — gates merges by running quality checks on every push.
+  - branch: main
+    event: push
+  # Manual run from any branch — for spot-checking lint on a feature
+  # branch before opening a PR or merging.
+  - event: manual
 
 labels:
-    "!host": titan
-    role: lint
+  role: lint
 
 steps:
-    - name: rust-fmt-clippy
-      image: 192.168.101.1:5000/nixos/nix:2.32.8
-      environment:
-          NIX_CONFIG: "experimental-features = nix-command flakes"
-          CARGO_HOME: /var/lib/ci-jobs/cache/cargo
-      commands:
-          - nix develop --no-write-lock-file --command bash -lc 'just ci::quality-rust'
-      depends_on: []
-
-    - name: web-quality
-      image: 192.168.101.1:5000/nixos/nix:2.32.8
-      environment:
-          NIX_CONFIG: "experimental-features = nix-command flakes"
-          NPM_CONFIG_CACHE: /var/lib/ci-jobs/cache/npm
-      commands:
-          - nix develop --no-write-lock-file --command bash -lc 'just ci::quality-frontend'
-      depends_on: []
+  - name: rust-fmt-clippy
+    image: forge.aithericon.eu/milanender/mekhan-ci-builder:latest
+    environment:
+      CARGO_HOME: /var/lib/ci-jobs/cache/cargo
+    commands:
+      - just ci::quality-rust
+    depends_on: []

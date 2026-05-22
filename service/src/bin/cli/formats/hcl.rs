@@ -56,6 +56,9 @@ fn parse_step_block(block: &hcl::Block) -> Result<DslStep> {
         label: get_attr_str(body, "label"),
         description: get_attr_str(body, "description"),
         initial_data: get_attr_json(body, "initial_data"),
+        initial: get_attr_json(body, "initial")
+            .and_then(|v| serde_json::from_value(v).ok()),
+        process_name: get_attr_str(body, "process_name"),
         task_title: get_attr_str(body, "task_title"),
         instructions: get_attr_str(body, "instructions"),
         steps: None,
@@ -100,7 +103,9 @@ fn parse_execution_block(block: &hcl::Block) -> Result<DslExecution> {
     let files = get_attr_string_array(body, "files").unwrap_or_default();
     let config = get_attr_json(body, "config")
         .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
-    Ok(DslExecution { backend, entrypoint, files, config })
+    let retry_policy = get_attr_json(body, "retry_policy")
+        .and_then(|v| serde_json::from_value(v).ok());
+    Ok(DslExecution { backend, entrypoint, files, config, retry_policy })
 }
 
 fn parse_task_step_block(block: &hcl::Block) -> Result<DslTaskStep> {
@@ -186,6 +191,17 @@ pub fn emit(graph: &WorkflowGraph) -> Result<String> {
                 serde_json::to_string(data).unwrap_or_default()
             ));
         }
+        if let Some(ref initial) = step.initial {
+            if let Ok(v) = serde_json::to_value(initial) {
+                lines.push(format!(
+                    "  initial = {}",
+                    serde_json::to_string(&v).unwrap_or_default()
+                ));
+            }
+        }
+        if let Some(ref pn) = step.process_name {
+            lines.push(format!("  process_name = \"{}\"", escape_hcl_str(pn)));
+        }
         if let Some(ref tt) = step.task_title {
             lines.push(format!("  task_title = \"{}\"", escape_hcl_str(tt)));
         }
@@ -209,6 +225,14 @@ pub fn emit(graph: &WorkflowGraph) -> Result<String> {
                     .unwrap_or_default()
                     .replace('\n', "\n    ")
             ));
+            if let Some(ref rp) = exec.retry_policy {
+                if let Ok(v) = serde_json::to_value(rp) {
+                    lines.push(format!(
+                        "    retry_policy = {}",
+                        serde_json::to_string(&v).unwrap_or_default()
+                    ));
+                }
+            }
             lines.push("  }".to_string());
         }
         if let Some(ref conditions) = step.conditions {

@@ -16,7 +16,8 @@ struct TemplateInfo {
 pub async fn run(server: &str, template_id: &str, directory: Option<&str>, format: WorkflowFormat) -> Result<()> {
     // Fetch template name via REST for directory naming
     let info_url = format!("{}/api/templates/{}", server, template_id);
-    let info: TemplateInfo = reqwest::get(&info_url)
+    let info: TemplateInfo = crate::http::auth(reqwest::Client::new().get(&info_url))
+        .send()
         .await
         .context("failed to fetch template info")?
         .json()

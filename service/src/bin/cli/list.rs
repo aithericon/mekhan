@@ -19,7 +19,8 @@ struct PaginatedResponse {
 
 pub async fn run(server: &str) -> Result<()> {
     let url = format!("{}/api/templates?page=1&per_page=50", server);
-    let resp: PaginatedResponse = reqwest::get(&url)
+    let resp: PaginatedResponse = crate::http::auth(reqwest::Client::new().get(&url))
+        .send()
         .await
         .context("failed to connect to server")?
         .json()

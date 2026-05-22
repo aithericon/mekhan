@@ -62,6 +62,21 @@ impl LiveZitadel {
         }
     }
 
+    /// Issuer URL bootstrap.sh wrote (host of the live Zitadel).
+    pub fn issuer(&self) -> String {
+        self.base.clone()
+    }
+
+    /// The `mekhan-token-broker` PAT bootstrap.sh wrote — drives the embedded
+    /// `/api/auth/tokens` broker against live Zitadel.
+    pub fn broker_pat(&self) -> String {
+        let toml = std::fs::read_to_string("mekhan.local.toml")
+            .or_else(|_| std::fs::read_to_string("../mekhan.local.toml"))
+            .expect("mekhan.local.toml not found — run deploy/zitadel/bootstrap.sh");
+        scan_toml(&toml, "broker_pat")
+            .expect("broker_pat in mekhan.local.toml — re-run bootstrap.sh after the broker change")
+    }
+
     async fn mgmt(&self, method: reqwest::Method, path: &str, body: Option<Value>) -> Value {
         let mut rb = self
             .http

@@ -75,7 +75,7 @@
 			</span>
 		</div>
 		<div class="flex items-center gap-2">
-			<div class="flex rounded-md border border-border text-xs">
+			<div class="flex rounded-md border border-border text-sm">
 				<button
 					class="px-3 py-1.5 transition-colors {filter === 'active'
 						? 'bg-primary text-primary-foreground'
@@ -131,7 +131,7 @@
 						<div class="flex items-center gap-3">
 							<div class="flex flex-col">
 								<span class="font-mono text-sm">{net.net_id}</span>
-								<span class="text-xs text-muted-foreground">
+								<span class="text-sm text-muted-foreground">
 									{net.in_memory ? 'in memory' : 'hibernated'}
 								</span>
 							</div>

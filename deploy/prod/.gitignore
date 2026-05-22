@@ -1,0 +1,11 @@
+.terraform/
+.terraform.lock.hcl
+terraform.tfstate
+terraform.tfstate.backup
+
+backend.hcl
+prod.auto.tfvars
+*.tfvars
+!*.tfvars.example
+
+plan.out

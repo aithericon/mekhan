@@ -248,16 +248,16 @@
 								</Badge>
 							</div>
 							{#if template.description}
-								<p class="mt-1 truncate text-xs text-muted-foreground">{template.description}</p>
+								<p class="mt-1 truncate text-sm text-muted-foreground">{template.description}</p>
 							{/if}
-							<p class="mt-1 text-[10px] text-muted-foreground">
+							<p class="mt-1 text-sm text-muted-foreground">
 								Updated {formatDate(template.updated_at)}
 							</p>
 							{#if runCounts[template.id]}
 								{@const c = runCounts[template.id]}
 								<button
 									type="button"
-									class="mt-1.5 inline-flex items-center gap-1.5 text-[11px] text-muted-foreground hover:text-foreground"
+									class="mt-1.5 inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
 									data-testid="btn-template-runs-{template.id}"
 									onclick={(e: MouseEvent) => {
 										e.preventDefault();

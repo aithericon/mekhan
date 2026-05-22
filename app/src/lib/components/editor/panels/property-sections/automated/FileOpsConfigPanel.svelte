@@ -53,7 +53,7 @@
 </script>
 
 <div class="space-y-1.5">
-	<span class="text-xs font-medium text-muted-foreground">Operation</span>
+	<span class="text-sm font-medium text-muted-foreground">Operation</span>
 	<Select.Root
 		type="single"
 		value={operation}
@@ -161,14 +161,14 @@
 		/>
 	</FormField>
 	<div class="space-y-1.5">
-		<span class="text-xs font-medium text-muted-foreground">Annotations</span>
+		<span class="text-sm font-medium text-muted-foreground">Annotations</span>
 		<KeyValueEditor
 			entries={(config.annotations as Record<string, unknown>) ?? {}}
 			{readonly}
 			onchange={(annotations) => onchange({ ...config, annotations })}
 		/>
 	</div>
-	<label class="flex items-center gap-1.5 text-xs text-muted-foreground">
+	<label class="flex items-center gap-1.5 text-sm text-muted-foreground">
 		<Checkbox
 			checked={(config.merge as boolean) ?? false}
 			disabled={readonly}
@@ -191,7 +191,7 @@
 		/>
 	</FormField>
 	{#if operation === 'delete'}
-		<label class="flex items-center gap-1.5 text-xs text-muted-foreground">
+		<label class="flex items-center gap-1.5 text-sm text-muted-foreground">
 			<Checkbox
 				checked={(config.ignore_missing as boolean) ?? false}
 				disabled={readonly}
@@ -205,14 +205,14 @@
 <!-- Storage config -->
 {#if useSingleStorage}
 	<div class="space-y-1.5 rounded-lg border border-border bg-muted/30 p-2">
-		<span class="text-[10px] font-medium text-muted-foreground">Storage</span>
+		<span class="text-sm font-medium text-muted-foreground">Storage</span>
 		<Select.Root
 			type="single"
 			value={(storage.backend as string) ?? 'local'}
 			onValueChange={(v) => { if (v) updateStorage({ backend: v }); }}
 			disabled={readonly}
 		>
-			<Select.Trigger disabled={readonly} class="h-6 px-1.5 py-0.5 text-[10px]">
+			<Select.Trigger disabled={readonly} class="h-6 px-1.5 py-0.5 text-sm">
 				{storageLabels[(storage.backend as string) ?? 'local'] ?? 'Local'}
 			</Select.Trigger>
 			<Select.Content>
@@ -228,7 +228,7 @@
 			placeholder={(storage.backend as string) === 'local' ? '/tmp/store' : 'https://...'}
 			disabled={readonly}
 			oninput={(e) => updateStorage({ endpoint: (e.currentTarget as HTMLInputElement).value })}
-			class="h-6 px-1.5 py-0.5 font-mono text-[10px]"
+			class="h-6 px-1.5 py-0.5 font-mono text-sm"
 		/>
 		{#if (storage.backend as string) !== 'local'}
 			<Input
@@ -237,20 +237,20 @@
 				placeholder="Bucket name"
 				disabled={readonly}
 				oninput={(e) => updateStorage({ bucket: (e.currentTarget as HTMLInputElement).value })}
-				class="h-6 px-1.5 py-0.5 text-[10px]"
+				class="h-6 px-1.5 py-0.5 text-sm"
 			/>
 		{/if}
 	</div>
 {:else}
 	<div class="space-y-1.5 rounded-lg border border-border bg-muted/30 p-2">
-		<span class="text-[10px] font-medium text-muted-foreground">Source Storage</span>
+		<span class="text-sm font-medium text-muted-foreground">Source Storage</span>
 		<Select.Root
 			type="single"
 			value={(srcStorage.backend as string) ?? 'local'}
 			onValueChange={(v) => { if (v) updateSrcStorage({ backend: v }); }}
 			disabled={readonly}
 		>
-			<Select.Trigger disabled={readonly} class="h-6 px-1.5 py-0.5 text-[10px]">
+			<Select.Trigger disabled={readonly} class="h-6 px-1.5 py-0.5 text-sm">
 				{storageLabels[(srcStorage.backend as string) ?? 'local'] ?? 'Local'}
 			</Select.Trigger>
 			<Select.Content>
@@ -266,7 +266,7 @@
 			placeholder={(srcStorage.backend as string) === 'local' ? '/tmp/store' : 'https://...'}
 			disabled={readonly}
 			oninput={(e) => updateSrcStorage({ endpoint: (e.currentTarget as HTMLInputElement).value })}
-			class="h-6 px-1.5 py-0.5 font-mono text-[10px]"
+			class="h-6 px-1.5 py-0.5 font-mono text-sm"
 		/>
 		{#if (srcStorage.backend as string) !== 'local'}
 			<Input
@@ -275,7 +275,7 @@
 				placeholder="Bucket name"
 				disabled={readonly}
 				oninput={(e) => updateSrcStorage({ bucket: (e.currentTarget as HTMLInputElement).value })}
-				class="h-6 px-1.5 py-0.5 text-[10px]"
+				class="h-6 px-1.5 py-0.5 text-sm"
 			/>
 		{/if}
 	</div>

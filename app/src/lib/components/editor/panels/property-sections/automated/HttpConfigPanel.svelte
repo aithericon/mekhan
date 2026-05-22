@@ -43,7 +43,7 @@
 </script>
 
 <div class="space-y-1.5">
-	<span class="text-xs font-medium text-muted-foreground">Method</span>
+	<span class="text-sm font-medium text-muted-foreground">Method</span>
 	<Select.Root
 		type="single"
 		value={(config.method as string) ?? 'GET'}
@@ -78,7 +78,7 @@
 </FormField>
 
 <div class="space-y-1.5">
-	<span class="text-xs font-medium text-muted-foreground">Headers</span>
+	<span class="text-sm font-medium text-muted-foreground">Headers</span>
 	<KeyValueEditor
 		entries={(config.headers as Record<string, unknown>) ?? {}}
 		{readonly}
@@ -89,7 +89,7 @@
 </div>
 
 <div class="space-y-1.5">
-	<span class="text-xs font-medium text-muted-foreground">Query Parameters</span>
+	<span class="text-sm font-medium text-muted-foreground">Query Parameters</span>
 	<KeyValueEditor
 		entries={(config.query as Record<string, unknown>) ?? {}}
 		{readonly}
@@ -100,7 +100,7 @@
 </div>
 
 <div class="space-y-1.5">
-	<span class="text-xs font-medium text-muted-foreground">Request Body (JSON)</span>
+	<span class="text-sm font-medium text-muted-foreground">Request Body (JSON)</span>
 	<CodeEditor
 		value={config.body ? JSON.stringify(config.body, null, 2) : ''}
 		language="json"
@@ -119,7 +119,7 @@
 
 <!-- Auth -->
 <div class="space-y-1.5">
-	<span class="text-xs font-medium text-muted-foreground">Authentication</span>
+	<span class="text-sm font-medium text-muted-foreground">Authentication</span>
 	<Select.Root
 		type="single"
 		value={authType}
@@ -155,7 +155,7 @@
 			disabled={readonly}
 			oninput={(e) =>
 				onchange({ ...config, auth: { ...auth, token: (e.currentTarget as HTMLInputElement).value } })}
-			class="h-6 px-1.5 py-0.5 font-mono text-[10px]"
+			class="h-6 px-1.5 py-0.5 font-mono text-sm"
 		/>
 		<Input
 			type="text"
@@ -164,7 +164,7 @@
 			disabled={readonly}
 			oninput={(e) =>
 				onchange({ ...config, auth: { ...auth, token_env: (e.currentTarget as HTMLInputElement).value } })}
-			class="h-6 px-1.5 py-0.5 text-[10px]"
+			class="h-6 px-1.5 py-0.5 text-sm"
 		/>
 	</div>
 {:else if auth && authType === 'basic'}
@@ -176,7 +176,7 @@
 			disabled={readonly}
 			oninput={(e) =>
 				onchange({ ...config, auth: { ...auth, username: (e.currentTarget as HTMLInputElement).value } })}
-			class="h-6 px-1.5 py-0.5 text-[10px]"
+			class="h-6 px-1.5 py-0.5 text-sm"
 		/>
 		<Input
 			type="text"
@@ -185,7 +185,7 @@
 			disabled={readonly}
 			oninput={(e) =>
 				onchange({ ...config, auth: { ...auth, password: (e.currentTarget as HTMLInputElement).value } })}
-			class="h-6 px-1.5 py-0.5 text-[10px]"
+			class="h-6 px-1.5 py-0.5 text-sm"
 		/>
 		<Input
 			type="text"
@@ -194,7 +194,7 @@
 			disabled={readonly}
 			oninput={(e) =>
 				onchange({ ...config, auth: { ...auth, password_env: (e.currentTarget as HTMLInputElement).value } })}
-			class="h-6 px-1.5 py-0.5 text-[10px]"
+			class="h-6 px-1.5 py-0.5 text-sm"
 		/>
 	</div>
 {:else if auth && authType === 'header'}
@@ -206,7 +206,7 @@
 			disabled={readonly}
 			oninput={(e) =>
 				onchange({ ...config, auth: { ...auth, name: (e.currentTarget as HTMLInputElement).value } })}
-			class="h-6 px-1.5 py-0.5 text-[10px]"
+			class="h-6 px-1.5 py-0.5 text-sm"
 		/>
 		<Input
 			type="text"
@@ -215,7 +215,7 @@
 			disabled={readonly}
 			oninput={(e) =>
 				onchange({ ...config, auth: { ...auth, value: (e.currentTarget as HTMLInputElement).value } })}
-			class="h-6 px-1.5 py-0.5 text-[10px]"
+			class="h-6 px-1.5 py-0.5 text-sm"
 		/>
 		<Input
 			type="text"
@@ -224,13 +224,13 @@
 			disabled={readonly}
 			oninput={(e) =>
 				onchange({ ...config, auth: { ...auth, value_env: (e.currentTarget as HTMLInputElement).value } })}
-			class="h-6 px-1.5 py-0.5 text-[10px]"
+			class="h-6 px-1.5 py-0.5 text-sm"
 		/>
 	</div>
 {/if}
 
 <div class="space-y-1.5">
-	<span class="text-xs font-medium text-muted-foreground">Response Mode</span>
+	<span class="text-sm font-medium text-muted-foreground">Response Mode</span>
 	<Select.Root
 		type="single"
 		value={(config.response_mode as string) ?? 'auto'}
@@ -264,7 +264,7 @@
 	/>
 </FormField>
 
-<label class="flex items-center gap-1.5 text-xs text-muted-foreground">
+<label class="flex items-center gap-1.5 text-sm text-muted-foreground">
 	<Checkbox
 		checked={(config.follow_redirects as boolean) ?? true}
 		disabled={readonly}

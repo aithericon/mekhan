@@ -88,7 +88,7 @@
 	<!-- Header -->
 	<div class="mb-2 flex items-center justify-between">
 		<!-- ui-allow: block-type badge color — no theme token for image/emerald identity -->
-		<span class="rounded bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">
+		<span class="rounded bg-emerald-100 px-2 py-0.5 text-sm font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">
 			Image
 		</span>
 		<div class="flex items-center gap-1">
@@ -132,11 +132,11 @@
 			placeholder={'Dynamic source URL — e.g. {{ invoice_file.url }}'}
 			disabled={readonly}
 			oninput={(e) => setUrl((e.currentTarget as HTMLInputElement).value)}
-			class="font-mono text-xs"
+			class="font-mono text-sm"
 		/>
 		<InterpolationHint example="invoice_file.url" />
 		{#if url}
-			<p class="text-[11px] text-muted-foreground">
+			<p class="text-sm text-muted-foreground">
 				A dynamic source is set — it takes precedence over uploaded files when the task renders.
 			</p>
 		{/if}
@@ -160,7 +160,7 @@
 						</div>
 					{/if}
 					{#if filenames.length > 1}
-						<p class="text-xs text-muted-foreground">+{filenames.length - 1} more (switch to grid/gallery to see all)</p>
+						<p class="text-sm text-muted-foreground">+{filenames.length - 1} more (switch to grid/gallery to see all)</p>
 					{/if}
 				{:else if display === 'grid'}
 					<!-- Grid: 2-column grid of thumbnails -->
@@ -185,7 +185,7 @@
 									</button>
 								{/if}
 								<div class="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/50 to-transparent px-1.5 py-1">
-									<span class="text-[10px] font-mono text-white drop-shadow">{name}</span>
+									<span class="text-sm font-mono text-white drop-shadow">{name}</span>
 								</div>
 							</div>
 						{/each}
@@ -213,7 +213,7 @@
 									</button>
 								{/if}
 								<div class="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/50 to-transparent px-1.5 py-1">
-									<span class="text-[10px] font-mono text-white drop-shadow">{name}</span>
+									<span class="text-sm font-mono text-white drop-shadow">{name}</span>
 								</div>
 							</div>
 						{/each}
@@ -227,7 +227,7 @@
 					{#each availableFiles as img (img.name)}
 						<button
 							type="button"
-							class="flex items-center gap-1 rounded-md border border-dashed border-border px-2 py-1 text-xs text-muted-foreground transition-colors hover:border-foreground/30 hover:bg-accent hover:text-foreground"
+							class="flex items-center gap-1 rounded-md border border-dashed border-border px-2 py-1 text-sm text-muted-foreground transition-colors hover:border-foreground/30 hover:bg-accent hover:text-foreground"
 							onclick={() => addFile(img.name)}
 						>
 							<ImageIcon class="size-3 shrink-0" />

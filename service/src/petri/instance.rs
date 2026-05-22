@@ -238,6 +238,7 @@ mod tests {
                 WorkflowNode {
                     id: "n_start".to_string(),
                     node_type: "start".to_string(),
+                    slug: None,
                     position: Position { x: 0.0, y: 0.0 },
                     data: WorkflowNodeData::Start {
                         label: "Start".to_string(),
@@ -252,11 +253,13 @@ mod tests {
                 WorkflowNode {
                     id: "n_end".to_string(),
                     node_type: "end".to_string(),
+                    slug: None,
                     position: Position { x: 100.0, y: 0.0 },
                     data: WorkflowNodeData::End {
                         label: "End".to_string(),
                         description: None,
                         terminal: crate::models::template::default_terminal_port(),
+                        result_mapping: Vec::new(),
                     },
                     parent_id: None,
                     width: None,

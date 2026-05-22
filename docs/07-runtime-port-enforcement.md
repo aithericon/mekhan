@@ -4,6 +4,9 @@ Status: Proposal
 Author: handoff doc — continuation of [`05-typed-ports.md`](./05-typed-ports.md) and [`06-triggers.md`](./06-triggers.md). Addresses the gap surfaced while explaining how the type system maps to the engine.
 Related: `service/src/compiler/compile.rs`, `service/src/models/template.rs` (`Port::validate_token`, `PortValidationError`), `service/src/petri/instance.rs`, `engine/sdk/src/context.rs`
 
+> **Superseded in part — see [`10-control-data-token-model.md`](./10-control-data-token-model.md).**
+> The "running net is untyped, every body place is `DynamicToken`" hole described below is now closed for split producers: parked `p_{id}_data` places carry enforced `Data__{id}` schemas validated by the engine `SchemaRegistry`. The remaining permissive cases are the intentional declared→enforced ramp documented in 10 §6.
+
 ## 1. Problem
 
 Typed ports are enforced at **two places only**: compile-time static analysis (`validate_edges_typed`, `compile.rs:557`) and the system boundary (`Port::validate_token` at instance creation `petri/instance.rs:148` and trigger fire `triggers/dispatcher.rs:350`). Between those, **the running net is untyped.** Every workflow-body place is `PlaceHandle<DynamicToken>` (`compile.rs:1092` and throughout); the engine's colored-token capability (`token_schema` via schemars, `engine/sdk/src/context.rs:354`) is used only for engine infra plumbing, never for user `Port` schemas.

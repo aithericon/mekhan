@@ -17,7 +17,7 @@
 	<div class="mb-2 flex items-center justify-between">
 		<!-- ui-allow: block-type badge color — no theme token for markdown/purple identity -->
 		<span
-			class="rounded bg-purple-100 px-2 py-0.5 text-xs font-medium text-purple-700 dark:bg-purple-900/30 dark:text-purple-300"
+			class="rounded bg-purple-100 px-2 py-0.5 text-sm font-medium text-purple-700 dark:bg-purple-900/30 dark:text-purple-300"
 			>Markdown</span
 		>
 		{#if !readonly}

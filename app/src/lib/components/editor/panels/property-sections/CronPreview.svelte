@@ -79,19 +79,19 @@
 
 <div class="rounded-md border border-border/60 bg-muted/20 p-2 space-y-1">
 	<div class="flex items-center justify-between">
-		<span class="text-xs font-medium text-muted-foreground">Next fires</span>
+		<span class="text-sm font-medium text-muted-foreground">Next fires</span>
 		{#if pending}
-			<span class="text-[10px] text-muted-foreground/70">…</span>
+			<span class="text-sm text-muted-foreground/70">…</span>
 		{/if}
 	</div>
 	{#if error}
-		<p class="text-[11px] text-destructive">{error}</p>
+		<p class="text-sm text-destructive">{error}</p>
 	{:else if upcoming.length === 0}
-		<p class="text-[11px] italic text-muted-foreground">No upcoming fires.</p>
+		<p class="text-sm italic text-muted-foreground">No upcoming fires.</p>
 	{:else}
 		<ul class="space-y-0.5">
 			{#each upcoming as iso, i (i)}
-				<li class="text-[11px] text-foreground">{format(iso)}</li>
+				<li class="text-sm text-foreground">{format(iso)}</li>
 			{/each}
 		</ul>
 	{/if}

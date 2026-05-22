@@ -57,7 +57,7 @@
 					{status.label}
 				</Badge>
 				{#if task.assignee_id}
-					<span class="flex items-center gap-1 text-[11px] text-muted-foreground">
+					<span class="flex items-center gap-1 text-sm text-muted-foreground">
 						<User class="size-3" />
 						{task.assignee_id}
 					</span>
@@ -69,7 +69,7 @@
 				href="{hpiBaseUrl}/task/{task.task_id}"
 				target="_blank"
 				rel="noopener noreferrer"
-				class="shrink-0 text-xs text-primary hover:underline"
+				class="shrink-0 text-sm text-primary hover:underline"
 			>
 				Open in HPI
 			</a>
@@ -86,7 +86,7 @@
 		{#if step.blocks.length > 0}
 			<div class="space-y-2">
 				{#if (task.steps ?? []).length > 1}
-					<div class="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+					<div class="text-sm font-medium text-muted-foreground uppercase tracking-wider">
 						{step.title}
 					</div>
 				{/if}
@@ -113,7 +113,7 @@
 	<!-- Completed data -->
 	{#if task.status === 'completed' && hasData}
 		<div class="border-t border-border pt-3 space-y-2">
-			<div class="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+			<div class="text-sm font-medium text-muted-foreground uppercase tracking-wider">
 				Submitted Data
 			</div>
 			{#each inputFields as inputBlock (inputBlock.field.name)}
@@ -126,7 +126,7 @@
 	{/if}
 
 	<!-- Metadata -->
-	<div class="border-t border-border pt-2 text-[10px] text-muted-foreground">
+	<div class="border-t border-border pt-2 text-sm text-muted-foreground">
 		<span>Created {new Date(task.created_at).toLocaleString()}</span>
 		{#if task.completed_at}
 			<span class="ml-2">Completed {new Date(task.completed_at).toLocaleString()}</span>

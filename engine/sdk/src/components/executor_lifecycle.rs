@@ -318,31 +318,15 @@ pub fn executor_lifecycle(
         let message_log = ctx.state::<DynamicToken>("message_log", "Message Log");
 
         if bridges.process {
-            // Route progress events through process_log_metric so the fraction
-            // becomes a time-series metric on the process. We use a Rhai
-            // adapter transition first to reshape the event into {key, value}.
-            // The executor IPC signal wraps its payload under `detail`, so we
-            // read evt.detail.fraction / detail.message / detail.current_step.
-            let progress_metric =
-                ctx.state::<DynamicToken>("progress_metric", "Progress Metric Input");
-            ctx.transition("shape_progress", "Shape Progress")
-                .auto_input("evt", &sig_progress)
-                .auto_output("out", &progress_metric)
-                .logic(r#"#{
-                    out: #{
-                        key: "progress_fraction",
-                        value: evt.detail.fraction,
-                        detail: #{
-                            message: evt.detail.message,
-                            current_step: evt.detail.current_step,
-                            total_steps: evt.detail.total_steps
-                        }
-                    }
-                }"#);
+            // Route progress events through the typed process_progress effect.
+            // The executor IPC signal carries the serialized canonical
+            // StatusDetail::ProgressUpdated under `detail`; we forward the
+            // signal token verbatim (no lossy downgrade) and the handler
+            // echoes `detail` into effect_result for typed projection.
             ctx.transition("log_progress", "Log Progress")
-                .auto_input("metric", &progress_metric)
-                .auto_output("logged", &progress_log)
-                .builtin_effect(&effects::PROCESS_LOG_METRIC);
+                .auto_input("progress", &sig_progress)
+                .auto_output("recorded", &progress_log)
+                .builtin_effect(&effects::PROCESS_PROGRESS);
         } else {
             ctx.transition("log_progress", "Log Progress")
                 .auto_input("evt", &sig_progress)
@@ -375,27 +359,15 @@ pub fn executor_lifecycle(
         }
 
         if bridges.process {
-            // Project phase transitions as log messages so users see them
-            // alongside other breadcrumbs. Executor IPC phase events have
-            // shape { category: "phase", detail: { phase_name, status, ... } }
-            // — we reach into detail and reshape into {level, source, message}.
-            let phase_message =
-                ctx.state::<DynamicToken>("phase_message", "Phase Message Input");
-            ctx.transition("shape_phase", "Shape Phase")
-                .auto_input("evt", &sig_phase)
-                .auto_output("out", &phase_message)
-                .logic(r#"#{
-                    out: #{
-                        level: "info",
-                        source: "executor-phase",
-                        message: "phase " + evt.detail.phase_name + " " + evt.detail.status,
-                        detail: evt.detail
-                    }
-                }"#);
+            // Route phase transitions through the typed process_phase effect.
+            // The executor IPC signal carries the serialized canonical
+            // StatusDetail::PhaseChanged under `detail`; forwarding the signal
+            // token verbatim keeps phase_name/status/message (and the typed
+            // Skipped/Failed variants) intact for typed projection.
             ctx.transition("log_phase", "Log Phase")
-                .auto_input("message", &phase_message)
-                .auto_output("logged", &phase_log)
-                .builtin_effect(&effects::PROCESS_LOG_MESSAGE);
+                .auto_input("phase", &sig_phase)
+                .auto_output("recorded", &phase_log)
+                .builtin_effect(&effects::PROCESS_PHASE);
         } else {
             ctx.transition("log_phase", "Log Phase")
                 .auto_input("evt", &sig_phase)

@@ -39,14 +39,14 @@
 		<div class="flex items-center gap-2">
 			<span class="truncate text-sm font-medium text-foreground">{process.name}</span>
 			{#if task.process_step}
-				<span class="shrink-0 text-[11px] text-muted-foreground">· {task.process_step}</span>
+				<span class="shrink-0 text-sm text-muted-foreground">· {task.process_step}</span>
 			{/if}
 		</div>
 		<div class="mt-1 flex items-center gap-2">
 			<div class="h-1 w-24 overflow-hidden rounded-full bg-cyan-200/50">
 				<div class="h-full rounded-full bg-cyan-500" style={`width: ${progressPercent}%`}></div>
 			</div>
-			<span class="text-[11px] text-muted-foreground">
+			<span class="text-sm text-muted-foreground">
 				Step {completedSteps} of {totalSteps}
 			</span>
 		</div>

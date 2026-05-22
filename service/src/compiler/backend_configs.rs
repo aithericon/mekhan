@@ -50,6 +50,33 @@ fn default_entrypoint() -> String {
     "main.py".to_string()
 }
 
+/// Editor-side catalogue-query config. Deserialized purely to validate shape;
+/// re-serialized as the `query` token the engine's `catalogue_lookup` handler
+/// accepts (ADR-17 convenience format: top-level `category` / `source_net` /
+/// `source_process_id` / `sort_by` / `limit` / `page` / `search` / `filters`).
+/// Maps directly onto the service catalogue filter grammar
+/// (`service/src/catalogue/queries.rs::list_entries`).
+#[derive(Debug, Clone, Deserialize, serde::Serialize)]
+pub struct CatalogueQueryConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_net: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_process_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub search: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sort_by: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page: Option<i64>,
+    /// Generic typed filters: `{ field: { op: value } }` (eq/neq/lt/gt/...).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filters: Option<HashMap<String, HashMap<String, Value>>>,
+}
+
 fn default_true() -> bool {
     true
 }
@@ -246,6 +273,20 @@ pub fn validate_and_transform(
             let _: FileOpsConfig = serde_json::from_value(config.clone())
                 .map_err(|e| CompileError::Validation(format!("invalid file_ops config: {e}")))?;
             Ok((config.clone(), vec![]))
+        }
+
+        ExecutionBackendType::CatalogueQuery => {
+            // Read-only catalogue lookup: no executor job, no staged inputs.
+            // Validate the shape and emit the normalized `query` token the
+            // `catalogue_lookup` effect handler consumes.
+            let parsed: CatalogueQueryConfig = serde_json::from_value(config.clone())
+                .map_err(|e| {
+                    CompileError::Validation(format!("invalid catalogue_query config: {e}"))
+                })?;
+            let token = serde_json::to_value(&parsed).map_err(|e| {
+                CompileError::Validation(format!("catalogue_query serialize: {e}"))
+            })?;
+            Ok((token, vec![]))
         }
     }
 }

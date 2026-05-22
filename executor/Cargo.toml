@@ -24,7 +24,7 @@ members = [
 version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
-authors = ["Aithericon Research"]
+authors = ["Aithericon GmbH"]
 repository = "https://github.com/aithericon/aithericon-executor"
 homepage = "https://github.com/aithericon/aithericon-executor"
 
@@ -108,8 +108,35 @@ sqlx = { version = "0.8", default-features = false, features = [
     "macros",
 ] }
 
-# File metadata
-aithericon-file-metadata = { path = "../shared/file-metadata", package = "fmeta", features = ["tokio", "all-backends", "checksum"] }
+# File metadata. NOTE: the `netcdf` backend (and only that one) hard-links
+# libnetcdf+libhdf5 system libraries, which blocks cross-compiling the executor
+# to x86_64-linux-gnu (no Linux netcdf .so on darwin hosts) — see
+# `just dev slurm-up`. Enumerating the pure-Rust backends individually keeps
+# the dev daemon's mime/format enrichment surface identical while making the
+# binary portable. Add `netcdf` back here if a real netcdf workflow needs it.
+aithericon-file-metadata = { path = "../shared/file-metadata", package = "fmeta", features = [
+    "tokio",
+    "checksum",
+    "csv",
+    "json",
+    "parquet",
+    "image",
+    "audio",
+    "video",
+    "zip",
+    "excel",
+    "arrow",
+    "zarr",
+    "vtk",
+    "toml",
+    "yaml",
+    "markdown",
+    "xml",
+    "html",
+    "ini",
+    "env",
+    "txt",
+] }
 
 # Docker
 bollard = "0.19"

@@ -251,6 +251,49 @@ pub(crate) async fn emit_bridge_out_events<E: EventRepository>(
     Ok(())
 }
 
+/// On a **permanent** failure of a Rhai (non-effect) transition, consume the
+/// bound input tokens so the marking advances and the broken transition is no
+/// longer selected — otherwise the consumer→eval bridge re-kicks the loop and
+/// the same transition re-fails forever. Then propagate the original error.
+///
+/// Non-permanent failures (benign races, transient internals) are propagated
+/// untouched: the net stays alive and the eval loop merely ends the current
+/// pass. Pure-Rhai transitions have no effect handler, so there is no replay
+/// cursor to keep in sync — `TokenRemoved` is the right marking-advancing event
+/// here (it is already projected and NATS/CLI-mapped).
+///
+/// A single `ErrorOccurred` is also emitted so the human-readable failure stays
+/// visible in the event log and `aithericon errors` (the effect path gets this
+/// visibility from its `EffectFailed` event; the Rhai path has none otherwise).
+/// This was the event that previously re-kicked the eval loop forever — it is
+/// safe now precisely because the accompanying `TokenRemoved`s advance the
+/// marking, so the broken transition is no longer enabled on the next pass.
+async fn consume_bound_tokens_on_permanent_failure<E: EventRepository>(
+    events: &E,
+    consumed_tokens: &[(PlaceId, petri_domain::TokenId)],
+    err: ServiceError,
+) -> Result<PersistedEvent, ServiceError> {
+    if err.is_permanent() {
+        let reason = format!("permanent transition failure: {}", err);
+        events
+            .append(DomainEvent::ErrorOccurred {
+                message: reason.clone(),
+            })
+            .await?;
+        for (place_id, token_id) in consumed_tokens {
+            events
+                .append(DomainEvent::TokenRemoved {
+                    token_id: token_id.clone(),
+                    place_id: place_id.clone(),
+                    reason: Some(reason.clone()),
+                    correlation_id: None,
+                })
+                .await?;
+        }
+    }
+    Err(err)
+}
+
 /// Fire a transition using port-based routing.
 ///
 /// The execution flow:
@@ -341,9 +384,20 @@ pub(crate) async fn fire_transition<
     let binding = find_valid_binding(executor, &transition, &input_arcs, marking, schema_registry)
         .ok_or_else(|| ServiceError::GuardNotSatisfied(transition_id.clone()))?;
 
-    let script_result = executor.execute_script(&transition.script, &binding.port_inputs)?;
+    let script_result =
+        match executor.execute_script(&transition.script, &binding.port_inputs) {
+            Ok(r) => r,
+            Err(e) => {
+                return consume_bound_tokens_on_permanent_failure(
+                    events,
+                    &binding.consumed_tokens,
+                    e,
+                )
+                .await
+            }
+        };
 
-    let (produced_tokens, bridge_out_tokens) = route_output_tokens(
+    let (produced_tokens, bridge_out_tokens) = match route_output_tokens(
         &net,
         &transition,
         &transition_id,
@@ -352,7 +406,17 @@ pub(crate) async fn fire_transition<
         schema_registry,
         net_parameters,
         None, // Rhai transitions have no effect result
-    )?;
+    ) {
+        Ok(v) => v,
+        Err(e) => {
+            return consume_bound_tokens_on_permanent_failure(
+                events,
+                &binding.consumed_tokens,
+                e,
+            )
+            .await
+        }
+    };
 
     let event = events
         .append(DomainEvent::TransitionFired {
@@ -595,7 +659,7 @@ async fn fire_effect_transition<E: EventRepository, T: TopologyRepository, S: St
             match effect_result {
                 Ok(effect_output) => {
                     // Success path — route output tokens from effect result
-                    let (produced_tokens, bridge_out_tokens) = route_output_tokens(
+                    match route_output_tokens(
                         net,
                         transition,
                         transition_id,
@@ -604,31 +668,63 @@ async fn fire_effect_transition<E: EventRepository, T: TopologyRepository, S: St
                         schema_registry,
                         net_parameters,
                         Some(&effect_output.result),
-                    )?;
+                    ) {
+                        Ok((produced_tokens, bridge_out_tokens)) => {
+                            let event = events
+                                .append(DomainEvent::EffectCompleted {
+                                    transition_id: transition_id.clone(),
+                                    transition_name: Some(transition.name.clone()),
+                                    consumed_tokens: binding.consumed_tokens,
+                                    produced_tokens,
+                                    effect_handler_id: handler_id.clone(),
+                                    effect_result: effect_output.result,
+                                    read_tokens: binding.read_tokens,
+                                    process_step_started: transition
+                                        .process_step_started
+                                        .clone(),
+                                    process_step_completed: transition
+                                        .process_step_completed
+                                        .clone(),
+                                })
+                                .await?;
 
-                    let event = events
-                        .append(DomainEvent::EffectCompleted {
-                            transition_id: transition_id.clone(),
-                            transition_name: Some(transition.name.clone()),
-                            consumed_tokens: binding.consumed_tokens,
-                            produced_tokens,
-                            effect_handler_id: handler_id.clone(),
-                            effect_result: effect_output.result,
-                            read_tokens: binding.read_tokens,
-                            process_step_started: transition.process_step_started.clone(),
-                            process_step_completed: transition.process_step_completed.clone(),
-                        })
-                        .await?;
+                            emit_bridge_out_events(
+                                events,
+                                transition_id,
+                                bridge_out_tokens,
+                                Some(event.sequence),
+                            )
+                            .await?;
 
-                    emit_bridge_out_events(
-                        events,
-                        transition_id,
-                        bridge_out_tokens,
-                        Some(event.sequence),
-                    )
-                    .await?;
+                            Ok(event)
+                        }
+                        Err(routing_err) => {
+                            // The handler's side effect already ran, but output
+                            // routing failed (e.g. an output token violates its
+                            // declared schema). This is permanent — re-running
+                            // would produce the same bad output. Record an
+                            // `EffectFailed` (NOT `ErrorOccurred`: the replay
+                            // cursor only tracks Effect* events, so a non-effect
+                            // event here would desync replay) and consume the
+                            // input tokens so the transition can't be
+                            // re-selected forever.
+                            events
+                                .append(DomainEvent::EffectFailed {
+                                    transition_id: transition_id.clone(),
+                                    transition_name: Some(transition.name.clone()),
+                                    consumed_tokens: binding.consumed_tokens.clone(),
+                                    produced_tokens: vec![],
+                                    effect_handler_id: handler_id.clone(),
+                                    error_message: routing_err.to_string(),
+                                    tokens_consumed: true,
+                                    input_data: Some(binding.port_inputs.clone()),
+                                    retryable: false,
+                                })
+                                .await?;
 
-                    Ok(event)
+                            Err(routing_err)
+                        }
+                    }
                 }
                 Err(effect_error) => {
                     let error_message = effect_error.to_string();
@@ -680,7 +776,14 @@ async fn fire_effect_transition<E: EventRepository, T: TopologyRepository, S: St
                         .await?;
                         Ok(event)
                     } else {
-                        // No error port: audit event, tokens stay, return error
+                        // No `_error` port: the transition cannot make progress
+                        // on a retry, so consume the input tokens (marking
+                        // advances → transition is no longer selected → the
+                        // eval loop reaches genuine quiescence instead of
+                        // re-firing forever). The full input is preserved in
+                        // the audit event. Retry/compensation is authored via
+                        // an `_error` port; `retryable` is recorded for
+                        // observability only.
                         events
                             .append(DomainEvent::EffectFailed {
                                 transition_id: transition_id.clone(),
@@ -689,7 +792,7 @@ async fn fire_effect_transition<E: EventRepository, T: TopologyRepository, S: St
                                 produced_tokens: vec![],
                                 effect_handler_id: handler_id.clone(),
                                 error_message: error_message.clone(),
-                                tokens_consumed: false,
+                                tokens_consumed: true,
                                 input_data: Some(binding.port_inputs.clone()),
                                 retryable,
                             })
@@ -699,6 +802,7 @@ async fn fire_effect_transition<E: EventRepository, T: TopologyRepository, S: St
                             transition_id: transition_id.clone(),
                             handler_id: handler_id.clone(),
                             message: error_message,
+                            retryable,
                         })
                     }
                 }
@@ -819,6 +923,7 @@ async fn fire_effect_transition<E: EventRepository, T: TopologyRepository, S: St
                             transition_id: transition_id.clone(),
                             handler_id: handler_id.clone(),
                             message: error_message.clone(),
+                            retryable: *retryable,
                         })
                     }
                 }

@@ -74,7 +74,7 @@
 			>
 				<ClipboardList class="size-10 text-muted-foreground/40" />
 				<p class="mt-3 text-sm text-muted-foreground">No tasks</p>
-				<p class="text-xs text-muted-foreground">
+				<p class="text-sm text-muted-foreground">
 					Tasks appear when workflows reach human task steps
 				</p>
 			</div>
@@ -98,11 +98,11 @@
 								</Badge>
 							</div>
 							{#if task.process_id}
-								<p class="mt-1 text-xs text-muted-foreground">
+								<p class="mt-1 text-sm text-muted-foreground">
 									Process: {task.process_id}
 								</p>
 							{/if}
-							<p class="mt-1 text-[10px] text-muted-foreground">
+							<p class="mt-1 text-sm text-muted-foreground">
 								{formatDate(task.created_at)}
 								{#if task.duration_ms}
 									<span class="ml-2">({(task.duration_ms / 1000).toFixed(1)}s)</span>
@@ -114,7 +114,7 @@
 			</div>
 
 			{#if store.total > store.tasks.length}
-				<p class="mt-4 text-center text-xs text-muted-foreground">
+				<p class="mt-4 text-center text-sm text-muted-foreground">
 					Showing {store.tasks.length} of {store.total} tasks
 				</p>
 			{/if}

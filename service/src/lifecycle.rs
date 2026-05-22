@@ -6,11 +6,42 @@ use futures::StreamExt;
 use sqlx::PgPool;
 use tracing;
 
+use petri_domain::{DomainEvent, PersistedEvent};
+
 use crate::catalogue::subscriptions::SubscriptionManager;
 use crate::config::CleanupConfig;
 use crate::nats::MekhanNats;
 use crate::petri::client::PetriClient;
-use crate::triggers::TriggerDispatcher;
+use crate::triggers::{ResultWaiters, TerminalOutcome, TriggerDispatcher};
+
+/// Resolve a WaitForResult waiter for `net_id`'s instance, if one is
+/// registered. Fast-pathed: the `net_id`→`id` lookup is skipped entirely when
+/// no waiters exist (the common case — every terminal net calls this).
+async fn resolve_waiter(
+    db: &PgPool,
+    waiters: &ResultWaiters,
+    net_id: &str,
+    status: &str,
+    result: Option<serde_json::Value>,
+) {
+    if waiters.is_empty() {
+        return;
+    }
+    if let Ok(Some((id,))) =
+        sqlx::query_as::<_, (uuid::Uuid,)>("SELECT id FROM workflow_instances WHERE net_id = $1")
+            .bind(net_id)
+            .fetch_optional(db)
+            .await
+    {
+        waiters.resolve(
+            &id,
+            TerminalOutcome {
+                status: status.to_string(),
+                result,
+            },
+        );
+    }
+}
 
 /// A terminal net event can legitimately arrive before the instance row is
 /// written (the create-instance API and the net's first events race). We NAK
@@ -30,6 +61,7 @@ pub async fn start_lifecycle_listener(
     db: PgPool,
     subscription_manager: Arc<SubscriptionManager>,
     triggers: Option<Arc<TriggerDispatcher>>,
+    waiters: Arc<ResultWaiters>,
 ) {
     let consumer = match nats.lifecycle_consumer().await {
         Ok(c) => c,
@@ -71,13 +103,25 @@ pub async fn start_lifecycle_listener(
         let net_id = parts[2];
         let event_type = parts[parts.len() - 1];
 
+        // The subject carries the terminal status; the payload carries the
+        // structured result envelope (`NetCompleted.exit_code`). Best-effort:
+        // a malformed/absent payload simply leaves `result` NULL (tolerant —
+        // bare-terminal workflows have no `exit_code` and stay NULL).
+        let persisted: Option<PersistedEvent> = serde_json::from_slice(&msg.payload).ok();
+
         match event_type {
             "completed" => {
                 tracing::info!("net {net_id} completed");
+                let result_envelope: Option<serde_json::Value> =
+                    persisted.as_ref().and_then(|p| match &p.event {
+                        DomainEvent::NetCompleted { exit_code, .. } => exit_code.clone(),
+                        _ => None,
+                    });
                 let result = sqlx::query(
-                    "UPDATE workflow_instances SET status = 'completed', completed_at = NOW() WHERE net_id = $1 AND status = 'running'"
+                    "UPDATE workflow_instances SET status = 'completed', completed_at = NOW(), result = COALESCE($2::jsonb, result) WHERE net_id = $1 AND status = 'running'"
                 )
                 .bind(net_id)
+                .bind(result_envelope.clone())
                 .execute(&db)
                 .await;
 
@@ -107,6 +151,7 @@ pub async fn start_lifecycle_listener(
                     Ok(_) => {}
                 }
 
+                resolve_waiter(&db, &waiters, net_id, "completed", result_envelope).await;
                 subscription_manager.cleanup_net_subscriptions(net_id).await;
 
                 // Phase 5d: NetCompletion triggers fire on terminal status.
@@ -117,10 +162,21 @@ pub async fn start_lifecycle_listener(
             }
             "cancelled" => {
                 tracing::info!("net {net_id} cancelled");
+                // Synthesize a uniform error envelope so the WaitForResult /
+                // SSE / poll contract is shape-stable across terminal kinds.
+                let cancel_reason = persisted.as_ref().and_then(|p| match &p.event {
+                    DomainEvent::NetCancelled { reason, .. } => reason.clone(),
+                    _ => None,
+                });
+                let result_envelope = serde_json::json!({
+                    "ok": false,
+                    "error": { "reason": cancel_reason, "value": serde_json::Value::Null }
+                });
                 let result = sqlx::query(
-                    "UPDATE workflow_instances SET status = 'cancelled', completed_at = NOW() WHERE net_id = $1 AND status = 'running'"
+                    "UPDATE workflow_instances SET status = 'cancelled', completed_at = NOW(), result = COALESCE($2::jsonb, result) WHERE net_id = $1 AND status = 'running'"
                 )
                 .bind(net_id)
+                .bind(result_envelope.clone())
                 .execute(&db)
                 .await;
 
@@ -150,6 +206,14 @@ pub async fn start_lifecycle_listener(
                     Ok(_) => {}
                 }
 
+                resolve_waiter(
+                    &db,
+                    &waiters,
+                    net_id,
+                    "cancelled",
+                    Some(result_envelope),
+                )
+                .await;
                 subscription_manager.cleanup_net_subscriptions(net_id).await;
 
                 if let Some(ref disp) = triggers {
@@ -159,16 +223,24 @@ pub async fn start_lifecycle_listener(
             }
             "failed" => {
                 tracing::info!("net {net_id} failed");
+                // Uniform error envelope so WaitForResult / SSE / poll see a
+                // shape-stable result across all terminal kinds.
+                let result_envelope = serde_json::json!({
+                    "ok": false,
+                    "error": { "reason": "net failed", "value": serde_json::Value::Null }
+                });
                 let result = sqlx::query(
-                    "UPDATE workflow_instances SET status = 'failed', completed_at = NOW() WHERE net_id = $1 AND status = 'running'"
+                    "UPDATE workflow_instances SET status = 'failed', completed_at = NOW(), result = COALESCE($2::jsonb, result) WHERE net_id = $1 AND status = 'running'"
                 )
                 .bind(net_id)
+                .bind(result_envelope.clone())
                 .execute(&db)
                 .await;
                 if let Err(e) = result {
                     tracing::error!("failed to update instance status for {net_id}: {e}");
                 }
 
+                resolve_waiter(&db, &waiters, net_id, "failed", Some(result_envelope)).await;
                 subscription_manager.cleanup_net_subscriptions(net_id).await;
 
                 if let Some(ref disp) = triggers {

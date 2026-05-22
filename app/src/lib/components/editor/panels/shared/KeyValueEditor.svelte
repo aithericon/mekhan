@@ -70,7 +70,7 @@
 				placeholder={keyPlaceholder}
 				disabled={readonly}
 				oninput={(e) => updateKey(i, (e.currentTarget as HTMLInputElement).value)}
-				class="flex-1 rounded border border-input bg-background px-1.5 py-0.5 text-[10px] text-foreground focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70"
+				class="flex-1 rounded border border-input bg-background px-1.5 py-0.5 text-sm text-foreground focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70"
 			/>
 			<input
 				type="text"
@@ -78,7 +78,7 @@
 				placeholder={valuePlaceholder}
 				disabled={readonly}
 				oninput={(e) => updateValue(i, (e.currentTarget as HTMLInputElement).value)}
-				class="flex-1 rounded border border-input bg-background px-1.5 py-0.5 text-[10px] text-foreground focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70"
+				class="flex-1 rounded border border-input bg-background px-1.5 py-0.5 text-sm text-foreground focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70"
 			/>
 			{#if !readonly}
 				<button
@@ -95,7 +95,7 @@
 	{#if !readonly}
 		<button
 			type="button"
-			class="flex w-full items-center justify-center gap-1 rounded border border-dashed border-border py-1 text-[10px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+			class="flex w-full items-center justify-center gap-1 rounded border border-dashed border-border py-1 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
 			onclick={addRow}
 		>
 			<Plus class="size-3" />
@@ -104,6 +104,6 @@
 	{/if}
 
 	{#if rows.length === 0 && readonly}
-		<p class="text-[10px] italic text-muted-foreground">No entries</p>
+		<p class="text-sm italic text-muted-foreground">No entries</p>
 	{/if}
 </div>

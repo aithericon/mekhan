@@ -48,6 +48,7 @@ fn simple_graph() -> WorkflowGraph {
             WorkflowNode {
                 id: "start".to_string(),
                 node_type: "start".to_string(),
+                slug: None,
                 position: Position { x: 0.0, y: 0.0 },
                 data: WorkflowNodeData::Start {
                     label: "Start".to_string(),
@@ -62,11 +63,13 @@ fn simple_graph() -> WorkflowGraph {
             WorkflowNode {
                 id: "end".to_string(),
                 node_type: "end".to_string(),
+                slug: None,
                 position: Position { x: 200.0, y: 0.0 },
                 data: WorkflowNodeData::End {
                     label: "End".to_string(),
                     description: None,
                 terminal: mekhan_service::models::template::default_terminal_port(),
+                result_mapping: Vec::new(),
                 },
                 parent_id: None,
                 width: None,
@@ -143,7 +146,7 @@ async fn full_instance_lifecycle() {
     let sub_mgr = std::sync::Arc::new(SubscriptionManager::new(kv, listener_nats.jetstream().clone()));
     let listener_db = db.clone();
     tokio::spawn(async move {
-        start_lifecycle_listener(listener_nats, listener_db, sub_mgr, None).await;
+        start_lifecycle_listener(listener_nats, listener_db, sub_mgr, None, mekhan_service::triggers::ResultWaiters::new()).await;
     });
 
     // 1. Create template

@@ -314,14 +314,14 @@
 		</div>
 		{#if fetching && !model}
 			<div
-				class="pointer-events-none absolute inset-0 flex items-center justify-center text-xs text-muted-foreground"
+				class="pointer-events-none absolute inset-0 flex items-center justify-center text-sm text-muted-foreground"
 			>
 				Loading posterior…
 			</div>
 		{/if}
 		{#if fetching && model}
 			<div
-				class="pointer-events-none absolute right-3 top-3 rounded-full bg-primary/80 px-2 py-0.5 text-[10px] font-medium text-primary-foreground"
+				class="pointer-events-none absolute right-3 top-3 rounded-full bg-primary/80 px-2 py-0.5 text-sm font-medium text-primary-foreground"
 			>
 				updating…
 			</div>
@@ -329,7 +329,7 @@
 	</div>
 
 	<!-- Reserve a fixed row so the summary line never shifts the chart height -->
-	<div class="flex min-h-5 flex-wrap items-center gap-4 text-xs text-muted-foreground">
+	<div class="flex min-h-5 flex-wrap items-center gap-4 text-sm text-muted-foreground">
 		{#if error}
 			<span class="text-red-500">{error}</span>
 		{:else if model}

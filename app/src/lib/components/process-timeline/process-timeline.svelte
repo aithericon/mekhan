@@ -140,34 +140,12 @@
 					>
 						{entry.label}
 					</span>
-					{#if entry.human}
-						<span
-							class="rounded-full bg-amber-100 px-1.5 py-0.5 text-sm font-medium text-amber-700 dark:bg-amber-900 dark:text-amber-200"
-						>
-							human
-						</span>
-					{/if}
 				</div>
 
-				{#if entry.duration_ms || entry.iterations}
+				{#if entry.duration_ms}
 					<p class="mt-0.5 text-sm text-muted-foreground">
-						{#if entry.iterations}
-							{entry.completed_iterations ?? 0}/{entry.iterations} iterations
-							{#if entry.duration_ms} · {formatDuration(entry.duration_ms)}{/if}
-						{:else if entry.duration_ms}
-							{formatDuration(entry.duration_ms)}
-						{/if}
+						{formatDuration(entry.duration_ms)}
 					</p>
-				{/if}
-
-				{#if entry.iterations && entry.status === 'running'}
-					{@const pct = ((entry.completed_iterations ?? 0) / entry.iterations) * 100}
-					<div class="mt-1.5 h-1.5 w-full max-w-[240px] overflow-hidden rounded-full bg-muted/50">
-						<div
-							class="h-full rounded-full bg-cyan-500 transition-all duration-300"
-							style="width: {pct}%"
-						></div>
-					</div>
 				{/if}
 			</div>
 		</div>

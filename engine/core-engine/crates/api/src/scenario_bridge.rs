@@ -97,6 +97,11 @@ impl ScenarioBridge {
             rhai_source: g.as_rhai_source().map(|s| s.to_string()),
         });
 
+        let priority = transition
+            .priority
+            .as_ref()
+            .and_then(|p| p.as_rhai_source().map(|s| s.to_string()));
+
         let simulation = transition
             .simulation
             .as_ref()
@@ -121,6 +126,7 @@ impl ScenarioBridge {
             logic,
             effect_config: None, // From top-level field if added
             guard,
+            priority,
             simulation,
             group_id: transition.group_id.clone(),
             inputs: transition.inputs.iter().map(Self::convert_arc).collect(),

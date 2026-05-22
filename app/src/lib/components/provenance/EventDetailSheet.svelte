@@ -126,10 +126,10 @@
 						<span class="inline-block h-3 w-3 rounded-full" style="background: {color}"></span>
 						<span class="font-semibold">{node.transition_name ?? node.event_type}</span>
 						{#if node.effect_handler}
-							<Badge variant="outline" class="text-[10px]">{node.effect_handler}</Badge>
+							<Badge variant="outline" class="text-sm">{node.effect_handler}</Badge>
 						{/if}
 					</div>
-					<div class="mt-0.5 text-xs text-zinc-500">
+					<div class="mt-0.5 text-sm text-zinc-500">
 						{node.net_id} &middot; event #{node.event_seq} &middot; {formatTime(node.timestamp)}
 					</div>
 				{/if}
@@ -155,7 +155,7 @@
 			<!-- Signal source (TokenCreated with a known dispatcher) -->
 			{#if showSignalSource && detail.signal_dispatch}
 				<section class="mb-4 rounded-md border border-amber-200 bg-amber-50 p-3 dark:border-amber-900 dark:bg-amber-900/20">
-					<div class="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-amber-800 dark:text-amber-200">
+					<div class="flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-amber-800 dark:text-amber-200">
 						<ArrowRight class="h-3.5 w-3.5" />
 						Signal Source
 					</div>
@@ -164,7 +164,7 @@
 						<span class="font-mono font-medium">{detail.signal_dispatch.dispatch_net}</span>
 						#<span class="font-mono font-medium">{detail.signal_dispatch.dispatch_seq}</span>
 					</div>
-					<div class="mt-1 flex items-center gap-1 text-xs text-zinc-500 dark:text-zinc-400">
+					<div class="mt-1 flex items-center gap-1 text-sm text-zinc-500 dark:text-zinc-400">
 						<span class="font-mono truncate">{detail.signal_dispatch.signal_key}</span>
 						<CopyButton text={detail.signal_dispatch.signal_key} />
 					</div>
@@ -176,7 +176,7 @@
 				{@const payloadJson = stringify(signalPayload)}
 				<section class="mb-4">
 					<div class="mb-2 flex items-center justify-between">
-						<h4 class="text-xs font-semibold uppercase tracking-wider text-zinc-500">
+						<h4 class="text-sm font-semibold uppercase tracking-wider text-zinc-500">
 							Signal Payload
 						</h4>
 						<button
@@ -194,7 +194,7 @@
 			<!-- Bridge target (for TokenBridgedOut) -->
 			{#if showBridge && detail.bridge}
 				<section class="mb-4 rounded-md border border-orange-200 bg-orange-50 p-3 dark:border-orange-900 dark:bg-orange-900/20">
-					<div class="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-orange-800 dark:text-orange-200">
+					<div class="flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-orange-800 dark:text-orange-200">
 						<Workflow class="h-3.5 w-3.5" />
 						Bridge Target
 					</div>
@@ -207,21 +207,21 @@
 			<!-- executor_submit summary -->
 			{#if execSummary && (execSummary.execution_id || execSummary.signal_key)}
 				<section class="mb-4">
-					<h4 class="mb-2 text-xs font-semibold uppercase tracking-wider text-zinc-500">
+					<h4 class="mb-2 text-sm font-semibold uppercase tracking-wider text-zinc-500">
 						Execution
 					</h4>
 					<div class="space-y-1 rounded-md border p-3 text-sm">
 						{#if execSummary.execution_id}
 							<div class="flex items-center gap-2">
 								<span class="text-zinc-500">execution_id</span>
-								<span class="font-mono text-xs truncate">{execSummary.execution_id}</span>
+								<span class="font-mono text-sm truncate">{execSummary.execution_id}</span>
 								<CopyButton text={execSummary.execution_id} />
 							</div>
 						{/if}
 						{#if execSummary.signal_key}
 							<div class="flex items-center gap-2">
 								<span class="text-zinc-500">signal_key</span>
-								<span class="font-mono text-xs truncate">{execSummary.signal_key}</span>
+								<span class="font-mono text-sm truncate">{execSummary.signal_key}</span>
 								<CopyButton text={execSummary.signal_key} />
 							</div>
 						{/if}
@@ -235,7 +235,7 @@
 				{@const resultTitle = detail.event_type === 'EffectFailed' ? 'Failure' : 'Effect Result'}
 				<section class="mb-4">
 					<div class="mb-2 flex items-center justify-between">
-						<h4 class="text-xs font-semibold uppercase tracking-wider text-zinc-500">
+						<h4 class="text-sm font-semibold uppercase tracking-wider text-zinc-500">
 							{resultTitle}
 						</h4>
 						<button
@@ -252,16 +252,16 @@
 
 			<!-- Tokens -->
 			<section>
-				<h4 class="text-xs font-semibold uppercase tracking-wider text-zinc-500">Tokens</h4>
+				<h4 class="text-sm font-semibold uppercase tracking-wider text-zinc-500">Tokens</h4>
 				<div class="mt-2 space-y-1">
 					{#each detail.tokens as token}
 						{@const rowId = `${token.role}:${token.token_id}`}
 						{@const expanded = expandedTokens[rowId]}
 						<div class="rounded bg-zinc-50 dark:bg-zinc-800">
 							<div class="flex items-center gap-2 px-2 py-1 text-sm">
-								<Badge variant="outline" class="text-[10px]">{token.role}</Badge>
-								<span class="font-mono text-xs truncate">{token.place_name ?? token.place_id}</span>
-								<span class="ml-auto font-mono text-[10px] text-zinc-400 truncate">
+								<Badge variant="outline" class="text-sm">{token.role}</Badge>
+								<span class="font-mono text-sm truncate">{token.place_name ?? token.place_id}</span>
+								<span class="ml-auto font-mono text-sm text-zinc-400 truncate">
 									{token.token_id.slice(0, 8)}
 								</span>
 								<CopyButton text={token.token_id} />
@@ -304,7 +304,7 @@
 			{#if detail.task}
 				<Separator class="my-4" />
 				<section>
-					<h4 class="text-xs font-semibold uppercase tracking-wider text-zinc-500">Human Task</h4>
+					<h4 class="text-sm font-semibold uppercase tracking-wider text-zinc-500">Human Task</h4>
 					<div class="mt-2 rounded-md border p-3">
 						<div class="font-medium">{detail.task.title}</div>
 						<div class="mt-1 flex items-center gap-2 text-sm text-zinc-500">
@@ -341,7 +341,7 @@
 			{#if detail.artifact}
 				<Separator class="my-4" />
 				<section>
-					<h4 class="mb-2 text-xs font-semibold uppercase tracking-wider text-zinc-500">Artifact</h4>
+					<h4 class="mb-2 text-sm font-semibold uppercase tracking-wider text-zinc-500">Artifact</h4>
 					<ArtifactCard entry={detail.artifact} expanded />
 				</section>
 			{/if}
@@ -350,7 +350,7 @@
 			{#if detail.metrics.length > 0}
 				<Separator class="my-4" />
 				<section>
-					<h4 class="text-xs font-semibold uppercase tracking-wider text-zinc-500">
+					<h4 class="text-sm font-semibold uppercase tracking-wider text-zinc-500">
 						Metrics ({detail.metrics.length})
 					</h4>
 					<div class="mt-2 space-y-1">
@@ -361,7 +361,7 @@
 							</div>
 						{/each}
 						{#if detail.metrics.length > 20}
-							<div class="px-2 text-xs text-zinc-400">
+							<div class="px-2 text-sm text-zinc-400">
 								+{detail.metrics.length - 20} more
 							</div>
 						{/if}
@@ -373,12 +373,12 @@
 			{#if detail.logs.length > 0}
 				<Separator class="my-4" />
 				<section>
-					<h4 class="text-xs font-semibold uppercase tracking-wider text-zinc-500">
+					<h4 class="text-sm font-semibold uppercase tracking-wider text-zinc-500">
 						Logs ({detail.logs.length})
 					</h4>
 					<div class="mt-2 max-h-64 space-y-1 overflow-y-auto">
 						{#each detail.logs as log}
-							<div class="rounded bg-zinc-50 px-2 py-1 font-mono text-xs dark:bg-zinc-800">
+							<div class="rounded bg-zinc-50 px-2 py-1 font-mono text-sm dark:bg-zinc-800">
 								<span class="text-zinc-400">[{log.level}]</span>
 								{#if log.source}
 									<span class="text-zinc-500">{log.source}:</span>

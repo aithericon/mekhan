@@ -11,16 +11,18 @@ use serde_json::{json, Value};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::models::instance::{StartToken, WorkflowInstance};
+use crate::models::instance::StartToken;
 use crate::models::template::{WorkflowGraph, WorkflowNodeData, WorkflowTemplate};
 use crate::nats::MekhanNats;
 use crate::petri::client::PetriClient;
-use crate::petri::instance::{deploy_instance, parameterize_air};
+use crate::petri::launcher::{InstanceLauncher, LaunchSpec};
 
 use super::model::{
     locate_trigger, FireOutcome, FireResult, TriggerError, TriggerKind, TriggerLocator,
     TriggerRecord,
 };
+use super::waiters::{ResultWaiters, TerminalOutcome};
+use tokio::sync::oneshot;
 
 /// In-memory registry of triggers across all published templates plus the
 /// runtime collaborators needed to fire one. Cheap to clone (everything is
@@ -129,7 +131,10 @@ impl TriggerDispatcher {
         let mut registered = 0;
         for node in &graph.nodes {
             let WorkflowNodeData::Trigger {
-                source, enabled, ..
+                source,
+                enabled,
+                reply_default,
+                ..
             } = &node.data
             else {
                 continue;
@@ -163,6 +168,7 @@ impl TriggerDispatcher {
                 target_node_id: target_node.id.clone(),
                 target_handle,
                 source: source.clone(),
+                reply_default: *reply_default,
                 enabled: *enabled,
                 registered_at: Utc::now(),
             };
@@ -220,13 +226,41 @@ impl TriggerDispatcher {
             .unwrap_or_default()
     }
 
-    /// Core fire path. Resolves the trigger, evaluates `payload_mapping`
-    /// against `event_payload`, then routes to spawn or signal.
+    /// Fire a trigger, discarding any WaitForResult handle. The path used by
+    /// every background source (cron/catalog/lifecycle/webhook) and by
+    /// FireAndForget callers.
     pub async fn fire(
         &self,
         node_id: &str,
         event_payload: Value,
     ) -> Result<FireResult, TriggerError> {
+        self.fire_impl(node_id, event_payload, None)
+            .await
+            .map(|(result, _rx)| result)
+    }
+
+    /// Fire a trigger and, for a Spawn, register a WaitForResult waiter.
+    /// Returns the receiver alongside the `FireResult` (always `None` for
+    /// Signal-kind fires — there is no instance to wait on).
+    pub async fn fire_waiting(
+        &self,
+        node_id: &str,
+        event_payload: Value,
+        waiters: &ResultWaiters,
+    ) -> Result<(FireResult, Option<oneshot::Receiver<TerminalOutcome>>), TriggerError> {
+        self.fire_impl(node_id, event_payload, Some(waiters)).await
+    }
+
+    /// Core fire path. Resolves the trigger, evaluates `payload_mapping`
+    /// against `event_payload`, then routes to spawn or signal. When `wait`
+    /// is `Some` and the route spawns, a WaitForResult waiter is registered
+    /// and its receiver returned.
+    async fn fire_impl(
+        &self,
+        node_id: &str,
+        event_payload: Value,
+        wait: Option<&ResultWaiters>,
+    ) -> Result<(FireResult, Option<oneshot::Receiver<TerminalOutcome>>), TriggerError> {
         let record = self
             .triggers
             .get(node_id)
@@ -274,10 +308,8 @@ impl TriggerDispatcher {
             });
         };
 
-        // Resolve the port the trigger feeds. For a Start target the workflow's
-        // input shape is the Start's declared `initial` (stored under
-        // `output_ports` because Start *emits* it); every other target uses its
-        // input port. Same resolution the compiler does in `validate_triggers`.
+        // Resolve the port the trigger feeds. Shared with the compiler's
+        // `validate_triggers` publish-time check so the two can't drift.
         let target_node = graph
             .nodes
             .iter()
@@ -286,19 +318,15 @@ impl TriggerDispatcher {
                 node_id: node_id.to_string(),
                 target: format!("target node '{}' missing in graph", record.target_node_id),
             })?;
-        let target_port = match &target_node.data {
-            WorkflowNodeData::Start { .. } => target_node.data.output_ports(),
-            _ => target_node.data.input_ports(),
-        }
-        .into_iter()
-        .find(|p| p.id == record.target_handle)
-        .ok_or_else(|| TriggerError::TargetMissing {
-            node_id: node_id.to_string(),
-            target: format!(
-                "target port '{}' missing on node '{}'",
-                record.target_handle, record.target_node_id
-            ),
-        })?;
+        let target_port =
+            crate::compiler::resolve_trigger_target_port(target_node, &record.target_handle)
+                .ok_or_else(|| TriggerError::TargetMissing {
+                    node_id: node_id.to_string(),
+                    target: format!(
+                        "target port '{}' missing on node '{}'",
+                        record.target_handle, record.target_node_id
+                    ),
+                })?;
 
         let source_kind = record.source.kind().to_string();
         let locator = TriggerLocator {
@@ -333,11 +361,14 @@ impl TriggerDispatcher {
         ) {
             Ok(t) => t,
             Err(e) => {
-                return Ok(finalize(
-                    FireOutcome::Dropped {
-                        reason: format!("payload mapping failed: {e}"),
-                    },
-                    false,
+                return Ok((
+                    finalize(
+                        FireOutcome::Dropped {
+                            reason: format!("payload mapping failed: {e}"),
+                        },
+                        false,
+                    ),
+                    None,
                 ));
             }
         };
@@ -348,20 +379,73 @@ impl TriggerDispatcher {
         // `parameterize_air`). Spawn's `parameterize_air` re-checks the same
         // Start port; redundant but keeps its other duties intact.
         if let Err(ve) = target_port.validate_token(&token) {
-            return Ok(finalize(
-                FireOutcome::Dropped {
-                    reason: format!("token rejected by target port '{}': {ve}", target_port.id),
-                },
-                false,
+            return Ok((
+                finalize(
+                    FireOutcome::Dropped {
+                        reason: format!(
+                            "token rejected by target port '{}': {ve}",
+                            target_port.id
+                        ),
+                    },
+                    false,
+                ),
+                None,
             ));
         }
 
-        let outcome_result = match record.kind {
-            TriggerKind::Spawn => self.fire_spawn(&record, &template, &graph, token).await,
-            TriggerKind::Signal => self.fire_signal(&record, token).await,
+        // Strict Start-input-contract gate. `validate_token` above is lenient
+        // for `file`/`json` (a `file` field accepts a bare string), so a
+        // malformed entry payload — e.g. `invoice_file: "example"` shadowing an
+        // uploaded file — passes it and is only caught by the strict `Data__*`
+        // schema deep in the net, after human effort is spent (live incident:
+        // instance 6f347648). Re-validate the resolved token against the SSOT
+        // typed shape the foundation derives for the Start `initial` port; on
+        // mismatch fail HERE, before any net is created, with a field-named
+        // 4xx. Scoped to Start (the spawn entry) — signal targets keep the
+        // lenient in-flight-port rule. No coercion: this is genuinely-wrong
+        // data, deliberately decoupled from the Task-#18 coercion path.
+        if matches!(target_node.data, WorkflowNodeData::Start { .. }) {
+            if let Err(v) = crate::compiler::token_shape::validate_token_against_port(
+                &target_port,
+                target_node,
+                &token,
+            ) {
+                let err = TriggerError::StartContractViolation {
+                    field: v.field,
+                    expected: v.expected,
+                    actual: v.actual,
+                };
+                // Record it (history + metric, errored) like the infra-error
+                // arm below, then surface a hard 4xx — a malformed entry
+                // payload is a caller error worth failing loudly, not a
+                // silent 200 dropped fire.
+                let _ = finalize(
+                    FireOutcome::Dropped {
+                        reason: err.to_string(),
+                    },
+                    true,
+                );
+                return Err(err);
+            }
+        }
+
+        let (outcome_result, rx): (
+            Result<FireOutcome, TriggerError>,
+            Option<oneshot::Receiver<TerminalOutcome>>,
+        ) = match record.kind {
+            TriggerKind::Spawn => {
+                match self
+                    .fire_spawn(&record, &template, &graph, token, wait)
+                    .await
+                {
+                    Ok((outcome, rx)) => (Ok(outcome), rx),
+                    Err(e) => (Err(e), None),
+                }
+            }
+            TriggerKind::Signal => (self.fire_signal(&record, token).await, None),
         };
         match outcome_result {
-            Ok(outcome) => Ok(finalize(outcome, false)),
+            Ok(outcome) => Ok((finalize(outcome, false), rx)),
             Err(e) => {
                 // Genuine infra failure (DB / deploy / NATS). Record it so it's
                 // visible in history and counted as an error (not the old
@@ -383,7 +467,8 @@ impl TriggerDispatcher {
         template: &WorkflowTemplate,
         graph: &WorkflowGraph,
         token: Value,
-    ) -> Result<FireOutcome, TriggerError> {
+        wait: Option<&ResultWaiters>,
+    ) -> Result<(FireOutcome, Option<oneshot::Receiver<TerminalOutcome>>), TriggerError> {
         let air_json = template
             .air_json
             .clone()
@@ -403,52 +488,62 @@ impl TriggerDispatcher {
             token,
         }];
 
-        let parameterized = parameterize_air(
-            &air_json,
-            instance_id,
-            template.id,
-            template.version,
-            created_by,
-            graph,
-            &start_tokens,
-        )
-        .map_err(|e| TriggerError::InstanceFailed(e.to_string()))?;
-
         // Audit metadata: who triggered this and which template version.
         let metadata = json!({
             "triggered_by": record.node_id,
             "trigger_kind": record.source.kind(),
         });
 
-        let instance = sqlx::query_as::<_, WorkflowInstance>(
-            r#"
-            INSERT INTO workflow_instances (id, template_id, template_version, net_id, status, created_by, started_at, metadata)
-            VALUES ($1, $2, $3, $4, 'running', $5, NOW(), $6)
-            RETURNING *
-            "#,
-        )
-        .bind(instance_id)
-        .bind(template.id)
-        .bind(template.version)
-        .bind(&net_id)
-        .bind(created_by)
-        .bind(&metadata)
-        .fetch_one(&self.db)
-        .await
-        .map_err(|e| TriggerError::Database(e.to_string()))?;
+        // Same parameterize → insert → deploy → rollback sequence as the user
+        // POST path, owned by the launcher. A spawn folds every launch failure
+        // into InstanceFailed (the dropped-fire is recorded by the caller).
+        let launcher = InstanceLauncher::new(&self.db, &self.petri);
+        let instance = launcher
+            .launch(LaunchSpec {
+                instance_id,
+                net_id,
+                template_id: template.id,
+                template_version: template.version,
+                created_by,
+                metadata,
+                air_json: &air_json,
+                graph,
+                start_tokens: &start_tokens,
+            })
+            .await
+            .map_err(|e| TriggerError::InstanceFailed(e.to_string()))?;
 
-        if let Err(e) = deploy_instance(&self.petri, &net_id, &parameterized).await {
-            // Roll back the row to keep lifecycle from observing a phantom.
-            let _ = sqlx::query("DELETE FROM workflow_instances WHERE id = $1")
-                .bind(instance_id)
-                .execute(&self.db)
-                .await;
-            return Err(TriggerError::InstanceFailed(format!("deploy: {e}")));
-        }
+        // WaitForResult: register the waiter, then close the
+        // create→deploy→terminal race. The net may already be terminal (the
+        // lifecycle consumer's `resolve` was a no-op — no waiter existed when
+        // it ran); re-read the row and resolve synchronously if so. `resolve`
+        // is idempotent, so a consumer that resolves between our `register`
+        // and this re-read is harmless (first writer wins).
+        let rx = match wait {
+            Some(waiters) => {
+                let rx = waiters.register(instance.id);
+                if let Ok(Some((status, result))) =
+                    sqlx::query_as::<_, (String, Option<serde_json::Value>)>(
+                        "SELECT status, result FROM workflow_instances WHERE id = $1",
+                    )
+                    .bind(instance.id)
+                    .fetch_optional(&self.db)
+                    .await
+                {
+                    if matches!(
+                        status.as_str(),
+                        "completed" | "cancelled" | "failed" | "archived"
+                    ) {
+                        waiters
+                            .resolve(&instance.id, TerminalOutcome { status, result });
+                    }
+                }
+                Some(rx)
+            }
+            None => None,
+        };
 
-        Ok(FireOutcome::Spawned {
-            instance_id: instance.id,
-        })
+        Ok((FireOutcome::Spawned { instance_id: instance.id }, rx))
     }
 
     async fn fire_signal(

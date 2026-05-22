@@ -23,7 +23,8 @@ pub async fn run(server: &str, template_id: Option<&str>) -> Result<()> {
         url.push_str(&format!("&template_id={}", tid));
     }
 
-    let resp: PaginatedResponse = reqwest::get(&url)
+    let resp: PaginatedResponse = crate::http::auth(reqwest::Client::new().get(&url))
+        .send()
         .await
         .context("failed to connect to server")?
         .json()

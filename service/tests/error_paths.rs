@@ -42,6 +42,7 @@ fn simple_graph() -> WorkflowGraph {
             WorkflowNode {
                 id: "start".to_string(),
                 node_type: "start".to_string(),
+                slug: None,
                 position: Position { x: 0.0, y: 0.0 },
                 data: WorkflowNodeData::Start {
                     label: "Start".to_string(),
@@ -56,11 +57,13 @@ fn simple_graph() -> WorkflowGraph {
             WorkflowNode {
                 id: "end".to_string(),
                 node_type: "end".to_string(),
+                slug: None,
                 position: Position { x: 200.0, y: 0.0 },
                 data: WorkflowNodeData::End {
                     label: "End".to_string(),
                     description: None,
                 terminal: mekhan_service::models::template::default_terminal_port(),
+                result_mapping: Vec::new(),
                 },
                 parent_id: None,
                 width: None,
@@ -245,7 +248,7 @@ async fn lifecycle_listener_retries_then_succeeds() {
     let listener_nats = nats.clone();
     let listener_db = db.clone();
     tokio::spawn(async move {
-        start_lifecycle_listener(listener_nats, listener_db, sub_mgr, None).await;
+        start_lifecycle_listener(listener_nats, listener_db, sub_mgr, None, mekhan_service::triggers::ResultWaiters::new()).await;
     });
     tokio::time::sleep(Duration::from_millis(200)).await;
 
@@ -392,6 +395,7 @@ async fn insert_published_template_with_required_start_field(db: &sqlx::PgPool) 
             WorkflowNode {
                 id: "start".to_string(),
                 node_type: "start".to_string(),
+                slug: None,
                 position: Position { x: 0.0, y: 0.0 },
                 data: WorkflowNodeData::Start {
                     label: "Start".to_string(),
@@ -418,11 +422,13 @@ async fn insert_published_template_with_required_start_field(db: &sqlx::PgPool) 
             WorkflowNode {
                 id: "end".to_string(),
                 node_type: "end".to_string(),
+                slug: None,
                 position: Position { x: 200.0, y: 0.0 },
                 data: WorkflowNodeData::End {
                     label: "End".to_string(),
                     description: None,
                 terminal: mekhan_service::models::template::default_terminal_port(),
+                result_mapping: Vec::new(),
                 },
                 parent_id: None,
                 width: None,

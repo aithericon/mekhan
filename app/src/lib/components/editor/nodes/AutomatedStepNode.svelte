@@ -45,21 +45,21 @@
 		{#if hasFields}
 			<div class="space-y-0.5 border-t border-border/40 pt-1.5">
 				<div class="flex items-center justify-between">
-					<span class="text-[10px] uppercase tracking-wider text-muted-foreground/70">
+					<span class="text-sm uppercase tracking-wider text-muted-foreground/70">
 						{data.output?.label ?? 'Output'}
 					</span>
-					<span class="text-[10px] text-muted-foreground/70">
+					<span class="text-sm text-muted-foreground/70">
 						{fields.length} field{fields.length === 1 ? '' : 's'}
 					</span>
 				</div>
 				<ul class="space-y-0.5">
 					{#each fields as field (field.name)}
 						<li class="flex items-center justify-between gap-2">
-							<span class="truncate font-mono text-[11px] text-foreground">
+							<span class="truncate font-mono text-sm text-foreground">
 								{field.name || '—'}{field.required ? '*' : ''}
 							</span>
 							<span
-								class="rounded bg-node-automated/15 px-1.5 py-0.5 text-[9px] font-medium uppercase text-node-automated"
+								class="rounded bg-node-automated/15 px-1.5 py-0.5 text-sm font-medium uppercase text-node-automated"
 							>
 								{kindBadge[field.kind] ?? field.kind}
 							</span>

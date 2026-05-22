@@ -129,16 +129,16 @@
 		<!-- Example buttons -->
 		<div class="px-4 py-2 border-b bg-muted flex gap-2 flex-wrap">
 			<span class="text-sm text-muted-foreground mr-2">Examples:</span>
-			<button onclick={() => loadExample('resource-allocation')} class="px-2 py-1 text-xs bg-blue-500/15 hover:bg-blue-500/25 text-blue-400 rounded">
+			<button onclick={() => loadExample('resource-allocation')} class="px-2 py-1 text-sm bg-blue-500/15 hover:bg-blue-500/25 text-blue-400 rounded">
 				Resource Allocation
 			</button>
-			<button onclick={() => loadExample('producer-consumer')} class="px-2 py-1 text-xs bg-green-500/15 hover:bg-green-500/25 text-green-400 rounded">
+			<button onclick={() => loadExample('producer-consumer')} class="px-2 py-1 text-sm bg-green-500/15 hover:bg-green-500/25 text-green-400 rounded">
 				Producer-Consumer
 			</button>
-			<button onclick={() => loadExample('order-state-machine')} class="px-2 py-1 text-xs bg-yellow-500/15 hover:bg-yellow-500/25 text-yellow-400 rounded">
+			<button onclick={() => loadExample('order-state-machine')} class="px-2 py-1 text-sm bg-yellow-500/15 hover:bg-yellow-500/25 text-yellow-400 rounded">
 				Order (Guards)
 			</button>
-			<button onclick={() => loadExample('booking-with-retry')} class="px-2 py-1 text-xs bg-purple-500/15 hover:bg-purple-500/25 text-purple-400 rounded">
+			<button onclick={() => loadExample('booking-with-retry')} class="px-2 py-1 text-sm bg-purple-500/15 hover:bg-purple-500/25 text-purple-400 rounded">
 				Booking (Retry)
 			</button>
 		</div>

@@ -131,6 +131,9 @@ pub struct ScenarioTransitionInput {
     pub logic: ScenarioLogicInput,
     pub effect_config: Option<serde_json::Value>,
     pub guard: Option<ScenarioGuardInput>,
+    /// Optional Rhai priority expression — `Transition::with_priority` source.
+    /// `None` defers to alphabetical-id tiebreak (see `select_next_transition`).
+    pub priority: Option<String>,
     pub simulation: Option<ScenarioSimulationInput>,
     pub group_id: Option<String>,
     pub inputs: Vec<ScenarioArcInput>,
@@ -261,6 +264,10 @@ impl ScenarioParser {
                 if let Some(ref source) = guard.rhai_source {
                     transition = transition.with_guard(source);
                 }
+            }
+
+            if let Some(ref priority_src) = st.priority {
+                transition = transition.with_priority(priority_src.clone());
             }
 
             if let Some(sim) = &st.simulation {

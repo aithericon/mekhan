@@ -286,6 +286,20 @@ where
         self.execution_config.read().unwrap().clone()
     }
 
+    /// Schema registry to use for transition *enablement* decisions, gated by
+    /// the same `validate_output_schemas` flag that `evaluate_until_quiescent`
+    /// applies to firing. Selection and firing must agree on the binding (a
+    /// schema-invalid input token must be "not enabled", not "enabled then
+    /// unfireable") — otherwise the eval loop spins forever re-selecting a
+    /// transition it can never fire. Returned owned so callers can `.as_deref()`.
+    fn eval_schema_registry(&self) -> Option<Arc<SchemaRegistry>> {
+        if self.execution_config().validate_output_schemas {
+            self.schema_registry()
+        } else {
+            None
+        }
+    }
+
     /// Set the secret store for resolving `{{secret:KEY}}` patterns in effect configs.
     pub fn set_secret_store(&self, store: Arc<dyn SecretStore>) {
         *self.secret_store.write().unwrap() = Some(store);
@@ -553,18 +567,26 @@ where
     /// Check if a transition is enabled (can fire).
     pub async fn is_enabled(&self, transition_id: &TransitionId) -> Result<bool, ServiceError> {
         let marking = self.get_marking_cached().await;
+        let registry = self.eval_schema_registry();
         evaluation::is_enabled(
             &self.executor,
             self.topology.as_ref(),
             transition_id,
             &marking,
+            registry.as_deref(),
         )
     }
 
     /// Get all enabled transitions.
     pub async fn enabled_transitions(&self) -> Result<Vec<TransitionId>, ServiceError> {
         let marking = self.get_marking_cached().await;
-        evaluation::enabled_transitions(&self.executor, self.topology.as_ref(), &marking)
+        let registry = self.eval_schema_registry();
+        evaluation::enabled_transitions(
+            &self.executor,
+            self.topology.as_ref(),
+            &marking,
+            registry.as_deref(),
+        )
     }
 
     /// Get the status of all transitions with reasons for being disabled.
@@ -572,7 +594,13 @@ where
         &self,
     ) -> Result<HashMap<TransitionId, TransitionStatusDetail>, ServiceError> {
         let marking = self.get_marking_cached().await;
-        evaluation::transition_statuses(&self.executor, self.topology.as_ref(), &marking)
+        let registry = self.eval_schema_registry();
+        evaluation::transition_statuses(
+            &self.executor,
+            self.topology.as_ref(),
+            &marking,
+            registry.as_deref(),
+        )
     }
 
     /// Compute the enabling time for a transition.
@@ -581,18 +609,26 @@ where
         transition_id: &TransitionId,
     ) -> Result<Option<DateTime<Utc>>, ServiceError> {
         let marking = self.get_marking_cached().await;
+        let registry = self.eval_schema_registry();
         evaluation::transition_enabling_time(
             &self.executor,
             self.topology.as_ref(),
             transition_id,
             &marking,
+            registry.as_deref(),
         )
     }
 
     /// Select the next transition to fire based on enabling time, specificity, and token priority.
     pub async fn select_next_transition(&self) -> Result<Option<TransitionId>, ServiceError> {
         let marking = self.get_marking_cached().await;
-        evaluation::select_next_transition(&self.executor, self.topology.as_ref(), &marking)
+        let registry = self.eval_schema_registry();
+        evaluation::select_next_transition(
+            &self.executor,
+            self.topology.as_ref(),
+            &marking,
+            registry.as_deref(),
+        )
     }
 
     /// Evaluate transitions until quiescence or max steps reached.
@@ -616,6 +652,7 @@ where
                     final_state: crate::evaluation::EvaluateFinalState::Quiescent,
                     events: Vec::new(),
                     terminal_reached: None,
+                    failure_reached: None,
                 });
             }
         };
@@ -1717,32 +1754,43 @@ mod tests {
             .await
             .unwrap();
 
-        let result = service.evaluate_until_quiescent(10).await;
+        let result = service
+            .evaluate_until_quiescent(10)
+            .await
+            .expect("permanent failure must quiesce, not propagate Err");
 
-        // Should return Err(ServiceError::EffectFailed)
-        match result {
-            Err(ServiceError::EffectFailed {
-                handler_id,
-                message,
-                ..
-            }) => {
-                assert_eq!(handler_id, "fail_handler");
-                assert!(message.contains("no error port"));
-            }
-            other => panic!("Expected Err(EffectFailed), got {:?}", other),
-        }
-
-        // Tokens should still be in the input place (not consumed)
+        // A no-`_error`-port effect failure is permanent: the pass stops
+        // cleanly with `failure_reached` set (the driver turns this into a
+        // net-level NetFailed marker) instead of propagating an Err that the
+        // eval-loop driver would log-and-retry forever.
+        assert_eq!(result.final_state, EvaluateFinalState::Quiescent);
+        let failure = result
+            .failure_reached
+            .expect("failure_reached should be set on permanent effect failure");
+        assert!(
+            failure.reason.contains("no error port"),
+            "reason should carry the handler error: {}",
+            failure.reason
+        );
+        // Bounded: no runaway event production.
         let events = service.get_events().await;
+        assert!(
+            events.len() < 5,
+            "event count must stay bounded, got {}",
+            events.len()
+        );
+
+        // Input token CONSUMED (marking advanced) so the transition can no
+        // longer be selected — this is what breaks the infinite loop.
         let marking = TestStateProjection::new().project(&events);
         assert_eq!(
             marking.token_count(&input_id),
-            1,
-            "Token should stay in input place"
+            0,
+            "input token must be consumed so the broken transition is not re-selected"
         );
         assert_eq!(marking.token_count(&output_id), 0);
 
-        // EffectFailed event should be in the log
+        // EffectFailed audit event present with tokens_consumed: true.
         let effect_failed = events
             .iter()
             .find(|e| matches!(&e.event, DomainEvent::EffectFailed { .. }));
@@ -1754,7 +1802,10 @@ mod tests {
             DomainEvent::EffectFailed {
                 tokens_consumed, ..
             } => {
-                assert!(!tokens_consumed, "tokens_consumed should be false");
+                assert!(
+                    tokens_consumed,
+                    "tokens_consumed must be true (marking advances)"
+                );
             }
             _ => unreachable!(),
         }
@@ -1804,18 +1855,149 @@ mod tests {
         service.initialize(net).await.unwrap();
         service.create_token(a_id, TokenColor::Unit).await.unwrap();
 
-        let result = service.evaluate_until_quiescent(10).await;
-        match result {
-            Err(ServiceError::EffectFailed { .. }) => {
-                // Expected — eval loop stops at T1
-            }
-            other => panic!("Expected EffectFailed error, got {:?}", other),
-        }
+        let result = service
+            .evaluate_until_quiescent(10)
+            .await
+            .expect("permanent failure must quiesce, not propagate Err");
 
-        // C should have no tokens (T2 never fired)
+        // Eval loop stops cleanly at T1 with the failure recorded.
+        assert_eq!(result.final_state, EvaluateFinalState::Quiescent);
+        let failure = result
+            .failure_reached
+            .expect("failure_reached should be set");
+        assert_eq!(failure.transition_id.to_string(), "T1_effect");
+
+        // T1's input consumed, nothing produced to B, T2 never fired → C empty.
+        // Bounded event count proves the loop did not spin.
         let events = service.get_events().await;
+        assert!(
+            events.len() < 5,
+            "event count must stay bounded, got {}",
+            events.len()
+        );
         let marking = TestStateProjection::new().project(&events);
         assert_eq!(marking.token_count(&c_id), 0);
+    }
+
+    /// A `Fatal` (non-retryable) effect error with no `_error` port must also
+    /// drop + audit + quiesce — not loop. This is the user's explicit example.
+    #[tokio::test]
+    async fn test_fatal_effect_without_error_port_drops_and_quiesces() {
+        let service = create_test_service();
+        let (net, input_id, output_id, _transition_id) = create_effect_net("fatal_handler", None);
+
+        service
+            .register_effect_handler("fatal_handler", Arc::new(FatalEffectHandler::new("boom")))
+            .unwrap();
+        service.initialize(net).await.unwrap();
+        service
+            .create_token(input_id.clone(), TokenColor::Data(serde_json::json!({"x": 1})))
+            .await
+            .unwrap();
+
+        let result = service
+            .evaluate_until_quiescent(50)
+            .await
+            .expect("Fatal failure must quiesce, not propagate Err");
+
+        assert_eq!(result.final_state, EvaluateFinalState::Quiescent);
+        let failure = result
+            .failure_reached
+            .expect("failure_reached should be set for a Fatal effect failure");
+        assert!(!failure.retryable, "Fatal must be classified non-retryable");
+
+        let events = service.get_events().await;
+        assert!(
+            events.len() < 5,
+            "event count must stay bounded, got {}",
+            events.len()
+        );
+        let marking = TestStateProjection::new().project(&events);
+        assert_eq!(
+            marking.token_count(&input_id),
+            0,
+            "input token consumed → transition no longer selectable"
+        );
+        assert_eq!(marking.token_count(&output_id), 0);
+        let ef = events
+            .iter()
+            .find(|e| matches!(&e.event, DomainEvent::EffectFailed { .. }))
+            .expect("EffectFailed audit event present");
+        match &ef.event {
+            DomainEvent::EffectFailed {
+                tokens_consumed,
+                retryable,
+                ..
+            } => {
+                assert!(tokens_consumed, "tokens_consumed must be true");
+                assert!(!retryable, "Fatal → retryable=false in the audit event");
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    /// Part A regression: a schema-invalid *input* token must make the
+    /// transition genuinely NOT enabled (selection is schema-aware, matching
+    /// firing). It is never selected → never fired → the loop reaches true
+    /// quiescence with no failure and no event spam. This is the user's
+    /// primary "invalid token schemas" scenario.
+    #[tokio::test]
+    async fn test_schema_invalid_input_token_is_not_selected() {
+        let service = create_test_service();
+
+        let mut defs = HashMap::new();
+        defs.insert(
+            "PosInt".to_string(),
+            serde_json::json!({ "type": "integer", "minimum": 1 }),
+        );
+        service.set_schema_registry(SchemaRegistry::new(defs).unwrap());
+
+        let mut net = PetriNet::new();
+        let input = Place::internal("input");
+        let output = Place::internal("output");
+        let input_id = input.id.clone();
+        let output_id = output.id.clone();
+        let t = Transition::new("T", "#{out: inp}")
+            .with_input_ports(vec![Port::new("inp").with_schema("PosInt")])
+            .with_output_ports(vec![Port::new("out")]);
+        let t_id = t.id.clone();
+        net.add_place(input);
+        net.add_place(output);
+        net.add_transition(t);
+        net.add_arc(PetriArc::input(input_id.clone(), t_id.clone(), "inp"));
+        net.add_arc(PetriArc::output(t_id, "out", output_id.clone()));
+
+        service.initialize(net).await.unwrap();
+        // Token violates PosInt (a string, not an integer >= 1).
+        service
+            .create_token(
+                input_id.clone(),
+                TokenColor::Data(serde_json::json!("not an int")),
+            )
+            .await
+            .unwrap();
+
+        let result = service.evaluate_until_quiescent(50).await.unwrap();
+
+        assert_eq!(result.final_state, EvaluateFinalState::Quiescent);
+        assert_eq!(result.steps_executed, 0, "transition must not fire");
+        assert!(
+            result.failure_reached.is_none(),
+            "a not-enabled transition is benign, not a net failure"
+        );
+
+        let events = service.get_events().await;
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(&e.event, DomainEvent::EffectFailed { .. })
+                    || matches!(&e.event, DomainEvent::ErrorOccurred { .. })),
+            "no failure events for a merely not-enabled transition"
+        );
+        // Token stays put (operator can fix it); it is simply not enabled.
+        let marking = TestStateProjection::new().project(&events);
+        assert_eq!(marking.token_count(&input_id), 1);
+        assert_eq!(marking.token_count(&output_id), 0);
     }
 
     #[tokio::test]
@@ -1982,20 +2164,24 @@ mod tests {
             .unwrap();
         service.set_execution_mode(ExecutionMode::Replay);
 
-        let result = service.evaluate_until_quiescent(1).await;
+        let result = service
+            .evaluate_until_quiescent(1)
+            .await
+            .expect("permanent failure must quiesce, not propagate Err");
 
-        // Should replay as Err(ServiceError::EffectFailed)
-        match result {
-            Err(ServiceError::EffectFailed {
-                handler_id,
-                message,
-                ..
-            }) => {
-                assert_eq!(handler_id, "fail_handler");
-                assert_eq!(message, "stored failure no port");
-            }
-            other => panic!("Expected Err(EffectFailed), got {:?}", other),
-        }
+        // Backward compat: an old-format stored EffectFailed{tokens_consumed:
+        // false} replays to an Err in the firing layer, which the eval loop now
+        // classifies as permanent and converts to a clean stop with
+        // `failure_reached` set (rather than propagating the Err and spinning).
+        assert_eq!(result.final_state, EvaluateFinalState::Quiescent);
+        let failure = result
+            .failure_reached
+            .expect("failure_reached should be set on replayed permanent failure");
+        assert!(
+            failure.reason.contains("stored failure no port"),
+            "reason should carry the stored error: {}",
+            failure.reason
+        );
     }
 
     // ========================================================================

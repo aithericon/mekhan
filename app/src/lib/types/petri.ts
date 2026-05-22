@@ -184,6 +184,8 @@ export type Arc = {
 	direction: ArcDirection;
 	weight?: number;
 	read?: boolean;
+	/** Transition port this arc binds to (handle id in the flow graph). */
+	port_name?: string;
 };
 
 export type PlaceKind = 'internal' | 'signal' | 'bridge_in' | 'bridge_out' | 'bridge_reply' | 'terminal';
@@ -194,6 +196,8 @@ export type Place = {
 	kind?: PlaceKind;
 	capacity?: number | null;
 	token_schema?: string | null;
+	/** Scenario group this place belongs to (flat on the wire). */
+	group_id?: string | null;
 	bridge_target?: {
 		target_net_id: string;
 		target_place_name: string;
@@ -203,6 +207,20 @@ export type Place = {
 		source_net_id: string;
 		source_place_name: string;
 	} | null;
+	// Bridge routing — flat on the wire (kept alongside the nested
+	// bridge_target/bridge_source for back-compat with older payloads).
+	/** bridge_out: human label for the remote net (falls back to target_net_id). */
+	label?: string | null;
+	/** bridge_out: id of the net this place forwards tokens to. */
+	target_net_id?: string | null;
+	/** bridge_out: place name in the target net. */
+	target_place_name?: string | null;
+	/** bridge_out: reply-routing place name. */
+	reply_to?: string | null;
+	/** bridge_in: id of the net this place receives tokens from. */
+	source_net_id?: string | null;
+	/** bridge_in: place name in the source net. */
+	source_place_name?: string | null;
 };
 
 export type Port = {
@@ -220,6 +238,10 @@ export type Transition = {
 	output_ports?: Port[];
 	effect_handler_id?: string | null;
 	logic_type?: 'rhai' | 'wasm' | 'effect';
+	/** Scenario group this transition belongs to (flat on the wire). */
+	group_id?: string | null;
+	/** Signal place ids this transition emits a causation edge to. */
+	caused_signals?: string[];
 };
 
 export type PetriNet = {

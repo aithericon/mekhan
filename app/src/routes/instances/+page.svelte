@@ -81,7 +81,7 @@
 				{/if}
 				<a
 					href="/instances"
-					class="ml-auto inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+					class="ml-auto inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
 				>
 					<X class="size-3" /> Clear
 				</a>
@@ -102,7 +102,7 @@
 			<div class="flex flex-col items-center justify-center rounded-xl border border-dashed border-border py-16">
 				<Activity class="size-10 text-muted-foreground/40" />
 				<p class="mt-3 text-sm text-muted-foreground">No instances yet</p>
-				<p class="text-xs text-muted-foreground">
+				<p class="text-sm text-muted-foreground">
 					Publish a template and run it to create instances
 				</p>
 			</div>
@@ -127,11 +127,11 @@
 								</Badge>
 							</div>
 							{#if instance.current_step}
-								<p class="mt-1 text-xs text-muted-foreground">
+								<p class="mt-1 text-sm text-muted-foreground">
 									Current: {instance.current_step}
 								</p>
 							{/if}
-							<p class="mt-1 text-[10px] text-muted-foreground">
+							<p class="mt-1 text-sm text-muted-foreground">
 								<span class="font-mono">{instance.net_id}</span>
 								<span class="mx-1">&middot;</span>
 								{formatDate(instance.created_at)}

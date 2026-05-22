@@ -23,21 +23,21 @@
 
 <div class="space-y-2">
 	<div class="flex items-center justify-between">
-		<span class="text-xs font-medium text-muted-foreground">Contains</span>
-		<span class="text-[10px] uppercase tracking-wide text-muted-foreground/80">
+		<span class="text-sm font-medium text-muted-foreground">Contains</span>
+		<span class="text-sm uppercase tracking-wide text-muted-foreground/80">
 			{children.length} node{children.length === 1 ? '' : 's'}
 		</span>
 	</div>
 	{#if children.length === 0}
-		<p class="rounded-md border border-dashed border-border/50 p-2 text-[11px] text-muted-foreground">
+		<p class="rounded-md border border-dashed border-border/50 p-2 text-sm text-muted-foreground">
 			Empty — drag nodes inside this scope to group them.
 		</p>
 	{:else}
 		<ul class="space-y-1">
 			{#each children as child, i (i)}
-				<li class="flex items-center justify-between rounded-md border border-border/60 bg-muted/20 px-2 py-1.5 text-[11px]">
+				<li class="flex items-center justify-between rounded-md border border-border/60 bg-muted/20 px-2 py-1.5 text-sm">
 					<span class="text-foreground">{child.label}</span>
-					<span class="font-mono text-[10px] text-muted-foreground">{child.type}</span>
+					<span class="font-mono text-sm text-muted-foreground">{child.type}</span>
 				</li>
 			{/each}
 		</ul>

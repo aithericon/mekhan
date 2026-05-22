@@ -1,3 +1,4 @@
+pub mod auth_token;
 pub mod error;
 pub mod instance;
 pub mod responses;

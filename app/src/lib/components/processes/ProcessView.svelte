@@ -12,13 +12,7 @@
 		type HpiLog,
 		type CatalogueEntry
 	} from '$lib/api/client';
-	import type {
-		ProcessTimelineEntry,
-		StepDefinition,
-		StepEvent,
-		Phase,
-		Progress
-	} from '$lib/types/process';
+	import type { ProcessTimelineEntry, Phase, Progress } from '$lib/types/process';
 	import { page } from '$app/state';
 	import { ProcessTimeline } from '$lib/components/process-timeline';
 	import { ArtifactCard } from '$lib/components/catalogue';
@@ -136,7 +130,6 @@
 				step: p.name,
 				label: p.name,
 				status: p.status,
-				human: false,
 				started_at: p.started_at ?? undefined,
 				completed_at: p.ended_at ?? undefined,
 				duration_ms
@@ -145,57 +138,12 @@
 	}
 
 	function buildTimeline(d: ProcessDetail): ProcessTimelineEntry[] {
-		// Canonical executor-domain model first; legacy Petri step_events fallback.
+		// Single timeline source: the canonical executor-domain phase model,
+		// stored verbatim at config.progress.phases by the mekhan ingest
+		// projector (typed process_phase effect).
 		const canonical = progressOf(d);
 		if (canonical?.phases?.length) return phasesToTimeline(canonical.phases);
-
-		const cfg = d.config as Record<string, unknown> | undefined;
-		const dx = d as unknown as { steps?: StepDefinition[]; step_events?: StepEvent[] };
-		const steps = (cfg?.steps ?? dx.steps) as StepDefinition[] | undefined;
-		const events = (cfg?.step_events ?? dx.step_events ?? []) as StepEvent[];
-		if (!steps?.length) return [];
-		return steps.map((step) => {
-			let firstStarted: string | undefined;
-			let lastStarted: string | undefined;
-			let lastCompleted: string | undefined;
-			let startCount = 0;
-			let completeCount = 0;
-			for (const ev of events) {
-				if (ev.started === step.key) {
-					if (!firstStarted) firstStarted = ev.timestamp;
-					lastStarted = ev.timestamp;
-					startCount++;
-				}
-				if (ev.completed === step.key) {
-					lastCompleted = ev.timestamp;
-					completeCount++;
-				}
-			}
-
-			let status: ProcessTimelineEntry['status'] = 'pending';
-			if (lastCompleted && completeCount >= startCount) {
-				status = 'completed';
-			} else if (lastStarted) {
-				status = 'running';
-			}
-
-			let duration_ms: number | undefined;
-			if (firstStarted && lastCompleted) {
-				duration_ms = new Date(lastCompleted).getTime() - new Date(firstStarted).getTime();
-			}
-
-			return {
-				step: step.key,
-				label: step.label,
-				status,
-				human: step.human,
-				started_at: firstStarted,
-				completed_at: lastCompleted,
-				duration_ms,
-				iterations: startCount > 1 ? startCount : undefined,
-				completed_iterations: startCount > 1 ? completeCount : undefined
-			};
-		});
+		return [];
 	}
 
 	let timelineEntries = $derived(detail ? buildTimeline(detail) : []);

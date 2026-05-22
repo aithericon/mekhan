@@ -1,8 +1,16 @@
+use std::convert::Infallible;
+use std::time::Duration;
+
+use async_nats::jetstream;
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
+    response::sse::{Event, KeepAlive, Sse},
     Json,
 };
+use futures::stream::Stream;
+use futures::StreamExt;
+use petri_domain::{DomainEvent, PersistedEvent};
 use serde_json::json;
 use uuid::Uuid;
 
@@ -15,7 +23,7 @@ use crate::models::instance::{
 use crate::models::responses::InstanceEventsResponse;
 use crate::models::template::{PaginatedResponse, WorkflowGraph, WorkflowTemplate};
 use crate::petri::events::fetch_events;
-use crate::petri::instance::{deploy_instance, parameterize_air, ParameterizeError};
+use crate::petri::launcher::{InstanceLauncher, LaunchError, LaunchSpec};
 use crate::AppState;
 
 /// POST /api/instances
@@ -66,62 +74,33 @@ pub async fn create_instance(
     let net_id = format!("mekhan-{instance_id}");
     let metadata = req.metadata.clone().unwrap_or(json!({}));
 
-    // Parameterize AIR JSON for this instance. Validation failures (missing
-    // start_tokens, kind mismatch, etc.) become 400s — the request is invalid.
-    let parameterized_air = parameterize_air(
-        &air_json,
-        instance_id,
-        template.id,
-        template.version,
-        created_by,
-        &graph,
-        &req.start_tokens,
-    )
-    .map_err(|e| match e {
-        ParameterizeError::MissingStartTokens(_)
-        | ParameterizeError::UnknownStartBlock(_)
-        | ParameterizeError::DuplicateStartToken(_)
-        | ParameterizeError::TokenNotObject(_)
-        | ParameterizeError::MissingRequiredField { .. }
-        | ParameterizeError::FieldKindMismatch { .. } => ApiError::bad_request(e.to_string()),
-    })?;
-
-    // Insert instance record FIRST so the lifecycle listener can find it
-    // if the net completes before we return.
-    let instance = sqlx::query_as::<_, WorkflowInstance>(
-        r#"
-        INSERT INTO workflow_instances (id, template_id, template_version, net_id, status, created_by, started_at, metadata)
-        VALUES ($1, $2, $3, $4, 'running', $5, NOW(), $6)
-        RETURNING *
-        "#,
-    )
-    .bind(instance_id)
-    .bind(template.id)
-    .bind(template.version)
-    .bind(&net_id)
-    .bind(created_by)
-    .bind(&metadata)
-    .fetch_one(&state.db)
-    .await
-    .map_err(|e| {
-        tracing::error!("failed to insert instance: {e}");
-        ApiError::internal(e.to_string())
-    })?;
-
-    // Deploy to petri-lab (DB row already exists for lifecycle listener).
-    // On failure we must clean up the DB row before bubbling the error — the
-    // listener would otherwise see a never-deployed instance forever.
-    if let Err(e) = deploy_instance(&state.petri, &net_id, &parameterized_air).await {
-        tracing::error!("failed to deploy instance to petri-lab: {e}");
-        let _ = sqlx::query("DELETE FROM workflow_instances WHERE id = $1")
-            .bind(instance_id)
-            .execute(&state.db)
-            .await;
-        return Err(ApiError::new(
-            StatusCode::BAD_GATEWAY,
-            format!("failed to deploy to engine: {e}"),
-        ));
-    }
+    // Parameterize → insert row (before deploy, for the lifecycle listener) →
+    // deploy → roll back the row on deploy failure. The launcher owns that
+    // sequence; here we only translate its failures to HTTP statuses:
+    // parameterize failures are caller error (400), a deploy failure is an
+    // engine fault (502).
+    let launcher = InstanceLauncher::new(&state.db, &state.petri);
+    let instance = launcher
+        .launch(LaunchSpec {
+            instance_id,
+            net_id,
+            template_id: template.id,
+            template_version: template.version,
+            created_by,
+            metadata,
+            air_json: &air_json,
+            graph: &graph,
+            start_tokens: &req.start_tokens,
+        })
+        .await
+        .map_err(|e| match e {
+            LaunchError::Parameterize(pe) => ApiError::bad_request(pe.to_string()),
+            LaunchError::Database(msg) => ApiError::internal(msg),
+            LaunchError::Deploy(msg) => ApiError::new(
+                StatusCode::BAD_GATEWAY,
+                format!("failed to deploy to engine: {msg}"),
+            ),
+        })?;
 
     Ok((StatusCode::CREATED, Json(instance)))
 }
@@ -230,6 +209,147 @@ pub async fn get_instance(
     .ok_or_else(|| ApiError::not_found("instance not found"))?;
 
     Ok(Json(instance))
+}
+
+/// GET /api/instances/{id}/stream
+///
+/// SSE stream of the instance's domain events, replayed from the start
+/// (`DeliverPolicy::All`) then live, terminated by a final `result` event
+/// carrying the structured envelope. Composes with FireAndForget: fire, get
+/// the instance id, then open this stream. No per-instance ownership check —
+/// consistent with `get_instance` (auth middleware gates the route).
+#[utoipa::path(
+    get,
+    path = "/api/instances/{id}/stream",
+    params(("id" = Uuid, Path, description = "Instance id")),
+    responses(
+        (status = 200, description = "SSE stream of domain events + final result", content_type = "text/event-stream"),
+        (status = 404, description = "Instance not found", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse),
+    ),
+    tag = "instances",
+)]
+pub async fn stream_instance(
+    State(state): State<AppState>,
+    _user: AuthUser,
+    Path(id): Path<Uuid>,
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
+    // Pre-stream existence check so 404 is a real HTTP status (not an SSE
+    // error frame), and to short-circuit already-terminal / history-purged
+    // instances without touching NATS.
+    let row = sqlx::query_as::<_, (String, String, Option<serde_json::Value>)>(
+        "SELECT net_id, status, result FROM workflow_instances WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?;
+    let (net_id, status, db_result) =
+        row.ok_or_else(|| ApiError::not_found("instance not found"))?;
+
+    let already_terminal = matches!(
+        status.as_str(),
+        "completed" | "cancelled" | "failed" | "archived"
+    );
+    let nats = state.nats.clone();
+
+    let stream = async_stream::stream! {
+        yield Ok(Event::default().event("connected").data(net_id.clone()));
+
+        // Already finished (or events purged by the cleanup sweep): emit the
+        // persisted result envelope and close — no point replaying history.
+        if already_terminal {
+            let payload = db_result.unwrap_or(serde_json::Value::Null);
+            yield Ok(Event::default().event("result").data(payload.to_string()));
+            return;
+        }
+
+        let stream_h = match nats.jetstream().get_stream("PETRI_GLOBAL").await {
+            Ok(s) => s,
+            Err(e) => {
+                yield Ok(Event::default().event("error").data(format!("stream: {e}")));
+                return;
+            }
+        };
+        // Ephemeral consumer (no durable name) so NATS auto-reaps it when the
+        // client disconnects and this future is dropped.
+        let consumer = match stream_h
+            .create_consumer(jetstream::consumer::pull::Config {
+                filter_subject: format!("petri.events.{net_id}.>"),
+                deliver_policy: jetstream::consumer::DeliverPolicy::All,
+                ack_policy: jetstream::consumer::AckPolicy::Explicit,
+                ..Default::default()
+            })
+            .await
+        {
+            Ok(c) => c,
+            Err(e) => {
+                yield Ok(Event::default().event("error").data(format!("consumer: {e}")));
+                return;
+            }
+        };
+        let mut messages = match consumer.messages().await {
+            Ok(m) => m,
+            Err(e) => {
+                yield Ok(Event::default().event("error").data(format!("messages: {e}")));
+                return;
+            }
+        };
+
+        let mut ping = tokio::time::interval(Duration::from_secs(10));
+        loop {
+            tokio::select! {
+                msg = messages.next() => {
+                    match msg {
+                        Some(Ok(m)) => {
+                            if let Ok(ev) = serde_json::from_slice::<PersistedEvent>(&m.payload) {
+                                let name = serde_json::to_value(&ev.event)
+                                    .ok()
+                                    .and_then(|v| {
+                                        v.get("type")
+                                            .and_then(|t| t.as_str().map(String::from))
+                                    })
+                                    .unwrap_or_else(|| "event".to_string());
+                                let data =
+                                    serde_json::to_string(&ev).unwrap_or_default();
+                                yield Ok(Event::default().event(name).data(data));
+
+                                // Terminal: derive the envelope straight from
+                                // the event (race-free vs. the DB write the
+                                // lifecycle consumer is doing concurrently),
+                                // emit it, and close.
+                                let terminal_envelope = match &ev.event {
+                                    DomainEvent::NetCompleted { exit_code, .. } => {
+                                        Some(exit_code.clone().unwrap_or(serde_json::Value::Null))
+                                    }
+                                    DomainEvent::NetCancelled { reason, .. } => Some(json!({
+                                        "ok": false,
+                                        "error": { "reason": reason, "value": serde_json::Value::Null }
+                                    })),
+                                    _ => None,
+                                };
+                                if let Some(env) = terminal_envelope {
+                                    let _ = m.ack().await;
+                                    yield Ok(Event::default().event("result").data(env.to_string()));
+                                    return;
+                                }
+                            }
+                            let _ = m.ack().await;
+                        }
+                        Some(Err(e)) => {
+                            tracing::warn!("instance stream read error: {e}");
+                        }
+                        None => return,
+                    }
+                }
+                _ = ping.tick() => {
+                    yield Ok(Event::default().comment("ping"));
+                }
+            }
+        }
+    };
+
+    Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(10))))
 }
 
 /// GET /api/instances/:id/state

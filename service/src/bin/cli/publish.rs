@@ -16,8 +16,7 @@ pub async fn run(_server: &str, directory: &str) -> Result<()> {
 
     let url = format!("{}/api/templates/{}/publish", server_url, template_id);
     let client = reqwest::Client::new();
-    let resp = client
-        .post(&url)
+    let resp = crate::http::auth(client.post(&url))
         .send()
         .await
         .context("failed to connect to server")?;

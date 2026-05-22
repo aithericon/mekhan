@@ -6,7 +6,9 @@ import type {
 	WorkflowEdge,
 	WorkflowEdgeType,
 	TriggerNodeData,
-	PhaseUpdateNodeData
+	PhaseUpdateNodeData,
+	SubWorkflowNodeData,
+	AutomatedStepNodeData
 } from '$lib/types/editor';
 
 /**
@@ -95,6 +97,7 @@ export class YjsGraphBinding {
 			const position = posRaw ?? { x: 0, y: 0 };
 
 			const data = this.materializeNodeData(yNode, type);
+			const slug = yNode.get('slug') as string | undefined;
 			const parentId = yNode.get('parentId') as string | undefined;
 			const width = yNode.get('width') as number | undefined;
 			const height = yNode.get('height') as number | undefined;
@@ -104,6 +107,7 @@ export class YjsGraphBinding {
 				type,
 				position,
 				data,
+				...(slug ? { slug } : {}),
 				...(parentId ? { parentId } : {}),
 				...(width != null ? { width } : {}),
 				...(height != null ? { height } : {})
@@ -189,12 +193,16 @@ export class YjsGraphBinding {
 				const output = config?.output as
 					| { id: string; label: string; fields: unknown[] }
 					| undefined;
+				const deploymentModel = config?.deploymentModel as
+					| AutomatedStepNodeData['deploymentModel']
+					| undefined;
 				return {
 					...base,
 					type: 'automated_step',
 					executionSpec: { entrypoint: 'main.py', ...spec },
 					...(output ? { output: output as never } : {}),
-					retryPolicy
+					retryPolicy,
+					...(deploymentModel ? { deploymentModel } : {})
 				};
 			}
 			case 'decision':
@@ -265,7 +273,30 @@ export class YjsGraphBinding {
 					},
 					concurrency: (config?.concurrency as TriggerNodeData['concurrency']) ?? 'allow',
 					payloadMapping: (config?.payloadMapping as TriggerNodeData['payloadMapping']) ?? [],
-					enabled: (config?.enabled as boolean) ?? false
+					enabled: (config?.enabled as boolean) ?? false,
+					replyDefault: (config?.replyDefault as TriggerNodeData['replyDefault']) ?? undefined
+				};
+			case 'sub_workflow':
+				return {
+					...base,
+					type: 'sub_workflow',
+					templateId: (config?.templateId as string) ?? '',
+					versionPin:
+						(config?.versionPin as SubWorkflowNodeData['versionPin']) ?? {
+							mode: 'latest'
+						},
+					...(config?.inputMapping
+						? {
+								inputMapping:
+									config.inputMapping as SubWorkflowNodeData['inputMapping']
+							}
+						: {}),
+					output:
+						(config?.output as SubWorkflowNodeData['output']) ?? {
+							id: 'out',
+							label: 'Result',
+							fields: []
+						}
 				};
 		}
 	}
@@ -396,6 +427,42 @@ export class YjsGraphBinding {
 			const yNode = this.yNodes.get(nodeId);
 			if (!yNode || !(yNode instanceof Y.Map)) return;
 			yNode.set('position', position);
+		});
+	}
+
+	/**
+	 * Set or clear a node's container parent. Used by the drag-into-container
+	 * gesture (Scope, Loop) — when a node is dropped inside a container the
+	 * position passed here must already be **relative to the parent**, mirroring
+	 * Svelte Flow's parent-relative child coordinates. Pass `null` to remove
+	 * the parent (parent_id is dropped from the Y.Map entirely).
+	 */
+	setNodeParent(
+		nodeId: string,
+		parentId: string | null,
+		position?: { x: number; y: number }
+	): void {
+		this.doc.transact(() => {
+			const yNode = this.yNodes.get(nodeId);
+			if (!yNode || !(yNode instanceof Y.Map)) return;
+			if (parentId) {
+				yNode.set('parentId', parentId);
+			} else {
+				yNode.delete('parentId');
+			}
+			if (position) yNode.set('position', position);
+		});
+	}
+
+	/** Node-level author-facing slug — the `<slug>.<field>` guard namespace.
+	 *  Empty/blank clears it (the compiler then derives a default from id). */
+	updateNodeSlug(nodeId: string, slug: string): void {
+		this.doc.transact(() => {
+			const yNode = this.yNodes.get(nodeId);
+			if (!yNode || !(yNode instanceof Y.Map)) return;
+			const trimmed = slug.trim();
+			if (trimmed) yNode.set('slug', trimmed);
+			else yNode.delete('slug');
 		});
 	}
 
@@ -544,6 +611,7 @@ export class YjsGraphBinding {
 					'retryPolicy',
 					data.retryPolicy ?? { maxRetries: 3, backoff: 'immediate', baseDelayMs: 0 }
 				);
+				config.set('deploymentModel', data.deploymentModel ?? { mode: 'inline' });
 				break;
 			case 'decision':
 				config.set('conditions', data.conditions);
@@ -599,6 +667,20 @@ export class YjsGraphBinding {
 				config.set('concurrency', data.concurrency);
 				config.set('payloadMapping', data.payloadMapping ?? []);
 				config.set('enabled', data.enabled ?? false);
+				config.set('replyDefault', data.replyDefault ?? null);
+				break;
+			case 'sub_workflow':
+				config.set('templateId', data.templateId);
+				config.set('versionPin', data.versionPin ?? { mode: 'latest' });
+				if (data.inputMapping && data.inputMapping.length > 0) {
+					config.set('inputMapping', data.inputMapping);
+				} else {
+					config.delete('inputMapping');
+				}
+				config.set(
+					'output',
+					data.output ?? { id: 'out', label: 'Result', fields: [] }
+				);
 				break;
 		}
 	}

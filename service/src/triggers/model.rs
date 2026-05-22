@@ -6,7 +6,7 @@ use chrono::{DateTime, Utc};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use crate::models::template::{TriggerSource, WorkflowEdge, WorkflowNodeData};
+use crate::models::template::{ReplyMode, TriggerSource, WorkflowEdge, WorkflowNodeData};
 
 /// Discriminator for the *kind of effect* a trigger has. Computed from its
 /// outgoing edge target: spawn (target is a Start port → create instance)
@@ -36,6 +36,9 @@ pub struct TriggerRecord {
     /// The handle on the target node, e.g. `"in"` for the canonical input port.
     pub target_handle: String,
     pub source: TriggerSource,
+    /// Node-authored default reply mode; the caller can still override it
+    /// per-request. `None` ⇒ FireAndForget unless the caller asks otherwise.
+    pub reply_default: Option<ReplyMode>,
     pub enabled: bool,
     pub registered_at: DateTime<Utc>,
 }
@@ -84,6 +87,14 @@ pub enum TriggerError {
     TargetMissing { node_id: String, target: String },
     #[error("payload mapping for field '{field}' failed: {message}")]
     PayloadMappingFailed { field: String, message: String },
+    #[error(
+        "start input contract violation: field '{field}' expected {expected}, got {actual}"
+    )]
+    StartContractViolation {
+        field: String,
+        expected: String,
+        actual: String,
+    },
     #[error("instance creation failed: {0}")]
     InstanceFailed(String),
     #[error("signal publish failed: {0}")]

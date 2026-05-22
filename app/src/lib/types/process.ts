@@ -6,7 +6,7 @@
  * What lives here:
  *   - Pagination envelope for the process/task/log/artifact list endpoints,
  *     which use a custom DSL not modeled in the spec yet.
- *   - Step-timeline shapes derived client-side from a process's history.
+ *   - The canonical phase/progress timeline shapes.
  */
 export interface PaginatedProcessResponse<T> {
 	items: T[];
@@ -18,28 +18,13 @@ export interface PaginatedProcessResponse<T> {
 	has_previous: boolean;
 }
 
-export interface StepDefinition {
-	key: string;
-	label: string;
-	human: boolean;
-}
-
-export interface StepEvent {
-	started: string | null;
-	completed: string | null;
-	timestamp: string;
-}
-
 export interface ProcessTimelineEntry {
 	step: string;
 	label: string;
 	status: 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
-	human: boolean;
 	started_at?: string;
 	completed_at?: string;
 	duration_ms?: number;
-	iterations?: number;
-	completed_iterations?: number;
 }
 
 /**

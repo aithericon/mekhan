@@ -138,6 +138,65 @@ describe('YjsGraphBinding', () => {
 		]);
 	});
 
+	it('reordering decision conditions swaps order and keeps wired edges', () => {
+		const decisionData = {
+			...createDefaultNodeData('decision'),
+			conditions: [
+				{ edgeId: 'branch-a', label: 'A', guard: 'g0' },
+				{ edgeId: 'branch-b', label: 'B', guard: 'g1' },
+				{ edgeId: 'branch-c', label: 'C', guard: 'g2' }
+			],
+			defaultBranch: 'default'
+		} as WorkflowNodeData;
+
+		binding.addNode('d1', 'decision', { x: 0, y: 0 }, decisionData);
+		binding.addNode('t1', 'end', { x: 100, y: 0 }, createDefaultNodeData('end'));
+		binding.addNode('t2', 'end', { x: 100, y: 100 }, createDefaultNodeData('end'));
+
+		binding.addEdge({
+			id: 'ea',
+			source: 'd1',
+			target: 't1',
+			type: 'conditional',
+			sourceHandle: 'branch-a'
+		});
+		binding.addEdge({
+			id: 'ec',
+			source: 'd1',
+			target: 't2',
+			type: 'conditional',
+			sourceHandle: 'branch-c'
+		});
+
+		// Move 'C' to the top (the move-up control applied twice == these
+		// array swaps the UI performs).
+		binding.updateNodeData('d1', {
+			type: 'decision',
+			conditions: [
+				{ edgeId: 'branch-c', label: 'C', guard: 'g2' },
+				{ edgeId: 'branch-a', label: 'A', guard: 'g0' },
+				{ edgeId: 'branch-b', label: 'B', guard: 'g1' }
+			],
+			defaultBranch: 'default'
+		} as WorkflowNodeData);
+
+		const node = binding.graph.nodes.find((n) => n.id === 'd1')!;
+		expect(node.data.type).toBe('decision');
+		if (node.data.type === 'decision') {
+			expect(node.data.conditions.map((c) => c.edgeId)).toEqual([
+				'branch-c',
+				'branch-a',
+				'branch-b'
+			]);
+		}
+
+		// Edge wiring is keyed by the stable edgeId, so a reorder must not
+		// drop or rewire any drawn edge.
+		expect(binding.graph.edges.map((e) => e.id).sort()).toEqual(['ea', 'ec']);
+		const ec = binding.graph.edges.find((e) => e.id === 'ec');
+		expect(ec?.sourceHandle).toBe('branch-c');
+	});
+
 	it('updateNodeData prunes the default-branch edge when defaultBranch is disabled', () => {
 		const decisionData = {
 			...createDefaultNodeData('decision'),
@@ -525,5 +584,38 @@ describe('YjsGraphBinding', () => {
 		after = binding.graph.nodes.find((n) => n.id === 'f1');
 		if (after?.data.type !== 'failure') return;
 		expect(after.data.failureMessage).toBeUndefined();
+	});
+
+	it('trigger replyDefault survives the updateNodeData round-trip', () => {
+		// Regression: the Yjs binding's trigger arm previously never wrote or
+		// re-materialized `replyDefault`, so the editor's "Default reply mode"
+		// Select looked inert — the change was dropped on sync and the
+		// persisted value never reloaded.
+		binding.addNode('t1', 'trigger', { x: 0, y: 0 }, createDefaultNodeData('trigger'));
+
+		const node = binding.graph.nodes.find((n) => n.id === 't1');
+		expect(node?.data.type).toBe('trigger');
+		if (node?.data.type !== 'trigger') return;
+		expect(node.data.replyDefault).toBeUndefined();
+
+		binding.updateNodeData('t1', {
+			...node.data,
+			replyDefault: 'wait_for_result'
+		} as Extract<WorkflowNodeData, { type: 'trigger' }>);
+
+		let after = binding.graph.nodes.find((n) => n.id === 't1');
+		expect(after?.data.type).toBe('trigger');
+		if (after?.data.type !== 'trigger') return;
+		expect(after.data.replyDefault).toBe('wait_for_result');
+
+		// Clearing re-materializes as undefined (treated as the
+		// FireAndForget default downstream), not a stale value.
+		binding.updateNodeData('t1', {
+			...after.data,
+			replyDefault: undefined
+		} as Extract<WorkflowNodeData, { type: 'trigger' }>);
+		after = binding.graph.nodes.find((n) => n.id === 't1');
+		if (after?.data.type !== 'trigger') return;
+		expect(after.data.replyDefault).toBeUndefined();
 	});
 });

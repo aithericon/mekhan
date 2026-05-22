@@ -1,0 +1,133 @@
+# syntax=docker/dockerfile:1.7
+# =============================================================================
+# Aithericon Engine — core-engine Nomad/HTTP service
+# =============================================================================
+# The Petri-net execution engine. Mekhan-service reaches this at
+# engine.service.consul:3030 via Consul DNS — see service/src/main.rs:44
+# (`PetriClient::new(&config.petri_lab_url)`).
+#
+# Path deps: engine/Cargo.toml has dependencies on ../executor/crates/* and
+# ../shared/* — the build context must be the monorepo root so the COPY
+# instructions below resolve.
+#
+#   docker build -f deploy/docker/Dockerfile.engine \
+#                -t aithericon-engine:latest .
+#
+# Runtime: rustls everywhere (no OpenSSL), no native FFI deps, no Python.
+# Single small process listening on $PORT (default 3030).
+# =============================================================================
+
+ARG RUST_VERSION=1.91
+
+# -----------------------------------------------------------------------------
+# Builder — trixie matches the executor for cache reuse on the CI builder.
+# Engine itself doesn't need trixie's newer glibc; bookworm would also work.
+# -----------------------------------------------------------------------------
+FROM rust:${RUST_VERSION}-trixie AS builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Build-time system deps:
+#   build-essential + pkg-config            — every *-sys crate baseline
+#   libhdf5-dev + libnetcdf-dev             — engine pulls fmeta's all-backends
+#                                              via ../executor/crates/executor-
+#                                              storage → hdf5-metno-sys
+#   libtesseract-dev + libleptonica-dev     — engine depends on executor-worker
+#                                              which (in this monorepo) pulls
+#                                              kreuzberg-tesseract transitively
+#   libclang-dev                            — bindgen for tesseract FFI
+#   libssl-dev                              — fallback for any sys crate
+#                                              probing OpenSSL (most use rustls)
+#   protobuf-compiler                       — defensive for any prost-build dep
+#
+# Yes this is most of Dockerfile.executor's deps — the engine workspace has
+# `path = "../executor/crates/*"` deps so cargo compiles them as part of
+# core-engine even though core-engine itself doesn't use them directly. If
+# fmeta/all-backends is later trimmed from the executor-storage dep, the
+# HDF5 lines can come out of here.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        libclang-dev \
+        libhdf5-dev \
+        libleptonica-dev \
+        libnetcdf-dev \
+        libssl-dev \
+        libtesseract-dev \
+        pkg-config \
+        protobuf-compiler \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+# Path-dep layout: engine/Cargo.toml references ../executor/crates/* and
+# ../shared/* — mirror the host layout so cargo resolves them.
+COPY engine/    /build/engine/
+COPY executor/  /build/executor/
+COPY shared/    /build/shared/
+
+# Cargo cache mounts + final binary copied out of the cache mount before the
+# layer is committed. Same pattern as Dockerfile.executor.
+ARG CARGO_BUILD_JOBS=2
+# `sharing=locked` serializes parallel access to the cargo registry /git
+# caches — Dockerfile.executor uses the same cache paths, so building both
+# images in parallel without this races on unpacking shared crates (e.g.
+# `failed to open .cargo-ok: File exists (os error 17)`). The /target cache
+# is per-image and stays `sharing=shared` (the default).
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,target=/build/engine/target \
+    set -eux; \
+    cd /build/engine; \
+    CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS} cargo build --release \
+        -p core-engine; \
+    mkdir -p /out; \
+    cp target/release/core-engine /out/core-engine; \
+    strip /out/core-engine || true
+
+# -----------------------------------------------------------------------------
+# Runtime — Debian trixie slim. The engine binary is dynamically linked but
+# only needs libc + libstdc++ + ca-certificates (rustls handles TLS in-tree).
+# -----------------------------------------------------------------------------
+FROM debian:trixie-slim AS runtime
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8
+
+# Runtime system deps. Even though core-engine doesn't *call* HDF5/tesseract
+# at runtime, the binary's NEEDED list includes them because the executor-
+# storage / executor-worker path deps are linked in. Same set as the executor
+# runtime, minus the user-facing tools (python, uv, tessdata lang packs).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        libhdf5-310 \
+        libleptonica6 \
+        libnetcdf22 \
+        libssl3 \
+        libstdc++6 \
+        libtesseract5 \
+        tzdata \
+    && rm -rf /var/lib/apt/lists/*
+
+# Non-root user, UID/GID 1000 matches the service + executor convention.
+RUN groupadd -g 1000 engine \
+    && useradd  -m -u 1000 -g 1000 -s /bin/bash engine
+
+# Binary
+COPY --from=builder /out/core-engine /usr/local/bin/core-engine
+RUN chmod +x /usr/local/bin/core-engine
+
+# Defaults — every value below can be overridden by the Nomad jobspec's env{}
+# block. PORT is the canonical OCI convention so external tooling stays sane.
+ENV PORT=3030 \
+    RUST_LOG=info \
+    EXECUTOR_ENABLED=true \
+    EXECUTOR_NAMESPACE=executor
+
+EXPOSE 3030
+
+USER engine
+WORKDIR /home/engine
+
+ENTRYPOINT ["/usr/local/bin/core-engine"]

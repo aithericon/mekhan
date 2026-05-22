@@ -47,12 +47,20 @@ fn has_group(air: &Value, id: &str) -> bool {
 }
 
 /// Every transition must have at least one input and one output arc.
+///
+/// Exception: a Decision's synthesized `t_<id>_deadend` is an intentional
+/// error sink — it consumes the unroutable token and raises (permanent
+/// ScriptError -> ErrorOccurred), so it deliberately has no output arc. The
+/// AIR omits an empty `outputs` field entirely (serde skip_if empty).
 fn assert_all_transitions_wired(air: &Value) {
     for t in transitions(air) {
         let id = t["id"].as_str().unwrap();
         let inputs = t["inputs"].as_array().unwrap();
-        let outputs = t["outputs"].as_array().unwrap();
         assert!(!inputs.is_empty(), "transition {id} has no inputs");
+        if id.ends_with("_deadend") {
+            continue;
+        }
+        let outputs = t["outputs"].as_array().unwrap();
         assert!(!outputs.is_empty(), "transition {id} has no outputs");
     }
 }
@@ -69,7 +77,9 @@ fn assert_arcs_reference_existing_places(air: &Value) {
                 "transition {tid} input references nonexistent place {pid}"
             );
         }
-        for arc in t["outputs"].as_array().unwrap() {
+        // `outputs` is omitted from the AIR when empty (serde skip_if), e.g.
+        // a Decision's `t_<id>_deadend` error sink has no output arc.
+        for arc in t["outputs"].as_array().map(Vec::as_slice).unwrap_or(&[]) {
             let pid = arc["place"].as_str().unwrap();
             assert!(
                 place_ids.contains(&pid),
@@ -113,10 +123,12 @@ fn ui_simple_start_end_deserializes_and_compiles() {
 
     let air = compile_to_air(&graph, "simple", "Simple workflow", &std::collections::HashMap::new()).expect("should compile");
 
-    // After merge: 1 terminal place, 0 transitions. No compile-time seeding
-    // (initial tokens are injected per-Start at instance creation).
-    assert_eq!(places(&air).len(), 1);
-    assert!(transitions(&air).is_empty());
+    // Start forks (`park_outputs`): seed + write-once parked copy + the
+    // forwarded place (End merges into the last) = 3 places, 1 t_*_park
+    // transition. No compile-time seeding (initial tokens are injected
+    // per-Start at instance creation).
+    assert_eq!(places(&air).len(), 3);
+    assert_eq!(transitions(&air).len(), 1);
     assert!(has_place_of_type(&air, "terminal"));
     assert_no_seeded_places(&air);
 }
@@ -135,11 +147,38 @@ fn ui_linear_human_task_deserializes_and_compiles() {
     let air = compile_to_air(&graph, "linear", "Linear workflow", &std::collections::HashMap::new()).expect("should compile");
 
     // HumanTask internal: input, active, signal, errors, output = 5 places
-    // + Start place = 6 (End merged into HumanTask output)
-    assert_eq!(places(&air).len(), 6);
+    // + the foundation control/data split adds parked-data + slim-control
+    // = 7. Start now forks too (p_*_ready + p_*_data + p_*_main = 3) = 10.
+    assert_eq!(places(&air).len(), 10);
     assert!(has_place_of_type(&air, "terminal"));
     assert!(has_place_of_type(&air, "signal"));
     assert_no_seeded_places(&air);
+
+    // Foundation split: parked data + control places + yield transition.
+    assert!(has_place(&air, "p_ht-1_data"), "parked data place");
+    assert!(has_place(&air, "p_ht-1_ctrl"), "slim control place");
+    assert!(has_transition(&air, "t_ht-1_yield"), "yield transition");
+    // Monotone invariant: nothing consumes the parked data place.
+    for t in transitions(&air) {
+        for a in t["inputs"].as_array().cloned().unwrap_or_default() {
+            if a["place"] == serde_json::json!("p_ht-1_data") {
+                assert_eq!(a["read"], serde_json::json!(true), "data place must be read-only");
+            }
+        }
+    }
+    // Data place carries an enforced typed schema (not bare DynamicToken).
+    let data_place = places(&air)
+        .iter()
+        .find(|p| p["id"] == "p_ht-1_data")
+        .unwrap();
+    assert_eq!(
+        data_place["token_schema"],
+        serde_json::json!("#/definitions/Data__ht-1")
+    );
+    assert!(
+        air["definitions"]["Data__ht-1"].is_object(),
+        "Data__ht-1 definition must be registered"
+    );
 
     // HumanTask injection transition (Start→HumanTask needs data injection)
     assert!(

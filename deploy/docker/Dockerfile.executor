@@ -34,7 +34,11 @@ ARG RUST_VERSION=1.91
 # -----------------------------------------------------------------------------
 # Builder — glibc-based; kreuzberg + libtesseract FFI rules out musl.
 # -----------------------------------------------------------------------------
-FROM rust:${RUST_VERSION}-bookworm AS builder
+# Trixie (Debian 13) — glibc 2.40+ / GCC 14. bookworm's glibc 2.36 is too
+# old for the prebuilt ONNX runtime binaries the `ort` crate pulls in via
+# kreuzberg-paddle-ocr (link fails with undefined `__isoc23_strtol` and
+# `__cxa_call_terminate`).
+FROM rust:${RUST_VERSION}-trixie AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -84,8 +88,12 @@ COPY shared/    /build/shared/
 # the cache mount enough to OOM small Docker Desktop VMs. Slower wall time,
 # stable disk footprint.
 ARG CARGO_BUILD_JOBS=2
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
+# `sharing=locked` on the cargo registry/git caches — Dockerfile.engine uses
+# the same cache paths, so building both images in parallel without this
+# races on unpacking shared crates. The /target cache is per-image and
+# stays `sharing=shared` (the default).
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=cache,target=/build/executor/target \
     set -eux; \
     cd /build/executor; \
@@ -97,10 +105,13 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     strip /out/aithericon-executor-service || true
 
 # -----------------------------------------------------------------------------
-# Runtime — Debian bookworm slim (glibc; kreuzberg + libtesseract FFI rule out
-# musl). A CUDA variant will be added as a separate Dockerfile when needed.
+# Runtime — Debian trixie slim (glibc; kreuzberg + libtesseract FFI rule out
+# musl). Trixie's glibc 2.40+ matches the builder; on bookworm the executor
+# binary would fail to load with "version `GLIBC_2.39' not found" linking the
+# ONNX shared object. A CUDA variant will be added as a separate Dockerfile
+# when needed.
 # -----------------------------------------------------------------------------
-FROM debian:bookworm-slim AS runtime
+FROM debian:trixie-slim AS runtime
 
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
@@ -127,8 +138,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
         git \
-        libhdf5-103-1 \
-        libnetcdf19 \
+        libhdf5-310 \
+        libnetcdf22 \
         libssl3 \
         libstdc++6 \
         python3 \
@@ -146,9 +157,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         tzdata \
     && rm -rf /var/lib/apt/lists/*
 
-# Pin TESSDATA_PREFIX to a stable path. Debian 12 puts it at
-# /usr/share/tesseract-ocr/5/tessdata; the symlink keeps a future base bump
-# from breaking the ENV below.
+# Pin TESSDATA_PREFIX to a stable path. Trixie ships tesseract 5.5 at
+# /usr/share/tesseract-ocr/5/tessdata (same path as bookworm's 5.3); the
+# symlink keeps a future major version bump from breaking the ENV below.
 RUN ln -sfn "$(find /usr/share/tesseract-ocr -maxdepth 2 -type d -name tessdata | head -n1)" \
             /opt/tessdata
 

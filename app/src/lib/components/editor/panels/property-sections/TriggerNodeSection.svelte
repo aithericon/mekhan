@@ -33,6 +33,14 @@
 	const mappings = $derived(data.payloadMapping ?? []);
 	const enabled = $derived(data.enabled ?? false);
 
+	type ReplyMode = components['schemas']['ReplyMode'];
+	const replyDefault = $derived((data.replyDefault ?? 'fire_and_forget') as ReplyMode);
+	const replyLabels: Record<ReplyMode, string> = {
+		fire_and_forget: 'Fire & forget (default)',
+		wait_for_result: 'Wait for result',
+		sse: 'SSE stream'
+	};
+
 	// A trigger's *armed* state is the inverse of every other field here: it is
 	// operational state of the published template, not a draft setting. In a
 	// draft this is read-only (it ships armed by default); on the published
@@ -193,7 +201,11 @@
 	});
 	const samplePayload = $derived.by(() =>
 		mappings.length > 0
-			? Object.fromEntries(mappedInputKeys.map((k) => [k, 'example']))
+			? Object.fromEntries(
+						mappedInputKeys
+							.filter((k) => !fileFields.some((f) => f.name === k))
+							.map((k) => [k, 'example'])
+					)
 			: Object.fromEntries(nonFileFields.map((f) => [f.name, sampleValue(f)]))
 	);
 
@@ -375,7 +387,7 @@
 	{:else if source?.kind === 'catalog'}
 		<div class="space-y-1.5">
 			<div class="flex items-center justify-between">
-				<span class="text-xs font-medium text-muted-foreground">Filters (eq only)</span>
+				<span class="text-sm font-medium text-muted-foreground">Filters (eq only)</span>
 				{#if !readonly}
 					<Button
 						variant="ghost"
@@ -406,7 +418,7 @@
 							update('source', { ...source, filters: next });
 						}}
 					/>
-					<span class="text-[10px] text-muted-foreground">=</span>
+					<span class="text-sm text-muted-foreground">=</span>
 					<Input
 						type="text"
 						value={ops.eq ?? ''}
@@ -445,7 +457,7 @@
 							backfill: (e.currentTarget as HTMLInputElement).checked
 						})}
 				/>
-				<span class="text-[11px]">Backfill on publish</span>
+				<span class="text-sm">Backfill on publish</span>
 			</label>
 		</div>
 	{:else if source?.kind === 'net_completion'}
@@ -500,29 +512,29 @@
 		</FormField>
 	{:else if source?.kind === 'manual'}
 		<div class="space-y-2">
-			<p class="text-xs text-muted-foreground">
+			<p class="text-sm text-muted-foreground">
 				Fires when something <code>POST</code>s to this endpoint — a script, a
 				cron job, another service. Add an <code>Authorization</code> header if
 				your deployment enforces auth.
 			</p>
 			<div class="space-y-1.5 rounded-md border border-border/60 bg-muted/20 p-2">
 				<div class="flex items-center justify-between gap-2">
-					<span class="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+					<span class="text-sm font-medium uppercase tracking-wide text-muted-foreground">
 						Sample request
 					</span>
 					<CopyButton text={curlCommand} />
 				</div>
-				<pre class="overflow-x-auto whitespace-pre-wrap break-all font-mono text-[10px] leading-relaxed text-foreground">{curlCommand}</pre>
+				<pre class="overflow-x-auto whitespace-pre-wrap break-all font-mono text-sm leading-relaxed text-foreground">{curlCommand}</pre>
 			</div>
 			{#if fileFields.length > 0}
-				<p class="text-[11px] text-muted-foreground">
+				<p class="text-sm text-muted-foreground">
 					Replace <code>/path/to/…</code> with your file(s). Each is uploaded to
 					storage and passed to the Start as a file reference — no need to
 					pre-upload.
 				</p>
 			{/if}
 			{#if targetStartFields.length === 0}
-				<p class="text-[11px] text-muted-foreground">
+				<p class="text-sm text-muted-foreground">
 					{#if !binding || !nodeId}
 						Wire this trigger into a Start node to auto-fill the request body
 						from its schema.
@@ -533,7 +545,7 @@
 				</p>
 			{/if}
 			{#if hasMapping}
-				<p class="text-[11px] text-muted-foreground">
+				<p class="text-sm text-muted-foreground">
 					Body keys are the identifiers your mapping expressions read; the
 					values shown are placeholders. The expressions project them onto the
 					target Start fields.
@@ -542,10 +554,37 @@
 		</div>
 	{/if}
 
+	<!-- Default reply mode. Caller can override per-request via
+	     ?reply= / Prefer / body; this is only the fallback. -->
+	<FormField label="Default reply mode" for="trigger-reply-default">
+		<Select.Root
+			type="single"
+			value={replyDefault}
+			onValueChange={(v) => {
+				if (v) update('replyDefault', v as ReplyMode);
+			}}
+			disabled={readonly}
+		>
+			<Select.Trigger id="trigger-reply-default" class="w-full" disabled={readonly}>
+				{replyLabels[replyDefault]}
+			</Select.Trigger>
+			<Select.Content>
+				<Select.Item value="fire_and_forget" label="Fire & forget (default)" />
+				<Select.Item value="wait_for_result" label="Wait for result" />
+				<Select.Item value="sse" label="SSE stream" />
+			</Select.Content>
+		</Select.Root>
+		<p class="mt-1 text-sm text-muted-foreground">
+			Used only when a caller doesn't request a mode. <code>SSE</code> is
+			advisory — streaming is the dedicated
+			<code>GET /api/instances/&lt;id&gt;/stream</code> endpoint.
+		</p>
+	</FormField>
+
 	<!-- Payload mapping — each row projects one target-port field. -->
 	<div class="space-y-1.5">
 		<div class="flex items-center justify-between">
-			<span class="text-xs font-medium text-muted-foreground">Payload mapping</span>
+			<span class="text-sm font-medium text-muted-foreground">Payload mapping</span>
 			{#if !readonly}
 				<Button variant="ghost" size="sm" onclick={addMapping}>
 					<Plus class="size-3.5" />
@@ -554,7 +593,7 @@
 			{/if}
 		</div>
 		{#if scopeVars.length > 0}
-			<p class="rounded-md bg-muted/30 p-2 text-[11px] text-muted-foreground">
+			<p class="rounded-md bg-muted/30 p-2 text-sm text-muted-foreground">
 				<span class="font-medium">In scope:</span>
 				{#each scopeVars as v, i (v.name)}<code
 						class="text-foreground">{v.name}</code><span class="text-muted-foreground/70"
@@ -565,7 +604,7 @@
 		{#if mappings.length === 0}
 			{#if targetStartFields.length > 0}
 				<div class="space-y-1.5 rounded-md border border-dashed border-border/50 p-2">
-					<p class="text-[11px] text-muted-foreground">
+					<p class="text-sm text-muted-foreground">
 						The target Start declares typed fields, so the payload can't be
 						forwarded verbatim — each field needs a mapping. Auto-map adds an
 						identity mapping per field; rename or edit them afterward.
@@ -583,7 +622,7 @@
 					{/if}
 				</div>
 			{:else}
-				<p class="rounded-md border border-dashed border-border/50 p-2 text-[11px] text-muted-foreground">
+				<p class="rounded-md border border-dashed border-border/50 p-2 text-sm text-muted-foreground">
 					No mappings. Without entries the trigger forwards <code>payload</code>
 					verbatim — only valid when the target port has no declared fields.
 				</p>
@@ -639,21 +678,21 @@
 			onchange={(e) => toggleEnabled((e.currentTarget as HTMLInputElement).checked)}
 		/>
 		<span class="text-sm">Enabled</span>
-		{#if toggling}<span class="text-[10px] text-muted-foreground">…</span>{/if}
+		{#if toggling}<span class="text-sm text-muted-foreground">…</span>{/if}
 	</label>
 	{#if readonly}
-		<p class="text-[11px] text-muted-foreground">
+		<p class="text-sm text-muted-foreground">
 			Arm or pause this trigger on the published template — takes effect immediately,
 			no new version required.
 		</p>
 	{:else}
-		<p class="text-[11px] text-muted-foreground">
+		<p class="text-sm text-muted-foreground">
 			Triggers ship enabled. Arming and pausing is done on the published template,
 			not here — it isn’t a draft setting.
 		</p>
 	{/if}
 	{#if toggleError}
-		<p class="text-[11px] text-destructive">{toggleError}</p>
+		<p class="text-sm text-destructive">{toggleError}</p>
 	{/if}
 
 	{#if nodeId}

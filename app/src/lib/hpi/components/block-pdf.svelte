@@ -21,7 +21,7 @@
 			<span></span>
 		{/if}
 		<a href={url} download={filename} target="_blank" rel="noopener noreferrer"
-		   class="flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-primary">
+		   class="flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-primary">
 			<Download class="size-3.5" />
 			Download
 		</a>

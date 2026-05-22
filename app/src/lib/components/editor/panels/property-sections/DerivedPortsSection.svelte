@@ -22,12 +22,12 @@
 
 <div class="space-y-2">
 	<div class="flex items-center justify-between">
-		<span class="text-xs font-medium text-muted-foreground">{title}</span>
-		<span class="text-[10px] uppercase tracking-wide text-muted-foreground/80">{derivedFrom}</span>
+		<span class="text-sm font-medium text-muted-foreground">{title}</span>
+		<span class="text-sm uppercase tracking-wide text-muted-foreground/80">{derivedFrom}</span>
 	</div>
 
 	{#if ports.length === 0}
-		<p class="rounded-md border border-dashed border-border/50 p-2 text-[11px] text-muted-foreground">
+		<p class="rounded-md border border-dashed border-border/50 p-2 text-sm text-muted-foreground">
 			No ports.
 		</p>
 	{:else}
@@ -35,13 +35,13 @@
 			{#each ports as port (port.id)}
 				<div class="rounded-md border border-border/60 bg-muted/20 px-2 py-1.5">
 					<div class="flex items-center justify-between">
-						<span class="font-mono text-[11px] font-medium text-foreground">{port.id}</span>
-						<span class="text-[10px] text-muted-foreground">{port.label}</span>
+						<span class="font-mono text-sm font-medium text-foreground">{port.id}</span>
+						<span class="text-sm text-muted-foreground">{port.label}</span>
 					</div>
 					{#if (port.fields ?? []).length > 0}
 						<ul class="mt-1 space-y-0.5">
 							{#each port.fields ?? [] as field (field.name)}
-								<li class="flex items-center justify-between text-[10px]">
+								<li class="flex items-center justify-between text-sm">
 									<span class="font-mono text-foreground">{field.name}</span>
 									<span class="text-muted-foreground">
 										{field.kind}{field.required ? ' • required' : ''}
@@ -50,7 +50,7 @@
 							{/each}
 						</ul>
 					{:else}
-						<p class="mt-1 text-[10px] italic text-muted-foreground">
+						<p class="mt-1 text-sm italic text-muted-foreground">
 							Pass-through (no typed fields).
 						</p>
 					{/if}

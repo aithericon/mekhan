@@ -1,0 +1,32 @@
+# Copy to prod.auto.tfvars (gitignored). Values from HetznerCluster/environments/prod/env.hcl.
+
+# ── Nomad target — prod cluster, 10.20.x subnet ─────────────────────────────
+nomad_address     = "https://10.20.0.10:4646"
+nomad_region      = "global"
+nomad_namespace   = "default"
+nomad_datacenters = ["dc1"]
+node_class        = "stateless"
+
+# ── Image ───────────────────────────────────────────────────────────────────
+image_repository = "forge.aithericon.eu/milanender/mekhan-service"
+
+# ── External exposure ───────────────────────────────────────────────────────
+hostname        = "mekhan.aithericon.eu"
+traefik_enabled = true
+
+# ── Runtime endpoints ───────────────────────────────────────────────────────
+nats_url      = "nats://nats.service.consul:4222"
+petri_lab_url = "http://engine.service.consul:3030"
+
+# Hetzner Object Storage.
+s3_endpoint = "https://fsn1.your-objectstorage.com"
+s3_bucket   = "mekhan-artifacts"
+
+# ── Auth & logging ──────────────────────────────────────────────────────────
+auth_mode = "bff"
+rust_log  = "info"
+
+# ── Resources ───────────────────────────────────────────────────────────────
+service_count = 2
+cpu_mhz       = 1000
+memory_mb     = 1024

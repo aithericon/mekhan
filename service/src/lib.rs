@@ -78,7 +78,13 @@ pub struct AppState {
     /// unless an introspection API credential is configured — then the
     /// Bearer path in `require_auth_middleware` is disabled.
     pub introspection: Option<Arc<crate::auth::IntrospectionVerifier>>,
+    /// Zitadel Management broker for the embedded `/api/auth/tokens` feature
+    /// (per-user automation PATs). `None` unless `auth.broker_pat` is
+    /// configured — then those endpoints 503 and the SPA hides the section.
+    pub zitadel_mgmt: Option<Arc<crate::auth::ZitadelMgmt>>,
     pub triggers: Arc<TriggerDispatcher>,
+    /// In-flight WaitForResult waiters, shared with the lifecycle consumer.
+    pub result_waiters: Arc<crate::triggers::ResultWaiters>,
 }
 
 /// Build the `OpenApiRouter` containing every `#[utoipa::path]`-annotated
@@ -88,6 +94,15 @@ fn build_openapi_router() -> OpenApiRouter<AppState> {
     OpenApiRouter::<AppState>::with_openapi(ApiDoc::openapi())
         // Health
         .routes(routes!(handlers::health::liveness))
+        // Auth tokens — embedded per-user PAT management. Cookie-only by
+        // construction (the `AuthUser` arg re-runs the cookie authenticator,
+        // so a Bearer PAT behind `require_auth_middleware` can't reach these
+        // and thus can't mint more tokens).
+        .routes(routes!(
+            handlers::auth_tokens::list_tokens,
+            handlers::auth_tokens::create_token
+        ))
+        .routes(routes!(handlers::auth_tokens::revoke_token))
         // Templates
         .routes(routes!(
             handlers::templates::list_templates,
@@ -106,6 +121,7 @@ fn build_openapi_router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::templates::compile_preview))
         .routes(routes!(handlers::templates::io_stubs))
         .routes(routes!(handlers::templates::compile_graph))
+        .routes(routes!(handlers::templates::analyze_graph))
         // Instances
         .routes(routes!(
             handlers::instances::list_instances,
@@ -117,6 +133,7 @@ fn build_openapi_router() -> OpenApiRouter<AppState> {
         ))
         .routes(routes!(handlers::instances::get_instance_state))
         .routes(routes!(handlers::instances::get_instance_events))
+        .routes(routes!(handlers::instances::stream_instance))
         // Processes (HPI inspection)
         .routes(routes!(process::handlers::list_processes))
         .routes(routes!(process::handlers::process_stats))

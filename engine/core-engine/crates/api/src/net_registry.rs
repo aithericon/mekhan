@@ -25,7 +25,7 @@ use petri_application::pre_dispatch::{
 use petri_application::{
     AdapterScheduler, EventRepository, MockSchedulerClient, PetriNetService,
     ProcessCompleteHandler, ProcessFailHandler, ProcessLogMessageHandler, ProcessLogMetricHandler,
-    ProcessStartHandler,
+    ProcessStartHandler, ProcessStatusDetailHandler,
     SchedulerCancelHandler, SchedulerSubmitHandler, StateProjection, TimerCancelHandler,
     TimerScheduleHandler, TopologyRepository,
 };
@@ -782,7 +782,29 @@ where
             )
             .expect("register process_log_message effect handler");
 
-        tracing::info!(net_id = %net_id, "Registered process lifecycle effect handlers (start + complete + fail + metric + log)");
+        service
+            .register_effect_handler(
+                effects::PROCESS_PHASE.handler_id,
+                Arc::new(ProcessStatusDetailHandler::new(
+                    effects::PROCESS_PHASE.default_input_port,
+                    effects::PROCESS_PHASE.default_output_port,
+                    "process_phase",
+                )),
+            )
+            .expect("register process_phase effect handler");
+
+        service
+            .register_effect_handler(
+                effects::PROCESS_PROGRESS.handler_id,
+                Arc::new(ProcessStatusDetailHandler::new(
+                    effects::PROCESS_PROGRESS.default_input_port,
+                    effects::PROCESS_PROGRESS.default_output_port,
+                    "process_progress",
+                )),
+            )
+            .expect("register process_progress effect handler");
+
+        tracing::info!(net_id = %net_id, "Registered process lifecycle effect handlers (start + complete + fail + metric + log + phase + progress)");
 
         // Register timer effect handlers if configured
         if let Some(ref timer_client) = self.timer_client {
@@ -1135,6 +1157,49 @@ fn spawn_net_evaluation_loop<E, T, S>(
                                 net_id = %net_id,
                                 terminal_place = %terminal.place_id,
                                 "Net completed — stopping eval loop"
+                            );
+
+                            // Cancel all per-net tasks (listeners, etc.)
+                            cancel_token.cancel();
+                            return;
+                        }
+
+                        // Check if a transition failed permanently. The firing
+                        // layer already consumed the offending tokens and
+                        // emitted the audit event (so the marking advanced and
+                        // the loop would otherwise just quiesce). Raise a
+                        // net-level NetFailed marker and tear the net down so
+                        // the instance is unmistakably dead, not silently idle
+                        // (mirrors the NetCompleted teardown above).
+                        if let Some(failure) = &result.failure_reached {
+                            let failed_event = DomainEvent::NetFailed {
+                                net_id: net_id.clone(),
+                                transition_id: failure.transition_id.clone(),
+                                reason: failure.reason.clone(),
+                                retryable: failure.retryable,
+                            };
+                            if let Err(e) = service.append_event(failed_event).await {
+                                tracing::error!(
+                                    net_id = %net_id,
+                                    error = %e,
+                                    "Failed to emit NetFailed event"
+                                );
+                            }
+
+                            // Broadcast the NetFailed event to SSE before exiting
+                            let all_events = service.get_events().await;
+                            for event in &all_events {
+                                if event.sequence > last_broadcast_seq {
+                                    let _ =
+                                        event_tx.send(SseSignal::Event(Box::new(event.clone())));
+                                }
+                            }
+
+                            tracing::warn!(
+                                net_id = %net_id,
+                                transition = %failure.transition_id,
+                                reason = %failure.reason,
+                                "Net failed permanently — stopping eval loop"
                             );
 
                             // Cancel all per-net tasks (listeners, etc.)

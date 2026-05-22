@@ -4,6 +4,62 @@
  */
 
 export interface paths {
+    "/api/analyze": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stateless shape analysis: the editor's single source of truth for guard
+         *     scope + diagnostics. Independent of `compile_to_air` succeeding (no files
+         *     needed) so feedback lands while editing, not at publish.
+         */
+        post: operations["analyze_graph"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/tokens": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** GET /api/auth/tokens — the caller's automation tokens. */
+        get: operations["list_tokens"];
+        put?: never;
+        /** POST /api/auth/tokens — mint a token. The `secret` is returned once. */
+        post: operations["create_token"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/tokens/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** DELETE /api/auth/tokens/{id} — revoke a token (ownership-guarded). */
+        delete: operations["revoke_token"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/catalogue": {
         parameters: {
             query?: never;
@@ -311,6 +367,30 @@ export interface paths {
          *     of truth) and best-effort engine status for enabled transitions / run mode.
          */
         get: operations["get_instance_state"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/instances/{id}/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/instances/{id}/stream
+         * @description SSE stream of the instance's domain events, replayed from the start
+         *     (`DeliverPolicy::All`) then live, terminated by a final `result` event
+         *     carrying the structured envelope. Composes with FireAndForget: fire, get
+         *     the instance id, then open this stream. No per-instance ownership check —
+         *     consistent with `get_instance` (auth middleware gates the route).
+         */
+        get: operations["stream_instance"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1065,16 +1145,6 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /**
-         * POST /api/triggers/{node_id}/fire
-         * @description Accepts either `application/json` (`{ "payload": { ... } }` — the scope
-         *     keys for `payload_mapping`) or `multipart/form-data` for file entrypoints:
-         *     an optional JSON `payload` part plus one binary part per file field. Each
-         *     file part is uploaded to blob storage (scoped to the trigger's template +
-         *     target node) and injected into the payload under the part name as a
-         *     `{ key, url, filename, content_type, size }` reference object — the same
-         *     shape the create-instance dialog produces, which `FieldKind::File` accepts.
-         */
         post: operations["fire_trigger"];
         delete?: never;
         options?: never;
@@ -1315,6 +1385,31 @@ export interface components {
             graph?: null | components["schemas"]["WorkflowGraph"];
             name: string;
         };
+        /** @description Request body for `POST /api/auth/tokens`. */
+        CreateTokenRequest: {
+            /** @description Optional longer note — stored as the machine-user `description`. */
+            description?: string | null;
+            /** @description Optional RFC 3339 expiry for the underlying PAT. Omit for no expiry. */
+            expires_at?: string | null;
+            /**
+             * @description Human-friendly label — stored as the backing Zitadel machine-user
+             *     `name`, shown in the token list.
+             */
+            name: string;
+        };
+        /**
+         * @description Response of `POST /api/auth/tokens`. Identical to [`TokenSummary`] plus the
+         *     one-time `secret` — Mekhan never stores or re-serves it.
+         */
+        CreatedToken: {
+            created_at?: string | null;
+            description?: string | null;
+            expires_at?: string | null;
+            id: string;
+            name: string;
+            /** @description The Personal Access Token. Present only here, only once. */
+            secret: string;
+        };
         /** @enum {string} */
         CronCatchup: "fire_missed" | "skip_missed";
         CronPreviewRequest: {
@@ -1369,6 +1464,21 @@ export interface components {
             ingress_seq: number;
             link_type: string;
             signal_key: string;
+        };
+        /**
+         * @description Where an `AutomatedStep`'s job runs. Internally tagged on the wire:
+         *     `{"mode":"inline"}` or `{"mode":"scheduled","jobTemplate":"...",
+         *     "resources":{...}}`. Keep the `mode` strings in lockstep with the
+         *     `snake_case` derive.
+         */
+        DeploymentModel: {
+            /** @enum {string} */
+            mode: "inline";
+        } | {
+            jobTemplate: string;
+            /** @enum {string} */
+            mode: "scheduled";
+            resources?: null | components["schemas"]["ResourceConfig"];
         };
         /**
          * @description One entry in a `download` task block. Mirrors the frontend `DownloadItem`
@@ -1428,7 +1538,7 @@ export interface components {
          *     `"llm"`, `"file_ops"`, `"kreuzberg"`.
          * @enum {string}
          */
-        ExecutionBackendType: "python" | "process" | "docker" | "http" | "llm" | "file_ops" | "kreuzberg";
+        ExecutionBackendType: "python" | "process" | "docker" | "http" | "llm" | "file_ops" | "kreuzberg" | "catalogue_query";
         ExecutionSpecConfig: {
             backendType: components["schemas"]["ExecutionBackendType"];
             config: unknown;
@@ -1524,9 +1634,17 @@ export interface components {
              *     sources the dispatcher synthesizes this scope from the event itself.
              */
             payload?: unknown;
+            reply_mode?: null | components["schemas"]["ReplyMode"];
         };
         FireTriggerResponse: {
+            outcome?: null | components["schemas"]["TerminalOutcome"];
             result: components["schemas"]["FireResult"];
+        };
+        /** @description Flattened guard diagnostic (`node_id` is highlighted in the editor). */
+        GuardDiagnosticDto: {
+            kind: string;
+            message: string;
+            node_id: string;
         };
         HealthResponse: {
             service: string;
@@ -2038,6 +2156,25 @@ export interface components {
             nodes: components["schemas"]["AncestryNode"][];
         };
         /**
+         * @description How a `POST /api/triggers/{id}/fire` caller wants the response delivered.
+         *     The caller selects per-request (query `?reply=`, `Prefer` header, or a
+         *     JSON body field); a Trigger node's optional `replyDefault` is used only
+         *     when the caller doesn't specify. `Sse` is never *executed* on the fire
+         *     endpoint — SSE is the dedicated `GET /api/instances/{id}/stream` — but is
+         *     modeled so a node can advertise it as the intended consumption mode.
+         * @enum {string}
+         */
+        ReplyMode: "fire_and_forget" | "wait_for_result" | "sse";
+        /** @description Optional resource hints forwarded to the scheduler for a `Scheduled` step. */
+        ResourceConfig: {
+            /** Format: int32 */
+            cpuMhz?: number | null;
+            /** Format: int32 */
+            gpu?: number | null;
+            /** Format: int32 */
+            memoryMb?: number | null;
+        };
+        /**
          * @description Retry behaviour for an `AutomatedStep` whose execution fails or times out.
          *
          *     On failure the compiler re-dispatches the job (a fresh executor submit)
@@ -2059,6 +2196,20 @@ export interface components {
              *     retries (a single failure routes straight to the error output).
              */
             maxRetries?: number;
+        };
+        /**
+         * @description One reachable, producer-attributed reference the guard picker should
+         *     offer at a node. The single source of truth for editor scope —
+         *     replaces the deleted client-side `computeScopes` reimplementation.
+         */
+        ScopeEntryDto: {
+            note: string;
+            /** @description What you'd type in a guard, e.g. `input.data.invoice_amount`. */
+            path: string;
+            producer_label: string;
+            producer_node: string;
+            /** @description Type label (`String`, `Number`, `Bool`, `Opaque(..)`, …). */
+            ty: string;
         };
         /** @description One identifier available to a trigger's payload-mapping expressions. */
         ScopeVar: {
@@ -2200,6 +2351,16 @@ export interface components {
             id: string;
             title: string;
         };
+        /** @description The terminal disposition handed back to a WaitForResult caller. */
+        TerminalOutcome: {
+            /**
+             * @description The structured result envelope (the same value persisted to
+             *     `workflow_instances.result`), or absent when none was produced.
+             */
+            result?: unknown;
+            /** @description Net terminal status: `completed` | `cancelled` | `failed`. */
+            status: string;
+        };
         TokenInfo: {
             /**
              * @description Full token payload (color). Null for `consumed` role when the
@@ -2210,6 +2371,20 @@ export interface components {
             place_name?: string | null;
             role: string;
             token_id: string;
+        };
+        /** @description One token row in `GET /api/auth/tokens`. Never carries the secret. */
+        TokenSummary: {
+            /** @description RFC 3339 creation timestamp, when Zitadel reports it. */
+            created_at?: string | null;
+            description?: string | null;
+            /** @description RFC 3339 PAT expiry — best-effort (omitted if Zitadel doesn't report it). */
+            expires_at?: string | null;
+            /**
+             * @description Opaque token id (the backing Zitadel machine-user id). Pass back to
+             *     `DELETE /api/auth/tokens/{id}` to revoke.
+             */
+            id: string;
+            name: string;
         };
         TriggerHistoryResponse: {
             history: components["schemas"]["FireResult"][];
@@ -2270,10 +2445,38 @@ export interface components {
             /** Format: int32 */
             template_version: number;
         };
+        /**
+         * @description Shape-aware analysis surface — per-node scope + diagnostics. Pure and
+         *     graph-only: works on drafts that can't compile/publish yet.
+         */
+        TypeSurfaceResponse: {
+            diagnostics: components["schemas"]["GuardDiagnosticDto"][];
+            graph_ok: boolean;
+            scopes: {
+                [key: string]: components["schemas"]["ScopeEntryDto"][];
+            };
+        };
         UpdateTemplateRequest: {
             description?: string | null;
             graph?: null | components["schemas"]["WorkflowGraph"];
             name?: string | null;
+        };
+        /**
+         * @description Which concrete child-template version a `SubWorkflow` embeds. Internally
+         *     tagged on the wire: `{"mode":"latest"}` or `{"mode":"pinned","version":3}`.
+         *     `Latest` is an *authoring* intent only — it is resolved to a concrete
+         *     version at the parent's publish time and the resolved AIR is frozen into
+         *     the parent, so runtime is always deterministic / replay-safe. Keep the
+         *     `mode` strings in lockstep with the `snake_case` derive.
+         */
+        VersionPin: {
+            /** @enum {string} */
+            mode: "latest";
+        } | {
+            /** @enum {string} */
+            mode: "pinned";
+            /** Format: int32 */
+            version: number;
         };
         Viewport: {
             /** Format: double */
@@ -2338,6 +2541,13 @@ export interface components {
             id: string;
             metadata: unknown;
             net_id: string;
+            /**
+             * @description Structured result envelope (`{ ok: true, value }` /
+             *     `{ ok: false, error: { reason, value } }`) declared by the workflow's
+             *     End/Failure result binding. NULL until the instance reaches a terminal
+             *     state, and stays NULL for workflows with no result binding.
+             */
+            result?: unknown;
             /** Format: date-time */
             started_at?: string | null;
             status: string;
@@ -2357,6 +2567,15 @@ export interface components {
             /** @description Parent scope node id — child positions are relative to the parent. */
             parentId?: string | null;
             position: components["schemas"]["Position"];
+            /**
+             * @description Stable, author-facing namespace for guard references to this node's
+             *     produced fields: a guard writes `<slug>.<field>` and the compiler
+             *     rebinds it to this node's parked data place. Rhai-identifier-safe and
+             *     unique within a graph. Optional on the wire — when absent the compiler
+             *     derives a deterministic fallback from `id` (clean-cut: no stored
+             *     templates to migrate). See [`WorkflowNode::slug`].
+             */
+            slug?: string | null;
             type: string;
             /**
              * Format: double
@@ -2390,6 +2609,15 @@ export interface components {
             description?: string | null;
             label: string;
             /**
+             * @description Optional success-result binding. Each entry's `expression` is a
+             *     Rhai expression over the inbound token; together they assemble the
+             *     structured `value` of the success envelope (`{ ok: true, value }`)
+             *     stamped onto the terminal token's `exit_code`. Empty (the default)
+             *     inserts no transition — the terminal token is byte-identical to
+             *     pre-feature behavior and the instance `result` stays NULL.
+             */
+            resultMapping?: components["schemas"]["FieldMapping"][];
+            /**
              * @description Declared terminal token shape. Defaults to an empty port (accepts
              *     any incoming token) so existing End nodes keep working. UI editor
              *     for `terminal` lands in Phase 4.
@@ -2406,6 +2634,15 @@ export interface components {
             /** @enum {string} */
             type: "human_task";
         } | {
+            /**
+             * @description Where/how the job is dispatched. `Inline` (default) = the current
+             *     direct executor-lifecycle path. `Scheduled` = submit through the
+             *     long-lived scheduler-net (Nomad/Slurm) for queued / GPU execution,
+             *     optionally pinning a job template + resources. `#[serde(default)]`
+             *     + `Inline` default ⇒ every existing template round-trips unchanged
+             *     (same precedent as `retry_policy`).
+             */
+            deploymentModel?: components["schemas"]["DeploymentModel"];
             description?: string | null;
             executionSpec: components["schemas"]["ExecutionSpecConfig"];
             /**
@@ -2500,6 +2737,14 @@ export interface components {
         } | {
             description?: string | null;
             /**
+             * @description Optional error-result binding. Each entry's `expression` is a Rhai
+             *     expression over the inbound token; together they assemble the
+             *     structured `error.value` of the error envelope
+             *     (`{ ok: false, error: { reason, value } }`) stamped onto the
+             *     token's `exit_code` and carried through to the terminal End.
+             */
+            errorResultMapping?: components["schemas"]["FieldMapping"][];
+            /**
              * @description Failure message. Supports `{{ field }}` placeholders resolved
              *     against the inbound token at run time.
              */
@@ -2519,10 +2764,44 @@ export interface components {
              *     expression evaluated against the trigger source's event payload.
              */
             payloadMapping?: components["schemas"]["FieldMapping"][];
+            replyDefault?: null | components["schemas"]["ReplyMode"];
             /** @description Tagged source describing what event fires this trigger. */
             source: components["schemas"]["TriggerSource"];
             /** @enum {string} */
             type: "trigger";
+        } | {
+            description?: string | null;
+            /**
+             * @description Parent upstream token → child Start `initial` port fields. Each
+             *     entry's `expression` is a Rhai expression over the inbound token;
+             *     together they assemble the token bridged into the child. Empty
+             *     (the default) passes the inbound token through unchanged.
+             */
+            inputMapping?: components["schemas"]["FieldMapping"][];
+            label: string;
+            /**
+             * @description Declared shape of the child's terminal result, mapped back onto the
+             *     workflow token at the join. Empty fields ⇒ pass the child result
+             *     through unchanged (Json). Authoring can prefill this from the
+             *     child's End `terminal` port.
+             */
+            output?: components["schemas"]["Port"];
+            /**
+             * Format: uuid
+             * @description Stable identity of the child template family (any version row's
+             *     `base_template_id`/`id` — resolution picks the concrete row per
+             *     `version_pin` at publish time).
+             */
+            templateId: string;
+            /** @enum {string} */
+            type: "sub_workflow";
+            /**
+             * @description Which concrete version of the child to embed. `Latest` resolves the
+             *     family's `is_latest` row *at the parent's publish time* and freezes
+             *     that concrete version into the embedded AIR; `Pinned` freezes an
+             *     explicit version. Either way the published parent is deterministic.
+             */
+            versionPin?: components["schemas"]["VersionPin"];
         };
         WorkflowTemplate: {
             air_json?: unknown;
@@ -2560,6 +2839,167 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    analyze_graph: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CompileRequest"];
+            };
+        };
+        responses: {
+            /** @description Shape-aware scope + diagnostics */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TypeSurfaceResponse"];
+                };
+            };
+        };
+    };
+    list_tokens: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The caller's tokens */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TokenSummary"][];
+                };
+            };
+            /** @description No session */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Token management disabled */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    create_token: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateTokenRequest"];
+            };
+        };
+        responses: {
+            /** @description Token created (secret shown once) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedToken"];
+                };
+            };
+            /** @description No session */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Identity provider error */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Token management disabled */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    revoke_token: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Token id from the list */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Revoked */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No session */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unknown token, or not the caller's */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Token management disabled */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     list_entries: {
         parameters: {
             query?: never;
@@ -3166,6 +3606,47 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["InstanceStateResponse"];
+                };
+            };
+            /** @description Instance not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    stream_instance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Instance id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description SSE stream of domain events + final result */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": unknown;
                 };
             };
             /** @description Instance not found */
@@ -4777,7 +5258,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Trigger fired */
+            /** @description Trigger fired (FireAndForget, or WaitForResult resolved) */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -4785,6 +5266,13 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["FireTriggerResponse"];
                 };
+            };
+            /** @description WaitForResult timed out — instance still running; poll/stream it */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Fire failed (e.g. mapping or instance error) */
             400: {
@@ -4803,6 +5291,13 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
+            };
+            /** @description SSE requested on the fire endpoint — use GET /api/instances/{id}/stream */
+            406: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

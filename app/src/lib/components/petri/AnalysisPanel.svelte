@@ -58,7 +58,7 @@
 			</div>
 		</div>
 		{#if report?.summary}
-			<div class="flex gap-3 text-xs text-muted-foreground mt-1">
+			<div class="flex gap-3 text-sm text-muted-foreground mt-1">
 				<span class={report.summary.error_count > 0 ? 'text-red-600 font-medium' : ''}>
 					{report.summary.error_count} errors
 				</span>
@@ -78,7 +78,7 @@
 			<div class="flex flex-col items-center justify-center py-8 text-center">
 				<CheckCircle class="w-8 h-8 text-green-500 mb-2" />
 				<p class="text-sm text-muted-foreground">No issues found</p>
-				<p class="text-xs text-muted-foreground mt-1">Topology is valid</p>
+				<p class="text-sm text-muted-foreground mt-1">Topology is valid</p>
 			</div>
 		{:else}
 			<div class="space-y-1">
@@ -98,7 +98,7 @@
 							<div class="min-w-0 flex-1">
 								<div class="flex items-center gap-2">
 									<span
-										class="text-[10px] font-mono px-1.5 py-0.5 rounded
+										class="text-sm font-mono px-1.5 py-0.5 rounded
 										{issue.level === 'error'
 											? 'bg-red-500/15 text-red-500'
 											: issue.level === 'warning'
@@ -107,11 +107,11 @@
 									>
 										{issue.code}
 									</span>
-									<span class="text-[10px] text-muted-foreground">
+									<span class="text-sm text-muted-foreground">
 										{issue.node_type}
 									</span>
 								</div>
-								<div class="text-xs mt-1 text-foreground">{issue.message}</div>
+								<div class="text-sm mt-1 text-foreground">{issue.message}</div>
 							</div>
 						</div>
 					</button>

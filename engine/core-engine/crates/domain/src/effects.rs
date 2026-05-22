@@ -260,6 +260,38 @@ pub const CATALOGUE_UNSUBSCRIBE: EffectDescriptor = EffectDescriptor {
     default_output_schema: None,
 };
 
+/// Record a typed process phase transition.
+///
+/// Carries a serialized `aithericon_executor_domain::StatusDetail::PhaseChanged`
+/// (or the bare `PhaseChanged` payload) on its input port. Unlike
+/// [`PROCESS_LOG_MESSAGE`], the payload is *not* downgraded to a stringly log
+/// breadcrumb — the handler echoes it verbatim into `effect_result` so the
+/// causality consumer can deserialize the whole typed variant.
+pub const PROCESS_PHASE: EffectDescriptor = EffectDescriptor {
+    handler_id: "process_phase",
+    default_input_port: "phase",
+    default_output_port: "recorded",
+    category: ServiceCategory::Orchestration,
+    default_input_schema: None,
+    default_output_schema: None,
+};
+
+/// Record a typed process progress update.
+///
+/// Carries a serialized `aithericon_executor_domain::StatusDetail::ProgressUpdated`
+/// (or the bare `ProgressUpdated` payload) on its input port. Unlike
+/// [`PROCESS_LOG_METRIC`], `current_step`/`total_steps`/`message` are not
+/// dropped — the handler echoes the payload verbatim into `effect_result` for
+/// typed projection by the causality consumer.
+pub const PROCESS_PROGRESS: EffectDescriptor = EffectDescriptor {
+    handler_id: "process_progress",
+    default_input_port: "progress",
+    default_output_port: "recorded",
+    category: ServiceCategory::Orchestration,
+    default_input_schema: None,
+    default_output_schema: None,
+};
+
 /// Log a numeric metric to the process trace (e.g., loss, accuracy, acquisition value).
 pub const PROCESS_LOG_METRIC: EffectDescriptor = EffectDescriptor {
     handler_id: "process_log_metric",
@@ -298,6 +330,8 @@ pub const ALL_BUILTIN: &[&EffectDescriptor] = &[
     &CATALOGUE_LOOKUP,
     &CATALOGUE_SUBSCRIBE,
     &CATALOGUE_UNSUBSCRIBE,
+    &PROCESS_PHASE,
+    &PROCESS_PROGRESS,
     &PROCESS_LOG_METRIC,
     &PROCESS_LOG_MESSAGE,
 ];
@@ -354,7 +388,7 @@ mod tests {
 
     #[test]
     fn all_builtin_covers_all_handlers() {
-        assert_eq!(ALL_BUILTIN.len(), 18);
+        assert_eq!(ALL_BUILTIN.len(), 20);
         let ids: Vec<&str> = ALL_BUILTIN.iter().map(|d| d.handler_id).collect();
         assert!(ids.contains(&"scheduler_submit"));
         assert!(ids.contains(&"scheduler_cancel"));
@@ -371,6 +405,10 @@ mod tests {
         assert!(ids.contains(&"catalogue_lookup"));
         assert!(ids.contains(&"catalogue_subscribe"));
         assert!(ids.contains(&"catalogue_unsubscribe"));
+        assert!(ids.contains(&"process_phase"));
+        assert!(ids.contains(&"process_progress"));
+        assert!(ids.contains(&"process_log_metric"));
+        assert!(ids.contains(&"process_log_message"));
     }
 
     #[test]
