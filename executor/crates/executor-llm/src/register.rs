@@ -185,6 +185,20 @@ pub struct RegisterRequest {
     pub engines: serde_json::Value,
     pub loaded_models: Vec<String>,
     pub services: serde_json::Value,
+    /// Workstream #122 (online-clinic Phase 2 § 35.6): dispatch backend kind
+    /// this pool advertises ("http" / "python" / "docker" / "file_ops" / …).
+    /// For executor-llm this is always `"http"` — the pool dispatches via
+    /// the HTTP POST /v1/inference path (see `inference_handler.rs`).
+    /// cap-routing persists the value on the `compute_pools` row and threads
+    /// it through `PickRouteResponse` → `cloud-layer-workflow::merge_enrichment`
+    /// → enriched effect_config → mekhan executor token, closing the gap that
+    /// surfaced at the N+17 e2e-canonical-scenarios cert (mekhan's
+    /// `ExecutionSpec.backend` wire-required field).
+    /// `#[serde(skip_serializing_if = "Option::is_none")]` preserves wire
+    /// compat with pre-#122 cap-routing instances which `#[serde(default)]`
+    /// the field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pool_backend: Option<String>,
 }
 
 /// Wire shape of the register response. The `heartbeat_token` is plaintext
@@ -307,6 +321,8 @@ pub fn build_register_request(
         engines: build_engines_advertisement(engine_capabilities),
         loaded_models: vec![],
         services,
+        // Workstream #122: executor-llm dispatches via HTTP POST /v1/inference.
+        pool_backend: Some("http".to_string()),
     }
 }
 
