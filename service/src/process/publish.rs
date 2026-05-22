@@ -15,9 +15,9 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::compiler::{
-    compile_to_air_with_subworkflows, generate_py_io_files, make_child_callable,
-    node_files_inline, node_input_scopes, node_namespace_scopes, CompileError, ResolvedChild,
-    SubWorkflowAir,
+    compile_to_air_with_subworkflows_inline, generate_py_io_files, make_child_callable,
+    node_files_storage_path, node_input_scopes, node_namespace_scopes, CompileError,
+    ResolvedChild, SubWorkflowAir,
 };
 use crate::models::error::ApiError;
 use crate::models::template::{
@@ -70,6 +70,8 @@ impl<'a> PublishService<'a> {
         graph: &WorkflowGraph,
         name: &str,
         description: &str,
+        template_id: Uuid,
+        version: i32,
         publishing_family: Option<Uuid>,
         files: &mut HashMap<String, HashMap<String, String>>,
     ) -> Result<CompiledArtifacts, ApiError> {
@@ -78,12 +80,17 @@ impl<'a> PublishService<'a> {
         let sub_air =
             resolve_subworkflow_air(self.state, publishing_family, graph).await?;
 
-        let air_files = node_files_inline(files);
-        let air_json = compile_to_air_with_subworkflows(
+        // Per-job NATS payloads only carry storage paths; the executor
+        // downloads the file at stage time. The compile-time borrow
+        // planner gets the inline source map directly via the `_inline`
+        // entry point so it can still detect `<slug>.<field>` accesses.
+        let air_files = node_files_storage_path(template_id, version, files);
+        let air_json = compile_to_air_with_subworkflows_inline(
             graph,
             name,
             description,
             &air_files,
+            files,
             &sub_air,
         )
         .map_err(|e| {

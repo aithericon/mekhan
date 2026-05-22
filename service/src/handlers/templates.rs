@@ -9,8 +9,8 @@ use uuid::Uuid;
 
 use crate::auth::AuthUser;
 use crate::compiler::{
-    compile_to_air, compile_to_air_with_subworkflows, generate_py_io_files,
-    node_files_inline, node_input_scopes, node_namespace_scopes,
+    compile_to_air, compile_to_air_with_subworkflows_inline, generate_py_io_files,
+    node_files_inline, node_files_storage_path, node_input_scopes, node_namespace_scopes,
 };
 use crate::lifecycle::cleanup_net;
 use crate::models::error::{ApiError, ErrorResponse};
@@ -485,6 +485,8 @@ pub async fn publish_template(
             &graph,
             &existing.name,
             &existing.description,
+            id,
+            existing.version,
             Some(existing.base_template_id.unwrap_or(existing.id)),
             &mut ydoc_files,
         )
@@ -896,6 +898,8 @@ pub async fn apply_template(
             &graph,
             &latest.name,
             &latest.description,
+            target_id,
+            target_version,
             Some(latest.base_template_id.unwrap_or(latest.id)),
             &mut files_map,
         )
@@ -1110,19 +1114,20 @@ pub async fn compile_preview(
         Ok(Some((_, f))) => f,
         _ => HashMap::new(),
     };
-    let files = node_files_inline(&ydoc_files);
+    // Mirror the publish path: storage_path NodeFiles for executor
+    // staging + the same inline `ydoc_files` map passed to the borrow
+    // planner so the preview AIR matches what publish would emit.
+    let files = node_files_storage_path(id, existing.version, &ydoc_files);
 
-    // Resolve + freeze SubWorkflow children so the preview AIR matches what
-    // publish would emit (DB-backed; the stateless `/api/compile` path cannot
-    // and correctly surfaces `SubWorkflowUnresolved` instead).
     let publishing_family = Some(existing.base_template_id.unwrap_or(existing.id));
     let sub_air = resolve_subworkflow_air(&state, publishing_family, &graph).await?;
 
-    let air = compile_to_air_with_subworkflows(
+    let air = compile_to_air_with_subworkflows_inline(
         &graph,
         &existing.name,
         &existing.description,
         &files,
+        &ydoc_files,
         &sub_air,
     )
     .map_err(|e| {

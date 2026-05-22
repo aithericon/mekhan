@@ -14,11 +14,11 @@ mod validate;
 mod wire;
 
 pub use compile::{
-    compile_to_air, compile_to_air_with_subworkflows, compile_to_scenario, ResolvedChild,
-    SubWorkflowAir,
+    compile_to_air, compile_to_air_with_subworkflows, compile_to_air_with_subworkflows_inline,
+    compile_to_scenario, compile_to_scenario_with_inline_sources, ResolvedChild, SubWorkflowAir,
 };
 pub use error::{CompileError, CompileErrorView};
-pub use lower::node_files_inline;
+pub use lower::{node_files_inline, node_files_storage_path};
 pub use pyio::generate_py_io_files;
 pub use subworkflow::{make_child_callable, CHILD_FAIL_OUT, CHILD_INBOX, CHILD_REPLY_OUT};
 pub use token_shape::{

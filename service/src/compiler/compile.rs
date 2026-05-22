@@ -16,6 +16,38 @@ use aithericon_sdk::Context;
 use serde_json::Value;
 use std::collections::HashMap;
 
+/// Extract inline Python source text from a [`NodeFiles`] for the
+/// borrow planner. Callers whose `files` already carry `InputSource::Raw`
+/// (preview, stateless compile, most tests) get a complete map for free;
+/// callers using `InputSource::StoragePath` (publish path) should call
+/// the `*_with_inline_sources` entry points and pass the inline source
+/// map directly. Skips `StoragePath` and `Url` silently.
+fn derive_inline_sources(
+    files: &NodeFiles,
+) -> HashMap<String, HashMap<String, String>> {
+    let mut out: HashMap<String, HashMap<String, String>> = HashMap::new();
+    for (node_id, node_files) in files {
+        let mut inner: HashMap<String, String> = HashMap::new();
+        for (name, source) in node_files {
+            match source {
+                InputSource::Raw { content } => {
+                    inner.insert(name.clone(), content.clone());
+                }
+                InputSource::Inline { value } => {
+                    if let Value::String(s) = value {
+                        inner.insert(name.clone(), s.clone());
+                    }
+                }
+                _ => {}
+            }
+        }
+        if !inner.is_empty() {
+            out.insert(node_id.clone(), inner);
+        }
+    }
+    out
+}
+
 /// A child template, fully compiled + made spawn-callable, resolved at the
 /// *parent's* publish time and frozen into the parent. Keyed by the parent's
 /// `SubWorkflow` node id in [`SubWorkflowAir`]. `lower_subworkflow` embeds
@@ -42,14 +74,27 @@ pub type SubWorkflowAir = HashMap<String, ResolvedChild>;
 /// resolution (a graph containing a `SubWorkflow` node compiles to an
 /// `Unresolved` error here — callers that support sub-workflows use
 /// [`compile_to_air_with_subworkflows`]).
+///
+/// Derives the Python-source map for the borrow planner from any `Raw`
+/// entries in `files`. Callers that pass `StoragePath` (publish path)
+/// should use [`compile_to_air_with_subworkflows_inline`] and provide
+/// the inline source map explicitly — otherwise the borrow planner
+/// can't scan source and silently emits no `<slug>.json` staging.
 pub fn compile_to_air(
     graph: &WorkflowGraph,
     name: &str,
     description: &str,
     files: &NodeFiles,
 ) -> Result<Value, CompileError> {
-    let scenario =
-        compile_to_scenario(graph, name, description, files, &SubWorkflowAir::new())?;
+    let inline = derive_inline_sources(files);
+    let scenario = compile_to_scenario_with_inline_sources(
+        graph,
+        name,
+        description,
+        files,
+        &inline,
+        &SubWorkflowAir::new(),
+    )?;
     serde_json::to_value(&scenario)
         .map_err(|e| CompileError::Compilation(format!("failed to serialize scenario: {e}")))
 }
@@ -63,7 +108,41 @@ pub fn compile_to_air_with_subworkflows(
     files: &NodeFiles,
     sub_air: &SubWorkflowAir,
 ) -> Result<Value, CompileError> {
-    let scenario = compile_to_scenario(graph, name, description, files, sub_air)?;
+    let inline = derive_inline_sources(files);
+    let scenario = compile_to_scenario_with_inline_sources(
+        graph,
+        name,
+        description,
+        files,
+        &inline,
+        sub_air,
+    )?;
+    serde_json::to_value(&scenario)
+        .map_err(|e| CompileError::Compilation(format!("failed to serialize scenario: {e}")))
+}
+
+/// Publish-path entry: `files` may carry `InputSource::StoragePath` for
+/// scaling (per-job-dispatch NATS payload stays small), and the
+/// `inline_sources` map carries the Python source the borrow planner
+/// needs to detect `<slug>.<field>` accesses. The two are decoupled —
+/// the executor stages whatever `files` says; the planner scans whatever
+/// `inline_sources` says.
+pub fn compile_to_air_with_subworkflows_inline(
+    graph: &WorkflowGraph,
+    name: &str,
+    description: &str,
+    files: &NodeFiles,
+    inline_sources: &HashMap<String, HashMap<String, String>>,
+    sub_air: &SubWorkflowAir,
+) -> Result<Value, CompileError> {
+    let scenario = compile_to_scenario_with_inline_sources(
+        graph,
+        name,
+        description,
+        files,
+        inline_sources,
+        sub_air,
+    )?;
     serde_json::to_value(&scenario)
         .map_err(|e| CompileError::Compilation(format!("failed to serialize scenario: {e}")))
 }
@@ -78,6 +157,21 @@ pub fn compile_to_scenario(
     name: &str,
     description: &str,
     files: &NodeFiles,
+    sub_air: &SubWorkflowAir,
+) -> Result<ScenarioDefinition, CompileError> {
+    let inline = derive_inline_sources(files);
+    compile_to_scenario_with_inline_sources(graph, name, description, files, &inline, sub_air)
+}
+
+/// Internal entry that decouples the executor-side `files` (which may
+/// carry `StoragePath` for runtime efficiency) from the compile-time
+/// `inline_sources` (which the borrow planner needs as plain text).
+pub fn compile_to_scenario_with_inline_sources(
+    graph: &WorkflowGraph,
+    name: &str,
+    description: &str,
+    files: &NodeFiles,
+    inline_sources: &HashMap<String, HashMap<String, String>>,
     sub_air: &SubWorkflowAir,
 ) -> Result<ScenarioDefinition, CompileError> {
     // 1. Build directed graph
@@ -219,7 +313,7 @@ pub fn compile_to_scenario(
     //     synthesize read-arcs (the compiler-as-borrow-checker) so every
     //     Decision/Loop guard physically `&`-borrows the parked data place
     //     that owns the field it references. Runs post-merge: place ids final.
-    apply_control_data_foundation(graph, &mut scenario, &fixups, files)?;
+    apply_control_data_foundation(graph, &mut scenario, &fixups, inline_sources)?;
 
     Ok(scenario)
 }
@@ -229,7 +323,7 @@ fn apply_control_data_foundation(
     graph: &crate::models::template::WorkflowGraph,
     scenario: &mut aithericon_sdk::scenario::ScenarioDefinition,
     fixups: &PostProcess,
-    files: &NodeFiles,
+    inline_sources: &HashMap<String, HashMap<String, String>>,
 ) -> Result<(), CompileError> {
     use crate::compiler::token_shape::{
         analyze, automated_step_borrow_plan, ctrl_def_name, data_def_name, def_ref,
@@ -357,7 +451,7 @@ fn apply_control_data_foundation(
     //      `review.invoice_amount` is a plain attribute lookup — no
     //      `token[...]` ceremony, no IPC). The borrow plan resolves the
     //      slug to the parked producer via the same machinery as guards.
-    let borrows = automated_step_borrow_plan(graph, files)?;
+    let borrows = automated_step_borrow_plan(graph, inline_sources)?;
     let mut by_consumer: std::collections::HashMap<String, Vec<_>> =
         std::collections::HashMap::new();
     for b in borrows {
@@ -1268,6 +1362,7 @@ mod tests {
             ],
             edges: vec![edge("e0", "s", "a"), edge("e1", "a", "e")],
             viewport: None,
+            instance_concurrency: Default::default(),
         };
         let scenario = crate::compiler::compile_to_scenario(
             &graph,

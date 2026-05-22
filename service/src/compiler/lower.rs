@@ -23,21 +23,32 @@ use aithericon_sdk::{
 use serde_json::json;
 use std::collections::HashMap;
 
-/// Per-node, per-filename input source map. Code files are always inline
-/// (`InputSource::Raw`) — the executor stages the source from the AIR's job
-/// spec directly, the borrow planner needs the source text to detect
-/// `<slug>.<field>` references, and the published-AIR ↔ S3 split is
-/// otherwise a footgun. Use [`node_files_inline`] to build one from the
-/// canonical `node_id → filename → content` map every caller already has
-/// in memory.
+/// Per-node, per-filename input source map. Two flavours coexist:
+///
+///   - `InputSource::Raw { content }` — inline source carried in the
+///     AIR. Right for stateless preview (no S3 yet) and compiler tests.
+///   - `InputSource::StoragePath { path, .. }` — S3 reference resolved
+///     by the executor at stage time. Right for publish + apply, where
+///     embedding every code file inline would blow the per-execution
+///     NATS message budget on large workflows.
+///
+/// The borrow planner needs source TEXT to detect `<slug>.<field>`
+/// access. Callers using `StoragePath` here must pass an inline source
+/// map to `compile_to_air_with_subworkflows_inline` so the planner
+/// still has something to scan. Callers using `Raw` can use the
+/// derive-from-files plain `compile_to_air*` entry points.
 pub type NodeFiles = HashMap<String, HashMap<String, InputSource>>;
 
-/// Wrap inline `node_id → filename → content` into the [`NodeFiles`] shape
-/// the compiler consumes. Single source of truth — replaces the legacy
-/// `storage_path_files` helpers in publish/handlers, which used to emit
-/// `InputSource::StoragePath` and required publish-time S3 keys to keep
-/// the executor working at runtime. Everything is `Raw` now (see
-/// [`NodeFiles`] for rationale).
+/// Wrap inline `node_id → filename → content` into a [`NodeFiles`]
+/// emitting `InputSource::Raw` for every entry. Right for the stateless
+/// preview (`POST /api/compile`) and compiler tests.
+///
+/// **Don't use for publish.** Every `Raw` entry gets embedded inline in
+/// the per-execution job spec dispatched over NATS; on workflows with
+/// many or sizeable code files that blows the message budget. Use
+/// [`node_files_storage_path`] instead and pass the inline source map
+/// to `compile_to_air_with_subworkflows_inline` so the borrow planner
+/// can still scan.
 pub fn node_files_inline(
     inline: &HashMap<String, HashMap<String, String>>,
 ) -> NodeFiles {
@@ -51,6 +62,43 @@ pub fn node_files_inline(
                         filename.clone(),
                         InputSource::Raw {
                             content: content.clone(),
+                        },
+                    )
+                })
+                .collect();
+            (node_id.clone(), sources)
+        })
+        .collect()
+}
+
+/// Wrap a published-template's inline file map into a [`NodeFiles`]
+/// keyed by S3 storage paths (`templates/{id}/v{n}/{node}/{filename}`),
+/// matching the S3 layout written by
+/// [`crate::process::publish::PublishService::upload_files`]. The
+/// executor downloads the file at stage time, so per-job NATS payloads
+/// stay small — the right primitive for publish + apply.
+///
+/// Pair with the original `ydoc_files` inline map passed as
+/// `inline_sources` to `compile_to_air_with_subworkflows_inline` so the
+/// borrow planner has source text to scan.
+pub fn node_files_storage_path(
+    template_id: uuid::Uuid,
+    version: i32,
+    ydoc_files: &HashMap<String, HashMap<String, String>>,
+) -> NodeFiles {
+    ydoc_files
+        .iter()
+        .map(|(node_id, files)| {
+            let sources = files
+                .keys()
+                .map(|filename| {
+                    let path =
+                        format!("templates/{template_id}/v{version}/{node_id}/{filename}");
+                    (
+                        filename.clone(),
+                        InputSource::StoragePath {
+                            path,
+                            storage: None,
                         },
                     )
                 })

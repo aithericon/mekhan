@@ -1861,7 +1861,7 @@ pub(crate) struct AutomatedStepDataBorrow {
 /// borrow will silently miss.
 pub(crate) fn automated_step_borrow_plan(
     graph: &WorkflowGraph,
-    files: &crate::compiler::lower::NodeFiles,
+    inline_sources: &std::collections::HashMap<String, std::collections::HashMap<String, String>>,
 ) -> Result<Vec<AutomatedStepDataBorrow>, CompileError> {
     use crate::models::template::ExecutionBackendType;
 
@@ -1880,20 +1880,21 @@ pub(crate) fn automated_step_borrow_plan(
         if execution_spec.backend_type != ExecutionBackendType::Python {
             continue;
         }
+        // `entrypoint` lives at the top of `executionSpec` (wire-level),
+        // not nested under `config`. Fall back to `main.py` for legacy
+        // templates that omit it.
         let entrypoint = execution_spec
-            .config
-            .get("entrypoint")
-            .and_then(|v| v.as_str())
-            .unwrap_or("main.py")
-            .to_string();
-        let Some(node_files) = files.get(&node.id) else {
+            .entrypoint
+            .clone()
+            .unwrap_or_else(|| "main.py".to_string());
+        let Some(node_files) = inline_sources.get(&node.id) else {
             continue;
         };
-        let Some(source) = node_files.get(&entrypoint).and_then(input_source_text) else {
+        let Some(source) = node_files.get(&entrypoint) else {
             continue;
         };
 
-        for r in crate::compiler::python_refs::extract_python_refs(&source) {
+        for r in crate::compiler::python_refs::extract_python_refs(source) {
             let Some(prod_id) = slugs.node_for(&r.head).map(str::to_string) else {
                 continue;
             };
@@ -1920,21 +1921,6 @@ pub(crate) fn automated_step_borrow_plan(
         }
     }
     Ok(out)
-}
-
-fn input_source_text(src: &aithericon_executor_domain::InputSource) -> Option<String> {
-    use aithericon_executor_domain::InputSource;
-    match src {
-        InputSource::Raw { content } => Some(content.clone()),
-        InputSource::Inline { value } => {
-            if let serde_json::Value::String(s) = value {
-                Some(s.clone())
-            } else {
-                None
-            }
-        }
-        _ => None,
-    }
 }
 
 /// Per-node, per-slug field map — the picker model pivoted from a flat
@@ -2478,17 +2464,16 @@ mod scope_reachability_tests {
         }"#;
         let g: WorkflowGraph = serde_json::from_str(json).expect("deser borrow graph");
 
-        let mut files: NodeFiles = HashMap::new();
+        let mut inline: std::collections::HashMap<String, std::collections::HashMap<String, String>> =
+            HashMap::new();
         let mut step_files = HashMap::new();
         step_files.insert(
             "main.py".to_string(),
-            InputSource::Raw {
-                content: "amount = review.invoice_amount\nprint(amount)\n".to_string(),
-            },
+            "amount = review.invoice_amount\nprint(amount)\n".to_string(),
         );
-        files.insert("extract".to_string(), step_files);
+        inline.insert("extract".to_string(), step_files);
 
-        let borrows = automated_step_borrow_plan(&g, &files).expect("borrow plan");
+        let borrows = automated_step_borrow_plan(&g, &inline).expect("borrow plan");
         assert_eq!(
             borrows.len(),
             1,
@@ -2504,8 +2489,6 @@ mod scope_reachability_tests {
     /// envelope once and the user reads any number of fields off it.
     #[test]
     fn python_borrow_dedupes_per_producer() {
-        use crate::compiler::lower::NodeFiles;
-        use aithericon_executor_domain::InputSource;
         use std::collections::HashMap;
 
         let json = r#"{
@@ -2534,17 +2517,16 @@ mod scope_reachability_tests {
         }"#;
         let g: WorkflowGraph = serde_json::from_str(json).expect("deser borrow graph");
 
-        let mut files: NodeFiles = HashMap::new();
+        let mut inline: HashMap<String, HashMap<String, String>> = HashMap::new();
         let mut step_files = HashMap::new();
         step_files.insert(
             "main.py".to_string(),
-            InputSource::Raw {
-                content: "a = review.invoice_amount\nb = review.vendor_name\nc = review.invoice_amount\n".to_string(),
-            },
+            "a = review.invoice_amount\nb = review.vendor_name\nc = review.invoice_amount\n"
+                .to_string(),
         );
-        files.insert("extract".to_string(), step_files);
+        inline.insert("extract".to_string(), step_files);
 
-        let borrows = automated_step_borrow_plan(&g, &files).expect("borrow plan");
+        let borrows = automated_step_borrow_plan(&g, &inline).expect("borrow plan");
         // Three accesses on `review` → one borrow.
         assert_eq!(
             borrows.len(),
@@ -2558,8 +2540,6 @@ mod scope_reachability_tests {
     /// positive against `os.path` and friends.
     #[test]
     fn python_unknown_head_is_silently_ignored() {
-        use crate::compiler::lower::NodeFiles;
-        use aithericon_executor_domain::InputSource;
         use std::collections::HashMap;
 
         let json = r#"{
@@ -2581,17 +2561,16 @@ mod scope_reachability_tests {
         }"#;
         let g: WorkflowGraph = serde_json::from_str(json).expect("deser graph");
 
-        let mut files: NodeFiles = HashMap::new();
+        let mut inline: HashMap<String, HashMap<String, String>> = HashMap::new();
         let mut step_files = HashMap::new();
         step_files.insert(
             "main.py".to_string(),
-            InputSource::Raw {
-                content: "import os\np = os.path.join('a', 'b')\nlocal_var = {'k': 1}\nv = local_var.get('k')\n".to_string(),
-            },
+            "import os\np = os.path.join('a', 'b')\nlocal_var = {'k': 1}\nv = local_var.get('k')\n"
+                .to_string(),
         );
-        files.insert("extract".to_string(), step_files);
+        inline.insert("extract".to_string(), step_files);
 
-        let borrows = automated_step_borrow_plan(&g, &files).expect("borrow plan");
+        let borrows = automated_step_borrow_plan(&g, &inline).expect("borrow plan");
         assert!(
             borrows.is_empty(),
             "stdlib + locals must not become borrows; got: {borrows:?}"
