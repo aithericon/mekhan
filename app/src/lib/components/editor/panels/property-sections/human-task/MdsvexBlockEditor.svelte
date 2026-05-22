@@ -1,15 +1,28 @@
 <script lang="ts">
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import { Textarea } from '$lib/components/ui/textarea';
+	import type { ScopeEntry } from '$lib/editor/guard-scope';
+	import InsertRefButton from '../InsertRefButton.svelte';
 
 	type Props = {
 		content: string;
 		readonly?: boolean;
+		scope?: ScopeEntry[];
 		onchange: (content: string) => void;
 		onremove: () => void;
 	};
 
-	let { content, readonly = false, onchange, onremove }: Props = $props();
+	let {
+		content,
+		readonly = false,
+		scope = [],
+		onchange,
+		onremove
+	}: Props = $props();
+
+	function appendRef(snippet: string) {
+		onchange(content ? `${content} ${snippet}` : snippet);
+	}
 </script>
 
 <!-- ui-allow: block-type accent — no theme token for markdown/purple identity -->
@@ -38,4 +51,9 @@
 		rows={4}
 		class="font-mono"
 	/>
+	{#if scope.length > 0}
+		<div class="mt-1.5">
+			<InsertRefButton {scope} disabled={readonly} oninsert={appendRef} />
+		</div>
+	{/if}
 </div>

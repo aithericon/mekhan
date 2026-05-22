@@ -205,7 +205,7 @@
 
 		<!-- Type-specific sections -->
 		{#if data.type === 'start'}
-			<StartNodeSection {data} {readonly} {onchange} {binding} {nodeId} {onselectnode} />
+			<StartNodeSection {data} {readonly} {onchange} {binding} {nodeId} {scope} {onselectnode} />
 		{:else if data.type === 'human_task'}
 			{#if templateId && nodeId}
 				<div class="space-y-3">
@@ -228,10 +228,10 @@
 					</Button>
 				</div>
 			{:else}
-				<HumanTaskSection {data} {readonly} {onchange} />
+				<HumanTaskSection {data} {readonly} {onchange} {scope} />
 			{/if}
 		{:else if data.type === 'automated_step'}
-			<AutomatedStepSection {data} {readonly} {onchange} {binding} {nodeId} {templateId} />
+			<AutomatedStepSection {data} {readonly} {onchange} {binding} {nodeId} {templateId} {scope} />
 			<RetryPolicySection {data} {readonly} {onchange} />
 		{:else if data.type === 'decision'}
 			<DecisionNodeSection {data} {readonly} {onchange} {scope} />
@@ -246,11 +246,11 @@
 		{:else if data.type === 'scope'}
 			<ScopeSection {data} {binding} {nodeId} />
 		{:else if data.type === 'phase_update'}
-			<PhaseUpdateNodeSection {data} {readonly} {onchange} />
+			<PhaseUpdateNodeSection {data} {readonly} {onchange} {scope} />
 		{:else if data.type === 'progress_update'}
-			<ProgressUpdateNodeSection {data} {readonly} {onchange} />
+			<ProgressUpdateNodeSection {data} {readonly} {onchange} {scope} />
 		{:else if data.type === 'failure'}
-			<FailureNodeSection {data} {readonly} {onchange} />
+			<FailureNodeSection {data} {readonly} {onchange} {scope} />
 		{:else if data.type === 'end'}
 			<EndNodeSection {data} {readonly} {onchange} />
 		{:else if data.type === 'sub_workflow'}

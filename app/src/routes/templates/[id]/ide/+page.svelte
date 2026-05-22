@@ -17,10 +17,9 @@
 		createNewVersion,
 		uploadFile,
 		updateTemplate,
-		getStepScopes,
-		type Template,
-		type StepScopeField
+		type Template
 	} from '$lib/api/client';
+	import { fetchNodeScopes, type ScopeEntry } from '$lib/editor/guard-scope';
 
 	const templateId = $derived(page.params.id!);
 
@@ -28,18 +27,16 @@
 	let error = $state<string | null>(null);
 	let runDialogOpen = $state(false);
 
-	// Per-node input scope for the step reference panel, plus a diagnostic so
-	// an empty panel can explain itself. Derived server-side from the live
-	// Y.Doc graph; getStepScopes never throws.
-	let stepScopes = $state<Record<string, StepScopeField[]>>({});
-	let scopeDiagnostic = $state<string>('ok');
+	// Per-node input scope for the step reference panel + every other panel
+	// that wants a RefPicker (Decision, Loop, HumanTask, AutomatedStep). Same
+	// `POST /api/analyze`-backed loader the canvas-mode property panel uses,
+	// so what the picker shows is exactly what the compiler resolves.
+	let nodeScopes = $state<Map<string, ScopeEntry[]>>(new Map());
 	let scopeBusy = $state(false);
 	async function refreshScopes() {
 		scopeBusy = true;
 		try {
-			const res = await getStepScopes(templateId);
-			stepScopes = res.scopes;
-			scopeDiagnostic = res.diagnostic;
+			nodeScopes = await fetchNodeScopes(binding.graph);
 		} finally {
 			scopeBusy = false;
 		}
@@ -241,12 +238,12 @@
 		load();
 	});
 
-	// Keep the step reference panel fresh. io-stubs derives scope from the
-	// live Y.Doc, so *any* edit — including adding a port field on another
-	// node — can change a step's scope. Refetch debounced after edits settle
-	// (not just on node switch, which is why a freshly added field looked
-	// like it "didn't show up"). The first post-sync update also corrects the
-	// initial fetch if it raced ahead of the doc.
+	// Keep every panel's scope fresh. /api/analyze derives scope from the live
+	// graph, so *any* edit — including adding a port field on another node —
+	// can change a step's scope. Refetch debounced after edits settle (not
+	// just on node switch, which is why a freshly added field looked like it
+	// "didn't show up"). The first post-sync update also corrects the initial
+	// fetch if it raced ahead of the doc.
 	let scopeTimer: ReturnType<typeof setTimeout> | undefined;
 	function scheduleScopeRefresh() {
 		clearTimeout(scopeTimer);
@@ -329,8 +326,7 @@
 					{binding}
 					nodeId={selectedNodeId}
 					readonly={template?.published ?? false}
-					scopeFields={stepScopes[selectedNodeId] ?? []}
-					{scopeDiagnostic}
+					scope={nodeScopes.get(selectedNodeId) ?? []}
 					scopeBusy={scopeBusy}
 					onRefreshScope={refreshScopes}
 				/>

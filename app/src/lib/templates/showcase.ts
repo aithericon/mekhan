@@ -482,14 +482,15 @@ const showcaseFiles: Record<string, Record<string, string>> = {
 # 'update_phase' / 'update_progress' / 'log_*' call streams to the process
 # view via the executor → causality → hpi_logs/hpi_metrics pipeline.
 # 'load_input()' returns the workflow token; the generated _aithericon_io.pyi
-# types this node's fields so 'token.vendor_name' autocompletes.
+# types each leaf so the IDE's Reference panel mirrors the picker's
+# '<slug>.<field>' / 'input.<path>' scope.
 import time
 
 from _aithericon_io import load_input
 
 token = load_input()
-vendor = token.vendor_name or ""
-amount = token.invoice_amount or 0
+vendor = token["vendor_name"] or ""
+amount = token["invoice_amount"] or 0
 
 # Process layout / definition surfaced to the user for this step.
 define_phases(["Load document", "OCR scan", "NLP extraction", "Validate", "Emit"])
@@ -546,7 +547,7 @@ import time
 from _aithericon_io import load_input
 
 token = load_input()
-amount = token.amount if token.amount is not None else (token.invoice_amount or 0)
+amount = token["amount"] if token.get("amount") is not None else (token["invoice_amount"] or 0)
 
 # Process layout / definition surfaced to the user for this step.
 define_phases(["Load token", "Sanctions screening", "Fraud scoring", "Decision"])
