@@ -2543,6 +2543,58 @@
         }
       }
     },
+    "/api/templates/apply-air": {
+      "post": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "POST /api/templates/apply-air",
+        "description": "Clinic-style headless template upload: accepts pre-compiled AIR\n(`ScenarioDefinition` shape — `{places[], transitions[]}`) directly,\nbypassing the editor's `WorkflowGraph` → AIR compile pass entirely.\nThe supplied `air_json` is stored verbatim into the `air_json` column;\na synthetic stub graph containing just the `Trigger` node is stored\ninto the `graph` column so the trigger dispatcher's `register_triggers`\nfinds it post-commit.\n\nIdempotency: name-based. A first apply with a given `name` Seeds a\nfresh v1 chain (`is_latest = true`); subsequent applies with the same\n`name` Bump the chain to a new born-published version (prior latest's\ntriggers `forget_template`'d, new version's triggers registered).\n\nDistinct from `POST /api/templates/{id}/apply` (the GitOps path for\ngraph-authored templates): that one demands an existing `{id}` and a\n`WorkflowGraph`, then runs the compile pass. This endpoint takes\nneither.",
+        "operationId": "apply_air_template",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApplyAirTemplateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Applied: seeded v1 or a new born-published version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowTemplate"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid AIR or trigger spec",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/templates/{id}": {
       "get": {
         "tags": [
@@ -3565,6 +3617,43 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "ApplyAirTemplateRequest": {
+        "type": "object",
+        "description": "Request body for `POST /api/templates/apply-air` — clinic-style\nheadless template upload.\n\nAccepts pre-compiled AIR directly: no `WorkflowGraph` compile pass,\nno Y.Doc init, no S3 file upload. The supplied `air_json` is stored\nverbatim into the `air_json` column; a synthetic stub graph (one\nTrigger node, no edges) is stored into the `graph` column so the\ntrigger dispatcher's `register_triggers` finds it.\n\nIdempotency: name-based. Re-apply with the same `name` Bumps the\nchain (new version row, prior version's triggers forgotten); first\napply Seeds (fresh chain at v1).",
+        "required": [
+          "name",
+          "air_json",
+          "trigger"
+        ],
+        "properties": {
+          "air_json": {
+            "description": "Pre-compiled AIR. Stored verbatim. The endpoint runs no compile\npass; the AIR is consumed by the engine at trigger-fire time."
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "source_ref": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SourceRef",
+                "description": "Optional git provenance, recorded into `source_ref` exactly like\nthe existing GitOps `apply` endpoint."
+              }
+            ]
+          },
+          "trigger": {
+            "$ref": "#/components/schemas/PreAirTriggerSpec"
           }
         }
       },
@@ -6196,6 +6285,54 @@
           }
         }
       },
+      "PreAirTriggerSpec": {
+        "type": "object",
+        "description": "Trigger spec embedded in a `POST /api/templates/apply-air` request.\nThe endpoint synthesizes a `WorkflowGraph` stub containing only this\nTrigger node so that `register_triggers` (which walks `template.graph`)\nfinds it post-commit. Direct AIR-place binding via\n`air_target_place_id` — no graph edge.",
+        "required": [
+          "node_id",
+          "label",
+          "source",
+          "air_target_place_id",
+          "enabled"
+        ],
+        "properties": {
+          "air_target_place_id": {
+            "type": "string",
+            "description": "The AIR place id whose `initial_tokens` will be seeded with the\nfire payload + system fields. Must exist in the supplied AIR's\n`places[]` — validated at fire time by `parameterize_for_place`."
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether the trigger is live post-apply. Explicit (no default) so\nthe deploy recipe must state intent — a disabled trigger never\nfires even if registered."
+          },
+          "label": {
+            "type": "string"
+          },
+          "node_id": {
+            "type": "string",
+            "description": "Stable, globally-unique node id used in `POST /api/triggers/{node_id}/fire`\nURLs. Author-controlled (e.g. `\"trg_di_extraction_v1\"`)."
+          },
+          "payload_mapping": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FieldMapping"
+            }
+          },
+          "reply_default": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ReplyMode"
+              }
+            ]
+          },
+          "source": {
+            "$ref": "#/components/schemas/TriggerSource",
+            "description": "Trigger source. Clinic's initial use case is `Manual`; other sources\nare valid here too (Webhook, Cron, ...) — the dispatcher resolves\nthem identically once the trigger is registered."
+          }
+        }
+      },
       "ProcessDetail": {
         "allOf": [
           {
@@ -7997,6 +8134,13 @@
               "type"
             ],
             "properties": {
+              "airTargetPlaceId": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Pre-AIR direct target. When set, the trigger fires by seeding the\nnamed AIR place with the supplied payload, bypassing graph-edge\nresolution. Mutually exclusive with an outgoing edge in the graph:\npre-AIR templates carry a Trigger-only stub graph (no Start, no\nedges). Used by clinic-style headless templates pushed through\n`POST /api/templates/apply-air`."
+              },
               "concurrency": {
                 "$ref": "#/components/schemas/ConcurrencyPolicy",
                 "description": "Concurrency / dedup policy applied by the dispatcher."
