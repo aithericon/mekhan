@@ -317,12 +317,21 @@ up-engine scheduler="off":
     fi
 
     echo "▶ starting engine on :3030…"
+    # Cloud-layer-mode default: dispatch executor_submit over HTTP to
+    # cloud-layer-workflow (`/v1/pre-dispatch`), which routes through
+    # CapabilityRoutingHook for pool selection + lease + enrichment. The
+    # PRE_DISPATCH_HOOKS_CONFIG TOML wires this in. Without these the engine
+    # falls back to NATS dispatch which needs an `ExecutionSpec.backend`
+    # field that only the enrichment chain injects, so the cert-stack fails
+    # closed with "missing field `backend`" at the engine's executor effect.
     nohup env \
       RUST_LOG="info,petri_application=debug,petri_api=debug" \
       NATS_URL="{{nats_url}}" \
       EXECUTOR_NATS_URL="{{nats_url}}" \
       EXECUTOR_ENABLED="true" \
       EXECUTOR_NAMESPACE="executor" \
+      MEKHAN_EXECUTOR_DISPATCH="http" \
+      PRE_DISPATCH_HOOKS_CONFIG="$PWD/engine/core-engine/.dev/pre-dispatch-hooks.toml" \
       PORT="3030" \
       "$PWD/engine/target/debug/core-engine" \
       > "{{log_dir}}/engine.log" 2>&1 &
