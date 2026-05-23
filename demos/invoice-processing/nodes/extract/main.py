@@ -7,8 +7,12 @@
 # upstream HumanTask's full form token — no aithericon import, no
 # token["field"], no SDK call to fetch it.
 #
-# Runner-injected SDK helpers (also no import needed):
-#   set_output(name, value)               — emit one field of the output port
+# Outputs are written *implicitly*: assign a name declared in this step's
+# output port and the runner sweeps it from `globals()` at exec end. The
+# editor / .pyi overlay types these names so a typo on the LHS is flagged
+# at author time. `set_output(name, value)` still works for dynamic names.
+#
+# Runner-injected SDK helpers (no import needed):
 #   log_info / log_warn / log_error / log_debug(msg, **fields)
 #   log_metric(name, value), log_artifact(path, name=...)
 #   define_phases([...]), update_phase(name, status)
@@ -17,14 +21,11 @@
 # causality → hpi_logs/hpi_metrics pipeline and surface in the process view.
 import time
 
-vendor = review.vendor_name or ""
-amount = review.invoice_amount or 0
-
 # Process layout / definition surfaced to the user for this step.
 define_phases(["Load document", "OCR scan", "NLP extraction", "Validate", "Emit"])
 
 update_phase("Load document", "running")
-log_info("loading invoice", vendor=vendor, amount=amount)
+log_info("loading invoice", vendor=review.vendor_name, amount=review.invoice_amount)
 update_progress(0.05, "Reading upstream invoice fields")
 time.sleep(0.4)  # demo pacing so the live phase/progress stream is visible
 update_phase("Load document", "completed")
@@ -44,18 +45,22 @@ time.sleep(0.6)
 update_phase("NLP extraction", "completed")
 
 update_phase("Validate", "running")
-if amount <= 0:
-    log_warn("extracted amount is non-positive — downstream review advised", amount=amount)
+if (review.invoice_amount or 0) <= 0:
+    log_warn("extracted amount is non-positive — downstream review advised",
+             amount=review.invoice_amount)
 else:
-    log_info("amount sanity check passed", amount=amount)
+    log_info("amount sanity check passed", amount=review.invoice_amount)
 update_progress(0.85, "Validating extracted fields")
 time.sleep(0.3)
 update_phase("Validate", "completed")
 
 update_phase("Emit", "running")
-set_output("vendor", vendor)
-set_output("amount", amount)
-set_output("extracted", True)
+
+# ── Outputs (implicit set_output via name match against the output port) ──
+vendor = review.vendor_name or ""
+amount = review.invoice_amount or 0
+extracted = True
+
 log_metric("invoice_amount", float(amount))
 log_info("extraction complete", vendor=vendor, amount=amount)
 update_progress(1.0, "Extraction done")

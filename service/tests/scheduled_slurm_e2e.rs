@@ -157,10 +157,7 @@ fn scheduled_graph(step_id: &str) -> WorkflowGraph {
     }
 }
 
-const MAIN_PY: &str = r#"from _aithericon_io import load_input
-
-load_input()
-log_info("scheduled slurm automated-step e2e ran")
+const MAIN_PY: &str = r#"log_info("scheduled slurm automated-step e2e ran", task_id=token.get("task_id"))
 set_output("ran", True)
 set_output("answer", 42)
 "#;

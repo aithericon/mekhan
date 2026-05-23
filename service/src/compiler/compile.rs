@@ -1381,17 +1381,21 @@ mod tests {
         assert!(stub.contains("vendor: Optional[str]"));
         assert!(stub.contains("amount: Optional[float]"));
         assert!(stub.contains("ok: Optional[bool]"));
-        assert!(stub.contains("def load_input() -> Token: ..."));
         // Unsafe identifier is not a typed attribute.
         assert!(!stub.contains("bad-name"));
 
-        let runtime = &map["_aithericon_io.py"];
-        assert!(runtime.contains("import aithericon"));
-        assert!(runtime.contains("return aithericon.token()"));
-        // The shape lives in the SDK only — the runtime must not reimplement a
-        // multi-file/dataclass loader (just the degraded SDK-absent read).
-        assert!(!runtime.contains("dataclass"));
-        assert!(!runtime.contains("Input"));
+        // No runtime `.py` is generated — the SDK exports `aithericon.token()`
+        // and the runner injects `token`/`input` as globals, so a per-node
+        // delegate adds noise without adding capability.
+        assert_eq!(files.len(), 1, "only `.pyi` is generated per node");
+        assert!(!map.contains_key("_aithericon_io.py"));
+        // And the stub MUST NOT advertise a `load_input()` import — there's
+        // no runtime backing it. Authors use the global `token` / `input`
+        // or `aithericon.token()`.
+        assert!(
+            !stub.contains("def load_input"),
+            "load_input is no longer a public API; stub must not advertise it"
+        );
 
         // Pass-through node: still a valid stub, no field decls.
         let empty = generate_py_io_files(
@@ -1401,7 +1405,6 @@ mod tests {
         );
         let empty_map: std::collections::HashMap<_, _> = empty.iter().cloned().collect();
         assert!(empty_map["_aithericon_io.pyi"].contains("class Token(dict): ..."));
-        assert!(empty_map["_aithericon_io.py"].contains("aithericon.token()"));
     }
 
     /// Declared outputs surface as top-level annotations in the `.pyi`

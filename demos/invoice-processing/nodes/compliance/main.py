@@ -47,6 +47,7 @@ else:
 update_progress(1.0, "Compliance complete")
 update_phase("Decision", "completed")
 
-set_output("compliant", compliant)
-set_output("risk_score", risk_score)
-set_output("checked_at", "2024-01-01")
+# ── Outputs (implicit set_output via name match against the output port) ──
+# `compliant` and `risk_score` are already locals above; just expose
+# `checked_at` and the runner sweeps all three at exec end.
+checked_at = "2024-01-01"
