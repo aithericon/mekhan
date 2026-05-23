@@ -7,6 +7,7 @@ pub mod compiler;
 
 pub mod config;
 pub mod db;
+pub mod demos;
 pub mod handlers;
 pub mod lifecycle;
 pub mod models;

@@ -1,0 +1,474 @@
+{
+  "nodes": [
+    {
+      "id": "scope-parallel",
+      "type": "scope",
+      "position": {
+        "x": 1040,
+        "y": 10
+      },
+      "width": 900,
+      "height": 280,
+      "data": {
+        "type": "scope",
+        "label": "High-Value Review"
+      }
+    },
+    {
+      "id": "trigger-invoice-api",
+      "type": "trigger",
+      "position": {
+        "x": 40,
+        "y": 110
+      },
+      "data": {
+        "type": "trigger",
+        "label": "API Call",
+        "source": {
+          "kind": "manual",
+          "form": []
+        },
+        "concurrency": "allow",
+        "payloadMapping": [
+          {
+            "targetField": "invoice_file",
+            "expression": "invoice_file"
+          },
+          {
+            "targetField": "invoice_id",
+            "expression": "invoice_id"
+          }
+        ],
+        "enabled": true
+      }
+    },
+    {
+      "id": "start",
+      "type": "start",
+      "position": {
+        "x": 40,
+        "y": 280
+      },
+      "data": {
+        "type": "start",
+        "label": "Start",
+        "processName": "Invoice {{ invoice_id }}",
+        "initial": {
+          "id": "in",
+          "label": "Invoice Intake",
+          "fields": [
+            {
+              "name": "invoice_file",
+              "label": "Invoice Image (PNG, JPG, or WebP)",
+              "kind": "file",
+              "required": true,
+              "accept": "image/png,image/jpeg,image/webp"
+            },
+            {
+              "name": "invoice_id",
+              "label": "Invoice ID",
+              "kind": "text",
+              "required": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "review",
+      "type": "human_task",
+      "position": {
+        "x": 240,
+        "y": 250
+      },
+      "data": {
+        "type": "human_task",
+        "label": "Review Invoice",
+        "taskTitle": "Review Incoming Invoice",
+        "instructionsMdsvex": "Please review the invoice details below and verify the information is correct before proceeding.",
+        "steps": [
+          {
+            "id": "step-verify",
+            "title": "Verify Details",
+            "blocks": [
+              {
+                "type": "image",
+                "url": "/api/files/{{ invoice_file.key }}",
+                "alt": "Uploaded invoice",
+                "caption": "Original invoice document (uploaded at instance start)"
+              },
+              {
+                "type": "download",
+                "downloads": [
+                  {
+                    "url": "/api/files/{{ invoice_file.key }}",
+                    "filename": "{{ invoice_file.filename }}",
+                    "mime_type": "{{ invoice_file.content_type }}",
+                    "description": "Original uploaded invoice"
+                  }
+                ]
+              },
+              {
+                "type": "divider"
+              },
+              {
+                "type": "input",
+                "field": {
+                  "name": "vendor_name",
+                  "label": "Vendor Name",
+                  "kind": "text",
+                  "required": true,
+                  "placeholder": "Enter vendor name"
+                }
+              },
+              {
+                "type": "input",
+                "field": {
+                  "name": "invoice_amount",
+                  "label": "Invoice Amount ($)",
+                  "kind": "number",
+                  "required": true
+                }
+              },
+              {
+                "type": "input",
+                "field": {
+                  "name": "description",
+                  "label": "Line Item Description",
+                  "kind": "textarea",
+                  "required": false,
+                  "placeholder": "Describe the goods or services"
+                }
+              }
+            ]
+          },
+          {
+            "id": "step-confirm",
+            "title": "Confirmation",
+            "blocks": [
+              {
+                "type": "input",
+                "field": {
+                  "name": "verified",
+                  "label": "I confirm this invoice is accurate",
+                  "kind": "checkbox",
+                  "required": true
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "extract",
+      "type": "automated_step",
+      "position": {
+        "x": 520,
+        "y": 250
+      },
+      "data": {
+        "type": "automated_step",
+        "label": "Extract Data",
+        "description": "OCR + NLP extraction pipeline",
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": [],
+            "virtualenv": false,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Extracted",
+          "fields": [
+            {
+              "name": "vendor",
+              "label": "Vendor",
+              "kind": "text",
+              "required": true
+            },
+            {
+              "name": "amount",
+              "label": "Amount",
+              "kind": "number",
+              "required": true
+            },
+            {
+              "name": "extracted",
+              "label": "Extracted",
+              "kind": "bool",
+              "required": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "check-amount",
+      "type": "decision",
+      "position": {
+        "x": 800,
+        "y": 255
+      },
+      "data": {
+        "type": "decision",
+        "label": "Amount Check",
+        "description": "Route based on invoice total",
+        "conditions": [
+          {
+            "edgeId": "branch-high",
+            "label": "High Value (> $5,000)",
+            "guard": "review.invoice_amount > 5000"
+          }
+        ],
+        "defaultBranch": "default"
+      }
+    },
+    {
+      "id": "split",
+      "type": "parallel_split",
+      "parentId": "scope-parallel",
+      "position": {
+        "x": 40,
+        "y": 110
+      },
+      "data": {
+        "type": "parallel_split",
+        "label": "Dual Review"
+      }
+    },
+    {
+      "id": "manager-approval",
+      "type": "human_task",
+      "parentId": "scope-parallel",
+      "position": {
+        "x": 280,
+        "y": 30
+      },
+      "data": {
+        "type": "human_task",
+        "label": "Manager Approval",
+        "taskTitle": "Approve High-Value Invoice",
+        "instructionsMdsvex": "This invoice exceeds $5,000 and requires manager sign-off.",
+        "steps": [
+          {
+            "id": "step-decide",
+            "title": "Decision",
+            "blocks": [
+              {
+                "type": "input",
+                "field": {
+                  "name": "decision",
+                  "label": "Approval Decision",
+                  "kind": "select",
+                  "required": true,
+                  "options": [
+                    "Approve",
+                    "Reject",
+                    "Request More Info"
+                  ]
+                }
+              },
+              {
+                "type": "input",
+                "field": {
+                  "name": "comments",
+                  "label": "Comments",
+                  "kind": "textarea",
+                  "required": false,
+                  "placeholder": "Optional notes for the finance team"
+                }
+              },
+              {
+                "type": "input",
+                "field": {
+                  "name": "signature",
+                  "label": "Manager Signature",
+                  "kind": "signature",
+                  "required": true
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "compliance",
+      "type": "automated_step",
+      "parentId": "scope-parallel",
+      "position": {
+        "x": 280,
+        "y": 200
+      },
+      "data": {
+        "type": "automated_step",
+        "label": "Compliance Check",
+        "description": "Sanctions & fraud screening",
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": [],
+            "virtualenv": false,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Screening result",
+          "fields": [
+            {
+              "name": "compliant",
+              "label": "Compliant",
+              "kind": "bool",
+              "required": true
+            },
+            {
+              "name": "risk_score",
+              "label": "Risk Score",
+              "kind": "number",
+              "required": true
+            },
+            {
+              "name": "checked_at",
+              "label": "Checked At",
+              "kind": "text",
+              "required": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "join",
+      "type": "parallel_join",
+      "parentId": "scope-parallel",
+      "position": {
+        "x": 560,
+        "y": 110
+      },
+      "data": {
+        "type": "parallel_join",
+        "label": "Merge Results"
+      }
+    },
+    {
+      "id": "end-approved",
+      "type": "end",
+      "parentId": "scope-parallel",
+      "position": {
+        "x": 770,
+        "y": 110
+      },
+      "data": {
+        "type": "end",
+        "label": "Approved"
+      }
+    },
+    {
+      "id": "end-processed",
+      "type": "end",
+      "position": {
+        "x": 1080,
+        "y": 410
+      },
+      "data": {
+        "type": "end",
+        "label": "Processed"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e-trigger-start",
+      "source": "trigger-invoice-api",
+      "target": "start",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e-start-review",
+      "source": "start",
+      "target": "review",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e-review-extract",
+      "source": "review",
+      "target": "extract",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e-extract-decision",
+      "source": "extract",
+      "target": "check-amount",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e-decision-split",
+      "source": "check-amount",
+      "target": "split",
+      "sourceHandle": "branch-high",
+      "targetHandle": "in",
+      "label": "> $5,000",
+      "type": "conditional"
+    },
+    {
+      "id": "e-decision-processed",
+      "source": "check-amount",
+      "target": "end-processed",
+      "sourceHandle": "default",
+      "targetHandle": "in",
+      "label": "≤ $5,000",
+      "type": "conditional"
+    },
+    {
+      "id": "e-split-manager",
+      "source": "split",
+      "target": "manager-approval",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e-split-compliance",
+      "source": "split",
+      "target": "compliance",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e-manager-join",
+      "source": "manager-approval",
+      "target": "join",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e-compliance-join",
+      "source": "compliance",
+      "target": "join",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e-join-end",
+      "source": "join",
+      "target": "end-approved",
+      "targetHandle": "in",
+      "type": "sequence"
+    }
+  ]
+}
