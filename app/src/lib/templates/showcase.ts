@@ -8,7 +8,7 @@
 import type { Template } from '$lib/api/client';
 import { getTemplate } from '$lib/api/client';
 
-/// Stable id baked into `demos/invoice-processing/.mekhan.json::templateId`.
+/// Stable id baked into `demos/invoice-processing/demo.json::templateId`.
 /// Single source of truth — both the seeder and this lookup agree on it.
 export const SHOWCASE_TEMPLATE_ID = '00000000-0000-0000-0000-000000000001';
 export const SHOWCASE_TEMPLATE_NAME = 'Invoice Processing Demo';

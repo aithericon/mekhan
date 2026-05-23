@@ -7,7 +7,7 @@ template, ready to publish.
 
 ```
 demos/<name>/
-  .mekhan.json         # stable templateId + name + description
+  demo.json         # stable templateId + name + description
   graph.json           # the WorkflowGraph (JSON)
   nodes/<node-id>/
     main.py            # per-node source files (real .py — IDE, ruff, type-check all work)
@@ -38,7 +38,7 @@ directory IS a publishable template — you can hand-edit one and
 ## Seeding
 
 The service-side seeder publishes every demo at startup, idempotent
-by `.mekhan.json::templateId`. Toggled via env:
+by `demo.json::templateId`. Toggled via env:
 
 - `MEKHAN__DEMOS__SEED=true` — enable (default in `just dev::up-mekhan`)
 - `MEKHAN__DEMOS__DIR=<path>` — override the search root (default `demos`)
@@ -50,7 +50,7 @@ clobbering their changes.
 ## Adding a demo
 
 1. Drop a new directory under `demos/`.
-2. Mint a stable templateId (UUID) — bake it into `.mekhan.json` so
+2. Mint a stable templateId (UUID) — bake it into `demo.json` so
    re-seeding is idempotent and tests can refer to it.
 3. Author `graph.json` either by hand or by exporting from a published
    template: `mekhan pull <template-id> demos/<new-name>/ --format json`.

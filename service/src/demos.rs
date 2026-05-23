@@ -4,10 +4,17 @@
 //!
 //! ```text
 //! demos/<name>/
-//!   .mekhan.json         # stable templateId + name + description
+//!   demo.json            # stable templateId + name + description
 //!   graph.json           # the WorkflowGraph (JSON)
 //!   nodes/<id>/<file>    # per-node text source (e.g. main.py)
 //! ```
+//!
+//! `demo.json` is intentionally *not* a dotfile — the demo descriptor is
+//! a public, documented contract that humans need to read (you read the
+//! templateId off it; you set the name + description). The CLI's
+//! `.mekhan.json` is a separate, internal bookkeeping artifact for
+//! pulled templates (server URL, last-pull timestamp, format choice)
+//! and is irrelevant to seeded demos.
 //!
 //! Two halves:
 //! - **Reader** ([`load_demo`], [`list_demo_dirs`]): turn a directory on
@@ -20,9 +27,10 @@
 //!   for the demo's id already exists, the seeder leaves it alone (user
 //!   may have edited it).
 //!
-//! Mirrors the on-disk layout `cli::fs_ops` writes for the GitOps `pull`
-//! flow — same format, distinct module because the CLI binary can't be
-//! linked from the library or test crates.
+//! `graph.json` + `nodes/<id>/<file>` mirror the layout `cli::fs_ops`
+//! writes for the GitOps `pull` flow — a demo directory is, modulo the
+//! descriptor filename, identical to a pulled template. (CLI: `.mekhan.json`;
+//! demo: `demo.json`.)
 //!
 //! Trigger-node id stability: the showcase used to mint a fresh trigger id
 //! at every demo creation because the dispatcher registry is keyed
@@ -37,9 +45,10 @@ use thiserror::Error;
 
 use crate::models::template::WorkflowGraph;
 
-/// `.mekhan.json` shape. Same field names the CLI uses, so a demo directory
-/// is interchangeable with a GitOps-pulled template — open one with
-/// `mekhan apply` if you want to publish a hand-edited copy.
+/// `demo.json` shape — the public demo descriptor. Only the three fields
+/// the seeder actually needs (stable id, name, description); the CLI's
+/// per-checkout bookkeeping (server URL, last pull, format) lives in
+/// `.mekhan.json` and is not modeled here.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DemoMetadata {
@@ -104,11 +113,14 @@ pub fn load_demo(dir: &Path) -> Result<LoadedDemo, DemoLoadError> {
         return Err(DemoLoadError::NotFound(dir.to_path_buf()));
     }
 
-    let meta_path = dir.join(".mekhan.json");
+    let meta_path = dir.join("demo.json");
     let meta_str = std::fs::read_to_string(&meta_path).map_err(|e| DemoLoadError::Metadata {
         path: meta_path.clone(),
         source: e,
     })?;
+    // `serde(deny_unknown_fields)` would help catch leftover CLI keys
+    // (`serverUrl`, `lastPull`, `format`) but we keep it permissive so an
+    // accidentally-pulled `.mekhan.json` renamed to `demo.json` still loads.
     let metadata: DemoMetadata =
         serde_json::from_str(&meta_str).map_err(|e| DemoLoadError::MetadataParse {
             path: meta_path.clone(),
@@ -236,7 +248,7 @@ pub fn list_demo_dirs(root: &Path) -> Result<Vec<PathBuf>, DemoLoadError> {
         if !ft.is_dir() {
             continue;
         }
-        if entry.path().join(".mekhan.json").is_file() {
+        if entry.path().join("demo.json").is_file() {
             out.push(entry.path());
         }
     }
@@ -288,7 +300,7 @@ const DEMO_SEEDER_AUTHOR_ID: uuid::Uuid =
     uuid::uuid!("00000000-0000-0000-0000-000000000aaa");
 
 /// Seed every demo under `root` into the running service. Idempotent:
-/// each demo's `.mekhan.json::templateId` is the stable identifier — if
+/// each demo's `demo.json::templateId` is the stable identifier — if
 /// a row with that id already exists, the seeder leaves it (logging
 /// "already present") regardless of content drift.
 ///
