@@ -16,8 +16,8 @@ use uuid::Uuid;
 
 use crate::compiler::{
     compile_to_air_with_subworkflows_inline, generate_py_io_files, make_child_callable,
-    node_files_storage_path, node_input_scopes, node_namespace_scopes, CompileError,
-    ResolvedChild, SubWorkflowAir,
+    node_files_storage_path, node_input_scopes, node_namespace_scopes, node_output_fields,
+    CompileError, ResolvedChild, SubWorkflowAir,
 };
 use crate::models::error::ApiError;
 use crate::models::template::{
@@ -164,18 +164,27 @@ fn synthesize_py_io_files(
     ydoc_files: &mut HashMap<String, HashMap<String, String>>,
 ) {
     let ns_scopes = node_namespace_scopes(graph).ok();
+    let outputs = node_output_fields(graph);
     if let Ok(scopes) = node_input_scopes(graph) {
         for node in &graph.nodes {
             if let WorkflowNodeData::AutomatedStep { execution_spec, .. } = &node.data {
                 if execution_spec.backend_type == ExecutionBackendType::Python {
                     if let Some(scope) = scopes.get(&node.id) {
                         let entry = ydoc_files.entry(node.id.clone()).or_default();
-                        let empty = std::collections::BTreeMap::new();
+                        let empty: std::collections::BTreeMap<
+                            String,
+                            std::collections::BTreeMap<String, crate::models::template::FieldKind>,
+                        > = std::collections::BTreeMap::new();
+                        let empty_out: std::collections::BTreeMap<
+                            String,
+                            crate::models::template::FieldKind,
+                        > = std::collections::BTreeMap::new();
                         let ns = ns_scopes
                             .as_ref()
                             .and_then(|m| m.get(&node.id))
                             .unwrap_or(&empty);
-                        for (filename, source) in generate_py_io_files(scope, ns) {
+                        let out = outputs.get(&node.id).unwrap_or(&empty_out);
+                        for (filename, source) in generate_py_io_files(scope, ns, out) {
                             entry.insert(filename.to_string(), source);
                         }
                     }

@@ -285,6 +285,31 @@ pub fn node_input_scopes(
     crate::compiler::token_shape::node_input_field_kinds(graph)
 }
 
+/// Per-AutomatedStep declared output fields: top-level name → declared kind.
+/// Sibling of [`node_input_scopes`]. Feeds the `.pyi` stub generator so the
+/// runner's implicit-output sweep (declared name assigned as a Python global
+/// gets emitted to `<name>.json`) shows up as a typed write target in
+/// Pyright/Pylance. Callers filter to Python AutomatedSteps; this returns
+/// entries for every AutomatedStep with declared output fields.
+pub fn node_output_fields(
+    graph: &WorkflowGraph,
+) -> HashMap<String, std::collections::BTreeMap<String, FieldKind>> {
+    let mut out: HashMap<String, std::collections::BTreeMap<String, FieldKind>> = HashMap::new();
+    for node in &graph.nodes {
+        if let WorkflowNodeData::AutomatedStep { output, .. } = &node.data {
+            if output.fields.is_empty() {
+                continue;
+            }
+            let mut fields = std::collections::BTreeMap::new();
+            for f in &output.fields {
+                fields.insert(f.name.clone(), f.kind);
+            }
+            out.insert(node.id.clone(), fields);
+        }
+    }
+    out
+}
+
 /// Validate Rhai guards on Decision/Loop nodes:
 /// 1. Syntax-check via `rhai::Engine::compile`.
 /// 2. Resolve every `input.<path>` reference against the **shape-aware**

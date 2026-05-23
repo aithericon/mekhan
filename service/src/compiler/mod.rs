@@ -26,4 +26,4 @@ pub use token_shape::{
     analyze as analyze_token_shapes, node_namespace_scopes, surface_types, ScopeEntry,
     ShapeDiagnostic, ShapeReport, TypeSurface,
 };
-pub use validate::{node_input_scopes, resolve_trigger_target_port};
+pub use validate::{node_input_scopes, node_output_fields, resolve_trigger_target_port};

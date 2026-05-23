@@ -155,6 +155,37 @@ pub enum CompileError {
     /// not a useful primitive; use a dedicated Delay node if/when needed).
     #[error("loop '{node_id}' has no body — add at least one node inside the loop container")]
     LoopEmpty { node_id: String },
+
+    // --- Python AutomatedStep output-field guards (sibling of the
+    //     direct-slug-access input borrows). Declared output.fields[].name is
+    //     swept from Python globals after exec() — if the name collides with a
+    //     reserved runner global or an upstream slug borrowed by this node,
+    //     the runtime would either silently lose the assignment or
+    //     accidentally re-emit borrowed input as output. Reject at compile.
+    /// Declared output field name matches a reserved runner global (`token`,
+    /// `input`, `set_output`, etc — mirror of the runner.rs `_RESERVED_GLOBALS`
+    /// set). Rename the field.
+    #[error(
+        "node '{node_id}': output field '{field_name}' shadows a reserved runner global — rename the field"
+    )]
+    OutputFieldShadowsReserved {
+        node_id: String,
+        field_name: String,
+    },
+
+    /// Declared output field name matches a slug bound as a Python global on
+    /// this node (an upstream producer the user's source borrows as
+    /// `<slug>.<attr>`). Without the guard the input global would silently
+    /// re-export as this step's output.
+    #[error(
+        "node '{node_id}': output field '{field_name}' collides with borrowed input '{upstream_slug}' from upstream node '{upstream_node_id}' — rename the output field"
+    )]
+    OutputFieldShadowsInput {
+        node_id: String,
+        field_name: String,
+        upstream_slug: String,
+        upstream_node_id: String,
+    },
 }
 
 impl CompileError {
@@ -184,6 +215,8 @@ impl CompileError {
             Self::SubWorkflowCycle { .. } => "subworkflow_cycle",
             Self::SubWorkflowDepthExceeded { .. } => "subworkflow_depth_exceeded",
             Self::LoopEmpty { .. } => "loop_empty",
+            Self::OutputFieldShadowsReserved { .. } => "output_field_shadows_reserved",
+            Self::OutputFieldShadowsInput { .. } => "output_field_shadows_input",
         }
     }
 
@@ -216,7 +249,9 @@ impl CompileError {
             | Self::TriggerEmptyMappingRequiredFields { node_id, .. }
             | Self::SubWorkflowUnresolved { node_id, .. }
             | Self::SubWorkflowDepthExceeded { node_id, .. }
-            | Self::LoopEmpty { node_id } => Some(node_id),
+            | Self::LoopEmpty { node_id }
+            | Self::OutputFieldShadowsReserved { node_id, .. }
+            | Self::OutputFieldShadowsInput { node_id, .. } => Some(node_id),
             _ => None,
         }
     }

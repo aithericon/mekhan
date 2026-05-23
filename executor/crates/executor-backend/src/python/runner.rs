@@ -25,11 +25,29 @@ use aithericon_executor_domain::ExecutorError;
 pub async fn write_runner(
     runner_path: &Path,
     user_code_path: &Path,
+    declared_outputs: &[(String, bool)],
 ) -> Result<(), ExecutorError> {
     let user_code_escaped = user_code_path
         .to_string_lossy()
         .replace('\\', "\\\\")
         .replace('\'', "\\'");
+
+    // Bake declared output names into the runner template so the post-exec
+    // sweep knows which globals to promote to `<name>.json` files. The
+    // compile-time `OutputFieldShadowsReserved` / `OutputFieldShadowsInput`
+    // guards in service/src/compiler/compile.rs reject collisions, so any
+    // name reaching this list is safe to write.
+    let declared_list = declared_outputs
+        .iter()
+        .map(|(name, _)| format!("{:?}", name))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let required_list = declared_outputs
+        .iter()
+        .filter(|(_, required)| *required)
+        .map(|(name, _)| format!("{:?}", name))
+        .collect::<Vec<_>>()
+        .join(", ");
 
     let template = format!(
         r#"#!/usr/bin/env python3
@@ -180,6 +198,52 @@ except ImportError as _e:
 # --- Execute user code ---
 exec(open('{user_code_escaped}', encoding='utf-8').read())
 
+# --- Implicit output sweep ---
+# Declared output.fields[].name from the workflow editor — the compiler
+# bakes this list in per execution. After user code finishes, walk the
+# list and promote each name found in globals() to `<name>.json`. Skip
+# names whose file already exists, so an explicit `set_output(name, v)`
+# inside user code wins (explicit-beats-implicit by recency: set_output
+# already wrote the file during exec). Required names with no file at
+# this point are a hard error — the executor-worker would fail to
+# project the missing output downstream, so fail fast here with a clear
+# message instead of surfacing as a confusing NoSuchKey later.
+_DECLARED_OUTPUTS = [{declared_list}]
+_REQUIRED_OUTPUTS = [{required_list}]
+_outputs_dir = os.environ.get("AITHERICON_OUTPUTS_DIR")
+if _outputs_dir and _DECLARED_OUTPUTS:
+    os.makedirs(_outputs_dir, exist_ok=True)
+    for _decl_name in _DECLARED_OUTPUTS:
+        _decl_path = os.path.join(_outputs_dir, _decl_name + ".json")
+        if os.path.exists(_decl_path):
+            continue
+        if _decl_name not in globals():
+            continue
+        try:
+            with open(_decl_path, "w") as _decl_f:
+                json.dump(globals()[_decl_name], _decl_f)
+        except (TypeError, ValueError) as _decl_e:
+            print(
+                f"[runner] implicit output {{_decl_name!r}} not JSON-serializable: {{_decl_e}}",
+                file=sys.stderr,
+            )
+if _outputs_dir and _REQUIRED_OUTPUTS:
+    _missing = [
+        _req_name
+        for _req_name in _REQUIRED_OUTPUTS
+        if not os.path.exists(os.path.join(_outputs_dir, _req_name + ".json"))
+    ]
+    if _missing:
+        print(
+            f"[runner] missing required output(s): {{_missing!r}}",
+            file=sys.stderr,
+        )
+        try:
+            aithericon.shutdown()
+        except NameError:
+            pass
+        sys.exit(2)
+
 # --- Cleanup ---
 try:
     aithericon.shutdown()
@@ -261,7 +325,7 @@ mod tests {
         }
 
         let runner_path = run_dir.join("__runner__.py");
-        write_runner(&runner_path, &user_path)
+        write_runner(&runner_path, &user_path, &[])
             .await
             .expect("write_runner");
 
@@ -595,7 +659,7 @@ mod tests {
         )
         .unwrap();
         let runner_path = run_dir.join("__runner__.py");
-        write_runner(&runner_path, &user_path).await.unwrap();
+        write_runner(&runner_path, &user_path, &[]).await.unwrap();
 
         let outputs_dir = run_dir.join("outputs");
         std::fs::create_dir_all(&outputs_dir).unwrap();
@@ -668,7 +732,7 @@ mod tests {
         let user_path = inputs_dir.join("main.py");
         std::fs::write(&user_path, "print('artifacts' in globals())").unwrap();
         let runner_path = run_dir.join("__runner__.py");
-        write_runner(&runner_path, &user_path).await.unwrap();
+        write_runner(&runner_path, &user_path, &[]).await.unwrap();
 
         let outputs_dir = run_dir.join("outputs");
         std::fs::create_dir_all(&outputs_dir).unwrap();
@@ -706,7 +770,7 @@ mod tests {
         )
         .unwrap();
         let runner_path = run_dir.join("__runner__.py");
-        write_runner(&runner_path, &user_path).await.unwrap();
+        write_runner(&runner_path, &user_path, &[]).await.unwrap();
 
         let output = Command::new("python3")
             .arg(&runner_path)
@@ -762,7 +826,7 @@ mod tests {
         std::fs::write(&user_path, r#"set_output("result", {"ok": True, "n": 7})"#)
             .unwrap();
         let runner_path = run_dir.join("__runner__.py");
-        write_runner(&runner_path, &user_path).await.unwrap();
+        write_runner(&runner_path, &user_path, &[]).await.unwrap();
 
         let output = Command::new("python3")
             .arg(&runner_path)
@@ -783,5 +847,109 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&written).unwrap();
         assert_eq!(parsed["ok"], serde_json::json!(true));
         assert_eq!(parsed["n"], serde_json::json!(7));
+    }
+
+    /// Run the runner with a baked declared-outputs list so the post-exec
+    /// sweep is active. Each entry is `(name, required)` — names are the
+    /// declared `output.fields[].name` from the workflow editor. Returns
+    /// the TempDir so callers keep it alive while reading swept outputs.
+    async fn run_runner_with_outputs(
+        user_script: &str,
+        inputs: &[(&str, &str)],
+        declared_outputs: &[(String, bool)],
+    ) -> (String, String, i32, TempDir) {
+        let temp = TempDir::new().expect("temp dir");
+        let run_dir = temp.path().to_path_buf();
+        let inputs_dir = run_dir.join("inputs");
+        std::fs::create_dir_all(&inputs_dir).unwrap();
+
+        let user_path = inputs_dir.join("main.py");
+        std::fs::write(&user_path, user_script).unwrap();
+
+        for (name, content) in inputs {
+            std::fs::write(inputs_dir.join(name), content).unwrap();
+        }
+
+        let runner_path = run_dir.join("__runner__.py");
+        write_runner(&runner_path, &user_path, declared_outputs)
+            .await
+            .expect("write_runner");
+
+        let outputs_dir = run_dir.join("outputs");
+        std::fs::create_dir_all(&outputs_dir).unwrap();
+
+        let output = Command::new("python3")
+            .arg(&runner_path)
+            .env("AITHERICON_RUN_DIR", &run_dir)
+            .env("AITHERICON_INPUTS_DIR", &inputs_dir)
+            .env("AITHERICON_OUTPUTS_DIR", &outputs_dir)
+            .env("PYTHONDONTWRITEBYTECODE", "1")
+            .output()
+            .expect("python3 invocation");
+
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        let code = output.status.code().unwrap_or(-1);
+        (stdout, stderr, code, temp)
+    }
+
+    #[tokio::test]
+    async fn implicit_output_swept_from_global() {
+        skip_if_env_unsupported!();
+        // The symmetric case to direct-slug-access inputs: declared output
+        // `vendor` is assigned as a plain Python global, no `set_output`
+        // call. The post-exec sweep promotes it to `vendor.json` so the
+        // executor-worker's per-field read picks it up the same way it
+        // does for explicit `set_output` writes.
+        let (stdout, stderr, code, temp) = run_runner_with_outputs(
+            r#"vendor = "ACME""#,
+            &[("input.json", "{}")],
+            &[("vendor".to_string(), true)],
+        )
+        .await;
+        assert_eq!(code, 0, "stdout: {stdout}\nstderr: {stderr}");
+        let written = std::fs::read_to_string(temp.path().join("outputs").join("vendor.json"))
+            .expect("vendor.json written by sweep");
+        assert_eq!(written, "\"ACME\"");
+    }
+
+    #[tokio::test]
+    async fn explicit_set_output_beats_implicit_sweep() {
+        skip_if_env_unsupported!();
+        // Explicit-beats-implicit by recency: `set_output` writes the file
+        // during `exec`, so when the sweep runs the file already exists and
+        // the implicit assignment is skipped. Locks down the "the call you
+        // made wins" rule — user can confidently mix both forms.
+        let (stdout, stderr, code, temp) = run_runner_with_outputs(
+            r#"set_output("vendor", "First"); vendor = "Second""#,
+            &[("input.json", "{}")],
+            &[("vendor".to_string(), true)],
+        )
+        .await;
+        assert_eq!(code, 0, "stdout: {stdout}\nstderr: {stderr}");
+        let written = std::fs::read_to_string(temp.path().join("outputs").join("vendor.json"))
+            .expect("vendor.json from explicit set_output");
+        assert_eq!(written, "\"First\"");
+    }
+
+    #[tokio::test]
+    async fn required_output_missing_fails_runner() {
+        skip_if_env_unsupported!();
+        // Required-but-missing is a hard runtime error — declared output
+        // `vendor` is required but the user code neither assigns it nor
+        // calls `set_output`. The runner must exit non-zero so the
+        // executor-worker surfaces the failure cleanly instead of the
+        // downstream silently observing a missing output.
+        let (stdout, stderr, code, _temp) = run_runner_with_outputs(
+            "x = 1",
+            &[("input.json", "{}")],
+            &[("vendor".to_string(), true)],
+        )
+        .await;
+        assert_eq!(code, 2, "stdout: {stdout}\nstderr: {stderr}");
+        assert!(
+            stderr.contains("missing required output") && stderr.contains("vendor"),
+            "stderr: {stderr}"
+        );
     }
 }

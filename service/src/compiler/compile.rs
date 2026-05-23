@@ -461,6 +461,66 @@ fn apply_control_data_foundation(
             .push(b);
     }
 
+    // (c2-pre) Validate declared output.fields on every Python AutomatedStep
+    //      against (a) reserved runner globals (b) slugs this node actually
+    //      borrows. The runner sweeps declared output names from globals()
+    //      after exec(); without these guards, a field named `token` would
+    //      shadow the inbound control token, and a field colliding with a
+    //      borrowed upstream slug would silently re-export the input as
+    //      output. Mirror of runner.rs _RESERVED_GLOBALS (executor-backend) —
+    //      keep both lists in sync when adding new injected globals.
+    const PY_RESERVED_GLOBALS: &[&str] = &[
+        "token",
+        "input",
+        "inputs",
+        "set_output",
+        "load_inputs",
+        "log_info",
+        "log_warn",
+        "log_error",
+        "log_debug",
+        "log_metric",
+        "log_artifact",
+        "update_progress",
+        "define_phases",
+        "update_phase",
+        "aithericon",
+        "sys",
+        "os",
+        "json",
+    ];
+    for node in &graph.nodes {
+        let WorkflowNodeData::AutomatedStep {
+            execution_spec,
+            output,
+            ..
+        } = &node.data
+        else {
+            continue;
+        };
+        if execution_spec.backend_type != crate::models::template::ExecutionBackendType::Python {
+            continue;
+        }
+        for field in &output.fields {
+            if PY_RESERVED_GLOBALS.contains(&field.name.as_str()) {
+                return Err(CompileError::OutputFieldShadowsReserved {
+                    node_id: node.id.clone(),
+                    field_name: field.name.clone(),
+                });
+            }
+            if let Some(borrows) = by_consumer.get(&node.id) {
+                if let Some(clash) = borrows.iter().find(|b| b.slug == field.name) {
+                    return Err(CompileError::OutputFieldShadowsInput {
+                        node_id: node.id.clone(),
+                        field_name: field.name.clone(),
+                        upstream_slug: clash.slug.clone(),
+                        upstream_node_id: clash.producer_node.clone(),
+                    });
+                }
+            }
+        }
+    }
+
     const BORROW_MARKER: &str = "/*__BORROWED_INPUTS__*/";
     for (consumer_id, consumer_borrows) in &by_consumer {
         // Two prepare-transition ID conventions: the inline AutomatedStep
@@ -1256,7 +1316,8 @@ mod tests {
         fields.insert("bad-name".to_string(), FieldKind::Text);
 
         let empty_ns = std::collections::BTreeMap::new();
-        let files = generate_py_io_files(&fields, &empty_ns);
+        let empty_out = std::collections::BTreeMap::new();
+        let files = generate_py_io_files(&fields, &empty_ns, &empty_out);
         let map: std::collections::HashMap<_, _> = files.iter().cloned().collect();
 
         let stub = &map["_aithericon_io.pyi"];
@@ -1280,10 +1341,69 @@ mod tests {
         let empty = generate_py_io_files(
             &std::collections::BTreeMap::new(),
             &std::collections::BTreeMap::new(),
+            &std::collections::BTreeMap::new(),
         );
         let empty_map: std::collections::HashMap<_, _> = empty.iter().cloned().collect();
         assert!(empty_map["_aithericon_io.pyi"].contains("class Token(dict): ..."));
         assert!(empty_map["_aithericon_io.py"].contains("aithericon.token()"));
+    }
+
+    /// Declared outputs surface as top-level annotations in the `.pyi`
+    /// overlay so Pyright/Pylance treats `vendor = ...` as a typed write
+    /// (the runner's post-exec sweep promotes that global to `vendor.json`).
+    /// Unsafe identifiers (Python keyword / hyphenated name) get dropped
+    /// from the typed surface like input fields do — the runtime sweep
+    /// still works via `globals()[name]`, just no editor type-check.
+    #[test]
+    fn test_pyio_outputs_become_top_level_annotations() {
+        use crate::models::template::FieldKind;
+        let fields = std::collections::BTreeMap::new();
+        let empty_ns = std::collections::BTreeMap::new();
+        let mut outputs = std::collections::BTreeMap::new();
+        outputs.insert("vendor".to_string(), FieldKind::Text);
+        outputs.insert("amount".to_string(), FieldKind::Number);
+        outputs.insert("extracted".to_string(), FieldKind::Bool);
+        outputs.insert("blob".to_string(), FieldKind::Json);
+        // Dropped from typed surface (keyword + hyphen), runtime still
+        // sweeps via globals().
+        outputs.insert("class".to_string(), FieldKind::Text);
+        outputs.insert("bad-name".to_string(), FieldKind::Text);
+
+        let files = generate_py_io_files(&fields, &empty_ns, &outputs);
+        let map: std::collections::HashMap<_, _> = files.iter().cloned().collect();
+        let stub = &map["_aithericon_io.pyi"];
+
+        assert!(
+            stub.contains("Declared outputs"),
+            "outputs header missing: {stub}"
+        );
+        // py_type mapping: Text/Textarea/etc → str, Number → float,
+        // Bool → bool, Json → Any.
+        assert!(stub.contains("vendor: str"), "vendor str: {stub}");
+        assert!(stub.contains("amount: float"), "amount float: {stub}");
+        assert!(stub.contains("extracted: bool"), "extracted bool: {stub}");
+        assert!(stub.contains("blob: Any"), "blob Any: {stub}");
+        // Order matters: outputs must come AFTER the token/input block so
+        // Pyright resolves the assignment site to the module-level annotation.
+        let token_pos = stub.find("input: Token").expect("input: Token");
+        let vendor_pos = stub.find("vendor: str").expect("vendor: str");
+        assert!(
+            vendor_pos > token_pos,
+            "outputs must follow token/input block"
+        );
+
+        // Unsafe identifiers dropped from typed surface.
+        assert!(!stub.contains("class: str"), "keyword leaked: {stub}");
+        assert!(!stub.contains("bad-name"), "hyphen leaked: {stub}");
+
+        // Empty outputs: no annotation block at all (no spurious header).
+        let no_outputs = generate_py_io_files(
+            &std::collections::BTreeMap::new(),
+            &std::collections::BTreeMap::new(),
+            &std::collections::BTreeMap::new(),
+        );
+        let no_map: std::collections::HashMap<_, _> = no_outputs.iter().cloned().collect();
+        assert!(!no_map["_aithericon_io.pyi"].contains("Declared outputs"));
     }
 
     #[test]
@@ -1676,5 +1796,130 @@ mod tests {
             !inputs.iter().any(|a| a.get("read") == Some(&serde_json::Value::Bool(true))),
             "no read-arc should be added for a non-slug placeholder; inputs: {inputs:?}"
         );
+    }
+
+    /// Declared output field literally named `token` collides with the
+    /// inbound-token runner global. The post-exec sweep would either
+    /// shadow `token` or surprise the author by re-emitting it; reject
+    /// at compile so the editor pins the offending node before publish.
+    /// Mirror guard: see `PY_RESERVED_GLOBALS` in apply_control_data_foundation.
+    #[test]
+    fn python_output_field_named_token_rejected_as_reserved() {
+        let json = r#"{
+          "nodes":[
+            {"id":"start","type":"start","position":{"x":0,"y":0},
+             "data":{"type":"start","label":"Start"}},
+            {"id":"extract","type":"automated_step","slug":"extract","position":{"x":0,"y":0},
+             "data":{"type":"automated_step","label":"Extract",
+                     "executionSpec":{"backendType":"python","entrypoint":"main.py","config":{"entrypoint":"main.py","python":"python3","sdk":true}},
+                     "output":{"id":"out","label":"Output","fields":[
+                       {"name":"token","label":"Token","kind":"text","required":true}
+                     ]},
+                     "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
+                     "deploymentModel":{"mode":"inline"}}},
+            {"id":"end","type":"end","position":{"x":0,"y":0},
+             "data":{"type":"end","label":"End"}}
+          ],
+          "edges":[
+            {"id":"e1","source":"start","target":"extract","targetHandle":"in","type":"sequence"},
+            {"id":"e2","source":"extract","target":"end","targetHandle":"in","type":"sequence"}
+          ]
+        }"#;
+        let graph: WorkflowGraph = serde_json::from_str(json).expect("deser graph");
+        // Validation requires the Python step's entrypoint file to exist —
+        // stage an empty `main.py`. The guard runs after validation but
+        // before lowering, so empty source is enough to reach it.
+        let mut files: std::collections::HashMap<
+            String,
+            std::collections::HashMap<String, aithericon_executor_domain::InputSource>,
+        > = std::collections::HashMap::new();
+        let mut step = std::collections::HashMap::new();
+        step.insert(
+            "main.py".to_string(),
+            aithericon_executor_domain::InputSource::Raw {
+                content: String::new(),
+            },
+        );
+        files.insert("extract".to_string(), step);
+
+        let err = compile_to_air(&graph, "t", "d", &files)
+            .expect_err("token-named output field must reject");
+        match err {
+            CompileError::OutputFieldShadowsReserved { node_id, field_name } => {
+                assert_eq!(node_id, "extract");
+                assert_eq!(field_name, "token");
+            }
+            other => panic!("expected OutputFieldShadowsReserved, got {other:?}"),
+        }
+    }
+
+    /// Declared output field name matches an upstream slug the Python
+    /// source actually borrows (`review.invoice_amount` borrows `review`,
+    /// and `review` is then declared as an output field). Without the
+    /// guard the input global would silently re-export as this step's
+    /// output. The check uses the per-consumer borrow list so a slug
+    /// not referenced in source is fine — only the actually-bound names
+    /// collide.
+    #[test]
+    fn python_output_field_collides_with_borrowed_input_rejected() {
+        let json = r#"{
+          "nodes":[
+            {"id":"start","type":"start","position":{"x":0,"y":0},
+             "data":{"type":"start","label":"Start"}},
+            {"id":"review","type":"human_task","slug":"review","position":{"x":0,"y":0},
+             "data":{"type":"human_task","label":"Review","taskTitle":"Review",
+                     "steps":[{"id":"s","title":"S","blocks":[
+                       {"type":"input","field":{"name":"invoice_amount","label":"Amt","kind":"number","required":true}}
+                     ]}]}},
+            {"id":"extract","type":"automated_step","slug":"extract","position":{"x":0,"y":0},
+             "data":{"type":"automated_step","label":"Extract",
+                     "executionSpec":{"backendType":"python","entrypoint":"main.py","config":{"entrypoint":"main.py","python":"python3","sdk":true}},
+                     "output":{"id":"out","label":"Output","fields":[
+                       {"name":"review","label":"Review","kind":"json","required":true}
+                     ]},
+                     "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
+                     "deploymentModel":{"mode":"inline"}}},
+            {"id":"end","type":"end","position":{"x":0,"y":0},
+             "data":{"type":"end","label":"End"}}
+          ],
+          "edges":[
+            {"id":"e1","source":"start","target":"review","targetHandle":"in","type":"sequence"},
+            {"id":"e2","source":"review","target":"extract","targetHandle":"in","type":"sequence"},
+            {"id":"e3","source":"extract","target":"end","targetHandle":"in","type":"sequence"}
+          ]
+        }"#;
+        let graph: WorkflowGraph = serde_json::from_str(json).expect("deser graph");
+        // Stage `main.py` with a `review.invoice_amount` borrow — that puts
+        // `review` in the per-consumer bound-globals set the guard checks
+        // against the declared output field.
+        let mut files: std::collections::HashMap<
+            String,
+            std::collections::HashMap<String, aithericon_executor_domain::InputSource>,
+        > = std::collections::HashMap::new();
+        let mut step = std::collections::HashMap::new();
+        step.insert(
+            "main.py".to_string(),
+            aithericon_executor_domain::InputSource::Raw {
+                content: "amount = review.invoice_amount\nprint(amount)\n".to_string(),
+            },
+        );
+        files.insert("extract".to_string(), step);
+
+        let err = compile_to_air(&graph, "t", "d", &files)
+            .expect_err("output 'review' shadowing borrowed input must reject");
+        match err {
+            CompileError::OutputFieldShadowsInput {
+                node_id,
+                field_name,
+                upstream_slug,
+                upstream_node_id,
+            } => {
+                assert_eq!(node_id, "extract");
+                assert_eq!(field_name, "review");
+                assert_eq!(upstream_slug, "review");
+                assert_eq!(upstream_node_id, "review");
+            }
+            other => panic!("expected OutputFieldShadowsInput, got {other:?}"),
+        }
     }
 }

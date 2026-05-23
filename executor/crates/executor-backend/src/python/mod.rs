@@ -161,9 +161,20 @@ impl ExecutionBackend for PythonBackend {
             )));
         }
 
-        // Generate runner template
+        // Generate runner template. Declared outputs from the spec are baked
+        // into the template so the post-exec sweep can promote matching
+        // Python globals to `<name>.json`. Outputs with an explicit `path`
+        // are sidecar-style (IPC / file already produced by user code) and
+        // not subject to the sweep — declared globals only.
+        let declared_outputs: Vec<(String, bool)> = run_context
+            .spec
+            .outputs
+            .iter()
+            .filter(|o| o.path.is_none())
+            .map(|o| (o.name.clone(), o.required))
+            .collect();
         let runner_path = run_context.run_dir.root.join("__runner__.py");
-        runner::write_runner(&runner_path, &user_code_path).await?;
+        runner::write_runner(&runner_path, &user_code_path, &declared_outputs).await?;
         debug!(runner = %runner_path.display(), "generated runner template");
 
         // Store paths in backend_state for execute()

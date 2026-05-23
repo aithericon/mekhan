@@ -95,9 +95,13 @@ impl BackendTestKit for PythonTestKit {
         let user_code_path = run_dir.inputs_dir.join(&config.script);
 
         let runner_path = run_dir.root.join("__runner__.py");
-        aithericon_executor_backend::python::runner::write_runner(&runner_path, &user_code_path)
-            .await
-            .unwrap();
+        aithericon_executor_backend::python::runner::write_runner(
+            &runner_path,
+            &user_code_path,
+            &[],
+        )
+        .await
+        .unwrap();
 
         let backend_state = serde_json::json!({
             "python_bin": config.python,
