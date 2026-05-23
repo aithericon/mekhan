@@ -8,7 +8,9 @@ import type {
 	TriggerNodeData,
 	PhaseUpdateNodeData,
 	SubWorkflowNodeData,
-	AutomatedStepNodeData
+	AutomatedStepNodeData,
+	EndNodeData,
+	FailureNodeData
 } from '$lib/types/editor';
 
 /**
@@ -169,8 +171,16 @@ export class YjsGraphBinding {
 					...(processName ? { processName } : {})
 				};
 			}
-			case 'end':
-				return { ...base, type: 'end' };
+			case 'end': {
+				const resultMapping = config?.resultMapping as
+					| EndNodeData['resultMapping']
+					| undefined;
+				return {
+					...base,
+					type: 'end',
+					...(resultMapping && resultMapping.length > 0 ? { resultMapping } : {})
+				};
+			}
 			case 'human_task':
 				return {
 					...base,
@@ -255,14 +265,21 @@ export class YjsGraphBinding {
 						? { totalSteps: config.totalSteps as number }
 						: {})
 				};
-			case 'failure':
+			case 'failure': {
+				const errorResultMapping = config?.errorResultMapping as
+					| FailureNodeData['errorResultMapping']
+					| undefined;
 				return {
 					...base,
 					type: 'failure',
 					...(config?.failureMessage
 						? { failureMessage: config.failureMessage as string }
+						: {}),
+					...(errorResultMapping && errorResultMapping.length > 0
+						? { errorResultMapping }
 						: {})
 				};
+			}
 			case 'trigger':
 				return {
 					...base,
@@ -622,6 +639,11 @@ export class YjsGraphBinding {
 				}
 				break;
 			case 'end':
+				if (data.resultMapping && data.resultMapping.length > 0) {
+					config.set('resultMapping', data.resultMapping);
+				} else {
+					config.delete('resultMapping');
+				}
 				break;
 			case 'human_task':
 				config.set('taskTitle', data.taskTitle);
@@ -688,6 +710,11 @@ export class YjsGraphBinding {
 					config.set('failureMessage', data.failureMessage);
 				} else {
 					config.delete('failureMessage');
+				}
+				if (data.errorResultMapping && data.errorResultMapping.length > 0) {
+					config.set('errorResultMapping', data.errorResultMapping);
+				} else {
+					config.delete('errorResultMapping');
 				}
 				break;
 			case 'trigger':

@@ -133,6 +133,7 @@
 		'phase_update',
 		'progress_update',
 		'failure',
+		'end',
 		'sub_workflow'
 	]);
 	const showScopePicker = $derived(SCOPE_BEARING_TYPES.has(data.type));
@@ -285,7 +286,7 @@
 		{:else if data.type === 'failure'}
 			<FailureNodeSection {data} {readonly} {onchange} {scope} />
 		{:else if data.type === 'end'}
-			<EndNodeSection {data} {readonly} {onchange} />
+			<EndNodeSection {data} {readonly} {onchange} {scope} />
 		{:else if data.type === 'sub_workflow'}
 			<SubWorkflowSection {data} {readonly} {onchange} {templateId} />
 		{/if}
