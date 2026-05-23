@@ -4,10 +4,18 @@
 //!
 //! ```text
 //! demos/<name>/
-//!   demo.json            # stable templateId + name + description
-//!   graph.json           # the WorkflowGraph (JSON)
-//!   nodes/<id>/<file>    # per-node text source (e.g. main.py)
+//!   demo.json                  # stable templateId + name + description
+//!   graph.json                 # the WorkflowGraph (JSON)
+//!   nodes/<id>/<file>          # per-node text source (e.g. main.py)
+//!   nodes/<id>/task.json       # HumanTask form definition (overlay onto data.steps)
 //! ```
+//!
+//! `nodes/<id>/task.json` is a node-metadata sidecar — a HumanTask is a
+//! node like any other, so its form definition lives next to the
+//! executable files of other node types (e.g. `nodes/extract/main.py`).
+//! The loader merges the sidecar onto the matching HumanTask node's
+//! `data.steps` and skips it from the regular text-file reader so it
+//! doesn't double as a Y.Doc file.
 //!
 //! `demo.json` is intentionally *not* a dotfile — the demo descriptor is
 //! a public, documented contract that humans need to read (you read the
@@ -102,6 +110,12 @@ pub enum DemoLoadError {
         #[source]
         source: std::io::Error,
     },
+    #[error("task sidecar at {path} targets node `{node_id}` which is not in the graph")]
+    TaskSidecarUnknownNode { path: PathBuf, node_id: String },
+    #[error(
+        "task sidecar at {path} targets a `{node_type}` node — task.json is only valid for human_task"
+    )]
+    TaskSidecarTypeMismatch { path: PathBuf, node_type: String },
 }
 
 /// Load one demo directory. Skips files inside `nodes/<id>/` whose
@@ -132,19 +146,105 @@ pub fn load_demo(dir: &Path) -> Result<LoadedDemo, DemoLoadError> {
         path: graph_path.clone(),
         source: e,
     })?;
-    let graph: WorkflowGraph =
+    let mut graph: WorkflowGraph =
         serde_json::from_str(&graph_str).map_err(|e| DemoLoadError::GraphParse {
             path: graph_path.clone(),
             source: e,
         })?;
 
-    let files = read_node_files(&dir.join("nodes"))?;
+    // Overlay HumanTask `data.steps` from `nodes/<id>/task.json` sidecars.
+    // A HumanTask is a node like any other, so its form definition lives
+    // under `nodes/<id>/` next to the executable files of other node
+    // types (e.g. `nodes/extract/main.py`). The filename `task.json` is
+    // the convention; `read_node_files` skips it so it doesn't double up
+    // as a Y.Doc text file.
+    let nodes_dir = dir.join("nodes");
+    merge_task_sidecars(&nodes_dir, &mut graph)?;
+
+    let files = read_node_files(&nodes_dir)?;
 
     Ok(LoadedDemo {
         metadata,
         graph,
         files,
     })
+}
+
+/// Filename used for HumanTask form-definition sidecars under `nodes/<id>/`.
+/// Pulled out of the regular text-file reader (see [`TASK_SIDECAR_FILENAME`]
+/// usage in [`read_node_files`]) so it doesn't double as a Y.Doc file.
+const TASK_SIDECAR_FILENAME: &str = "task.json";
+
+/// Walk `nodes/<id>/task.json` files and overlay each onto the matching
+/// HumanTask node's `data.steps`. Missing sidecar leaves `data.steps` as
+/// authored in graph.json (empty placeholder, which publish will reject —
+/// a clear "you forgot the sidecar" failure mode). A sidecar for a node
+/// that isn't a HumanTask (or doesn't exist) is a hard error here so
+/// typos surface at load time, not at publish.
+fn merge_task_sidecars(
+    nodes_dir: &Path,
+    graph: &mut WorkflowGraph,
+) -> Result<(), DemoLoadError> {
+    use crate::models::template::{TaskStepConfig, WorkflowNodeData};
+
+    if !nodes_dir.is_dir() {
+        return Ok(());
+    }
+    let entries = std::fs::read_dir(nodes_dir).map_err(|e| DemoLoadError::NodeFile {
+        path: nodes_dir.to_path_buf(),
+        source: e,
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|e| DemoLoadError::NodeFile {
+            path: nodes_dir.to_path_buf(),
+            source: e,
+        })?;
+        let ft = entry.file_type().map_err(|e| DemoLoadError::NodeFile {
+            path: entry.path(),
+            source: e,
+        })?;
+        if !ft.is_dir() {
+            continue;
+        }
+        let sidecar = entry.path().join(TASK_SIDECAR_FILENAME);
+        if !sidecar.is_file() {
+            continue;
+        }
+        let node_id = entry.file_name().to_string_lossy().into_owned();
+        let text = std::fs::read_to_string(&sidecar).map_err(|e| DemoLoadError::NodeFile {
+            path: sidecar.clone(),
+            source: e,
+        })?;
+        let steps: Vec<TaskStepConfig> =
+            serde_json::from_str(&text).map_err(|e| DemoLoadError::GraphParse {
+                path: sidecar.clone(),
+                source: e,
+            })?;
+
+        let node = graph.nodes.iter_mut().find(|n| n.id == node_id);
+        match node {
+            Some(n) => match &mut n.data {
+                WorkflowNodeData::HumanTask {
+                    steps: target, ..
+                } => {
+                    *target = steps;
+                }
+                _ => {
+                    return Err(DemoLoadError::TaskSidecarTypeMismatch {
+                        path: sidecar,
+                        node_type: n.data.type_name().to_string(),
+                    });
+                }
+            },
+            None => {
+                return Err(DemoLoadError::TaskSidecarUnknownNode {
+                    path: sidecar,
+                    node_id,
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Read every text file under `nodes/<id>/`. Empty result if the directory
@@ -195,6 +295,12 @@ fn read_node_files(
             }
             let filename = file_entry.file_name().to_string_lossy().into_owned();
             if is_binary_asset(&filename) {
+                continue;
+            }
+            // `task.json` is HumanTask form-definition metadata, not a
+            // Y.Doc text file — `merge_task_sidecars` consumes it
+            // separately. Skip it here so it doesn't ship twice.
+            if filename == TASK_SIDECAR_FILENAME {
                 continue;
             }
             let content =
@@ -499,6 +605,75 @@ mod tests {
             !has_placeholder,
             "trigger-placeholder must be replaced with a stable id at dump time"
         );
+
+        // Sidecar overlay: graph.json carries `steps: []` for HumanTask
+        // nodes; `nodes/<id>/task.json` must be merged in. Without this
+        // the review node would have zero blocks and the engine would
+        // reject the HumanTaskRequest at runtime.
+        use crate::models::template::WorkflowNodeData;
+        let review = demo
+            .graph
+            .nodes
+            .iter()
+            .find(|n| n.id == "review")
+            .expect("review node");
+        match &review.data {
+            WorkflowNodeData::HumanTask { steps, .. } => {
+                assert!(
+                    !steps.is_empty(),
+                    "review.data.steps must be filled from nodes/review/task.json"
+                );
+            }
+            other => panic!("review must be a HumanTask, got {other:?}"),
+        }
+        // And the sidecar must NOT also ship as a Y.Doc text file under
+        // `files["review"]`, otherwise the editor opens it as a tab and
+        // it round-trips back to S3 as a step source.
+        if let Some(review_files) = demo.files.get("review") {
+            assert!(
+                !review_files.contains_key("task.json"),
+                "task.json must be consumed as a sidecar, not shipped as a node file"
+            );
+        }
+    }
+
+    /// A task sidecar targeting a non-HumanTask node is a typo — fail at
+    /// load time with a clear pointer, not at publish time with "engine
+    /// rejected empty steps" three calls deep.
+    #[test]
+    fn task_sidecar_on_non_human_task_node_is_a_hard_error() {
+        use tempfile::TempDir;
+        let tmp = TempDir::new().unwrap();
+        // Minimal demo directory: graph with one Start (NOT a HumanTask)
+        // + a `task.json` sidecar that *names* `start`. Should reject.
+        std::fs::write(
+            tmp.path().join("demo.json"),
+            r#"{ "templateId": "deadbeef-0000-0000-0000-000000000000", "name": "X" }"#,
+        )
+        .unwrap();
+        std::fs::write(
+            tmp.path().join("graph.json"),
+            r#"{
+                "nodes": [{
+                    "id": "start",
+                    "type": "start",
+                    "position": { "x": 0, "y": 0 },
+                    "data": { "type": "start", "label": "Start" }
+                }],
+                "edges": []
+            }"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(tmp.path().join("nodes/start")).unwrap();
+        std::fs::write(tmp.path().join("nodes/start/task.json"), "[]").unwrap();
+
+        let err = load_demo(tmp.path()).expect_err("must reject");
+        match err {
+            DemoLoadError::TaskSidecarTypeMismatch { node_type, .. } => {
+                assert_eq!(node_type, "start");
+            }
+            other => panic!("expected TaskSidecarTypeMismatch, got {other:?}"),
+        }
     }
 
     #[test]

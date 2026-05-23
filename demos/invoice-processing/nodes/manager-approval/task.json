@@ -1,0 +1,41 @@
+[
+  {
+    "id": "step-decide",
+    "title": "Decision",
+    "blocks": [
+      {
+        "type": "input",
+        "field": {
+          "name": "decision",
+          "label": "Approval Decision",
+          "kind": "select",
+          "required": true,
+          "options": [
+            "Approve",
+            "Reject",
+            "Request More Info"
+          ]
+        }
+      },
+      {
+        "type": "input",
+        "field": {
+          "name": "comments",
+          "label": "Comments",
+          "kind": "textarea",
+          "required": false,
+          "placeholder": "Optional notes for the finance team"
+        }
+      },
+      {
+        "type": "input",
+        "field": {
+          "name": "signature",
+          "label": "Manager Signature",
+          "kind": "signature",
+          "required": true
+        }
+      }
+    ]
+  }
+]

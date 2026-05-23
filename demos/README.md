@@ -7,15 +7,27 @@ template, ready to publish.
 
 ```
 demos/<name>/
-  demo.json         # stable templateId + name + description
-  graph.json           # the WorkflowGraph (JSON)
+  demo.json                   # stable templateId + name + description
+  graph.json                  # the WorkflowGraph (JSON), small + structural
   nodes/<node-id>/
-    main.py            # per-node source files (real .py — IDE, ruff, type-check all work)
+    main.py                   # per-node source (real .py — IDE, ruff, type-check all work)
+    task.json                 # HumanTask form definition (overlay onto data.steps)
 ```
 
-Same on-disk shape as the GitOps `mekhan pull/apply` flow, so a demo
-directory IS a publishable template — you can hand-edit one and
-`mekhan apply demos/invoice-processing/` to push it.
+`nodes/<id>/task.json` is the HumanTask sidecar: each HumanTask is a
+node like any other, so its form definition (the verbose `steps`
+block tree with all the form fields and instructions) lives next to
+the executable files of other node types. `graph.json` carries
+`steps: []` for those nodes and the loader merges the sidecar before
+returning. Identifying metadata (label, taskTitle, instructionsMdsvex)
+stays inline in `graph.json` so the graph still reads at a glance.
+
+Same on-disk shape as the GitOps `mekhan pull/apply` flow modulo the
+sidecar split — a hand `mekhan apply demos/<name>/` against the
+shipped fixture would fail at publish ("HumanTask rejects empty
+steps") because that path doesn't merge sidecars. Use the in-process
+loader (or the startup seeder, which calls the loader) for the
+shipped demos.
 
 ## Loading
 

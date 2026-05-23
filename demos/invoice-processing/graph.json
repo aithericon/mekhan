@@ -86,78 +86,7 @@
         "label": "Review Invoice",
         "taskTitle": "Review Incoming Invoice",
         "instructionsMdsvex": "Please review the invoice details below and verify the information is correct before proceeding.",
-        "steps": [
-          {
-            "id": "step-verify",
-            "title": "Verify Details",
-            "blocks": [
-              {
-                "type": "image",
-                "url": "/api/files/{{ invoice_file.key }}",
-                "alt": "Uploaded invoice",
-                "caption": "Original invoice document (uploaded at instance start)"
-              },
-              {
-                "type": "download",
-                "downloads": [
-                  {
-                    "url": "/api/files/{{ invoice_file.key }}",
-                    "filename": "{{ invoice_file.filename }}",
-                    "mime_type": "{{ invoice_file.content_type }}",
-                    "description": "Original uploaded invoice"
-                  }
-                ]
-              },
-              {
-                "type": "divider"
-              },
-              {
-                "type": "input",
-                "field": {
-                  "name": "vendor_name",
-                  "label": "Vendor Name",
-                  "kind": "text",
-                  "required": true,
-                  "placeholder": "Enter vendor name"
-                }
-              },
-              {
-                "type": "input",
-                "field": {
-                  "name": "invoice_amount",
-                  "label": "Invoice Amount ($)",
-                  "kind": "number",
-                  "required": true
-                }
-              },
-              {
-                "type": "input",
-                "field": {
-                  "name": "description",
-                  "label": "Line Item Description",
-                  "kind": "textarea",
-                  "required": false,
-                  "placeholder": "Describe the goods or services"
-                }
-              }
-            ]
-          },
-          {
-            "id": "step-confirm",
-            "title": "Confirmation",
-            "blocks": [
-              {
-                "type": "input",
-                "field": {
-                  "name": "verified",
-                  "label": "I confirm this invoice is accurate",
-                  "kind": "checkbox",
-                  "required": true
-                }
-              }
-            ]
-          }
-        ]
+        "steps": []
       }
     },
     {
@@ -256,47 +185,7 @@
         "label": "Manager Approval",
         "taskTitle": "Approve High-Value Invoice",
         "instructionsMdsvex": "This invoice exceeds $5,000 and requires manager sign-off.",
-        "steps": [
-          {
-            "id": "step-decide",
-            "title": "Decision",
-            "blocks": [
-              {
-                "type": "input",
-                "field": {
-                  "name": "decision",
-                  "label": "Approval Decision",
-                  "kind": "select",
-                  "required": true,
-                  "options": [
-                    "Approve",
-                    "Reject",
-                    "Request More Info"
-                  ]
-                }
-              },
-              {
-                "type": "input",
-                "field": {
-                  "name": "comments",
-                  "label": "Comments",
-                  "kind": "textarea",
-                  "required": false,
-                  "placeholder": "Optional notes for the finance team"
-                }
-              },
-              {
-                "type": "input",
-                "field": {
-                  "name": "signature",
-                  "label": "Manager Signature",
-                  "kind": "signature",
-                  "required": true
-                }
-              }
-            ]
-          }
-        ]
+        "steps": []
       }
     },
     {
@@ -432,7 +321,7 @@
       "target": "end-processed",
       "sourceHandle": "default",
       "targetHandle": "in",
-      "label": "≤ $5,000",
+      "label": "\u2264 $5,000",
       "type": "conditional"
     },
     {
