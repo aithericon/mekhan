@@ -11,7 +11,7 @@ use crate::compiler::rhai_gen::{
 };
 use crate::compiler::token_shape::YIELD_LOGIC;
 use crate::models::template::{
-    DeploymentModel, ExecutionBackendType, FieldMapping, PhaseUpdateStatus, ResourceConfig,
+    DeploymentModel, ExecutionBackendType, FieldMapping, PhaseUpdateStatus, Port, ResourceConfig,
     WorkflowEdge, WorkflowNode, WorkflowNodeData,
 };
 use aithericon_executor_domain::InputSource;
@@ -855,6 +855,38 @@ fn lower_human_task(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     Ok(())
 }
 
+/// Serialize the declared `output.fields` as a Rhai array literal carrying
+/// `(name, required, kind)` per entry, suitable for embedding into the
+/// prepare transition's `d.spec.outputs` slot. Python-only — other backends
+/// keep the historical `outputs: []` for now (the runner sweep that consumes
+/// these declarations only exists on the Python runner; widening to other
+/// backends requires their own validation path first).
+fn declared_outputs_rhai(backend: ExecutionBackendType, output: &Port) -> String {
+    if backend != ExecutionBackendType::Python || output.fields.is_empty() {
+        return "[]".to_string();
+    }
+    let arr: Vec<serde_json::Value> = output
+        .fields
+        .iter()
+        .map(|f| {
+            // FieldKind serializes as snake_case (text, number, bool, json,
+            // textarea, select, file, signature, timestamp). The runner side
+            // maps unknown kind strings to "skip validation" so forward-compat
+            // additions don't break existing deployments before they roll.
+            let kind_str = serde_json::to_value(f.kind)
+                .ok()
+                .and_then(|v| v.as_str().map(String::from))
+                .unwrap_or_else(|| "json".to_string());
+            serde_json::json!({
+                "name": f.name,
+                "required": f.required,
+                "kind": kind_str,
+            })
+        })
+        .collect();
+    json_to_rhai_literal(&serde_json::Value::Array(arr))
+}
+
 fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     // Scheduled steps dispatch through the long-lived scheduler-net instead of
     // the inline executor lifecycle. Delegated early so the inline path below
@@ -886,6 +918,7 @@ fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileError> {
         label,
         execution_spec,
         retry_policy,
+        output,
         ..
     } = &cx.node.data
     else {
@@ -903,6 +936,7 @@ fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     let config_rhai = json_to_rhai_literal(&validated_config);
     let inputs_rhai =
         json_to_rhai_literal(&serde_json::to_value(&staged_inputs).unwrap_or_default());
+    let outputs_rhai = declared_outputs_rhai(*backend_type, output);
 
     let max_retries = retry_policy.max_retries;
     let ctx = &mut *cx.ctx;
@@ -946,7 +980,7 @@ fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileError> {
             .auto_input("input", &p_input)
             .auto_output("job", &exec_inbox)
             .logic(format!(
-                r#"let d = input; d.job_id = "{id}"; d.run = 0; d.retries = 0; d.max_retries = {max_retries}; let job_inputs = {inputs_rhai}; job_inputs.push(#{{ "name": "input.json", "source": #{{ "type": "inline", "value": input }} }}); /*__BORROWED_INPUTS__*/ d.spec = #{{ "backend": "{backend_type}", "inputs": job_inputs, "outputs": [], "config": {config_rhai}, "stream_events": ["metric", "progress", "phase", "log"] }}; #{{ job: d }}"#
+                r#"let d = input; d.job_id = "{id}"; d.run = 0; d.retries = 0; d.max_retries = {max_retries}; let job_inputs = {inputs_rhai}; job_inputs.push(#{{ "name": "input.json", "source": #{{ "type": "inline", "value": input }} }}); /*__BORROWED_INPUTS__*/ d.spec = #{{ "backend": "{backend_type}", "inputs": job_inputs, "outputs": {outputs_rhai}, "config": {config_rhai}, "stream_events": ["metric", "progress", "phase", "log"] }}; #{{ job: d }}"#
             ));
 
         let lc = executor_lifecycle(
@@ -1037,6 +1071,7 @@ fn lower_automated_step_scheduled(cx: &mut LoweringCtx) -> Result<(), CompileErr
         label,
         execution_spec,
         deployment_model,
+        output,
         ..
     } = &cx.node.data
     else {
@@ -1066,6 +1101,7 @@ fn lower_automated_step_scheduled(cx: &mut LoweringCtx) -> Result<(), CompileErr
     let resources_rhai = json_to_rhai_literal(
         &serde_json::to_value(&resources).unwrap_or(serde_json::Value::Null),
     );
+    let outputs_rhai = declared_outputs_rhai(backend_type, output);
     let backend_wire = backend_type.as_wire_str();
     let job_template_lit = rhai_str_escape(&job_template);
     let id_lit = rhai_str_escape(&id);
@@ -1112,7 +1148,7 @@ fn lower_automated_step_scheduled(cx: &mut LoweringCtx) -> Result<(), CompileErr
         .auto_input("input", &p_input)
         .auto_output("job", &sched_out)
         .logic(format!(
-            r#"let d = #{{}}; d.job_id = "{id_lit}"; d.model_name = "{id_lit}"; d.run = 0; d.retries = 0; d.max_retries = 0; d.job_template_id = "{job_template_lit}"; let job_inputs = {inputs_rhai}; job_inputs.push(#{{ "name": "input.json", "source": #{{ "type": "inline", "value": input }} }}); /*__BORROWED_INPUTS__*/ d.spec = #{{ "backend": "{backend_wire}", "inputs": job_inputs, "outputs": [], "config": {config_rhai}, "resources": {resources_rhai}, "stream_events": ["metric", "progress", "phase", "log"] }}; #{{ job: d }}"#
+            r#"let d = #{{}}; d.job_id = "{id_lit}"; d.model_name = "{id_lit}"; d.run = 0; d.retries = 0; d.max_retries = 0; d.job_template_id = "{job_template_lit}"; let job_inputs = {inputs_rhai}; job_inputs.push(#{{ "name": "input.json", "source": #{{ "type": "inline", "value": input }} }}); /*__BORROWED_INPUTS__*/ d.spec = #{{ "backend": "{backend_wire}", "inputs": job_inputs, "outputs": {outputs_rhai}, "config": {config_rhai}, "resources": {resources_rhai}, "stream_events": ["metric", "progress", "phase", "log"] }}; #{{ job: d }}"#
         ));
 
     ctx.transition(format!("t_{id}_to_output"), format!("{label} - To Output"))

@@ -101,6 +101,7 @@ fn process_config_into_spec_with_io() {
         name: "result.json".into(),
         path: Some("result.json".into()),
         required: true,
+        kind: None,
         upload_to: None,
     }];
 

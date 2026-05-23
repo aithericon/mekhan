@@ -131,6 +131,7 @@ mod tests {
                     name: "model.pt".into(),
                     path: Some("model.pt".into()),
                     required: true,
+                    kind: None,
                     upload_to: None,
                 }],
                 config: serde_json::json!({
@@ -318,6 +319,7 @@ mod tests {
             name: "result.json".into(),
             path: Some("result.json".into()),
             required: true,
+            kind: None,
             upload_to: Some(OutputUploadConfig {
                 storage: StorageConfig {
                     backend: StorageBackend::Gcs,
@@ -356,6 +358,7 @@ mod tests {
             name: "out.txt".into(),
             path: Some("out.txt".into()),
             required: false,
+            kind: None,
             upload_to: None,
         };
         let json = serde_json::to_string(&output).unwrap();
@@ -402,6 +405,7 @@ mod tests {
                     name: "result".into(),
                     path: Some("result.tar.gz".into()),
                     required: true,
+                    kind: None,
                     upload_to: Some(OutputUploadConfig {
                         storage: StorageConfig {
                             backend: StorageBackend::Gcs,

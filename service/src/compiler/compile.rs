@@ -1922,4 +1922,139 @@ mod tests {
             other => panic!("expected OutputFieldShadowsInput, got {other:?}"),
         }
     }
+
+    /// Lower.rs MUST emit the declared `output.fields` into the prepare
+    /// transition's `d.spec.outputs` Rhai literal — name, required, and
+    /// kind per entry. Without this the executor sees `outputs: []` at
+    /// runtime, the runner template bakes an empty `_DECLARED_OUTPUTS`,
+    /// and the entire P1+P3 implicit-output story is inert in
+    /// production. Locks the wiring: kind serializes as the snake_case
+    /// FieldKind string ("text", "number", "bool", "json"), required
+    /// flag carried verbatim, non-Python backends keep `outputs: []`.
+    #[test]
+    fn python_automated_step_emits_declared_outputs_in_prepare_rhai() {
+        let json = r#"{
+          "nodes":[
+            {"id":"start","type":"start","position":{"x":0,"y":0},
+             "data":{"type":"start","label":"Start"}},
+            {"id":"extract","type":"automated_step","slug":"extract","position":{"x":0,"y":0},
+             "data":{"type":"automated_step","label":"Extract",
+                     "executionSpec":{"backendType":"python","entrypoint":"main.py","config":{"entrypoint":"main.py","python":"python3","sdk":true}},
+                     "output":{"id":"out","label":"Output","fields":[
+                       {"name":"vendor","label":"Vendor","kind":"text","required":true},
+                       {"name":"amount","label":"Amount","kind":"number","required":false},
+                       {"name":"extracted","label":"Extracted","kind":"bool","required":true}
+                     ]},
+                     "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
+                     "deploymentModel":{"mode":"inline"}}},
+            {"id":"end","type":"end","position":{"x":0,"y":0},
+             "data":{"type":"end","label":"End"}}
+          ],
+          "edges":[
+            {"id":"e1","source":"start","target":"extract","targetHandle":"in","type":"sequence"},
+            {"id":"e2","source":"extract","target":"end","targetHandle":"in","type":"sequence"}
+          ]
+        }"#;
+        let graph: WorkflowGraph = serde_json::from_str(json).expect("deser graph");
+        let mut files: std::collections::HashMap<
+            String,
+            std::collections::HashMap<String, aithericon_executor_domain::InputSource>,
+        > = std::collections::HashMap::new();
+        let mut step = std::collections::HashMap::new();
+        step.insert(
+            "main.py".to_string(),
+            aithericon_executor_domain::InputSource::Raw {
+                content: String::new(),
+            },
+        );
+        files.insert("extract".to_string(), step);
+
+        let air = compile_to_air(&graph, "t", "d", &files).expect("compile");
+        let transitions = air["transitions"].as_array().expect("transitions");
+        let prepare = transitions
+            .iter()
+            .find(|t| {
+                t["id"]
+                    .as_str()
+                    .map(|s| s == "extract/prepare" || s == "t_extract_prepare")
+                    .unwrap_or(false)
+            })
+            .expect("prepare transition");
+        let source = prepare["logic"]["source"]
+            .as_str()
+            .expect("prepare logic source");
+
+        // The literal `"outputs": []` is the pre-feature default — its
+        // presence here would mean the lower.rs wiring regressed and
+        // declared outputs never reach the runner.
+        assert!(
+            !source.contains(r#""outputs": []"#),
+            "outputs literal must NOT be empty when fields are declared: {source}"
+        );
+        // Each declared field appears in the Rhai array with name +
+        // required + kind, in serde-snake_case form.
+        for needle in [
+            r#""name": "vendor""#,
+            r#""kind": "text""#,
+            r#""name": "amount""#,
+            r#""kind": "number""#,
+            r#""name": "extracted""#,
+            r#""kind": "bool""#,
+            r#""required": true"#,
+            r#""required": false"#,
+        ] {
+            assert!(
+                source.contains(needle),
+                "prepare Rhai missing {needle:?}: {source}"
+            );
+        }
+    }
+
+    /// Sibling of the wiring test: non-Python backends keep the
+    /// historical `outputs: []` since the runner sweep / strict
+    /// validation only exists on the Python runner. Widening this to
+    /// other backends needs their own validation path.
+    #[test]
+    fn non_python_automated_step_keeps_empty_outputs_in_prepare_rhai() {
+        let json = r#"{
+          "nodes":[
+            {"id":"start","type":"start","position":{"x":0,"y":0},
+             "data":{"type":"start","label":"Start"}},
+            {"id":"run","type":"automated_step","slug":"run","position":{"x":0,"y":0},
+             "data":{"type":"automated_step","label":"Run",
+                     "executionSpec":{"backendType":"docker","config":{"image":"alpine:latest"}},
+                     "output":{"id":"out","label":"Output","fields":[
+                       {"name":"stdout","label":"Stdout","kind":"textarea","required":false}
+                     ]},
+                     "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
+                     "deploymentModel":{"mode":"inline"}}},
+            {"id":"end","type":"end","position":{"x":0,"y":0},
+             "data":{"type":"end","label":"End"}}
+          ],
+          "edges":[
+            {"id":"e1","source":"start","target":"run","targetHandle":"in","type":"sequence"},
+            {"id":"e2","source":"run","target":"end","targetHandle":"in","type":"sequence"}
+          ]
+        }"#;
+        let graph: WorkflowGraph = serde_json::from_str(json).expect("deser graph");
+        let air = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
+            .expect("compile");
+        let transitions = air["transitions"].as_array().expect("transitions");
+        let prepare = transitions
+            .iter()
+            .find(|t| {
+                t["id"]
+                    .as_str()
+                    .map(|s| s == "run/prepare" || s == "t_run_prepare")
+                    .unwrap_or(false)
+            })
+            .expect("prepare transition");
+        let source = prepare["logic"]["source"]
+            .as_str()
+            .expect("prepare logic source");
+        assert!(
+            source.contains(r#""outputs": []"#),
+            "non-Python backends must keep outputs: [] for now: {source}"
+        );
+    }
 }

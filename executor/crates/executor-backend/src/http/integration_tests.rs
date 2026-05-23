@@ -1010,8 +1010,8 @@ async fn output_mapping_extracts_json_subpath() {
     ]);
 
     let outputs = vec![
-        OutputDeclaration { name: "user_id".into(), path: None, required: true, upload_to: None },
-        OutputDeclaration { name: "user_name".into(), path: None, required: true, upload_to: None },
+        OutputDeclaration { name: "user_id".into(), path: None, required: true, kind: None, upload_to: None },
+        OutputDeclaration { name: "user_name".into(), path: None, required: true, kind: None, upload_to: None },
     ];
     let spec = config.into_spec_with_io(vec![], outputs);
     let run_ctx = RunContext {

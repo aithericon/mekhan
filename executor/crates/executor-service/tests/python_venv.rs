@@ -199,6 +199,7 @@ mod python_venv_tests {
             name: "answer".into(),
             path: Some("answer.json".into()),
             required: true,
+            kind: None,
             upload_to: None,
         }];
 

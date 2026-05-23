@@ -147,6 +147,17 @@ pub struct OutputDeclaration {
     #[serde(default = "default_true")]
     pub required: bool,
 
+    /// Declared field kind (lowercase: "text", "number", "bool", "json",
+    /// "textarea", "select", "file", "signature", "timestamp"). When the
+    /// service-side compiler emits a typed output port, this carries the
+    /// kind across the service/executor boundary so the runner can
+    /// strict-validate the emitted value against the declaration. `None`
+    /// means "no kind validation" (back-compat with pre-typed jobs +
+    /// non-Python backends). Backend-side validation is opt-in via
+    /// `PETRI_VALIDATE_SCHEMAS`; unknown kind strings skip validation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+
     /// Upload this file output to a specific storage destination after execution.
     /// Supports `{{secret:KEY}}` patterns in storage credentials.
     #[serde(default, skip_serializing_if = "Option::is_none")]

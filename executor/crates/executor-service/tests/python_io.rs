@@ -160,6 +160,7 @@ mod python_io_tests {
             name: "result".into(),
             path: Some("result.json".into()),
             required: true,
+            kind: None,
             upload_to: None,
         }];
 
@@ -219,6 +220,7 @@ mod python_io_tests {
             name: "sum".into(),
             path: Some("sum.json".into()),
             required: true,
+            kind: None,
             upload_to: None,
         }];
 
@@ -298,6 +300,7 @@ set_output("result", {"answer": result})
             name: "result".into(),
             path: None,
             required: true,
+            kind: None,
             upload_to: None,
         }];
 

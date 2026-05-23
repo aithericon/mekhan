@@ -25,27 +25,39 @@ use aithericon_executor_domain::ExecutorError;
 pub async fn write_runner(
     runner_path: &Path,
     user_code_path: &Path,
-    declared_outputs: &[(String, bool)],
+    declared_outputs: &[(String, bool, Option<String>)],
 ) -> Result<(), ExecutorError> {
     let user_code_escaped = user_code_path
         .to_string_lossy()
         .replace('\\', "\\\\")
         .replace('\'', "\\'");
 
-    // Bake declared output names into the runner template so the post-exec
-    // sweep knows which globals to promote to `<name>.json` files. The
-    // compile-time `OutputFieldShadowsReserved` / `OutputFieldShadowsInput`
-    // guards in service/src/compiler/compile.rs reject collisions, so any
-    // name reaching this list is safe to write.
+    // Bake declared output names + kinds into the runner template so the
+    // post-exec sweep can promote matching Python globals to `<name>.json`
+    // files AND strict-validate each emitted JSON value against the declared
+    // FieldKind (gated by PETRI_VALIDATE_SCHEMAS, default on — see
+    // engine/core-engine/src/config.rs). The compile-time
+    // `OutputFieldShadowsReserved` / `OutputFieldShadowsInput` guards in
+    // service/src/compiler/compile.rs reject collisions, so any name
+    // reaching this list is safe to write.
     let declared_list = declared_outputs
         .iter()
-        .map(|(name, _)| format!("{:?}", name))
+        .map(|(name, _, _)| format!("{:?}", name))
         .collect::<Vec<_>>()
         .join(", ");
     let required_list = declared_outputs
         .iter()
-        .filter(|(_, required)| *required)
-        .map(|(name, _)| format!("{:?}", name))
+        .filter(|(_, required, _)| *required)
+        .map(|(name, _, _)| format!("{:?}", name))
+        .collect::<Vec<_>>()
+        .join(", ");
+    // Kinds dict literal: `"vendor": "text", "amount": "number", ...`.
+    // Entries with no declared kind (None) are omitted so the runner skips
+    // them in the validation pass — back-compat for jobs whose service-side
+    // compiler doesn't yet emit kinds.
+    let kinds_dict = declared_outputs
+        .iter()
+        .filter_map(|(name, _, kind)| kind.as_ref().map(|k| format!("{:?}: {:?}", name, k)))
         .collect::<Vec<_>>()
         .join(", ");
 
@@ -243,6 +255,71 @@ if _outputs_dir and _REQUIRED_OUTPUTS:
         except NameError:
             pass
         sys.exit(2)
+
+# --- Strict kind validation (PETRI_VALIDATE_SCHEMAS gate) ---
+# Validate each emitted output value against its declared FieldKind, hard-
+# rejecting on mismatch so authors see the precise source of the problem
+# at the runner instead of a generic JSON Schema failure at the petri
+# layer downstream. Covers BOTH paths uniformly — files written by the
+# implicit sweep above AND files written by explicit set_output earlier.
+# Default-on; PETRI_VALIDATE_SCHEMAS=false/0 disables, matching the
+# engine's posture (engine/core-engine/src/config.rs:243). Names with no
+# declared kind (back-compat with pre-typed jobs) skip validation.
+_DECLARED_KINDS = {{{kinds_dict}}}
+_validate_schemas = (
+    os.environ.get("PETRI_VALIDATE_SCHEMAS", "true").lower() not in ("false", "0")
+)
+
+def _kind_accepts(_kind, _value):
+    # Mirror of FieldKind::accepts in service/src/models/template.rs.
+    # `bool` is checked FIRST because in Python `True` / `False` are int
+    # subclasses, so `isinstance(True, (int, float))` returns True — the
+    # naive Number check would silently accept a bool where a number is
+    # required.
+    if _kind == "json":
+        return True
+    if _kind == "bool":
+        return isinstance(_value, bool)
+    if _kind == "number":
+        return isinstance(_value, (int, float)) and not isinstance(_value, bool)
+    if _kind in ("text", "textarea", "select", "signature", "timestamp"):
+        return isinstance(_value, str)
+    if _kind == "file":
+        return isinstance(_value, (str, dict))
+    # Unknown kind: forward-compat with future FieldKind additions whose
+    # rollout reaches the service before the executor. Skip rather than
+    # falsely reject.
+    return True
+
+if _validate_schemas and _outputs_dir and _DECLARED_KINDS:
+    _kind_errors = []
+    for _vname, _vkind in _DECLARED_KINDS.items():
+        _vpath = os.path.join(_outputs_dir, _vname + ".json")
+        if not os.path.exists(_vpath):
+            # Either an optional output not emitted, or a required one
+            # already caught above. Either way, no value to validate.
+            continue
+        try:
+            with open(_vpath) as _vf:
+                _vval = json.load(_vf)
+        except (OSError, json.JSONDecodeError) as _ve:
+            _kind_errors.append((_vname, _vkind, f"unreadable: {{_ve}}"))
+            continue
+        if not _kind_accepts(_vkind, _vval):
+            _kind_errors.append(
+                (_vname, _vkind, type(_vval).__name__)
+            )
+    if _kind_errors:
+        for (_en, _ek, _et) in _kind_errors:
+            print(
+                f"[runner] declared output {{_en!r}} kind={{_ek!r}} got {{_et}} — value rejected",
+                file=sys.stderr,
+            )
+        try:
+            aithericon.shutdown()
+        except NameError:
+            pass
+        sys.exit(3)
 
 # --- Cleanup ---
 try:
@@ -850,13 +927,27 @@ mod tests {
     }
 
     /// Run the runner with a baked declared-outputs list so the post-exec
-    /// sweep is active. Each entry is `(name, required)` — names are the
-    /// declared `output.fields[].name` from the workflow editor. Returns
-    /// the TempDir so callers keep it alive while reading swept outputs.
+    /// sweep is active. Each entry is `(name, required, kind)` — names
+    /// come from `output.fields[].name`, kind is the FieldKind string
+    /// ("text", "number", "bool", "json", ...) or `None` to skip strict
+    /// validation for that name. Returns the TempDir so callers keep it
+    /// alive while reading swept outputs.
     async fn run_runner_with_outputs(
         user_script: &str,
         inputs: &[(&str, &str)],
-        declared_outputs: &[(String, bool)],
+        declared_outputs: &[(String, bool, Option<String>)],
+    ) -> (String, String, i32, TempDir) {
+        run_runner_with_outputs_env(user_script, inputs, declared_outputs, &[]).await
+    }
+
+    /// Like [`run_runner_with_outputs`] but also takes extra env vars to set
+    /// when invoking the runner. Lets tests toggle `PETRI_VALIDATE_SCHEMAS`
+    /// without duplicating the boilerplate.
+    async fn run_runner_with_outputs_env(
+        user_script: &str,
+        inputs: &[(&str, &str)],
+        declared_outputs: &[(String, bool, Option<String>)],
+        extra_env: &[(&str, &str)],
     ) -> (String, String, i32, TempDir) {
         let temp = TempDir::new().expect("temp dir");
         let run_dir = temp.path().to_path_buf();
@@ -878,14 +969,16 @@ mod tests {
         let outputs_dir = run_dir.join("outputs");
         std::fs::create_dir_all(&outputs_dir).unwrap();
 
-        let output = Command::new("python3")
-            .arg(&runner_path)
+        let mut cmd = Command::new("python3");
+        cmd.arg(&runner_path)
             .env("AITHERICON_RUN_DIR", &run_dir)
             .env("AITHERICON_INPUTS_DIR", &inputs_dir)
             .env("AITHERICON_OUTPUTS_DIR", &outputs_dir)
-            .env("PYTHONDONTWRITEBYTECODE", "1")
-            .output()
-            .expect("python3 invocation");
+            .env("PYTHONDONTWRITEBYTECODE", "1");
+        for (k, v) in extra_env {
+            cmd.env(k, v);
+        }
+        let output = cmd.output().expect("python3 invocation");
 
         let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
         let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
@@ -904,7 +997,7 @@ mod tests {
         let (stdout, stderr, code, temp) = run_runner_with_outputs(
             r#"vendor = "ACME""#,
             &[("input.json", "{}")],
-            &[("vendor".to_string(), true)],
+            &[("vendor".to_string(), true, None)],
         )
         .await;
         assert_eq!(code, 0, "stdout: {stdout}\nstderr: {stderr}");
@@ -923,7 +1016,7 @@ mod tests {
         let (stdout, stderr, code, temp) = run_runner_with_outputs(
             r#"set_output("vendor", "First"); vendor = "Second""#,
             &[("input.json", "{}")],
-            &[("vendor".to_string(), true)],
+            &[("vendor".to_string(), true, None)],
         )
         .await;
         assert_eq!(code, 0, "stdout: {stdout}\nstderr: {stderr}");
@@ -943,12 +1036,113 @@ mod tests {
         let (stdout, stderr, code, _temp) = run_runner_with_outputs(
             "x = 1",
             &[("input.json", "{}")],
-            &[("vendor".to_string(), true)],
+            &[("vendor".to_string(), true, None)],
         )
         .await;
         assert_eq!(code, 2, "stdout: {stdout}\nstderr: {stderr}");
         assert!(
             stderr.contains("missing required output") && stderr.contains("vendor"),
+            "stderr: {stderr}"
+        );
+    }
+
+    /// Hard rejection on kind mismatch (implicit write). Declared output
+    /// `vendor` is kind=text but user assigns an integer. The post-exec
+    /// validation pass surfaces a precise message at the runner instead of
+    /// leaking a generic JSON Schema error far downstream. Exit code 3
+    /// distinguishes "schema validation failure" from missing-required (2).
+    #[tokio::test]
+    async fn kind_mismatch_implicit_rejected() {
+        skip_if_env_unsupported!();
+        let (stdout, stderr, code, _temp) = run_runner_with_outputs(
+            "vendor = 42",
+            &[("input.json", "{}")],
+            &[("vendor".to_string(), true, Some("text".to_string()))],
+        )
+        .await;
+        assert_eq!(code, 3, "stdout: {stdout}\nstderr: {stderr}");
+        assert!(
+            stderr.contains("vendor") && stderr.contains("kind='text'") && stderr.contains("int"),
+            "stderr: {stderr}"
+        );
+    }
+
+    /// Kind validation MUST apply to explicit `set_output` too — otherwise
+    /// the rule "use the declared port" would have a hole where you can
+    /// emit anything via set_output and bypass the contract. Same
+    /// validation pass, same exit code, same precision.
+    #[tokio::test]
+    async fn kind_mismatch_explicit_set_output_rejected() {
+        skip_if_env_unsupported!();
+        let (stdout, stderr, code, _temp) = run_runner_with_outputs(
+            r#"set_output("vendor", 42)"#,
+            &[("input.json", "{}")],
+            &[("vendor".to_string(), true, Some("text".to_string()))],
+        )
+        .await;
+        assert_eq!(code, 3, "stdout: {stdout}\nstderr: {stderr}");
+        assert!(
+            stderr.contains("vendor") && stderr.contains("kind='text'"),
+            "stderr: {stderr}"
+        );
+    }
+
+    /// `PETRI_VALIDATE_SCHEMAS=false` opts out of the strict validation
+    /// path — same posture as the engine-side flag at
+    /// engine/core-engine/src/config.rs:243. The mismatched value still
+    /// gets written; the runner just doesn't reject. Useful for emergency
+    /// rollback if a kind tightening turns out to be wrong in production.
+    #[tokio::test]
+    async fn kind_mismatch_disabled_via_env() {
+        skip_if_env_unsupported!();
+        let (stdout, stderr, code, temp) = run_runner_with_outputs_env(
+            "vendor = 42",
+            &[("input.json", "{}")],
+            &[("vendor".to_string(), true, Some("text".to_string()))],
+            &[("PETRI_VALIDATE_SCHEMAS", "false")],
+        )
+        .await;
+        assert_eq!(code, 0, "stdout: {stdout}\nstderr: {stderr}");
+        let written = std::fs::read_to_string(temp.path().join("outputs").join("vendor.json"))
+            .expect("vendor.json written through despite kind mismatch");
+        assert_eq!(written, "42");
+    }
+
+    /// `Json` kind is the escape hatch — accepts any JSON value. Locks
+    /// down the FieldKind::accepts mirror so a port declared as Json
+    /// passes everything: dicts, lists, primitives, mixed nesting.
+    #[tokio::test]
+    async fn kind_json_accepts_anything() {
+        skip_if_env_unsupported!();
+        let (stdout, stderr, code, temp) = run_runner_with_outputs(
+            r#"blob = {"k": [1, 2, 3], "nested": {"x": True}}"#,
+            &[("input.json", "{}")],
+            &[("blob".to_string(), true, Some("json".to_string()))],
+        )
+        .await;
+        assert_eq!(code, 0, "stdout: {stdout}\nstderr: {stderr}");
+        let written = std::fs::read_to_string(temp.path().join("outputs").join("blob.json"))
+            .expect("blob.json written");
+        assert!(written.contains("\"nested\""));
+    }
+
+    /// Python `True`/`False` are int subclasses — `isinstance(True, int)`
+    /// is True, so a naive Number check would silently accept a bool
+    /// where a number is required. The runner's `_kind_accepts` checks
+    /// `not isinstance(value, bool)` for Number specifically. This test
+    /// locks that down: declared kind=number, user writes True → reject.
+    #[tokio::test]
+    async fn kind_number_rejects_bool() {
+        skip_if_env_unsupported!();
+        let (stdout, stderr, code, _temp) = run_runner_with_outputs(
+            "count = True",
+            &[("input.json", "{}")],
+            &[("count".to_string(), true, Some("number".to_string()))],
+        )
+        .await;
+        assert_eq!(code, 3, "stdout: {stdout}\nstderr: {stderr}");
+        assert!(
+            stderr.contains("count") && stderr.contains("kind='number'") && stderr.contains("bool"),
             "stderr: {stderr}"
         );
     }
