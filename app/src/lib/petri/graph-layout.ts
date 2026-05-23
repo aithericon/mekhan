@@ -19,10 +19,16 @@ export const GROUP_MIN_WIDTH = 180;
 export const GROUP_MIN_HEIGHT = 100;
 
 // Transition height is derived from port counts and must match the row
-// metrics in TransitionNode.svelte.
-const TRANS_HEADER_H = 24; // px-2 py-1 + text
+// metrics in TransitionNode.svelte. If those CSS/Tailwind values change,
+// update these in lockstep — otherwise dagre packs the rows tighter than
+// the rendered chip and adjacent nodes overlap.
+// Worst-case header: a guard/effect badge ("G", "FX") is `px-1.5 py-0.5
+// text-sm` → 20px line + 4px padding = 24px tall, so the row clears
+// max(text, badge) + py-1 = 24 + 8 = 32. Plain (label-only) transitions
+// over-pad by 4px — acceptable trade for keeping ports from overlapping.
+const TRANS_HEADER_H = 32;
 const TRANS_PORTS_PAD = 9; // border-t (1px) + py-1 (4px*2)
-const TRANS_PORT_ROW = 14; // .port-row height
+const TRANS_PORT_ROW = 22; // .port-row { min-height: 22px } in TransitionNode.svelte
 
 export function getTransitionHeight(
 	inputCount: number,
@@ -35,10 +41,13 @@ export function getTransitionHeight(
 }
 
 // Meta-group node dimensions (must match MetaGroupNode.svelte).
+// Header is two stacked text-sm rows (title + summary) inside `px-3 py-1.5`,
+// so 2 × 20px line-height + 2 × 6px padding = 52. Ports section adds a 1px
+// top border plus `py-1` (8px) above the first row.
 export const META_WIDTH = 220;
-const META_HEADER_H = 28;
-const META_PORT_ROW = 16;
-const META_PAD = 12;
+const META_HEADER_H = 52;
+const META_PORT_ROW = 16; // .port-row { height: 16px } in MetaGroupNode.svelte
+const META_PAD = 9; // border-t (1px) + py-1 (4px*2)
 
 export function getMetaHeight(inputCount: number, outputCount: number): number {
 	const maxPorts = Math.max(inputCount, outputCount, 1);

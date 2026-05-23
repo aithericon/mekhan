@@ -89,15 +89,15 @@
 			<div
 				id="transition-{data.label.toLowerCase().replace(/\s+/g, '-')}"
 				data-testid="transition-node"
-				class="transition-chip flex flex-col border-2 rounded-lg cursor-pointer min-w-[200px] w-max
+				class="transition-chip flex flex-col border-2 rounded-lg cursor-pointer min-w-[200px] w-max bg-card bg-linear-to-br
 					{hasGuard ? 'border-amber-500' : ''}
-					{isEffect && data.enabled ? 'border-purple-400 bg-purple-50 hover:bg-purple-100 dark:border-purple-600 dark:bg-purple-900 dark:hover:bg-purple-800' : ''}
-					{isEffect && !data.enabled ? 'border-purple-300 bg-purple-50/60 hover:bg-purple-100 dark:border-purple-500/60 dark:bg-purple-950 dark:hover:bg-purple-900' : ''}
+					{isEffect && data.enabled ? 'border-purple-400 from-purple-500/10 to-purple-500/25 hover:from-purple-500/15 hover:to-purple-500/30' : ''}
+					{isEffect && !data.enabled ? 'border-purple-300 from-purple-500/5 to-purple-500/15 hover:from-purple-500/10 hover:to-purple-500/20' : ''}
 					{!isEffect && data.enabled
-						? 'border-gray-400 bg-white hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-700 dark:hover:bg-gray-600'
+						? 'border-gray-400 from-gray-500/5 to-gray-500/20 hover:from-gray-500/10 hover:to-gray-500/25 dark:border-gray-600'
 						: ''}
 					{!isEffect && !data.enabled
-						? 'border-gray-300 bg-gray-100 hover:bg-gray-50 dark:border-gray-600/60 dark:bg-gray-800 dark:hover:bg-gray-700'
+						? 'border-gray-300 from-gray-500/5 to-gray-500/10 hover:from-gray-500/10 hover:to-gray-500/15 dark:border-gray-600/60'
 						: ''}
 					{data.selected ? 'ring-2 ring-primary ring-offset-1 ring-offset-background' : ''}
 					{data.spotlightRole === 'fired' ? 'spotlight-fired' : ''}

@@ -29,15 +29,23 @@
 		data.onSelect?.();
 	}
 
+	// Same surface treatment as the template-editor nodes: solid `bg-card`
+	// underlay + a low-alpha colored gradient on top. Keeps the canvas
+	// dot-grid from bleeding through and matches the visual language of
+	// the design canvas.
+	const PLACE_SURFACE = 'bg-card bg-linear-to-br';
 	const kindColors: Record<string, string> = {
-		internal: 'border-blue-500 bg-blue-100 dark:bg-blue-950',
-		signal: 'border-amber-500 bg-amber-100 dark:bg-amber-950',
-		bridge_in: 'border-teal-500 bg-teal-100 dark:bg-teal-950',
-		bridge_out: 'border-rose-500 bg-rose-100 dark:bg-rose-950',
-		bridge_reply: 'border-indigo-500 bg-indigo-100 dark:bg-indigo-950'
+		internal:     `border-blue-500   ${PLACE_SURFACE} from-blue-500/10   to-blue-500/25`,
+		signal:       `border-amber-500  ${PLACE_SURFACE} from-amber-500/10  to-amber-500/25`,
+		bridge_in:    `border-teal-500   ${PLACE_SURFACE} from-teal-500/10   to-teal-500/25`,
+		bridge_out:   `border-rose-500   ${PLACE_SURFACE} from-rose-500/10   to-rose-500/25`,
+		bridge_reply: `border-indigo-500 ${PLACE_SURFACE} from-indigo-500/10 to-indigo-500/25`
 	};
 
-	const typeColor = $derived(kindColors[data.kind] || 'border-muted-foreground bg-muted');
+	const typeColor = $derived(
+		kindColors[data.kind] ||
+			`border-muted-foreground ${PLACE_SURFACE} from-muted-foreground/10 to-muted-foreground/25`
+	);
 
 	const bridgeTooltip = $derived.by(() => {
 		if (data.kind === 'bridge_out' && data.bridgeTarget) {
