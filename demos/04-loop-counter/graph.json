@@ -18,7 +18,9 @@
     {
       "id": "lp",
       "type": "loop",
-      "position": { "x": 280, "y": 160 },
+      "position": { "x": 280, "y": 120 },
+      "width": 420,
+      "height": 220,
       "data": {
         "type": "loop",
         "label": "Iterate",
@@ -31,7 +33,7 @@
       "id": "tick",
       "type": "phase_update",
       "parentId": "lp",
-      "position": { "x": 200, "y": 280 },
+      "position": { "x": 80, "y": 80 },
       "data": {
         "type": "phase_update",
         "label": "Iteration {{ lp.iteration }}",
@@ -43,7 +45,7 @@
     {
       "id": "end",
       "type": "end",
-      "position": { "x": 720, "y": 160 },
+      "position": { "x": 800, "y": 160 },
       "data": {
         "type": "end",
         "label": "Done",
