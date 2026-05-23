@@ -1937,8 +1937,19 @@ fn lower_subworkflow(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     // Declared output port → how the child's terminal result maps back onto
     // the workflow token at the join. Empty fields ⇒ pass the child result
     // through opaquely (consistent with AutomatedStep's envelope semantics).
+    //
+    // The child's End node stamps its `resultMapping` under
+    // `exit_code: { ok: true, value: <fields> }` on the workflow token (see
+    // lower_end's result_shape transition). The terminal token that reaches
+    // `reply_out` therefore carries the declared output fields nested at
+    // `exit_code.value.<field>` — NOT at the top level. Reading
+    // `reply[<field>]` worked transiently when the SDK's executor_lifecycle
+    // terminals (`<step>/completed`) raced past the End and won the reply,
+    // because that raw envelope had the executor's `outputs.<field>` at
+    // depth-1; once publish.rs filters reply sources to End-derived terminals
+    // only, the join MUST unwrap the `exit_code.value` envelope.
     let join_logic = if output.fields.is_empty() {
-        r#"#{ output: reply }"#.to_string()
+        r#"let __v = if "exit_code" in reply && type_of(reply.exit_code) == "map" && "value" in reply.exit_code { reply.exit_code.value } else { reply }; #{ output: __v }"#.to_string()
     } else {
         let entries: Vec<String> = output
             .fields
@@ -1946,10 +1957,13 @@ fn lower_subworkflow(cx: &mut LoweringCtx) -> Result<(), CompileError> {
             .map(|f| {
                 let k = serde_json::to_string(&f.name)
                     .unwrap_or_else(|_| "\"\"".to_string());
-                format!("{k}: reply[{k}]")
+                format!("{k}: __v[{k}]")
             })
             .collect();
-        format!("#{{ output: #{{ {} }} }}", entries.join(", "))
+        format!(
+            r#"let __v = if "exit_code" in reply && type_of(reply.exit_code) == "map" && "value" in reply.exit_code {{ reply.exit_code.value }} else {{ reply }}; #{{ output: #{{ {} }} }}"#,
+            entries.join(", ")
+        )
     };
 
     let ctx = &mut *cx.ctx;

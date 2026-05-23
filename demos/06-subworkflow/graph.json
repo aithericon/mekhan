@@ -47,7 +47,7 @@
         "type": "end",
         "label": "Done",
         "resultMapping": [
-          { "targetField": "greeting", "expression": "input.greeting" }
+          { "targetField": "greeting", "expression": "call_greet.greeting" }
         ]
       }
     }

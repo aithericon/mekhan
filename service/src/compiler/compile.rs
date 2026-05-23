@@ -118,7 +118,7 @@ pub struct ResolvedChild {
 /// Per-`SubWorkflow`-node resolved child AIR. Empty for every compile path
 /// that has no sub-workflows (preview/tests use the back-compat wrapper); the
 /// publish/preview handlers populate it after recursively compiling +
-/// `make_child_callable`-ing each referenced child template.
+/// `make_child_subable`-ing each referenced child template.
 pub type SubWorkflowAir = HashMap<String, ResolvedChild>;
 
 /// Compile a WorkflowGraph to AIR JSON. Back-compat wrapper: no sub-workflow
@@ -526,6 +526,95 @@ fn apply_control_data_foundation(
                     replace_word_boundary(source, &rw.referenced, &rw.rewrite_to)
                 {
                     t.logic = TransitionLogic::Rhai { source: rewritten };
+                }
+            }
+        }
+    }
+
+    // (c-deadend) Decision deadend enabling-time alignment. The Decision
+    //      lowering emits one transition per branch + a default + an unguarded
+    //      `t_<dec>_deadend` whose intent is "fire only when nothing else
+    //      could." That priority intent breaks under the engine's selection
+    //      rule (evaluation::select_next_transition): step 1 is *earliest
+    //      enabling time wins*, and enabling time is the max created_at of all
+    //      *consumed + read* tokens on the binding. Because deadend reads only
+    //      the control-token place while branches/default also read the parked
+    //      `p_<producer>_data`, deadend can end up with an *earlier* enabling
+    //      time when the data token happens to be created after the ctrl token
+    //      (a non-deterministic micro-race inside the producer's yield: the
+    //      two are emitted from the same logic block but their `created_at`
+    //      stamps depend on hash iteration order). Step 1 wins outright, so
+    //      deadend fires even when a branch guard is true — caught live as
+    //      03-decision-routing failing for score=40 but passing for score=10.
+    //
+    //      Fix: mirror the read-arcs (and corresponding input_ports) that the
+    //      (c) read-arc synthesis added to a deadend's siblings onto the
+    //      deadend itself. The deadend's guard/logic stays unchanged (it still
+    //      `throw`s); the extra read-arcs only change its enabling time, so
+    //      it now ties with the branches/default on step 1 and loses on step 2
+    //      (specificity / input_count). Deadend's `priority(0)` is preserved
+    //      as the final tiebreak when read-arcs alone don't disambiguate.
+    for node in &graph.nodes {
+        if !matches!(node.data, WorkflowNodeData::Decision { .. }) {
+            continue;
+        }
+        let deadend_id = format!("t_{}_deadend", node.id);
+        let sibling_prefixes = [
+            format!("t_{}_branch_", node.id),
+            format!("t_{}_default", node.id),
+        ];
+
+        // Collect siblings' read-arcs (place_id, port_name, schema_ref).
+        let mut sibling_reads: Vec<(String, String, Option<String>)> = Vec::new();
+        for t in &scenario.transitions {
+            if !sibling_prefixes.iter().any(|p| t.id.starts_with(p)) {
+                continue;
+            }
+            for a in &t.inputs {
+                if !a.read {
+                    continue;
+                }
+                let schema_ref = t
+                    .input_ports
+                    .iter()
+                    .find(|p| p.name == a.port)
+                    .and_then(|p| p.schema_ref.clone());
+                if !sibling_reads
+                    .iter()
+                    .any(|(pl, po, _)| pl == &a.place && po == &a.port)
+                {
+                    sibling_reads.push((a.place.clone(), a.port.clone(), schema_ref));
+                }
+            }
+        }
+        if sibling_reads.is_empty() {
+            continue;
+        }
+
+        if let Some(deadend) = scenario
+            .transitions
+            .iter_mut()
+            .find(|t| t.id == deadend_id)
+        {
+            for (place_id, port_name, schema_ref) in sibling_reads {
+                if !deadend.input_ports.iter().any(|p| p.name == port_name) {
+                    deadend.input_ports.push(ScenarioPort {
+                        name: port_name.clone(),
+                        schema_ref,
+                        cardinality: "single".to_string(),
+                    });
+                }
+                if !deadend
+                    .inputs
+                    .iter()
+                    .any(|a| a.place == place_id && a.port == port_name && a.read)
+                {
+                    deadend.inputs.push(ScenarioArc {
+                        place: place_id,
+                        port: port_name,
+                        weight: 1,
+                        read: true,
+                    });
                 }
             }
         }
@@ -2399,6 +2488,268 @@ mod tests {
         assert!(
             source.contains(r#""outputs": []"#),
             "non-Python backends must keep outputs: [] for now: {source}"
+        );
+    }
+
+    fn subworkflow_node_with_output(id: &str, child_template_id: uuid::Uuid) -> WorkflowNode {
+        WorkflowNode {
+            id: id.to_string(),
+            node_type: "sub_workflow".to_string(),
+            slug: None,
+            position: Position { x: 0.0, y: 0.0 },
+            data: WorkflowNodeData::SubWorkflow {
+                label: "Call".to_string(),
+                description: None,
+                template_id: child_template_id,
+                version_pin: crate::models::template::VersionPin::Latest,
+                input_mapping: vec![],
+                output: Port {
+                    id: "out".to_string(),
+                    label: "Out".to_string(),
+                    fields: vec![PortField {
+                        name: "greeting".to_string(),
+                        label: "Greeting".to_string(),
+                        kind: FieldKind::Text,
+                        required: true,
+                        options: None,
+                        description: None,
+                        accept: None,
+                    }],
+                },
+            },
+            parent_id: None,
+            width: None,
+            height: None,
+        }
+    }
+
+    fn end_node_with_mapping(id: &str, target: &str, expr: &str) -> WorkflowNode {
+        WorkflowNode {
+            id: id.to_string(),
+            node_type: "end".to_string(),
+            slug: None,
+            position: Position { x: 0.0, y: 0.0 },
+            data: WorkflowNodeData::End {
+                label: "Done".to_string(),
+                description: None,
+                terminal: Port {
+                    id: "in".to_string(),
+                    label: "Terminal".to_string(),
+                    fields: vec![],
+                },
+                result_mapping: vec![crate::models::template::FieldMapping {
+                    target_field: target.to_string(),
+                    expression: expr.to_string(),
+                }],
+            },
+            parent_id: None,
+            width: None,
+            height: None,
+        }
+    }
+
+    /// SubWorkflow's declared output field accessed as `<slug>.<field>` in a
+    /// downstream End mapping MUST resolve as a parked-producer borrow — read-
+    /// arc on `p_<sub>_data` + Rhai rewrite to `d_<sub>.<field>`. Without this
+    /// (regression caught live on 06-subworkflow): the End reads from the
+    /// post-yield control token which carries only `_*`/task_id/status, so
+    /// `input.<field>` returns null and the result is empty.
+    ///
+    /// Also asserts the new `t_<sub>_join` envelope-unwrap shape: the child's
+    /// terminal reply token wraps the declared outputs under
+    /// `exit_code.value.<field>` (End's result_shape stamp), so the join must
+    /// unwrap before projecting the declared port — otherwise the parent
+    /// downstream sees `null` despite the child returning the right value.
+    #[test]
+    fn subworkflow_slug_borrow_and_join_unwraps_exit_code() {
+        let child_id = uuid::Uuid::new_v4();
+        let parent = WorkflowGraph {
+            nodes: vec![
+                start_node("s"),
+                {
+                    let mut n = subworkflow_node_with_output("sub", child_id);
+                    n.slug = Some("sub".to_string());
+                    n
+                },
+                end_node_with_mapping("e", "greeting", "sub.greeting"),
+            ],
+            edges: vec![edge("e0", "s", "sub"), edge("e1", "sub", "e")],
+            viewport: None,
+            instance_concurrency: Default::default(),
+        };
+
+        // SubWorkflow lowering only needs an opaque AIR Value to embed in the
+        // spawn effect config; the child isn't recompiled here. A minimal
+        // ScenarioDefinition-shaped JSON suffices.
+        let mut sub_air = SubWorkflowAir::new();
+        sub_air.insert(
+            "sub".to_string(),
+            ResolvedChild {
+                air: serde_json::json!({
+                    "name": "child-stub",
+                    "places": [],
+                    "transitions": [],
+                    "groups": [],
+                    "mock_adapters": [],
+                    "definitions": {},
+                    "requirements": [],
+                }),
+                resolved_version: 1,
+                template_id: child_id.to_string(),
+            },
+        );
+
+        let air = compile_to_air_with_subworkflows_inline(
+            &parent,
+            "test",
+            "",
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+            &sub_air,
+        )
+        .expect("compile parent with sub_air");
+        let transitions = air["transitions"].as_array().unwrap();
+
+        // (1) Join logic unwraps exit_code.value before projecting declared
+        //     output port. Without the unwrap, the parent receives the raw
+        //     End-shaped envelope (where the field lives at depth-3, not
+        //     top level).
+        let join = transitions
+            .iter()
+            .find(|t| t["id"] == "t_sub_join")
+            .expect("t_sub_join transition");
+        let join_src = join["logic"]["source"].as_str().expect("join logic");
+        assert!(
+            join_src.contains("exit_code") && join_src.contains("value"),
+            "join must unwrap reply.exit_code.value before projecting declared port: {join_src}"
+        );
+        assert!(
+            join_src.contains(r#"__v["greeting"]"#),
+            "join must read declared field from unwrapped __v, not raw reply: {join_src}"
+        );
+
+        // (2) End's `sub.greeting` mapping → read-arc on `p_sub_data` +
+        //     `d_sub.greeting` rewrite. This is the SubWorkflow-as-parked-
+        //     producer contract (is_parked_producer recognizes SubWorkflow).
+        let end_shape = transitions
+            .iter()
+            .find(|t| t["id"] == "t_e_result_shape")
+            .expect("t_e_result_shape transition");
+
+        let end_src = end_shape["logic"]["source"].as_str().expect("end logic");
+        assert!(
+            end_src.contains("d_sub.greeting"),
+            "End mapping must rewrite sub.greeting → d_sub.greeting: {end_src}"
+        );
+
+        let inputs = end_shape["inputs"].as_array().expect("end inputs");
+        let read = inputs.iter().find(|a| a["place"] == "p_sub_data");
+        assert!(
+            read.is_some(),
+            "End must take a read-arc on p_sub_data; inputs: {inputs:?}"
+        );
+        assert_eq!(read.unwrap()["read"], serde_json::Value::Bool(true));
+        assert_eq!(read.unwrap()["port"], "d_sub");
+    }
+
+    /// `t_<dec>_deadend` must inherit the read-arcs that the (c) read-arc
+    /// synthesis added to its sibling branch/default transitions. Without
+    /// the mirror, deadend's enabling time (max created_at over only the
+    /// control-token arc) can land *earlier* than the branches' (which
+    /// includes the parked data place), and the engine's
+    /// `select_next_transition` step-1 "earliest enabling time wins" rule
+    /// fires deadend even when a branch guard is true. Regression caught
+    /// live on 03-decision-routing: score=40 (`doubled >= 50 → true`)
+    /// failing because deadend won the race over t_route_branch_0.
+    #[test]
+    fn decision_deadend_inherits_sibling_readarcs() {
+        use crate::models::template::BranchCondition;
+        let graph = WorkflowGraph {
+            nodes: vec![
+                start_node_with_slug_and_field("s", "start", "score"),
+                WorkflowNode {
+                    id: "dec".to_string(),
+                    node_type: "decision".to_string(),
+                    slug: None,
+                    position: Position { x: 0.0, y: 0.0 },
+                    data: WorkflowNodeData::Decision {
+                        label: "Route".to_string(),
+                        description: None,
+                        conditions: vec![BranchCondition {
+                            edge_id: "hi".to_string(),
+                            label: "High".to_string(),
+                            guard: "start.score >= 50".to_string(),
+                        }],
+                        default_branch: Some("lo".to_string()),
+                    },
+                    parent_id: None,
+                    width: None,
+                    height: None,
+                },
+                end_node_with_id("e_hi"),
+                end_node_with_id("e_lo"),
+            ],
+            edges: vec![
+                edge("e0", "s", "dec"),
+                WorkflowEdge {
+                    id: "e_hi".to_string(),
+                    source: "dec".to_string(),
+                    target: "e_hi".to_string(),
+                    source_handle: Some("hi".to_string()),
+                    target_handle: Some("in".to_string()),
+                    label: None,
+                    edge_type: "conditional".to_string(),
+                },
+                WorkflowEdge {
+                    id: "e_lo".to_string(),
+                    source: "dec".to_string(),
+                    target: "e_lo".to_string(),
+                    source_handle: Some("lo".to_string()),
+                    target_handle: Some("in".to_string()),
+                    label: None,
+                    edge_type: "conditional".to_string(),
+                },
+            ],
+            viewport: None,
+            instance_concurrency: Default::default(),
+        };
+        let air = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
+            .expect("compile");
+        let transitions = air["transitions"].as_array().unwrap();
+
+        let branch = transitions
+            .iter()
+            .find(|t| t["id"] == "t_dec_branch_0")
+            .expect("t_dec_branch_0");
+        let branch_data_arc = branch["inputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["place"] == "p_s_data")
+            .expect("branch should have a read-arc to p_s_data");
+        assert_eq!(branch_data_arc["read"], serde_json::Value::Bool(true));
+
+        let deadend = transitions
+            .iter()
+            .find(|t| t["id"] == "t_dec_deadend")
+            .expect("t_dec_deadend");
+        let deadend_data_arc = deadend["inputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["place"] == "p_s_data");
+        assert!(
+            deadend_data_arc.is_some(),
+            "deadend must mirror the branch's read-arc on p_s_data to align enabling time; inputs: {:?}",
+            deadend["inputs"]
+        );
+        assert_eq!(deadend_data_arc.unwrap()["read"], serde_json::Value::Bool(true));
+        // The mirrored read-arc must also bring along the input_port so the
+        // engine can bind the schema'd token, matching the sibling's shape.
+        let deadend_ports = deadend["input_ports"].as_array().unwrap();
+        assert!(
+            deadend_ports.iter().any(|p| p["name"] == "d_s"),
+            "deadend must declare the mirrored input_port: {deadend_ports:?}"
         );
     }
 }

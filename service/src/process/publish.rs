@@ -297,12 +297,44 @@ pub async fn resolve_subworkflow_air(
         };
         let entry_place = format!("p_{start_id}_ready");
 
+        // Reply sources must be the workflow's End-derived terminals only —
+        // NOT every place flagged `terminal` in the AIR. The SDK's
+        // executor_lifecycle component marks `<step>/completed`,
+        // `<step>/cancelled`, `<step>/dead_letter` as terminal for the engine's
+        // net-completion tracking, but those are intermediate lifecycle places
+        // (the next step's `t_<step>_to_output` consumes them). Wiring them as
+        // reply sources causes the raw executor envelope to race past the
+        // End node's result-shape mapping into the parent's `p_<sub>_reply` —
+        // breaking the child's declared output contract.
+        //
+        // End terminals are emitted by lower.rs::lower_end (post-merge) at
+        // `p_<endId>_completed` (process-registered Starts) or `p_<endId>_result`
+        // (bare End). Both patterns are scoped by the End node's id; intermediate
+        // SDK terminals live under the AutomatedStep's slash-prefixed scope
+        // (`<step>/…`). Filter by End-node id prefix so the child's reply
+        // contract matches the workflow's declared exits.
+        let end_ids: Vec<&str> = child_graph
+            .nodes
+            .iter()
+            .filter(|n| matches!(n.data, WorkflowNodeData::End { .. }))
+            .map(|n| n.id.as_str())
+            .collect();
         let terminal_ids: Vec<String> = child_def
             .places
             .iter()
-            .filter(|p| p.place_type == "terminal")
+            .filter(|p| {
+                p.place_type == "terminal"
+                    && end_ids
+                        .iter()
+                        .any(|eid| p.id.starts_with(&format!("p_{eid}_")))
+            })
             .map(|p| p.id.clone())
             .collect();
+        if terminal_ids.is_empty() {
+            return Err(unresolved(
+                "child has no End-derived terminal places — sub-workflow contract requires at least one End",
+            ));
+        }
 
         make_child_callable(&mut child_def, &entry_place, &terminal_ids).map_err(
             |e| {
