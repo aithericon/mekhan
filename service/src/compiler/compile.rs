@@ -470,7 +470,14 @@ fn apply_control_data_foundation(
                     cardinality: "single".to_string(),
                 });
             }
-            if !t.inputs.iter().any(|a| a.place == data_place && a.read) {
+            // Skip arc-add if ANY arc to this place exists, regardless of
+            // read/consume direction. Loop's own continue/exit transitions
+            // are pre-wired in `lower_loop`: continue consumes + reproduces
+            // its counter (`read: false` arc), exit read-arcs it. The
+            // synthesis pass would otherwise add a duplicate `read: true`
+            // arc next to the consuming one, breaking the engine's binding
+            // resolution.
+            if !t.inputs.iter().any(|a| a.place == data_place) {
                 t.inputs.push(ScenarioArc {
                     place: data_place.clone(),
                     port: var.clone(),
@@ -478,18 +485,31 @@ fn apply_control_data_foundation(
                     read: true,
                 });
             }
+            // Word-boundary replace so the rewrite doesn't double-prefix
+            // an already-rewritten reference. Loop's own continue/exit
+            // guards/logic are pre-wired in `lower_loop` with a hard-coded
+            // `d_<slug>.iteration` (when expanding the user `loop_condition`
+            // through this pipeline). A naïve `str::replace("<slug>.",
+            // "d_<slug>.")` would then turn `d_<slug>.iteration` into
+            // `d_d_<slug>.iteration` because the inner `<slug>.iteration`
+            // matches as a substring. The boundary check (prior byte is
+            // not an identifier-continuation byte) stops that.
             if in_guard {
                 if let Some(s) = guard_src {
-                    t.guard = Some(TransitionGuard::Rhai {
-                        source: s.replace(&b.referenced, &new_ref),
-                    });
+                    if let Some(rewritten) =
+                        replace_word_boundary(&s, &b.referenced, &new_ref)
+                    {
+                        t.guard = Some(TransitionGuard::Rhai { source: rewritten });
+                    }
                 }
             }
             if in_logic {
                 if let Some(s) = logic_src {
-                    t.logic = TransitionLogic::Rhai {
-                        source: s.replace(&b.referenced, &new_ref),
-                    };
+                    if let Some(rewritten) =
+                        replace_word_boundary(&s, &b.referenced, &new_ref)
+                    {
+                        t.logic = TransitionLogic::Rhai { source: rewritten };
+                    }
                 }
             }
         }
@@ -2650,6 +2670,200 @@ mod tests {
         );
         assert_eq!(read.unwrap()["read"], serde_json::Value::Bool(true));
         assert_eq!(read.unwrap()["port"], "d_sub");
+    }
+
+    /// Loop counter parked in `p_<loop>_data`: an AutomatedStep body of the
+    /// loop must be able to read `<slug>.iteration` even though the executor
+    /// envelope (executor_lifecycle.rs t_<step>_to_output) strips the
+    /// workflow token down to `{ job_id, run, execution_id, detail, source,
+    /// status }`. Pre-park-refactor the counter rode on the control token
+    /// under `<slug>: { iteration: N }`, was dropped at the AutomatedStep
+    /// envelope, and the loop's own continue/exit guards failed reading
+    /// `input.<slug>.iteration` from the post-envelope body_out token.
+    ///
+    /// Asserts the full park-and-borrow pipeline end-to-end:
+    ///   - `t_<loop>_enter` produces a `p_<loop>_data` token (`{iteration:0}`).
+    ///   - `t_<loop>_continue` consumes + reproduces `p_<loop>_data`,
+    ///     guards on `d_<slug>.iteration`.
+    ///   - `t_<loop>_exit` read-arcs `p_<loop>_data` (so it stays parked
+    ///     for post-loop consumers).
+    ///   - The body's `t_<body>/prepare` gets a read-arc on `p_<loop>_data`
+    ///     and a `<slug>.json` staging entry — promoted by the runner as a
+    ///     Python global so `lp.iteration` is a plain attribute lookup.
+    ///   - End mapping `<slug>.iteration` rewrites to `d_<slug>.iteration`
+    ///     with a read-arc on `p_<loop>_data` (final-count visibility).
+    #[test]
+    fn loop_counter_parked_and_borrowed_into_automated_step_body() {
+        use aithericon_executor_domain::InputSource;
+        use serde_json::json;
+        use std::collections::HashMap;
+
+        let graph_json = json!({
+          "nodes": [
+            {"id":"start","type":"start","position":{"x":0,"y":0},
+             "data":{"type":"start","label":"Start"}},
+            {"id":"lp","type":"loop","slug":"lp","position":{"x":0,"y":0},
+             "data":{"type":"loop","label":"Iterate",
+                     "maxIterations": 10,
+                     "loopCondition":"lp.iteration < 3"}},
+            {"id":"tick","type":"automated_step","slug":"tick",
+             "parentId":"lp",
+             "position":{"x":0,"y":0},
+             "data":{"type":"automated_step","label":"Body",
+                     "executionSpec":{"backendType":"python","entrypoint":"main.py","config":{"entrypoint":"main.py","python":"python3","sdk":true}},
+                     "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
+                     "deploymentModel":{"mode":"inline"},
+                     "output":{"id":"out","label":"Tick","fields":[
+                       {"name":"saw","label":"Iteration","kind":"number","required":true}
+                     ]}}},
+            {"id":"end","type":"end","position":{"x":0,"y":0},
+             "data":{"type":"end","label":"End",
+                     "resultMapping":[
+                       {"targetField":"final_count","expression":"lp.iteration"}
+                     ]}}
+          ],
+          "edges":[
+            {"id":"e1","source":"start","target":"lp","targetHandle":"in","type":"sequence"},
+            {"id":"e_body_in","source":"lp","target":"tick","sourceHandle":"body_in","targetHandle":"in","type":"sequence"},
+            {"id":"e_body_out","source":"tick","target":"lp","targetHandle":"body_out","type":"loop_back"},
+            {"id":"e_lp_end","source":"lp","target":"end","targetHandle":"in","type":"sequence"}
+          ]
+        });
+        let graph: WorkflowGraph =
+            serde_json::from_value(graph_json).expect("graph deser");
+
+        let mut step_files: HashMap<String, InputSource> = HashMap::new();
+        step_files.insert(
+            "main.py".to_string(),
+            InputSource::Raw {
+                content: "saw = lp.iteration\n".to_string(),
+            },
+        );
+        let mut files: HashMap<String, HashMap<String, InputSource>> = HashMap::new();
+        files.insert("tick".to_string(), step_files);
+
+        let scenario = crate::compiler::compile_to_scenario(
+            &graph,
+            "loop-body-borrow",
+            "",
+            &files,
+            &crate::compiler::SubWorkflowAir::new(),
+        )
+        .expect("compile loop+automated-step graph");
+
+        // (1) Loop's parked-counter topology.
+        let enter = scenario
+            .transitions
+            .iter()
+            .find(|t| t.id == "t_lp_enter")
+            .expect("t_lp_enter");
+        assert!(
+            enter
+                .outputs
+                .iter()
+                .any(|a| a.place == "p_lp_data" && a.port == "data"),
+            "enter must produce the parked counter; outputs: {:?}",
+            enter.outputs
+        );
+
+        let cont = scenario
+            .transitions
+            .iter()
+            .find(|t| t.id == "t_lp_continue")
+            .expect("t_lp_continue");
+        assert!(
+            cont.inputs
+                .iter()
+                .any(|a| a.place == "p_lp_data" && a.port == "d_lp" && !a.read),
+            "continue must CONSUME the counter (read=false) on port d_lp; inputs: {:?}",
+            cont.inputs
+        );
+        assert!(
+            cont.outputs
+                .iter()
+                .any(|a| a.place == "p_lp_data" && a.port == "data"),
+            "continue must produce a fresh counter; outputs: {:?}",
+            cont.outputs
+        );
+        match &cont.guard {
+            Some(aithericon_sdk::scenario::TransitionGuard::Rhai { source }) => {
+                assert!(
+                    source.contains("d_lp.iteration"),
+                    "continue guard must reference d_lp.iteration (rewritten): {source}"
+                );
+                assert!(
+                    !source.contains("input.lp.iteration"),
+                    "continue guard must NOT read iteration off the token (executor envelope strips it): {source}"
+                );
+            }
+            other => panic!("continue must have a Rhai guard: {other:?}"),
+        }
+
+        let exit = scenario
+            .transitions
+            .iter()
+            .find(|t| t.id == "t_lp_exit")
+            .expect("t_lp_exit");
+        assert!(
+            exit.inputs
+                .iter()
+                .any(|a| a.place == "p_lp_data" && a.port == "d_lp" && a.read),
+            "exit must READ-ARC the counter so it survives for post-loop consumers; inputs: {:?}",
+            exit.inputs
+        );
+
+        // (2) Body's prepare staging — `lp.json` + read-arc into `p_lp_data`.
+        let prepare = scenario
+            .transitions
+            .iter()
+            .find(|t| t.id == "tick/prepare")
+            .expect("tick/prepare");
+        match &prepare.logic {
+            aithericon_sdk::scenario::TransitionLogic::Rhai { source } => {
+                assert!(
+                    source.contains(r#""name": "lp.json""#),
+                    "body prepare must stage lp.json (the parked counter envelope): {source}"
+                );
+                assert!(
+                    source.contains("d_lp"),
+                    "body prepare must reference d_lp read-arc var: {source}"
+                );
+            }
+            other => panic!("expected Rhai logic on prepare, got {other:?}"),
+        }
+        assert!(
+            prepare
+                .inputs
+                .iter()
+                .any(|a| a.place == "p_lp_data" && a.read),
+            "body prepare must read-arc p_lp_data; inputs: {:?}",
+            prepare.inputs
+        );
+
+        // (3) End mapping reads the final counter through the same parked
+        //     place — proves the counter survives post-loop too.
+        let end_shape = scenario
+            .transitions
+            .iter()
+            .find(|t| t.id == "t_end_result_shape")
+            .expect("t_end_result_shape");
+        match &end_shape.logic {
+            aithericon_sdk::scenario::TransitionLogic::Rhai { source } => {
+                assert!(
+                    source.contains("d_lp.iteration"),
+                    "End mapping must rewrite lp.iteration → d_lp.iteration: {source}"
+                );
+            }
+            other => panic!("expected Rhai logic on end shape, got {other:?}"),
+        }
+        assert!(
+            end_shape
+                .inputs
+                .iter()
+                .any(|a| a.place == "p_lp_data" && a.read),
+            "End must read-arc p_lp_data for the final iteration value; inputs: {:?}",
+            end_shape.inputs
+        );
     }
 
     /// `t_<dec>_deadend` must inherit the read-arcs that the (c) read-arc

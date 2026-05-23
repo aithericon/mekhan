@@ -1001,6 +1001,7 @@ fn is_parked_producer(graph: &WorkflowGraph, id: &str) -> bool {
                     | WorkflowNodeData::AutomatedStep { .. }
                     | WorkflowNodeData::SubWorkflow { .. }
                     | WorkflowNodeData::Start { .. }
+                    | WorkflowNodeData::Loop { .. }
             )
     })
 }
@@ -1252,31 +1253,44 @@ fn resolve_ref(
             let Some(prod_id) = slugs.node_for(root).map(str::to_string) else {
                 return RefResolution::Unresolved;
             };
-            // Loop producers expose their declared fields (`iteration`) on the
-            // *control token* rather than a parked data place, so the resolver
-            // emits a string-rewrite to the canonical `input.<slug>.<field>`
-            // path. The picker still offers the producer-style form so authors
-            // get one mental model for every upstream borrow.
+            // Loop producers store their declared counter in a *parked*
+            // `p_{id}_data` place — the workflow token is left untouched (see
+            // `lower_loop`). Resolution returns a regular [`Borrow`] so the
+            // standard (c) read-arc synthesis pipeline handles the rewrite:
+            // `<slug>.iteration` → `d_<slug>.iteration`, read-arc on
+            // `p_<slug>_data`.
             //
-            // A loop is allowed to reference its own slug in its
-            // `loopCondition` — the engine's `t_<id>_enter` sets the namespace
-            // before `t_<id>_continue` reads it, so self-reference is well-
-            // defined here (unlike parked producers, which would read their
-            // own future output).
+            // The parked counter survives any body — including an
+            // AutomatedStep whose executor envelope strips the workflow token.
+            // Loop's own continue/exit guards are pre-wired in `lower_loop`
+            // (their input port `d_<slug>` is already there, so the (c) pass
+            // skips them via the "any arc to this place" check).
+            //
+            // out_shape still nests the iteration under `<slug>` (so the
+            // picker/`reachable_scope` keep showing `<slug>.iteration`); we
+            // strip the slug for the parked producer_path because the parked
+            // token stores `{ iteration: N }` flat — see `lower_loop`'s
+            // `t_<id>_enter` logic.
             if is_loop_node(graph, &prod_id) {
+                if gref.segs.is_empty() {
+                    return RefResolution::Unresolved;
+                }
                 let Some(shape) = node_out.get(&prod_id) else {
                     return RefResolution::Unresolved;
                 };
-                // Loop's output shape stores its declared fields at
-                // `<slug>.<field>` (the namespace lives on the control token
-                // under the slug key), so resolution prepends the slug.
                 let mut full: Vec<String> = vec![root.clone()];
                 full.extend(gref.segs.iter().cloned());
                 if shape.resolve(&full).is_none() {
                     return RefResolution::Unresolved;
                 }
-                return RefResolution::ControlAlias {
-                    rewrite_to: format!("input.{root}.{}", gref.segs.join(".")),
+                let prov = shape
+                    .find_by_leaf(&gref.segs[gref.segs.len() - 1])
+                    .map(|(_, _, p)| p.node_label)
+                    .unwrap_or_else(|| "loop".to_string());
+                return RefResolution::Borrow {
+                    producer_id: prod_id,
+                    producer_path: gref.segs.join("."),
+                    producer_label: prov,
                 };
             }
             // Parked-producer borrows must reach a *strictly upstream* node

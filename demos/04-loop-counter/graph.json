@@ -31,15 +31,32 @@
     },
     {
       "id": "tick",
-      "type": "phase_update",
+      "type": "automated_step",
       "parentId": "lp",
-      "position": { "x": 80, "y": 80 },
+      "position": { "x": 60, "y": 60 },
       "data": {
-        "type": "phase_update",
-        "label": "Iteration {{ lp.iteration }}",
-        "phaseName": "iteration",
-        "status": "running",
-        "message": "Loop body — iteration {{ lp.iteration }}"
+        "type": "automated_step",
+        "label": "Body — print iteration",
+        "description": "Python body that reads `lp.iteration` directly. Proves the loop counter survives the executor envelope (it lives in the parked p_lp_data place, not on the workflow token).",
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": [],
+            "virtualenv": false,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Tick",
+          "fields": [
+            { "name": "saw", "label": "Iteration Observed", "kind": "number", "required": true }
+          ]
+        }
       }
     },
     {
