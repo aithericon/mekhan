@@ -12,7 +12,7 @@
 //!
 //! ```text
 //!  Start
-//!    └─► Loop(max=3, "input._loop_lp_count < 3")
+//!    └─► Loop(max=3, "lp.iteration < 3")
 //!         │                  ┌────────────────────────────┐
 //!         │  body_in────────►│ Sub(child:Start→End)       │
 //!         │                  │   └─► Cat(catalogue_query) │
@@ -262,7 +262,7 @@ fn parent_graph(child_family: Uuid) -> Value {
             { "id": "lp", "type": "loop", "position": { "x": 240, "y": 0 },
               "data": { "type": "loop", "label": "Outer Loop",
                         "maxIterations": 3,
-                        "loopCondition": "input._loop_lp_count < 3" } },
+                        "loopCondition": "lp.iteration < 3" } },
 
             // Body — child of the Loop. SubWorkflow call.
             { "id": "sub", "type": "sub_workflow",

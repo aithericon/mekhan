@@ -169,6 +169,29 @@ for _name, _value in (inputs.items() if isinstance(inputs, dict) else []):
         continue
     globals()[_slug] = _accessible(_value)
 
+# Auto-promote any *nested-object* control-token key as a top-level Python
+# global. The Loop node declares `<slug>: {{ iteration: N }}` namespaces on the
+# control token (see service/src/compiler/lower.rs::lower_loop), and the
+# borrow planner / picker treat `<slug>.iteration` exactly like an upstream
+# AutomatedStep's `<slug>.<field>` borrow — but there's no parked envelope to
+# stage as `<slug>.json`. Instead the runner sees the namespace on the
+# inbound control token and promotes it here, so `lp.iteration` is a plain
+# attribute lookup. Scalar / list control-token leaves stay reachable only
+# via `input.<field>` — the `<slug>` form is reserved for producer namespaces.
+for _name, _value in (_input_raw.items() if isinstance(_input_raw, dict) else []):
+    if not isinstance(_name, str) or _name.startswith('_') or _name in _RESERVED_GLOBALS:
+        continue
+    if not _name.isidentifier():
+        continue
+    if not isinstance(_value, dict):
+        continue
+    if _name in globals():
+        # A staged `<slug>.json` already won the name — don't shadow with the
+        # control-token nested object (the file-based borrow is the more
+        # authoritative source).
+        continue
+    globals()[_name] = _accessible(_value)
+
 
 # --- Output helper (file-based fallback) ---
 def set_output(name, value):

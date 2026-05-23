@@ -48,6 +48,57 @@ fn derive_inline_sources(
     out
 }
 
+/// Word-boundary-aware substring replace. Returns `Some(rewritten)` if at
+/// least one match was rewritten; `None` if no matches were found (so callers
+/// can skip the allocation when nothing changes).
+///
+/// Used by the Loop alias rewrite path: a naïve `str::replace("lp.iteration",
+/// "input.lp.iteration")` would double-rewrite the engine-injected portion of
+/// `t_<id>_continue` / `t_<id>_exit`'s guard, since the substring
+/// `lp.iteration` appears inside `input.lp.iteration` too. This helper only
+/// matches when the character immediately before the needle isn't an
+/// identifier-continuation byte (alphanumeric or `_`) and isn't `.` — so
+/// `(lp.iteration < 3)` rewrites cleanly while `input.lp.iteration` stays
+/// untouched. Tail boundary is unconstrained — the needle ends in either an
+/// identifier (`.iteration`) or a closing dot; what comes next doesn't matter
+/// for safe matching.
+fn replace_word_boundary(haystack: &str, needle: &str, repl: &str) -> Option<String> {
+    if needle.is_empty() || !haystack.contains(needle) {
+        return None;
+    }
+    let bytes = haystack.as_bytes();
+    let needle_bytes = needle.as_bytes();
+    let mut out = String::with_capacity(haystack.len());
+    let mut i = 0;
+    let mut any = false;
+    while i + needle_bytes.len() <= bytes.len() {
+        if &bytes[i..i + needle_bytes.len()] == needle_bytes {
+            let prev_ok = if i == 0 {
+                true
+            } else {
+                let p = bytes[i - 1];
+                !(p.is_ascii_alphanumeric() || p == b'_' || p == b'.')
+            };
+            if prev_ok {
+                out.push_str(repl);
+                i += needle_bytes.len();
+                any = true;
+                continue;
+            }
+        }
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+    if i < bytes.len() {
+        out.push_str(&haystack[i..]);
+    }
+    if any {
+        Some(out)
+    } else {
+        None
+    }
+}
+
 /// A child template, fully compiled + made spawn-callable, resolved at the
 /// *parent's* publish time and frozen into the parent. Keyed by the parent's
 /// `SubWorkflow` node id in [`SubWorkflowAir`]. `lower_subworkflow` embeds
@@ -327,7 +378,7 @@ fn apply_control_data_foundation(
 ) -> Result<(), CompileError> {
     use crate::compiler::token_shape::{
         analyze, automated_step_borrow_plan, ctrl_def_name, data_def_name, def_ref,
-        dynamic_token_definition, guard_readarc_plan, human_task_borrow_plan,
+        dynamic_token_definition, guard_readarc_plan, human_task_borrow_plan, loop_alias_plan,
     };
     use aithericon_sdk::scenario::{ScenarioArc, ScenarioPort, TransitionGuard, TransitionLogic};
 
@@ -439,6 +490,42 @@ fn apply_control_data_foundation(
                     t.logic = TransitionLogic::Rhai {
                         source: s.replace(&b.referenced, &new_ref),
                     };
+                }
+            }
+        }
+    }
+
+    // (c-alias) Loop namespace rewrites: `<slug>.<field>` in a guard / loop
+    //      condition / End mapping where `<slug>` resolves to a Loop node
+    //      gets rewritten to the canonical `input.<slug>.<field>` form. No
+    //      read-arc / input port: the value lives on the control token, not
+    //      a parked place. Parallel to the read-arc loop above; same
+    //      `t_<consumer>_*` scoping rule.
+    //
+    //      Word-boundary-aware: a naïve `str::replace` would double-rewrite
+    //      `lp.iteration` inside the engine-injected safety guard
+    //      `input.lp.iteration < {max}` (the substring matches there too).
+    //      The replace_word_boundary helper only matches when the prior char
+    //      isn't an identifier-continuation byte, so `input.lp.iteration`
+    //      stays untouched while `(lp.iteration < 3)` gets rewritten.
+    for rw in loop_alias_plan(graph)? {
+        let t_prefix = format!("t_{}_", rw.consumer_node_id);
+        for t in &mut scenario.transitions {
+            if !t.id.starts_with(&t_prefix) {
+                continue;
+            }
+            if let Some(TransitionGuard::Rhai { source }) = &t.guard {
+                if let Some(rewritten) =
+                    replace_word_boundary(source, &rw.referenced, &rw.rewrite_to)
+                {
+                    t.guard = Some(TransitionGuard::Rhai { source: rewritten });
+                }
+            }
+            if let TransitionLogic::Rhai { source } = &t.logic {
+                if let Some(rewritten) =
+                    replace_word_boundary(source, &rw.referenced, &rw.rewrite_to)
+                {
+                    t.logic = TransitionLogic::Rhai { source: rewritten };
                 }
             }
         }

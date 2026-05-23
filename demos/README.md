@@ -39,13 +39,28 @@ shipped demos.
 - **From tests**: same `load_demo` call — tests against the literal
   shipped demo, no hand-rolled graph drift.
 
-## Currently bundled
+## Currently bundled — learning path
 
-- **`invoice-processing/`** — end-to-end "Invoice Processing Demo":
-  API-trigger → Start → human review → Python extract → decision →
-  either fast-path "Processed" or scope[split → manager approval +
-  compliance check → join] → "Approved". Exercises every editor node
-  type plus direct slug access in Python steps.
+The numbered demos are a progression: each step adds one new capability
+on top of the previous one. Read them in order — by `06-` you have
+seen every primitive the editor exposes. `invoice-processing/` is the
+capstone that ties them together.
+
+| # | Demo | What's new |
+|---|------|-----------|
+| 01 | `01-hello-world/` | The minimal shape: Start → AutomatedStep → End. One Python step, implicit output sweep. |
+| 02 | `02-human-form/` | HumanTask with a `task.json` sidecar. End reads a HumanTask form field. |
+| 03 | `03-decision-routing/` | AutomatedStep produces a derived field; Decision branches on it via a `<slug>.<field>` guard. |
+| 04 | `04-loop-counter/` | Loop with body wired through `body_in` / `body_out`. Stop condition lives in `loopCondition`. |
+| 05 | `05-parallel-fanout/` | ParallelSplit fans two AutomatedSteps; ParallelJoin merges them back. |
+| 06 | `06-subworkflow/` | Flow-in-flow: parent embeds `01-hello-world` via a `sub_workflow` node + `inputMapping`. |
+| ★ | `invoice-processing/` | Capstone: trigger → human review → Python extract → decision → scope[split + join] → end. Exercises every editor node type plus direct slug access in Python. |
+
+The seeder loads directories in lexical order, so `01-` … `06-` seed
+before `invoice-processing/`. `06-subworkflow/` references
+`01-hello-world/`'s templateId — alphabetical order guarantees the
+child template is published before the parent resolves its
+`sub_workflow` reference at publish time.
 
 ## Seeding
 

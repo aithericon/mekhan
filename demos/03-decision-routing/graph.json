@@ -1,0 +1,105 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "position": { "x": 40, "y": 160 },
+      "data": {
+        "type": "start",
+        "label": "Start",
+        "processName": "Score {{ score }}",
+        "initial": {
+          "id": "in",
+          "label": "Score Input",
+          "fields": [
+            {
+              "name": "score",
+              "label": "Raw Score (0-50)",
+              "kind": "number",
+              "required": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "classify",
+      "type": "automated_step",
+      "position": { "x": 320, "y": 160 },
+      "data": {
+        "type": "automated_step",
+        "label": "Double the Score",
+        "description": "Trivial transform — doubles the raw score so the Decision has a derived field to read.",
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": [],
+            "virtualenv": false,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Classified",
+          "fields": [
+            { "name": "doubled", "label": "Doubled Score", "kind": "number", "required": true }
+          ]
+        }
+      }
+    },
+    {
+      "id": "route",
+      "type": "decision",
+      "position": { "x": 600, "y": 160 },
+      "data": {
+        "type": "decision",
+        "label": "High / Low",
+        "description": "Route based on the doubled score.",
+        "conditions": [
+          {
+            "edgeId": "branch-high",
+            "label": "High (≥ 50)",
+            "guard": "classify.doubled >= 50"
+          }
+        ],
+        "defaultBranch": "default"
+      }
+    },
+    {
+      "id": "end-high",
+      "type": "end",
+      "position": { "x": 880, "y": 60 },
+      "data": {
+        "type": "end",
+        "label": "High Bucket",
+        "resultMapping": [
+          { "targetField": "bucket", "expression": "\"high\"" },
+          { "targetField": "doubled", "expression": "classify.doubled" }
+        ]
+      }
+    },
+    {
+      "id": "end-low",
+      "type": "end",
+      "position": { "x": 880, "y": 260 },
+      "data": {
+        "type": "end",
+        "label": "Low Bucket",
+        "resultMapping": [
+          { "targetField": "bucket", "expression": "\"low\"" },
+          { "targetField": "doubled", "expression": "classify.doubled" }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    { "id": "e_start_classify", "source": "start",    "target": "classify", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_classify_route", "source": "classify", "target": "route",    "targetHandle": "in", "type": "sequence" },
+    { "id": "e_high",           "source": "route",    "target": "end-high", "targetHandle": "in", "sourceHandle": "branch-high", "label": "≥ 50", "type": "conditional" },
+    { "id": "e_low",            "source": "route",    "target": "end-low",  "targetHandle": "in", "sourceHandle": "default",     "label": "< 50",     "type": "conditional" }
+  ]
+}

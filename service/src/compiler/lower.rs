@@ -1537,10 +1537,19 @@ fn lower_loop(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     let p_output: PlaceHandle<DynamicToken> =
         ctx.state(format!("p_{id}_output"), format!("{label} - Output"));
 
-    let counter_key = format!("_loop_{id}_count");
+    // Loop iteration counter lives in a declared, namespaced nested object on
+    // the control token — `<slug>: { iteration: 0 }`. The slug is the loop's
+    // Rhai-identifier-safe author-facing key (same one the SlugIndex registers
+    // for `<slug>.<field>` borrows). User code reads it through the same
+    // producer-style path as any other producer: `<slug>.iteration` in Python,
+    // `input.<slug>.iteration` in Rhai. No magic underscore-prefixed leaves;
+    // no hidden contract — `node_output_fields` declares it, the picker and
+    // `.pyi` overlay surface it, the runner auto-promotes the namespace as a
+    // Python global.
+    let slug = cx.node.slug();
 
-    // t_{id}_enter — initialize loop counter, hand off to body via p_body_in.
-    // Body children's outgoing edges back to the loop carry
+    // t_{id}_enter — initialize the loop's namespace, hand off to body via
+    // p_body_in. Body children's outgoing edges back to the loop carry
     // `targetHandle: "body_out"` (wire.rs routes those to p_body_out via
     // `input_handles`); the body's incoming edge from the loop carries
     // `sourceHandle: "body_in"` (wire.rs routes from p_body_in via the
@@ -1549,7 +1558,7 @@ fn lower_loop(cx: &mut LoweringCtx) -> Result<(), CompileError> {
         .auto_input("input", &p_input)
         .auto_output("body", &p_body_in)
         .logic_rhai(format!(
-            "let d = input; d.{counter_key} = 0; #{{ body: d }}"
+            "let d = input; d.{slug} = #{{ iteration: 0 }}; #{{ body: d }}"
         ))
         .done();
 
@@ -1559,19 +1568,21 @@ fn lower_loop(cx: &mut LoweringCtx) -> Result<(), CompileError> {
         .auto_input("input", &p_body_out)
         .auto_output("body", &p_body_in)
         .guard_rhai(format!(
-            "input.{counter_key} < {max_iterations} && ({loop_condition})"
+            "input.{slug}.iteration < {max_iterations} && ({loop_condition})"
         ))
         .logic_rhai(format!(
-            "let d = input; d.{counter_key} = d.{counter_key} + 1; #{{ body: d }}"
+            "let d = input; d.{slug}.iteration = d.{slug}.iteration + 1; #{{ body: d }}"
         ))
         .done();
 
-    // t_{id}_exit — exit loop
+    // t_{id}_exit — exit loop. The `<slug>: { iteration: N }` namespace stays
+    // on the outgoing control token so post-loop nodes can still read the
+    // final iteration count via `<slug>.iteration`.
     ctx.transition(format!("t_{id}_exit"), format!("{label} - Exit"))
         .auto_input("input", &p_body_out)
         .auto_output("output", &p_output)
         .guard_rhai(format!(
-            "input.{counter_key} >= {max_iterations} || !({loop_condition})"
+            "input.{slug}.iteration >= {max_iterations} || !({loop_condition})"
         ))
         .logic_rhai("#{ output: input }")
         .done();

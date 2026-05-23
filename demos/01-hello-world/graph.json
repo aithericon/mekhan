@@ -1,0 +1,71 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "position": { "x": 40, "y": 120 },
+      "data": {
+        "type": "start",
+        "label": "Start",
+        "processName": "Hello {{ name }}",
+        "initial": {
+          "id": "in",
+          "label": "Greeting Input",
+          "fields": [
+            {
+              "name": "name",
+              "label": "Your Name",
+              "kind": "text",
+              "required": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "greet",
+      "type": "automated_step",
+      "position": { "x": 320, "y": 120 },
+      "data": {
+        "type": "automated_step",
+        "label": "Build Greeting",
+        "description": "Compose a greeting from the inbound name.",
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": [],
+            "virtualenv": false,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Greeting",
+          "fields": [
+            { "name": "greeting", "label": "Greeting", "kind": "text", "required": true }
+          ]
+        }
+      }
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "position": { "x": 620, "y": 120 },
+      "data": {
+        "type": "end",
+        "label": "Done",
+        "resultMapping": [
+          { "targetField": "greeting", "expression": "greet.greeting" }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    { "id": "e_start_greet", "source": "start", "target": "greet", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_greet_end",   "source": "greet", "target": "end",   "targetHandle": "in", "type": "sequence" }
+  ]
+}

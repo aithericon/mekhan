@@ -685,4 +685,117 @@ mod tests {
             "invoice-processing must appear in {dirs:?}"
         );
     }
+
+    /// The learning-path demos (`01-` … `06-`) all parse through the same
+    /// types the live `/api/templates` consumer expects. A break here
+    /// catches a regression in `WorkflowNodeData` shape against the
+    /// bundled fixtures before it hits a user editor session.
+    ///
+    /// The expected templateIds are the stable ones baked into each
+    /// demo.json — tests and the seeder both reach for demos by id, so
+    /// drift in that column needs to be a deliberate, type-checked break.
+    #[test]
+    fn learning_path_demos_all_load() {
+        let root = repo_root().join("demos");
+        for (dir_name, expected_id, expected_name) in [
+            ("01-hello-world",      "00000000-0000-0000-0000-000000000011", "01 · Hello World"),
+            ("02-human-form",       "00000000-0000-0000-0000-000000000012", "02 · Human Form"),
+            ("03-decision-routing", "00000000-0000-0000-0000-000000000013", "03 · Decision Routing"),
+            ("04-loop-counter",     "00000000-0000-0000-0000-000000000014", "04 · Loop Counter"),
+            ("05-parallel-fanout",  "00000000-0000-0000-0000-000000000015", "05 · Parallel Fanout"),
+            ("06-subworkflow",      "00000000-0000-0000-0000-000000000016", "06 · SubWorkflow (Flow-in-Flow)"),
+        ] {
+            let demo = load_demo(&root.join(dir_name))
+                .unwrap_or_else(|e| panic!("{dir_name} must load: {e}"));
+            assert_eq!(demo.metadata.template_id, expected_id, "{dir_name} templateId");
+            assert_eq!(demo.metadata.name, expected_name, "{dir_name} name");
+        }
+    }
+
+    /// Every numbered learning-path demo (except 06-subworkflow, which
+    /// resolves a child at publish time and so can't be compiled through
+    /// the in-process `compile_to_air` path) must compile cleanly through
+    /// the same AIR pipeline `/api/templates/{id}/publish` uses. A break
+    /// here means the demo would seed but fail at publish time with a
+    /// stack of compile errors — the seeder logs and continues, which is
+    /// silent enough that this test is what catches it.
+    #[test]
+    fn learning_path_demos_compile_to_air() {
+        use crate::compiler::{compile_to_air, node_files_inline};
+
+        let root = repo_root().join("demos");
+        for dir_name in [
+            "01-hello-world",
+            "02-human-form",
+            "03-decision-routing",
+            "04-loop-counter",
+            "05-parallel-fanout",
+        ] {
+            let demo = load_demo(&root.join(dir_name))
+                .unwrap_or_else(|e| panic!("{dir_name} must load: {e}"));
+            let files = node_files_inline(&demo.files);
+            let air = compile_to_air(
+                &demo.graph,
+                &demo.metadata.name,
+                demo.metadata
+                    .description
+                    .as_deref()
+                    .unwrap_or(""),
+                &files,
+            )
+            .unwrap_or_else(|e| panic!("{dir_name} must compile to AIR: {e:?}"));
+            // Sanity: serialized AIR must contain at least one transition
+            // — rules out a graph that deserialized into an empty net.
+            assert!(
+                air.to_string().contains("\"transitions\""),
+                "{dir_name} AIR must declare transitions"
+            );
+        }
+    }
+
+    /// `06-subworkflow` references `01-hello-world`'s templateId via its
+    /// `sub_workflow` node. The seeder publishes demos in lexical order so
+    /// `01-` is in place before `06-` resolves — this test pins the
+    /// invariant *and* asserts the cross-demo id linkage stays in sync.
+    #[test]
+    fn subworkflow_demo_references_hello_world_template_id() {
+        use crate::models::template::WorkflowNodeData;
+        let root = repo_root().join("demos");
+
+        let hello = load_demo(&root.join("01-hello-world")).expect("01-hello-world");
+        let sub = load_demo(&root.join("06-subworkflow")).expect("06-subworkflow");
+
+        let call_node = sub
+            .graph
+            .nodes
+            .iter()
+            .find(|n| n.id == "call_greet")
+            .expect("call_greet sub_workflow node");
+        match &call_node.data {
+            WorkflowNodeData::SubWorkflow { template_id, .. } => {
+                assert_eq!(
+                    template_id.to_string(),
+                    hello.metadata.template_id,
+                    "call_greet must reference 01-hello-world's templateId"
+                );
+            }
+            other => panic!("call_greet must be SubWorkflow, got {other:?}"),
+        }
+
+        // And the seeder iterates in lexical order, so `list_demo_dirs`
+        // hands them out child-before-parent.
+        let dirs = list_demo_dirs(&root).expect("list");
+        let hello_idx = dirs
+            .iter()
+            .position(|p| p.ends_with("01-hello-world"))
+            .expect("01-hello-world present");
+        let sub_idx = dirs
+            .iter()
+            .position(|p| p.ends_with("06-subworkflow"))
+            .expect("06-subworkflow present");
+        assert!(
+            hello_idx < sub_idx,
+            "child (01-hello-world @ {hello_idx}) must seed before parent (06-subworkflow @ {sub_idx})"
+        );
+    }
 }

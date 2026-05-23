@@ -285,26 +285,37 @@ pub fn node_input_scopes(
     crate::compiler::token_shape::node_input_field_kinds(graph)
 }
 
-/// Per-AutomatedStep declared output fields: top-level name → declared kind.
-/// Sibling of [`node_input_scopes`]. Feeds the `.pyi` stub generator so the
-/// runner's implicit-output sweep (declared name assigned as a Python global
-/// gets emitted to `<name>.json`) shows up as a typed write target in
-/// Pyright/Pylance. Callers filter to Python AutomatedSteps; this returns
-/// entries for every AutomatedStep with declared output fields.
+/// Per-node declared output fields the picker / `.pyi` overlay surface as
+/// `<slug>.<field>` borrows. Covers:
+///
+/// - **AutomatedStep** — explicit `output.fields` declared in the editor.
+/// - **Loop** — synthetic `iteration: number` exposed on the control token by
+///   `t_<id>_enter`; no parked envelope, but downstream nodes (including the
+///   body) read it through the same `<slug>.<field>` mental model as any other
+///   producer. The compiler emits a `ControlAlias` rewrite (see
+///   `token_shape::loop_alias_plan`) so the engine sees `input.<slug>.iteration`.
 pub fn node_output_fields(
     graph: &WorkflowGraph,
 ) -> HashMap<String, std::collections::BTreeMap<String, FieldKind>> {
     let mut out: HashMap<String, std::collections::BTreeMap<String, FieldKind>> = HashMap::new();
     for node in &graph.nodes {
-        if let WorkflowNodeData::AutomatedStep { output, .. } = &node.data {
-            if output.fields.is_empty() {
-                continue;
+        match &node.data {
+            WorkflowNodeData::AutomatedStep { output, .. } => {
+                if output.fields.is_empty() {
+                    continue;
+                }
+                let mut fields = std::collections::BTreeMap::new();
+                for f in &output.fields {
+                    fields.insert(f.name.clone(), f.kind);
+                }
+                out.insert(node.id.clone(), fields);
             }
-            let mut fields = std::collections::BTreeMap::new();
-            for f in &output.fields {
-                fields.insert(f.name.clone(), f.kind);
+            WorkflowNodeData::Loop { .. } => {
+                let mut fields = std::collections::BTreeMap::new();
+                fields.insert("iteration".to_string(), FieldKind::Number);
+                out.insert(node.id.clone(), fields);
             }
-            out.insert(node.id.clone(), fields);
+            _ => continue,
         }
     }
     out

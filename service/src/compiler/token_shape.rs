@@ -780,14 +780,28 @@ fn out_shape(node: &WorkflowNode, in_shape: &TokenShape) -> TokenShape {
             o
         }
 
-        // Loop: `t_*_enter` injects `_loop_<id>_count`, body re-enters with it
-        // incremented; the exit arm forwards the token (counter still present).
+        // Loop: `t_*_enter` injects a declared `<slug>: { iteration: 0 }`
+        // namespace on the control token; body re-entry increments
+        // `<slug>.iteration`; the exit arm forwards the token unchanged so
+        // post-loop nodes can still read the final count. The namespace is
+        // first-class — `node_output_fields` declares `iteration: number`,
+        // the picker / `.pyi` overlay surface it as `<slug>.iteration`, the
+        // runner auto-promotes `<slug>` as a Python global, and Rhai
+        // expressions in `loopCondition` / guards / End mappings reference it
+        // as `input.<slug>.iteration` (or `<slug>.iteration` for the
+        // slug-borrow rewrite path).
         WorkflowNodeData::Loop { .. } => {
             let mut o = in_shape.clone();
-            o.insert(
-                &format!("_loop_{}_count", node.id),
+            let mut ns = TokenShape::object();
+            ns.insert(
+                "iteration",
                 TokenShape::Scalar(ScalarTy::Number),
-                Provenance::new(node, "loop iteration counter (injected by t_*_enter)"),
+                Provenance::new(node, "loop iteration counter (declared producer field)"),
+            );
+            o.insert(
+                &node.slug(),
+                ns,
+                Provenance::new(node, "loop namespace (`<slug>.iteration`)"),
             );
             o
         }
@@ -986,6 +1000,17 @@ fn is_parked_producer(graph: &WorkflowGraph, id: &str) -> bool {
     })
 }
 
+/// Loop nodes expose their declared fields (`iteration`) on the control token
+/// directly — no parked data place. Resolvers route `<slug>.<field>` through a
+/// `ControlAlias` (string-rewrite to `input.<slug>.<field>`) instead of the
+/// read-arc path.
+fn is_loop_node(graph: &WorkflowGraph, id: &str) -> bool {
+    graph
+        .nodes
+        .iter()
+        .any(|n| n.id == id && matches!(n.data, WorkflowNodeData::Loop { .. }))
+}
+
 fn topo_pos(order: &[petgraph::graph::NodeIndex], wg: &WorkflowDiGraph) -> BTreeMap<String, usize> {
     let mut pos = BTreeMap::new();
     for (i, ni) in order.iter().enumerate() {
@@ -1018,6 +1043,13 @@ impl SlugIndex {
 /// one from their id, collision-suffixed (`_2`, `_3`, …) deterministically by
 /// graph order so existing example templates load unchanged (clean-cut: no
 /// stored templates to migrate).
+///
+/// **Loops are exempt from suffixing**: a Loop node's slug is embedded
+/// *literally* in the engine's Rhai logic (see `lower::lower_loop`), so a
+/// silent rename to `<slug>_2` would diverge from the picker / `<slug>.iteration`
+/// resolution. Any collision where one side is a Loop — whether the colliding
+/// slug is explicit or derived — is a hard [`CompileError::SlugConflict`].
+/// Authors disambiguate by setting an explicit `slug` on one of the loops.
 pub(crate) fn slug_index(graph: &WorkflowGraph) -> Result<SlugIndex, CompileError> {
     let mut by_slug: BTreeMap<String, String> = BTreeMap::new();
     let mut by_node: BTreeMap<String, String> = BTreeMap::new();
@@ -1050,9 +1082,45 @@ pub(crate) fn slug_index(graph: &WorkflowGraph) -> Result<SlugIndex, CompileErro
             continue;
         }
         let base = n.slug();
+        // Loops never get silent suffixing — their slug is the literal
+        // engine-Rhai key for the `<slug>: { iteration: N }` namespace. Any
+        // collision (explicit or derived, peer is also a Loop or not) must
+        // be a hard SlugConflict so the picker and engine stay aligned.
+        let is_loop = matches!(n.data, WorkflowNodeData::Loop { .. });
+        if is_loop {
+            if let Some(other) = by_slug.get(&base) {
+                if other != &n.id {
+                    return Err(CompileError::SlugConflict {
+                        slug: base,
+                        node_a: other.clone(),
+                        node_b: n.id.clone(),
+                    });
+                }
+            }
+            by_slug.insert(base.clone(), n.id.clone());
+            by_node.insert(n.id.clone(), base);
+            continue;
+        }
+        // For non-Loop producers a derived-slug collision still suffix-renames
+        // — the read-arc resolver routes through the SlugIndex, so the suffix
+        // is invisible to the engine. But if the colliding peer IS a Loop,
+        // even a non-Loop derived collision has to be a hard error: the loop's
+        // namespace would otherwise be ambiguous with a parked producer of
+        // the same name.
         let mut s = base.clone();
         let mut k = 2usize;
-        while by_slug.contains_key(&s) {
+        while let Some(holder) = by_slug.get(&s) {
+            let holder_is_loop = graph
+                .nodes
+                .iter()
+                .any(|m| &m.id == holder && matches!(m.data, WorkflowNodeData::Loop { .. }));
+            if holder_is_loop {
+                return Err(CompileError::SlugConflict {
+                    slug: s,
+                    node_a: holder.clone(),
+                    node_b: n.id.clone(),
+                });
+            }
             s = format!("{base}_{k}");
             k += 1;
         }
@@ -1130,6 +1198,18 @@ enum RefResolution {
         producer_path: String,
         producer_label: String,
     },
+    /// Author-facing `<slug>.<field>` whose data lives on the control token
+    /// rather than a parked data place. Resolves with a *pure string rewrite*
+    /// to `input.<slug>.<field>` — no read-arc, no extra input port. Used by
+    /// Loop nodes, which expose `iteration` as a declared producer field but
+    /// don't park their token. The picker treats it like any other producer
+    /// borrow; the engine sees the canonical `input.<slug>.<field>` form.
+    ControlAlias {
+        /// The full source-level path the rewrite emits (always begins with
+        /// `input.`). Wired into `apply_control_data_foundation`'s
+        /// string-replace so the engine guard reads the control-token path.
+        rewrite_to: String,
+    },
     /// Nothing the compiler can bind (non-control `input.*`, unknown slug,
     /// non-upstream / non-parked producer, or unknown field).
     Unresolved,
@@ -1167,12 +1247,45 @@ fn resolve_ref(
             let Some(prod_id) = slugs.node_for(root).map(str::to_string) else {
                 return RefResolution::Unresolved;
             };
+            // Loop producers expose their declared fields (`iteration`) on the
+            // *control token* rather than a parked data place, so the resolver
+            // emits a string-rewrite to the canonical `input.<slug>.<field>`
+            // path. The picker still offers the producer-style form so authors
+            // get one mental model for every upstream borrow.
+            //
+            // A loop is allowed to reference its own slug in its
+            // `loopCondition` — the engine's `t_<id>_enter` sets the namespace
+            // before `t_<id>_continue` reads it, so self-reference is well-
+            // defined here (unlike parked producers, which would read their
+            // own future output).
+            if is_loop_node(graph, &prod_id) {
+                let Some(shape) = node_out.get(&prod_id) else {
+                    return RefResolution::Unresolved;
+                };
+                // Loop's output shape stores its declared fields at
+                // `<slug>.<field>` (the namespace lives on the control token
+                // under the slug key), so resolution prepends the slug.
+                let mut full: Vec<String> = vec![root.clone()];
+                full.extend(gref.segs.iter().cloned());
+                if shape.resolve(&full).is_none() {
+                    return RefResolution::Unresolved;
+                }
+                return RefResolution::ControlAlias {
+                    rewrite_to: format!("input.{root}.{}", gref.segs.join(".")),
+                };
+            }
+            // Parked-producer borrows must reach a *strictly upstream* node
+            // and can't self-reference (a producer can't read its own future
+            // output).
             if prod_id == consumer.id {
                 return RefResolution::Unresolved;
             }
             let up = pos.get(&prod_id).copied().unwrap_or(usize::MAX);
             let me = pos.get(&consumer.id).copied().unwrap_or(0);
-            if up >= me || !is_parked_producer(graph, &prod_id) {
+            if up >= me {
+                return RefResolution::Unresolved;
+            }
+            if !is_parked_producer(graph, &prod_id) {
                 return RefResolution::Unresolved;
             }
             let Some(shape) = node_out.get(&prod_id) else {
@@ -1341,6 +1454,29 @@ fn check_guard(
                     let segs: Vec<String> =
                         producer_path.split('.').map(str::to_string).collect();
                     if let Some((TokenShape::Scalar(ty), _)) = shape.resolve(&segs) {
+                        if !scalar_satisfies(ty, lit) {
+                            out.push(ShapeDiagnostic::GuardTypeMismatch {
+                                node_id: node.id.clone(),
+                                node_label: node.data.label().to_string(),
+                                guard: guard.to_string(),
+                                referenced: gref.referenced.clone(),
+                                found: ty.label().to_string(),
+                                note: format!("compared against a {} literal", lit.label()),
+                            });
+                        }
+                    }
+                }
+            }
+            RefResolution::ControlAlias { .. } => {
+                // Loop's declared producer fields live on the control token;
+                // type-checking is best-effort against the input shape under
+                // the slug namespace (`input.<slug>.<field...>`).
+                if let RefRoot::Qualified(slug) = &gref.root {
+                    let mut segs: Vec<String> = vec![slug.clone()];
+                    segs.extend(gref.segs.iter().cloned());
+                    if let (Some((TokenShape::Scalar(ty), _)), Some(lit)) =
+                        (in_shape.resolve(&segs), &gref.lit)
+                    {
                         if !scalar_satisfies(ty, lit) {
                             out.push(ShapeDiagnostic::GuardTypeMismatch {
                                 node_id: node.id.clone(),
@@ -1800,6 +1936,11 @@ pub(crate) fn guard_readarc_plan(
                         producer_node: producer_id,
                         producer_path,
                     }),
+                    // ControlAlias (Loop): the data is on the control token —
+                    // no read-arc needed. `loop_alias_plan` returns the parallel
+                    // list of rewrites that `apply_control_data_foundation`
+                    // applies as a pure string replacement.
+                    RefResolution::ControlAlias { .. } => {}
                     // Unbindable — hard error (publish blocks; the editor sees
                     // the matching `UnresolvedGuardPath` via `analyze`).
                     RefResolution::Unresolved => {
@@ -1819,6 +1960,92 @@ pub(crate) fn guard_readarc_plan(
         }
     }
     Ok(binds)
+}
+
+/// One author-facing `<slug>.<field>` rewrite where the producer is a Loop
+/// (data lives on the control token, not a parked place). Parallel output of
+/// [`guard_readarc_plan`] returned by [`loop_alias_plan`] — the consumer
+/// (`apply_control_data_foundation`) applies these as a pure string-replace
+/// in the consumer transition's guard / logic source, with no extra input
+/// port and no read arc.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LoopAliasRewrite {
+    /// Consumer node whose guard / logic / mapping expression contains the
+    /// reference. Applied to all transitions matching `t_<consumer>_*` —
+    /// same scope rule as [`ReadArcBind`].
+    pub consumer_node_id: String,
+    /// Exact substring written in source (e.g. `lp.iteration`). The replace
+    /// target.
+    pub referenced: String,
+    /// Canonical control-token path the engine actually evaluates
+    /// (e.g. `input.lp.iteration`).
+    pub rewrite_to: String,
+}
+
+/// Walk every guard / loop-condition / End-mapping expression and collect the
+/// loop-namespace rewrites — pure string substitutions that route author-
+/// facing `<slug>.<field>` to the canonical `input.<slug>.<field>` the engine
+/// reads. Parallel to [`guard_readarc_plan`]: that function emits read-arc
+/// binds for parked producers; this one emits alias rewrites for loops.
+pub(crate) fn loop_alias_plan(
+    graph: &WorkflowGraph,
+) -> Result<Vec<LoopAliasRewrite>, CompileError> {
+    let report = analyze(graph)?;
+    let wg = WorkflowDiGraph::build(graph)?;
+    let order = topo_order(&wg)?;
+    let pos = topo_pos(&order, &wg);
+    let slugs = slug_index(graph)?;
+    let mut rewrites = Vec::new();
+
+    for node in &graph.nodes {
+        let guards: Vec<String> = match &node.data {
+            WorkflowNodeData::Decision { conditions, .. } => conditions
+                .iter()
+                .filter(|c| !c.guard.trim().is_empty())
+                .map(|c| c.guard.clone())
+                .collect(),
+            WorkflowNodeData::Loop { loop_condition, .. }
+                if !loop_condition.trim().is_empty() =>
+            {
+                vec![loop_condition.clone()]
+            }
+            WorkflowNodeData::End { result_mapping, .. } => result_mapping
+                .iter()
+                .map(|m| m.expression.clone())
+                .filter(|s| !s.trim().is_empty())
+                .collect(),
+            WorkflowNodeData::Failure {
+                error_result_mapping,
+                ..
+            } => error_result_mapping
+                .iter()
+                .map(|m| m.expression.clone())
+                .filter(|s| !s.trim().is_empty())
+                .collect(),
+            _ => continue,
+        };
+        let in_shape = report.node_in.get(&node.id);
+        for guard in &guards {
+            for gref in guard_refs(guard) {
+                if let RefResolution::ControlAlias { rewrite_to } = resolve_ref(
+                    &gref,
+                    node,
+                    &slugs,
+                    graph,
+                    in_shape,
+                    &report.node_out,
+                    &pos,
+                ) {
+                    rewrites.push(LoopAliasRewrite {
+                        consumer_node_id: node.id.clone(),
+                        referenced: gref.referenced.clone(),
+                        rewrite_to,
+                    });
+                }
+            }
+        }
+    }
+    Ok(rewrites)
 }
 
 /// One Python AutomatedStep borrow into an upstream parked place.

@@ -1,0 +1,5 @@
+{
+  "templateId": "00000000-0000-0000-0000-000000000012",
+  "name": "02 · Human Form",
+  "description": "Step 2 of the learning path. Adds a HumanTask: an empty Start hands off to a form-rendering task, the operator fills it in, the End maps the form result back. Showcases the task.json sidecar shape and HumanTask result-borrowing."
+}

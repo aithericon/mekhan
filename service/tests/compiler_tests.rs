@@ -612,12 +612,12 @@ fn loop_produces_enter_continue_exit() {
                     label: "Retry Loop".to_string(),
                     description: None,
                     max_iterations: 5,
-                    // Reference the loop's own iteration counter. The
-                    // control/data foundation injects it as the control-token
-                    // leaf `_loop_<id>_count` (lower.rs `lower_loop` /
-                    // out_shape(Loop)); a `_`-prefixed head is a control leaf
-                    // so the guard SSOT threads it without a read-arc.
-                    loop_condition: "input._loop_lp_count < 5".to_string(),
+                    // Reference the loop's own iteration counter via the
+                    // declared `<slug>.iteration` producer field. The compiler's
+                    // `loop_alias_plan` rewrites it to the canonical
+                    // `input.<slug>.iteration` form for the engine — no read-arc,
+                    // since loop data lives on the control token directly.
+                    loop_condition: "lp.iteration < 5".to_string(),
                 },
                 parent_id: None,
                 width: None,
@@ -2046,8 +2046,9 @@ fn guard_multi_hop_scope_walk() {
 #[test]
 fn loop_condition_can_reference_iteration_local() {
     // Loop body's `loop_condition` should be able to reference the loop's own
-    // iteration counter — the foundation injects it as the control-token leaf
-    // `_loop_<id>_count` — without the upstream Start declaring it.
+    // declared `<slug>.iteration` producer field — the compiler's `loop_alias_plan`
+    // rewrites it to the canonical control-token path `input.<slug>.iteration`,
+    // and no upstream Start needs to declare it.
     use mekhan_service::models::template::{FieldKind, Port, PortField};
 
     let loop_node = WorkflowNode {
@@ -2059,7 +2060,7 @@ fn loop_condition_can_reference_iteration_local() {
             label: "Retry".to_string(),
             description: None,
             max_iterations: 5,
-            loop_condition: "input._loop_lp_count < 3".to_string(),
+            loop_condition: "lp.iteration < 3".to_string(),
         },
         parent_id: None,
         width: None,
