@@ -744,7 +744,7 @@ pub enum TaskBlockConfig {
     #[serde(rename = "divider")]
     Divider,
     /// `filenames` references compile-time staged assets; `url` is a direct
-    /// (often `{{ token.path }}`-interpolated) source resolved at instance
+    /// (often `{{ <slug>.<field> }}`-interpolated) source resolved at instance
     /// time. When `url` is set the human-task UI renders it as the image
     /// source (matching the frontend `{type:"image",url,alt?,caption?}`).
     #[serde(rename = "image")]
@@ -764,7 +764,7 @@ pub enum TaskBlockConfig {
     File { filename: String },
     /// Embedded PDF viewer (rendered inline in the task UI). `height` is a
     /// CSS length string, default ~"400px"; `caption` is rendered above the
-    /// viewer. `url`, when set (typically via `{{ token.path }}`
+    /// viewer. `url`, when set (typically via `{{ <slug>.<field> }}`
     /// interpolation), is the direct PDF source.
     #[serde(rename = "pdf")]
     Pdf {
@@ -779,7 +779,7 @@ pub enum TaskBlockConfig {
     },
     /// Downloadable artifact list. Serializes to the frontend
     /// `{type:"download",downloads:[{url,filename,...}]}` shape. `url` is
-    /// typically `{{ token.path }}`-interpolated to an uploaded file.
+    /// typically `{{ <slug>.<field> }}`-interpolated to an uploaded file.
     #[serde(rename = "download")]
     Download { downloads: Vec<DownloadItemConfig> },
 }

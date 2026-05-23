@@ -327,7 +327,7 @@ fn apply_control_data_foundation(
 ) -> Result<(), CompileError> {
     use crate::compiler::token_shape::{
         analyze, automated_step_borrow_plan, ctrl_def_name, data_def_name, def_ref,
-        dynamic_token_definition, guard_readarc_plan,
+        dynamic_token_definition, guard_readarc_plan, human_task_borrow_plan,
     };
     use aithericon_sdk::scenario::{ScenarioArc, ScenarioPort, TransitionGuard, TransitionLogic};
 
@@ -509,6 +509,73 @@ fn apply_control_data_foundation(
             if source.contains(BORROW_MARKER) {
                 let new_source = source.replace(BORROW_MARKER, "");
                 t.logic = TransitionLogic::Rhai { source: new_source };
+            }
+        }
+    }
+
+    // (c3) HumanTask placeholder borrows: direct sibling of (c2) for
+    //      AutomatedStep — same read-arc, same `d_<producer>` var, same
+    //      schema ref. `build_human_task_injection_logic` emits the
+    //      wire-edge transition's Rhai against `input` (the inbound slim
+    //      control token) with `__pluck(input, ["<slug>", …])` for every
+    //      slug-qualified placeholder; this phase rewrites those calls
+    //      to `__pluck(d_<producer>, […])` so they resolve against the
+    //      read-arc-bound parked envelope instead. One model.
+    let ht_borrows = human_task_borrow_plan(graph)?;
+    let mut ht_by_consumer: std::collections::HashMap<String, Vec<_>> =
+        std::collections::HashMap::new();
+    for b in ht_borrows {
+        ht_by_consumer
+            .entry(b.consumer_node_id.clone())
+            .or_default()
+            .push(b);
+    }
+    for (consumer_id, consumer_borrows) in &ht_by_consumer {
+        // The wire-edge transition is the one whose output writes to the
+        // HumanTask's `p_<id>_input`. Multi-inbound HumanTasks (rare —
+        // typically only via ParallelJoin) have one such transition per
+        // inbound edge; rewrite each independently.
+        let input_place = format!("p_{}_input", consumer_id);
+        for t in &mut scenario.transitions {
+            if !t.outputs.iter().any(|a| a.place == input_place) {
+                continue;
+            }
+            for b in consumer_borrows {
+                let var = format!("d_{}", b.producer_node.replace('-', "_"));
+                let data_place = format!("p_{}_data", b.producer_node);
+                // Slug-specific needle: the trailing `, ` (comma+space)
+                // is exactly what `interpolate_to_rhai_expr` emits
+                // between segments via `segs.join(", ")`, so this
+                // matches only the multi-segment case `{{ <slug>.<f> }}`
+                // and never a same-prefix root-level field like
+                // `__pluck(input, ["startle"])` (no trailing comma).
+                let needle = format!(r#"__pluck(input, ["{}", "#, b.slug);
+                let replacement = format!(r#"__pluck({var}, ["#);
+                let source = match &t.logic {
+                    TransitionLogic::Rhai { source } => source.clone(),
+                    _ => continue,
+                };
+                if !source.contains(&needle) {
+                    continue;
+                }
+                if !t.input_ports.iter().any(|p| p.name == var) {
+                    t.input_ports.push(ScenarioPort {
+                        name: var.clone(),
+                        schema_ref: Some(def_ref(&data_def_name(&b.producer_node))),
+                        cardinality: "single".to_string(),
+                    });
+                }
+                if !t.inputs.iter().any(|a| a.place == data_place && a.read) {
+                    t.inputs.push(ScenarioArc {
+                        place: data_place.clone(),
+                        port: var.clone(),
+                        weight: 1,
+                        read: true,
+                    });
+                }
+                t.logic = TransitionLogic::Rhai {
+                    source: source.replace(&needle, &replacement),
+                };
             }
         }
     }
@@ -1402,6 +1469,212 @@ mod tests {
         assert!(
             compile_to_air(&graph, "t", "d", &std::collections::HashMap::new()).is_ok(),
             "step without an error edge must still compile"
+        );
+    }
+
+    fn start_node_with_slug_and_field(id: &str, slug: &str, field: &str) -> WorkflowNode {
+        WorkflowNode {
+            id: id.to_string(),
+            node_type: "start".to_string(),
+            slug: Some(slug.to_string()),
+            position: Position { x: 0.0, y: 0.0 },
+            data: WorkflowNodeData::Start {
+                label: "Start".to_string(),
+                description: None,
+                initial: Port {
+                    id: "in".to_string(),
+                    label: "Initial".to_string(),
+                    fields: vec![PortField {
+                        name: field.to_string(),
+                        label: field.to_string(),
+                        kind: FieldKind::Text,
+                        required: true,
+                        options: None,
+                        description: None,
+                        accept: None,
+                    }],
+                },
+                process_name: None,
+            },
+            parent_id: None,
+            width: None,
+            height: None,
+        }
+    }
+
+    fn human_task_with_title(id: &str, title: &str) -> WorkflowNode {
+        WorkflowNode {
+            id: id.to_string(),
+            node_type: "human_task".to_string(),
+            slug: None,
+            position: Position { x: 0.0, y: 50.0 },
+            data: WorkflowNodeData::HumanTask {
+                label: "Task".to_string(),
+                description: None,
+                task_title: title.to_string(),
+                instructions_mdsvex: None,
+                steps: vec![],
+            },
+            parent_id: None,
+            width: None,
+            height: None,
+        }
+    }
+
+    /// End-to-end: a HumanTask placeholder `{{ <slug>.<field> }}` must
+    /// land in the compiled AIR as a read-arc against the upstream
+    /// parked place + a rewritten `__pluck(d_<producer>, [...])` call,
+    /// not the pre-rewrite `__pluck(input, ["<slug>", ...])` form. One
+    /// model — same shape as Python AutomatedStep's `<slug>.<field>`.
+    #[test]
+    fn human_task_slug_borrow_rewrites_pluck_and_adds_read_arc() {
+        let graph = WorkflowGraph {
+            nodes: vec![
+                start_node_with_slug_and_field("s", "start", "invoice_id"),
+                human_task_with_title("ht", "Pay {{ start.invoice_id }}"),
+                end_node("e"),
+            ],
+            edges: vec![edge("e1", "s", "ht"), edge("e2", "ht", "e")],
+            viewport: None,
+            instance_concurrency: Default::default(),
+        };
+
+        let air = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
+            .expect("compile");
+        let transitions = air["transitions"].as_array().unwrap();
+
+        // Find the wire-edge transition writing to the HumanTask's input.
+        let edge_t = transitions
+            .iter()
+            .find(|t| {
+                t["outputs"]
+                    .as_array()
+                    .map(|arr| arr.iter().any(|a| a["place"] == "p_ht_input"))
+                    .unwrap_or(false)
+            })
+            .expect("wire-edge transition writing to p_ht_input must exist");
+
+        // (1) Rhai logic must have been rewritten away from `input` to
+        //     the read-arc-bound `d_s` variable.
+        let logic_src = edge_t["logic"]["source"].as_str().unwrap_or("");
+        assert!(
+            logic_src.contains(r#"__pluck(d_s, ["invoice_id"])"#),
+            "expected rewritten pluck against d_s, got logic: {logic_src}"
+        );
+        assert!(
+            !logic_src.contains(r#"__pluck(input, ["start", "#),
+            "pre-rewrite `__pluck(input, [\"start\", …])` must be gone: {logic_src}"
+        );
+
+        // (2) A read-arc on `p_s_data` with port `d_s` must have been
+        //     added — the borrow's physical realization.
+        let inputs = edge_t["inputs"].as_array().expect("inputs array");
+        let read_arc = inputs.iter().find(|a| a["place"] == "p_s_data");
+        assert!(
+            read_arc.is_some(),
+            "expected read-arc to p_s_data; inputs: {inputs:?}"
+        );
+        let read_arc = read_arc.unwrap();
+        assert_eq!(read_arc["read"], serde_json::Value::Bool(true));
+        assert_eq!(read_arc["port"], "d_s");
+
+        // (3) The corresponding input port must carry the schema ref —
+        //     same shape as Python's borrow ports.
+        let ports = edge_t["input_ports"].as_array().expect("input_ports");
+        let d_s_port = ports
+            .iter()
+            .find(|p| p["name"] == "d_s")
+            .expect("d_s input port");
+        assert_eq!(d_s_port["schema_ref"], "#/definitions/Data__s");
+    }
+
+    /// An unknown head identifier (typo, or a legitimate root-level
+    /// field on the slim control token) must NOT be rewritten — the
+    /// existing slim-token pluck path stays in place and resolves
+    /// at runtime against `input` directly.
+    #[test]
+    fn human_task_unknown_slug_left_alone() {
+        let graph = WorkflowGraph {
+            nodes: vec![
+                start_node_with_slug_and_field("s", "start", "invoice_id"),
+                human_task_with_title("ht", "Hello {{ mystery.field }}"),
+                end_node("e"),
+            ],
+            edges: vec![edge("e1", "s", "ht"), edge("e2", "ht", "e")],
+            viewport: None,
+            instance_concurrency: Default::default(),
+        };
+
+        let air = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
+            .expect("compile");
+        let transitions = air["transitions"].as_array().unwrap();
+        let edge_t = transitions
+            .iter()
+            .find(|t| {
+                t["outputs"]
+                    .as_array()
+                    .map(|arr| arr.iter().any(|a| a["place"] == "p_ht_input"))
+                    .unwrap_or(false)
+            })
+            .expect("wire-edge transition");
+
+        let logic_src = edge_t["logic"]["source"].as_str().unwrap_or("");
+        // Unknown slug stays as a root-level pluck against `input`.
+        assert!(
+            logic_src.contains(r#"__pluck(input, ["mystery", "field"])"#),
+            "unknown slug must remain a root-level pluck: {logic_src}"
+        );
+
+        // No spurious read-arc on the unknown producer.
+        let inputs = edge_t["inputs"].as_array().expect("inputs array");
+        assert!(
+            !inputs.iter().any(|a| a["place"] == "p_mystery_data"),
+            "no read-arc should be synthesized for an unknown slug"
+        );
+    }
+
+    /// A bare root-level placeholder `{{ field }}` (no slug prefix)
+    /// remains a slim-token pluck — these are not slug-namespaced
+    /// borrows. Start fields stay at the root of `input` at the
+    /// wire-edge, exactly as before. Regression guard for backward
+    /// compatibility with templates authored against the legacy
+    /// flat-token model.
+    #[test]
+    fn human_task_bare_field_placeholder_left_at_root() {
+        let graph = WorkflowGraph {
+            nodes: vec![
+                start_node_with_slug_and_field("s", "start", "invoice_id"),
+                human_task_with_title("ht", "Pay {{ invoice_id }}"),
+                end_node("e"),
+            ],
+            edges: vec![edge("e1", "s", "ht"), edge("e2", "ht", "e")],
+            viewport: None,
+            instance_concurrency: Default::default(),
+        };
+
+        let air = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
+            .expect("compile");
+        let transitions = air["transitions"].as_array().unwrap();
+        let edge_t = transitions
+            .iter()
+            .find(|t| {
+                t["outputs"]
+                    .as_array()
+                    .map(|arr| arr.iter().any(|a| a["place"] == "p_ht_input"))
+                    .unwrap_or(false)
+            })
+            .expect("wire-edge transition");
+
+        let logic_src = edge_t["logic"]["source"].as_str().unwrap_or("");
+        assert!(
+            logic_src.contains(r#"__pluck(input, ["invoice_id"])"#),
+            "bare field placeholder must stay as root-of-input pluck: {logic_src}"
+        );
+
+        let inputs = edge_t["inputs"].as_array().expect("inputs array");
+        assert!(
+            !inputs.iter().any(|a| a.get("read") == Some(&serde_json::Value::Bool(true))),
+            "no read-arc should be added for a non-slug placeholder; inputs: {inputs:?}"
         );
     }
 }

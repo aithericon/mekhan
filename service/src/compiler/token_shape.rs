@@ -1923,6 +1923,80 @@ pub(crate) fn automated_step_borrow_plan(
     Ok(out)
 }
 
+/// One slug-namespaced `{{ <slug>.<field> }}` placeholder access on a
+/// HumanTask, resolved into a Petri read-arc against the upstream parked
+/// place. Direct sibling of [`AutomatedStepDataBorrow`] — same lifecycle,
+/// same `(consumer, producer)` dedupe key, same downstream rewrite
+/// shape. The runtime difference: instead of staging the producer
+/// envelope as `<slug>.json`, the compiler's post-merge rewrite swaps
+/// `__pluck(input, ["<slug>", ...])` → `__pluck(d_<producer>, [...])`
+/// so the existing interpolation Rhai resolves against the read-arc-
+/// bound parked envelope.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct HumanTaskDataBorrow {
+    /// HumanTask node that authors the `{{ <slug>.<field> }}` reference.
+    pub consumer_node_id: String,
+    /// Slug the author wrote (`start` in `{{ start.invoice_id }}`).
+    pub slug: String,
+    /// Resolved upstream node id whose parked data the borrow reaches.
+    pub producer_node: String,
+}
+
+/// For every HumanTask, scan its authored strings (title / instructions /
+/// step blocks) and resolve every `{{ <slug>.<field> }}` placeholder into
+/// an upstream parked place. Returns one [`HumanTaskDataBorrow`] per
+/// `(consumer, producer)` pair.
+///
+/// Best-effort: a head identifier that isn't a known graph slug is
+/// silently ignored (could be a typo or — at the wire-edge — a
+/// legitimate root-level field on the slim control token, which
+/// `interpolate_to_rhai_expr` already plucks against). A slug whose
+/// producer isn't strictly upstream is likewise ignored. Self-references
+/// (`<slug>` resolving back to the HumanTask itself) skip.
+pub(crate) fn human_task_borrow_plan(
+    graph: &WorkflowGraph,
+) -> Result<Vec<HumanTaskDataBorrow>, CompileError> {
+    let wg = WorkflowDiGraph::build(graph)?;
+    let order = topo_order(&wg)?;
+    let pos = topo_pos(&order, &wg);
+    let slugs = slug_index(graph)?;
+
+    let mut out: Vec<HumanTaskDataBorrow> = Vec::new();
+    let mut seen: std::collections::BTreeSet<(String, String)> = std::collections::BTreeSet::new();
+
+    for node in &graph.nodes {
+        if !matches!(node.data, WorkflowNodeData::HumanTask { .. }) {
+            continue;
+        }
+        for r in crate::compiler::human_task_refs::extract_human_task_refs(node) {
+            let Some(prod_id) = slugs.node_for(&r.head).map(str::to_string) else {
+                continue;
+            };
+            if prod_id == node.id {
+                continue;
+            }
+            let up = pos.get(&prod_id).copied().unwrap_or(usize::MAX);
+            let me = pos.get(&node.id).copied().unwrap_or(0);
+            if up >= me {
+                continue;
+            }
+            if !is_parked_producer(graph, &prod_id) {
+                continue;
+            }
+            let key = (node.id.clone(), prod_id.clone());
+            if !seen.insert(key) {
+                continue;
+            }
+            out.push(HumanTaskDataBorrow {
+                consumer_node_id: node.id.clone(),
+                slug: r.head,
+                producer_node: prod_id,
+            });
+        }
+    }
+    Ok(out)
+}
+
 /// Per-node, per-slug field map — the picker model pivoted from a flat
 /// list to `slug → fields`. Drives the Python `.pyi` overlay's one
 /// `class _<Slug>NS:` per upstream producer so the IDE autocompletes
@@ -2574,6 +2648,108 @@ mod scope_reachability_tests {
         assert!(
             borrows.is_empty(),
             "stdlib + locals must not become borrows; got: {borrows:?}"
+        );
+    }
+
+    /// One model: a HumanTask's `{{ <slug>.<field> }}` placeholder
+    /// resolves to a single borrow against the upstream parked place,
+    /// exactly like a Python AutomatedStep's `<slug>.<field>` source
+    /// access.
+    #[test]
+    fn human_task_borrow_simple() {
+        // Start(slug=start, with invoice_id) → review (HumanTask) → end.
+        // The HumanTask title interpolates `{{ start.invoice_id }}`.
+        let json = r#"{
+          "nodes":[
+            {"id":"s","type":"start","slug":"start","position":{"x":0,"y":0},
+             "data":{"type":"start","label":"Start",
+                     "initial":{"id":"in","label":"Initial","fields":[
+                       {"name":"invoice_id","label":"Invoice","kind":"text","required":true}
+                     ]}}},
+            {"id":"review","type":"human_task","position":{"x":0,"y":0},
+             "data":{"type":"human_task","label":"Review",
+                     "taskTitle":"Review {{ start.invoice_id }}",
+                     "steps":[]}},
+            {"id":"end","type":"end","position":{"x":0,"y":0},
+             "data":{"type":"end","label":"End"}}
+          ],
+          "edges":[
+            {"id":"e1","source":"s","target":"review","type":"sequence"},
+            {"id":"e2","source":"review","target":"end","type":"sequence"}
+          ]
+        }"#;
+        let g: WorkflowGraph = serde_json::from_str(json).expect("deser borrow graph");
+        let borrows = human_task_borrow_plan(&g).expect("borrow plan");
+        assert_eq!(borrows.len(), 1, "expected exactly one borrow; got: {borrows:?}");
+        assert_eq!(borrows[0].consumer_node_id, "review");
+        assert_eq!(borrows[0].slug, "start");
+        assert_eq!(borrows[0].producer_node, "s");
+    }
+
+    /// Multiple placeholders against the same producer collapse to one
+    /// borrow per `(consumer, producer)` pair — mirrors the Python
+    /// dedupe rule. The runtime read-arc reaches the whole envelope, the
+    /// Rhai `__pluck` walks down to the individual field per call site.
+    #[test]
+    fn human_task_borrow_dedupes_per_producer() {
+        let json = r#"{
+          "nodes":[
+            {"id":"s","type":"start","slug":"start","position":{"x":0,"y":0},
+             "data":{"type":"start","label":"Start",
+                     "initial":{"id":"in","label":"Initial","fields":[
+                       {"name":"invoice_id","label":"I","kind":"text","required":true},
+                       {"name":"vendor_name","label":"V","kind":"text","required":true}
+                     ]}}},
+            {"id":"review","type":"human_task","position":{"x":0,"y":0},
+             "data":{"type":"human_task","label":"Review",
+                     "taskTitle":"Pay {{ start.vendor_name }} for {{ start.invoice_id }}",
+                     "instructionsMdsvex":"Re: {{ start.invoice_id }}",
+                     "steps":[]}},
+            {"id":"end","type":"end","position":{"x":0,"y":0},
+             "data":{"type":"end","label":"End"}}
+          ],
+          "edges":[
+            {"id":"e1","source":"s","target":"review","type":"sequence"},
+            {"id":"e2","source":"review","target":"end","type":"sequence"}
+          ]
+        }"#;
+        let g: WorkflowGraph = serde_json::from_str(json).expect("deser borrow graph");
+        let borrows = human_task_borrow_plan(&g).expect("borrow plan");
+        assert_eq!(
+            borrows.len(),
+            1,
+            "three placeholders on `start` → one borrow; got: {borrows:?}"
+        );
+    }
+
+    /// An unknown head identifier (typo, root-level control-token
+    /// field like `{{ status }}`, or a placeholder pointing nowhere)
+    /// is silently ignored — same posture as Python's
+    /// `python_unknown_head_is_silently_ignored`. The interpolation
+    /// stays in place and `__pluck` degrades to `()` at runtime.
+    #[test]
+    fn human_task_unknown_slug_ignored() {
+        let json = r#"{
+          "nodes":[
+            {"id":"s","type":"start","position":{"x":0,"y":0},
+             "data":{"type":"start","label":"Start"}},
+            {"id":"review","type":"human_task","position":{"x":0,"y":0},
+             "data":{"type":"human_task","label":"Review",
+                     "taskTitle":"{{ mystery.field }} or {{ also_unknown }}",
+                     "steps":[]}},
+            {"id":"end","type":"end","position":{"x":0,"y":0},
+             "data":{"type":"end","label":"End"}}
+          ],
+          "edges":[
+            {"id":"e1","source":"s","target":"review","type":"sequence"},
+            {"id":"e2","source":"review","target":"end","type":"sequence"}
+          ]
+        }"#;
+        let g: WorkflowGraph = serde_json::from_str(json).expect("deser graph");
+        let borrows = human_task_borrow_plan(&g).expect("borrow plan");
+        assert!(
+            borrows.is_empty(),
+            "unknown slugs and root-level placeholders must not become borrows; got: {borrows:?}"
         );
     }
 }

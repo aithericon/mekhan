@@ -88,16 +88,24 @@ pub(crate) fn with_pluck_prelude(logic: &str) -> String {
     }
 }
 
-/// Validate a `{{ … }}` placeholder body and turn it into a safe, null-safe
-/// Rhai accessor rooted at the workflow token (`input`).
+/// One segment of a parsed `{{ … }}` placeholder path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum PathSegment {
+    /// `.<identifier>` — `[A-Za-z_][A-Za-z0-9_]*`.
+    Field(String),
+    /// `[<n>]` — non-negative integer.
+    Index(usize),
+}
+
+/// Validate a `{{ … }}` placeholder body and return its parsed path
+/// segments, or `None` for inputs that aren't a dotted identifier path
+/// (optionally with numeric indices). This is deliberately *not* a Rhai
+/// expression evaluator: arbitrary expressions are rejected so a template
+/// author can never inject executable Rhai through a task block string.
 ///
-/// Only dotted identifier paths with optional numeric indices are accepted —
-/// e.g. `invoice_file.url`, `items[0].amount`. This is deliberately *not* a
-/// Rhai expression evaluator: arbitrary expressions are rejected (returns
-/// `None`) so a template author can never inject executable Rhai through a
-/// task block string. The accepted path is emitted as a [`PLUCK_HELPER`]
-/// call so a misaimed placeholder degrades to `()` rather than hard-erroring.
-pub(crate) fn placeholder_to_accessor(inner: &str) -> Option<String> {
+/// The first segment is always [`PathSegment::Field`] — a leading `[0]`
+/// is illegal.
+pub(crate) fn parse_placeholder_segments(inner: &str) -> Option<Vec<PathSegment>> {
     let s = inner.trim();
     if s.is_empty() {
         return None;
@@ -116,15 +124,12 @@ pub(crate) fn placeholder_to_accessor(inner: &str) -> Option<String> {
         *i > start
     }
 
-    // Collect path segments as Rhai literals: identifiers (validated to
-    // `[A-Za-z0-9_]`, so safe unquoted-escaped) become quoted string keys,
-    // `[n]` becomes a bare integer index. Emitted as `__pluck(input, [..])`.
-    let mut segs: Vec<String> = Vec::new();
+    let mut segs: Vec<PathSegment> = Vec::new();
     let first = i;
     if !ident(bytes, &mut i) {
         return None;
     }
-    segs.push(format!("\"{}\"", &s[first..i]));
+    segs.push(PathSegment::Field(s[first..i].to_string()));
 
     while i < bytes.len() {
         match bytes[i] {
@@ -134,7 +139,7 @@ pub(crate) fn placeholder_to_accessor(inner: &str) -> Option<String> {
                 if !ident(bytes, &mut i) {
                     return None;
                 }
-                segs.push(format!("\"{}\"", &s[seg_start..i]));
+                segs.push(PathSegment::Field(s[seg_start..i].to_string()));
             }
             b'[' => {
                 i += 1;
@@ -145,13 +150,33 @@ pub(crate) fn placeholder_to_accessor(inner: &str) -> Option<String> {
                 if i == num_start || i >= bytes.len() || bytes[i] != b']' {
                     return None;
                 }
-                segs.push(s[num_start..i].to_string());
+                let n: usize = s[num_start..i].parse().ok()?;
+                segs.push(PathSegment::Index(n));
                 i += 1; // consume ']'
             }
             _ => return None,
         }
     }
-    Some(format!("__pluck(input, [{}])", segs.join(", ")))
+    Some(segs)
+}
+
+/// Validate a `{{ … }}` placeholder body and turn it into a safe, null-safe
+/// Rhai accessor rooted at the workflow token (`input`).
+///
+/// Only dotted identifier paths with optional numeric indices are accepted —
+/// e.g. `invoice_file.url`, `items[0].amount`. The accepted path is emitted as
+/// a [`PLUCK_HELPER`] call so a misaimed placeholder degrades to `()` rather
+/// than hard-erroring. See [`parse_placeholder_segments`] for the parser.
+pub(crate) fn placeholder_to_accessor(inner: &str) -> Option<String> {
+    let segs = parse_placeholder_segments(inner)?;
+    let rendered: Vec<String> = segs
+        .iter()
+        .map(|s| match s {
+            PathSegment::Field(f) => format!("\"{f}\""),
+            PathSegment::Index(n) => n.to_string(),
+        })
+        .collect();
+    Some(format!("__pluck(input, [{}])", rendered.join(", ")))
 }
 
 /// Turn a raw string that may contain `{{ path }}` placeholders into a Rhai
@@ -219,8 +244,12 @@ pub(crate) fn interpolate_to_rhai_expr(raw: &str) -> String {
 }
 
 /// Like [`json_to_rhai_literal`] but every string is run through
-/// [`interpolate_to_rhai_expr`], so `{{ token.path }}` placeholders anywhere
-/// in a human task's steps resolve against the runtime token.
+/// [`interpolate_to_rhai_expr`], so `{{ <slug>.<field> }}` (or root-level
+/// `{{ field }}`) placeholders anywhere in a human task's steps resolve
+/// against the runtime token. Slug-qualified placeholders are rewritten
+/// post-merge in [`crate::compiler::compile`]'s `(c3)` phase to pluck
+/// against the read-arc-bound producer envelope; bare placeholders stay
+/// rooted in the slim control token.
 pub(crate) fn json_to_rhai_interpolated(value: &Value) -> String {
     match value {
         Value::String(s) => interpolate_to_rhai_expr(s),

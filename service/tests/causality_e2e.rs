@@ -565,7 +565,7 @@ async fn clean_slate(nats: &MekhanNats) {
     tokio::time::sleep(Duration::from_millis(200)).await;
 }
 
-/// Runtime proof of the `{{ token.path }}` human-task interpolation:
+/// Runtime proof of the `{{ <slug>.<field> }}` human-task interpolation:
 ///
 /// Start declares a `file` start-param (`invoice_file`); the Review task's
 /// image + download blocks and its instructions reference it via

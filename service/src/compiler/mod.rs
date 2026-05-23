@@ -4,6 +4,7 @@ mod error;
 mod graph;
 mod lower;
 mod pyio;
+pub(crate) mod human_task_refs;
 pub(crate) mod python_refs;
 mod rhai_gen;
 pub mod rhai_scope;
