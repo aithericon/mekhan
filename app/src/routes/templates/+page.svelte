@@ -282,22 +282,34 @@
 							{/if}
 							{#if (ioByTemplate.get(template.id)?.inputs.length ?? 0) > 0 || (ioByTemplate.get(template.id)?.outputs.length ?? 0) > 0}
 								{@const io = ioByTemplate.get(template.id) ?? { inputs: [], outputs: [] }}
-								<p
-									class="mt-1 truncate text-sm text-muted-foreground"
+								<div
+									class="mt-2 flex flex-wrap items-center gap-1.5 text-sm"
 									data-testid="template-io-{template.id}"
 								>
 									{#if io.inputs.length > 0}
-										<span>Inputs:</span>
-										<span class="font-mono text-foreground/80">{io.inputs.join(', ')}</span>
+										<span class="text-sm font-medium uppercase tracking-wider text-muted-foreground/70">
+											In
+										</span>
+										{#each io.inputs as name (name)}
+											<span class="rounded border border-node-start/40 bg-node-start/10 px-1.5 py-0.5 font-mono text-sm text-node-start">
+												{name}
+											</span>
+										{/each}
 									{/if}
 									{#if io.inputs.length > 0 && io.outputs.length > 0}
-										<span class="mx-1">→</span>
+										<span class="text-muted-foreground/50">→</span>
 									{/if}
 									{#if io.outputs.length > 0}
-										<span>Outputs:</span>
-										<span class="font-mono text-foreground/80">{io.outputs.join(', ')}</span>
+										<span class="text-sm font-medium uppercase tracking-wider text-muted-foreground/70">
+											Out
+										</span>
+										{#each io.outputs as name (name)}
+											<span class="rounded border border-node-end/40 bg-node-end/10 px-1.5 py-0.5 font-mono text-sm text-node-end">
+												{name}
+											</span>
+										{/each}
 									{/if}
-								</p>
+								</div>
 							{/if}
 							<p class="mt-1 text-sm text-muted-foreground">
 								Updated {formatDate(template.updated_at)}
