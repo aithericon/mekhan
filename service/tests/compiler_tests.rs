@@ -613,10 +613,11 @@ fn loop_produces_enter_continue_exit() {
                     description: None,
                     max_iterations: 5,
                     // Reference the loop's own iteration counter via the
-                    // declared `<slug>.iteration` producer field. The compiler's
-                    // `loop_alias_plan` rewrites it to the canonical
-                    // `input.<slug>.iteration` form for the engine — no read-arc,
-                    // since loop data lives on the control token directly.
+                    // declared `<slug>.iteration` producer field. The counter
+                    // is parked in `p_lp_data`; the standard read-arc synthesis
+                    // pass rewrites this to `d_lp.iteration` and adds a
+                    // read-arc on `p_lp_data` for the continue/exit transitions
+                    // (pre-wired by `lower_loop`).
                     loop_condition: "lp.iteration < 5".to_string(),
                 },
                 parent_id: None,
@@ -2046,9 +2047,10 @@ fn guard_multi_hop_scope_walk() {
 #[test]
 fn loop_condition_can_reference_iteration_local() {
     // Loop body's `loop_condition` should be able to reference the loop's own
-    // declared `<slug>.iteration` producer field — the compiler's `loop_alias_plan`
-    // rewrites it to the canonical control-token path `input.<slug>.iteration`,
-    // and no upstream Start needs to declare it.
+    // declared `<slug>.iteration` producer field — the standard read-arc
+    // synthesis pass binds it to the loop's own parked `p_<id>_data` (the
+    // continue/exit transitions are pre-wired in `lower_loop`), so no upstream
+    // Start needs to declare it.
     use mekhan_service::models::template::{FieldKind, Port, PortField};
 
     let loop_node = WorkflowNode {

@@ -378,7 +378,7 @@ fn apply_control_data_foundation(
 ) -> Result<(), CompileError> {
     use crate::compiler::token_shape::{
         analyze, automated_step_borrow_plan, ctrl_def_name, data_def_name, def_ref,
-        dynamic_token_definition, guard_readarc_plan, human_task_borrow_plan, loop_alias_plan,
+        dynamic_token_definition, guard_readarc_plan, human_task_borrow_plan,
     };
     use aithericon_sdk::scenario::{ScenarioArc, ScenarioPort, TransitionGuard, TransitionLogic};
 
@@ -510,42 +510,6 @@ fn apply_control_data_foundation(
                     {
                         t.logic = TransitionLogic::Rhai { source: rewritten };
                     }
-                }
-            }
-        }
-    }
-
-    // (c-alias) Loop namespace rewrites: `<slug>.<field>` in a guard / loop
-    //      condition / End mapping where `<slug>` resolves to a Loop node
-    //      gets rewritten to the canonical `input.<slug>.<field>` form. No
-    //      read-arc / input port: the value lives on the control token, not
-    //      a parked place. Parallel to the read-arc loop above; same
-    //      `t_<consumer>_*` scoping rule.
-    //
-    //      Word-boundary-aware: a naïve `str::replace` would double-rewrite
-    //      `lp.iteration` inside the engine-injected safety guard
-    //      `input.lp.iteration < {max}` (the substring matches there too).
-    //      The replace_word_boundary helper only matches when the prior char
-    //      isn't an identifier-continuation byte, so `input.lp.iteration`
-    //      stays untouched while `(lp.iteration < 3)` gets rewritten.
-    for rw in loop_alias_plan(graph)? {
-        let t_prefix = format!("t_{}_", rw.consumer_node_id);
-        for t in &mut scenario.transitions {
-            if !t.id.starts_with(&t_prefix) {
-                continue;
-            }
-            if let Some(TransitionGuard::Rhai { source }) = &t.guard {
-                if let Some(rewritten) =
-                    replace_word_boundary(source, &rw.referenced, &rw.rewrite_to)
-                {
-                    t.guard = Some(TransitionGuard::Rhai { source: rewritten });
-                }
-            }
-            if let TransitionLogic::Rhai { source } = &t.logic {
-                if let Some(rewritten) =
-                    replace_word_boundary(source, &rw.referenced, &rw.rewrite_to)
-                {
-                    t.logic = TransitionLogic::Rhai { source: rewritten };
                 }
             }
         }

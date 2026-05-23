@@ -289,11 +289,10 @@ pub fn node_input_scopes(
 /// `<slug>.<field>` borrows. Covers:
 ///
 /// - **AutomatedStep** — explicit `output.fields` declared in the editor.
-/// - **Loop** — synthetic `iteration: number` exposed on the control token by
-///   `t_<id>_enter`; no parked envelope, but downstream nodes (including the
-///   body) read it through the same `<slug>.<field>` mental model as any other
-///   producer. The compiler emits a `ControlAlias` rewrite (see
-///   `token_shape::loop_alias_plan`) so the engine sees `input.<slug>.iteration`.
+/// - **Loop** — synthetic `iteration: number` parked in `p_<loop>_data` by
+///   `t_<id>_enter`; downstream nodes (including the body) read it through the
+///   same `<slug>.<field>` mental model as any other producer, resolved by the
+///   standard read-arc synthesis pass (see `guard_readarc_plan`).
 pub fn node_output_fields(
     graph: &WorkflowGraph,
 ) -> HashMap<String, std::collections::BTreeMap<String, FieldKind>> {

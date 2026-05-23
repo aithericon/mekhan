@@ -1006,10 +1006,10 @@ fn is_parked_producer(graph: &WorkflowGraph, id: &str) -> bool {
     })
 }
 
-/// Loop nodes expose their declared fields (`iteration`) on the control token
-/// directly — no parked data place. Resolvers route `<slug>.<field>` through a
-/// `ControlAlias` (string-rewrite to `input.<slug>.<field>`) instead of the
-/// read-arc path.
+/// True if `id` names a `WorkflowNodeData::Loop` node. Loop counters live in a
+/// parked `p_<loop>_data` place keyed flat (`{iteration: N}`), so
+/// `<slug>.iteration` borrows resolve through the standard read-arc pipeline
+/// (see `resolve_ref`'s Qualified branch).
 fn is_loop_node(graph: &WorkflowGraph, id: &str) -> bool {
     graph
         .nodes
@@ -1198,23 +1198,15 @@ fn guard_refs(src: &str) -> Vec<GuardRef> {
 enum RefResolution {
     /// Stays on the inbound control token — no read-arc.
     Control,
-    /// Borrowed from an upstream parked producer's `p_{id}_data`.
+    /// Borrowed from an upstream parked producer's `p_{id}_data`. Loop counters
+    /// resolve here too: their counter lives in a parked `p_<loop>_data` place
+    /// keyed flat (`{iteration: N}`), so the standard read-arc synthesis
+    /// rewrites `<slug>.iteration` to `d_<slug>.iteration` like any other
+    /// producer borrow.
     Borrow {
         producer_id: String,
         producer_path: String,
         producer_label: String,
-    },
-    /// Author-facing `<slug>.<field>` whose data lives on the control token
-    /// rather than a parked data place. Resolves with a *pure string rewrite*
-    /// to `input.<slug>.<field>` — no read-arc, no extra input port. Used by
-    /// Loop nodes, which expose `iteration` as a declared producer field but
-    /// don't park their token. The picker treats it like any other producer
-    /// borrow; the engine sees the canonical `input.<slug>.<field>` form.
-    ControlAlias {
-        /// The full source-level path the rewrite emits (always begins with
-        /// `input.`). Wired into `apply_control_data_foundation`'s
-        /// string-replace so the engine guard reads the control-token path.
-        rewrite_to: String,
     },
     /// Nothing the compiler can bind (non-control `input.*`, unknown slug,
     /// non-upstream / non-parked producer, or unknown field).
@@ -1473,29 +1465,6 @@ fn check_guard(
                     let segs: Vec<String> =
                         producer_path.split('.').map(str::to_string).collect();
                     if let Some((TokenShape::Scalar(ty), _)) = shape.resolve(&segs) {
-                        if !scalar_satisfies(ty, lit) {
-                            out.push(ShapeDiagnostic::GuardTypeMismatch {
-                                node_id: node.id.clone(),
-                                node_label: node.data.label().to_string(),
-                                guard: guard.to_string(),
-                                referenced: gref.referenced.clone(),
-                                found: ty.label().to_string(),
-                                note: format!("compared against a {} literal", lit.label()),
-                            });
-                        }
-                    }
-                }
-            }
-            RefResolution::ControlAlias { .. } => {
-                // Loop's declared producer fields live on the control token;
-                // type-checking is best-effort against the input shape under
-                // the slug namespace (`input.<slug>.<field...>`).
-                if let RefRoot::Qualified(slug) = &gref.root {
-                    let mut segs: Vec<String> = vec![slug.clone()];
-                    segs.extend(gref.segs.iter().cloned());
-                    if let (Some((TokenShape::Scalar(ty), _)), Some(lit)) =
-                        (in_shape.resolve(&segs), &gref.lit)
-                    {
                         if !scalar_satisfies(ty, lit) {
                             out.push(ShapeDiagnostic::GuardTypeMismatch {
                                 node_id: node.id.clone(),
@@ -1955,11 +1924,6 @@ pub(crate) fn guard_readarc_plan(
                         producer_node: producer_id,
                         producer_path,
                     }),
-                    // ControlAlias (Loop): the data is on the control token —
-                    // no read-arc needed. `loop_alias_plan` returns the parallel
-                    // list of rewrites that `apply_control_data_foundation`
-                    // applies as a pure string replacement.
-                    RefResolution::ControlAlias { .. } => {}
                     // Unbindable — hard error (publish blocks; the editor sees
                     // the matching `UnresolvedGuardPath` via `analyze`).
                     RefResolution::Unresolved => {
@@ -1979,92 +1943,6 @@ pub(crate) fn guard_readarc_plan(
         }
     }
     Ok(binds)
-}
-
-/// One author-facing `<slug>.<field>` rewrite where the producer is a Loop
-/// (data lives on the control token, not a parked place). Parallel output of
-/// [`guard_readarc_plan`] returned by [`loop_alias_plan`] — the consumer
-/// (`apply_control_data_foundation`) applies these as a pure string-replace
-/// in the consumer transition's guard / logic source, with no extra input
-/// port and no read arc.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct LoopAliasRewrite {
-    /// Consumer node whose guard / logic / mapping expression contains the
-    /// reference. Applied to all transitions matching `t_<consumer>_*` —
-    /// same scope rule as [`ReadArcBind`].
-    pub consumer_node_id: String,
-    /// Exact substring written in source (e.g. `lp.iteration`). The replace
-    /// target.
-    pub referenced: String,
-    /// Canonical control-token path the engine actually evaluates
-    /// (e.g. `input.lp.iteration`).
-    pub rewrite_to: String,
-}
-
-/// Walk every guard / loop-condition / End-mapping expression and collect the
-/// loop-namespace rewrites — pure string substitutions that route author-
-/// facing `<slug>.<field>` to the canonical `input.<slug>.<field>` the engine
-/// reads. Parallel to [`guard_readarc_plan`]: that function emits read-arc
-/// binds for parked producers; this one emits alias rewrites for loops.
-pub(crate) fn loop_alias_plan(
-    graph: &WorkflowGraph,
-) -> Result<Vec<LoopAliasRewrite>, CompileError> {
-    let report = analyze(graph)?;
-    let wg = WorkflowDiGraph::build(graph)?;
-    let order = topo_order(&wg)?;
-    let pos = topo_pos(&order, &wg);
-    let slugs = slug_index(graph)?;
-    let mut rewrites = Vec::new();
-
-    for node in &graph.nodes {
-        let guards: Vec<String> = match &node.data {
-            WorkflowNodeData::Decision { conditions, .. } => conditions
-                .iter()
-                .filter(|c| !c.guard.trim().is_empty())
-                .map(|c| c.guard.clone())
-                .collect(),
-            WorkflowNodeData::Loop { loop_condition, .. }
-                if !loop_condition.trim().is_empty() =>
-            {
-                vec![loop_condition.clone()]
-            }
-            WorkflowNodeData::End { result_mapping, .. } => result_mapping
-                .iter()
-                .map(|m| m.expression.clone())
-                .filter(|s| !s.trim().is_empty())
-                .collect(),
-            WorkflowNodeData::Failure {
-                error_result_mapping,
-                ..
-            } => error_result_mapping
-                .iter()
-                .map(|m| m.expression.clone())
-                .filter(|s| !s.trim().is_empty())
-                .collect(),
-            _ => continue,
-        };
-        let in_shape = report.node_in.get(&node.id);
-        for guard in &guards {
-            for gref in guard_refs(guard) {
-                if let RefResolution::ControlAlias { rewrite_to } = resolve_ref(
-                    &gref,
-                    node,
-                    &slugs,
-                    graph,
-                    in_shape,
-                    &report.node_out,
-                    &pos,
-                ) {
-                    rewrites.push(LoopAliasRewrite {
-                        consumer_node_id: node.id.clone(),
-                        referenced: gref.referenced.clone(),
-                        rewrite_to,
-                    });
-                }
-            }
-        }
-    }
-    Ok(rewrites)
 }
 
 /// One Python AutomatedStep borrow into an upstream parked place.

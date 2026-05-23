@@ -1548,7 +1548,7 @@ fn lower_loop(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     //   - Loop's own continue/exit guards (pre-wired d_<slug> binding here).
     //   - Post-loop Rhai consumers (End mappings, Decision guards) via the
     //     standard `<slug>.<field>` borrow resolution (resolve_ref Qualified
-    //     branch returns Borrow for Loop now, not ControlAlias).
+    //     branch returns Borrow for Loop).
     //   - Body / post-loop Python AutomatedSteps via automated_step_borrow_plan
     //     (is_parked_producer recognizes Loop), which stages `<slug>.json`
     //     and promotes the namespace as a Python global.

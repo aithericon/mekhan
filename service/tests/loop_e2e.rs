@@ -129,10 +129,10 @@ fn loop_graph() -> Value {
                         "maxIterations": 3,
                         // Loop declares `iteration: number` as a producer field
                         // (see service/src/compiler/validate.rs::node_output_fields).
-                        // The compiler's `loop_alias_plan` rewrites the source-
-                        // level `lp.iteration` to the canonical control-token
-                        // path `input.lp.iteration` for the engine. No read-arc
-                        // is synthesized — Loop data lives on the control token.
+                        // The counter is parked in `p_lp_data` by `lower_loop`;
+                        // the standard read-arc synthesis pass rewrites
+                        // `lp.iteration` to `d_lp.iteration` on the loop's own
+                        // pre-wired continue/exit transitions.
                         "loopCondition": "lp.iteration < 3" } },
             // Loop body — a PhaseUpdate passthrough. `parent_id == "lp"`
             // satisfies the LoopEmpty check; the body_in/body_out handle
