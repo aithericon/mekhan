@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { YjsGraphBinding } from '$lib/yjs/graph-binding.svelte';
+	import type { ScopeEntry } from '$lib/editor/guard-scope';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import ImageIcon from '@lucide/svelte/icons/image';
 	import X from '@lucide/svelte/icons/x';
@@ -9,6 +10,7 @@
 
 	import { Input } from '$lib/components/ui/input';
 	import InterpolationHint from './InterpolationHint.svelte';
+	import InsertRefButton from '../InsertRefButton.svelte';
 
 	type DisplayMode = 'single' | 'grid' | 'gallery';
 
@@ -19,6 +21,7 @@
 		binding?: YjsGraphBinding;
 		nodeId?: string;
 		readonly?: boolean;
+		scope?: ScopeEntry[];
 		onchange: (filenames: string[], display: DisplayMode, url?: string) => void;
 		onremove: () => void;
 	};
@@ -30,6 +33,7 @@
 		binding,
 		nodeId,
 		readonly = false,
+		scope = [],
 		onchange,
 		onremove
 	}: Props = $props();
@@ -134,7 +138,15 @@
 			oninput={(e) => setUrl((e.currentTarget as HTMLInputElement).value)}
 			class="font-mono text-sm"
 		/>
-		<InterpolationHint example="invoice_file.url" />
+		{#if scope.length > 0}
+			<InsertRefButton
+				{scope}
+				disabled={readonly}
+				oninsert={(snippet) => setUrl(url ? `${url} ${snippet}` : snippet)}
+			/>
+		{:else}
+			<InterpolationHint example="invoice_file.url" />
+		{/if}
 		{#if url}
 			<p class="text-sm text-muted-foreground">
 				A dynamic source is set — it takes precedence over uploaded files when the task renders.

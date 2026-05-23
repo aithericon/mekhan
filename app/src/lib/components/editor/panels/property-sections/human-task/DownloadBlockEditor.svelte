@@ -1,25 +1,38 @@
 <script lang="ts">
 	import type { DownloadBlock } from '$lib/types/editor';
+	import type { ScopeEntry } from '$lib/editor/guard-scope';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import Plus from '@lucide/svelte/icons/plus';
 	import Download from '@lucide/svelte/icons/download';
 	import { Input } from '$lib/components/ui/input';
 	import InterpolationHint from './InterpolationHint.svelte';
+	import InsertRefButton from '../InsertRefButton.svelte';
 
 	type DownloadItem = DownloadBlock['downloads'][number];
 
 	type Props = {
 		downloads: DownloadItem[];
 		readonly?: boolean;
+		scope?: ScopeEntry[];
 		onchange: (downloads: DownloadItem[]) => void;
 		onremove: () => void;
 	};
 
-	let { downloads, readonly = false, onchange, onremove }: Props = $props();
+	let { downloads, readonly = false, scope = [], onchange, onremove }: Props = $props();
 
 	function updateItem(index: number, patch: Partial<DownloadItem>) {
 		const next = downloads.map((d, i) => (i === index ? { ...d, ...patch } : d));
 		onchange(next);
+	}
+
+	function appendField(
+		index: number,
+		key: 'url' | 'filename' | 'description',
+		snippet: string
+	) {
+		const curr = downloads[index]?.[key] ?? '';
+		const next = curr ? `${curr} ${snippet}` : snippet;
+		updateItem(index, { [key]: next } as Partial<DownloadItem>);
 	}
 
 	function addItem() {
@@ -79,24 +92,42 @@
 						</button>
 					{/if}
 				</div>
-				<Input
-					type="text"
-					value={item.url}
-					placeholder={'URL — e.g. {{ invoice_file.url }}'}
-					disabled={readonly}
-					oninput={(e) => updateItem(idx, { url: (e.currentTarget as HTMLInputElement).value })}
-					class="font-mono text-sm"
-				/>
-				<div class="grid grid-cols-2 gap-2">
+				<div class="space-y-1">
 					<Input
 						type="text"
-						value={item.filename}
-						placeholder={'Filename — e.g. {{ invoice_file.filename }}'}
+						value={item.url}
+						placeholder={'URL — e.g. {{ invoice_file.url }}'}
 						disabled={readonly}
-						oninput={(e) =>
-							updateItem(idx, { filename: (e.currentTarget as HTMLInputElement).value })}
+						oninput={(e) => updateItem(idx, { url: (e.currentTarget as HTMLInputElement).value })}
 						class="font-mono text-sm"
 					/>
+					{#if scope.length > 0}
+						<InsertRefButton
+							{scope}
+							disabled={readonly}
+							oninsert={(s) => appendField(idx, 'url', s)}
+						/>
+					{/if}
+				</div>
+				<div class="grid grid-cols-2 gap-2">
+					<div class="space-y-1">
+						<Input
+							type="text"
+							value={item.filename}
+							placeholder={'Filename — e.g. {{ invoice_file.filename }}'}
+							disabled={readonly}
+							oninput={(e) =>
+								updateItem(idx, { filename: (e.currentTarget as HTMLInputElement).value })}
+							class="font-mono text-sm"
+						/>
+						{#if scope.length > 0}
+							<InsertRefButton
+								{scope}
+								disabled={readonly}
+								oninsert={(s) => appendField(idx, 'filename', s)}
+							/>
+						{/if}
+					</div>
 					<Input
 						type="text"
 						value={item.mime_type ?? ''}
@@ -109,20 +140,31 @@
 						class="font-mono text-sm"
 					/>
 				</div>
-				<Input
-					type="text"
-					value={item.description ?? ''}
-					placeholder="Description (optional)"
-					disabled={readonly}
-					oninput={(e) =>
-						updateItem(idx, {
-							description: trimOrUndefined((e.currentTarget as HTMLInputElement).value)
-						})}
-				/>
+				<div class="space-y-1">
+					<Input
+						type="text"
+						value={item.description ?? ''}
+						placeholder="Description (optional)"
+						disabled={readonly}
+						oninput={(e) =>
+							updateItem(idx, {
+								description: trimOrUndefined((e.currentTarget as HTMLInputElement).value)
+							})}
+					/>
+					{#if scope.length > 0}
+						<InsertRefButton
+							{scope}
+							disabled={readonly}
+							oninsert={(s) => appendField(idx, 'description', s)}
+						/>
+					{/if}
+				</div>
 			</div>
 		{/each}
 
-		<InterpolationHint example="invoice_file.url" />
+		{#if scope.length === 0}
+			<InterpolationHint example="invoice_file.url" />
+		{/if}
 
 		{#if !readonly}
 			<button

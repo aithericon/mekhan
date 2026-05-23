@@ -137,6 +137,7 @@
 					{binding}
 					{nodeId}
 					{readonly}
+					{scope}
 					onchange={(filenames, display, url) =>
 						updateBlock(blockIdx, { ...block, type: 'image', filenames, display, url })}
 					onremove={() => removeBlock(blockIdx)}
@@ -160,6 +161,7 @@
 					{binding}
 					{nodeId}
 					{readonly}
+					{scope}
 					onchange={(filename, caption, height, url) =>
 						updateBlock(blockIdx, { ...block, type: 'pdf', filename, caption, height, url })}
 					onremove={() => removeBlock(blockIdx)}
@@ -168,6 +170,7 @@
 				<DownloadBlockEditor
 					downloads={block.downloads}
 					{readonly}
+					{scope}
 					onchange={(downloads) =>
 						updateBlock(blockIdx, { type: 'download', downloads })}
 					onremove={() => removeBlock(blockIdx)}
