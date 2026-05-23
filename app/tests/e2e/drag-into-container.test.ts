@@ -1,34 +1,5 @@
 import { test, expect, type Page, type Locator } from '@playwright/test';
-import { showcaseGraph } from '../../src/lib/templates/showcase';
-
-const DEMO_ID = 'demo-template-test';
-const DEMO_NAME = 'Invoice Processing Demo';
-const APP_URL = process.env.PLAYWRIGHT_BASE_URL ?? 'http://localhost:5173';
-
-async function gotoDemoEditor(page: Page) {
-	await page.route('**/api/templates/' + DEMO_ID, async (route) => {
-		if (route.request().method() === 'GET') {
-			await route.fulfill({
-				status: 200,
-				contentType: 'application/json',
-				body: JSON.stringify({
-					id: DEMO_ID,
-					name: DEMO_NAME,
-					description: 'Showcase workflow',
-					graph: showcaseGraph,
-					version: 1,
-					published: false,
-					author_id: '00000000-0000-0000-0000-000000000000',
-					created_at: new Date().toISOString(),
-					updated_at: new Date().toISOString()
-				})
-			});
-		} else {
-			await route.continue();
-		}
-	});
-	await page.goto(`${APP_URL}/templates/${DEMO_ID}`);
-}
+import { gotoDemoEditor } from './helpers/demo';
 
 /**
  * Smoke test for the drag-into-container UX (Scope + Loop).

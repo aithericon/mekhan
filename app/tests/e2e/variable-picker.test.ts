@@ -9,12 +9,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import { gotoDemoEditor } from './helpers/demo';
 
-// Allow overriding the base URL when running against the live dev server
-// (`pnpm dev` on 5173) instead of the preview port baked into the config.
-if (process.env.PLAYWRIGHT_BASE_URL) {
-	test.use({ baseURL: process.env.PLAYWRIGHT_BASE_URL });
-}
-
 /**
  * Synthetic /api/analyze response: enough scope for both the showcase's
  * `check-amount` Decision node and any newly-dropped node id. The picker

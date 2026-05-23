@@ -16,8 +16,7 @@ export function createYjsSession(templateId: string): YjsSession {
 	// host (a reverse proxy will handle the WS upgrade).
 	let wsUrl: string;
 	if (typeof window !== 'undefined') {
-		const isDev = window.location.port === '5180' || import.meta.env.DEV;
-		if (isDev) {
+		if (import.meta.env.DEV) {
 			wsUrl = `ws://${window.location.hostname}:3100/api/yjs`;
 		} else {
 			const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
