@@ -210,6 +210,32 @@ async fn main() -> anyhow::Result<()> {
         result_waiters,
     };
 
+    // Seed built-in demos before the listener accepts requests. Idempotent
+    // by stable template id (see `mekhan_service::demos`); best-effort —
+    // a failure to seed logs a warning and is otherwise transparent. Gated
+    // by `demos.seed` so production deployments must opt in.
+    if config.demos.seed {
+        let demos_dir = std::path::PathBuf::from(&config.demos.dir);
+        match mekhan_service::demos::seed_all(&state, &demos_dir).await {
+            Ok(outcomes) => {
+                let seeded = outcomes
+                    .iter()
+                    .filter(|(_, o)| matches!(o, mekhan_service::demos::SeedOutcome::Seeded))
+                    .count();
+                let already = outcomes.len() - seeded;
+                tracing::info!(
+                    demos_dir = %demos_dir.display(),
+                    seeded,
+                    already_present = already,
+                    "demo seeder finished"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "demo seeder failed — proceeding without demos");
+            }
+        }
+    }
+
     let app = build_router(state);
 
     let addr: SocketAddr = format!("{}:{}", config.host, config.port).parse()?;

@@ -721,6 +721,8 @@ up-mekhan auth_mode="dev_noop":
       MEKHAN__S3__ENDPOINT="{{s3_endpoint}}" \
       MEKHAN__S3__ACCESS_KEY="rustfsadmin" \
       MEKHAN__S3__SECRET_KEY="rustfsadmin" \
+      MEKHAN__DEMOS__SEED="true" \
+      MEKHAN__DEMOS__DIR="$PWD/demos" \
       ${mode_assign:+"$mode_assign"} \
       "$PWD/target/debug/mekhan-service" \
       > "{{log_dir}}/mekhan.log" 2>&1 &

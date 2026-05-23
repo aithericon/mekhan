@@ -9,11 +9,16 @@
 //!   nodes/<id>/<file>    # per-node text source (e.g. main.py)
 //! ```
 //!
-//! This module provides only the *reading* half — turn a directory on disk
-//! into the `(metadata, graph, files)` triple a caller can hand to the
-//! `/api/templates/.../apply` path. Seeding (calling apply on startup) is
-//! a separate concern handled at the binary level; tests use the same
-//! reader to load the literal demo a frontend would otherwise render.
+//! Two halves:
+//! - **Reader** ([`load_demo`], [`list_demo_dirs`]): turn a directory on
+//!   disk into the `(metadata, graph, files)` triple a caller can hand
+//!   to the `/api/templates/.../apply` path. Used by tests.
+//! - **Seeder** ([`seed_all`]): hand the loaded demos through the
+//!   identical compile → upload → publish pipeline the `apply` handler
+//!   uses, but bypass HTTP auth so the seeder can run at service startup
+//!   before any user request. Idempotent by stable template id: if a row
+//!   for the demo's id already exists, the seeder leaves it alone (user
+//!   may have edited it).
 //!
 //! Mirrors the on-disk layout `cli::fs_ops` writes for the GitOps `pull`
 //! flow — same format, distinct module because the CLI binary can't be
@@ -237,6 +242,196 @@ pub fn list_demo_dirs(root: &Path) -> Result<Vec<PathBuf>, DemoLoadError> {
     }
     out.sort();
     Ok(out)
+}
+
+// ── Seeder ──────────────────────────────────────────────────────────────────
+
+/// Errors the startup seeder can surface to the caller. Each variant carries
+/// enough context to log a single actionable line — the seeder is
+/// best-effort by design (a failure to seed the demo must not prevent the
+/// service from starting) so the binary logs and continues.
+#[derive(Debug, Error)]
+pub enum DemoSeedError {
+    #[error("load demo failed: {0}")]
+    Load(#[from] DemoLoadError),
+    #[error("metadata templateId `{0}` is not a valid UUID")]
+    InvalidTemplateId(String),
+    #[error("db error: {0}")]
+    Db(#[from] sqlx::Error),
+    #[error("compile failed: {0}")]
+    Compile(String),
+    #[error("s3 upload failed: {0}")]
+    Upload(String),
+    #[error("yjs init failed: {0}")]
+    Yjs(String),
+}
+
+/// One-shot outcome of seeding a single demo. The seeder logs and
+/// continues; the binary calls this in a loop and totals the actions.
+#[derive(Debug, Clone, Copy)]
+pub enum SeedOutcome {
+    /// Template already existed (matched by stable id). Left untouched —
+    /// the user may have edited it through the web editor.
+    AlreadyPresent,
+    /// Row + AIR + S3 files + Y.Doc + triggers freshly created.
+    Seeded,
+}
+
+/// Synthetic actor id used for the `author_id` column on seeded templates.
+/// Same value across all environments so a `SELECT * WHERE author_id = X`
+/// reliably distinguishes seeded demos from user-authored content.
+///
+/// `00000000-0000-0000-0000-000000000aaa` — chosen to be obviously
+/// non-Zitadel (real user subjects are random v4 UUIDs) and to sort
+/// distinctly from the nil UUID some test fixtures use.
+const DEMO_SEEDER_AUTHOR_ID: uuid::Uuid =
+    uuid::uuid!("00000000-0000-0000-0000-000000000aaa");
+
+/// Seed every demo under `root` into the running service. Idempotent:
+/// each demo's `.mekhan.json::templateId` is the stable identifier — if
+/// a row with that id already exists, the seeder leaves it (logging
+/// "already present") regardless of content drift.
+///
+/// Logs and continues on per-demo failure; only a totally missing `root`
+/// or a non-recoverable DB / S3 error surfaces. The caller (service main)
+/// treats the return value as advisory: the demo not being seeded must
+/// not prevent the service from accepting requests.
+pub async fn seed_all(
+    state: &crate::AppState,
+    root: &Path,
+) -> Result<Vec<(String, SeedOutcome)>, DemoSeedError> {
+    let mut results = Vec::new();
+    let dirs = list_demo_dirs(root)?;
+    if dirs.is_empty() {
+        tracing::info!(root = %root.display(), "no demos found");
+        return Ok(results);
+    }
+    for dir in dirs {
+        let name = dir
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| dir.display().to_string());
+        match seed_one(state, &dir).await {
+            Ok(outcome) => {
+                match outcome {
+                    SeedOutcome::AlreadyPresent => tracing::info!(
+                        demo = %name,
+                        "demo already present — leaving as-is"
+                    ),
+                    SeedOutcome::Seeded => tracing::info!(
+                        demo = %name,
+                        "demo seeded"
+                    ),
+                }
+                results.push((name, outcome));
+            }
+            Err(e) => {
+                // Best-effort: log and continue with the next demo. The
+                // failure mode is "demo button on the frontend won't
+                // work for this one" — not "service can't start".
+                tracing::warn!(demo = %name, error = %e, "demo seed failed");
+            }
+        }
+    }
+    Ok(results)
+}
+
+/// Seed one demo directory. Idempotent — see [`seed_all`] for the
+/// existence check semantics.
+pub async fn seed_one(
+    state: &crate::AppState,
+    dir: &Path,
+) -> Result<SeedOutcome, DemoSeedError> {
+    let demo = load_demo(dir)?;
+    let template_id: uuid::Uuid = demo
+        .metadata
+        .template_id
+        .parse()
+        .map_err(|_| DemoSeedError::InvalidTemplateId(demo.metadata.template_id.clone()))?;
+
+    // Idempotency: the stable id is the contract with the rest of the
+    // platform (frontend lookup, e2e tests, hand-edited copies). If a
+    // row already exists under it — whether seeded last boot or
+    // hand-edited since — the seeder must not clobber it.
+    let exists: Option<(uuid::Uuid,)> =
+        sqlx::query_as("SELECT id FROM workflow_templates WHERE id = $1")
+            .bind(template_id)
+            .fetch_optional(&state.db)
+            .await?;
+    if exists.is_some() {
+        return Ok(SeedOutcome::AlreadyPresent);
+    }
+
+    // From here on, this mirrors `apply_template`'s seed-mode path:
+    // compile → upload → INSERT born-published row → init Y.Doc →
+    // register triggers live. Each step is logged on failure but no
+    // partial state is persisted before commit (S3 orphans are inert).
+    let mut files = demo.files.clone();
+    let publisher = crate::process::publish::PublishService::new(state);
+    let crate::process::publish::CompiledArtifacts {
+        air_json,
+        graph_json,
+    } = publisher
+        .compile_artifacts(
+            &demo.graph,
+            &demo.metadata.name,
+            demo.metadata.description.as_deref().unwrap_or(""),
+            template_id,
+            1,
+            Some(template_id),
+            &mut files,
+        )
+        .await
+        .map_err(|e| DemoSeedError::Compile(format!("{e:?}")))?;
+
+    publisher
+        .upload_files(template_id, 1, &files)
+        .await
+        .map_err(DemoSeedError::Upload)?;
+
+    // INSERT born-published, version 1, latest. Schema matches the row
+    // `apply_template`'s seed-mode finalize produces, just done as a
+    // single INSERT since no draft predecessor exists.
+    let row: crate::models::template::WorkflowTemplate = sqlx::query_as(
+        r#"
+        INSERT INTO workflow_templates
+            (id, name, description, base_template_id, version,
+             is_latest, published, published_at, graph, air_json, author_id)
+        VALUES ($1, $2, $3, $1, 1, TRUE, TRUE, NOW(), $4, $5, $6)
+        RETURNING *
+        "#,
+    )
+    .bind(template_id)
+    .bind(&demo.metadata.name)
+    .bind(demo.metadata.description.as_deref().unwrap_or(""))
+    .bind(&graph_json)
+    .bind(&air_json)
+    .bind(DEMO_SEEDER_AUTHOR_ID)
+    .fetch_one(&state.db)
+    .await?;
+
+    // Initialize Y.Doc so the web editor sees the same graph + files the
+    // executor will run. Non-fatal on failure (the executor reads AIR
+    // from S3, not the Y.Doc) but a missing Y.Doc means the editor opens
+    // an empty workspace.
+    if let Err(e) = state
+        .yjs
+        .persistence
+        .init_doc_from_graph_with_files(template_id, &demo.graph, &files)
+        .await
+    {
+        tracing::warn!(template_id = %template_id, error = %e, "y.doc init failed for seeded demo");
+    }
+
+    // Make the demo's triggers live in the in-memory dispatcher
+    // immediately. Otherwise `hydrate()`-only behavior would skip them
+    // until the next service restart.
+    let n = publisher.register_triggers(&row).await;
+    if n > 0 {
+        tracing::info!(template_id = %template_id, triggers = n, "demo triggers registered live");
+    }
+
+    Ok(SeedOutcome::Seeded)
 }
 
 #[cfg(test)]
