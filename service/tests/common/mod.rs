@@ -91,6 +91,9 @@ pub fn test_config() -> AppConfig {
         artifact_s3: None,
         frontend_dir: None,
         auth: AuthConfig::default(),
+        // Tests publish demos explicitly through the API; the startup
+        // seeder is off so each test owns its template ids.
+        demos: mekhan_service::config::DemosConfig::default(),
     }
 }
 
