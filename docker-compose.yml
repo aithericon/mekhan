@@ -40,6 +40,11 @@ services:
     environment:
       RUSTFS_ROOT_USER: rustfsadmin
       RUSTFS_ROOT_PASSWORD: rustfsadmin
+      # `rustfs:latest` (>= 2026-05) refuses to start on non-loopback
+      # listeners with the default credentials. This is a local dev stack
+      # behind the docker bridge — allow the default rather than churning
+      # creds across mekhan + executor configs.
+      RUSTFS_ALLOW_INSECURE_DEFAULT_CREDENTIALS: "true"
     volumes:
       - mekhan-rustfs-data:/data
       - mekhan-rustfs-logs:/logs
