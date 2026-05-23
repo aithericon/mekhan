@@ -461,31 +461,44 @@ export const showcaseGraph: WorkflowGraph = {
  * Y.Doc at template creation so the demo lands publishable without the user
  * having to open the IDE and type a script first.
  *
- * These use the Aithericon Python SDK the way the runner intends: the runner
- * (executor PythonBackend) auto-imports the SDK, calls `aithericon.init()`
- * before the user code and `aithericon.shutdown()` after, and injects
- * `inputs`, `set_output`, and `log_*` into scope. Step code therefore just
- * calls those helpers directly — it must NOT re-run init / ExecutionContext,
- * which would double the IPC lifecycle. The upstream token is the staged
- * `input.json` (the compiler's prepare-transition snapshot); each emitted
- * `set_output(name, value)` becomes a field on the node's declared output
- * port.
+ * These exercise the Python runner the way it's intended to be used:
+ *   1. Upstream data is read as `<slug>.<field>` (e.g. `review.invoice_amount`,
+ *      `extract.amount`). The compiler scans the source, synthesizes a
+ *      read-arc against the named producer's parked place, and stages its
+ *      envelope as `<slug>.json` — with the business fields hoisted to the
+ *      top level (HumanTask form fields out of `.data`, AutomatedStep
+ *      outputs out of `.detail.outputs`) so what the user typed matches
+ *      what the picker offered. The runner promotes each staged slug to a
+ *      Python global (an AccessibleDict) — no imports, no `token["field"]`,
+ *      no SDK call to fetch borrowed data.
+ *   2. SDK helpers (`set_output`, `log_info`/`warn`/`error`/`debug`,
+ *      `update_progress`, `define_phases`/`update_phase`, `log_metric`,
+ *      `log_artifact`) are injected by the runner. User code calls them
+ *      directly — do NOT call `aithericon.init()` / `shutdown()`, the
+ *      runner already owns the IPC lifecycle.
+ *   3. Each `set_output(name, value)` writes one field of the node's
+ *      declared output port; downstream borrows are typed against that
+ *      port's shape.
  */
 const showcaseFiles: Record<string, Record<string, string>> = {
 	extract: {
 		'main.py': `# Extract Data — OCR + NLP extraction (Aithericon Python backend).
 #
-# The SDK runner injects these into scope (no import / init / shutdown):
-#   set_output, log_info/log_warn/log_error/log_debug, log_metric,
-#   define_phases, update_phase, update_progress.
-# 'define_phases' declares the process layout the user watches live; each
-# 'update_phase' / 'update_progress' / 'log_*' call streams to the process
-# view via the executor → causality → hpi_logs/hpi_metrics pipeline.
+# Upstream borrows are plain Python globals — one per producer slug. The
+# compiler scans every <slug>.<field> access in this file, synthesizes the
+# read-arc, and stages the producer's parked envelope as <slug>.json. The
+# runner promotes each staged file to a global, so 'review' below is the
+# upstream HumanTask's full form token — no aithericon import, no
+# token["field"], no SDK call to fetch it.
 #
-# Upstream data is available as plain Python globals — one per slug. The
-# compiler detects every <slug>.<field> access here and stages the
-# producer's parked data alongside the job, so 'review' below is the
-# upstream HumanTask's full form token. No imports, no token[...].
+# Runner-injected SDK helpers (also no import needed):
+#   set_output(name, value)               — emit one field of the output port
+#   log_info / log_warn / log_error / log_debug(msg, **fields)
+#   log_metric(name, value), log_artifact(path, name=...)
+#   define_phases([...]), update_phase(name, status)
+#   update_progress(fraction, message=...)
+# Live phases/progress/logs/metrics stream through the executor →
+# causality → hpi_logs/hpi_metrics pipeline and surface in the process view.
 import time
 
 vendor = review.vendor_name or ""
@@ -495,8 +508,8 @@ amount = review.invoice_amount or 0
 define_phases(["Load document", "OCR scan", "NLP extraction", "Validate", "Emit"])
 
 update_phase("Load document", "running")
-log_info("loading invoice token", vendor=vendor, amount=amount)
-update_progress(0.05, "Reading workflow token")
+log_info("loading invoice", vendor=vendor, amount=amount)
+update_progress(0.05, "Reading upstream invoice fields")
 time.sleep(0.4)  # demo pacing so the live phase/progress stream is visible
 update_phase("Load document", "completed")
 
@@ -536,31 +549,28 @@ update_phase("Emit", "completed")
 	compliance: {
 		'main.py': `# Compliance Check — sanctions & fraud screening (Python backend).
 #
-# Same injected SDK handler as Extract: define_phases declares the process
-# layout the user sees; update_phase/update_progress/log_*/log_metric stream
-# live to the process view. 'token' is the accumulated workflow token; its
-# per-node field types come from the generated _aithericon_io.pyi (upstream
-# form + Extract output).
+# Same runner-injected SDK as Extract. Each upstream producer is a Python
+# global — 'extract' (the OCR step) and 'review' (the HumanTask) — typed
+# in the editor via the generated _aithericon_io.pyi overlay. The compiler
+# stages each referenced producer's envelope as <slug>.json with the
+# business fields hoisted to the top level (HumanTask form fields out of
+# .data, AutomatedStep output fields out of .detail.outputs) so attribute
+# reads just work; missing fields read as None.
 import time
 
-# Each upstream slug is a Python global. The compiler stages exactly the
-# producers referenced here ('extract.amount', 'review.invoice_amount')
-# as <slug>.json so this just works — no imports, no token[...]. A
-# missing attribute is None at runtime; the .pyi types it Optional[T].
-amount = (
-    extract.amount
-    if getattr(extract, "amount", None) is not None
-    else (review.invoice_amount or 0)
-)
+# 'extract.amount' is guaranteed present here (we're inside the high-value
+# branch, downstream of the Extract step), but kept defensively in case
+# OCR ever emits a null amount.
+amount = extract.amount if extract.amount is not None else (review.invoice_amount or 0)
 
 # Process layout / definition surfaced to the user for this step.
-define_phases(["Load token", "Sanctions screening", "Fraud scoring", "Decision"])
+define_phases(["Read context", "Sanctions screening", "Fraud scoring", "Decision"])
 
-update_phase("Load token", "running")
+update_phase("Read context", "running")
 log_info("starting compliance screening", amount=amount)
-update_progress(0.1, "Loading accumulated token")
+update_progress(0.1, "Reading upstream context")
 time.sleep(0.3)  # demo pacing so the live phase/progress stream is visible
-update_phase("Load token", "completed")
+update_phase("Read context", "completed")
 
 update_phase("Sanctions screening", "running")
 log_info("checking vendor against sanctions / watch lists")

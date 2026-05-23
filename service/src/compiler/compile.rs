@@ -552,9 +552,65 @@ fn apply_control_data_foundation(
                         read: true,
                     });
                 }
+
+                // Hoist business fields from their nested envelope path up to
+                // the top level so the Python runner's `<slug>.<field>` direct
+                // access matches what the picker / `_aithericon_io.pyi` show.
+                // The shape model surfaces e.g. `review.invoice_amount` to the
+                // user even though the parked envelope nests it under `data`
+                // (HumanTask) or `detail.outputs` (AutomatedStep) — Rhai
+                // guards close that gap via `producer_path` rewriting; Python
+                // source isn't rewritten, so the staged envelope must be the
+                // flat form. Spread is "envelope first, business overlay
+                // second", so business fields win on any collision with
+                // envelope meta (e.g. a form field literally named
+                // `task_id`).
+                let producer = graph.nodes.iter().find(|n| n.id == b.producer_node);
+                let hoist_path: &[&str] = match producer.map(|n| &n.data) {
+                    Some(WorkflowNodeData::HumanTask { .. }) => &["data"],
+                    Some(WorkflowNodeData::AutomatedStep { .. }) => &["detail", "outputs"],
+                    _ => &[],
+                };
+                let value_expr = if hoist_path.is_empty() {
+                    var.clone()
+                } else {
+                    let flat = format!("__flat_{}", b.producer_node.replace('-', "_"));
+                    // Build `__flat_x` by copying the envelope (sans the hoist
+                    // segment at the top) then overlaying the nested business
+                    // map. We narrow `__h` segment-by-segment with `type_of` /
+                    // `()`-guard so a missing intermediate key yields an
+                    // empty overlay rather than a Rhai hard error.
+                    pushes.push_str(&format!(
+                        "let {flat} = #{{}}; \
+                         for __k in {var}.keys() {{ \
+                             if __k != \"{top}\" {{ {flat}[__k] = {var}[__k]; }} \
+                         }} \
+                         let __h_{pid} = {var}; ",
+                        flat = flat,
+                        var = var,
+                        top = hoist_path[0],
+                        pid = b.producer_node.replace('-', "_"),
+                    ));
+                    for seg in hoist_path {
+                        pushes.push_str(&format!(
+                            "__h_{pid} = if type_of(__h_{pid}) == \"map\" {{ __h_{pid}[\"{seg}\"] }} else {{ () }}; ",
+                            pid = b.producer_node.replace('-', "_"),
+                            seg = seg,
+                        ));
+                    }
+                    pushes.push_str(&format!(
+                        "if type_of(__h_{pid}) == \"map\" {{ \
+                             for __k in __h_{pid}.keys() {{ {flat}[__k] = __h_{pid}[__k]; }} \
+                         }} ",
+                        pid = b.producer_node.replace('-', "_"),
+                        flat = flat,
+                    ));
+                    flat
+                };
+
                 pushes.push_str(&format!(
                     r#"job_inputs.push(#{{ "name": "{}.json", "source": #{{ "type": "inline", "value": {} }} }}); "#,
-                    b.slug, var
+                    b.slug, value_expr
                 ));
             }
             if let TransitionLogic::Rhai { source } = &t.logic {
@@ -1533,6 +1589,204 @@ mod tests {
                 .any(|a| a.place == "p_review_data" && a.read),
             "read-arc into p_review_data missing; got: {:?}",
             prepare.inputs
+        );
+
+        // (2) For HumanTask producers the staged value must be the
+        //     `data`-hoisted form: `__flat_<producer>` is built and what's
+        //     passed to `job_inputs.push`. The bare `d_review` envelope (with
+        //     `data.invoice_amount` nested) would defeat direct slug access in
+        //     Python — the picker promises `review.invoice_amount`, not
+        //     `review.data.invoice_amount`, so the runtime envelope must match.
+        match &prepare.logic {
+            aithericon_sdk::scenario::TransitionLogic::Rhai { source } => {
+                assert!(
+                    source.contains("__flat_review"),
+                    "HumanTask producer must be staged via __flat_<producer>; source: {source}"
+                );
+                assert!(
+                    source.contains("__h_review = d_review")
+                        && source.contains(r#"__h_review["data"]"#),
+                    "hoist must descend from d_review into its `data` segment; source: {source}"
+                );
+                assert!(
+                    source.contains(r#""value": __flat_review"#),
+                    "job_inputs.push must reference __flat_review, not d_review; source: {source}"
+                );
+                assert!(
+                    !source.contains(r#""value": d_review"#),
+                    "job_inputs.push must NOT stage the bare d_review envelope; source: {source}"
+                );
+            }
+            other => panic!("expected Rhai logic, got {other:?}"),
+        }
+    }
+
+    /// Execute the rewritten prepare Rhai with a *production-shaped*
+    /// HumanTask envelope (form fields nested under `.data`) and prove the
+    /// resulting `job_inputs[1].source.value` is the *flat* dict the Python
+    /// runner expects — every form field at the top level, envelope-meta
+    /// keys preserved, form fields winning on name collision. This is the
+    /// integration test the runner-template unit tests can't be: those use
+    /// synthetic flat envelopes and so cannot catch this end-to-end gap.
+    #[test]
+    fn human_task_borrow_stages_flat_envelope_at_runtime() {
+        use aithericon_executor_domain::InputSource;
+        use serde_json::json;
+        use std::collections::HashMap;
+
+        // Reuse the same minimal graph as the wiring test. The Python
+        // source's `review.invoice_amount` access drives the borrow.
+        let graph_json = json!({
+          "nodes": [
+            {"id":"start","type":"start","position":{"x":0,"y":0},
+             "data":{"type":"start","label":"Start"}},
+            {"id":"review","type":"human_task","slug":"review",
+             "position":{"x":0,"y":0},
+             "data":{"type":"human_task","label":"Review","taskTitle":"Review",
+                     "steps":[{"id":"s","title":"S","blocks":[
+                       {"type":"input","field":{"name":"vendor_name","label":"V","kind":"text","required":true}},
+                       {"type":"input","field":{"name":"invoice_amount","label":"A","kind":"number","required":true}}
+                     ]}]}},
+            {"id":"extract","type":"automated_step","slug":"extract",
+             "position":{"x":0,"y":0},
+             "data":{"type":"automated_step","label":"Extract",
+                     "executionSpec":{"backendType":"python","entrypoint":"main.py","config":{"entrypoint":"main.py","python":"python3","sdk":true}},
+                     "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
+                     "deploymentModel":{"mode":"inline"}}},
+            {"id":"end","type":"end","position":{"x":0,"y":0},
+             "data":{"type":"end","label":"End"}}
+          ],
+          "edges":[
+            {"id":"e1","source":"start","target":"review","targetHandle":"in","type":"sequence"},
+            {"id":"e2","source":"review","target":"extract","targetHandle":"in","type":"sequence"},
+            {"id":"e3","source":"extract","target":"end","targetHandle":"in","type":"sequence"}
+          ]
+        });
+        let graph: WorkflowGraph = serde_json::from_value(graph_json).unwrap();
+
+        let mut step_files = HashMap::new();
+        step_files.insert(
+            "main.py".to_string(),
+            InputSource::Raw {
+                content: "v = review.vendor_name\na = review.invoice_amount\n".to_string(),
+            },
+        );
+        let mut files: HashMap<String, HashMap<String, InputSource>> = HashMap::new();
+        files.insert("extract".to_string(), step_files);
+
+        let scenario = crate::compiler::compile_to_scenario(
+            &graph,
+            "borrow-runtime",
+            "test",
+            &files,
+            &crate::compiler::SubWorkflowAir::new(),
+        )
+        .expect("compile");
+
+        let prepare = scenario
+            .transitions
+            .iter()
+            .find(|t| t.id == "extract/prepare")
+            .expect("prepare transition");
+        let source = match &prepare.logic {
+            aithericon_sdk::scenario::TransitionLogic::Rhai { source } => source.clone(),
+            _ => panic!("expected Rhai logic"),
+        };
+
+        // Build a synthetic prepare-time scope: `input` is the slim control
+        // token (what `let d = input;` reads in the real prepare), `d_review`
+        // is the production-shaped HumanTask parked envelope — form fields
+        // nested under `.data`, envelope meta (`status`, `task_id`, ...) at
+        // the top level. This is the exact shape `t_review_yield`'s
+        // `YIELD_LOGIC` parks (per `lower_human_task` + the engine's
+        // `HumanTaskCompletion` injection).
+        let mut engine = rhai::Engine::new();
+        engine.set_max_expr_depths(256, 256);
+        let mut scope = rhai::Scope::new();
+        scope.push("input", rhai::Map::new());
+        let d_review_json = json!({
+            "task_id": "T-1",
+            "status": "completed",
+            "completed_at": "2026-05-23T00:00:00Z",
+            "data": {
+                "vendor_name": "ACME",
+                "invoice_amount": 1234.5
+            }
+        });
+        let d_review: rhai::Dynamic = engine
+            .parse_json(&d_review_json.to_string(), true)
+            .expect("d_review parse")
+            .into();
+        scope.push_dynamic("d_review", d_review);
+
+        let result: rhai::Map = engine
+            .eval_with_scope(&mut scope, &source)
+            .expect("prepare Rhai must execute under the synthetic scope");
+
+        // The prepare returns `#{ job: d }`. Find the staged `review.json`
+        // and assert its `value` is the flat form.
+        let job = result
+            .get("job")
+            .and_then(|v| v.clone().try_cast::<rhai::Map>())
+            .expect("prepare must return #{ job: <map> }");
+        let inputs = job
+            .get("spec")
+            .and_then(|v| v.clone().try_cast::<rhai::Map>())
+            .and_then(|m| m.get("inputs").cloned())
+            .and_then(|v| v.try_cast::<rhai::Array>())
+            .expect("spec.inputs array");
+
+        let review_entry = inputs
+            .iter()
+            .filter_map(|v| v.clone().try_cast::<rhai::Map>())
+            .find(|m| {
+                m.get("name")
+                    .and_then(|v| v.clone().try_cast::<String>())
+                    .as_deref()
+                    == Some("review.json")
+            })
+            .expect("review.json must be staged");
+        let staged_value: rhai::Map = review_entry
+            .get("source")
+            .and_then(|v| v.clone().try_cast::<rhai::Map>())
+            .and_then(|m| m.get("value").cloned())
+            .and_then(|v| v.try_cast::<rhai::Map>())
+            .expect("review.json source.value must be a map");
+
+        // Form fields hoisted to top level — the direct-slug-access promise.
+        assert_eq!(
+            staged_value
+                .get("vendor_name")
+                .and_then(|v| v.clone().try_cast::<String>())
+                .as_deref(),
+            Some("ACME"),
+            "form field vendor_name must be at top level; got staged: {staged_value:?}"
+        );
+        assert_eq!(
+            staged_value
+                .get("invoice_amount")
+                .and_then(|v| v.clone().try_cast::<f64>()),
+            Some(1234.5),
+            "form field invoice_amount must be at top level; got staged: {staged_value:?}"
+        );
+
+        // Envelope meta preserved (so `review.task_id` / `review.completed_at`
+        // still work in Python source if anyone ever wants them).
+        assert_eq!(
+            staged_value
+                .get("task_id")
+                .and_then(|v| v.clone().try_cast::<String>())
+                .as_deref(),
+            Some("T-1"),
+            "envelope task_id must remain; got staged: {staged_value:?}"
+        );
+
+        // Nested `.data` is GONE from the staged shape — leaving it as a
+        // sibling would let stale `review.data.invoice_amount` keep working
+        // alongside the canonical `review.invoice_amount`, drifting the two.
+        assert!(
+            !staged_value.contains_key("data"),
+            "nested `data` must be removed after hoisting; got staged: {staged_value:?}"
         );
     }
 
