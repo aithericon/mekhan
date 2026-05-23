@@ -162,7 +162,6 @@
 		{binding}
 		{nodeId}
 		{templateId}
-		{scope}
 	/>
 {:else if data.executionSpec.backendType === 'docker'}
 	<DockerConfigPanel config={data.executionSpec.config as Record<string, unknown>} {readonly} onchange={handleConfigChange} />

@@ -20,6 +20,7 @@
 	import FailureNodeSection from './property-sections/FailureNodeSection.svelte';
 	import EndNodeSection from './property-sections/EndNodeSection.svelte';
 	import SubWorkflowSection from './property-sections/SubWorkflowSection.svelte';
+	import InScopeRefsSection from './property-sections/InScopeRefsSection.svelte';
 	import { fetchNodeScopes, type ScopeEntry } from '$lib/editor/guard-scope';
 	import { outputPortsFor } from '$lib/editor/derived-ports';
 	import { Button } from '$lib/components/ui/button';
@@ -95,10 +96,12 @@
 		if (binding && nodeId) binding.updateNodeSlug(nodeId, value);
 	}
 
-	// In-scope identifiers at the selected node for the Decision/Loop guard
-	// pickers. Single source of truth: the backend shape-aware analyzer
-	// (`POST /api/analyze`). Debounced so a burst of graph edits collapses to
-	// one round-trip; best-effort (stale/empty on failure — never throws).
+	// In-scope identifiers at the selected node, used by the universal
+	// Inputs-in-scope picker as well as every nested section that embeds a
+	// RefPicker (Decision, Loop, AutomatedStep, HumanTask). Single source of
+	// truth: the backend shape-aware analyzer (`POST /api/analyze`).
+	// Debounced so a burst of graph edits collapses to one round-trip;
+	// best-effort (stale/empty on failure — never throws).
 	let scope = $state<ScopeEntry[]>([]);
 	$effect(() => {
 		const g = binding?.graph;
@@ -117,6 +120,28 @@
 			clearTimeout(timer);
 		};
 	});
+
+	// Mirror the IDE rail: scope visibility is universal for any node type
+	// whose authoring depends on what data reaches it. Trigger/Parallel*/
+	// Scope/End either produce input or have no per-step refs to insert.
+	const SCOPE_BEARING_TYPES = new Set([
+		'start',
+		'human_task',
+		'automated_step',
+		'decision',
+		'loop',
+		'phase_update',
+		'progress_update',
+		'failure',
+		'sub_workflow'
+	]);
+	const showScopePicker = $derived(SCOPE_BEARING_TYPES.has(data.type));
+
+	// Unmerged fan-in: pure graph topology, computed live so the warning
+	// inside the scope panel reflects the current edges.
+	const incomingCount = $derived(
+		binding && nodeId ? binding.graph.edges.filter((e) => e.target === nodeId).length : 0
+	);
 </script>
 
 <div
@@ -201,6 +226,14 @@
 					</p>
 				{/if}
 			</FormField>
+		{/if}
+
+		<!-- Inputs in scope — universal picker. Canvas omits the manual
+		     refresh affordance because the $effect above already debounce-
+		     refetches on every graph edit. No `oninsertref` here either:
+		     canvas rail has no code editor to target. -->
+		{#if showScopePicker}
+			<InScopeRefsSection {scope} {incomingCount} />
 		{/if}
 
 		<!-- Type-specific sections -->

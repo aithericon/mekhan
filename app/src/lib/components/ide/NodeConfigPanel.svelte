@@ -6,7 +6,7 @@
 	import AutomatedStepSection from '$lib/components/editor/panels/property-sections/AutomatedStepSection.svelte';
 	import DecisionNodeSection from '$lib/components/editor/panels/property-sections/DecisionNodeSection.svelte';
 	import LoopNodeSection from '$lib/components/editor/panels/property-sections/LoopNodeSection.svelte';
-	import StepReferencePanel from '$lib/components/ide/StepReferencePanel.svelte';
+	import InScopeRefsSection from '$lib/components/editor/panels/property-sections/InScopeRefsSection.svelte';
 	import type { ScopeEntry } from '$lib/editor/guard-scope';
 
 	type Props = {
@@ -14,13 +14,13 @@
 		nodeId: string;
 		readonly?: boolean;
 		/** This node's in-scope refs (from `/api/analyze`). Drives the
-		 *  reference panel for Python steps and every nested section that
-		 *  embeds a RefPicker (Decision, Loop, AutomatedStep, HumanTask). */
+		 *  Inputs-in-scope picker and every nested section that embeds a
+		 *  RefPicker (Decision, Loop, AutomatedStep, HumanTask). */
 		scope?: ScopeEntry[];
 		scopeBusy?: boolean;
 		onRefreshScope?: () => void;
 		/** Insert a snippet at the active code editor's cursor. When
-		 *  undefined, the reference panel renders refs as static text. */
+		 *  undefined, the scope picker renders refs as static text. */
 		oninsertref?: (snippet: string) => void;
 	};
 
@@ -38,11 +38,22 @@
 		binding.graph.nodes.find((n) => n.id === nodeId)?.data ?? null
 	);
 
-	const isPythonStep = $derived(
-		nodeData?.type === 'automated_step' &&
-			// executionSpec exists on automated_step variants
-			(nodeData as Extract<WorkflowNodeData, { type: 'automated_step' }>).executionSpec
-				?.backendType === 'python'
+	// Node types whose authoring depends on what data is in scope. Everything
+	// else (Trigger, ParallelSplit/Join, Scope, End) either produces input or
+	// has no per-step references to insert, so suppress the picker.
+	const SCOPE_BEARING_TYPES = new Set([
+		'start',
+		'human_task',
+		'automated_step',
+		'decision',
+		'loop',
+		'phase_update',
+		'progress_update',
+		'failure',
+		'sub_workflow'
+	]);
+	const showScopePicker = $derived(
+		nodeData ? SCOPE_BEARING_TYPES.has(nodeData.type) : false
 	);
 
 	// Unmerged fan-in: >1 edge into a non-Join step means it runs once per
@@ -96,6 +107,16 @@
 				></textarea>
 			</div>
 
+			{#if showScopePicker}
+				<InScopeRefsSection
+					{scope}
+					busy={scopeBusy}
+					{incomingCount}
+					onRefresh={onRefreshScope}
+					{oninsertref}
+				/>
+			{/if}
+
 			{#if nodeData.type === 'start'}
 				<StartNodeSection data={nodeData} {readonly} onchange={handleChange} {scope} />
 			{:else if nodeData.type === 'human_task'}
@@ -112,16 +133,6 @@
 				<LoopNodeSection data={nodeData} {readonly} onchange={handleChange} {scope} />
 			{/if}
 		</div>
-
-		{#if isPythonStep}
-			<StepReferencePanel
-				{scope}
-				busy={scopeBusy}
-				{incomingCount}
-				onRefresh={onRefreshScope}
-				{oninsertref}
-			/>
-		{/if}
 	{:else}
 		<div class="flex flex-1 items-center justify-center text-sm text-muted-foreground">
 			Select a node from the file tree

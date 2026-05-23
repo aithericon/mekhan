@@ -1,8 +1,8 @@
 <script lang="ts">
 	import KeyValueEditor from '../../shared/KeyValueEditor.svelte';
 	import StringListEditor from '../../shared/StringListEditor.svelte';
+	import PythonRuntimeReference from './PythonRuntimeReference.svelte';
 	import type { YjsGraphBinding } from '$lib/yjs/graph-binding.svelte';
-	import type { ScopeEntry } from '$lib/editor/guard-scope';
 	import type * as Y from 'yjs';
 	import Plus from '@lucide/svelte/icons/plus';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
@@ -19,9 +19,6 @@
 		binding?: YjsGraphBinding;
 		nodeId?: string;
 		templateId?: string;
-		/** Read-only listing of upstream fields this step can read at runtime.
-		 *  Actual code-editor insertion happens in the IDE side. */
-		scope?: ScopeEntry[];
 	};
 
 	let {
@@ -32,8 +29,7 @@
 		onentrypointchange,
 		binding,
 		nodeId,
-		templateId,
-		scope = []
+		templateId
 	}: Props = $props();
 
 	function fileHref(filename: string): string | null {
@@ -76,24 +72,6 @@
 		binding.deleteFile(nodeId, filename);
 	}
 </script>
-
-{#if scope.length > 0}
-	<div class="space-y-1" data-testid="python-inputs-in-scope">
-		<span class="text-sm font-medium text-muted-foreground">Inputs in scope</span>
-		<ul class="rounded-md border border-border/60 bg-muted/20 p-2 space-y-0.5">
-			{#each scope as e (e.qualified)}
-				<li class="flex items-baseline justify-between gap-2 text-sm">
-					<code class="font-mono text-foreground">{e.qualified}</code>
-					<span class="shrink-0 text-sm text-muted-foreground">{e.kind}</span>
-				</li>
-			{/each}
-		</ul>
-		<p class="text-sm text-muted-foreground">
-			Readable at runtime as <code class="font-mono">token["…"]</code> or via the typed
-			<code class="font-mono">load_input()</code> helper. Open the IDE to insert into code.
-		</p>
-	</div>
-{/if}
 
 <div class="space-y-1.5">
 	<div class="flex items-center justify-between">
@@ -240,3 +218,5 @@
 		onchange={(env) => onchange({ ...config, env })}
 	/>
 </div>
+
+<PythonRuntimeReference />
