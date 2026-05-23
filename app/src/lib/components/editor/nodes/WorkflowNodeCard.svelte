@@ -18,7 +18,7 @@
 	// tailwind-variants with explicit per-kind classes — Tailwind's JIT
 	// scanner can't expand `border-node-${kind}` dynamically.
 	export const workflowNodeCardVariants = tv({
-		base: 'rounded-xl border-2 shadow-sm transition-shadow bg-gradient-to-br',
+		base: 'rounded-xl border-2 shadow-sm transition-shadow bg-card bg-gradient-to-br',
 		variants: {
 			kind: {
 				'start':       'from-node-start/10       to-node-start/25       border-node-start/60',
