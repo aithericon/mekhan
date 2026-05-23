@@ -459,3 +459,273 @@ pub(crate) fn build_human_task_injection_logic(target_node: &WorkflowNode) -> St
         "#{ output: input }".to_string()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    //! HumanTask interpolation contract.
+    //!
+    //! These lock down the path from authored `{{ … }}` placeholders in a
+    //! HumanTask's title / instructions / step blocks all the way to the
+    //! Rhai script the wire-edge transition runs. They also pin the known
+    //! asymmetry vs. the Python AutomatedStep clean-cut model: at the
+    //! HumanTask wire-edge, the `input` Rhai variable is the *single
+    //! upstream slim token* on the inbound arc — there is no merged
+    //! `<slug>` namespace. So `{{start.invoice_id}}` parses to
+    //! `__pluck(input, ["start", "invoice_id"])` and resolves to `()` at
+    //! runtime unless the upstream literally exposes a `start` map. The
+    //! `dotted_slug_path_*` cases below codify that gap.
+    use super::*;
+    use crate::models::template::{
+        CalloutSeverity, Position, TaskBlockConfig, TaskStepConfig, WorkflowNode,
+        WorkflowNodeData,
+    };
+
+    fn ht_node(
+        task_title: &str,
+        instructions_mdsvex: Option<&str>,
+        steps: Vec<TaskStepConfig>,
+    ) -> WorkflowNode {
+        WorkflowNode {
+            id: "ht1".to_string(),
+            node_type: "human_task".to_string(),
+            slug: None,
+            position: Position { x: 0.0, y: 0.0 },
+            data: WorkflowNodeData::HumanTask {
+                label: "Task".to_string(),
+                description: None,
+                task_title: task_title.to_string(),
+                instructions_mdsvex: instructions_mdsvex.map(str::to_string),
+                steps,
+            },
+            parent_id: None,
+            width: None,
+            height: None,
+        }
+    }
+
+    // ----- placeholder_to_accessor -----
+
+    #[test]
+    fn placeholder_simple_ident() {
+        assert_eq!(
+            placeholder_to_accessor("invoice_id"),
+            Some(r#"__pluck(input, ["invoice_id"])"#.to_string())
+        );
+    }
+
+    #[test]
+    fn placeholder_dotted_path_parses_without_namespace_awareness() {
+        // The parser happily accepts `start.invoice_id`. Whether `input`
+        // actually has a `start` key at runtime is the runtime's problem
+        // — and at the HumanTask wire-edge it does NOT (the inbound arc
+        // carries the slim token directly, not a `<slug>`-keyed wrapper).
+        assert_eq!(
+            placeholder_to_accessor("start.invoice_id"),
+            Some(r#"__pluck(input, ["start", "invoice_id"])"#.to_string())
+        );
+    }
+
+    #[test]
+    fn placeholder_array_index() {
+        assert_eq!(
+            placeholder_to_accessor("items[0].amount"),
+            Some(r#"__pluck(input, ["items", 0, "amount"])"#.to_string())
+        );
+    }
+
+    #[test]
+    fn placeholder_trims_whitespace() {
+        assert_eq!(
+            placeholder_to_accessor("   invoice_id   "),
+            Some(r#"__pluck(input, ["invoice_id"])"#.to_string())
+        );
+    }
+
+    #[test]
+    fn placeholder_rejects_empty_and_expressions() {
+        assert_eq!(placeholder_to_accessor(""), None);
+        assert_eq!(placeholder_to_accessor("   "), None);
+        // Arbitrary Rhai is rejected so a placeholder can never inject
+        // executable code.
+        assert_eq!(placeholder_to_accessor("a + b"), None);
+        assert_eq!(placeholder_to_accessor("foo()"), None);
+        assert_eq!(placeholder_to_accessor("a.b c"), None);
+        assert_eq!(placeholder_to_accessor("1abc"), None); // leading digit
+        assert_eq!(placeholder_to_accessor("items[]"), None);
+        assert_eq!(placeholder_to_accessor("items[a]"), None); // non-numeric idx
+    }
+
+    // ----- interpolate_to_rhai_expr -----
+
+    #[test]
+    fn interpolate_no_placeholders_emits_plain_literal() {
+        // Regression guard: a placeholder-free string must round-trip to
+        // the exact same Rhai literal `json_to_rhai_literal` would emit,
+        // so byte-identical AIR is preserved for non-templated content.
+        assert_eq!(
+            interpolate_to_rhai_expr("Hello, world!\nNext line"),
+            json_to_rhai_literal(&Value::String("Hello, world!\nNext line".into()))
+        );
+    }
+
+    #[test]
+    fn interpolate_mixed_text_and_one_placeholder() {
+        // `""` seed forces string-context concatenation regardless of the
+        // plucked value's type.
+        assert_eq!(
+            interpolate_to_rhai_expr("Hello {{ name }}!"),
+            r#"("" + "Hello " + (__pluck(input, ["name"])) + "!")"#
+        );
+    }
+
+    #[test]
+    fn interpolate_invalid_placeholder_left_as_literal_text() {
+        // `{{ a + b }}` isn't a legal path → the `{{ }}` survive as plain
+        // characters; the surrounding text is untouched and no pluck call
+        // is emitted (so the prelude won't be prepended either).
+        let out = interpolate_to_rhai_expr("Sum is {{ a + b }} today");
+        assert!(!out.contains("__pluck("));
+        assert!(out.contains("{{ a + b }}"));
+    }
+
+    #[test]
+    fn interpolate_unterminated_brace_keeps_raw_text() {
+        let out = interpolate_to_rhai_expr("Stray {{ never closed");
+        assert!(!out.contains("__pluck("));
+        assert!(out.contains("Stray {{ never closed"));
+    }
+
+    #[test]
+    fn interpolate_two_placeholders_chain_concat() {
+        assert_eq!(
+            interpolate_to_rhai_expr("{{a}}/{{b}}"),
+            r#"("" + (__pluck(input, ["a"])) + "/" + (__pluck(input, ["b"])))"#
+        );
+    }
+
+    // ----- build_human_task_injection_logic -----
+
+    #[test]
+    fn injection_no_placeholders_skips_pluck_helper() {
+        // Regression guard for `with_pluck_prelude`: a HumanTask without
+        // any `{{ }}` must produce a script that does NOT carry the
+        // helper, so existing static HumanTasks stay byte-identical.
+        let node = ht_node("Review the invoice", Some("Open the file"), vec![]);
+        let script = build_human_task_injection_logic(&node);
+        assert!(
+            !script.contains("__pluck("),
+            "placeholder-free script should not include __pluck helper, got: {script}"
+        );
+        assert!(script.contains("d.title = \"Review the invoice\""));
+    }
+
+    #[test]
+    fn injection_with_placeholder_prepends_pluck_once() {
+        let node = ht_node("Review {{ vendor_name }}", None, vec![]);
+        let script = build_human_task_injection_logic(&node);
+        // PLUCK_HELPER appears exactly once (deduped via with_pluck_prelude).
+        assert_eq!(
+            script.matches("fn __pluck(").count(),
+            1,
+            "expected exactly one pluck helper definition, got: {script}"
+        );
+        // And the title field interpolates.
+        assert!(
+            script.contains(r#"__pluck(input, ["vendor_name"])"#),
+            "title placeholder did not lower to a pluck call: {script}"
+        );
+    }
+
+    #[test]
+    fn injection_interpolates_title_instructions_and_step_block_content() {
+        let step = TaskStepConfig {
+            id: "s1".into(),
+            title: "Confirm {{ vendor_name }}".into(),
+            description_mdsvex: Some("for invoice {{ invoice_id }}".into()),
+            blocks: vec![
+                TaskBlockConfig::Mdsvex {
+                    content: "Amount: {{ amount }}".into(),
+                },
+                TaskBlockConfig::Callout {
+                    severity: CalloutSeverity::Info,
+                    title: Some("Vendor {{ vendor_name }}".into()),
+                    content: "Please check {{ vendor_name }}".into(),
+                },
+            ],
+        };
+        let node = ht_node(
+            "Review {{ vendor_name }}",
+            Some("See {{ invoice_id }} for details"),
+            vec![step],
+        );
+        let script = build_human_task_injection_logic(&node);
+
+        // Title + instructions go through `interpolate_to_rhai_expr` and
+        // each becomes its own concat expression.
+        assert!(script.contains(r#"__pluck(input, ["vendor_name"])"#));
+        assert!(script.contains(r#"__pluck(input, ["invoice_id"])"#));
+        // Step block contents go through `json_to_rhai_interpolated` —
+        // mdsvex blocks and callout title/content interpolate too.
+        assert!(script.contains(r#"__pluck(input, ["amount"])"#));
+        // Helper is still injected exactly once even though many calls
+        // are emitted across title/instructions/step blocks.
+        assert_eq!(script.matches("fn __pluck(").count(), 1);
+    }
+
+    #[test]
+    fn injection_dotted_slug_path_resolves_against_root_input_not_a_namespace() {
+        // Codifies the known gap: a HumanTask placeholder of
+        // `{{ start.invoice_id }}` is lowered to a pluck against the
+        // root `input` — NOT against a `<slug>`-keyed map. At runtime,
+        // the wire-edge transition feeding the HumanTask binds `input`
+        // to the upstream slim token directly (no merged `<slug>`
+        // wrapper), so `__pluck(input, ["start", "invoice_id"])`
+        // degrades to `()` unless the upstream literally produced a
+        // `start` map field.
+        //
+        // This is the asymmetry vs. the Python AutomatedStep clean-cut
+        // model, where the compiler's borrow planner stages each
+        // referenced upstream node's outputs as `<slug>.json` files. If
+        // HumanTask interpolation later adopts that same model (read-arc
+        // to each referenced producer's `p_<slug>_data` place), this
+        // assertion is the one that flips.
+        let node = ht_node("Pay {{ start.invoice_id }} now", None, vec![]);
+        let script = build_human_task_injection_logic(&node);
+        assert!(
+            script.contains(r#"__pluck(input, ["start", "invoice_id"])"#),
+            "expected dotted path to lower against root `input`, got: {script}"
+        );
+        // And critically — NOT against a slug-namespaced map. If the
+        // model ever changes, this line is what fails first.
+        assert!(
+            !script.contains(r#"__pluck(input.start"#)
+                && !script.contains(r#"__pluck(scopes,"#),
+            "dotted-path lowering should still hit `input` at the root: {script}"
+        );
+    }
+
+    #[test]
+    fn injection_non_human_task_yields_pass_through() {
+        // Defensive: wiring_logic only invokes us for HumanTask, but the
+        // function still has a fallback branch — keep it documented.
+        let node = WorkflowNode {
+            id: "x".into(),
+            node_type: "start".into(),
+            slug: None,
+            position: Position { x: 0.0, y: 0.0 },
+            data: WorkflowNodeData::Start {
+                label: "Start".into(),
+                description: None,
+                initial: crate::models::template::default_initial_port(),
+                process_name: None,
+            },
+            parent_id: None,
+            width: None,
+            height: None,
+        };
+        assert_eq!(
+            build_human_task_injection_logic(&node),
+            "#{ output: input }"
+        );
+    }
+}
