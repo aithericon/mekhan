@@ -17,8 +17,10 @@
 
 	// tailwind-variants with explicit per-kind classes — Tailwind's JIT
 	// scanner can't expand `border-node-${kind}` dynamically.
+	// `bg-card` underlays the alpha gradient so the canvas dot-grid never
+	// bleeds through — the colored gradient sits on a solid card surface.
 	export const workflowNodeCardVariants = tv({
-		base: 'rounded-xl border-2 shadow-sm transition-shadow bg-card bg-gradient-to-br',
+		base: 'rounded-xl border-2 shadow-sm transition-shadow bg-card bg-linear-to-br',
 		variants: {
 			kind: {
 				'start':       'from-node-start/10       to-node-start/25       border-node-start/60',
