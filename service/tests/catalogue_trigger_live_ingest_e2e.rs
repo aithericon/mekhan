@@ -135,7 +135,7 @@ async fn clean_slate(nats: &MekhanNats) {
             let _ = stream.delete_consumer(consumer_name).await;
         }
     }
-    for stream_name in ["PETRI_GLOBAL", "HUMAN_REQUESTS", "PROCESS"] {
+    for stream_name in ["PETRI_GLOBAL", "HUMAN_REQUESTS", "PROCESS", "MEKHAN_SILENT_DROPS"] {
         if let Ok(stream) = nats.jetstream().get_stream(stream_name).await {
             let _ = stream.purge().await;
         }
@@ -453,4 +453,177 @@ async fn malformed_catalogue_register_bumps_silent_drops() {
          loud-failure wiring at `record_silent_drop` was removed or \
          the projector grew a silent fallback that swallows malformed shapes"
     );
+}
+
+/// Full DLQ round-trip: publish a malformed catalogue_register event, verify
+/// the record reaches the `MEKHAN_SILENT_DROPS` stream via the drainer, and
+/// the `GET /api/observability/silent-drops` endpoint returns it with the
+/// payload + per-site context intact.
+///
+/// This is the test that proves the dead-letter queue actually does what it
+/// promises: when something goes silently sideways, an operator can later
+/// query exactly *what* sideways and inspect the original bytes.
+#[tokio::test]
+async fn dlq_endpoint_returns_malformed_payload() {
+    if !engine_available().await {
+        panic!(
+            "engine not available at {} — start the stack with `just dev up`",
+            engine_url()
+        );
+    }
+    let nats_url = engine_nats_url();
+    let (app, db, triggers) =
+        common::test_app_with_petri_url_and_triggers(&nats_url, &engine_url()).await;
+    let nats = MekhanNats::connect(&nats_url, None).await.expect("nats");
+    nats.ensure_silent_drops_stream()
+        .await
+        .expect("ensure MEKHAN_SILENT_DROPS");
+    clean_slate(&nats).await;
+    mekhan_service::observability::reset_silent_drops();
+
+    // Install the drainer (idempotent — first caller wins). If a previous
+    // test in the same process already installed it, the existing drainer
+    // continues to receive our records; either way the stream gets fed.
+    if let Some(rx) = mekhan_service::observability::install_drainer() {
+        let drainer_nats = nats.clone();
+        tokio::spawn(async move {
+            mekhan_service::observability::drain_silent_drops(drainer_nats, rx).await;
+        });
+        // Tiny pause so the drainer's loop is actually awaiting the channel
+        // by the time we send the first record.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    let _consumers = spawn_consumers(nats.clone(), db.clone(), triggers).await;
+
+    // Same malformed event as the proof-of-loudness test — missing
+    // `created_at`. Carries a unique sentinel string in `category` so we
+    // can match the DLQ record back to this test without picking up
+    // residual records from other tests in the same process.
+    let sentinel = format!("dlq_sentinel_{}", Uuid::new_v4().simple());
+    let net_id = format!("mekhan-fake-dlq-{}", Uuid::new_v4());
+    let bad_cmd = json!({
+        "execution_id": "x",
+        "job_id": "y",
+        "artifact_id": "z",
+        "name": "Bad",
+        "category": sentinel,
+        "filename": "x.bin"
+        // created_at intentionally omitted
+    });
+    let event = catalogue_register_event(1, bad_cmd);
+    publish_event(&nats.jetstream(), &net_id, "effect_completed", &event).await;
+
+    // Wait for the silent_drops counter to bump (proves ingest consumed
+    // the event and the projector called record_silent_drop_with).
+    let start = std::time::Instant::now();
+    while start.elapsed() < Duration::from_secs(10) {
+        if mekhan_service::observability::silent_drops() > 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        mekhan_service::observability::silent_drops() > 0,
+        "silent_drops counter never bumped — projector didn't fire"
+    );
+
+    // Now poll the DLQ endpoint until our sentinel appears. The drainer is
+    // async (channel → NATS publish), so there's a small race window
+    // between the counter bump and the stream having the record.
+    let resp_records = poll_dlq_for_sentinel(
+        &app,
+        &sentinel,
+        "catalogue_register",
+        Duration::from_secs(10),
+    )
+    .await;
+
+    // Find the record carrying our sentinel — the same drainer feeds every
+    // test in this process so the stream may have unrelated records too.
+    let ours = resp_records
+        .iter()
+        .find(|r| {
+            r.kind == "catalogue_register"
+                && r.payload
+                    .as_deref()
+                    .map(|p| p.contains(sentinel.as_str()))
+                    .unwrap_or(false)
+        })
+        .expect("DLQ should contain a record carrying our sentinel category");
+
+    // Verify the record's shape carries what we need for forensics.
+    assert!(
+        ours.error.to_lowercase().contains("created_at")
+            || ours.error.to_lowercase().contains("missing"),
+        "error string should name the missing field, was: {}",
+        ours.error
+    );
+    assert_eq!(
+        ours.context["net_id"].as_str(),
+        Some(net_id.as_str()),
+        "context.net_id should match the publisher: {:?}",
+        ours.context
+    );
+    assert_eq!(
+        ours.context["event_seq"].as_i64(),
+        Some(1),
+        "context.event_seq should match the synthetic envelope's seq: {:?}",
+        ours.context
+    );
+    let payload = ours.payload.as_deref().expect("payload should be captured");
+    assert!(
+        payload.contains(&sentinel),
+        "captured payload should include the malformed input verbatim"
+    );
+}
+
+/// Helper: poll `GET /api/observability/silent-drops` until a record
+/// carrying `sentinel` shows up (or timeout). Returns the records array
+/// of the matching response.
+async fn poll_dlq_for_sentinel(
+    app: &axum::Router,
+    sentinel: &str,
+    kind: &str,
+    timeout: Duration,
+) -> Vec<mekhan_service::observability::SilentDropRecord> {
+    let start = std::time::Instant::now();
+    loop {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/api/observability/silent-drops?kind={kind}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = resp.status();
+        let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        assert!(
+            status.is_success(),
+            "GET silent-drops: HTTP {status}: {}",
+            String::from_utf8_lossy(&bytes)
+        );
+        let body: Value = serde_json::from_slice(&bytes).unwrap();
+        let records: Vec<mekhan_service::observability::SilentDropRecord> =
+            serde_json::from_value(body["records"].clone()).unwrap();
+        if records
+            .iter()
+            .any(|r| r.payload.as_deref().map(|p| p.contains(sentinel)).unwrap_or(false))
+        {
+            return records;
+        }
+        if start.elapsed() > timeout {
+            panic!(
+                "DLQ endpoint never returned a record carrying `{sentinel}` within {timeout:?}; \
+                 got {} records — drainer might not be running, or the stream consumer \
+                 didn't pick up the message",
+                records.len()
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
 }

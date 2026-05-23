@@ -166,6 +166,28 @@ impl MekhanNats {
         Ok(())
     }
 
+    /// Ensure the MEKHAN_SILENT_DROPS JetStream stream exists.
+    ///
+    /// Dead-letter queue for messages a consumer couldn't process —
+    /// deserialization failures, subject-shape mismatches, KV row
+    /// deserialize errors. Bounded retention because silent drops are
+    /// (in healthy operation) rare; cap is forensic, not durable
+    /// storage. Records are produced by `observability::record_silent_drop*`
+    /// via the background drainer.
+    pub async fn ensure_silent_drops_stream(&self) -> Result<(), async_nats::Error> {
+        self.jetstream
+            .get_or_create_stream(jetstream::stream::Config {
+                name: "MEKHAN_SILENT_DROPS".into(),
+                subjects: vec!["mekhan.silent_drops.>".into()],
+                retention: jetstream::stream::RetentionPolicy::Limits,
+                max_age: std::time::Duration::from_secs(7 * 24 * 60 * 60), // 7 days
+                max_messages: 10_000, // forensic cap; not durable storage
+                ..Default::default()
+            })
+            .await?;
+        Ok(())
+    }
+
     /// Create or get the durable consumer for human task request ingestion.
     pub async fn human_task_consumer(&self) -> Result<PullConsumer, async_nats::Error> {
         let stream = self.jetstream.get_stream("HUMAN_REQUESTS").await?;

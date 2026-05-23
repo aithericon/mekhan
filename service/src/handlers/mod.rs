@@ -2,6 +2,7 @@ pub mod auth_tokens;
 pub mod files;
 pub mod health;
 pub mod instances;
+pub mod observability;
 pub mod process_live;
 pub mod task_stream;
 pub mod templates;

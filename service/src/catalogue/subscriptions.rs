@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use super::model::{CatalogueEntry, CatalogueRegisterCommand};
 use super::protocol::SubscribeRequest;
 use super::repository::CatalogueRepository;
-use crate::observability::record_silent_drop;
+use crate::observability::record_silent_drop_with;
 
 /// A persisted catalogue subscription.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -94,9 +94,14 @@ impl SubscriptionManager {
                             // until something rewrites the key. Loud so an
                             // operator sees they've got a stranded
                             // subscription, not a quietly-missing trigger.
-                            record_silent_drop(
+                            record_silent_drop_with(
                                 "catalogue_subscription_hydrate",
-                                &format!("key={key}: {e}"),
+                                &e,
+                                serde_json::json!({
+                                    "kv_bucket": "CATALOGUE_SUBSCRIPTIONS",
+                                    "key": key.as_str(),
+                                }),
+                                Some(value.as_ref()),
                             );
                         }
                     }

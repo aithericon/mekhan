@@ -11,7 +11,7 @@ use petri_domain::{DomainEvent, PersistedEvent};
 use crate::catalogue::subscriptions::SubscriptionManager;
 use crate::config::CleanupConfig;
 use crate::nats::MekhanNats;
-use crate::observability::record_silent_drop;
+use crate::observability::record_silent_drop_with;
 use crate::petri::client::PetriClient;
 use crate::triggers::{ResultWaiters, TerminalOutcome, TriggerDispatcher};
 
@@ -100,9 +100,11 @@ pub async fn start_lifecycle_listener(
             // shape this consumer is bound to — either a producer drift or a
             // subject filter misconfiguration. Either way the message will
             // never be processable, so ACK + loud.
-            record_silent_drop(
+            record_silent_drop_with(
                 "lifecycle_subject",
                 &format!("unexpected subject: {subject}"),
+                serde_json::json!({ "subject": subject }),
+                None, // subject-only failure — no payload to capture
             );
             let _ = msg.ack().await;
             continue;
@@ -122,7 +124,12 @@ pub async fn start_lifecycle_listener(
             match serde_json::from_slice(&msg.payload) {
                 Ok(p) => Some(p),
                 Err(e) => {
-                    record_silent_drop("lifecycle_envelope", &e);
+                    record_silent_drop_with(
+                        "lifecycle_envelope",
+                        &e,
+                        serde_json::json!({ "subject": subject, "net_id": net_id }),
+                        Some(&msg.payload),
+                    );
                     None
                 }
             }

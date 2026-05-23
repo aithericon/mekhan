@@ -187,6 +187,7 @@ fn build_openapi_router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::triggers::preview_cron))
         .routes(routes!(handlers::triggers::trigger_metrics))
         .routes(routes!(handlers::triggers::trigger_source_scope))
+        .routes(routes!(handlers::observability::list_silent_drops))
 }
 
 pub fn build_router(state: AppState) -> Router {

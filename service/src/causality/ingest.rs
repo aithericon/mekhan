@@ -13,7 +13,7 @@ use crate::catalogue::model::CatalogueRegisterCommand;
 use crate::catalogue::subscriptions::SubscriptionManager;
 use crate::causality::live::LiveBroadcasts;
 use crate::nats::MekhanNats;
-use crate::observability::record_silent_drop;
+use crate::observability::record_silent_drop_with;
 use crate::triggers::TriggerDispatcher;
 
 /// Slim serde type for CrossNetTokenTransfer messages on `petri.bridge.>`.
@@ -111,7 +111,12 @@ async fn process_bridge_transfer(
     let transfer: CrossNetTokenTransfer = match serde_json::from_slice(payload) {
         Ok(t) => t,
         Err(e) => {
-            record_silent_drop("bridge_transfer", &e);
+            record_silent_drop_with(
+                "bridge_transfer",
+                &e,
+                serde_json::json!({ "subject": subject }),
+                Some(payload),
+            );
             return Ok(());
         }
     };
@@ -162,7 +167,12 @@ async fn process_domain_event(
     let persisted: PersistedEvent = match serde_json::from_slice(payload) {
         Ok(p) => p,
         Err(e) => {
-            record_silent_drop("event_envelope", &e);
+            record_silent_drop_with(
+                "event_envelope",
+                &e,
+                serde_json::json!({ "subject": subject, "net_id": net_id }),
+                Some(payload),
+            );
             return Ok(());
         }
     };
@@ -1475,7 +1485,13 @@ async fn register_catalogue_entry(
     let cmd: CatalogueRegisterCommand = match serde_json::from_value(effect_result.clone()) {
         Ok(c) => c,
         Err(e) => {
-            record_silent_drop("catalogue_register", &e);
+            let payload_bytes = serde_json::to_vec(effect_result).ok();
+            record_silent_drop_with(
+                "catalogue_register",
+                &e,
+                serde_json::json!({ "net_id": net_id, "event_seq": event_seq }),
+                payload_bytes.as_deref(),
+            );
             return Ok(());
         }
     };

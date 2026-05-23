@@ -46,6 +46,22 @@ async fn main() -> anyhow::Result<()> {
     let mekhan_nats = MekhanNats::connect(&config.nats_url, config.nats_creds.as_deref()).await?;
     tracing::info!("NATS connected at {}", config.nats_url);
 
+    // Silent-drop DLQ wiring: ensure the JetStream stream + spawn the
+    // background drainer. After this point, every `record_silent_drop*`
+    // call also publishes a `SilentDropRecord` to MEKHAN_SILENT_DROPS,
+    // queryable via `GET /api/observability/silent-drops`.
+    mekhan_nats
+        .ensure_silent_drops_stream()
+        .await
+        .expect("failed to create MEKHAN_SILENT_DROPS stream");
+    if let Some(drain_rx) = mekhan_service::observability::install_drainer() {
+        let drain_nats = mekhan_nats.clone();
+        tokio::spawn(async move {
+            mekhan_service::observability::drain_silent_drops(drain_nats, drain_rx).await;
+        });
+        tracing::info!("silent drop drainer started");
+    }
+
     // Create catalogue subscription manager (KV-backed, in-memory cached)
     let sub_kv = mekhan_nats
         .ensure_catalogue_subscriptions_kv()
