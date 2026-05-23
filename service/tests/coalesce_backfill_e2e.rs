@@ -142,24 +142,12 @@ async fn spawn_consumers(
     )
 }
 
-/// Purge the JetStream consumers + streams a previous test run may have
-/// left dirty so a re-run on the same dev broker starts from a clean slate.
-async fn clean_slate(nats: &MekhanNats) {
-    for (stream_name, consumer_name) in [
-        ("PETRI_GLOBAL", "mekhan-causality-ingest"),
-        ("PETRI_GLOBAL", "mekhan-lifecycle"),
-        ("HUMAN_REQUESTS", "mekhan-human-task-ingest"),
-        ("PROCESS", "mekhan-process-event-ingest"),
-    ] {
-        if let Ok(stream) = nats.jetstream().get_stream(stream_name).await {
-            let _ = stream.delete_consumer(consumer_name).await;
-        }
-    }
-    for stream_name in ["PETRI_GLOBAL", "HUMAN_REQUESTS", "PROCESS"] {
-        if let Ok(stream) = nats.jetstream().get_stream(stream_name).await {
-            let _ = stream.purge().await;
-        }
-    }
+/// Build a unique consumer prefix for this test invocation. With it set
+/// on `MekhanNats`, the lifecycle + causality durables are uniquely named
+/// so parallel runs (and the live dev daemon) keep independent cursors
+/// on the shared streams. Replaces the old `clean_slate` purge.
+fn test_prefix() -> String {
+    format!("test_{}", Uuid::new_v4().simple())
 }
 
 /// Pre-seed a catalogue entry. The Catalog trigger's filter is
@@ -414,8 +402,10 @@ async fn backfill_with_single_active_coalesces_overlapping_fires() {
     let nats_url = engine_nats_url();
     let (app, db, triggers) =
         common::test_app_with_petri_url_and_triggers(&nats_url, &engine_url()).await;
-    let nats = MekhanNats::connect(&nats_url, None).await.expect("nats");
-    clean_slate(&nats).await;
+    let nats = MekhanNats::connect(&nats_url, None)
+        .await
+        .expect("nats")
+        .with_consumer_prefix(test_prefix());
     // Reset so the projection-failure assertion at the end is about THIS
     // test, not residual drift from a prior run.
     mekhan_service::observability::reset_silent_drops();

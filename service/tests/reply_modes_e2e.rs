@@ -10,8 +10,9 @@
 //! covered there; this file is the Part B counterpart.
 //!
 //! Requires the dev/test infra + engine: `just dev up` (or the regression
-//! infra). Run single-threaded — `clean_slate` purges the shared
-//! `PETRI_GLOBAL` stream: `--test-threads=1`.
+//! infra). Each test builds a `MekhanNats` with a per-test
+//! `with_consumer_prefix` so the lifecycle + causality durables are
+//! scoped to this run and don't fight the live dev daemon's cursors.
 
 mod common;
 
@@ -78,23 +79,11 @@ where
     TaskHandle(handle.abort_handle())
 }
 
-async fn clean_slate(nats: &MekhanNats) {
-    for (stream_name, consumer_name) in [
-        ("PETRI_GLOBAL", "mekhan-causality-ingest"),
-        ("PETRI_GLOBAL", "mekhan-lifecycle"),
-        ("HUMAN_REQUESTS", "mekhan-human-task-ingest"),
-        ("PROCESS", "mekhan-process-event-ingest"),
-    ] {
-        if let Ok(stream) = nats.jetstream().get_stream(stream_name).await {
-            let _ = stream.delete_consumer(consumer_name).await;
-        }
-    }
-    for stream_name in ["PETRI_GLOBAL", "HUMAN_REQUESTS", "PROCESS"] {
-        if let Ok(stream) = nats.jetstream().get_stream(stream_name).await {
-            let _ = stream.purge().await;
-        }
-    }
-    tokio::time::sleep(Duration::from_millis(200)).await;
+/// Build a unique consumer prefix for this test invocation. Lets parallel
+/// runs (and the live dev daemon) keep independent lifecycle/causality
+/// cursors on the shared streams without any purge ritual.
+fn test_prefix() -> String {
+    format!("test_{}", Uuid::new_v4().simple())
 }
 
 async fn wait_for_instance_status(
@@ -231,8 +220,8 @@ async fn setup(
 
     let nats = MekhanNats::connect(&engine_nats, None)
         .await
-        .expect("connect to NATS");
-    clean_slate(&nats).await;
+        .expect("connect to NATS")
+        .with_consumer_prefix(test_prefix());
     let kv = nats
         .ensure_catalogue_subscriptions_kv()
         .await

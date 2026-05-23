@@ -269,7 +269,8 @@ async fn causality_full_pipeline() {
     let db = common::create_test_db().await;
     let nats = MekhanNats::connect(&nats_url, None)
         .await
-        .expect("connect to NATS");
+        .expect("connect to NATS")
+        .with_consumer_prefix(format!("test_{}", Uuid::new_v4().simple()));
 
     // Build router using the SAME db pool as our consumers
     // (test_app_with_nats creates a separate DB which wouldn't see causality data)
@@ -310,34 +311,13 @@ async fn causality_full_pipeline() {
         result_waiters: mekhan_service::triggers::ResultWaiters::new(),
     });
 
-    // ── 2. Spawn Mekhan consumers (clean slate) ──────────────────────────
+    // ── 2. Spawn Mekhan consumers ────────────────────────────────────────
     //
-    // Delete stale durable consumers and purge streams so our fresh consumers
-    // don't replay messages from previous test runs.
-
-    for (stream_name, consumer_name) in [
-        ("PETRI_GLOBAL", "mekhan-causality-ingest"),
-        ("PETRI_GLOBAL", "mekhan-lifecycle"),
-        ("HUMAN_REQUESTS", "mekhan-human-task-ingest"),
-        ("PROCESS", "mekhan-process-event-ingest"),
-    ] {
-        if let Ok(stream) = nats.jetstream().get_stream(stream_name).await {
-            let _ = stream.delete_consumer(consumer_name).await;
-        }
-    }
-    // Purge the streams too. The projection consumers use DeliverPolicy::All,
-    // so against a long-lived `just dev` stack a fresh consumer would replay
-    // the entire accumulated history and never reach this run's events within
-    // the 15s timeout. The engine is the source of truth and republishes on
-    // deploy, so these projection/transport streams are safe to purge between
-    // e2e runs. Mirrors the clean-slate setup in causality_ingest.rs.
-    for stream_name in ["PETRI_GLOBAL", "HUMAN_REQUESTS", "PROCESS"] {
-        if let Ok(stream) = nats.jetstream().get_stream(stream_name).await {
-            let _ = stream.purge().await;
-        }
-    }
-    // Brief settle for deletions + purges
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    // The `MekhanNats` above carries a per-test consumer prefix, so the
+    // durables we create here (`{prefix}_mekhan-lifecycle`,
+    // `{prefix}_mekhan-causality-ingest`) are unique to this test run and
+    // start at `DeliverPolicy::New`. No purge of shared streams — that
+    // would destroy the live dev daemon's in-flight state.
 
     // Subscription manager (needed by both causality ingest and lifecycle listener)
     let kv = nats
@@ -544,25 +524,12 @@ async fn causality_full_pipeline() {
     eprintln!("  ✓ causality_full_pipeline passed");
 }
 
-/// Clean-slate the projection consumers/streams so a fresh consumer doesn't
-/// replay accumulated history against a long-lived `just dev` stack.
-async fn clean_slate(nats: &MekhanNats) {
-    for (stream_name, consumer_name) in [
-        ("PETRI_GLOBAL", "mekhan-causality-ingest"),
-        ("PETRI_GLOBAL", "mekhan-lifecycle"),
-        ("HUMAN_REQUESTS", "mekhan-human-task-ingest"),
-        ("PROCESS", "mekhan-process-event-ingest"),
-    ] {
-        if let Ok(stream) = nats.jetstream().get_stream(stream_name).await {
-            let _ = stream.delete_consumer(consumer_name).await;
-        }
-    }
-    for stream_name in ["PETRI_GLOBAL", "HUMAN_REQUESTS", "PROCESS"] {
-        if let Ok(stream) = nats.jetstream().get_stream(stream_name).await {
-            let _ = stream.purge().await;
-        }
-    }
-    tokio::time::sleep(Duration::from_millis(200)).await;
+/// Build a unique consumer prefix for this test invocation. With it set
+/// on `MekhanNats`, the lifecycle + causality durables are uniquely named
+/// so parallel runs (and the live dev daemon) keep independent cursors
+/// on the shared streams. Replaces the old `clean_slate` purge.
+fn test_prefix() -> String {
+    format!("test_{}", Uuid::new_v4().simple())
 }
 
 /// Runtime proof of the `{{ <slug>.<field> }}` human-task interpolation:
@@ -596,8 +563,8 @@ async fn interpolated_human_task_resolves_start_file_param() {
 
     let nats = MekhanNats::connect(&engine_nats, None)
         .await
-        .expect("connect to NATS");
-    clean_slate(&nats).await;
+        .expect("connect to NATS")
+        .with_consumer_prefix(test_prefix());
 
     let kv = nats
         .ensure_catalogue_subscriptions_kv()
@@ -817,8 +784,8 @@ async fn rrv_publish_and_create(
     let (app, db) = common::test_app_with_petri_url(&engine_nats, &engine_url()).await;
     let nats = MekhanNats::connect(&engine_nats, None)
         .await
-        .expect("connect to NATS");
-    clean_slate(&nats).await;
+        .expect("connect to NATS")
+        .with_consumer_prefix(test_prefix());
     let kv = nats
         .ensure_catalogue_subscriptions_kv()
         .await
