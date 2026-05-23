@@ -27,7 +27,11 @@
 //! NATS :4333). Set
 //! `TEST_POSTGRES_URL=postgres://mekhan:mekhan@localhost:5439/mekhan`
 //! and the `TEST_S3_*` env per `reference_executor_e2e_s3_bucket`.
-//! Single-threaded (`--test-threads=1`) — shares the live engine + executor.
+//!
+//! Parallel-safe: builds `MekhanNats` with a per-test
+//! [`MekhanNats::with_consumer_prefix`] so the lifecycle + causality
+//! durables are uniquely named, and the test net_id scopes the events
+//! that matter. No `clean_slate` ritual — durables die with the test.
 
 mod common;
 
@@ -68,26 +72,25 @@ async fn body_json(body: Body) -> Value {
     serde_json::from_slice(&bytes).unwrap()
 }
 
-/// Wipe NATS streams + delete the durable consumers a prior failed run might
-/// have left behind so they can't filter out this run's signals. Mirrors
-/// `clean_slate` in the other HumanTask-bearing e2e tests.
-async fn clean_slate(nats: &MekhanNats) {
-    for (stream_name, consumer_name) in [
+/// Delete the per-test durables this test created. Best-effort; the test
+/// stream itself (`PETRI_GLOBAL` etc.) is shared with the live dev daemon
+/// and must NOT be purged.
+async fn cleanup_durables(nats: &MekhanNats) {
+    let prefix = match nats.consumer_prefix() {
+        Some(p) => p,
+        None => return,
+    };
+    for (stream_name, base) in [
         ("PETRI_GLOBAL", "mekhan-causality-ingest"),
         ("PETRI_GLOBAL", "mekhan-lifecycle"),
         ("HUMAN_REQUESTS", "mekhan-human-task-ingest"),
-        ("PROCESS", "mekhan-process-event-ingest"),
     ] {
         if let Ok(stream) = nats.jetstream().get_stream(stream_name).await {
-            let _ = stream.delete_consumer(consumer_name).await;
+            let _ = stream
+                .delete_consumer(&format!("{prefix}_{base}"))
+                .await;
         }
     }
-    for stream_name in ["PETRI_GLOBAL", "HUMAN_REQUESTS", "PROCESS"] {
-        if let Ok(stream) = nats.jetstream().get_stream(stream_name).await {
-            let _ = stream.purge().await;
-        }
-    }
-    tokio::time::sleep(Duration::from_millis(200)).await;
 }
 
 struct TaskHandle(tokio::task::AbortHandle);
@@ -194,8 +197,15 @@ async fn invoice_processing_demo_low_value_path_completes() {
     }
     let nats_url = engine_nats_url();
     let (app, db) = common::test_app_with_petri_url(&nats_url, &engine_url()).await;
-    let nats = MekhanNats::connect(&nats_url, None).await.expect("nats");
-    clean_slate(&nats).await;
+    // Per-test consumer prefix scopes the lifecycle + causality durables
+    // away from any concurrent test or the live dev daemon — no purge,
+    // no shared cursor.
+    let prefix = format!("test_{}", Uuid::new_v4().simple());
+    let nats = MekhanNats::connect(&nats_url, None)
+        .await
+        .expect("nats")
+        .with_consumer_prefix(prefix);
+    let cleanup_nats = nats.clone();
     let (_causality, _lifecycle) = spawn_consumers(nats, db.clone()).await;
 
     // Load the literal demo. The test runs against an isolated DB+template
@@ -341,4 +351,9 @@ async fn invoice_processing_demo_low_value_path_completes() {
          check the executor + service logs (the failure can be in publish, in the \
          Python extract step, in the Decision guard, or in the lifecycle listener)"
     );
+
+    // Best-effort cleanup of this test's per-test durables on the shared
+    // streams. A test panic above leaks them until `just dev reset`; each
+    // is uniquely prefixed so they don't collide.
+    cleanup_durables(&cleanup_nats).await;
 }
