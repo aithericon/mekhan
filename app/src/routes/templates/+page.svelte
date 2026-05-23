@@ -8,7 +8,8 @@
 		createNewVersion,
 		createInstance,
 		listInstances,
-		type TemplateSummary
+		type TemplateSummary,
+		type WorkflowGraph
 	} from '$lib/api/client';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
@@ -175,6 +176,35 @@
 
 	const formatDate = (s: string) => new Date(s).toLocaleDateString();
 
+	// Surface the workflow's typed boundary on the list: Start `initial` field
+	// names (inputs) and the union of End `resultMapping` target keys (outputs).
+	// Multi-End templates collapse to the union — the editor card is where you
+	// see per-End shape. `graph` ships with the list payload (typed `unknown`
+	// in the schema), so no second fetch is needed.
+	function summarize(graphRaw: unknown): { inputs: string[]; outputs: string[] } {
+		const graph = graphRaw as WorkflowGraph | undefined;
+		const nodes = graph?.nodes ?? [];
+		const inputs: string[] = [];
+		const outputs: string[] = [];
+		const seenOutput = new Set<string>();
+		for (const n of nodes) {
+			if (n.data.type === 'start') {
+				for (const f of n.data.initial?.fields ?? []) if (f.name) inputs.push(f.name);
+			} else if (n.data.type === 'end') {
+				for (const m of n.data.resultMapping ?? []) {
+					if (m.targetField && !seenOutput.has(m.targetField)) {
+						seenOutput.add(m.targetField);
+						outputs.push(m.targetField);
+					}
+				}
+			}
+		}
+		return { inputs, outputs };
+	}
+	const ioByTemplate = $derived(
+		new Map(templates.map((t) => [t.id, summarize(t.graph)]))
+	);
+
 	// Load on mount
 	$effect(() => {
 		load();
@@ -249,6 +279,25 @@
 							</div>
 							{#if template.description}
 								<p class="mt-1 truncate text-sm text-muted-foreground">{template.description}</p>
+							{/if}
+							{#if (ioByTemplate.get(template.id)?.inputs.length ?? 0) > 0 || (ioByTemplate.get(template.id)?.outputs.length ?? 0) > 0}
+								{@const io = ioByTemplate.get(template.id) ?? { inputs: [], outputs: [] }}
+								<p
+									class="mt-1 truncate text-sm text-muted-foreground"
+									data-testid="template-io-{template.id}"
+								>
+									{#if io.inputs.length > 0}
+										<span>Inputs:</span>
+										<span class="font-mono text-foreground/80">{io.inputs.join(', ')}</span>
+									{/if}
+									{#if io.inputs.length > 0 && io.outputs.length > 0}
+										<span class="mx-1">→</span>
+									{/if}
+									{#if io.outputs.length > 0}
+										<span>Outputs:</span>
+										<span class="font-mono text-foreground/80">{io.outputs.join(', ')}</span>
+									{/if}
+								</p>
 							{/if}
 							<p class="mt-1 text-sm text-muted-foreground">
 								Updated {formatDate(template.updated_at)}
