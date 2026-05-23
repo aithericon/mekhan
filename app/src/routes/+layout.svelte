@@ -5,12 +5,13 @@
 	import { Button } from '$lib/components/ui/button';
 	import { TooltipProvider } from '$lib/components/ui/tooltip';
 	import User from '@lucide/svelte/icons/user';
-	import { findOrCreateShowcaseTemplate } from '$lib/templates/showcase';
+	import { findShowcaseTemplate } from '$lib/templates/showcase';
 	import { auth } from '$lib/auth/store.svelte';
 	import { ensureAuthInitialized, requireSession } from '$lib/auth/guard';
 
 	let { children } = $props();
 	let openingDemo = $state(false);
+	let demoMissing = $state(false);
 
 	onMount(async () => {
 		// BFF: the backend owns the OIDC callback (302s straight to the SPA),
@@ -27,8 +28,17 @@
 	async function openDemo() {
 		if (openingDemo) return;
 		openingDemo = true;
+		demoMissing = false;
 		try {
-			const template = await findOrCreateShowcaseTemplate();
+			const template = await findShowcaseTemplate();
+			if (!template) {
+				// Seeder hasn't run. The landing page `/` renders the full
+				// actionable diagnostic (the `MEKHAN__DEMOS__SEED=true`
+				// hint); the nav button just bounces there.
+				demoMissing = true;
+				await goto('/');
+				return;
+			}
 			await goto(`/templates/${template.id}`);
 		} finally {
 			openingDemo = false;

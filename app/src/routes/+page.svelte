@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { Button } from '$lib/components/ui/button';
-	import { findOrCreateShowcaseTemplate } from '$lib/templates/showcase';
+	import { findShowcaseTemplate } from '$lib/templates/showcase';
 	import Play from '@lucide/svelte/icons/play';
 	import Square from '@lucide/svelte/icons/square';
 	import User from '@lucide/svelte/icons/user';
@@ -23,7 +23,15 @@
 		openingDemo = true;
 		demoError = null;
 		try {
-			const template = await findOrCreateShowcaseTemplate();
+			const template = await findShowcaseTemplate();
+			if (!template) {
+				// Seeded by the service at startup, gated by
+				// `MEKHAN__DEMOS__SEED`. Direct the user to the toggle
+				// rather than silently doing nothing.
+				demoError =
+					'Demo not seeded yet. Restart mekhan-service with MEKHAN__DEMOS__SEED=true (or run `just dev::up`).';
+				return;
+			}
 			await goto(`/templates/${template.id}`);
 		} catch (e) {
 			demoError = e instanceof Error ? e.message : 'Failed to open demo. Is mekhan-service running?';

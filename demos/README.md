@@ -35,6 +35,18 @@ directory IS a publishable template — you can hand-edit one and
   compliance check → join] → "Approved". Exercises every editor node
   type plus direct slug access in Python steps.
 
+## Seeding
+
+The service-side seeder publishes every demo at startup, idempotent
+by `.mekhan.json::templateId`. Toggled via env:
+
+- `MEKHAN__DEMOS__SEED=true` — enable (default in `just dev::up-mekhan`)
+- `MEKHAN__DEMOS__DIR=<path>` — override the search root (default `demos`)
+
+A seeded demo whose templateId already exists on the server is left
+alone — users can hand-edit through the web editor without the seeder
+clobbering their changes.
+
 ## Adding a demo
 
 1. Drop a new directory under `demos/`.
@@ -45,3 +57,17 @@ directory IS a publishable template — you can hand-edit one and
 4. Drop per-node sources into `nodes/<id>/`.
 5. The Rust unit test `service::demos::tests::invoice_processing_demo_loads`
    is a template for writing a per-demo "this parses" smoke test.
+
+## Editing a demo
+
+The on-disk fixture is canonical. To edit:
+
+- **Through the web editor**: load the seeded demo, edit, then
+  `mekhan pull <templateId> demos/<name>/ --format json` to round-trip
+  the change back to disk. The seeder will leave the now-edited row
+  alone on next restart (idempotent), so re-seed via DB reset or by
+  deleting the row first.
+- **On disk**: edit `graph.json` / `nodes/<id>/main.py` directly. To
+  publish: `mekhan apply demos/<name>/` (uses the same templateId so
+  it bumps a new version), or wipe the existing row and let the
+  seeder republish.
