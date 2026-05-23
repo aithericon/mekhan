@@ -410,20 +410,26 @@ pub fn write_node_config(
         }
         WorkflowNodeData::AutomatedStep {
             execution_spec,
+            input,
+            output,
             retry_policy,
             deployment_model,
             ..
         } => {
             let spec_val = serde_json::to_value(execution_spec).unwrap_or_default();
             config.insert(txn, "executionSpec", json_value_to_any(&spec_val));
-            // `retry_policy` and `deployment_model` are `#[serde(default)]` on
-            // AutomatedStep, so omitting them here makes the graph→Y.Doc seed
-            // (createTemplate) + publish's Y.Doc→graph reconstruction
-            // (`doc_to_graph`) silently reset them to defaults — losing an
-            // authored retry policy and, critically, collapsing a `Scheduled`
-            // step back to `Inline` (it would never reach scheduler-net).
-            // `input`/`output` are deliberately NOT persisted: they are
-            // re-derived from the backend (see their doc comments).
+            // `input`/`output`/`retry_policy`/`deployment_model` are all
+            // `#[serde(default)]` on AutomatedStep, so omitting any of them
+            // here makes the graph→Y.Doc seed (createTemplate / seeded
+            // demos) + the Y.Doc→graph reconstruction (`doc_to_graph`)
+            // silently reset them. Without input/output the editor's
+            // "Output port — Fields" panel reads back empty; without
+            // retry/deployment we'd lose authored retries and collapse a
+            // Scheduled step to Inline (never reaches scheduler-net).
+            let in_val = serde_json::to_value(input).unwrap_or_default();
+            config.insert(txn, "input", json_value_to_any(&in_val));
+            let out_val = serde_json::to_value(output).unwrap_or_default();
+            config.insert(txn, "output", json_value_to_any(&out_val));
             let retry_val = serde_json::to_value(retry_policy).unwrap_or_default();
             config.insert(txn, "retryPolicy", json_value_to_any(&retry_val));
             let dm_val = serde_json::to_value(deployment_model).unwrap_or_default();
@@ -663,6 +669,88 @@ mod tests {
                 assert_eq!(process_name.as_deref(), None);
             }
             other => panic!("expected Start, got {other:?}"),
+        }
+    }
+
+    /// Locks in that AutomatedStep `output` (and `input`) survive a Y.Doc
+    /// round-trip. Pre-fix the seeder wrote a graph with output ports but
+    /// the Y.Doc init dropped them, so the editor's port panel rendered
+    /// "No declared output fields" against a seeded demo whose disk
+    /// fixture had them set. Catches the silent-default-collapse class of
+    /// regression where a node-data field is `#[serde(default)]` and gets
+    /// quietly omitted from the Y.Doc seed.
+    #[test]
+    fn automated_step_input_output_survive_ydoc_roundtrip() {
+        use crate::models::template::{
+            DeploymentModel, ExecutionBackendType, ExecutionSpecConfig, FieldKind, Port,
+            PortField, RetryPolicy, WorkflowEdge, WorkflowNode,
+        };
+
+        let output_port = Port {
+            id: "out".to_string(),
+            label: "Out".to_string(),
+            fields: vec![
+                PortField {
+                    name: "vendor".to_string(),
+                    label: "Vendor".to_string(),
+                    kind: FieldKind::Text,
+                    required: true,
+                    options: None,
+                    description: None,
+                    accept: None,
+                },
+                PortField {
+                    name: "amount".to_string(),
+                    label: "Amount".to_string(),
+                    kind: FieldKind::Number,
+                    required: true,
+                    options: None,
+                    description: None,
+                    accept: None,
+                },
+            ],
+        };
+
+        let graph = WorkflowGraph {
+            nodes: vec![WorkflowNode {
+                id: "extract".to_string(),
+                node_type: "automated_step".to_string(),
+                slug: None,
+                position: Position { x: 0.0, y: 0.0 },
+                data: WorkflowNodeData::AutomatedStep {
+                    label: "Extract".to_string(),
+                    description: None,
+                    execution_spec: ExecutionSpecConfig {
+                        backend_type: ExecutionBackendType::Python,
+                        entrypoint: Some("main.py".to_string()),
+                        config: serde_json::json!({"python": "python3"}),
+                    },
+                    input: Port::empty_input(),
+                    output: output_port.clone(),
+                    retry_policy: RetryPolicy::default(),
+                    deployment_model: DeploymentModel::default(),
+                },
+                parent_id: None,
+                width: None,
+                height: None,
+            }],
+            edges: Vec::<WorkflowEdge>::new(),
+            viewport: None,
+            instance_concurrency: Default::default(),
+        };
+
+        let rt = doc_to_graph(&graph_to_doc(&graph)).expect("parse Y.Doc");
+        match &rt.nodes[0].data {
+            WorkflowNodeData::AutomatedStep { output, .. } => {
+                assert_eq!(
+                    output.fields.len(),
+                    2,
+                    "output.fields must survive Y.Doc round-trip"
+                );
+                let names: Vec<&str> = output.fields.iter().map(|f| f.name.as_str()).collect();
+                assert_eq!(names, vec!["vendor", "amount"]);
+            }
+            other => panic!("expected AutomatedStep, got {other:?}"),
         }
     }
 
