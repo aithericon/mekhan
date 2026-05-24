@@ -1,0 +1,5 @@
+{
+  "templateId": "00000000-0000-0000-0000-000000000020",
+  "name": "vLLM Smoke Test",
+  "description": "Sends a fixed text prompt to a local OpenAI-compatible inference server (vllm-metal at http://localhost:8000) and surfaces the response. Verifies the executor's LLM backend → OpenAI-compat → vllm-metal integration end-to-end. Requires `just dev vllm-up` (see just/dev.just::up-vllm for install + model defaults). Multimodal not exercised: workflow-level file inputs do not currently flow into LLM image slots — that would require compiler + lowering changes."
+}

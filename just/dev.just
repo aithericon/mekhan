@@ -27,9 +27,11 @@ pid_dir   := ".dev/pid"
 log_dir   := ".dev/log"
 work_dir  := ".dev/work"
 
-# Executor build features. Skip `kreuzberg` (heavy pdfium deps) and `llm`
-# (requires API keys) — re-add if you need them.
-executor_features := "docker,python,http,http-cancel,file-ops,opendal-s3,url-inputs"
+# Executor build features. Skip `kreuzberg` (heavy pdfium deps). `llm` is
+# included so an AutomatedStep with backendType=llm can dispatch against the
+# local vllm-metal server (`just dev vllm-up`); external-provider workflows
+# need API keys in the LlmConfig but the local OpenAI-compat path needs none.
+executor_features := "docker,python,http,http-cancel,file-ops,opendal-s3,url-inputs,llm"
 
 # Local infra endpoints (also baked into service/mekhan.toml + engine env)
 nats_url     := "nats://localhost:4333"
@@ -41,11 +43,16 @@ s3_endpoint  := "http://localhost:9005"
 # Default recipe: bring up the full stack
 default: up
 
-# Start everything: infra + executor + engine + mekhan + app (auth: dev_noop)
+# Start everything: infra + vllm + executor + engine + mekhan + app
+# (auth: dev_noop). vllm-metal starts BEFORE the executor so the first
+# LLM-step dispatch finds a ready server. If vllm-metal isn't installed
+# locally, `up-vllm` no-ops with a hint — the rest of the stack still
+# comes up; only LLM-using workflows would fail at dispatch time.
 up:
     @just dev::_dirs
     @just dev::_infra-up
     @just dev::_wait-infra
+    @just dev::up-vllm
     @just dev::up-executor
     @just dev::up-engine
     @just dev::up-mekhan
@@ -59,6 +66,7 @@ up-auth:
     @just dev::_dirs
     @just dev::_infra-up
     @just dev::_wait-infra
+    @just dev::up-vllm
     @just dev::up-executor
     @just dev::up-engine
     @just dev::up-mekhan bff
@@ -71,6 +79,7 @@ down:
     @just dev::down-mekhan   || true
     @just dev::down-engine   || true
     @just dev::down-executor || true
+    @just dev::down-vllm     || true
     @just dev::_kill nomad   || true
     @just dev::_infra-down
 
@@ -99,7 +108,7 @@ status:
     docker compose ps --format "table {{ '{{.Name}}' }}\t{{ '{{.Status}}' }}\t{{ '{{.Ports}}' }}" 2>/dev/null || echo "  (compose not running)"
     echo ""
     echo "── native daemons ─────────────────────────────────────"
-    for name in executor engine nomad mekhan app; do
+    for name in vllm executor engine nomad mekhan app; do
       pf="{{pid_dir}}/$name.pid"
       if [ -s "$pf" ] && kill -0 "$(cat "$pf")" 2>/dev/null; then
         printf "  %-10s up  (pid %s)\n" "$name" "$(cat "$pf")"
@@ -183,6 +192,87 @@ _wait-infra:
       curl -sf "{{s3_endpoint}}/" >/dev/null 2>&1 && break
       sleep 1
     done
+
+# ── vllm-metal (local OpenAI-compat inference server, Apple Silicon) ────────
+#
+# Stands up a local vllm-metal `vllm serve` instance the executor's LLM backend
+# can dispatch against (provider=openai + base_url=http://localhost:8000 — no
+# api_key needed for the local path). vllm-metal is real vLLM with an MLX
+# compute backend; see https://github.com/vllm-project/vllm-metal.
+#
+# Prerequisite (per-machine, one-time): install vllm-metal into
+# `~/.venv-vllm-metal` and pre-pull the model (~5GB):
+#
+#   curl -fsSL https://raw.githubusercontent.com/vllm-project/vllm-metal/main/install.sh | bash
+#   source ~/.venv-vllm-metal/bin/activate
+#   hf download mlx-community/Qwen3.5-9B-MLX-4bit
+#
+# Native arm64 Python 3.12 required (NOT Rosetta).
+#
+# Knobs (env-overridable on the recipe call):
+#   VLLM_MODEL                     — model id (default mlx-community/Qwen3.5-9B-MLX-4bit; uniform 4-bit
+#                                    MLX, ~5GB weights, ~10-20s cold load). Other picks workable on 48GB:
+#                                      mlx-community/Qwen3.5-9B-MLX-8bit        (~9GB, less quant loss)
+#                                      mlx-community/Qwen3.5-9B-MLX-bf16        (~18GB, full precision)
+#                                      mlx-community/Qwen3.6-27B-4bit           (~14GB, more capable, slower)
+#                                      mlx-community/Qwen3.6-27B-OptiQ-4bit     (mixed 4/8-bit; LOAD RISK
+#                                        — vllm-metal may not handle OptiQ's mixed-precision layout;
+#                                        try only after a uniform 4-bit is known-working)
+#                                    If you change VLLM_MODEL, update the model field in
+#                                    demos/vllm-smoke/graph.json to match (the demo carries the model id
+#                                    in its LlmConfig; vllm-metal serves under exactly the id it loaded).
+#   VLLM_PORT                      — port (default 8000)
+#   VLLM_METAL_MULTIMODAL_MODE     — auto | text-only-compat | multimodal-native (default auto;
+#                                    set text-only-compat if a Qwen3.5/3.6 checkpoint trips the
+#                                    native multimodal loader)
+#   VLLM_READY_TIMEOUT_SECS        — readiness poll budget (default 120; 9B 4-bit cold load is
+#                                    typically 10-20s, but first-ever load before OS file cache
+#                                    warms can be longer; raise for larger models)
+up-vllm:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just dev::_dirs
+    if [ -s "{{pid_dir}}/vllm.pid" ] && kill -0 "$(cat {{pid_dir}}/vllm.pid)" 2>/dev/null; then
+      echo "  vllm already running (pid $(cat {{pid_dir}}/vllm.pid))"
+      exit 0
+    fi
+    venv="$HOME/.venv-vllm-metal"
+    if [ ! -x "$venv/bin/vllm" ]; then
+      echo "  · vllm-metal not installed at $venv — skipping"
+      echo "    install:  curl -fsSL https://raw.githubusercontent.com/vllm-project/vllm-metal/main/install.sh | bash"
+      echo "    (the rest of the dev stack still comes up; only LLM-using workflows would fail)"
+      exit 0
+    fi
+    model="${VLLM_MODEL:-mlx-community/Qwen3.5-9B-MLX-4bit}"
+    port="${VLLM_PORT:-8000}"
+    mm_mode="${VLLM_METAL_MULTIMODAL_MODE:-auto}"
+    ready_timeout="${VLLM_READY_TIMEOUT_SECS:-120}"
+
+    echo "▶ starting vllm-metal (model=$model port=$port mm=$mm_mode)…"
+    # `bash -c` so the venv activation + exec live in a child shell nohup owns.
+    # `exec` replaces the bash so the pidfile points at the actual vllm process.
+    nohup env VLLM_METAL_MULTIMODAL_MODE="$mm_mode" \
+      bash -c 'source "$0"/bin/activate && exec vllm serve "$1" --host 127.0.0.1 --port "$2"' \
+      "$venv" "$model" "$port" \
+      > "{{log_dir}}/vllm.log" 2>&1 &
+    echo $! > "{{pid_dir}}/vllm.pid"
+
+    echo "▶ waiting for vllm (cold model load can take 60-90s)…"
+    ready=0
+    for _ in $(seq 1 "$ready_timeout"); do
+      if curl -sf "http://localhost:${port}/v1/models" >/dev/null 2>&1; then
+        ready=1; break
+      fi
+      sleep 1
+    done
+    if [ "$ready" != "1" ]; then
+      echo "✗ vllm did not become ready in ${ready_timeout}s (log: {{log_dir}}/vllm.log)" >&2
+      exit 1
+    fi
+    echo "  ✓ vllm (pid $(cat {{pid_dir}}/vllm.pid))  http://localhost:${port}  log: {{log_dir}}/vllm.log"
+
+down-vllm:
+    @just dev::_kill vllm
 
 # ── Executor (aithericon-executor-service, daemon mode) ──────────────────────
 
@@ -800,6 +890,7 @@ _summary auth="DISABLED (dev_noop) — every request is the dev user":
     @echo "  postgres   → localhost:5439              (db: mekhan / user: mekhan / pw: mekhan)"
     @echo "  nats       → localhost:4333              (http monitor: http://localhost:8333)"
     @echo "  rustfs     → http://localhost:9005       (console: http://localhost:9006 / admin: rustfsadmin)"
+    @echo "  vllm       → http://localhost:8000       (OpenAI-compat; up if installed, see just/dev.just::up-vllm)"
     @echo "  executor   → daemon (NATS-driven)        (cancel: http://localhost:3105)"
     @echo "  engine     → http://localhost:3030"
     @echo "  mekhan     → http://localhost:3100"

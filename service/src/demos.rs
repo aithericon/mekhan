@@ -689,6 +689,37 @@ mod tests {
         );
     }
 
+    /// The vllm-smoke demo (text-only LLM step pointed at a local
+    /// OpenAI-compat server) must parse + compile cleanly through the same
+    /// AIR pipeline `/api/templates/{id}/publish` uses. The demo has no
+    /// node files, so this also covers the "LLM step with zero staged
+    /// inputs" case which the existing learning-path tests don't exercise.
+    #[test]
+    fn vllm_smoke_demo_loads_and_compiles() {
+        use crate::compiler::{compile_to_air, node_files_inline};
+
+        let root = repo_root().join("demos");
+        let demo = load_demo(&root.join("vllm-smoke")).expect("vllm-smoke must load");
+        assert_eq!(demo.metadata.name, "vLLM Smoke Test");
+        assert_eq!(
+            demo.metadata.template_id,
+            "00000000-0000-0000-0000-000000000020"
+        );
+
+        let files = node_files_inline(&demo.files);
+        let air = compile_to_air(
+            &demo.graph,
+            &demo.metadata.name,
+            demo.metadata.description.as_deref().unwrap_or(""),
+            &files,
+        )
+        .unwrap_or_else(|e| panic!("vllm-smoke must compile to AIR: {e:?}"));
+        assert!(
+            air.to_string().contains("\"transitions\""),
+            "vllm-smoke AIR must declare transitions"
+        );
+    }
+
     /// The learning-path demos (`01-` … `06-`) all parse through the same
     /// types the live `/api/templates` consumer expects. A break here
     /// catches a regression in `WorkflowNodeData` shape against the
