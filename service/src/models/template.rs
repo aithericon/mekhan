@@ -28,6 +28,14 @@ pub struct WorkflowTemplate {
     // Compiled AIR (populated on publish)
     pub air_json: Option<serde_json::Value>,
 
+    // Per-node compiler sub-graph interface registry (populated on publish,
+    // alongside `air_json`). Sidecar — *not* embedded in AIR. Parent compiles
+    // that embed this template via a `SubWorkflow` node read this directly
+    // (no string-shape filtering on the child's AIR) to find the child's
+    // entry place + workflow-exit terminals. NULL on pre-prototype rows;
+    // `resolve_subworkflow_air` falls back to the old filter in that case.
+    pub interface_json: Option<serde_json::Value>,
+
     // GitOps provenance — the git ref a `mekhan apply` published from
     // (shape: `SourceRef`). NULL for UI-published / new_version rows, so its
     // presence also marks a git-managed version. Stored raw to match the

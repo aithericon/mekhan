@@ -15,9 +15,9 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::compiler::{
-    compile_to_air_with_subworkflows_inline, generate_py_io_files, make_child_callable,
+    compile_to_air_with_subworkflows_and_interfaces, generate_py_io_files, make_child_callable,
     node_files_storage_path, node_input_scopes, node_namespace_scopes, node_output_fields,
-    CompileError, ResolvedChild, SubWorkflowAir,
+    CompileError, InterfaceRegistry, NodeKind, ResolvedChild, SubWorkflowAir,
 };
 use crate::models::error::ApiError;
 use crate::models::template::{
@@ -26,12 +26,15 @@ use crate::models::template::{
 use crate::AppState;
 use aithericon_sdk::scenario::ScenarioDefinition;
 
-/// The two durable products of the publish compile step: the parameterizable
-/// AIR the executor runs and the JSON graph every downstream consumer (trigger
-/// dispatcher, create-instance dialog) reads back.
+/// The three durable products of the publish compile step: the parameterizable
+/// AIR the executor runs, the JSON graph every downstream consumer (trigger
+/// dispatcher, create-instance dialog) reads back, and the per-node compiler
+/// sub-graph interface registry (sidecar — read at child-of-`SubWorkflow`
+/// resolution time).
 pub struct CompiledArtifacts {
     pub air_json: serde_json::Value,
     pub graph_json: serde_json::Value,
+    pub interface_json: serde_json::Value,
 }
 
 /// Owns the publish pipeline's domain logic: inject the `_aithericon_io`
@@ -85,7 +88,7 @@ impl<'a> PublishService<'a> {
         // planner gets the inline source map directly via the `_inline`
         // entry point so it can still detect `<slug>.<field>` accesses.
         let air_files = node_files_storage_path(template_id, version, files);
-        let air_json = compile_to_air_with_subworkflows_inline(
+        let (air_json, interface_json) = compile_to_air_with_subworkflows_and_interfaces(
             graph,
             name,
             description,
@@ -103,6 +106,7 @@ impl<'a> PublishService<'a> {
         Ok(CompiledArtifacts {
             air_json,
             graph_json,
+            interface_json,
         })
     }
 
@@ -282,27 +286,70 @@ pub async fn resolve_subworkflow_air(
         let mut child_def: ScenarioDefinition = serde_json::from_value(child_air)
             .map_err(|_| unresolved("child AIR is not a valid scenario"))?;
 
-        // Child Start entry place id: `p_{startNodeId}_ready` (stable through
-        // the pipeline). Require exactly one Start.
-        let child_graph: WorkflowGraph = serde_json::from_value(child.graph.clone())
-            .map_err(|_| unresolved("child graph is invalid"))?;
-        let starts: Vec<&str> = child_graph
-            .nodes
-            .iter()
-            .filter(|n| matches!(n.data, WorkflowNodeData::Start { .. }))
-            .map(|n| n.id.as_str())
-            .collect();
-        let [start_id] = starts.as_slice() else {
-            return Err(unresolved("child must have exactly one Start node"));
+        // Boundary derivation. PROTOTYPE primary path: read the child's
+        // per-node compiler interface (sidecar `interface_json`) and pull
+        // `entry` (single Start) + `workflow_terminals` (union over End
+        // nodes) verbatim. No string-shape filtering, no `place_type` peek,
+        // no slash-exclusion to disambiguate executor-lifecycle terminals
+        // from workflow-exits. The registry is alias-stable.
+        //
+        // Fallback path: when `interface_json` is NULL (pre-prototype rows
+        // or a republish that skipped the new pipeline), reconstruct from
+        // AIR + child graph the way we did before — `place_type ==
+        // "terminal" && !contains('/')` for the End-derived terminals (the
+        // slash exclusion is the alias-collapse stability patch from
+        // 674408e) and `p_{startId}_ready` for the entry place. Both
+        // branches feed `make_child_callable` identically.
+        let (entry_place, terminal_ids) = match child
+            .interface_json
+            .as_ref()
+            .and_then(|v| serde_json::from_value::<InterfaceRegistry>(v.clone()).ok())
+        {
+            Some(registry) => {
+                let starts: Vec<&str> = registry
+                    .values()
+                    .filter(|i| i.kind == NodeKind::Start)
+                    .filter_map(|i| i.entry.as_deref())
+                    .collect();
+                let [entry] = starts.as_slice() else {
+                    return Err(unresolved(
+                        "child interface has != 1 Start with an entry place",
+                    ));
+                };
+                let terminals: Vec<String> = registry
+                    .values()
+                    .filter(|i| i.kind == NodeKind::End)
+                    .flat_map(|i| i.workflow_terminals.iter().cloned())
+                    .collect();
+                if terminals.is_empty() {
+                    return Err(unresolved(
+                        "child interface declares no workflow-exit terminals",
+                    ));
+                }
+                (entry.to_string(), terminals)
+            }
+            None => {
+                let child_graph: WorkflowGraph = serde_json::from_value(child.graph.clone())
+                    .map_err(|_| unresolved("child graph is invalid"))?;
+                let starts: Vec<&str> = child_graph
+                    .nodes
+                    .iter()
+                    .filter(|n| matches!(n.data, WorkflowNodeData::Start { .. }))
+                    .map(|n| n.id.as_str())
+                    .collect();
+                let [start_id] = starts.as_slice() else {
+                    return Err(unresolved("child must have exactly one Start node"));
+                };
+                let entry = format!("p_{start_id}_ready");
+                let terminals: Vec<String> = child_def
+                    .places
+                    .iter()
+                    .filter(|p| p.place_type == "terminal" && !p.id.contains('/'))
+                    .map(|p| p.id.clone())
+                    .collect();
+                (entry, terminals)
+            }
         };
-        let entry_place = format!("p_{start_id}_ready");
-
-        let terminal_ids: Vec<String> = child_def
-            .places
-            .iter()
-            .filter(|p| p.place_type == "terminal")
-            .map(|p| p.id.clone())
-            .collect();
 
         make_child_callable(&mut child_def, &entry_place, &terminal_ids).map_err(
             |e| {
