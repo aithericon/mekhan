@@ -123,6 +123,7 @@
 	import { cn } from '$lib/utils';
 	import type { Component, Snippet } from 'svelte';
 	import { compileErrors } from '$lib/editor/compile-errors.svelte';
+	import NodeRuntimeBadge from '$lib/components/instances/NodeRuntimeBadge.svelte';
 
 	let {
 		kind,
@@ -172,6 +173,11 @@
 			<Icon class="size-3.5 text-white" />
 		</div>
 		<span class="text-sm font-medium text-foreground">{label}</span>
+		{#if nodeId}
+			<div class="ml-auto">
+				<NodeRuntimeBadge {nodeId} />
+			</div>
+		{/if}
 	</div>
 	{#if body}
 		<div class="px-3 py-2 text-sm text-muted-foreground">

@@ -4,6 +4,7 @@
 	import type { LoopNodeData } from '$lib/types/editor';
 	import Repeat from '@lucide/svelte/icons/repeat';
 	import { workflowNodeHandleClass } from './WorkflowNodeCard.svelte';
+	import NodeRuntimeBadge from '$lib/components/instances/NodeRuntimeBadge.svelte';
 	import {
 		RESIZE_REPORT_CONTEXT_KEY,
 		type ResizeReport
@@ -75,11 +76,14 @@
 		secondary suffix. The default condition (`true`) renders as
 		"forever" so the cap reads as the real stop.
 	-->
-	<div class="absolute left-3 top-2 flex items-center gap-2 text-sm font-medium text-muted-foreground">
+	<div class="absolute left-3 right-3 top-2 flex items-center gap-2 text-sm font-medium text-muted-foreground">
 		<Repeat class="size-4 text-node-loop" />
 		<span>{data.label}</span>
 		<span class="font-mono text-sm">· {condText}</span>
 		<span class="text-sm opacity-60">· {maxText}</span>
+		<div class="ml-auto">
+			<NodeRuntimeBadge nodeId={id} />
+		</div>
 	</div>
 
 	<!--

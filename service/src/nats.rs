@@ -289,4 +289,25 @@ impl MekhanNats {
         Ok(consumer)
     }
 
+    /// Create or get the durable consumer for the step-executions projection.
+    /// Consumes `petri.events.>` and folds events into per-step rows via the
+    /// projector in `service/src/projections/step_executions/`.
+    pub async fn step_executions_consumer(&self) -> Result<PullConsumer, async_nats::Error> {
+        let stream = self.jetstream.get_stream("PETRI_GLOBAL").await?;
+        let durable = self.durable_name("mekhan-step-executions");
+        let consumer = stream
+            .get_or_create_consumer(
+                &durable,
+                jetstream::consumer::pull::Config {
+                    durable_name: Some(durable.clone()),
+                    filter_subject: "petri.events.>".into(),
+                    ack_policy: jetstream::consumer::AckPolicy::Explicit,
+                    deliver_policy: self.deliver_policy(),
+                    ..Default::default()
+                },
+            )
+            .await?;
+        Ok(consumer)
+    }
+
 }

@@ -147,6 +147,16 @@ async fn main() -> anyhow::Result<()> {
         Some(trigger_dispatcher.clone()),
     ));
 
+    // Step-executions projection (PETRI_GLOBAL domain events → step_execution
+    // table). Folds per-step inputs/outputs/metrics for the instance-view
+    // canvas overlay.
+    tokio::spawn(
+        mekhan_service::projections::step_executions::start_step_executions_ingest(
+            mekhan_nats.clone(),
+            db.clone(),
+        ),
+    );
+
     let catalogue_repo = Arc::new(PgCatalogueRepository::new(db.clone()));
 
     // Spawn catalogue NATS request-reply responder

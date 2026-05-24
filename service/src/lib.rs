@@ -16,6 +16,7 @@ pub mod observability;
 pub mod openapi;
 pub mod petri;
 pub mod process;
+pub mod projections;
 pub mod query;
 pub mod s3;
 pub mod triggers;
@@ -135,6 +136,7 @@ fn build_openapi_router() -> OpenApiRouter<AppState> {
         ))
         .routes(routes!(handlers::instances::get_instance_state))
         .routes(routes!(handlers::instances::get_instance_events))
+        .routes(routes!(handlers::instances::list_step_executions))
         .routes(routes!(handlers::instances::stream_instance))
         // Processes (HPI inspection)
         .routes(routes!(process::handlers::list_processes))

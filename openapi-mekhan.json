@@ -1038,6 +1038,63 @@
         }
       }
     },
+    "/api/instances/{id}/step-executions": {
+      "get": {
+        "tags": [
+          "instances"
+        ],
+        "summary": "GET /api/instances/:id/step-executions",
+        "description": "Returns one row per workflow node × execution iteration for an instance.\nMaterialized by the step-executions projection consumer; the frontend\noverlays this data on the canvas node cards.",
+        "operationId": "list_step_executions",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Instance id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Per-step execution rows for this instance",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StepExecutionResponse"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Instance not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/instances/{id}/stream": {
       "get": {
         "tags": [
@@ -1081,6 +1138,49 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/observability/silent-drops": {
+      "get": {
+        "tags": [
+          "observability"
+        ],
+        "summary": "`GET /api/observability/silent-drops`",
+        "description": "Reads the dead-letter queue: every record any consumer ACKed and\ndropped because it couldn't parse the input. Drains up to `limit`\nrecent records from `MEKHAN_SILENT_DROPS` and returns them along\nwith the process-wide counter.\n\nThe stream itself enforces retention (currently 7d / 10k msgs); this\nendpoint just exposes whatever is currently retained.",
+        "operationId": "list_silent_drops",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Max records to return (default 100, hard cap 1000)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "description": "Filter by kind (broker-side subject filter)",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Counter + recent dead-letter records",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SilentDropsResponse"
                 }
               }
             }
@@ -4704,6 +4804,26 @@
                 "type": "string"
               }
             }
+          },
+          {
+            "type": "object",
+            "description": "`SingleActiveCoalesce`: a sibling instance is still running, so this\nfire was *coalesced* — recorded as missed, and the dispatcher will\ndispatch exactly one follow-up fire after the active instance\nterminates. Distinct from `Dropped` because the workflow does see\nthe missed observation (eventually).",
+            "required": [
+              "active_instance_id",
+              "outcome"
+            ],
+            "properties": {
+              "active_instance_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "outcome": {
+                "type": "string",
+                "enum": [
+                  "coalesced"
+                ]
+              }
+            }
           }
         ],
         "description": "Result of a single fire attempt. Kept structurally similar across sources\nso the history endpoint can render a uniform table."
@@ -5037,6 +5157,39 @@
           "grid",
           "gallery"
         ]
+      },
+      "InstanceConcurrencyPolicy": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "mode"
+            ],
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "unlimited"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "mode"
+            ],
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "single_active_coalesce"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Template-level instance concurrency policy. Read by the trigger\ndispatcher on fire and the lifecycle listener on instance terminal.\n\nTagged on the wire as `{\"mode\": \"unlimited\"}` / `{\"mode\":\n\"single_active_coalesce\"}` so future variants (e.g. queue, locked)\ncan land without breaking the existing wire shape."
       },
       "InstanceEventsResponse": {
         "type": "object",
@@ -5724,6 +5877,7 @@
                   "type": "string",
                   "format": "uuid"
                 },
+                "interface_json": {},
                 "is_latest": {
                   "type": "boolean"
                 },
@@ -6454,6 +6608,62 @@
           }
         }
       },
+      "SilentDropRecord": {
+        "type": "object",
+        "description": "One dead-letter record. Published as a JSON message on\n`mekhan.silent_drops.{kind}`.",
+        "required": [
+          "kind",
+          "error",
+          "recorded_at"
+        ],
+        "properties": {
+          "context": {
+            "description": "Per-site structured context. Free-form JSON object — typically\n`subject`, `net_id`, `key`, `event_seq`, whatever the call site\nknows that would help forensic inspection."
+          },
+          "error": {
+            "type": "string",
+            "description": "Human-readable failure description — the underlying error\n(deser error, missing field, subject pattern mismatch, …)."
+          },
+          "kind": {
+            "type": "string",
+            "description": "Stable identifier of the consumer + reason. Doubles as the NATS\nsubject suffix (`mekhan.silent_drops.{kind}`) so consumers can\nfilter at the broker. Examples: `catalogue_register`,\n`event_envelope`, `lifecycle_subject`,\n`catalogue_subscription_hydrate`."
+          },
+          "payload": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Raw payload the consumer couldn't parse, captured as a UTF-8\nstring (lossy if the bytes weren't valid UTF-8). All current\ncall sites carry JSON, so lossy is fine in practice; the loss\nonly shows up if a malformed message contained binary noise.\n`None` for sites that drop on subject-only checks (no payload\nto capture)."
+          },
+          "recorded_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "UTC timestamp the drop was recorded at."
+          }
+        }
+      },
+      "SilentDropsResponse": {
+        "type": "object",
+        "required": [
+          "total_since_boot",
+          "records"
+        ],
+        "properties": {
+          "records": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SilentDropRecord"
+            },
+            "description": "Captured records, newest first. May be empty if the stream is\nempty or the filter excludes everything."
+          },
+          "total_since_boot": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Process-wide counter — total drops since boot. Independent of\nthe stream contents (which may have rolled off via retention).",
+            "minimum": 0
+          }
+        }
+      },
       "SourceRef": {
         "type": "object",
         "description": "Git provenance recorded on a version published via `mekhan apply`.\nSerialized into the `workflow_templates.source_ref` JSONB column.",
@@ -6513,6 +6723,69 @@
           },
           "token": {
             "description": "JSON object whose keys match the Start's `initial` port field names."
+          }
+        }
+      },
+      "StepExecutionResponse": {
+        "type": "object",
+        "description": "Response shape for `GET /api/instances/{id}/step-executions`.\n\nOne row per `(workflow node, execution iteration)` for an instance.\nMaterialized by the step-executions projection consumer\n(`service/src/projections/step_executions/`). The frontend keys on\n`node_id` to overlay runtime info onto each node card on the canvas.",
+        "required": [
+          "node_id",
+          "iteration_index",
+          "node_kind",
+          "status"
+        ],
+        "properties": {
+          "branch_taken": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Decision branch identifier: `\"edge:<edge_id>\"` for the output that\nreceived the token. `None` for non-branching nodes."
+          },
+          "completed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "duration_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "error": {
+            "description": "`EffectFailed` payload (error_message, retryable, ...) for failed steps."
+          },
+          "inputs": {
+            "description": "`{ \"<producer_node_id>\": <envelope> }` grouped by upstream owner of\neach read-arc place this step consumed."
+          },
+          "iteration_index": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "node_id": {
+            "type": "string"
+          },
+          "node_kind": {
+            "type": "string"
+          },
+          "outputs": {
+            "description": "The envelope deposited at the node's `data_port` (parking nodes) or\n`workflow_terminals[*]` (End nodes)."
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string",
+            "description": "`\"pending\" | \"running\" | \"completed\" | \"failed\" | \"skipped\"`."
           }
         }
       },
@@ -6598,7 +6871,7 @@
           },
           {
             "type": "object",
-            "description": "`filenames` references compile-time staged assets; `url` is a direct\n(often `{{ token.path }}`-interpolated) source resolved at instance\ntime. When `url` is set the human-task UI renders it as the image\nsource (matching the frontend `{type:\"image\",url,alt?,caption?}`).",
+            "description": "`filenames` references compile-time staged assets; `url` is a direct\n(often `{{ <slug>.<field> }}`-interpolated) source resolved at instance\ntime. When `url` is set the human-task UI renders it as the image\nsource (matching the frontend `{type:\"image\",url,alt?,caption?}`).",
             "required": [
               "type"
             ],
@@ -6658,7 +6931,7 @@
           },
           {
             "type": "object",
-            "description": "Embedded PDF viewer (rendered inline in the task UI). `height` is a\nCSS length string, default ~\"400px\"; `caption` is rendered above the\nviewer. `url`, when set (typically via `{{ token.path }}`\ninterpolation), is the direct PDF source.",
+            "description": "Embedded PDF viewer (rendered inline in the task UI). `height` is a\nCSS length string, default ~\"400px\"; `caption` is rendered above the\nviewer. `url`, when set (typically via `{{ <slug>.<field> }}`\ninterpolation), is the direct PDF source.",
             "required": [
               "type"
             ],
@@ -6697,7 +6970,7 @@
           },
           {
             "type": "object",
-            "description": "Downloadable artifact list. Serializes to the frontend\n`{type:\"download\",downloads:[{url,filename,...}]}` shape. `url` is\ntypically `{{ token.path }}`-interpolated to an uploaded file.",
+            "description": "Downloadable artifact list. Serializes to the frontend\n`{type:\"download\",downloads:[{url,filename,...}]}` shape. `url` is\ntypically `{{ <slug>.<field> }}`-interpolated to an uploaded file.",
             "required": [
               "downloads",
               "type"
@@ -7417,6 +7690,10 @@
               "$ref": "#/components/schemas/WorkflowEdge"
             }
           },
+          "instance_concurrency": {
+            "$ref": "#/components/schemas/InstanceConcurrencyPolicy",
+            "description": "How concurrent fires (from triggers / manual / API) interact with\nalready-running instances of this template. Defaults to `Unlimited`\nso existing templates load unchanged.\n\nDistinct from the per-`Trigger`-node `ConcurrencyPolicy` (which\ngates *fires* by Skip/Queue/DedupKey before they reach this\ntemplate-level check). `InstanceConcurrencyPolicy` operates at the\ninstance lifecycle layer — it sees a fire that already passed the\nper-trigger gate and decides whether to spawn now or coalesce."
+          },
           "nodes": {
             "type": "array",
             "items": {
@@ -8131,6 +8408,7 @@
             "type": "string",
             "format": "uuid"
           },
+          "interface_json": {},
           "is_latest": {
             "type": "boolean"
           },

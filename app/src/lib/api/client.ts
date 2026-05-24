@@ -83,6 +83,7 @@ export type WorkflowInstance = components['schemas']['WorkflowInstance'];
 export type InstanceListItem = components['schemas']['InstanceListItem'];
 export type CreateInstanceRequest = components['schemas']['CreateInstanceRequest'];
 export type InstanceStateResponse = components['schemas']['InstanceStateResponse'];
+export type StepExecution = components['schemas']['StepExecutionResponse'];
 
 // ─── Processes / HPI ────────────────────────────────────────────────────────
 export type HpiProcess = components['schemas']['HpiProcess'];
@@ -349,6 +350,20 @@ export async function getInstanceState(id: string): Promise<InstanceStateRespons
 	return unwrap(
 		await client.GET('/api/instances/{id}/state', { params: { path: { id } } })
 	);
+}
+
+/**
+ * One row per `(node, iteration)` for an instance — materialized by the
+ * step-executions projection consumer. The instance view overlays each
+ * row onto its corresponding template node card; clicking opens a drawer
+ * with the full inputs/outputs payload.
+ */
+export async function listStepExecutions(id: string): Promise<StepExecution[]> {
+	return unwrap(
+		await client.GET('/api/instances/{id}/step-executions', {
+			params: { path: { id } }
+		})
+	) as StepExecution[];
 }
 
 export async function cancelInstance(id: string): Promise<void> {

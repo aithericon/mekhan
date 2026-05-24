@@ -20,7 +20,7 @@ use crate::models::instance::{
     CreateInstanceRequest, EngineStatus, InstanceListItem, InstanceStateResponse,
     ListInstancesQuery, WorkflowInstance,
 };
-use crate::models::responses::InstanceEventsResponse;
+use crate::models::responses::{InstanceEventsResponse, StepExecutionResponse};
 use crate::models::template::{PaginatedResponse, WorkflowGraph, WorkflowTemplate};
 use crate::petri::events::fetch_events;
 use crate::petri::launcher::{InstanceLauncher, LaunchError, LaunchSpec};
@@ -482,6 +482,101 @@ pub async fn get_instance_events(
         events: events_json,
         event_count,
     }))
+}
+
+/// GET /api/instances/:id/step-executions
+///
+/// Returns one row per workflow node × execution iteration for an instance.
+/// Materialized by the step-executions projection consumer; the frontend
+/// overlays this data on the canvas node cards.
+#[utoipa::path(
+    get,
+    path = "/api/instances/{id}/step-executions",
+    params(("id" = Uuid, Path, description = "Instance id")),
+    responses(
+        (status = 200, description = "Per-step execution rows for this instance", body = Vec<StepExecutionResponse>),
+        (status = 404, description = "Instance not found", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse),
+    ),
+    tag = "instances",
+)]
+pub async fn list_step_executions(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Vec<StepExecutionResponse>>, ApiError> {
+    // Existence check so the 404 path is honest (the projection may have no
+    // rows for a brand-new instance that hasn't fired any transitions yet).
+    let instance_exists: Option<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM workflow_instances WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+    if instance_exists.is_none() {
+        return Err(ApiError::not_found("instance not found"));
+    }
+
+    let rows: Vec<(
+        String,
+        i32,
+        String,
+        String,
+        Option<serde_json::Value>,
+        Option<serde_json::Value>,
+        Option<String>,
+        Option<chrono::DateTime<chrono::Utc>>,
+        Option<chrono::DateTime<chrono::Utc>>,
+        Option<serde_json::Value>,
+    )> = sqlx::query_as(
+        "SELECT node_id, iteration_index, node_kind, status, \
+                inputs, outputs, branch_taken, \
+                started_at, completed_at, error \
+         FROM step_execution \
+         WHERE instance_id = $1 \
+         ORDER BY started_at NULLS LAST, node_id, iteration_index",
+    )
+    .bind(id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    let response: Vec<StepExecutionResponse> = rows
+        .into_iter()
+        .map(
+            |(
+                node_id,
+                iteration_index,
+                node_kind,
+                status,
+                inputs,
+                outputs,
+                branch_taken,
+                started_at,
+                completed_at,
+                error,
+            )| {
+                let duration_ms = match (started_at, completed_at) {
+                    (Some(s), Some(c)) => Some((c - s).num_milliseconds()),
+                    _ => None,
+                };
+                StepExecutionResponse {
+                    node_id,
+                    iteration_index,
+                    node_kind,
+                    status,
+                    inputs,
+                    outputs,
+                    branch_taken,
+                    started_at,
+                    completed_at,
+                    duration_ms,
+                    error,
+                }
+            },
+        )
+        .collect();
+
+    Ok(Json(response))
 }
 
 /// DELETE /api/instances/:id

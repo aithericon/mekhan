@@ -11,8 +11,12 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import { ProcessView } from '$lib/components/processes';
 	import { NetWorkbench } from '$lib/components/petri';
+	import StepsView from '$lib/components/instances/StepsView.svelte';
+	import WorkflowGraphView from '$lib/components/instances/WorkflowGraphView.svelte';
 	import FileText from '@lucide/svelte/icons/file-text';
 	import LayoutDashboard from '@lucide/svelte/icons/layout-dashboard';
+	import ListChecks from '@lucide/svelte/icons/list-checks';
+	import Workflow from '@lucide/svelte/icons/workflow';
 	import Network from '@lucide/svelte/icons/network';
 
 	const instanceId = $derived(page.params.id!);
@@ -22,7 +26,7 @@
 	let loading = $state(true);
 	let error = $state<string | null>(null);
 
-	let mode = $state<'process' | 'petri'>('process');
+	let mode = $state<'process' | 'workflow' | 'steps' | 'petri'>('process');
 	let selectedProcessId = $state<string | null>(null);
 	// The Petri workbench is heavy; only mount it once the user opens it, then
 	// keep it alive (hidden) so toggling back doesn't re-init the store.
@@ -152,7 +156,9 @@
 		{@render lineage()}
 
 		{#if primaryProcess || hasNet}
-			<!-- Mode switch: Process is primary; the Petri net is secondary/debug. -->
+			<!-- Mode switch: Process (HPI) is primary; Workflow shows the
+			     template graph overlaid with per-step runtime info; Steps is
+			     the same data as a table; Petri net is the engine debug view. -->
 			<div
 				class="flex items-center gap-1 border-b border-border bg-card px-3 py-1 shrink-0"
 			>
@@ -167,6 +173,28 @@
 					Process
 				</button>
 				{#if hasNet}
+					<button
+						class="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-sm font-medium transition-colors
+							{mode === 'workflow'
+							? 'bg-primary text-primary-foreground'
+							: 'text-muted-foreground hover:bg-accent hover:text-foreground'}"
+						onclick={() => (mode = 'workflow')}
+						title="Template graph overlaid with per-step runtime status"
+					>
+						<Workflow class="size-3.5" />
+						Workflow
+					</button>
+					<button
+						class="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-sm font-medium transition-colors
+							{mode === 'steps'
+							? 'bg-primary text-primary-foreground'
+							: 'text-muted-foreground hover:bg-accent hover:text-foreground'}"
+						onclick={() => (mode = 'steps')}
+						title="Per-step runtime as a table — every iteration as a row"
+					>
+						<ListChecks class="size-3.5" />
+						Steps
+					</button>
 					<button
 						class="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-sm transition-colors
 							{mode === 'petri'
@@ -220,6 +248,19 @@
 							{/if}
 						</div>
 					{/if}
+				</div>
+
+				<!-- Workflow (template graph with per-node runtime overlay) -->
+				<div class="absolute inset-0" class:hidden={mode !== 'workflow'}>
+					<WorkflowGraphView {instance} />
+				</div>
+
+				<!-- Steps (same data as a flat table; useful for Loop iterations) -->
+				<div
+					class="absolute inset-0 overflow-y-auto"
+					class:hidden={mode !== 'steps'}
+				>
+					<StepsView {instance} />
 				</div>
 
 				<!-- Petri net (secondary, lazy + kept alive once opened) -->

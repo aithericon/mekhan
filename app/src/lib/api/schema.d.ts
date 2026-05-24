@@ -375,6 +375,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/instances/{id}/step-executions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/instances/:id/step-executions
+         * @description Returns one row per workflow node × execution iteration for an instance.
+         *     Materialized by the step-executions projection consumer; the frontend
+         *     overlays this data on the canvas node cards.
+         */
+        get: operations["list_step_executions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/instances/{id}/stream": {
         parameters: {
             query?: never;
@@ -391,6 +413,32 @@ export interface paths {
          *     consistent with `get_instance` (auth middleware gates the route).
          */
         get: operations["stream_instance"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/observability/silent-drops": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * `GET /api/observability/silent-drops`
+         * @description Reads the dead-letter queue: every record any consumer ACKed and
+         *     dropped because it couldn't parse the input. Drains up to `limit`
+         *     recent records from `MEKHAN_SILENT_DROPS` and returns them along
+         *     with the process-wide counter.
+         *
+         *     The stream itself enforces retention (currently 7d / 10k msgs); this
+         *     endpoint just exposes whatever is currently retained.
+         */
+        get: operations["list_silent_drops"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1617,6 +1665,11 @@ export interface components {
             /** @enum {string} */
             outcome: "dropped";
             reason: string;
+        } | {
+            /** Format: uuid */
+            active_instance_id: string;
+            /** @enum {string} */
+            outcome: "coalesced";
         };
         /** @description Wrap an outcome with metadata the history endpoint records on every fire. */
         FireResult: {
@@ -1725,6 +1778,21 @@ export interface components {
          * @enum {string}
          */
         ImageDisplay: "single" | "grid" | "gallery";
+        /**
+         * @description Template-level instance concurrency policy. Read by the trigger
+         *     dispatcher on fire and the lifecycle listener on instance terminal.
+         *
+         *     Tagged on the wire as `{"mode": "unlimited"}` / `{"mode":
+         *     "single_active_coalesce"}` so future variants (e.g. queue, locked)
+         *     can land without breaking the existing wire shape.
+         */
+        InstanceConcurrencyPolicy: {
+            /** @enum {string} */
+            mode: "unlimited";
+        } | {
+            /** @enum {string} */
+            mode: "single_active_coalesce";
+        };
         /**
          * @description Response shape for `GET /api/instances/{id}/events`.
          *
@@ -1963,6 +2031,7 @@ export interface components {
                 graph: unknown;
                 /** Format: uuid */
                 id: string;
+                interface_json?: unknown;
                 is_latest: boolean;
                 name: string;
                 /** Format: uuid */
@@ -2231,6 +2300,58 @@ export interface components {
             signal_key: string;
         };
         /**
+         * @description One dead-letter record. Published as a JSON message on
+         *     `mekhan.silent_drops.{kind}`.
+         */
+        SilentDropRecord: {
+            /**
+             * @description Per-site structured context. Free-form JSON object — typically
+             *     `subject`, `net_id`, `key`, `event_seq`, whatever the call site
+             *     knows that would help forensic inspection.
+             */
+            context?: unknown;
+            /**
+             * @description Human-readable failure description — the underlying error
+             *     (deser error, missing field, subject pattern mismatch, …).
+             */
+            error: string;
+            /**
+             * @description Stable identifier of the consumer + reason. Doubles as the NATS
+             *     subject suffix (`mekhan.silent_drops.{kind}`) so consumers can
+             *     filter at the broker. Examples: `catalogue_register`,
+             *     `event_envelope`, `lifecycle_subject`,
+             *     `catalogue_subscription_hydrate`.
+             */
+            kind: string;
+            /**
+             * @description Raw payload the consumer couldn't parse, captured as a UTF-8
+             *     string (lossy if the bytes weren't valid UTF-8). All current
+             *     call sites carry JSON, so lossy is fine in practice; the loss
+             *     only shows up if a malformed message contained binary noise.
+             *     `None` for sites that drop on subject-only checks (no payload
+             *     to capture).
+             */
+            payload?: string | null;
+            /**
+             * Format: date-time
+             * @description UTC timestamp the drop was recorded at.
+             */
+            recorded_at: string;
+        };
+        SilentDropsResponse: {
+            /**
+             * @description Captured records, newest first. May be empty if the stream is
+             *     empty or the filter excludes everything.
+             */
+            records: components["schemas"]["SilentDropRecord"][];
+            /**
+             * Format: int64
+             * @description Process-wide counter — total drops since boot. Independent of
+             *     the stream contents (which may have rolled off via retention).
+             */
+            total_since_boot: number;
+        };
+        /**
          * @description Git provenance recorded on a version published via `mekhan apply`.
          *     Serialized into the `workflow_templates.source_ref` JSONB column.
          */
@@ -2268,6 +2389,45 @@ export interface components {
             start_block_id: string;
             /** @description JSON object whose keys match the Start's `initial` port field names. */
             token: unknown;
+        };
+        /**
+         * @description Response shape for `GET /api/instances/{id}/step-executions`.
+         *
+         *     One row per `(workflow node, execution iteration)` for an instance.
+         *     Materialized by the step-executions projection consumer
+         *     (`service/src/projections/step_executions/`). The frontend keys on
+         *     `node_id` to overlay runtime info onto each node card on the canvas.
+         */
+        StepExecutionResponse: {
+            /**
+             * @description Decision branch identifier: `"edge:<edge_id>"` for the output that
+             *     received the token. `None` for non-branching nodes.
+             */
+            branch_taken?: string | null;
+            /** Format: date-time */
+            completed_at?: string | null;
+            /** Format: int64 */
+            duration_ms?: number | null;
+            /** @description `EffectFailed` payload (error_message, retryable, ...) for failed steps. */
+            error?: unknown;
+            /**
+             * @description `{ "<producer_node_id>": <envelope> }` grouped by upstream owner of
+             *     each read-arc place this step consumed.
+             */
+            inputs?: unknown;
+            /** Format: int32 */
+            iteration_index: number;
+            node_id: string;
+            node_kind: string;
+            /**
+             * @description The envelope deposited at the node's `data_port` (parking nodes) or
+             *     `workflow_terminals[*]` (End nodes).
+             */
+            outputs?: unknown;
+            /** Format: date-time */
+            started_at?: string | null;
+            /** @description `"pending" | "running" | "completed" | "failed" | "skipped"`. */
+            status: string;
         };
         TaskBlockConfig: {
             field: components["schemas"]["TaskFieldConfig"];
@@ -2526,6 +2686,18 @@ export interface components {
         };
         WorkflowGraph: {
             edges: components["schemas"]["WorkflowEdge"][];
+            /**
+             * @description How concurrent fires (from triggers / manual / API) interact with
+             *     already-running instances of this template. Defaults to `Unlimited`
+             *     so existing templates load unchanged.
+             *
+             *     Distinct from the per-`Trigger`-node `ConcurrencyPolicy` (which
+             *     gates *fires* by Skip/Queue/DedupKey before they reach this
+             *     template-level check). `InstanceConcurrencyPolicy` operates at the
+             *     instance lifecycle layer — it sees a fire that already passed the
+             *     per-trigger gate and decides whether to spawn now or coalesce.
+             */
+            instance_concurrency?: components["schemas"]["InstanceConcurrencyPolicy"];
             nodes: components["schemas"]["WorkflowNode"][];
             viewport?: null | components["schemas"]["Viewport"];
         };
@@ -2815,6 +2987,7 @@ export interface components {
             graph: unknown;
             /** Format: uuid */
             id: string;
+            interface_json?: unknown;
             is_latest: boolean;
             name: string;
             /** Format: uuid */
@@ -3628,6 +3801,47 @@ export interface operations {
             };
         };
     };
+    list_step_executions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Instance id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Per-step execution rows for this instance */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StepExecutionResponse"][];
+                };
+            };
+            /** @description Instance not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     stream_instance: {
         parameters: {
             query?: never;
@@ -3665,6 +3879,31 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_silent_drops: {
+        parameters: {
+            query?: {
+                /** @description Max records to return (default 100, hard cap 1000) */
+                limit?: number;
+                /** @description Filter by kind (broker-side subject filter) */
+                kind?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Counter + recent dead-letter records */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SilentDropsResponse"];
                 };
             };
         };
