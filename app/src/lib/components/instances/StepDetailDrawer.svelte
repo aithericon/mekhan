@@ -236,7 +236,15 @@
 									<!-- nodeKind is left undefined: `producerNode` is a slug,
 									     not a kind. The registry's shape predicates are specific
 									     enough to dispatch on shape alone. -->
-									<SmartValue value={envelope} ctx={{ position: 'input', instanceId }} />
+									<SmartValue
+										value={envelope}
+										ctx={{
+											position: 'input',
+											instanceId,
+											stepStartedAt: step.started_at ?? undefined,
+											stepCompletedAt: step.completed_at ?? undefined
+										}}
+									/>
 								</div>
 							{/each}
 						</div>
@@ -253,7 +261,13 @@
 					{#if step.outputs !== null && step.outputs !== undefined}
 						<SmartValue
 							value={step.outputs}
-							ctx={{ position: 'output', nodeKind: step.node_kind, instanceId }}
+							ctx={{
+								position: 'output',
+								nodeKind: step.node_kind,
+								instanceId,
+								stepStartedAt: step.started_at ?? undefined,
+								stepCompletedAt: step.completed_at ?? undefined
+							}}
 						/>
 					{/if}
 				</section>

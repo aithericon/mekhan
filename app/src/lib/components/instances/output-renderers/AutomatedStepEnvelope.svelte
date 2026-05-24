@@ -90,35 +90,39 @@
 	let stdioOpen = $state(false);
 
 	// ── Live log lines for this execution ────────────────────────────────────
-	// Logs land in `hpi_logs` keyed by `process_id`, and the executor sidecar
-	// stamps `execution_id` into `detail.fields.execution_id` for every line
-	// (see `executor/crates/executor-worker/src/ipc_sidecar.rs:896`). We
-	// resolve instance → process via `listProcessesByInstance` (filters on
-	// `net_id = mekhan-{instanceId}`), pull a generous tail, then client-
-	// filter rows whose execution_id matches the envelope. A backend filter
-	// on `detail->'fields'->>'execution_id'` would be cleaner; we punt it.
+	// Logs land in `hpi_logs` keyed by `process_id`. Original plan was to
+	// filter by `detail.fields.execution_id` (the Python sidecar auto-stamps
+	// it — see `executor/crates/executor-worker/src/ipc_sidecar.rs:896`), but
+	// in-process backends like the LLM emit logs through `StreamContext`
+	// directly without that stamping (see
+	// `executor/crates/executor-worker/src/event_emitter.rs:143-154` and
+	// `executor/crates/executor-llm/src/backend.rs:111-122`), so the
+	// execution_id filter silently dropped every line.
+	//
+	// Time-window filter instead: the step row already knows its
+	// `started_at` and `completed_at`, which the drawer forwards via
+	// `ctx.stepStartedAt`/`ctx.stepCompletedAt`. Logs in that window are
+	// "this execution's logs" — robust to backend instrumentation choices.
+	// Adjacent-step contamination is bounded (steps are typically
+	// sequential in the demo workflows; concurrent Parallel branches mix
+	// but a small mix is fine for an "Activity" pane).
 	let logRows = $state<LogRow[]>([]);
 	let logsLoading = $state(false);
 	let logsError = $state<string | null>(null);
 	let logsFetched = $state(false);
 	let expandedLogId = $state<number | null>(null);
 
-	function execIdOf(row: LogRow): string | undefined {
-		const d = row.detail;
-		if (!d || typeof d !== 'object') return undefined;
-		const o = d as Record<string, unknown>;
-		const fields = o.fields;
-		if (fields && typeof fields === 'object') {
-			const f = (fields as Record<string, unknown>).execution_id;
-			if (typeof f === 'string') return f;
-		}
-		const top = o.execution_id;
-		return typeof top === 'string' ? top : undefined;
-	}
+	const stepStartedAt = $derived(ctx.stepStartedAt);
+	const stepCompletedAt = $derived(ctx.stepCompletedAt);
+	// Tiny pre/post buffer so the window catches the surrounding lifecycle
+	// breadcrumbs the executor emits just before/after the step's
+	// projected timestamps (executor `accepted` / `submitted` fire before
+	// `started_at` was set on the row).
+	const WINDOW_BUFFER_MS = 5_000;
 
 	async function fetchLogLines() {
 		if (logsLoading) return;
-		if (!ctx.instanceId || !env.execution_id) return;
+		if (!ctx.instanceId || !stepStartedAt) return;
 		logsLoading = true;
 		logsError = null;
 		try {
@@ -129,17 +133,26 @@
 				logsFetched = true;
 				return;
 			}
+			const sinceTs = new Date(Date.parse(stepStartedAt) - WINDOW_BUFFER_MS).toISOString();
+			const untilTs = stepCompletedAt
+				? new Date(Date.parse(stepCompletedAt) + WINDOW_BUFFER_MS).toISOString()
+				: undefined;
 			// Fetch logs across every process linked to this instance and
 			// concatenate. In practice the instance has one process, but Loop /
 			// SubWorkflow can spawn additional processes that legitimately log
-			// under the same execution_id.
+			// during a single step.
 			const tails = await Promise.all(
-				rows.map((p) => getProcessLogsTail(p.process_id, { limit: 500 }))
+				rows.map((p) =>
+					getProcessLogsTail(p.process_id, {
+						since: sinceTs,
+						until: untilTs,
+						limit: 500
+					})
+				)
 			);
 			const all = tails.flatMap((t) => t.logs);
-			const filtered = all.filter((r) => execIdOf(r) === env.execution_id);
-			filtered.sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
-			logRows = filtered;
+			all.sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
+			logRows = all;
 			logsFetched = true;
 		} catch (e) {
 			logsError = e instanceof Error ? e.message : String(e);
@@ -346,7 +359,7 @@
 						</div>
 					{:else if logsFetched && logRows.length === 0}
 						<div class="rounded-md border border-border bg-muted/20 px-3 py-2 text-sm text-muted-foreground italic">
-							No log lines tagged for execution_id <code class="font-mono">{env.execution_id}</code>.
+							No log lines in this step's time window.
 						</div>
 					{:else if logRows.length > 0}
 						<div class="overflow-hidden rounded-md border border-border bg-card">
