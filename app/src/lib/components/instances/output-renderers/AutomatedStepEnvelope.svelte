@@ -7,6 +7,7 @@
 	import XCircle from '@lucide/svelte/icons/x-circle';
 	import AlertCircle from '@lucide/svelte/icons/alert-circle';
 	import KeyValueList from './KeyValueList.svelte';
+	import SmartValue from './SmartValue.svelte';
 	import { listProcessesByInstance, getProcessLogsTail } from '$lib/api/client';
 	import type { components } from '$lib/api/schema';
 	import type { RendererProps } from './types';
@@ -261,7 +262,11 @@
 	{#if hasOutputs}
 		<div>
 			<div class="mb-1.5 text-sm font-semibold text-foreground">Outputs</div>
-			<KeyValueList value={detail.outputs} {ctx} />
+			<!-- Cascade through SmartValue so shape-specific renderers (the
+			     LLM response envelope, file refs, etc.) get a chance to
+			     dispatch on `detail.outputs`. Without this the LLM markdown
+			     body gets squeezed into KeyValueList's right column. -->
+			<SmartValue value={detail.outputs} {ctx} />
 		</div>
 	{:else}
 		<div class="text-sm text-muted-foreground italic">No business outputs.</div>
