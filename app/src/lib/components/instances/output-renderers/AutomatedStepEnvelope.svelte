@@ -90,26 +90,22 @@
 	let stdioOpen = $state(false);
 
 	// ── Live log lines for this execution ────────────────────────────────────
-	// Logs land in `hpi_logs` keyed by `process_id`. Original plan was to
-	// filter by `detail.fields.execution_id` (the Python sidecar auto-stamps
-	// it — see `executor/crates/executor-worker/src/ipc_sidecar.rs:896`), but
-	// in-process backends like the LLM emit logs through `StreamContext`
-	// directly without that stamping (see
-	// `executor/crates/executor-worker/src/event_emitter.rs:143-154` and
-	// `executor/crates/executor-llm/src/backend.rs:111-122`), so the
-	// execution_id filter silently dropped every line.
+	// Logs land in `hpi_logs` keyed by `process_id`. Every line going forward
+	// carries `execution_id` in `detail.fields` via the unified
+	// `event_emitter::enrich_log_fields` path used by both the IPC sidecar
+	// (child-process SDK logs) and `StreamContext::log` (in-process backends
+	// like the LLM), so we can scope precisely.
 	//
-	// Time-window filter instead: the step row already knows its
-	// `started_at` and `completed_at`, which the drawer forwards via
-	// `ctx.stepStartedAt`/`ctx.stepCompletedAt`. Logs in that window are
-	// "this execution's logs" — robust to backend instrumentation choices.
-	// Adjacent-step contamination is bounded (steps are typically
-	// sequential in the demo workflows; concurrent Parallel branches mix
-	// but a small mix is fine for an "Activity" pane).
+	// Two-pass to stay graceful: fetch by step time window (with buffer) to
+	// avoid a server-side filter dependency, then narrow client-side to rows
+	// stamped with this execution_id. If the window has rows but none carry
+	// the stamp (instances run before the convergence landed), fall back to
+	// the time-window set so the pane stays useful on legacy data.
 	let logRows = $state<LogRow[]>([]);
 	let logsLoading = $state(false);
 	let logsError = $state<string | null>(null);
 	let logsFetched = $state(false);
+	let logsScopeNote = $state<'execution_id' | 'time_window_fallback' | null>(null);
 	let expandedLogId = $state<number | null>(null);
 
 	const stepStartedAt = $derived(ctx.stepStartedAt);
@@ -119,6 +115,16 @@
 	// projected timestamps (executor `accepted` / `submitted` fire before
 	// `started_at` was set on the row).
 	const WINDOW_BUFFER_MS = 5_000;
+
+	function rowExecutionId(row: LogRow): string | undefined {
+		const d = row.detail;
+		if (!d || typeof d !== 'object') return undefined;
+		const o = d as Record<string, unknown>;
+		const fields =
+			o.fields && typeof o.fields === 'object' ? (o.fields as Record<string, unknown>) : o;
+		const v = fields.execution_id;
+		return typeof v === 'string' ? v : undefined;
+	}
 
 	async function fetchLogLines() {
 		if (logsLoading) return;
@@ -130,6 +136,7 @@
 			const rows = (procs.items ?? []) as Array<{ process_id: string }>;
 			if (rows.length === 0) {
 				logRows = [];
+				logsScopeNote = null;
 				logsFetched = true;
 				return;
 			}
@@ -152,7 +159,24 @@
 			);
 			const all = tails.flatMap((t) => t.logs);
 			all.sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
-			logRows = all;
+
+			const targetExecutionId = env.execution_id;
+			if (targetExecutionId) {
+				const stamped = all.filter((row) => rowExecutionId(row) === targetExecutionId);
+				const anyStamped = all.some((row) => rowExecutionId(row) !== undefined);
+				if (stamped.length > 0 || anyStamped) {
+					// Convergence-stamped data — precise scope.
+					logRows = stamped;
+					logsScopeNote = 'execution_id';
+				} else {
+					// Legacy data (no enrich_log_fields stamping) — fall back.
+					logRows = all;
+					logsScopeNote = 'time_window_fallback';
+				}
+			} else {
+				logRows = all;
+				logsScopeNote = 'time_window_fallback';
+			}
 			logsFetched = true;
 		} catch (e) {
 			logsError = e instanceof Error ? e.message : String(e);
@@ -359,7 +383,7 @@
 						</div>
 					{:else if logsFetched && logRows.length === 0}
 						<div class="rounded-md border border-border bg-muted/20 px-3 py-2 text-sm text-muted-foreground italic">
-							No log lines in this step's time window.
+							No log lines for this step.
 						</div>
 					{:else if logRows.length > 0}
 						<div class="overflow-hidden rounded-md border border-border bg-card">
@@ -402,6 +426,11 @@
 						</div>
 						<p class="mt-1 text-sm text-muted-foreground">
 							{logRows.length} line{logRows.length === 1 ? '' : 's'}
+							{#if logsScopeNote === 'execution_id'}
+								<span class="font-mono"> · scoped by execution_id</span>
+							{:else if logsScopeNote === 'time_window_fallback'}
+								<span class="font-mono"> · time-window (legacy)</span>
+							{/if}
 							{#if detail.logs.total_entries && detail.logs.total_entries !== logRows.length}
 								(executor reported {detail.logs.total_entries})
 							{/if}
