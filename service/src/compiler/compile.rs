@@ -471,6 +471,22 @@ fn derive_node_ownership(
     let mut by_len: Vec<String> = interfaces.keys().cloned().collect();
     by_len.sort_by(|a, b| b.len().cmp(&a.len()));
 
+    // Match a Petri id back to its owning workflow node. Two naming
+    // conventions are in play:
+    //
+    //   - `lower.rs` emits underscore-style ids directly (`t_{node}_role`,
+    //     `p_{node}_role`). Decision, the wire-edge transitions, the top
+    //     `to_output` / `to_error` of AutomatedStep, all look like this.
+    //   - The SDK's `ctx.scoped_prefix(id, …)` joins nested ids with `/`
+    //     (e.g. `extract/prepare`, `extract/t_accepted`, `extract/submitted`).
+    //     The AutomatedStep `prepare` transition (which carries the
+    //     `<slug>.<field>` read-arcs) and the entire `executor_lifecycle`
+    //     sub-net live here. No `p_`/`t_` prefix is emitted on nested ids.
+    //
+    // Without the slash-form match the step-execution projector silently
+    // skips owned-transition fires for AutomatedStep, so `inputs` is never
+    // captured on the step row even though the read-arcs fire normally
+    // at runtime.
     fn match_owner<'a>(id: &str, kind: char, by_len: &'a [String]) -> Option<&'a str> {
         for node_id in by_len {
             let prefix = match kind {
@@ -482,6 +498,11 @@ fn derive_node_ownership(
             }
             if id == &prefix[..prefix.len() - 1] {
                 // Bare `p_{id}` / `t_{id}` (no trailing role) — counts too.
+                return Some(node_id.as_str());
+            }
+            // SDK-style slash-nested id from `ctx.scoped_prefix(node_id, …)`.
+            let slash_prefix = format!("{node_id}/");
+            if id.starts_with(&slash_prefix) {
                 return Some(node_id.as_str());
             }
         }
@@ -503,6 +524,36 @@ fn derive_node_ownership(
                 if !iface.owned_transitions.iter().any(|t| t == &transition.id) {
                     iface.owned_transitions.push(transition.id.clone());
                 }
+            }
+        }
+    }
+
+    // Wire-edge transitions (`t_edge_<edge_id>`) belong to no node by the
+    // prefix rule above — their ids are keyed on the edge, not either
+    // endpoint. But for HumanTask consumers, `build_human_task_injection_logic`
+    // runs on the wire transition (see `service/src/compiler/wire.rs:17-21`),
+    // and `apply_control_data_foundation`'s (c3) phase synthesizes the
+    // `<slug>.<field>` read-arcs on it. The read-arc payloads are exactly
+    // the HumanTask's inputs, so credit the transition to whichever node's
+    // entry the wire produces into. That puts the read_tokens on the right
+    // step-execution row when the projector folds the event log.
+    let mut wire_edge_owners: Vec<(String, String)> = Vec::new();
+    for transition in &scenario.transitions {
+        if !transition.id.starts_with("t_edge_") {
+            continue;
+        }
+        for arc in &transition.outputs {
+            for (node_id, iface) in interfaces.iter() {
+                if iface.entry.as_deref() == Some(&arc.place) {
+                    wire_edge_owners.push((transition.id.clone(), node_id.clone()));
+                }
+            }
+        }
+    }
+    for (tid, owner) in wire_edge_owners {
+        if let Some(iface) = interfaces.get_mut(&owner) {
+            if !iface.owned_transitions.iter().any(|t| t == &tid) {
+                iface.owned_transitions.push(tid);
             }
         }
     }
@@ -2267,6 +2318,94 @@ mod tests {
         assert!(
             !staged_value.contains_key("data"),
             "nested `data` must be removed after hoisting; got staged: {staged_value:?}"
+        );
+    }
+
+    /// The step-execution projector keys input/output attribution off the
+    /// node interface's `owned_transitions` list. AutomatedStep's `prepare`
+    /// transition (which holds the `<slug>.<field>` read-arcs) lives under
+    /// the SDK's `ctx.scoped_prefix({id}, …)`, so its actual id is
+    /// `{id}/prepare` — slash-separated, not the `t_{id}_prepare`
+    /// underscore form. The HumanTask `t_edge_<edge_id>` wire transition
+    /// (which `build_human_task_injection_logic` runs on and is rewritten
+    /// with read-arcs by phase (c3)) is keyed on the edge id and has no
+    /// node prefix at all. Both used to slip past `derive_node_ownership`,
+    /// leaving the projector unable to credit their read_tokens to the
+    /// step row — so the workflow-projection drawer showed empty Inputs
+    /// for HumanTask and AutomatedStep even when the run consumed inputs
+    /// correctly.
+    #[test]
+    fn ownership_credits_scoped_prepare_and_wire_edge_to_consumer_node() {
+        use aithericon_executor_domain::InputSource;
+        use serde_json::json;
+        use std::collections::HashMap;
+
+        // Same invoice-shaped graph as `human_task_borrow_stages_…` —
+        // a HumanTask that the AutomatedStep borrows from.
+        let graph_json = json!({
+          "nodes": [
+            {"id":"start","type":"start","position":{"x":0,"y":0},
+             "data":{"type":"start","label":"Start"}},
+            {"id":"review","type":"human_task","slug":"review",
+             "position":{"x":0,"y":0},
+             "data":{"type":"human_task","label":"Review","taskTitle":"Review",
+                     "steps":[{"id":"s","title":"S","blocks":[
+                       {"type":"input","field":{"name":"vendor_name","label":"V","kind":"text","required":true}},
+                       {"type":"input","field":{"name":"invoice_amount","label":"A","kind":"number","required":true}}
+                     ]}]}},
+            {"id":"extract","type":"automated_step","slug":"extract",
+             "position":{"x":0,"y":0},
+             "data":{"type":"automated_step","label":"Extract",
+                     "executionSpec":{"backendType":"python","entrypoint":"main.py","config":{"entrypoint":"main.py","python":"python3","sdk":true}},
+                     "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
+                     "deploymentModel":{"mode":"inline"}}},
+            {"id":"end","type":"end","position":{"x":0,"y":0},
+             "data":{"type":"end","label":"End"}}
+          ],
+          "edges":[
+            {"id":"e1","source":"start","target":"review","targetHandle":"in","type":"sequence"},
+            {"id":"e2","source":"review","target":"extract","targetHandle":"in","type":"sequence"},
+            {"id":"e3","source":"extract","target":"end","targetHandle":"in","type":"sequence"}
+          ]
+        });
+        let graph: WorkflowGraph = serde_json::from_value(graph_json).unwrap();
+
+        let mut step_files = HashMap::new();
+        step_files.insert(
+            "main.py".to_string(),
+            InputSource::Raw {
+                content: "v = review.vendor_name\na = review.invoice_amount\n".to_string(),
+            },
+        );
+        let mut files: HashMap<String, HashMap<String, InputSource>> = HashMap::new();
+        files.insert("extract".to_string(), step_files);
+
+        let inline_sources: HashMap<String, HashMap<String, String>> = HashMap::new();
+        let (_scenario, interfaces) = compile_to_scenario_and_interfaces(
+            &graph,
+            "ownership-test",
+            "test",
+            &files,
+            &inline_sources,
+            &crate::compiler::SubWorkflowAir::new(),
+        )
+        .expect("compile");
+
+        let extract = interfaces.get("extract").expect("extract interface");
+        assert!(
+            extract
+                .owned_transitions
+                .iter()
+                .any(|t| t == "extract/prepare"),
+            "extract should own its slash-nested `prepare` transition; got: {:?}",
+            extract.owned_transitions
+        );
+
+        let review = interfaces.get("review").expect("review interface");
+        assert!(
+            review.owned_transitions.iter().any(|t| t.starts_with("t_edge_")),
+            "review should own the `t_edge_*` wire transition that feeds its entry place (the wire holds the `<slug>.<field>` read-arcs synthesized for HumanTask injection); got: {:?}",
+            review.owned_transitions
         );
     }
 
