@@ -235,7 +235,7 @@ impl State {
     fn absorb(&mut self, persisted: &PersistedEvent, lookups: &Lookups<'_>) {
         match &persisted.event {
             DomainEvent::TokenCreated { token, place_id, .. } => {
-                self.note_entry_arrival(place_id, token, lookups);
+                self.note_entry_arrival(place_id, token, persisted.timestamp, lookups);
             }
             DomainEvent::TransitionFired {
                 transition_id,
@@ -305,7 +305,21 @@ impl State {
 
     /// Token landed at some place — if that place is the entry of a node,
     /// open a new iteration row for that node (dedup by TokenId).
-    fn note_entry_arrival(&mut self, place_id: &PlaceId, token: &Token, lookups: &Lookups<'_>) {
+    ///
+    /// `arrived_at` is the event timestamp of the entry-token producer; it
+    /// becomes the row's `started_at` so the displayed duration captures
+    /// the full "input available → output written" span. For effect
+    /// transitions (executor-backed steps) the engine only sees them when
+    /// the result comes back, so using the firing's own timestamp would
+    /// collapse duration to ~0; entry arrival is the only signal we have
+    /// that the step's clock started.
+    fn note_entry_arrival(
+        &mut self,
+        place_id: &PlaceId,
+        token: &Token,
+        arrived_at: DateTime<Utc>,
+        lookups: &Lookups<'_>,
+    ) {
         let Some(node_id) = lookups.entry_to_node.get(&place_id.0) else {
             return;
         };
@@ -325,7 +339,7 @@ impl State {
             inputs: None,
             outputs: None,
             branch_taken: None,
-            started_at: None,
+            started_at: Some(arrived_at),
             completed_at: None,
             error: None,
             last_sequence: 0,
@@ -344,9 +358,11 @@ impl State {
     ) {
         // 1. Any token landing at some node's entry opens a new iteration row
         //    for that downstream node (handles upstream → downstream handoff,
-        //    including Loop body re-entry).
+        //    including Loop body re-entry). The firing's timestamp is the
+        //    moment the entry token came into existence, which we record as
+        //    the downstream step's `started_at`.
         for (place_id, token) in produced_tokens {
-            self.note_entry_arrival(place_id, token, lookups);
+            self.note_entry_arrival(place_id, token, ts, lookups);
         }
 
         // 2. Find the owning node of this transition (if any) and update its
@@ -393,9 +409,15 @@ impl State {
             .expect("row just inserted above");
 
         // 3. First fire for this iteration: transition Pending→Running.
+        // `started_at` was set when the entry token arrived (T0); only
+        // backfill from the firing timestamp (T2) for nodes with no entry —
+        // ParallelJoin, or any future control-flow node whose first fire
+        // precedes any token deposit into its boundary.
         if row.status == StepStatus::Pending {
             row.status = StepStatus::Running;
-            row.started_at = Some(ts);
+            if row.started_at.is_none() {
+                row.started_at = Some(ts);
+            }
         }
         row.last_sequence = sequence;
 
@@ -758,7 +780,11 @@ mod tests {
             s_row.outputs,
             Some(serde_json::json!({"name": "Alice"}))
         );
-        assert_eq!(s_row.started_at, Some(ts(101)));
+        // started_at = T0 (entry token created at 100), NOT T2 (firing at
+        // 101). For effect-backed steps the firing event is emitted only
+        // when the executor result returns; using the firing timestamp
+        // would collapse duration to ~0.
+        assert_eq!(s_row.started_at, Some(ts(100)));
         assert_eq!(s_row.completed_at, Some(ts(101)));
         assert_eq!(s_row.last_sequence, 1);
     }
