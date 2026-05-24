@@ -27,10 +27,15 @@
 			pulseRole?: 'fired' | null;
 			onFire: () => void;
 			onSelect?: () => void;
+			/** Width/height predicted by topology-to-flow + getTransitionWidth.
+			 *  Pinning the chip to this width is what keeps dagre's layout in
+			 *  sync with the rendered DOM (no more long-label spillover). */
+			_dims?: { width: number; height: number };
 		};
 	}
 
 	let { data }: Props = $props();
+	const chipWidth = $derived(data._dims?.width ?? 200);
 
 	// Derive disabled reason from status
 	const disabledReason = $derived.by(() => {
@@ -89,7 +94,7 @@
 			<div
 				id="transition-{data.label.toLowerCase().replace(/\s+/g, '-')}"
 				data-testid="transition-node"
-				class="transition-chip flex flex-col border-2 rounded-lg cursor-pointer min-w-[200px] w-max bg-card bg-linear-to-br
+				class="transition-chip flex flex-col border-2 rounded-lg cursor-pointer bg-card bg-linear-to-br
 					{hasGuard ? 'border-amber-500' : ''}
 					{isEffect && data.enabled ? 'border-purple-400 from-purple-500/10 to-purple-500/25 hover:from-purple-500/15 hover:to-purple-500/30' : ''}
 					{isEffect && !data.enabled ? 'border-purple-300 from-purple-500/5 to-purple-500/15 hover:from-purple-500/10 hover:to-purple-500/20' : ''}
@@ -103,6 +108,7 @@
 					{data.spotlightRole === 'fired' ? 'spotlight-fired' : ''}
 					{data.spotlightRole === 'dimmed' ? 'spotlight-dimmed' : ''}
 					{data.pulseRole === 'fired' ? 'pulse-fired' : ''}"
+				style="width: {chipWidth}px;"
 				onclick={handleClick}
 				onkeydown={(e) => e.key === 'Enter' && handleClick(e as unknown as MouseEvent)}
 				role="button"
