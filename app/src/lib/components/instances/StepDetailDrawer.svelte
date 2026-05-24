@@ -18,6 +18,10 @@
 		 *  Drives the iteration picker for Loop bodies. When omitted or
 		 *  single-element, the picker is hidden. */
 		iterations?: StepExecution[];
+		/** Owning workflow instance id. Forwarded into the renderer context so
+		 *  envelope renderers can resolve instance-scoped backend resources
+		 *  (e.g. AutomatedStepEnvelope's log lookup). */
+		instanceId?: string;
 		open: boolean;
 		onClose: () => void;
 		/** When the user picks a different iteration in the drawer, the parent
@@ -25,7 +29,15 @@
 		onSelectIteration?: (iterationIndex: number) => void;
 	};
 
-	let { step, node = null, iterations = [], open, onClose, onSelectIteration }: Props = $props();
+	let {
+		step,
+		node = null,
+		iterations = [],
+		instanceId,
+		open,
+		onClose,
+		onSelectIteration
+	}: Props = $props();
 
 	const statusColor: Record<string, string> = {
 		pending: 'bg-gray-100 text-gray-700',
@@ -198,7 +210,7 @@
 									<!-- nodeKind is left undefined: `producerNode` is a slug,
 									     not a kind. The registry's shape predicates are specific
 									     enough to dispatch on shape alone. -->
-									<SmartValue value={envelope} ctx={{ position: 'input' }} />
+									<SmartValue value={envelope} ctx={{ position: 'input', instanceId }} />
 								</div>
 							{/each}
 						</div>
@@ -215,7 +227,7 @@
 					{#if step.outputs !== null && step.outputs !== undefined}
 						<SmartValue
 							value={step.outputs}
-							ctx={{ position: 'output', nodeKind: step.node_kind }}
+							ctx={{ position: 'output', nodeKind: step.node_kind, instanceId }}
 						/>
 					{/if}
 				</section>

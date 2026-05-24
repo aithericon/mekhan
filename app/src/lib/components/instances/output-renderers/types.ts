@@ -22,6 +22,11 @@ export type RenderContext = {
 	/** Where this value is being shown — slight visual tweaks (e.g. inputs get
 	 *  the producer name above; outputs don't). */
 	position: RenderPosition;
+	/** Owning workflow instance id (UUID). Renderers that need to reach back
+	 *  out to instance-scoped backend resources (e.g. AutomatedStepEnvelope
+	 *  fetching live log lines for an execution_id) read this; renderers
+	 *  without that need ignore it. */
+	instanceId?: string;
 };
 
 export type RendererProps = {

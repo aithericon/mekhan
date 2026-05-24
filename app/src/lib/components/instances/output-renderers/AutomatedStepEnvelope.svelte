@@ -7,7 +7,15 @@
 	import XCircle from '@lucide/svelte/icons/x-circle';
 	import AlertCircle from '@lucide/svelte/icons/alert-circle';
 	import KeyValueList from './KeyValueList.svelte';
+	import { listProcessesByInstance, getProcessLogsTail } from '$lib/api/client';
+	import type { components } from '$lib/api/schema';
 	import type { RendererProps } from './types';
+
+	// The OpenAPI-derived shape that comes back from
+	// `/api/processes/{id}/logs/tail` (the `LogRow` re-export in
+	// `$lib/api/client` is a hand-rolled near-duplicate with stricter optionality
+	// — we use the schema-derived one so the response flows through unmunged).
+	type LogRow = components['schemas']['LogRow'];
 
 	// The executor envelope shape — see `executor/crates/executor-*/src/...` for
 	// producers and `service/src/compiler/token_shape.rs`'s AutomatedStep arm
@@ -79,6 +87,116 @@
 
 	let logsOpen = $state(false);
 	let stdioOpen = $state(false);
+
+	// ── Live log lines for this execution ────────────────────────────────────
+	// Logs land in `hpi_logs` keyed by `process_id`, and the executor sidecar
+	// stamps `execution_id` into `detail.fields.execution_id` for every line
+	// (see `executor/crates/executor-worker/src/ipc_sidecar.rs:896`). We
+	// resolve instance → process via `listProcessesByInstance` (filters on
+	// `net_id = mekhan-{instanceId}`), pull a generous tail, then client-
+	// filter rows whose execution_id matches the envelope. A backend filter
+	// on `detail->'fields'->>'execution_id'` would be cleaner; we punt it.
+	let logRows = $state<LogRow[]>([]);
+	let logsLoading = $state(false);
+	let logsError = $state<string | null>(null);
+	let logsFetched = $state(false);
+	let expandedLogId = $state<number | null>(null);
+
+	function execIdOf(row: LogRow): string | undefined {
+		const d = row.detail;
+		if (!d || typeof d !== 'object') return undefined;
+		const o = d as Record<string, unknown>;
+		const fields = o.fields;
+		if (fields && typeof fields === 'object') {
+			const f = (fields as Record<string, unknown>).execution_id;
+			if (typeof f === 'string') return f;
+		}
+		const top = o.execution_id;
+		return typeof top === 'string' ? top : undefined;
+	}
+
+	async function fetchLogLines() {
+		if (logsLoading) return;
+		if (!ctx.instanceId || !env.execution_id) return;
+		logsLoading = true;
+		logsError = null;
+		try {
+			const procs = await listProcessesByInstance(ctx.instanceId);
+			const rows = (procs.items ?? []) as Array<{ process_id: string }>;
+			if (rows.length === 0) {
+				logRows = [];
+				logsFetched = true;
+				return;
+			}
+			// Fetch logs across every process linked to this instance and
+			// concatenate. In practice the instance has one process, but Loop /
+			// SubWorkflow can spawn additional processes that legitimately log
+			// under the same execution_id.
+			const tails = await Promise.all(
+				rows.map((p) => getProcessLogsTail(p.process_id, { limit: 500 }))
+			);
+			const all = tails.flatMap((t) => t.logs);
+			const filtered = all.filter((r) => execIdOf(r) === env.execution_id);
+			filtered.sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
+			logRows = filtered;
+			logsFetched = true;
+		} catch (e) {
+			logsError = e instanceof Error ? e.message : String(e);
+		} finally {
+			logsLoading = false;
+		}
+	}
+
+	function toggleLogs() {
+		logsOpen = !logsOpen;
+		if (logsOpen && !logsFetched) {
+			void fetchLogLines();
+		}
+	}
+
+	const logLevelColor: Record<string, string> = {
+		info: 'bg-blue-100 text-blue-700',
+		warn: 'bg-amber-100 text-amber-700',
+		error: 'bg-red-100 text-red-700',
+		debug: 'bg-slate-100 text-slate-600'
+	};
+
+	function levelColor(level: string): string {
+		return logLevelColor[level.toLowerCase()] ?? logLevelColor.debug;
+	}
+
+	function formatTimeShort(iso: string): string {
+		try {
+			return new Intl.DateTimeFormat(undefined, {
+				hour: '2-digit',
+				minute: '2-digit',
+				second: '2-digit'
+			}).format(new Date(iso));
+		} catch {
+			return iso;
+		}
+	}
+
+	function rowDetail(row: LogRow): Record<string, unknown> | null {
+		const d = row.detail;
+		if (!d || typeof d !== 'object') return null;
+		// Mirror LogsPanel's logic: prefer the structured `fields` sub-object,
+		// strip the noisy `petri_*` routing keys that the sidecar stamps on
+		// every log line.
+		const o = d as Record<string, unknown>;
+		const fields = o.fields && typeof o.fields === 'object' ? (o.fields as Record<string, unknown>) : o;
+		const out: Record<string, unknown> = {};
+		for (const [k, v] of Object.entries(fields)) {
+			if (k.startsWith('petri_event_')) continue;
+			if (k.startsWith('petri_signal_') && k !== 'petri_signal_key') continue;
+			out[k] = v;
+		}
+		return Object.keys(out).length > 0 ? out : null;
+	}
+
+	function toggleExpand(id: number) {
+		expandedLogId = expandedLogId === id ? null : id;
+	}
 
 	function formatDuration(ms: number | undefined): string | null {
 		if (ms === undefined || ms === null) return null;
@@ -187,8 +305,8 @@
 		<div>
 			<button
 				type="button"
-				class="flex items-center gap-1 text-sm font-semibold text-foreground hover:text-muted-foreground"
-				onclick={() => (logsOpen = !logsOpen)}
+				class="flex w-full items-center gap-1 text-left text-sm font-semibold text-foreground hover:text-muted-foreground"
+				onclick={toggleLogs}
 			>
 				{#if logsOpen}
 					<ChevronDown class="size-3.5" />
@@ -199,14 +317,78 @@
 				<span class="ml-1 font-normal text-muted-foreground">
 					({detail.logs.total_entries} entr{detail.logs.total_entries === 1 ? 'y' : 'ies'})
 				</span>
+				{#if detail.logs.count_by_level}
+					<span class="ml-2 flex flex-wrap gap-1">
+						{#each Object.entries(detail.logs.count_by_level) as [level, count] (level)}
+							<Badge variant="outline" class="font-mono text-sm font-normal">
+								{level}: {count}
+							</Badge>
+						{/each}
+					</span>
+				{/if}
 			</button>
-			{#if logsOpen && detail.logs.count_by_level}
-				<div class="mt-1.5 flex flex-wrap gap-1.5">
-					{#each Object.entries(detail.logs.count_by_level) as [level, count] (level)}
-						<Badge variant="outline" class="font-mono">
-							{level}: {count}
-						</Badge>
-					{/each}
+
+			{#if logsOpen}
+				<div class="mt-2">
+					{#if logsLoading && logRows.length === 0}
+						<div class="rounded-md border border-border bg-muted/20 px-3 py-2 text-sm text-muted-foreground">
+							Loading log lines…
+						</div>
+					{:else if logsError}
+						<div class="flex items-center justify-between rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+							<span>{logsError}</span>
+							<Button variant="ghost" size="sm" onclick={fetchLogLines}>Retry</Button>
+						</div>
+					{:else if logsFetched && logRows.length === 0}
+						<div class="rounded-md border border-border bg-muted/20 px-3 py-2 text-sm text-muted-foreground italic">
+							No log lines tagged for execution_id <code class="font-mono">{env.execution_id}</code>.
+						</div>
+					{:else if logRows.length > 0}
+						<div class="overflow-hidden rounded-md border border-border bg-card">
+							<div class="max-h-80 divide-y divide-border overflow-y-auto">
+								{#each logRows as row (row.id)}
+									{@const isExpanded = expandedLogId === row.id}
+									{@const extra = rowDetail(row)}
+									<button
+										type="button"
+										class="flex w-full items-start gap-2 px-3 py-1 text-left text-sm hover:bg-accent/30 focus:bg-accent/40 focus:outline-none"
+										onclick={() => toggleExpand(row.id)}
+									>
+										<ChevronRight
+											class="mt-0.5 size-3 shrink-0 text-muted-foreground/50 transition-transform {isExpanded
+												? 'rotate-90'
+												: ''}"
+										/>
+										<span class="shrink-0 pt-0.5 tabular-nums font-mono text-sm text-muted-foreground">
+											{formatTimeShort(row.timestamp)}
+										</span>
+										<Badge class={levelColor(row.level)} variant="secondary">
+											{row.level}
+										</Badge>
+										{#if row.source}
+											<span class="shrink-0 pt-0.5 font-mono text-sm text-muted-foreground">{row.source}</span>
+										{/if}
+										<span class="break-all pt-0.5 text-foreground">{row.message}</span>
+									</button>
+									{#if isExpanded && extra}
+										<div class="bg-muted/40 px-9 py-2 text-sm">
+											<pre class="overflow-x-auto font-mono text-sm whitespace-pre-wrap break-words text-foreground">{JSON.stringify(extra, null, 2)}</pre>
+										</div>
+									{:else if isExpanded}
+										<div class="bg-muted/40 px-9 py-2 text-sm text-muted-foreground italic">
+											No structured detail.
+										</div>
+									{/if}
+								{/each}
+							</div>
+						</div>
+						<p class="mt-1 text-sm text-muted-foreground">
+							{logRows.length} line{logRows.length === 1 ? '' : 's'}
+							{#if detail.logs.total_entries && detail.logs.total_entries !== logRows.length}
+								(executor reported {detail.logs.total_entries})
+							{/if}
+						</p>
+					{/if}
 				</div>
 			{/if}
 		</div>

@@ -155,6 +155,7 @@
 	step={drawerStep}
 	node={drawerNode}
 	iterations={drawerIterations}
+	instanceId={instance.id}
 	open={drawerOpen}
 	onClose={closeDrawer}
 	onSelectIteration={selectIteration}
