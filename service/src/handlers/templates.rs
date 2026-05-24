@@ -481,6 +481,7 @@ pub async fn publish_template(
     let CompiledArtifacts {
         air_json,
         graph_json,
+        interface_json,
     } = publisher
         .compile_artifacts(
             &graph,
@@ -509,7 +510,7 @@ pub async fn publish_template(
     //
     // UI publish: no git provenance (column stays NULL).
     let template =
-        finalize_publish_row(&state.db, id, &air_json, &graph_json, None).await?;
+        finalize_publish_row(&state.db, id, &air_json, &graph_json, &interface_json, None).await?;
 
     // Make the just-published template's triggers live immediately. The
     // dispatcher's in-memory registry is otherwise only filled by `hydrate()`
@@ -593,6 +594,7 @@ async fn finalize_publish_row<'e, E>(
     id: Uuid,
     air_json: &serde_json::Value,
     graph_json: &serde_json::Value,
+    interface_json: &serde_json::Value,
     source_ref: Option<&serde_json::Value>,
 ) -> Result<WorkflowTemplate, ApiError>
 where
@@ -602,7 +604,7 @@ where
         r#"
         UPDATE workflow_templates
         SET published = TRUE, published_at = NOW(), air_json = $2, graph = $3,
-            source_ref = $4, updated_at = NOW()
+            interface_json = $4, source_ref = $5, updated_at = NOW()
         WHERE id = $1
         RETURNING *
         "#,
@@ -610,6 +612,7 @@ where
     .bind(id)
     .bind(air_json)
     .bind(graph_json)
+    .bind(interface_json)
     .bind(source_ref)
     .fetch_one(exec)
     .await
@@ -632,6 +635,7 @@ async fn insert_published_version<'e, E>(
     version: i32,
     air_json: &serde_json::Value,
     graph_json: &serde_json::Value,
+    interface_json: &serde_json::Value,
     source_ref: Option<&serde_json::Value>,
 ) -> Result<WorkflowTemplate, ApiError>
 where
@@ -642,8 +646,9 @@ where
         r#"
         INSERT INTO workflow_templates
             (id, name, description, base_template_id, parent_id, version,
-             is_latest, published, published_at, graph, air_json, source_ref, author_id)
-        VALUES ($1, $2, $3, $4, $5, $6, TRUE, TRUE, NOW(), $7, $8, $9, $10)
+             is_latest, published, published_at, graph, air_json,
+             interface_json, source_ref, author_id)
+        VALUES ($1, $2, $3, $4, $5, $6, TRUE, TRUE, NOW(), $7, $8, $9, $10, $11)
         RETURNING *
         "#,
     )
@@ -655,6 +660,7 @@ where
     .bind(version)
     .bind(graph_json)
     .bind(air_json)
+    .bind(interface_json)
     .bind(source_ref)
     .bind(src.author_id)
     .fetch_one(exec)
@@ -894,6 +900,7 @@ pub async fn apply_template(
     let CompiledArtifacts {
         air_json,
         graph_json,
+        interface_json,
     } = publisher
         .compile_artifacts(
             &graph,
@@ -939,6 +946,7 @@ pub async fn apply_template(
                 latest.id,
                 &air_json,
                 &graph_json,
+                &interface_json,
                 source_ref_json.as_ref(),
             )
             .await?
@@ -952,6 +960,7 @@ pub async fn apply_template(
                 target_version,
                 &air_json,
                 &graph_json,
+                &interface_json,
                 source_ref_json.as_ref(),
             )
             .await?
@@ -1387,6 +1396,7 @@ mod apply_mode_tests {
             published_by: None,
             graph: serde_json::json!({}),
             air_json: None,
+            interface_json: None,
             source_ref: None,
             author_id: Uuid::new_v4(),
             created_at: Utc::now(),

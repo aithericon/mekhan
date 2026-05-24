@@ -4,6 +4,7 @@
 
 use crate::compiler::compile::SubWorkflowAir;
 use crate::compiler::error::CompileError;
+use crate::compiler::interface::{InterfaceRegistry, NodeInterface, NodeKind, OutputKey};
 use crate::compiler::well_known;
 use crate::compiler::rhai_gen::{
     build_join_merge_logic, build_merge_logic, build_retry_topology, interpolate_to_rhai_expr,
@@ -179,6 +180,12 @@ pub(crate) struct LoweringCtx<'a, 'c> {
     /// Pre-resolved child sub-workflow AIR, keyed by SubWorkflow node id.
     /// Empty unless the publish/preview path populated it.
     pub(crate) sub_air: &'a SubWorkflowAir,
+    /// Per-node sub-graph interface registry. The dispatcher synthesizes a
+    /// baseline from `ports` + `fixups.data_places` after every lower call;
+    /// targeted lowerings (Start/End/HumanTask/SubWorkflow) enrich their
+    /// entry directly (workflow_terminals, owned_places). See
+    /// `service/src/compiler/interface.rs`.
+    pub(crate) interfaces: &'c mut InterfaceRegistry,
 }
 
 /// Expand one workflow node into Petri structure.
@@ -224,6 +231,7 @@ pub(crate) fn expand_node(
     fixups: &mut PostProcess,
     node_files: &HashMap<String, InputSource>,
     sub_air: &SubWorkflowAir,
+    interfaces: &mut InterfaceRegistry,
 ) -> Result<(), CompileError> {
     let mut cx = LoweringCtx {
         node,
@@ -235,8 +243,87 @@ pub(crate) fn expand_node(
         fixups,
         node_files,
         sub_air,
+        interfaces,
     };
-    node.lower(&mut cx)
+    node.lower(&mut cx)?;
+    // Post-lower: synthesize / merge a baseline interface entry from the
+    // canonical sources of truth (`ports`, `fixups.data_places`). Targeted
+    // lowerings (`lower_start`, `lower_end`, `lower_human_task`,
+    // `lower_subworkflow`) may have already inserted an entry with richer
+    // information (workflow_terminals, owned_places); we merge on top of
+    // theirs rather than overwrite. Other variants get full auto-derivation.
+    synthesize_baseline_interface(&mut cx);
+    Ok(())
+}
+
+/// Compute / augment a node's `NodeInterface` from its `NodePorts` +
+/// `fixups.data_places` entry. Idempotent: leaves any already-populated field
+/// alone. Called by the dispatcher post-lower so every node has at least the
+/// boundary + data_port + kind recorded in the registry.
+fn synthesize_baseline_interface(cx: &mut LoweringCtx) {
+    let node_id = cx.node.id.clone();
+    let kind = node_kind_of(cx.node);
+    let entry_iface = cx
+        .interfaces
+        .entry(node_id.clone())
+        .or_insert_with(|| NodeInterface::new(node_id.clone(), kind));
+
+    // Always overwrite kind: enrichment helpers might have inserted with a
+    // default kind, but the dispatcher knows the real one from the graph.
+    entry_iface.kind = kind;
+
+    if let Some(ports) = cx.ports.get(&node_id) {
+        if entry_iface.entry.is_none() {
+            entry_iface.entry = Some(ports.input_place.id().to_string());
+        }
+        for (handle, place) in &ports.input_handles {
+            entry_iface
+                .named_inputs
+                .entry(handle.clone())
+                .or_insert_with(|| place.id().to_string());
+        }
+        for (edge_id, place) in &ports.input_places {
+            entry_iface
+                .named_inputs
+                .entry(edge_id.clone())
+                .or_insert_with(|| place.id().to_string());
+        }
+        for (key, place) in &ports.output_places {
+            let k = match key {
+                None => OutputKey::Default,
+                Some(s) => OutputKey::Edge(s.clone()),
+            };
+            entry_iface
+                .outputs
+                .entry(k)
+                .or_insert_with(|| place.id().to_string());
+        }
+    }
+
+    if entry_iface.data_port.is_none() {
+        if let Some(p) = cx.fixups.data_places.get(&node_id) {
+            entry_iface.data_port = Some(p.clone());
+        }
+    }
+}
+
+fn node_kind_of(node: &WorkflowNode) -> NodeKind {
+    match &node.data {
+        WorkflowNodeData::Start { .. } => NodeKind::Start,
+        WorkflowNodeData::End { .. } => NodeKind::End,
+        WorkflowNodeData::HumanTask { .. } => NodeKind::HumanTask,
+        WorkflowNodeData::AutomatedStep { .. } => NodeKind::AutomatedStep,
+        WorkflowNodeData::Decision { .. } => NodeKind::Decision,
+        WorkflowNodeData::Loop { .. } => NodeKind::Loop,
+        WorkflowNodeData::ParallelSplit { .. } => NodeKind::ParallelSplit,
+        WorkflowNodeData::ParallelJoin { .. } => NodeKind::ParallelJoin,
+        WorkflowNodeData::Scope { .. } => NodeKind::Scope,
+        WorkflowNodeData::SubWorkflow { .. } => NodeKind::SubWorkflow,
+        WorkflowNodeData::PhaseUpdate { .. } => NodeKind::PhaseUpdate,
+        WorkflowNodeData::ProgressUpdate { .. } => NodeKind::ProgressUpdate,
+        WorkflowNodeData::Failure { .. } => NodeKind::Failure,
+        WorkflowNodeData::Trigger { .. } => NodeKind::Trigger,
+    }
 }
 
 fn lower_start(cx: &mut LoweringCtx) -> Result<(), CompileError> {
@@ -685,11 +772,12 @@ fn lower_end(cx: &mut LoweringCtx) -> Result<(), CompileError> {
         (done.clone(), done_id)
     };
 
-    match cx.fixups.process_token_place.clone() {
+    let terminal_id = match cx.fixups.process_token_place.clone() {
         // No process was registered by the Start (opt-in unused) —
         // the terminal feed is itself the terminal place.
         None => {
-            cx.fixups.terminal_place_ids.push(terminal_feed_id);
+            cx.fixups.terminal_place_ids.push(terminal_feed_id.clone());
+            terminal_feed_id
         }
         // A Start registered a process — mirror the Start pattern:
         // insert a `process_complete` effect between the (post-shape)
@@ -711,11 +799,20 @@ fn lower_end(cx: &mut LoweringCtx) -> Result<(), CompileError> {
             .auto_output("completed", &completed)
             .process_complete();
 
-            cx.fixups
-                .terminal_place_ids
-                .push(format!("p_{id}_completed"));
+            let completed_id = format!("p_{id}_completed");
+            cx.fixups.terminal_place_ids.push(completed_id.clone());
+            completed_id
         }
-    }
+    };
+
+    // Stamp this End's workflow-exit terminal on its interface. Recorded
+    // *pre*-alias-collapse here; `compile.rs` rewrites it through the alias
+    // map alongside the rest of the registry after merges resolve.
+    let iface = cx
+        .interfaces
+        .entry(id.clone())
+        .or_insert_with(|| NodeInterface::new(id.clone(), NodeKind::End));
+    iface.workflow_terminals.push(terminal_id);
 
     cx.ports.insert(
         id.clone(),

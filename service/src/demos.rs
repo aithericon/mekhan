@@ -489,6 +489,7 @@ pub async fn seed_one(
     let crate::process::publish::CompiledArtifacts {
         air_json,
         graph_json,
+        interface_json,
     } = publisher
         .compile_artifacts(
             &demo.graph,
@@ -514,8 +515,9 @@ pub async fn seed_one(
         r#"
         INSERT INTO workflow_templates
             (id, name, description, base_template_id, version,
-             is_latest, published, published_at, graph, air_json, author_id)
-        VALUES ($1, $2, $3, $1, 1, TRUE, TRUE, NOW(), $4, $5, $6)
+             is_latest, published, published_at, graph, air_json,
+             interface_json, author_id)
+        VALUES ($1, $2, $3, $1, 1, TRUE, TRUE, NOW(), $4, $5, $6, $7)
         RETURNING *
         "#,
     )
@@ -524,6 +526,7 @@ pub async fn seed_one(
     .bind(demo.metadata.description.as_deref().unwrap_or(""))
     .bind(&graph_json)
     .bind(&air_json)
+    .bind(&interface_json)
     .bind(DEMO_SEEDER_AUTHOR_ID)
     .fetch_one(&state.db)
     .await?;

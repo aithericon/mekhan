@@ -3,6 +3,7 @@
 //! `error`/`graph`/`validate`/`lower`/`wire`/`rhai_gen`/`pyio` modules.
 
 use crate::compiler::graph::{topo_order, WorkflowDiGraph};
+use crate::compiler::interface::InterfaceRegistry;
 use crate::compiler::lower::{expand_node, NodeFiles, NodePorts, PostProcess};
 use crate::compiler::validate::{
     validate, validate_edges_typed, validate_guards, validate_triggers,
@@ -198,6 +199,34 @@ pub fn compile_to_air_with_subworkflows_inline(
         .map_err(|e| CompileError::Compilation(format!("failed to serialize scenario: {e}")))
 }
 
+/// Publish-path entry returning both AIR JSON and the per-node interface
+/// registry JSON. The publish handler persists `interface_json` alongside
+/// `air_json` so a parent's `SubWorkflow` resolver can read it back without
+/// re-deriving boundary places from string conventions. See
+/// `service/src/process/publish.rs::resolve_subworkflow_air`.
+pub fn compile_to_air_with_subworkflows_and_interfaces(
+    graph: &WorkflowGraph,
+    name: &str,
+    description: &str,
+    files: &NodeFiles,
+    inline_sources: &HashMap<String, HashMap<String, String>>,
+    sub_air: &SubWorkflowAir,
+) -> Result<(Value, Value), CompileError> {
+    let (scenario, interfaces) = compile_to_scenario_and_interfaces(
+        graph,
+        name,
+        description,
+        files,
+        inline_sources,
+        sub_air,
+    )?;
+    let air = serde_json::to_value(&scenario)
+        .map_err(|e| CompileError::Compilation(format!("failed to serialize scenario: {e}")))?;
+    let iface = serde_json::to_value(&interfaces)
+        .map_err(|e| CompileError::Compilation(format!("failed to serialize interfaces: {e}")))?;
+    Ok((air, iface))
+}
+
 /// Run the full build/validate/lower/wire pipeline and return the typed
 /// [`ScenarioDefinition`] *before* JSON serialization. Recursive child
 /// compilation (publish-time pin resolution) needs the typed scenario so it
@@ -225,6 +254,35 @@ pub fn compile_to_scenario_with_inline_sources(
     inline_sources: &HashMap<String, HashMap<String, String>>,
     sub_air: &SubWorkflowAir,
 ) -> Result<ScenarioDefinition, CompileError> {
+    let (scenario, _interfaces) = compile_to_scenario_and_interfaces(
+        graph,
+        name,
+        description,
+        files,
+        inline_sources,
+        sub_air,
+    )?;
+    Ok(scenario)
+}
+
+/// Prototype entry: compile and return both the scenario AND the per-node
+/// interface registry. The registry is alias-rewritten post-merge so place
+/// ids are stable; consumers (publish-side SubWorkflow resolution, future
+/// scope/borrow consumers) read it directly instead of pattern-matching on
+/// place id conventions.
+///
+/// This is the seam that publish persists alongside `air_json` (sidecar
+/// `interface_json`), so a parent compile that embeds this template via a
+/// `SubWorkflow` node reads the child's interface verbatim — no scanning,
+/// no `place_type == "terminal" && !id.contains('/')` filtering.
+pub fn compile_to_scenario_and_interfaces(
+    graph: &WorkflowGraph,
+    name: &str,
+    description: &str,
+    files: &NodeFiles,
+    inline_sources: &HashMap<String, HashMap<String, String>>,
+    sub_air: &SubWorkflowAir,
+) -> Result<(ScenarioDefinition, InterfaceRegistry), CompileError> {
     // 1. Build directed graph
     let wg = WorkflowDiGraph::build(graph)?;
 
@@ -254,6 +312,7 @@ pub fn compile_to_scenario_with_inline_sources(
     let mut ctx = Context::new(name).description(description);
     let mut node_ports: HashMap<String, NodePorts> = HashMap::new();
     let mut fixups = PostProcess::default();
+    let mut interfaces: InterfaceRegistry = HashMap::new();
 
     // Pre-populate scope_groups: map child node_id → parent scope's group_id
     for node in &graph.nodes {
@@ -305,6 +364,7 @@ pub fn compile_to_scenario_with_inline_sources(
             &mut fixups,
             node_files,
             sub_air,
+            &mut interfaces,
         )?;
     }
 
@@ -318,12 +378,42 @@ pub fn compile_to_scenario_with_inline_sources(
     // 6. Resolve place aliases from merges
     let alias = resolve_aliases(&fixups.merges);
 
-    // 7. Resolve terminal place IDs through aliases, then apply fixups
-    let resolved_terminal_ids: Vec<String> = fixups
-        .terminal_place_ids
-        .iter()
-        .map(|id| alias.get(id).cloned().unwrap_or_else(|| id.clone()))
+    // 6a. Sub-graph ownership derivation (PROTOTYPE).
+    //
+    //     Walk the pre-merge scenario once and credit every place/transition
+    //     to its owning node via the existing `p_{id}_*` / `t_{id}_*` naming
+    //     convention. This is the one (and only) place the prefix match
+    //     survives — concentrated, audited, and run once. After this every
+    //     consumer reads `interface.owned_places` / `interface.owned_transitions`
+    //     directly.
+    //
+    //     Then alias-rewrite every place id in every interface so downstream
+    //     passes see post-merge ids: `entry`, `named_inputs`, `outputs`,
+    //     `data_port`, `workflow_terminals`, `owned_places` are all stable.
+    //     This is the analog of compile.rs's old terminal-id alias resolution
+    //     (step 7), generalised — and the structural fix for the
+    //     `e5ed9fc` / `674408e` SubWorkflow terminal-filter leak: consumers
+    //     never have to re-derive collapse-stable ids.
+    derive_node_ownership(&scenario, &mut interfaces);
+    for iface in interfaces.values_mut() {
+        iface.rewrite_places(&alias);
+    }
+
+    // 7. Terminal place_type fixup. Read from the registry's
+    //    `workflow_terminals` (already post-alias) — this is what
+    //    `lower_end` published. Union with `fixups.terminal_place_ids` for
+    //    back-compat if any future lowering still records terminals only
+    //    on fixups.
+    let mut resolved_terminal_ids: Vec<String> = interfaces
+        .values()
+        .flat_map(|i| i.workflow_terminals.iter().cloned())
         .collect();
+    for id in &fixups.terminal_place_ids {
+        let resolved = alias.get(id).cloned().unwrap_or_else(|| id.clone());
+        if !resolved_terminal_ids.contains(&resolved) {
+            resolved_terminal_ids.push(resolved);
+        }
+    }
     for place in &mut scenario.places {
         if resolved_terminal_ids.contains(&place.id) {
             place.place_type = "terminal".to_string();
@@ -340,17 +430,24 @@ pub fn compile_to_scenario_with_inline_sources(
         });
     }
 
-    // 8b. Tag places/transitions of scope children with their group_id
+    // 8b. Tag places/transitions of scope children with their group_id —
+    //     via interface ownership, not prefix match. Robust to nested
+    //     scopes + any future naming change inside `lower_*`.
     for (node_id, group_id) in &fixups.scope_groups {
-        let prefix = format!("p_{}_", node_id);
-        let t_prefix = format!("t_{}_", node_id);
+        let Some(iface) = interfaces.get(node_id) else {
+            continue;
+        };
+        let owned_p: std::collections::HashSet<&str> =
+            iface.owned_places.iter().map(String::as_str).collect();
+        let owned_t: std::collections::HashSet<&str> =
+            iface.owned_transitions.iter().map(String::as_str).collect();
         for place in &mut scenario.places {
-            if place.id.starts_with(&prefix) && place.group_id.is_none() {
+            if owned_p.contains(place.id.as_str()) && place.group_id.is_none() {
                 place.group_id = Some(group_id.clone());
             }
         }
         for transition in &mut scenario.transitions {
-            if transition.id.starts_with(&t_prefix) && transition.group_id.is_none() {
+            if owned_t.contains(transition.id.as_str()) && transition.group_id.is_none() {
                 transition.group_id = Some(group_id.clone());
             }
         }
@@ -366,7 +463,55 @@ pub fn compile_to_scenario_with_inline_sources(
     //     that owns the field it references. Runs post-merge: place ids final.
     apply_control_data_foundation(graph, &mut scenario, &fixups, inline_sources)?;
 
-    Ok(scenario)
+    Ok((scenario, interfaces))
+}
+
+/// Walk the (pre-merge) scenario and credit every place to the owning node by
+/// matching `p_{node_id}_*` / `t_{node_id}_*` prefixes. **The only place this
+/// prefix match still lives.** Longest-prefix-wins so id-prefix collisions
+/// like `"lp"` vs `"lp_inner"` don't misattribute.
+fn derive_node_ownership(
+    scenario: &ScenarioDefinition,
+    interfaces: &mut InterfaceRegistry,
+) {
+    let mut by_len: Vec<String> = interfaces.keys().cloned().collect();
+    by_len.sort_by(|a, b| b.len().cmp(&a.len()));
+
+    fn match_owner<'a>(id: &str, kind: char, by_len: &'a [String]) -> Option<&'a str> {
+        for node_id in by_len {
+            let prefix = match kind {
+                'p' => format!("p_{node_id}_"),
+                _ => format!("t_{node_id}_"),
+            };
+            if id.starts_with(&prefix) {
+                return Some(node_id.as_str());
+            }
+            if id == &prefix[..prefix.len() - 1] {
+                // Bare `p_{id}` / `t_{id}` (no trailing role) — counts too.
+                return Some(node_id.as_str());
+            }
+        }
+        None
+    }
+
+    for place in &scenario.places {
+        if let Some(owner) = match_owner(&place.id, 'p', &by_len) {
+            if let Some(iface) = interfaces.get_mut(owner) {
+                if !iface.owned_places.iter().any(|p| p == &place.id) {
+                    iface.owned_places.push(place.id.clone());
+                }
+            }
+        }
+    }
+    for transition in &scenario.transitions {
+        if let Some(owner) = match_owner(&transition.id, 't', &by_len) {
+            if let Some(iface) = interfaces.get_mut(owner) {
+                if !iface.owned_transitions.iter().any(|t| t == &transition.id) {
+                    iface.owned_transitions.push(transition.id.clone());
+                }
+            }
+        }
+    }
 }
 
 /// Post-merge foundation phase. See call site (step 10).
@@ -1094,6 +1239,73 @@ mod tests {
         // `parameterize_air` seeds them at instance creation.
         let main_place = places.iter().find(|p| p["id"] == "p_s_main").unwrap();
         assert_eq!(main_place["type"], "terminal");
+    }
+
+    /// Prototype proof: the per-node interface registry is alias-stable on
+    /// the exact graph the `e5ed9fc`/`674408e` SubWorkflow terminal-filter
+    /// leak hit — a trivial Start→End child where End's terminal
+    /// (`p_e_done`) collapses into Start's `p_s_main`. The End's interface
+    /// entry stays consistent: `workflow_terminals` post-rewrite is
+    /// `[p_s_main]`, NOT `[p_e_done]` (dead) or empty. That's what
+    /// `publish.rs::resolve_subworkflow_air` reads as the spawn-callable
+    /// reply source — no `place_type` peek, no slash-exclusion. See
+    /// `service/src/compiler/interface.rs` for the registry shape.
+    #[test]
+    fn interface_registry_is_alias_collapse_stable() {
+        use crate::compiler::interface::NodeKind;
+        let graph = WorkflowGraph {
+            nodes: vec![start_node("s"), end_node("e")],
+            edges: vec![edge("e1", "s", "e")],
+            viewport: None,
+            instance_concurrency: Default::default(),
+        };
+        let files: NodeFiles = std::collections::HashMap::new();
+        let inline: HashMap<String, HashMap<String, String>> = std::collections::HashMap::new();
+        let (_, registry) = compile_to_scenario_and_interfaces(
+            &graph,
+            "test",
+            "desc",
+            &files,
+            &inline,
+            &SubWorkflowAir::new(),
+        )
+        .unwrap();
+
+        // Start: alive, kind, entry place stable, owned places include the
+        // post-collapse survivor (`p_s_main`) — `p_s_ready`, `p_s_data`,
+        // and `p_s_main` are the three Start-emitted places.
+        let s = registry.get("s").expect("Start interface present");
+        assert_eq!(s.kind, NodeKind::Start);
+        assert_eq!(s.entry.as_deref(), Some("p_s_ready"));
+        assert!(
+            s.owned_places.iter().any(|p| p == "p_s_main"),
+            "Start should own its collapsed-survivor output place: {:?}",
+            s.owned_places
+        );
+
+        // End: alive, kind, workflow_terminals alias-rewritten to the
+        // collapse survivor (the entire seam this prototype closes).
+        let e = registry.get("e").expect("End interface present");
+        assert_eq!(e.kind, NodeKind::End);
+        assert_eq!(
+            e.workflow_terminals,
+            vec!["p_s_main".to_string()],
+            "End's terminal should be alias-rewritten to the collapse survivor (was {:?})",
+            e.workflow_terminals,
+        );
+        // Critical SubWorkflow-resolution invariant: the terminal id is NOT
+        // a slash-separated SDK lifecycle place, so the old
+        // `!id.contains('/')` filter would still catch it — but it's also
+        // NOT the `p_e_done` prefix the original buggy filter (`e5ed9fc`)
+        // searched for. The interface registry sidesteps both checks.
+        assert!(
+            !e.workflow_terminals[0].contains('/'),
+            "Terminal must be a workflow-exit, not an SDK lifecycle marker",
+        );
+        assert!(
+            !e.workflow_terminals[0].starts_with("p_e_"),
+            "Terminal must be the post-collapse survivor, not the pre-collapse `p_e_done`",
+        );
     }
 
     #[test]
