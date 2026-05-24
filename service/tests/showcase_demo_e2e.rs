@@ -324,8 +324,7 @@ async fn invoice_processing_demo_low_value_path_completes() {
                         "data": {
                             "vendor_name": "ACME Demo",
                             "invoice_amount": 250.0,
-                            "description": "low-value invoice for e2e",
-                            "verified": true
+                            "description": "low-value invoice for e2e"
                         }
                     })
                     .to_string(),

@@ -4,6 +4,12 @@
     "title": "Decision",
     "blocks": [
       {
+        "type": "callout",
+        "severity": "warning",
+        "title": "Invoice {{ invoice_id }} — High-value review",
+        "content": "Invoice **{{ invoice_id }}** from **{{ extract.vendor }}** totals **${{ extract.amount }}** and exceeds the $5,000 threshold. Manager sign-off is required."
+      },
+      {
         "type": "input",
         "field": {
           "name": "decision",
