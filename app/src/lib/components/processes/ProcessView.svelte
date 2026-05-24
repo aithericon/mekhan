@@ -30,7 +30,6 @@
 	import X from '@lucide/svelte/icons/x';
 	import ChevronLeft from '@lucide/svelte/icons/chevron-left';
 	import ChevronRight from '@lucide/svelte/icons/chevron-right';
-	import ExternalLink from '@lucide/svelte/icons/external-link';
 	import Settings from '@lucide/svelte/icons/settings';
 
 	let {
@@ -83,11 +82,36 @@
 		debug: 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'
 	};
 	const taskStatusColors: Record<string, string> = {
-		pending: 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200',
-		completed: 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200',
-		cancelled: 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300',
-		failed: 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
+		pending: 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-300',
+		completed: 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950 dark:text-emerald-300',
+		cancelled: 'border-slate-200 bg-slate-50 text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300',
+		failed: 'border-red-200 bg-red-50 text-red-600 dark:border-red-800 dark:bg-red-950 dark:text-red-300'
 	};
+	const taskStatusLabels: Record<string, string> = {
+		pending: 'Pending',
+		completed: 'Completed',
+		cancelled: 'Cancelled',
+		failed: 'Rejected'
+	};
+	function taskStatusLabel(s: string): string {
+		return taskStatusLabels[s.toLowerCase()] ?? s;
+	}
+	function taskDateText(t: {
+		status: string;
+		created_at: string;
+		completed_at?: string | null;
+	}): string {
+		switch (t.status?.toLowerCase()) {
+			case 'completed':
+				return `Completed ${relativeTime(t.completed_at ?? t.created_at)}`;
+			case 'cancelled':
+				return `Cancelled ${relativeTime(t.completed_at ?? t.created_at)}`;
+			case 'failed':
+				return `Rejected ${relativeTime(t.completed_at ?? t.created_at)}`;
+			default:
+				return `Received ${relativeTime(t.created_at)}`;
+		}
+	}
 	function logLevelColor(l: string): string {
 		return logLevelColors[l.toLowerCase()] ?? logLevelColors.debug;
 	}
@@ -377,7 +401,7 @@
 			{/if}
 
 			{#if openTasks.length > 0}
-				<div class="rounded-lg border border-border bg-card p-4">
+				<div class="max-w-3xl rounded-lg border border-border bg-card p-4">
 					<h3 class="mb-3 flex items-center gap-2 text-sm font-semibold text-foreground">
 						<ListChecks class="size-4 text-muted-foreground" />
 						Open tasks
@@ -391,43 +415,43 @@
 								steps?: unknown[];
 							}}
 							{@const taskId = anyTask.task_id ?? anyTask.id}
-							<div
-								class="flex items-start justify-between gap-4 rounded-md border border-border/60 bg-background px-3 py-2"
-							>
-								<div class="min-w-0 flex-1">
-									<div class="flex flex-wrap items-center gap-1.5">
-										<span class="text-sm font-medium text-foreground">{task.title}</span>
+							<div class="group/task relative">
+								<a
+									href={taskHref(taskId)}
+									class="block rounded-lg border border-border/60 bg-background px-3 py-2 pr-12 transition hover:border-primary/40 hover:shadow-sm"
+								>
+									<div class="flex items-center gap-2">
+										<span class="truncate text-sm font-medium text-foreground">{task.title}</span>
+										<Badge
+											variant="outline"
+											class="shrink-0 rounded-full border-amber-200 bg-amber-50 text-amber-700"
+										>
+											Pending
+										</Badge>
+									</div>
+									<div class="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-sm text-muted-foreground">
+										<span>Received {relativeTime(task.created_at)}</span>
 										{#if task.assignee}
-											<span class="text-sm text-muted-foreground">· {task.assignee}</span>
+											<span class="text-muted-foreground/60">·</span>
+											<span>{task.assignee}</span>
 										{/if}
 									</div>
-									<p class="mt-0.5 text-sm text-muted-foreground">
-										Created {relativeTime(task.created_at)}
-									</p>
-								</div>
-								<div class="flex shrink-0 items-center gap-1">
-									<Button
-										variant="ghost"
-										size="sm"
-										href={taskHref(taskId)}
-										class="text-muted-foreground hover:text-foreground"
-									>
-										<ExternalLink class="size-3.5 mr-1" />
-										Open
-									</Button>
-									<Button
-										variant="ghost"
-										size="sm"
-										class="text-red-700 hover:text-red-800 hover:bg-red-100 dark:text-red-400 dark:hover:bg-red-900"
-										onclick={async () => {
-											await handleCancelTask(taskId);
-											dropOpenTask(taskId, 'cancelled');
-										}}
-									>
-										<X class="size-3.5 mr-1" />
-										Cancel
-									</Button>
-								</div>
+								</a>
+								<Button
+									variant="ghost"
+									size="icon-sm"
+									title="Cancel task"
+									aria-label="Cancel task"
+									class="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:bg-red-100 hover:text-red-700 dark:hover:bg-red-900 dark:hover:text-red-400"
+									onclick={async (e) => {
+										e.preventDefault();
+										e.stopPropagation();
+										await handleCancelTask(taskId);
+										dropOpenTask(taskId, 'cancelled');
+									}}
+								>
+									<X class="size-4" />
+								</Button>
 							</div>
 						{/each}
 					</div>
@@ -581,7 +605,7 @@
 				<p class="mt-2 text-sm text-muted-foreground">No tasks for this process</p>
 			</div>
 		{:else}
-			<div class="space-y-2">
+			<div class="max-w-3xl space-y-2">
 				{#each tasks as task (task.id)}
 					{@const anyTask = task as unknown as {
 						task_id?: string;
@@ -589,51 +613,41 @@
 						steps?: unknown[];
 					}}
 					{@const taskId = anyTask.task_id ?? anyTask.id}
-					<div class="rounded-lg border border-border bg-card p-4">
-						<div class="flex items-start justify-between gap-4">
-							<div class="min-w-0 flex-1">
-								<div class="flex flex-wrap items-center gap-1.5">
-									<span class="text-sm font-medium text-foreground">{task.title}</span>
-									<Badge class={taskStatusColor(task.status)} variant="secondary">
-										{task.status}
-									</Badge>
-								</div>
-								<div
-									class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-sm text-muted-foreground"
-								>
-									{#if task.assignee}
-										<span>Assignee: {task.assignee}</span>
-									{/if}
-									<span>Created {relativeTime(task.created_at)}</span>
-									{#if task.completed_at}
-										<span>Completed {relativeTime(task.completed_at)}</span>
-									{/if}
-								</div>
+					<div class="group/task relative">
+						<a
+							href={taskHref(taskId)}
+							class="block rounded-lg border border-border bg-card p-3 {task.status === 'pending' ? 'pr-12' : ''} transition hover:border-primary/40 hover:shadow-sm"
+						>
+							<div class="flex items-center gap-2">
+								<span class="truncate text-sm font-medium text-foreground">{task.title}</span>
+								<Badge variant="outline" class="shrink-0 rounded-full {taskStatusColor(task.status)}">
+									{taskStatusLabel(task.status)}
+								</Badge>
 							</div>
-
-							<div class="flex shrink-0 items-center gap-1">
-								<Button
-									variant="ghost"
-									size="sm"
-									href={taskHref(taskId)}
-									class="text-muted-foreground hover:text-foreground"
-								>
-									<ExternalLink class="size-3.5 mr-1" />
-									Open
-								</Button>
-								{#if task.status === 'pending'}
-									<Button
-										variant="ghost"
-										size="sm"
-										class="text-red-700 hover:text-red-800 hover:bg-red-100 dark:text-red-400 dark:hover:bg-red-900"
-										onclick={() => handleCancelTask(taskId)}
-									>
-										<X class="size-3.5 mr-1" />
-										Cancel
-									</Button>
+							<div class="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-sm text-muted-foreground">
+								<span>{taskDateText(task)}</span>
+								{#if task.assignee}
+									<span class="text-muted-foreground/60">·</span>
+									<span>{task.assignee}</span>
 								{/if}
 							</div>
-						</div>
+						</a>
+						{#if task.status === 'pending'}
+							<Button
+								variant="ghost"
+								size="icon-sm"
+								title="Cancel task"
+								aria-label="Cancel task"
+								class="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:bg-red-100 hover:text-red-700 dark:hover:bg-red-900 dark:hover:text-red-400"
+								onclick={(e) => {
+									e.preventDefault();
+									e.stopPropagation();
+									handleCancelTask(taskId);
+								}}
+							>
+								<X class="size-4" />
+							</Button>
+						{/if}
 					</div>
 				{/each}
 			</div>

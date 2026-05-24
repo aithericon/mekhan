@@ -20,14 +20,32 @@
 	let { task, process = null, hpiBaseUrl }: Props = $props();
 
 	const statusConfig: Record<string, { color: string; label: string }> = {
-		pending: { color: 'bg-amber-100 text-amber-700', label: 'Pending' },
-		completed: { color: 'bg-green-100 text-green-700', label: 'Completed' },
-		cancelled: { color: 'bg-slate-100 text-slate-700', label: 'Cancelled' },
-		failed: { color: 'bg-red-100 text-red-700', label: 'Failed' }
+		pending: { color: 'border-amber-200 bg-amber-50 text-amber-700', label: 'Pending' },
+		completed: { color: 'border-emerald-200 bg-emerald-50 text-emerald-700', label: 'Completed' },
+		cancelled: { color: 'border-slate-200 bg-slate-50 text-slate-600', label: 'Cancelled' },
+		failed: { color: 'border-red-200 bg-red-50 text-red-600', label: 'Rejected' }
 	};
 
 	const status = $derived(statusConfig[task.status] ?? statusConfig.pending);
 	const hasData = $derived(task.data && Object.keys(task.data).length > 0);
+
+	function formatDuration(ms?: number | null): string | null {
+		if (ms == null) return null;
+		if (ms < 1000) return `${ms}ms`;
+		const seconds = Math.floor(ms / 1000);
+		if (seconds < 60) return `${(ms / 1000).toFixed(1)}s`;
+		const minutes = Math.floor(seconds / 60);
+		const remSec = seconds % 60;
+		if (minutes < 60) return `${minutes}m ${remSec}s`;
+		const hours = Math.floor(minutes / 60);
+		const remMin = minutes % 60;
+		if (hours < 24) return `${hours}h ${remMin}m`;
+		const days = Math.floor(hours / 24);
+		const remHours = hours % 24;
+		return `${days}d ${remHours}h`;
+	}
+
+	const durationText = $derived(formatDuration(task.duration_ms));
 
 	function getInputFields(steps: TaskStep[]) {
 		return steps.flatMap((step) =>
@@ -44,7 +62,7 @@
 		<div class="min-w-0">
 			<h3 class="text-sm font-semibold text-foreground truncate">{task.title}</h3>
 			<div class="flex items-center gap-2 mt-1">
-				<Badge class={status.color} variant="secondary">
+				<Badge class="rounded-full {status.color}" variant="outline">
 					{#if task.status === 'pending'}
 						<Clock class="size-3 mr-1" />
 					{:else if task.status === 'completed'}
@@ -126,13 +144,16 @@
 	{/if}
 
 	<!-- Metadata -->
-	<div class="border-t border-border pt-2 text-sm text-muted-foreground">
-		<span>Created {new Date(task.created_at).toLocaleString()}</span>
+	<dl class="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 border-t border-border pt-3 text-sm">
+		<dt class="text-muted-foreground">Created</dt>
+		<dd class="text-foreground">{new Date(task.created_at).toLocaleString()}</dd>
 		{#if task.completed_at}
-			<span class="ml-2">Completed {new Date(task.completed_at).toLocaleString()}</span>
+			<dt class="text-muted-foreground">Completed</dt>
+			<dd class="text-foreground">{new Date(task.completed_at).toLocaleString()}</dd>
 		{/if}
-		{#if task.duration_ms}
-			<span class="ml-2">({(task.duration_ms / 1000).toFixed(1)}s)</span>
+		{#if durationText}
+			<dt class="text-muted-foreground">Duration</dt>
+			<dd class="text-foreground">{durationText}</dd>
 		{/if}
-	</div>
+	</dl>
 </div>

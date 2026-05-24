@@ -57,7 +57,7 @@
 			{src}
 			alt={alt ?? ''}
 			loading="lazy"
-			class="max-w-full rounded-lg"
+			class="mx-auto max-h-[60vh] max-w-full rounded-lg object-contain"
 			onerror={() => (failed = true)}
 		/>
 	{:else}

@@ -20,6 +20,9 @@
 	import { MDSVEX_CLASS } from '$lib/mdsvex-styles';
 	import { authFetch } from '$lib/auth/fetch';
 	import { toast } from 'svelte-sonner';
+	import Check from '@lucide/svelte/icons/check';
+	import ArrowRight from '@lucide/svelte/icons/arrow-right';
+	import * as Stepper from '$lib/components/ui/stepper';
 	import {
 		getTextValue as _getTextValue,
 		getCheckboxValue as _getCheckboxValue,
@@ -39,14 +42,107 @@
 		onsubmit: (data: Record<string, unknown>) => void;
 		oncancel?: (reason?: string) => void;
 		submitting?: boolean;
+		/** Persist form draft (values + active step) to localStorage under this key. */
+		taskId?: string;
 	}
 
-	let { steps, onsubmit, oncancel, submitting = false }: Props = $props();
+	let { steps, onsubmit, oncancel, submitting = false, taskId }: Props = $props();
 
 	let formData: Record<string, unknown> = $state({});
 	let errors: Record<string, string> = $state({});
-	let activeStep = $state(0);
+	// 1-based to match Stepper.Root contract
+	let activeStep = $state(1);
 	let datePopoverOpen: Record<string, boolean> = $state({});
+
+	const STORAGE_KEY = $derived(taskId ? `task-draft-${taskId}` : null);
+	let draftLoaded = $state(false);
+
+	$effect(() => {
+		const key = STORAGE_KEY;
+		if (!key || draftLoaded) return;
+		draftLoaded = true;
+		if (typeof localStorage === 'undefined') return;
+		try {
+			const saved = localStorage.getItem(key);
+			if (!saved) return;
+			const draft = JSON.parse(saved) as { formValues?: Record<string, unknown>; step?: number };
+			if (draft.formValues && typeof draft.formValues === 'object') {
+				formData = { ...draft.formValues };
+			}
+			if (typeof draft.step === 'number' && draft.step >= 1 && draft.step <= steps.length) {
+				activeStep = draft.step;
+			}
+		} catch {
+			localStorage.removeItem(key);
+		}
+	});
+
+	$effect(() => {
+		const key = STORAGE_KEY;
+		if (!key || !draftLoaded) return;
+		if (typeof localStorage === 'undefined') return;
+		const snapshot = $state.snapshot(formData);
+		const step = activeStep;
+		const hasValues = Object.keys(snapshot).length > 0;
+		if (!hasValues && step === 1) {
+			localStorage.removeItem(key);
+			return;
+		}
+		try {
+			localStorage.setItem(key, JSON.stringify({ formValues: snapshot, step }));
+		} catch {
+			/* quota or disabled — silently drop */
+		}
+	});
+
+	function clearDraft() {
+		if (!STORAGE_KEY || typeof localStorage === 'undefined') return;
+		localStorage.removeItem(STORAGE_KEY);
+	}
+
+	function setFieldErrorBound(name: string, message: string) {
+		errors = { ...errors, [name]: message };
+	}
+
+	function clearFieldErrorBound(name: string) {
+		if (!(name in errors)) return;
+		const { [name]: _, ...rest } = errors;
+		errors = rest;
+	}
+
+	function focusField(fieldName: string): void {
+		queueMicrotask(() => {
+			document
+				.querySelector<HTMLElement>(`[data-testid="field-${fieldName}"]`)
+				?.focus();
+		});
+	}
+
+	/** Validate one step's fields. Returns the first invalid field name, or null. */
+	function validateStep(stepIdx: number): string | null {
+		const s = steps[stepIdx];
+		if (!s) return null;
+		return validateFields(
+			fieldsForStep(s),
+			formData,
+			setFieldErrorBound,
+			clearFieldErrorBound
+		);
+	}
+
+	/** Walk forward from current step toward `targetStep` (1-based, exclusive).
+	 *  Returns 1-based index of first failing step (and focuses its bad field),
+	 *  or null if all steps in [activeStep, targetStep) validate. */
+	function validateUpTo(targetStep: number): number | null {
+		for (let s = activeStep; s < targetStep; s++) {
+			const firstInvalid = validateStep(s - 1);
+			if (firstInvalid) {
+				focusField(firstInvalid);
+				return s;
+			}
+		}
+		return null;
+	}
 
 	// Value accessors bound to formData
 	function getTextValue(name: string): string {
@@ -79,42 +175,60 @@
 			errors = rest;
 		}
 	}
-	function setFieldError(name: string, message: string) {
-		errors = { ...errors, [name]: message };
-	}
 
-	const currentStep = $derived(steps[activeStep]);
-	const isLastStep = $derived(activeStep === steps.length - 1);
+	const currentStep = $derived(steps[activeStep - 1]);
+	const isLastStep = $derived(activeStep === steps.length);
 	const allFields = $derived(steps.flatMap((s) => fieldsForStep(s)));
 
 	function handleSubmit() {
-		errors = {};
 		const firstInvalid = validateFields(
 			allFields,
 			formData,
-			(name, msg) => (errors = { ...errors, [name]: msg }),
-			(name) => {
-				const { [name]: _, ...rest } = errors;
-				errors = rest;
-			}
+			setFieldErrorBound,
+			clearFieldErrorBound
 		);
 		if (firstInvalid) {
-			// Jump to first step with an error
+			// Jump to first step containing an error
 			for (let i = 0; i < steps.length; i++) {
 				const stepFields = fieldsForStep(steps[i]);
 				if (stepFields.some((f) => errors[f.name])) {
-					activeStep = i;
+					activeStep = i + 1;
+					focusField(firstInvalid);
 					break;
 				}
 			}
 			return;
 		}
+		clearDraft();
 		onsubmit(coerceFormData(allFields, formData));
+	}
+
+	function goToNextStep() {
+		if (activeStep >= steps.length) return;
+		const firstInvalid = validateStep(activeStep - 1);
+		if (firstInvalid) {
+			focusField(firstInvalid);
+			return;
+		}
+		activeStep += 1;
+	}
+
+	function goToPreviousStep() {
+		activeStep = Math.max(1, activeStep - 1);
+	}
+
+	/** Stepper trigger click: backward = free, forward = validate intermediate steps. */
+	function handleStepTriggerClick(target: number, event: MouseEvent) {
+		if (target <= activeStep) return; // backward / same = free
+		event.preventDefault(); // block Stepper's auto-select
+		const failedAt = validateUpTo(target);
+		activeStep = failedAt ?? target;
 	}
 
 	function handleCancel() {
 		const reason = prompt('Reason for cancellation (optional):');
 		if (reason === null) return;
+		clearDraft();
 		oncancel?.(reason || undefined);
 	}
 
@@ -156,20 +270,43 @@
 >
 	<!-- Multi-step indicator -->
 	{#if steps.length > 1}
-		<div class="flex gap-1">
-			{#each steps as step, i (step.id)}
-				<button
-					type="button"
-					class="flex-1 rounded-full py-1 text-sm font-medium transition-colors {i === activeStep
-						? 'bg-primary text-primary-foreground'
-						: i < activeStep
-							? 'bg-primary/20 text-primary'
-							: 'bg-muted text-muted-foreground'}"
-					onclick={() => (activeStep = i)}
-				>
-					{step.title}
-				</button>
-			{/each}
+		<Stepper.Root bind:step={activeStep}>
+			<Stepper.Nav class="mb-2 w-full gap-4 overflow-visible" orientation="horizontal">
+				{#each steps as step, i (step.id)}
+					{@const isDone = i + 1 < activeStep}
+					<Stepper.Item id={step.id} class="min-w-0">
+						<Stepper.Trigger
+							class="w-full min-w-0 items-center gap-2 rounded-xl px-2 pt-0 pb-1 text-center transition-colors"
+							onclick={(e) => handleStepTriggerClick(i + 1, e)}
+						>
+							<Stepper.Indicator>
+								{#if isDone}
+									<Check class="size-4" />
+								{:else}
+									{i + 1}
+								{/if}
+							</Stepper.Indicator>
+							<div class="w-full min-w-0">
+								<Stepper.Title
+									class="text-sm leading-tight break-words whitespace-normal group-data-[current=false]/stepper-trigger:text-muted-foreground group-data-[current=true]/stepper-trigger:text-foreground"
+								>
+									{step.title}
+								</Stepper.Title>
+							</div>
+						</Stepper.Trigger>
+						<Stepper.Separator />
+					</Stepper.Item>
+				{/each}
+			</Stepper.Nav>
+		</Stepper.Root>
+
+		<div class="flex items-center justify-between">
+			{#if currentStep}
+				<h3 class="text-sm font-semibold text-foreground">{currentStep.title}</h3>
+			{:else}
+				<span></span>
+			{/if}
+			<span class="text-sm text-muted-foreground">Step {activeStep} of {steps.length}</span>
 		</div>
 	{/if}
 
@@ -250,7 +387,7 @@
 							maxFileSize={field.max_file_size}
 							fileCount={parseFileValue(getTextValue(field.name)).length}
 							onUpload={(files) => handleUpload(field, files)}
-							onFileRejected={({ reason }) => setFieldError(field.name, reason)}
+							onFileRejected={({ reason }) => setFieldErrorBound(field.name, reason)}
 						>
 							<FileDropZone.Trigger data-testid={`field-${field.name}`} />
 						</FileDropZone.Root>
@@ -436,26 +573,46 @@
 
 	<!-- Navigation / action bar -->
 	<div class="flex items-center gap-2 border-t border-border pt-4">
-		{#if steps.length > 1 && activeStep > 0}
-			<Button type="button" variant="outline" onclick={() => (activeStep -= 1)} disabled={submitting}>
-				Previous
-			</Button>
-		{/if}
-
-		{#if steps.length > 1 && !isLastStep}
-			<Button type="button" onclick={() => (activeStep += 1)} disabled={submitting}>
-				Next
-			</Button>
-		{:else}
-			<Button type="submit" disabled={submitting}>
-				{submitting ? 'Submitting...' : 'Complete Task'}
-			</Button>
-		{/if}
-
 		{#if oncancel}
-			<Button type="button" variant="outline" onclick={handleCancel} disabled={submitting}>
-				Reject
+			<Button
+				type="button"
+				variant="ghost"
+				class="text-muted-foreground hover:text-red-700"
+				onclick={handleCancel}
+				disabled={submitting}
+			>
+				Reject task
 			</Button>
 		{/if}
+
+		<div class="ml-auto flex items-center gap-2">
+			{#if steps.length > 1 && activeStep > 1}
+				<Button
+					type="button"
+					variant="outline"
+					onclick={goToPreviousStep}
+					disabled={submitting}
+				>
+					Previous
+				</Button>
+			{/if}
+
+			{#if steps.length > 1 && !isLastStep}
+				<Button type="button" onclick={goToNextStep} disabled={submitting}>
+					Next
+				</Button>
+			{:else}
+				<Button
+					type="submit"
+					disabled={submitting}
+					class="group gap-2 shadow-md shadow-primary/20 transition hover:-translate-y-0.5 hover:shadow-lg hover:shadow-primary/30"
+				>
+					{submitting ? 'Submitting...' : 'Complete task'}
+					{#if !submitting}
+						<ArrowRight class="size-4 opacity-70 transition-opacity group-hover:opacity-100" />
+					{/if}
+				</Button>
+			{/if}
+		</div>
 	</div>
 </form>

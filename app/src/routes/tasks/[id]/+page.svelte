@@ -131,6 +131,7 @@
 					<div class="p-4">
 						<TaskForm
 							steps={task.steps}
+							taskId={task.task_id}
 							onsubmit={handleComplete}
 							oncancel={handleCancel}
 							{submitting}
