@@ -79,9 +79,7 @@
 	</div>
 
 	{#if responseText}
-		<div class="rounded-md border border-border bg-muted/20 p-4">
-			<Markdown content={responseText} />
-		</div>
+		<Markdown content={responseText} />
 	{:else}
 		<div class="text-sm text-muted-foreground italic">Empty response.</div>
 	{/if}
