@@ -1035,10 +1035,10 @@ pub(crate) struct SlugIndex {
 }
 
 impl SlugIndex {
-    fn node_for(&self, slug: &str) -> Option<&str> {
+    pub(crate) fn node_for(&self, slug: &str) -> Option<&str> {
         self.by_slug.get(slug).map(String::as_str)
     }
-    fn slug_for(&self, node_id: &str) -> Option<&str> {
+    pub(crate) fn slug_for(&self, node_id: &str) -> Option<&str> {
         self.by_node.get(node_id).map(String::as_str)
     }
 }

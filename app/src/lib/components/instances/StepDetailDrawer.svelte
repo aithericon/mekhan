@@ -6,6 +6,7 @@
 	import X from '@lucide/svelte/icons/x';
 	import Settings2 from '@lucide/svelte/icons/settings-2';
 	import type { StepExecution, WorkflowNode } from '$lib/api/client';
+	import type { NodeInterface } from '$lib/types/node-interface';
 	import { nodeKindMeta } from './node-kind-meta';
 	import { SmartValue } from './output-renderers';
 
@@ -14,6 +15,11 @@
 		/** The node from the template graph this step instantiates. Optional —
 		 *  the drawer degrades gracefully when not supplied (e.g. older callers). */
 		node?: WorkflowNode | null;
+		/** The compiler-derived interface for this node. Carries the
+		 *  `borrowed_paths` map (`producer_node_id → [attr, …]`) the drawer
+		 *  uses to surface "what fields this step actually read" from each
+		 *  upstream envelope. */
+		nodeInterface?: NodeInterface | null;
 		/** Every iteration of this node in the current instance (oldest → newest).
 		 *  Drives the iteration picker for Loop bodies. When omitted or
 		 *  single-element, the picker is hidden. */
@@ -32,12 +38,17 @@
 	let {
 		step,
 		node = null,
+		nodeInterface = null,
 		iterations = [],
 		instanceId,
 		open,
 		onClose,
 		onSelectIteration
 	}: Props = $props();
+
+	function borrowedAttrsFor(producerNodeId: string): string[] {
+		return nodeInterface?.borrowed_paths?.[producerNodeId] ?? [];
+	}
 
 	const statusColor: Record<string, string> = {
 		pending: 'bg-gray-100 text-gray-700',
@@ -203,9 +214,24 @@
 					{#if inputEntries(step.inputs).length > 0}
 						<div class="space-y-3">
 							{#each inputEntries(step.inputs) as [producerNode, envelope] (producerNode)}
+								{@const reads = borrowedAttrsFor(producerNode)}
 								<div>
-									<div class="mb-1 text-sm font-mono text-muted-foreground">
-										from <span class="text-foreground">{producerNode}</span>
+									<div class="mb-1 flex flex-wrap items-center gap-1.5 text-sm">
+										<span class="font-mono text-muted-foreground">from</span>
+										<span class="font-mono text-foreground">{producerNode}</span>
+										{#if reads.length > 0}
+											<!-- Compiler-derived borrow surface: the field
+											     attrs this step's author actually referenced
+											     off `<producerNode>`. Narrows the full
+											     envelope below to "what was read". -->
+											<span class="text-muted-foreground">·</span>
+											<span class="text-muted-foreground">reads</span>
+											{#each reads as attr (attr)}
+												<Badge variant="outline" class="font-mono text-sm font-normal">
+													{producerNode}.{attr}
+												</Badge>
+											{/each}
+										{/if}
 									</div>
 									<!-- nodeKind is left undefined: `producerNode` is a slug,
 									     not a kind. The registry's shape predicates are specific

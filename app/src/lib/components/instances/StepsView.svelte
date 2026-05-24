@@ -9,6 +9,11 @@
 		type WorkflowNode
 	} from '$lib/api/client';
 	import { Badge } from '$lib/components/ui/badge';
+	import {
+		parseInterfaceRegistry,
+		type InterfaceRegistry,
+		type NodeInterface
+	} from '$lib/types/node-interface';
 	import StepDetailDrawer from './StepDetailDrawer.svelte';
 
 	type Props = {
@@ -23,6 +28,7 @@
 	let error = $state<string | null>(null);
 	let selected = $state<StepExecution | null>(null);
 	let selectedNode = $state<WorkflowNode | null>(null);
+	let selectedInterface = $state<NodeInterface | null>(null);
 	let selectedIterations = $state<StepExecution[]>([]);
 	let drawerOpen = $state(false);
 
@@ -33,6 +39,10 @@
 		for (const n of graph.nodes) map.set(n.id, n);
 		return map;
 	});
+
+	const interfaceRegistry = $derived<InterfaceRegistry>(
+		parseInterfaceRegistry(template?.interface_json)
+	);
 
 	const stepsByNode = $derived.by(() => {
 		const map = new Map<string, StepExecution[]>();
@@ -115,6 +125,7 @@
 	function openStep(step: StepExecution) {
 		selected = step;
 		selectedNode = nodesById.get(step.node_id) ?? null;
+		selectedInterface = interfaceRegistry[step.node_id] ?? null;
 		selectedIterations = stepsByNode.get(step.node_id) ?? [];
 		drawerOpen = true;
 	}
@@ -207,6 +218,7 @@
 <StepDetailDrawer
 	step={selected}
 	node={selectedNode}
+	nodeInterface={selectedInterface}
 	iterations={selectedIterations}
 	instanceId={instance.id}
 	open={drawerOpen}

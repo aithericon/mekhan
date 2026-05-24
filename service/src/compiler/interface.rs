@@ -218,6 +218,17 @@ pub struct NodeInterface {
     /// Every transition this node owns (post-alias-resolution). Replaces the
     /// `t_{node_id}_` prefix match in `compile.rs` step 8b.
     pub owned_transitions: Vec<String>,
+
+    // ── Author-visible borrows ──────────────────────────────────────────────
+    /// `producer_node_id → [attr, …]` — the first-segment fields this node's
+    /// author references off each upstream parked envelope. Populated at
+    /// compile time from Python source (`extract_python_refs`) for
+    /// AutomatedSteps and from `{{ <slug>.<attr> }}` placeholders for
+    /// HumanTasks. The frontend renders these alongside the runtime inputs
+    /// so the user can see *what the step actually read* — not just the
+    /// full upstream envelope handed over the edge.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub borrowed_paths: BTreeMap<String, Vec<String>>,
 }
 
 impl NodeInterface {
@@ -232,6 +243,7 @@ impl NodeInterface {
             workflow_terminals: Vec::new(),
             owned_places: Vec::new(),
             owned_transitions: Vec::new(),
+            borrowed_paths: BTreeMap::new(),
         }
     }
 

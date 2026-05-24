@@ -395,6 +395,7 @@ pub fn compile_to_scenario_and_interfaces(
     //     `e5ed9fc` / `674408e` SubWorkflow terminal-filter leak: consumers
     //     never have to re-derive collapse-stable ids.
     derive_node_ownership(&scenario, &mut interfaces);
+    populate_borrowed_paths(graph, inline_sources, &mut interfaces);
     for iface in interfaces.values_mut() {
         iface.rewrite_places(&alias);
     }
@@ -555,6 +556,95 @@ fn derive_node_ownership(
             if !iface.owned_transitions.iter().any(|t| t == &tid) {
                 iface.owned_transitions.push(tid);
             }
+        }
+    }
+}
+
+/// Author-visible borrow surface. For each node that authors
+/// `<slug>.<attr>` references — Python AutomatedSteps (Python source) and
+/// HumanTasks (`{{ }}` placeholders in title/instructions/step blocks) —
+/// resolve every reference's `slug` to its upstream `producer_node_id` and
+/// record the `attr` field name. The frontend's step drawer reads this to
+/// show *what the step actually read* from each upstream envelope (the
+/// runtime input is the whole envelope; this narrows it to the fields the
+/// author asked for).
+///
+/// Stored on `NodeInterface.borrowed_paths` and shipped to the frontend
+/// as part of `interface_json`. Decision/Loop guards are not yet covered
+/// (they use a different scanner; their `<slug>.<field>` refs already
+/// surface in the picker via `reachable_scope`).
+fn populate_borrowed_paths(
+    graph: &crate::models::template::WorkflowGraph,
+    inline_sources: &HashMap<String, HashMap<String, String>>,
+    interfaces: &mut InterfaceRegistry,
+) {
+    use crate::compiler::human_task_refs::extract_human_task_refs;
+    use crate::compiler::python_refs::extract_python_refs;
+    use crate::compiler::token_shape::slug_index;
+    use crate::models::template::{ExecutionBackendType, WorkflowNodeData};
+    use std::collections::{BTreeMap, BTreeSet};
+
+    let Ok(slugs) = slug_index(graph) else {
+        return;
+    };
+
+    for node in &graph.nodes {
+        // `BTreeSet` dedupes per (producer, attr); we then materialize to
+        // the persisted `Vec<String>` shape.
+        let mut paths: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        match &node.data {
+            WorkflowNodeData::HumanTask { .. } => {
+                for r in extract_human_task_refs(node) {
+                    let Some(prod_id) = slugs.node_for(&r.head) else {
+                        continue;
+                    };
+                    if prod_id == node.id {
+                        continue;
+                    }
+                    paths
+                        .entry(prod_id.to_string())
+                        .or_default()
+                        .insert(r.attr);
+                }
+            }
+            WorkflowNodeData::AutomatedStep { execution_spec, .. } => {
+                if execution_spec.backend_type != ExecutionBackendType::Python {
+                    continue;
+                }
+                let entrypoint = execution_spec
+                    .entrypoint
+                    .clone()
+                    .unwrap_or_else(|| "main.py".to_string());
+                let Some(node_files) = inline_sources.get(&node.id) else {
+                    continue;
+                };
+                let Some(source) = node_files.get(&entrypoint) else {
+                    continue;
+                };
+                for r in extract_python_refs(source) {
+                    let Some(prod_id) = slugs.node_for(&r.head) else {
+                        continue;
+                    };
+                    if prod_id == node.id {
+                        continue;
+                    }
+                    paths
+                        .entry(prod_id.to_string())
+                        .or_default()
+                        .insert(r.attr);
+                }
+            }
+            _ => continue,
+        }
+
+        if paths.is_empty() {
+            continue;
+        }
+        if let Some(iface) = interfaces.get_mut(&node.id) {
+            iface.borrowed_paths = paths
+                .into_iter()
+                .map(|(k, v)| (k, v.into_iter().collect()))
+                .collect();
         }
     }
 }
