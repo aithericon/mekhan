@@ -7,6 +7,7 @@
 	import Settings2 from '@lucide/svelte/icons/settings-2';
 	import type { StepExecution, WorkflowNode } from '$lib/api/client';
 	import { nodeKindMeta } from './node-kind-meta';
+	import { SmartValue } from './output-renderers';
 
 	type Props = {
 		step: StepExecution | null;
@@ -194,7 +195,10 @@
 									<div class="mb-1 text-sm font-mono text-muted-foreground">
 										from <span class="text-foreground">{producerNode}</span>
 									</div>
-									<pre class="rounded-md border border-border bg-muted/30 p-3 text-sm font-mono whitespace-pre-wrap break-words">{pretty(envelope)}</pre>
+									<!-- nodeKind is left undefined: `producerNode` is a slug,
+									     not a kind. The registry's shape predicates are specific
+									     enough to dispatch on shape alone. -->
+									<SmartValue value={envelope} ctx={{ position: 'input' }} />
 								</div>
 							{/each}
 						</div>
@@ -209,7 +213,10 @@
 						{/if}
 					</h3>
 					{#if step.outputs !== null && step.outputs !== undefined}
-						<pre class="rounded-md border border-border bg-muted/30 p-3 text-sm font-mono whitespace-pre-wrap break-words">{pretty(step.outputs)}</pre>
+						<SmartValue
+							value={step.outputs}
+							ctx={{ position: 'output', nodeKind: step.node_kind }}
+						/>
 					{/if}
 				</section>
 			</div>

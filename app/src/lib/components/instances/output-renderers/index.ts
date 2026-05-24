@@ -1,0 +1,131 @@
+/**
+ * Registered renderers, ordered most-specific → most-general.  Each entry's
+ * `matches` predicate is the only thing dispatch reads — predicates must be
+ * structurally safe on arbitrary JSON (no throws on missing keys, nested
+ * arrays, nulls, etc.) since the dispatcher walks the list in order and takes
+ * the first hit.
+ */
+import HumanTaskEnvelope from './HumanTaskEnvelope.svelte';
+import FileReference from './FileReference.svelte';
+import TabularArray from './TabularArray.svelte';
+import KeyValueList from './KeyValueList.svelte';
+import PrimitiveValue from './PrimitiveValue.svelte';
+import JsonBlock from './JsonBlock.svelte';
+import type { OutputRenderer, RenderContext } from './types';
+
+export { default as SmartValue } from './SmartValue.svelte';
+export type { RenderContext, RenderPosition } from './types';
+
+function isObj(v: unknown): v is Record<string, unknown> {
+	return !!v && typeof v === 'object' && !Array.isArray(v);
+}
+
+// ── Renderer predicates ──────────────────────────────────────────────────────
+
+/** HumanTask response envelope — see `service/src/compiler/token_shape.rs`
+ *  `WorkflowNodeData::HumanTask` arm. Stable signature is `{task_id, status,
+ *  data: object}`. Optional `nodeKind === 'human_task'` confirms.  */
+function matchesHumanTask(value: unknown, ctx: RenderContext): boolean {
+	if (!isObj(value)) return false;
+	if (typeof value.task_id !== 'string') return false;
+	if (typeof value.status !== 'string') return false;
+	if (!isObj(value.data)) return false;
+	// Either the shape matches AND the producer is a HumanTask (strong), or
+	// the shape matches and we don't know the kind (we still trust the shape —
+	// the `data` envelope key isn't a coincidence).
+	return ctx.nodeKind === undefined || ctx.nodeKind === 'human_task';
+}
+
+/** Catalogue file reference — `{url, filename?, content_type?}`. */
+function matchesFileRef(value: unknown): boolean {
+	if (!isObj(value)) return false;
+	return typeof value.url === 'string';
+}
+
+/** Array of similar objects — useful when the rows share at least one key. */
+function matchesTabular(value: unknown): boolean {
+	if (!Array.isArray(value) || value.length === 0) return false;
+	// Require the first element to be a plain object; tolerate heterogeneity
+	// past that (TabularArray itself unions keys across rows).
+	const first = value[0];
+	if (!isObj(first)) return false;
+	// Reject single-row arrays — they don't benefit from a table.
+	if (value.length === 1) return false;
+	return true;
+}
+
+/** Flat-ish object — every value is either a primitive or a single nested
+ *  object (typically a file ref). Punts to JsonBlock for deeply nested shapes
+ *  that would render awkwardly. */
+function matchesKeyValue(value: unknown): boolean {
+	if (!isObj(value)) return false;
+	const entries = Object.entries(value);
+	if (entries.length === 0) return false;
+	for (const [, v] of entries) {
+		if (v === null || v === undefined) continue;
+		if (typeof v !== 'object') continue; // primitive ok
+		if (Array.isArray(v)) {
+			// Allow arrays of primitives; reject arrays-of-objects so the user
+			// gets a proper TabularArray when they should.
+			for (const item of v) {
+				if (item !== null && typeof item === 'object') return false;
+			}
+			continue;
+		}
+		// Nested object: only fine if it's a file ref (renders inline).
+		if (!matchesFileRef(v)) return false;
+	}
+	return true;
+}
+
+/** Strings, numbers, booleans, null. */
+function matchesPrimitive(value: unknown): boolean {
+	return value === null || value === undefined || typeof value !== 'object';
+}
+
+export const REGISTRY: OutputRenderer[] = [
+	{
+		name: 'human-task',
+		label: 'Human task response',
+		matches: matchesHumanTask,
+		component: HumanTaskEnvelope
+	},
+	{
+		name: 'file-ref',
+		label: 'File reference',
+		matches: matchesFileRef,
+		component: FileReference
+	},
+	{
+		name: 'tabular',
+		label: 'Table',
+		matches: matchesTabular,
+		component: TabularArray
+	},
+	{
+		name: 'key-value',
+		label: 'Fields',
+		matches: matchesKeyValue,
+		component: KeyValueList
+	},
+	{
+		name: 'primitive',
+		label: 'Value',
+		matches: matchesPrimitive,
+		component: PrimitiveValue
+	}
+];
+
+export const FALLBACK: OutputRenderer = {
+	name: 'json',
+	label: 'JSON',
+	matches: () => true,
+	component: JsonBlock
+};
+
+export function pickRenderer(value: unknown, ctx: RenderContext): OutputRenderer {
+	for (const r of REGISTRY) {
+		if (r.matches(value, ctx)) return r;
+	}
+	return FALLBACK;
+}
