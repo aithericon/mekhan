@@ -77,6 +77,13 @@
 <Sheet.Root bind:open onOpenChange={(v: boolean) => { if (!v) onClose(); }}>
 	<SheetContent class="w-full sm:max-w-xl">
 		{#if step}
+			<!-- SheetTitle/SheetDescription are sr-only by design (a11y).
+			     The visible header below mirrors them. -->
+			<SheetTitle>{nodeLabel} — {meta.label} ({step.status})</SheetTitle>
+			<SheetDescription>
+				Runtime detail for step {step.node_id}{step.iteration_index > 0 ? `, iteration ${step.iteration_index}` : ''}.
+			</SheetDescription>
+
 			<header class="flex items-start gap-3 border-b border-border px-5 py-4">
 				<!-- Mirror the canvas card: kind-coloured icon chip + label. -->
 				<div class="flex size-9 shrink-0 items-center justify-center rounded-md {meta.chipClass}">
@@ -84,10 +91,10 @@
 				</div>
 
 				<div class="min-w-0 flex-1">
-					<SheetTitle class="text-base font-semibold text-foreground truncate">
+					<h2 class="text-base font-semibold text-foreground truncate">
 						{nodeLabel}
-					</SheetTitle>
-					<SheetDescription class="mt-1 flex flex-wrap items-center gap-2 text-sm">
+					</h2>
+					<div class="mt-1 flex flex-wrap items-center gap-2 text-sm">
 						<Badge variant="outline" class="font-mono">{meta.label}</Badge>
 						<Badge class={statusColor[step.status] ?? ''} variant="secondary">
 							{step.status}
@@ -98,7 +105,7 @@
 						{#if step.branch_taken}
 							<Badge variant="outline" class="font-mono">→ {step.branch_taken}</Badge>
 						{/if}
-					</SheetDescription>
+					</div>
 					<div class="mt-1 font-mono text-sm text-muted-foreground/80 truncate" title={step.node_id}>
 						id: {step.node_id}
 					</div>
