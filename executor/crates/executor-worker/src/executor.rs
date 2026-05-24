@@ -183,6 +183,14 @@ impl JobExecutor {
         // The child_exited token tells the sidecar to stop waiting for a connection
         // if the child exits without ever connecting (e.g., immediate crash).
         let child_exited = tokio_util::sync::CancellationToken::new();
+        // Clone the StreamContext Arc so both the IPC sidecar (for child-
+        // process SDK logs) AND in-process backends (LLM, http, file_ops)
+        // share the same sequence counter + emitter. Sharing is intentional:
+        // a hypothetical LLM step that ALSO spawns a child would interleave
+        // their log events on one ordered stream.
+        let stream_ctx_for_backend = stream_ctx
+            .clone()
+            .map(|sc| sc as std::sync::Arc<dyn aithericon_executor_backend::traits::EventStream>);
         let sidecar_handle = match start_ipc_sidecar(
             run_context.run_dir.ipc_socket.clone(),
             execution_id.clone(),
@@ -210,7 +218,9 @@ impl JobExecutor {
             .callback_for(execution_id.clone(), job.metadata.clone());
 
         // Execute
-        let result = backend.execute(&run_context, status_cb, cancel).await;
+        let result = backend
+            .execute(&run_context, status_cb, stream_ctx_for_backend, cancel)
+            .await;
 
         // Signal sidecar that the child has exited. If the child never connected,
         // this unblocks the accept loop. If it did connect, background artifact
@@ -484,30 +494,16 @@ impl JobExecutor {
                     }
                 }
 
-                if let Some(ref logs) = exec_result.logs {
-                    if logs.total_entries > 0 {
-                        let warn_error_count = logs
-                            .count_by_level
-                            .iter()
-                            .filter(|(k, _)| k.as_str() == "warn" || k.as_str() == "error")
-                            .map(|(_, v)| v)
-                            .sum::<u64>();
-                        let event = ExecutionEvent {
-                            execution_id: execution_id.clone(),
-                            category: EventCategory::Log,
-                            detail: StatusDetail::LogsForwarded {
-                                count: logs.total_entries,
-                                warn_error_count,
-                            },
-                            metadata: job.metadata.clone(),
-                            source: self.reporter.source().to_string(),
-                            timestamp: Utc::now(),
-                            sequence: event_seq,
-                        };
-                        self.reporter.emit_event(&event).await;
-                        event_seq += 1;
-                    }
-                }
+                // LogsForwarded summary event intentionally not emitted: the
+                // per-message log path (IPC sidecar's `LogMessage` events
+                // for child processes, the EventStream trait for in-process
+                // backends) already lands every individual entry in
+                // hpi_logs. A trailing "logs_forwarded count=N" envelope
+                // shows up in the process view on every successful execution
+                // — pure UI noise with no incremental signal. The
+                // `LogSummary` is still returned on `ExecutionResult` for
+                // sinks/diagnostics; just don't broadcast it as a user-
+                // facing event.
 
                 // Flush metric sink for this execution
                 if let Some(ref sink) = self.metric_sink {

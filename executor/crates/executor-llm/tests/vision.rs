@@ -243,7 +243,7 @@ async fn ollama_vision_basic() {
     ctx = backend.prepare(&job, ctx).await.unwrap();
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -307,7 +307,7 @@ async fn ollama_vision_structured_output() {
     ctx = backend.prepare(&job, ctx).await.unwrap();
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 

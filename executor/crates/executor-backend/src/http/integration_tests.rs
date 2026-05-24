@@ -133,7 +133,7 @@ async fn get_200_json_success() {
     let job = dummy_job();
     let prepared = backend.prepare(&job, run_ctx).await.unwrap();
     let result = backend
-        .execute(&prepared, noop_callback(), CancellationToken::new())
+        .execute(&prepared, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -169,7 +169,7 @@ async fn post_json_body() {
     let job = dummy_job();
     let prepared = backend.prepare(&job, run_ctx).await.unwrap();
     let result = backend
-        .execute(&prepared, noop_callback(), CancellationToken::new())
+        .execute(&prepared, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -196,7 +196,7 @@ async fn post_string_body_text_plain() {
     let job = dummy_job();
     let prepared = backend.prepare(&job, run_ctx).await.unwrap();
     let result = backend
-        .execute(&prepared, noop_callback(), CancellationToken::new())
+        .execute(&prepared, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -219,7 +219,7 @@ async fn non_2xx_is_exit_failure() {
     let job = dummy_job();
     let prepared = backend.prepare(&job, run_ctx).await.unwrap();
     let result = backend
-        .execute(&prepared, noop_callback(), CancellationToken::new())
+        .execute(&prepared, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -248,7 +248,7 @@ async fn custom_expected_status_codes() {
     let job = dummy_job();
     let prepared = backend.prepare(&job, run_ctx).await.unwrap();
     let result = backend
-        .execute(&prepared, noop_callback(), CancellationToken::new())
+        .execute(&prepared, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -273,7 +273,7 @@ async fn reports_running_status() {
 
     let (cb, records) = tracking_callback();
     let _result = backend
-        .execute(&prepared, cb, CancellationToken::new())
+        .execute(&prepared, cb, None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -308,7 +308,7 @@ async fn query_params_sent() {
     let job = dummy_job();
     let prepared = backend.prepare(&job, run_ctx).await.unwrap();
     let result = backend
-        .execute(&prepared, noop_callback(), CancellationToken::new())
+        .execute(&prepared, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -333,7 +333,7 @@ async fn custom_headers_sent() {
     let job = dummy_job();
     let prepared = backend.prepare(&job, run_ctx).await.unwrap();
     let result = backend
-        .execute(&prepared, noop_callback(), CancellationToken::new())
+        .execute(&prepared, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -357,7 +357,7 @@ async fn put_method() {
     let job = dummy_job();
     let prepared = backend.prepare(&job, run_ctx).await.unwrap();
     let result = backend
-        .execute(&prepared, noop_callback(), CancellationToken::new())
+        .execute(&prepared, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -381,7 +381,7 @@ async fn delete_method() {
     let job = dummy_job();
     let prepared = backend.prepare(&job, run_ctx).await.unwrap();
     let result = backend
-        .execute(&prepared, noop_callback(), CancellationToken::new())
+        .execute(&prepared, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -409,7 +409,7 @@ async fn bearer_auth_sent() {
     let job = dummy_job();
     let prepared = backend.prepare(&job, run_ctx).await.unwrap();
     let result = backend
-        .execute(&prepared, noop_callback(), CancellationToken::new())
+        .execute(&prepared, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -439,7 +439,7 @@ async fn basic_auth_sent() {
     let job = dummy_job();
     let prepared = backend.prepare(&job, run_ctx).await.unwrap();
     let result = backend
-        .execute(&prepared, noop_callback(), CancellationToken::new())
+        .execute(&prepared, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -468,7 +468,7 @@ async fn header_auth_sent() {
     let job = dummy_job();
     let prepared = backend.prepare(&job, run_ctx).await.unwrap();
     let result = backend
-        .execute(&prepared, noop_callback(), CancellationToken::new())
+        .execute(&prepared, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -500,7 +500,7 @@ async fn body_from_input_file() {
     let job = dummy_job();
     let prepared = backend.prepare(&job, run_ctx).await.unwrap();
     let result = backend
-        .execute(&prepared, noop_callback(), CancellationToken::new())
+        .execute(&prepared, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -530,7 +530,7 @@ async fn response_mode_json() {
     let job = dummy_job();
     let prepared = backend.prepare(&job, run_ctx).await.unwrap();
     let result = backend
-        .execute(&prepared, noop_callback(), CancellationToken::new())
+        .execute(&prepared, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -559,7 +559,7 @@ async fn response_mode_text() {
     let job = dummy_job();
     let prepared = backend.prepare(&job, run_ctx).await.unwrap();
     let result = backend
-        .execute(&prepared, noop_callback(), CancellationToken::new())
+        .execute(&prepared, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -587,7 +587,7 @@ async fn response_mode_discard() {
     let job = dummy_job();
     let prepared = backend.prepare(&job, run_ctx).await.unwrap();
     let result = backend
-        .execute(&prepared, noop_callback(), CancellationToken::new())
+        .execute(&prepared, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -617,7 +617,7 @@ async fn response_mode_auto_json() {
     let job = dummy_job();
     let prepared = backend.prepare(&job, run_ctx).await.unwrap();
     let result = backend
-        .execute(&prepared, noop_callback(), CancellationToken::new())
+        .execute(&prepared, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -646,7 +646,7 @@ async fn response_mode_auto_text() {
     let job = dummy_job();
     let prepared = backend.prepare(&job, run_ctx).await.unwrap();
     let result = backend
-        .execute(&prepared, noop_callback(), CancellationToken::new())
+        .execute(&prepared, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -677,7 +677,7 @@ async fn response_headers_captured() {
     let job = dummy_job();
     let prepared = backend.prepare(&job, run_ctx).await.unwrap();
     let result = backend
-        .execute(&prepared, noop_callback(), CancellationToken::new())
+        .execute(&prepared, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -701,7 +701,7 @@ async fn metrics_populated() {
     let job = dummy_job();
     let prepared = backend.prepare(&job, run_ctx).await.unwrap();
     let result = backend
-        .execute(&prepared, noop_callback(), CancellationToken::new())
+        .execute(&prepared, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -736,7 +736,7 @@ async fn large_response_truncated() {
     let job = dummy_job();
     let prepared = backend.prepare(&job, run_ctx).await.unwrap();
     let result = backend
-        .execute(&prepared, noop_callback(), CancellationToken::new())
+        .execute(&prepared, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -763,7 +763,7 @@ async fn timeout_returns_timed_out() {
     let job = dummy_job();
     let prepared = backend.prepare(&job, run_ctx).await.unwrap();
     let result = backend
-        .execute(&prepared, noop_callback(), CancellationToken::new())
+        .execute(&prepared, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -798,7 +798,7 @@ async fn cancellation_returns_cancelled() {
     });
 
     let result = backend
-        .execute(&prepared, noop_callback(), cancel)
+        .execute(&prepared, noop_callback(), None, cancel)
         .await
         .unwrap();
 
@@ -819,7 +819,7 @@ async fn connection_refused_backend_error() {
     let job = dummy_job();
     let prepared = backend.prepare(&job, run_ctx).await.unwrap();
     let result = backend
-        .execute(&prepared, noop_callback(), CancellationToken::new())
+        .execute(&prepared, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -858,7 +858,7 @@ async fn redirect_followed_by_default() {
     let job = dummy_job();
     let prepared = backend.prepare(&job, run_ctx).await.unwrap();
     let result = backend
-        .execute(&prepared, noop_callback(), CancellationToken::new())
+        .execute(&prepared, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -885,7 +885,7 @@ async fn redirect_not_followed_when_disabled() {
     let job = dummy_job();
     let prepared = backend.prepare(&job, run_ctx).await.unwrap();
     let result = backend
-        .execute(&prepared, noop_callback(), CancellationToken::new())
+        .execute(&prepared, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -1030,7 +1030,7 @@ async fn output_mapping_extracts_json_subpath() {
     let job = dummy_job();
     let run_ctx = backend.prepare(&job, run_ctx).await.unwrap();
     let result = backend
-        .execute(&run_ctx, noop_callback(), CancellationToken::new())
+        .execute(&run_ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -1066,7 +1066,7 @@ async fn output_mapping_extracts_header() {
     let job = dummy_job();
     let run_ctx = backend.prepare(&job, run_ctx).await.unwrap();
     let result = backend
-        .execute(&run_ctx, noop_callback(), CancellationToken::new())
+        .execute(&run_ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -1097,7 +1097,7 @@ async fn output_mapping_with_non_json_body_skips_dot_path() {
     let job = dummy_job();
     let run_ctx = backend.prepare(&job, run_ctx).await.unwrap();
     let result = backend
-        .execute(&run_ctx, noop_callback(), CancellationToken::new())
+        .execute(&run_ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -1129,7 +1129,7 @@ async fn output_mapping_empty_is_backward_compatible() {
     let job = dummy_job();
     let run_ctx = backend.prepare(&job, run_ctx).await.unwrap();
     let result = backend
-        .execute(&run_ctx, noop_callback(), CancellationToken::new())
+        .execute(&run_ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -1165,7 +1165,7 @@ async fn output_mapping_array_index() {
     let job = dummy_job();
     let run_ctx = backend.prepare(&job, run_ctx).await.unwrap();
     let result = backend
-        .execute(&run_ctx, noop_callback(), CancellationToken::new())
+        .execute(&run_ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -1227,7 +1227,7 @@ async fn body_from_input_json_auto_content_type() {
     let job = dummy_job();
     let run_ctx = backend.prepare(&job, run_ctx).await.unwrap();
     let result = backend
-        .execute(&run_ctx, noop_callback(), CancellationToken::new())
+        .execute(&run_ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -1277,7 +1277,7 @@ async fn body_from_input_binary_auto_content_type() {
     let job = dummy_job();
     let run_ctx = backend.prepare(&job, run_ctx).await.unwrap();
     let result = backend
-        .execute(&run_ctx, noop_callback(), CancellationToken::new())
+        .execute(&run_ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -1326,7 +1326,7 @@ async fn body_from_input_explicit_content_type_preserved() {
     let job = dummy_job();
     let run_ctx = backend.prepare(&job, run_ctx).await.unwrap();
     let result = backend
-        .execute(&run_ctx, noop_callback(), CancellationToken::new())
+        .execute(&run_ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 

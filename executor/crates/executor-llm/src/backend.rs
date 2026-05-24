@@ -72,6 +72,7 @@ impl ExecutionBackend for LlmBackend {
         &self,
         run_context: &RunContext,
         status_cb: StatusCallback,
+        event_stream: Option<std::sync::Arc<dyn aithericon_executor_backend::traits::EventStream>>,
         cancel: CancellationToken,
     ) -> Result<ExecutionResult, ExecutorError> {
         let config: LlmConfig = serde_json::from_value(run_context.backend_state.clone())
@@ -101,6 +102,23 @@ impl ExecutionBackend for LlmBackend {
             if let Some(last_msg) = request.messages.last_mut() {
                 last_msg.images = images;
             }
+        }
+
+        // Dispatch log — flows through the same NATS subject the IPC
+        // sidecar uses for child-process SDK logs, so it lands in
+        // mekhan's hpi_logs as a per-message entry rather than only
+        // appearing in the end-of-execution LogSummary count.
+        if let Some(ref es) = event_stream {
+            es.log(
+                LogLevel::Info,
+                format!("dispatching LLM request to {}/{}", adapter.name(), config.model),
+                HashMap::from([
+                    ("provider".into(), adapter.name().to_string()),
+                    ("model".into(), config.model.clone()),
+                    ("image_count".into(), config.images.len().to_string()),
+                ]),
+            )
+            .await;
         }
 
         // Merge config-level api_key and base_url into env so adapters can
@@ -214,9 +232,35 @@ impl ExecutionBackend for LlmBackend {
                             }
                         }
 
+                        // Completion log — counterpart to the dispatch log
+                        // above. Surfaces timing + token usage as a real
+                        // hpi_logs entry, not just the LogSummary count.
+                        if let Some(ref es) = event_stream {
+                            es.log(
+                                LogLevel::Info,
+                                format!(
+                                    "LLM response received from {} in {}ms ({} input + {} output tokens)",
+                                    resp.model,
+                                    duration.as_millis(),
+                                    resp.usage.input_tokens,
+                                    resp.usage.output_tokens,
+                                ),
+                                HashMap::from([
+                                    ("provider".into(), adapter.name().to_string()),
+                                    ("model".into(), resp.model.clone()),
+                                    ("duration_ms".into(), duration.as_millis().to_string()),
+                                    ("input_tokens".into(), resp.usage.input_tokens.to_string()),
+                                    ("output_tokens".into(), resp.usage.output_tokens.to_string()),
+                                    ("total_tokens".into(), resp.usage.total_tokens.to_string()),
+                                    ("finish_reason".into(), resp.finish_reason.to_string()),
+                                ]),
+                            )
+                            .await;
+                        }
+
                         let logs = Some(LogSummary {
-                            total_entries: 1,
-                            count_by_level: HashMap::from([("info".into(), 1)]),
+                            total_entries: 2,
+                            count_by_level: HashMap::from([("info".into(), 2)]),
                             recent_errors: vec![],
                             dropped_count: 0,
                         });
@@ -246,9 +290,28 @@ impl ExecutionBackend for LlmBackend {
                             repeat_count: 1,
                         };
 
+                        // Per-message error log so the failure shows up in
+                        // hpi_logs alongside the dispatch entry, not only
+                        // in the failed-execution summary.
+                        if let Some(ref es) = event_stream {
+                            es.log(
+                                LogLevel::Error,
+                                format!("LLM execution failed: {e}"),
+                                HashMap::from([
+                                    ("provider".into(), adapter.name().to_string()),
+                                    ("model".into(), config.model.clone()),
+                                    ("duration_ms".into(), duration.as_millis().to_string()),
+                                ]),
+                            )
+                            .await;
+                        }
+
                         let logs = Some(LogSummary {
-                            total_entries: 1,
-                            count_by_level: HashMap::from([("error".into(), 1)]),
+                            total_entries: 2,
+                            count_by_level: HashMap::from([
+                                ("info".into(), 1),
+                                ("error".into(), 1),
+                            ]),
                             recent_errors: vec![error_entry],
                             dropped_count: 0,
                         });

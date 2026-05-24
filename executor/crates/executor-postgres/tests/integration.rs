@@ -356,7 +356,7 @@ async fn tenant_isolation_two_tenants_one_pool() {
     };
     let prepared_a = backend.prepare(&job_a, ctx_a).await.expect("prepare A");
     let result_a = backend
-        .execute(&prepared_a, noop_callback(), CancellationToken::new())
+        .execute(&prepared_a, noop_callback(), None, CancellationToken::new())
         .await
         .expect("execute A");
     assert!(matches!(result_a.outcome, ExecutionOutcome::Success));
@@ -387,7 +387,7 @@ async fn tenant_isolation_two_tenants_one_pool() {
     };
     let prepared_b = backend.prepare(&job_b, ctx_b).await.expect("prepare B");
     let result_b = backend
-        .execute(&prepared_b, noop_callback(), CancellationToken::new())
+        .execute(&prepared_b, noop_callback(), None, CancellationToken::new())
         .await
         .expect("execute B");
     assert!(matches!(result_b.outcome, ExecutionOutcome::Success));
@@ -419,7 +419,7 @@ async fn tenant_isolation_two_tenants_one_pool() {
     };
     let prepared_a2 = backend.prepare(&job_a2, ctx_a2).await.expect("prepare A2");
     let result_a2 = backend
-        .execute(&prepared_a2, noop_callback(), CancellationToken::new())
+        .execute(&prepared_a2, noop_callback(), None, CancellationToken::new())
         .await
         .expect("execute A2");
     let arr_a2 = result_a2.outputs["rows"].as_array().expect("rows A2");
@@ -571,7 +571,7 @@ async fn jsonb_output_projection_roundtrip() {
     let prepared = backend.prepare(&job, ctx).await.expect("prepare");
     let (cb, log) = tracking_callback();
     let result = backend
-        .execute(&prepared, cb, CancellationToken::new())
+        .execute(&prepared, cb, None, CancellationToken::new())
         .await
         .expect("execute");
     assert!(matches!(result.outcome, ExecutionOutcome::Success));
@@ -615,7 +615,7 @@ async fn jsonb_output_projection_roundtrip() {
     };
     let prepared2 = backend.prepare(&job2, ctx2).await.expect("prepare 2");
     let result2 = backend
-        .execute(&prepared2, noop_callback(), CancellationToken::new())
+        .execute(&prepared2, noop_callback(), None, CancellationToken::new())
         .await
         .expect("execute 2");
     let arr2 = result2.outputs["rows"].as_array().expect("rows 2");
@@ -672,7 +672,7 @@ async fn pool_is_reused_across_jobs() {
         };
         let prepared = backend.prepare(&job, ctx).await.expect("prepare");
         let result = backend
-            .execute(&prepared, noop_callback(), CancellationToken::new())
+            .execute(&prepared, noop_callback(), None, CancellationToken::new())
             .await
             .expect("execute");
         assert!(matches!(result.outcome, ExecutionOutcome::Success));
@@ -740,7 +740,7 @@ async fn set_local_security_invariant() {
         };
         let prepared = backend.prepare(&job, ctx).await.expect("prepare");
         let _ = backend
-            .execute(&prepared, noop_callback(), CancellationToken::new())
+            .execute(&prepared, noop_callback(), None, CancellationToken::new())
             .await
             .expect("execute");
     }
@@ -813,7 +813,7 @@ async fn read_only_transaction_blocks_writes() {
     };
     let prepared = backend.prepare(&job, ctx).await.expect("prepare");
     let result = backend
-        .execute(&prepared, noop_callback(), CancellationToken::new())
+        .execute(&prepared, noop_callback(), None, CancellationToken::new())
         .await
         .expect("execute returns Ok with BackendError outcome");
 

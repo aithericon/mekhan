@@ -78,6 +78,7 @@ impl ExecutionBackend for DockerBackend {
         &self,
         run_context: &RunContext,
         status_cb: StatusCallback,
+        _event_stream: Option<std::sync::Arc<dyn crate::traits::EventStream>>,
         cancel: CancellationToken,
     ) -> Result<ExecutionResult, ExecutorError> {
         let config = DockerConfig::from_spec(&run_context.spec)?;

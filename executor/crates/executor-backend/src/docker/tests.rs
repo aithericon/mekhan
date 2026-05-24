@@ -265,7 +265,7 @@ async fn echo_succeeds_in_container() {
     }
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -315,7 +315,7 @@ async fn exit_failure_in_container() {
     }
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -358,7 +358,7 @@ async fn timeout_kills_container() {
     }
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -406,7 +406,7 @@ async fn cancellation_stops_container() {
     });
 
     let result = backend
-        .execute(&ctx, noop_callback(), cancel)
+        .execute(&ctx, noop_callback(), None, cancel)
         .await
         .unwrap();
 
@@ -447,7 +447,7 @@ async fn reports_running_with_container_id() {
 
     let (cb, log) = tracking_callback();
     backend
-        .execute(&ctx, cb, CancellationToken::new())
+        .execute(&ctx, cb, None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -491,7 +491,7 @@ async fn env_vars_injected_in_container() {
     }
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 

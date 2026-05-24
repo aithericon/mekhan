@@ -356,6 +356,7 @@ impl ExecutionBackend for HttpBackend {
         &self,
         run_context: &RunContext,
         status_cb: StatusCallback,
+        _event_stream: Option<std::sync::Arc<dyn crate::traits::EventStream>>,
         cancel: CancellationToken,
     ) -> Result<ExecutionResult, ExecutorError> {
         let resolved: ResolvedHttpConfig =

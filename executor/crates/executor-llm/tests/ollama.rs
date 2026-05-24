@@ -223,7 +223,7 @@ async fn ollama_extract_structured_blocks() {
     ctx = backend.prepare(&job, ctx).await.unwrap();
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -328,7 +328,7 @@ async fn openai_extract_structured_blocks() {
     ctx = backend.prepare(&job, ctx).await.unwrap();
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -400,7 +400,7 @@ async fn ollama_chat_with_history() {
     ctx = backend.prepare(&job, ctx).await.unwrap();
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -451,7 +451,7 @@ async fn ollama_metrics_always_populated() {
     ctx = backend.prepare(&job, ctx).await.unwrap();
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 

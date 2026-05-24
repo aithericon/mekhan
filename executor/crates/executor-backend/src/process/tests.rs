@@ -217,7 +217,7 @@ async fn echo_succeeds() {
     let ctx = make_process_run_context(spec, Duration::from_secs(10));
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -243,7 +243,7 @@ async fn false_exits_nonzero() {
     let ctx = make_process_run_context(spec, Duration::from_secs(10));
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -271,7 +271,7 @@ async fn timeout_kills_process() {
     let ctx = make_process_run_context(spec, Duration::from_millis(100));
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -304,7 +304,7 @@ async fn cancellation_stops_process() {
     });
 
     let result = backend
-        .execute(&ctx, noop_callback(), cancel)
+        .execute(&ctx, noop_callback(), None, cancel)
         .await
         .unwrap();
 
@@ -330,7 +330,7 @@ async fn reports_running_with_pid() {
 
     let (cb, log) = tracking_callback();
     backend
-        .execute(&ctx, cb, CancellationToken::new())
+        .execute(&ctx, cb, None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -357,7 +357,7 @@ async fn captures_output_tail() {
     let ctx = make_process_run_context(spec, Duration::from_secs(10));
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -395,7 +395,7 @@ async fn env_vars_from_spec_and_context() {
     );
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -428,7 +428,7 @@ async fn stderr_captured_separately() {
     let ctx = make_process_run_context(spec, Duration::from_secs(10));
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -454,7 +454,7 @@ async fn working_dir_changes_cwd() {
     let ctx = make_process_run_context(spec, Duration::from_secs(10));
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -479,7 +479,7 @@ async fn inherit_env_false_clears_environment() {
     let ctx = make_process_run_context(spec, Duration::from_secs(10));
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -504,7 +504,7 @@ async fn command_not_found_returns_spawn_error() {
     let ctx = make_process_run_context(spec, Duration::from_secs(10));
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await;
 
     assert!(
@@ -528,7 +528,7 @@ async fn multiple_args_passed_correctly() {
     let ctx = make_process_run_context(spec, Duration::from_secs(10));
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -549,7 +549,7 @@ async fn empty_output_returns_none() {
     let ctx = make_process_run_context(spec, Duration::from_secs(10));
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -571,7 +571,7 @@ async fn duration_is_nonzero() {
     let ctx = make_process_run_context(spec, Duration::from_secs(10));
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 

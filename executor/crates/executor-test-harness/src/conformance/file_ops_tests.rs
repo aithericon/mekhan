@@ -50,7 +50,7 @@ async fn prepare_and_execute(
         .await
         .expect("prepare should succeed");
     let result = backend
-        .execute(&ctx, cb, cancel)
+        .execute(&ctx, cb, None, cancel)
         .await
         .expect("execute should not return Err");
     kit.cleanup_run_context(&ctx).await;

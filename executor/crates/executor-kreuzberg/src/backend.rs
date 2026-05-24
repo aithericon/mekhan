@@ -81,6 +81,7 @@ impl ExecutionBackend for KreuzbergBackend {
         &self,
         run_context: &RunContext,
         status_cb: StatusCallback,
+        _event_stream: Option<std::sync::Arc<dyn aithericon_executor_backend::traits::EventStream>>,
         cancel: CancellationToken,
     ) -> Result<ExecutionResult, ExecutorError> {
         let resolved: ResolvedKreuzbergConfig =

@@ -130,7 +130,7 @@ async fn single_txt_extraction() {
 
     let (cb, log) = tracking_callback();
     let result = backend
-        .execute(&ctx, cb, CancellationToken::new())
+        .execute(&ctx, cb, None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -191,7 +191,7 @@ async fn single_extraction_with_explicit_file_name() {
 
     let ctx = backend.prepare(&job, ctx).await.unwrap();
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -213,7 +213,7 @@ async fn single_extraction_sole_input_auto_resolved() {
 
     let ctx = backend.prepare(&job, ctx).await.unwrap();
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -244,7 +244,7 @@ async fn batch_extraction_all_inputs() {
 
     let (cb, log) = tracking_callback();
     let result = backend
-        .execute(&ctx, cb, CancellationToken::new())
+        .execute(&ctx, cb, None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -309,7 +309,7 @@ async fn batch_extraction_filtered_files() {
 
     let ctx = backend.prepare(&job, ctx).await.unwrap();
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -336,7 +336,7 @@ async fn batch_partial_failure() {
 
     let ctx = backend.prepare(&job, ctx).await.unwrap();
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -373,7 +373,7 @@ async fn batch_total_failure_is_backend_error() {
 
     let ctx = backend.prepare(&job, ctx).await.unwrap();
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -405,7 +405,7 @@ async fn single_nonexistent_file_returns_backend_error() {
 
     let ctx = backend.prepare(&job, ctx).await.unwrap();
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -441,7 +441,7 @@ async fn cancellation_returns_cancelled_outcome() {
     let cancel = CancellationToken::new();
     cancel.cancel();
 
-    let result = backend.execute(&ctx, noop_callback(), cancel).await.unwrap();
+    let result = backend.execute(&ctx, noop_callback(), None, cancel).await.unwrap();
 
     assert!(matches!(result.outcome, ExecutionOutcome::Cancelled));
 }
@@ -525,7 +525,7 @@ async fn writes_expected_output_files() {
 
     let ctx = backend.prepare(&job, ctx).await.unwrap();
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -556,7 +556,7 @@ async fn success_populates_info_log() {
 
     let ctx = backend.prepare(&job, ctx).await.unwrap();
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -581,7 +581,7 @@ async fn failure_populates_error_log() {
 
     let ctx = backend.prepare(&job, ctx).await.unwrap();
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 

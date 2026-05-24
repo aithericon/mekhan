@@ -6,7 +6,9 @@ use async_nats::jetstream;
 use chrono::Utc;
 use tracing::{debug, error};
 
-use aithericon_executor_domain::{EventCategory, ExecutionEvent, StatusDetail};
+use aithericon_executor_domain::{EventCategory, ExecutionEvent, LogLevel, StatusDetail};
+
+use aithericon_executor_backend::traits::EventStream;
 
 /// Lightweight trait for emitting ExecutionEvents to NATS JetStream.
 ///
@@ -130,5 +132,24 @@ impl StreamContext {
         };
         self.emitter.emit(&event).await;
         true
+    }
+}
+
+/// Bridge `StreamContext` (executor-worker's per-execution event channel)
+/// to the in-process `EventStream` trait that backends call. Lets the LLM
+/// backend (and other in-process backends) emit per-message logs through
+/// the same path the IPC sidecar uses for child-process SDK logs.
+#[async_trait::async_trait]
+impl EventStream for StreamContext {
+    async fn log(&self, level: LogLevel, message: String, fields: HashMap<String, String>) {
+        self.maybe_emit(
+            EventCategory::Log,
+            StatusDetail::LogMessage {
+                level: level.as_str().to_string(),
+                message,
+                fields,
+            },
+        )
+        .await;
     }
 }
