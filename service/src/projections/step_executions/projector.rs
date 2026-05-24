@@ -239,13 +239,14 @@ impl State {
             }
             DomainEvent::TransitionFired {
                 transition_id,
-                consumed_tokens: _,
+                consumed_tokens,
                 produced_tokens,
                 read_tokens,
                 ..
             } => {
                 self.handle_fire(
                     transition_id,
+                    consumed_tokens,
                     produced_tokens,
                     read_tokens,
                     persisted.sequence,
@@ -256,13 +257,14 @@ impl State {
             }
             DomainEvent::EffectCompleted {
                 transition_id,
-                consumed_tokens: _,
+                consumed_tokens,
                 produced_tokens,
                 read_tokens,
                 ..
             } => {
                 self.handle_fire(
                     transition_id,
+                    consumed_tokens,
                     produced_tokens,
                     read_tokens,
                     persisted.sequence,
@@ -346,9 +348,68 @@ impl State {
         });
     }
 
+    /// A produced token landed at some node's entry place: that token IS
+    /// the consumer's inbound payload (the slim control token threaded by
+    /// the upstream's `auto_output` arc, or the HumanTask-injected token
+    /// from the `t_edge_*` wire transition). Record it on the consumer's
+    /// row, attributed to the upstream node.
+    ///
+    /// Attribution prefers the firing transition's owner, but for the
+    /// HumanTask wire-edge — credited to the consumer in
+    /// `derive_node_ownership` so its `read_tokens` flow onto the right
+    /// row — the firing owner IS the consumer, so we fall back to whichever
+    /// place owner appears in `consumed_tokens` that isn't the consumer
+    /// itself. That correctly resolves to the real upstream (e.g. Start).
+    ///
+    /// If a `read_tokens`-capture for the same producer slug arrives later
+    /// in the same fire (or in a downstream owned fire), it wins on key
+    /// collision — the parked envelope is semantically richer than the
+    /// slim control.
+    fn note_inbound_at_entry(
+        &mut self,
+        place_id: &PlaceId,
+        token: &Token,
+        transition_id: &TransitionId,
+        consumed_tokens: &[(PlaceId, TokenId)],
+        lookups: &Lookups<'_>,
+    ) {
+        let Some(consumer) = lookups.entry_to_node.get(&place_id.0).cloned() else {
+            return;
+        };
+        let firing_owner = lookups.transition_owner.get(&transition_id.0).cloned();
+        let source = match firing_owner {
+            Some(o) if o != consumer => Some(o),
+            _ => consumed_tokens
+                .iter()
+                .filter_map(|(p, _)| lookups.place_owner.get(&p.0))
+                .find(|src| **src != consumer)
+                .cloned(),
+        };
+        let key = source.unwrap_or_else(|| "input".to_string());
+
+        let iter = self.active_iter.get(&consumer).copied().unwrap_or(0);
+        // Row was opened by `note_entry_arrival` immediately above.
+        let Some(row) = self.rows.get_mut(&(consumer, iter)) else {
+            return;
+        };
+        let mut map: serde_json::Map<String, serde_json::Value> = row
+            .inputs
+            .as_ref()
+            .and_then(|v| v.as_object())
+            .cloned()
+            .unwrap_or_default();
+        // Only insert if absent — don't overwrite a read-arc payload
+        // already on the row.
+        if !map.contains_key(&key) {
+            map.insert(key, token_color_to_json(&token.color));
+            row.inputs = Some(serde_json::Value::Object(map));
+        }
+    }
+
     fn handle_fire(
         &mut self,
         transition_id: &TransitionId,
+        consumed_tokens: &[(PlaceId, TokenId)],
         produced_tokens: &[(PlaceId, Token)],
         read_tokens: &[(PlaceId, Token)],
         sequence: u64,
@@ -361,8 +422,27 @@ impl State {
         //    including Loop body re-entry). The firing's timestamp is the
         //    moment the entry token came into existence, which we record as
         //    the downstream step's `started_at`.
+        //
+        //    Simultaneously, that produced token is the consumer's inbound
+        //    control token — what the upstream actually handed over the
+        //    edge. Credit it to the consumer's row as an input, attributed
+        //    to whichever upstream node owned the firing transition (or,
+        //    when the firing transition is owned by the consumer itself —
+        //    the HumanTask wire-edge case where `t_edge_*` is credited to
+        //    the consumer so its `read_tokens` flow there — the source
+        //    place owner from `consumed_tokens`). Without this the drawer's
+        //    "Inputs" stays empty for steps that don't synthesize a
+        //    `<slug>.<field>` read-arc, like a HumanTask whose form just
+        //    collects user-entered data.
         for (place_id, token) in produced_tokens {
             self.note_entry_arrival(place_id, token, ts, lookups);
+            self.note_inbound_at_entry(
+                place_id,
+                token,
+                transition_id,
+                consumed_tokens,
+                lookups,
+            );
         }
 
         // 2. Find the owning node of this transition (if any) and update its
@@ -422,6 +502,11 @@ impl State {
         row.last_sequence = sequence;
 
         // 4. Capture inputs from read_tokens, grouped by producer node.
+        //    Merge into any existing inputs (set by the inbound-control-
+        //    token capture in step 1, or by an earlier owned fire); the
+        //    read-arc payload is the producer's parked envelope, which is
+        //    semantically richer than the slim inbound control token, so
+        //    it wins on key collision.
         if !read_tokens.is_empty() {
             let mut groups: BTreeMap<String, Vec<serde_json::Value>> = BTreeMap::new();
             for (place_id, token) in read_tokens {
@@ -435,9 +520,12 @@ impl State {
                     .or_default()
                     .push(token_color_to_json(&token.color));
             }
-            // Single-value groups deserve a flat value, multi-value get the
-            // array. Either is JSON the UI can render the same way.
-            let mut inputs_obj = serde_json::Map::new();
+            let mut inputs_obj: serde_json::Map<String, serde_json::Value> = row
+                .inputs
+                .as_ref()
+                .and_then(|v| v.as_object())
+                .cloned()
+                .unwrap_or_default();
             for (k, mut vs) in groups {
                 let v = if vs.len() == 1 {
                     vs.remove(0)
@@ -627,13 +715,24 @@ mod tests {
         produced: Vec<(PlaceId, Token)>,
         read: Vec<(PlaceId, Token)>,
     ) -> PersistedEvent {
+        fired_with_consumed(seq, ts_secs, transition_id, vec![], produced, read)
+    }
+
+    fn fired_with_consumed(
+        seq: u64,
+        ts_secs: i64,
+        transition_id: TransitionId,
+        consumed: Vec<(PlaceId, TokenId)>,
+        produced: Vec<(PlaceId, Token)>,
+        read: Vec<(PlaceId, Token)>,
+    ) -> PersistedEvent {
         PersistedEvent {
             sequence: seq,
             timestamp: ts(ts_secs),
             event: DomainEvent::TransitionFired {
                 transition_id,
                 transition_name: None,
-                consumed_tokens: vec![],
+                consumed_tokens: consumed,
                 produced_tokens: produced,
                 read_tokens: read,
                 process_step_started: None,
@@ -829,6 +928,135 @@ mod tests {
         assert_eq!(
             a_row.outputs,
             Some(serde_json::json!({"greeting": "hi Alice"}))
+        );
+    }
+
+    /// Inbound control token capture: a step that doesn't synthesize any
+    /// `<slug>.<field>` read-arcs still receives the upstream's slim
+    /// control token at its entry. The projector records that token as
+    /// an input from the upstream, attributed by the firing owner (the
+    /// straightforward `upstream → downstream entry` path).
+    #[test]
+    fn projector_captures_inbound_control_token_when_upstream_produces_at_entry() {
+        let reg = three_node_registry();
+        // `a`'s entry is `p_s_main` (alias-collapsed onto the producer).
+        // When `t_s_park` fires producing at `p_s_main`, `a`'s row should
+        // open with that token recorded as an input from `s` — even
+        // though there is no read-arc.
+        let events = vec![
+            token_created(0, 100, place("p_s_ready"), unit_token()),
+            fired(
+                1,
+                101,
+                trans("t_s_park"),
+                vec![
+                    (place("p_s_data"), data_token(serde_json::json!({"name": "Alice"}))),
+                    (place("p_s_main"), data_token(serde_json::json!({"_instance_id": "abc"}))),
+                ],
+                vec![],
+            ),
+        ];
+
+        let rows = project_step_executions(&events, &reg);
+        let a_row = rows
+            .iter()
+            .find(|r| r.node_id == "a")
+            .expect("a row exists (entry token landed even with no read-arc)");
+        assert_eq!(
+            a_row.inputs,
+            Some(serde_json::json!({ "s": {"_instance_id": "abc"} })),
+            "a should see the slim control token from s as its inbound input"
+        );
+    }
+
+    /// Wire-edge inbound case (HumanTask in the real compiler): the
+    /// transition that produces at the consumer's entry place is owned
+    /// by the consumer itself (because `derive_node_ownership` credits
+    /// `t_edge_*` transitions to the entry-receiving node so their
+    /// `read_tokens` flow onto the right row). The firing owner is
+    /// therefore == consumer, and inbound attribution must fall back
+    /// to the source place owner from `consumed_tokens`.
+    #[test]
+    fn projector_credits_wire_edge_inbound_to_source_place_owner() {
+        let mut reg: InterfaceRegistry = HashMap::new();
+
+        let mut s = NodeInterface::new("s", NodeKind::Start);
+        s.entry = Some("p_s_ready".to_string());
+        s.outputs = BTreeMap::from([(OutputKey::Default, "p_s_main".to_string())]);
+        s.data_port = Some("p_s_data".to_string());
+        s.owned_places = vec![
+            "p_s_ready".to_string(),
+            "p_s_main".to_string(),
+            "p_s_data".to_string(),
+        ];
+        s.owned_transitions = vec!["t_s_park".to_string()];
+        reg.insert("s".to_string(), s);
+
+        let mut h = NodeInterface::new("h", NodeKind::HumanTask);
+        h.entry = Some("p_h_input".to_string());
+        h.data_port = Some("p_h_data".to_string());
+        h.outputs = BTreeMap::from([(OutputKey::Default, "p_h_main".to_string())]);
+        h.owned_places = vec![
+            "p_h_input".to_string(),
+            "p_h_data".to_string(),
+            "p_h_main".to_string(),
+        ];
+        // Wire-edge transition `t_edge_e1` belongs to the consumer (the
+        // HumanTask) because `derive_node_ownership`'s post-pass attributes
+        // wire-edge transitions to whichever node's entry they produce into.
+        h.owned_transitions = vec![
+            "t_h_finalize".to_string(),
+            "t_edge_e1".to_string(),
+        ];
+        reg.insert("h".to_string(), h);
+
+        // Upstream control token: we share the same id between the
+        // produced-by-Start token and the consumed-by-wire-edge entry,
+        // mirroring the real engine (no shared id is required for the
+        // attribution rule, but matching reality keeps the test honest).
+        let upstream_token = data_token(serde_json::json!({"_instance_id": "abc"}));
+        let upstream_token_id = upstream_token.id.clone();
+        let events = vec![
+            token_created(0, 100, place("p_s_ready"), unit_token()),
+            // t_s_park: Start parks its data + threads slim control onward.
+            fired(
+                1,
+                101,
+                trans("t_s_park"),
+                vec![
+                    (
+                        place("p_s_data"),
+                        data_token(serde_json::json!({"vendor": "ACME"})),
+                    ),
+                    (place("p_s_main"), upstream_token.clone()),
+                ],
+                vec![],
+            ),
+            // t_edge_e1: the HumanTask wire transition consumes from
+            // p_s_main (Start's output) and produces at p_h_input
+            // (HumanTask's entry). Owner = "h" (per the compiler fix).
+            fired_with_consumed(
+                2,
+                102,
+                trans("t_edge_e1"),
+                vec![(place("p_s_main"), upstream_token_id.clone())],
+                vec![(
+                    place("p_h_input"),
+                    data_token(serde_json::json!({"_instance_id": "abc"})),
+                )],
+                vec![],
+            ),
+        ];
+
+        let rows = project_step_executions(&events, &reg);
+        let h_row = rows
+            .iter()
+            .find(|r| r.node_id == "h")
+            .expect("h row exists");
+        assert_eq!(
+            h_row.inputs,
+            Some(serde_json::json!({ "s": {"_instance_id": "abc"} })),
+            "wire-edge produced-at-entry token must be attributed to the source place owner (`s`), not the firing owner (`h` itself)"
         );
     }
 
