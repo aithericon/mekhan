@@ -7,6 +7,7 @@
  */
 import HumanTaskEnvelope from './HumanTaskEnvelope.svelte';
 import AutomatedStepEnvelope from './AutomatedStepEnvelope.svelte';
+import ProcessTokenEnvelope from './ProcessTokenEnvelope.svelte';
 import FileReference from './FileReference.svelte';
 import TabularArray from './TabularArray.svelte';
 import KeyValueList from './KeyValueList.svelte';
@@ -48,6 +49,16 @@ function matchesAutomatedStep(value: unknown, ctx: RenderContext): boolean {
 	if (typeof value.job_id !== 'string') return false;
 	if (!isObj(value.detail)) return false;
 	return ctx.nodeKind === undefined || ctx.nodeKind === 'automated_step';
+}
+
+/** Process-rooted token (carrying `_instance_id` stamped by Start, plus
+ *  the other `_*` system fields and the declared business fields). Also
+ *  matches the inbound at HumanTask after the wire-edge injection merges
+ *  in form scaffold. The renderer hides the noise (scaffold + metadata
+ *  disclosures) and surfaces the business fields. */
+function matchesProcessToken(value: unknown): boolean {
+	if (!isObj(value)) return false;
+	return typeof value._instance_id === 'string';
 }
 
 /** Catalogue file reference — `{url, filename?, content_type?}`. */
@@ -109,6 +120,12 @@ export const REGISTRY: OutputRenderer[] = [
 		label: 'Automated step result',
 		matches: matchesAutomatedStep,
 		component: AutomatedStepEnvelope
+	},
+	{
+		name: 'process-token',
+		label: 'Process token',
+		matches: matchesProcessToken,
+		component: ProcessTokenEnvelope
 	},
 	{
 		name: 'file-ref',
