@@ -286,98 +286,42 @@ pub async fn resolve_subworkflow_air(
         let mut child_def: ScenarioDefinition = serde_json::from_value(child_air)
             .map_err(|_| unresolved("child AIR is not a valid scenario"))?;
 
-        // Boundary derivation. PROTOTYPE primary path: read the child's
-        // per-node compiler interface (sidecar `interface_json`) and pull
-        // `entry` (single Start) + `workflow_terminals` (union over End
-        // nodes) verbatim. No string-shape filtering, no `place_type` peek,
-        // no slash-exclusion to disambiguate executor-lifecycle terminals
-        // from workflow-exits. The registry is alias-stable.
+        // Boundary derivation: read the child's per-node compiler interface
+        // registry (sidecar `interface_json`) and pull `entry` (single Start)
+        // + `workflow_terminals` (union over End nodes) verbatim. No
+        // string-shape filtering, no `place_type` peek. The registry is
+        // alias-stable (see `service/src/compiler/interface.rs`).
         //
-        // Fallback path: when `interface_json` is NULL (pre-prototype rows
-        // or a republish that skipped the new pipeline), reconstruct from
-        // AIR + child graph the way we did before — `place_type ==
-        // "terminal" && !contains('/')` for the End-derived terminals (the
-        // slash exclusion is the alias-collapse stability patch from
-        // 674408e) and `p_{startId}_ready` for the entry place. Both
-        // branches feed `make_child_callable` identically.
-        let (entry_place, terminal_ids) = match child
+        // Every published template MUST carry `interface_json` — there is
+        // no fallback path, no pre-registry rows in production.
+        let interface_value = child
             .interface_json
             .as_ref()
-            .and_then(|v| serde_json::from_value::<InterfaceRegistry>(v.clone()).ok())
-        {
-            Some(registry) => {
-                let starts: Vec<&str> = registry
-                    .values()
-                    .filter(|i| i.kind == NodeKind::Start)
-                    .filter_map(|i| i.entry.as_deref())
-                    .collect();
-                let [entry] = starts.as_slice() else {
-                    return Err(unresolved(
-                        "child interface has != 1 Start with an entry place",
-                    ));
-                };
-                let terminals: Vec<String> = registry
-                    .values()
-                    .filter(|i| i.kind == NodeKind::End)
-                    .flat_map(|i| i.workflow_terminals.iter().cloned())
-                    .collect();
-                if terminals.is_empty() {
-                    return Err(unresolved(
-                        "child interface declares no workflow-exit terminals",
-                    ));
-                }
-                (entry.to_string(), terminals)
-            }
-            None => {
-                let child_graph: WorkflowGraph = serde_json::from_value(child.graph.clone())
-                    .map_err(|_| unresolved("child graph is invalid"))?;
-                let starts: Vec<&str> = child_graph
-                    .nodes
-                    .iter()
-                    .filter(|n| matches!(n.data, WorkflowNodeData::Start { .. }))
-                    .map(|n| n.id.as_str())
-                    .collect();
-                let [start_id] = starts.as_slice() else {
-                    return Err(unresolved("child must have exactly one Start node"));
-                };
-                let entry = format!("p_{start_id}_ready");
-                // Reply sources must be the workflow's End-derived terminals
-                // only — NOT every place flagged `terminal` in the AIR. The
-                // SDK's executor_lifecycle component marks
-                // `<step>/completed` / `<step>/cancelled` /
-                // `<step>/dead_letter` as terminal for the engine's
-                // net-completion tracking, but those are intermediate
-                // lifecycle places (the next step's `t_<step>_to_output`
-                // consumes them). Wiring them as reply sources causes the
-                // raw executor envelope to race past the End node's
-                // result-shape mapping into the parent's `p_<sub>_reply`,
-                // breaking the child's declared output contract.
-                //
-                // SDK-emitted lifecycle terminals are *always*
-                // `<step>/<state>` (slash-separated, see engine/sdk
-                // Context::prefixed_id). Compiler-emitted End terminals
-                // are always `p_<x>_<y>` (no slash) — even after
-                // alias-collapse rewrites them (e.g., Start→End-direct
-                // collapses `p_<endId>_done` to `p_<startId>_main`, no
-                // slash either way). A naive `p_<endId>_*` prefix match
-                // would miss the collapsed case; the slash exclusion is
-                // collapse-stable. Per-674408e. The primary path above
-                // (`interface_json`) sidesteps this disambiguation
-                // entirely.
-                let terminals: Vec<String> = child_def
-                    .places
-                    .iter()
-                    .filter(|p| p.place_type == "terminal" && !p.id.contains('/'))
-                    .map(|p| p.id.clone())
-                    .collect();
-                if terminals.is_empty() {
-                    return Err(unresolved(
-                        "child has no End-derived terminal places — sub-workflow contract requires at least one End",
-                    ));
-                }
-                (entry, terminals)
-            }
+            .ok_or_else(|| unresolved("child has no published interface registry"))?;
+        let registry: InterfaceRegistry = serde_json::from_value(interface_value.clone())
+            .map_err(|e| unresolved(&format!("child interface registry is invalid: {e}")))?;
+
+        let starts: Vec<&str> = registry
+            .values()
+            .filter(|i| i.kind == NodeKind::Start)
+            .filter_map(|i| i.entry.as_deref())
+            .collect();
+        let [entry_place] = starts.as_slice() else {
+            return Err(unresolved(
+                "child interface must have exactly one Start node with an entry place",
+            ));
         };
+        let entry_place = entry_place.to_string();
+        let terminal_ids: Vec<String> = registry
+            .values()
+            .filter(|i| i.kind == NodeKind::End)
+            .flat_map(|i| i.workflow_terminals.iter().cloned())
+            .collect();
+        if terminal_ids.is_empty() {
+            return Err(unresolved(
+                "child interface declares no workflow-exit terminals — sub-workflow contract requires at least one End",
+            ));
+        }
 
         make_child_callable(&mut child_def, &entry_place, &terminal_ids).map_err(
             |e| {

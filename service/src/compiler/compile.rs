@@ -399,23 +399,16 @@ pub fn compile_to_scenario_and_interfaces(
         iface.rewrite_places(&alias);
     }
 
-    // 7. Terminal place_type fixup. Read from the registry's
-    //    `workflow_terminals` (already post-alias) — this is what
-    //    `lower_end` published. Union with `fixups.terminal_place_ids` for
-    //    back-compat if any future lowering still records terminals only
-    //    on fixups.
-    let mut resolved_terminal_ids: Vec<String> = interfaces
+    // 7. Terminal place_type fixup. Reads exclusively from the registry's
+    //    `workflow_terminals` (already post-alias-rewrite). Per the
+    //    interface contract (see `interface.rs`), `lower_end` is the only
+    //    lowering that populates this field — there is no other path.
+    let resolved_terminal_ids: std::collections::HashSet<&str> = interfaces
         .values()
-        .flat_map(|i| i.workflow_terminals.iter().cloned())
+        .flat_map(|i| i.workflow_terminals.iter().map(String::as_str))
         .collect();
-    for id in &fixups.terminal_place_ids {
-        let resolved = alias.get(id).cloned().unwrap_or_else(|| id.clone());
-        if !resolved_terminal_ids.contains(&resolved) {
-            resolved_terminal_ids.push(resolved);
-        }
-    }
     for place in &mut scenario.places {
-        if resolved_terminal_ids.contains(&place.id) {
+        if resolved_terminal_ids.contains(place.id.as_str()) {
             place.place_type = "terminal".to_string();
         }
     }
@@ -460,8 +453,9 @@ pub fn compile_to_scenario_and_interfaces(
     //     parked data + control tokens, schema the split places/ports, and
     //     synthesize read-arcs (the compiler-as-borrow-checker) so every
     //     Decision/Loop guard physically `&`-borrows the parked data place
-    //     that owns the field it references. Runs post-merge: place ids final.
-    apply_control_data_foundation(graph, &mut scenario, &fixups, inline_sources)?;
+    //     that owns the field it references. Runs post-merge: place ids
+    //     final. Reads exclusively from `interfaces.data_port`.
+    apply_control_data_foundation(graph, &mut scenario, &interfaces, inline_sources)?;
 
     Ok((scenario, interfaces))
 }
@@ -514,11 +508,15 @@ fn derive_node_ownership(
     }
 }
 
-/// Post-merge foundation phase. See call site (step 10).
+/// Post-merge foundation phase. See call site (step 10). Reads exclusively
+/// from `interfaces` (specifically `data_port`) — never from string-shape
+/// derivations or `fixups`. Per the interface contract, every node that
+/// parks a borrow-reachable envelope MUST publish `data_port` from its
+/// `lower_*`.
 fn apply_control_data_foundation(
     graph: &crate::models::template::WorkflowGraph,
     scenario: &mut aithericon_sdk::scenario::ScenarioDefinition,
-    fixups: &PostProcess,
+    interfaces: &InterfaceRegistry,
     inline_sources: &HashMap<String, HashMap<String, String>>,
 ) -> Result<(), CompileError> {
     use crate::compiler::token_shape::{
@@ -529,13 +527,19 @@ fn apply_control_data_foundation(
 
     let report = analyze(graph)?;
 
-    // (a) Typed definitions for every split node's parked data + control
+    // Parked-producer nodes: those whose interface published a `data_port`.
+    let parked: Vec<(&str, &str)> = interfaces
+        .iter()
+        .filter_map(|(id, iface)| iface.data_port.as_deref().map(|p| (id.as_str(), p)))
+        .collect();
+
+    // (a) Typed definitions for every parked producer's data + control
     //     token. Data = the producer's full output shape (enforced);
     //     control = an open object (small, dynamic `_loop_*` keys).
     let (dyn_name, dyn_schema) = dynamic_token_definition();
     scenario.definitions.entry(dyn_name).or_insert(dyn_schema);
-    for node_id in fixups.data_places.keys() {
-        if let Some(shape) = report.node_out.get(node_id) {
+    for (node_id, _) in &parked {
+        if let Some(shape) = report.node_out.get(*node_id) {
             scenario
                 .definitions
                 .insert(data_def_name(node_id), shape.to_json_schema());
@@ -547,12 +551,12 @@ fn apply_control_data_foundation(
     }
 
     // (b) Schema the split places + the yield transition's output ports.
-    for (node_id, data_place) in &fixups.data_places {
+    for (node_id, data_place) in &parked {
         let data_ref = def_ref(&data_def_name(node_id));
         let ctrl_ref = def_ref(&ctrl_def_name(node_id));
         let ctrl_place = format!("p_{node_id}_ctrl");
         for p in &mut scenario.places {
-            if &p.id == data_place {
+            if p.id == *data_place {
                 p.token_schema = Some(data_ref.clone());
             } else if p.id == ctrl_place {
                 p.token_schema = Some(ctrl_ref.clone());
@@ -579,7 +583,17 @@ fn apply_control_data_foundation(
     //     the reference in `guard`; End/Failure result-mapping expressions
     //     (added on main) hold it in `logic` — both are covered.
     for b in guard_readarc_plan(graph)? {
-        let data_place = format!("p_{}_data", b.producer_node);
+        // Producer's data port from the registry — never reconstructed
+        // from the naming convention. If the producer didn't publish a
+        // `data_port` (i.e., it's not a parked producer), the reference
+        // is unresolved upstream by the borrow planner; skip silently.
+        let Some(data_place) = interfaces
+            .get(&b.producer_node)
+            .and_then(|i| i.data_port.as_deref())
+        else {
+            continue;
+        };
+        let data_place = data_place.to_string();
         let var = format!("d_{}", b.producer_node.replace('-', "_"));
         let new_ref = format!("{var}.{}", b.producer_path);
         let schema_ref = def_ref(&data_def_name(&b.producer_node));
@@ -841,7 +855,12 @@ fn apply_control_data_foundation(
             let mut pushes = String::new();
             for b in consumer_borrows {
                 let var = format!("d_{}", b.producer_node.replace('-', "_"));
-                let data_place = format!("p_{}_data", b.producer_node);
+                let Some(data_place) = interfaces
+                    .get(&b.producer_node)
+                    .and_then(|i| i.data_port.clone())
+                else {
+                    continue;
+                };
                 if !t.input_ports.iter().any(|p| p.name == var) {
                     t.input_ports.push(ScenarioPort {
                         name: var.clone(),
@@ -963,7 +982,12 @@ fn apply_control_data_foundation(
             }
             for b in consumer_borrows {
                 let var = format!("d_{}", b.producer_node.replace('-', "_"));
-                let data_place = format!("p_{}_data", b.producer_node);
+                let Some(data_place) = interfaces
+                    .get(&b.producer_node)
+                    .and_then(|i| i.data_port.clone())
+                else {
+                    continue;
+                };
                 // Slug-specific needle: the trailing `, ` (comma+space)
                 // is exactly what `interpolate_to_rhai_expr` emits
                 // between segments via `segs.join(", ")`, so this

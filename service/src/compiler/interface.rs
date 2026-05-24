@@ -1,20 +1,97 @@
-//! Per-node compiler interface: the explicit shape every `lower_*` already
-//! emits (sub-graph boundary places, terminal exits, parked data port, owned
-//! places/transitions) — recorded on a registry instead of left for downstream
-//! passes to rediscover via `format!("p_{id}_*")` + `starts_with`.
+//! # Sub-graph interface registry — the compiler's typed contract
 //!
-//! The registry is the seam where the type-driven lowering layer
-//! (`token_shape::SlugIndex`, per-node `lower_*`) meets the cross-cutting
-//! passes (scope-child tagging, schema binding, sub-workflow reply wiring,
-//! read-arc synthesis). Today every leak we've fixed
-//! (`e5ed9fc`/`674408e` SubWorkflow terminal filter, `cd1825f` Loop counter,
-//! priority tiebreaker fallback) sat on that seam.
+//! Every workflow node lowers into a known Petri sub-graph. The shape of that
+//! sub-graph (where tokens enter, where they leave, which place parks the
+//! borrowable data envelope, which place is a workflow exit) is **explicit
+//! output** of lowering, recorded in [`InterfaceRegistry`]. Downstream passes
+//! consume the registry — they never pattern-match on place id conventions
+//! or `place_type` to recover boundary information.
 //!
-//! Scope: this prototype adds the registry + a single alias-rewrite pass +
-//! consumption at three demonstration sites (`publish.rs::resolve_subworkflow_air`,
-//! `compile.rs` step 8b scope tagging, step 10 data-port lookup). Each
-//! `lower_*` still constructs ids via `format!` — production-side naming is
-//! fine; the leak is on the read side.
+//! ## Mental model
+//!
+//! ```text
+//!   WorkflowNode               Sub-graph (Petri places + transitions)
+//!   ─────────────              ────────────────────────────────────────
+//!   Start { ... }       →      p_<id>_ready (entry)
+//!                              p_<id>_data  (write-once parked envelope)
+//!                              p_<id>_main  (default output)
+//!                              t_<id>_park  (fork: data + main)
+//!
+//!   HumanTask { ... }   →      p_<id>_input   (entry)
+//!                              p_<id>_active  (state)
+//!                              p_<id>_data    (parked envelope)
+//!                              p_<id>_ctrl    (default output, slimmed control token)
+//!                              ...
+//!
+//!   End { ... }         →      p_<id>_done       (entry)
+//!                              p_<id>_result     (workflow terminal — if result_mapping)
+//!                              p_<id>_completed  (workflow terminal — if process registered)
+//! ```
+//!
+//! After lowering, the dispatcher walks every node and asserts that a
+//! [`NodeInterface`] entry was published. Then `compile.rs`:
+//!
+//!   1. Builds the alias map from pass-through edge merges (`apply_merges`).
+//!   2. Calls `derive_node_ownership` — the ONE prefix-match pass that fills
+//!      `owned_places` / `owned_transitions` from `p_<id>_*` / `t_<id>_*`.
+//!   3. Rewrites every place id in every interface through the alias map, so
+//!      consumers see post-collapse ids.
+//!
+//! From that point onward, the registry is the source of truth.
+//!
+//! ## Contract every `lower_*` must satisfy
+//!
+//! The dispatcher hard-errors if a lowering returns `Ok` without publishing
+//! an interface entry. Each lowering populates:
+//!
+//! | Field                 | When set                                                                  |
+//! |-----------------------|---------------------------------------------------------------------------|
+//! | `node_id`             | always                                                                    |
+//! | `kind`                | always (mirrors `WorkflowNodeData` variant)                               |
+//! | `entry`               | `Some` for nodes with an inbound boundary; `None` only for `ParallelJoin` |
+//! | `named_inputs`        | every named inbound port (Loop `body_out`, Join per-edge inputs)         |
+//! | `outputs`             | every outbound port keyed by [`OutputKey`]                                |
+//! | `data_port`           | `Some` iff the node parks a borrow-reachable envelope (Start/HumanTask/AutomatedStep) |
+//! | `workflow_terminals`  | `End` nodes only — every terminal place this End feeds                    |
+//! | `owned_places`        | filled centrally by `derive_node_ownership` (do NOT set in `lower_*`)     |
+//! | `owned_transitions`   | filled centrally by `derive_node_ownership` (do NOT set in `lower_*`)     |
+//!
+//! `Trigger` is the sole exception: it has no AIR shape, no interface entry.
+//!
+//! ## Ownership invariant
+//!
+//! Every place a `lower_*` emits MUST start with `p_{node_id}_`, every
+//! transition with `t_{node_id}_`. This is the ONLY place-id convention the
+//! compiler enforces; `derive_node_ownership` does longest-prefix matching to
+//! credit ownership. Any lowering that violates the convention will silently
+//! lose ownership of those places (they won't be scope-tagged, won't appear
+//! in `owned_places`).
+//!
+//! ## Alias collapse
+//!
+//! Pure-passthrough edge wiring is optimized into a place merge: the
+//! consumer's input place gets aliased onto the producer's output place.
+//! `NodeInterface::rewrite_places` is run once on every interface after
+//! `resolve_aliases` so every field carries post-collapse ids. This is the
+//! structural fix for the bugs that motivated this design — consumers don't
+//! need to know aliases happened.
+//!
+//! ## What downstream passes read
+//!
+//! - `compile.rs` step 7 (terminal `place_type` fixup): reads
+//!   `interface.workflow_terminals` only.
+//! - `compile.rs` step 8b (scope-child group tagging): reads
+//!   `interface.owned_places` / `owned_transitions`.
+//! - `compile.rs` step 10 (data-port schema binding + read-arc synthesis):
+//!   reads `interface.data_port`.
+//! - `publish.rs::resolve_subworkflow_air` (parent compile embedding a
+//!   `SubWorkflow` child): reads the child's published `interface_json` —
+//!   `entry` of the unique `Start` + `workflow_terminals` union over all
+//!   `End` nodes.
+//!
+//! No consumer touches `place_type`, prefix-matches place ids, or filters
+//! `<step>/<state>` slash-shapes. If you find yourself doing that in a new
+//! pass, extend the interface instead.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;

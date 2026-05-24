@@ -116,11 +116,16 @@ pub(crate) struct PlaceMerge {
     pub(crate) survivor: String,
 }
 
-/// Tracks post-processing fixups that must be applied after ctx.build().
+/// Side-channel state that builds during lowering and is consumed by the
+/// post-merge orchestration passes in `compile.rs`. Distinct from the
+/// per-node interface registry (`InterfaceRegistry`): this holds *non*-
+/// per-node bookkeeping (place merges, group declarations, scope-child
+/// parentage, the process token shared between Start and End).
+///
+/// Workflow-exit terminal places and parked-data ports used to live here
+/// too; both moved to `NodeInterface` as the canonical source of truth.
 #[derive(Default)]
 pub(crate) struct PostProcess {
-    /// Place IDs that should be changed to "terminal" type.
-    pub(crate) terminal_place_ids: Vec<String>,
     /// Groups to add: (id, name, parent_id).
     pub(crate) groups: Vec<(String, String, Option<String>)>,
     /// Pass-through edge merges: dead place → survivor place.
@@ -134,13 +139,6 @@ pub(crate) struct PostProcess {
     /// before their terminal place, so the process is marked complete. `None`
     /// = no process registered → End stays a bare terminal (unchanged).
     pub(crate) process_token_place: Option<PlaceHandle<DynamicToken>>,
-    /// Control/data split (foundation): node_id → its write-once parked data
-    /// place id. Generalizes the `process_token_place` precedent — every
-    /// HumanTask/AutomatedStep parks its full output here once; the read-arc
-    /// synthesis phase (post-merge, in `compile_to_air`) wires guards that
-    /// reference that producer's fields to read-arc this place, and registers
-    /// the typed `#/definitions/*` for the data + control tokens.
-    pub(crate) data_places: HashMap<String, String>,
 }
 
 /// Tracks which places are the input/output interface of each expanded node.
@@ -180,12 +178,44 @@ pub(crate) struct LoweringCtx<'a, 'c> {
     /// Pre-resolved child sub-workflow AIR, keyed by SubWorkflow node id.
     /// Empty unless the publish/preview path populated it.
     pub(crate) sub_air: &'a SubWorkflowAir,
-    /// Per-node sub-graph interface registry. The dispatcher synthesizes a
-    /// baseline from `ports` + `fixups.data_places` after every lower call;
-    /// targeted lowerings (Start/End/HumanTask/SubWorkflow) enrich their
-    /// entry directly (workflow_terminals, owned_places). See
-    /// `service/src/compiler/interface.rs`.
+    /// Per-node sub-graph interface registry. Every `lower_*` MUST call
+    /// `publish_interface()` exactly once (except Trigger). See
+    /// `service/src/compiler/interface.rs` for the protocol.
     pub(crate) interfaces: &'c mut InterfaceRegistry,
+}
+
+impl LoweringCtx<'_, '_> {
+    /// Publish this node's interface to the registry. Derives `kind`,
+    /// `entry`, `named_inputs`, and `outputs` from `ports[node_id]` (which
+    /// the lowering already populated) and inserts the entry. Returns a
+    /// mutable handle so the caller can extend with fields `ports` doesn't
+    /// carry — `workflow_terminals` (End) or `data_port` (parked producers).
+    ///
+    /// Must be called exactly once per non-Trigger lower_*. The dispatcher
+    /// hard-errors if no entry is published.
+    pub(crate) fn publish_interface(&mut self) -> &mut NodeInterface {
+        let id = self.node.id.clone();
+        let kind = node_kind_of(self.node);
+        let mut iface = NodeInterface::new(id.clone(), kind);
+        if let Some(ports) = self.ports.get(&id) {
+            iface.entry = Some(ports.input_place.id().to_string());
+            for (handle, place) in &ports.input_handles {
+                iface.named_inputs.insert(handle.clone(), place.id().to_string());
+            }
+            for (edge_id, place) in &ports.input_places {
+                iface.named_inputs.insert(edge_id.clone(), place.id().to_string());
+            }
+            for (key, place) in &ports.output_places {
+                let k = match key {
+                    None => OutputKey::Default,
+                    Some(s) => OutputKey::Edge(s.clone()),
+                };
+                iface.outputs.insert(k, place.id().to_string());
+            }
+        }
+        self.interfaces.insert(id.clone(), iface);
+        self.interfaces.get_mut(&id).expect("just inserted")
+    }
 }
 
 /// Expand one workflow node into Petri structure.
@@ -246,65 +276,20 @@ pub(crate) fn expand_node(
         interfaces,
     };
     node.lower(&mut cx)?;
-    // Post-lower: synthesize / merge a baseline interface entry from the
-    // canonical sources of truth (`ports`, `fixups.data_places`). Targeted
-    // lowerings (`lower_start`, `lower_end`, `lower_human_task`,
-    // `lower_subworkflow`) may have already inserted an entry with richer
-    // information (workflow_terminals, owned_places); we merge on top of
-    // theirs rather than overwrite. Other variants get full auto-derivation.
-    synthesize_baseline_interface(&mut cx);
+    // Protocol enforcement: every non-Trigger lowering MUST call
+    // `cx.publish_interface()` exactly once. The dispatcher hard-errors
+    // if it didn't — there is no auto-derive fallback (by design; see
+    // `service/src/compiler/interface.rs` for the contract).
+    if !matches!(node.data, WorkflowNodeData::Trigger { .. })
+        && !cx.interfaces.contains_key(&node.id)
+    {
+        return Err(CompileError::Compilation(format!(
+            "internal: lower_* for node '{}' ({:?}) did not publish an interface — \
+             every lowering must call `cx.publish_interface()` before returning",
+            node.id, node.data
+        )));
+    }
     Ok(())
-}
-
-/// Compute / augment a node's `NodeInterface` from its `NodePorts` +
-/// `fixups.data_places` entry. Idempotent: leaves any already-populated field
-/// alone. Called by the dispatcher post-lower so every node has at least the
-/// boundary + data_port + kind recorded in the registry.
-fn synthesize_baseline_interface(cx: &mut LoweringCtx) {
-    let node_id = cx.node.id.clone();
-    let kind = node_kind_of(cx.node);
-    let entry_iface = cx
-        .interfaces
-        .entry(node_id.clone())
-        .or_insert_with(|| NodeInterface::new(node_id.clone(), kind));
-
-    // Always overwrite kind: enrichment helpers might have inserted with a
-    // default kind, but the dispatcher knows the real one from the graph.
-    entry_iface.kind = kind;
-
-    if let Some(ports) = cx.ports.get(&node_id) {
-        if entry_iface.entry.is_none() {
-            entry_iface.entry = Some(ports.input_place.id().to_string());
-        }
-        for (handle, place) in &ports.input_handles {
-            entry_iface
-                .named_inputs
-                .entry(handle.clone())
-                .or_insert_with(|| place.id().to_string());
-        }
-        for (edge_id, place) in &ports.input_places {
-            entry_iface
-                .named_inputs
-                .entry(edge_id.clone())
-                .or_insert_with(|| place.id().to_string());
-        }
-        for (key, place) in &ports.output_places {
-            let k = match key {
-                None => OutputKey::Default,
-                Some(s) => OutputKey::Edge(s.clone()),
-            };
-            entry_iface
-                .outputs
-                .entry(k)
-                .or_insert_with(|| place.id().to_string());
-        }
-    }
-
-    if entry_iface.data_port.is_none() {
-        if let Some(p) = cx.fixups.data_places.get(&node_id) {
-            entry_iface.data_port = Some(p.clone());
-        }
-    }
 }
 
 fn node_kind_of(node: &WorkflowNode) -> NodeKind {
@@ -683,7 +668,6 @@ let eid = dd.artifact_id;
     // immediately-following task still interpolates Start fields off the
     // control token (`{{ invoice_id }}`), so we fork rather than split.
     let (data_place_id, p_main) = park_outputs(ctx, id, label, &tail);
-    cx.fixups.data_places.insert(id.clone(), data_place_id);
 
     cx.ports.insert(
         id.clone(),
@@ -694,6 +678,10 @@ let eid = dd.artifact_id;
             input_handles: HashMap::new(),
         },
     );
+    // Protocol: publish the interface (derives entry + outputs from ports),
+    // then enrich with `data_port` since Start is a borrow-reachable parked
+    // producer (see `interface.rs` contract table).
+    cx.publish_interface().data_port = Some(data_place_id);
     Ok(())
 }
 
@@ -775,10 +763,7 @@ fn lower_end(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     let terminal_id = match cx.fixups.process_token_place.clone() {
         // No process was registered by the Start (opt-in unused) —
         // the terminal feed is itself the terminal place.
-        None => {
-            cx.fixups.terminal_place_ids.push(terminal_feed_id.clone());
-            terminal_feed_id
-        }
+        None => terminal_feed_id,
         // A Start registered a process — mirror the Start pattern:
         // insert a `process_complete` effect between the (post-shape)
         // feed place and a new terminal. The handler reads `process_id`
@@ -799,20 +784,9 @@ fn lower_end(cx: &mut LoweringCtx) -> Result<(), CompileError> {
             .auto_output("completed", &completed)
             .process_complete();
 
-            let completed_id = format!("p_{id}_completed");
-            cx.fixups.terminal_place_ids.push(completed_id.clone());
-            completed_id
+            format!("p_{id}_completed")
         }
     };
-
-    // Stamp this End's workflow-exit terminal on its interface. Recorded
-    // *pre*-alias-collapse here; `compile.rs` rewrites it through the alias
-    // map alongside the rest of the registry after merges resolve.
-    let iface = cx
-        .interfaces
-        .entry(id.clone())
-        .or_insert_with(|| NodeInterface::new(id.clone(), NodeKind::End));
-    iface.workflow_terminals.push(terminal_id);
 
     cx.ports.insert(
         id.clone(),
@@ -823,17 +797,21 @@ fn lower_end(cx: &mut LoweringCtx) -> Result<(), CompileError> {
             input_handles: HashMap::new(),
         },
     );
+    // Protocol: publish (derives entry from ports) then enrich with the
+    // workflow-exit terminal. Recorded pre-alias-collapse; `compile.rs`
+    // rewrites every interface place id through the alias map post-merge.
+    cx.publish_interface().workflow_terminals.push(terminal_id);
     Ok(())
 }
 
 /// Foundation: split a data-yielding node's output into a write-once parked
 /// **data** place + a slim **control** place, joined by a `t_{id}_yield`
 /// transition. Generalizes the Start-parks-`ProcessStarted` precedent to
-/// every HumanTask/AutomatedStep. Returns the control place (the node's new
-/// downstream output) and the data place id (recorded in `fixups.data_places`
-/// for the post-merge read-arc synthesis phase). Schema refs are left as the
-/// default permissive `DynamicToken`; the post-merge phase upgrades the data/
-/// ctrl `token_schema` to the typed `#/definitions/*` and registers them.
+/// every HumanTask/AutomatedStep. Returns the parked-data place id (the
+/// caller publishes on `interface.data_port`) and the control place (the
+/// node's new downstream output). Schema refs are left as the default
+/// permissive `DynamicToken`; the post-merge phase upgrades the data/ctrl
+/// `token_schema` to the typed `#/definitions/*` and registers them.
 fn split_outputs(
     ctx: &mut Context,
     id: &str,
@@ -865,8 +843,8 @@ fn split_outputs(
 /// `{{ invoice_id }}` interpolation is baked against the inbound token at
 /// compile time), so the token must continue intact. We therefore *fork*
 /// (`#{ data: d, main: d }`) rather than *split*. Returns the parked-data
-/// place id (recorded in `fixups.data_places`) and the place carrying the
-/// unchanged token onward.
+/// place id (the caller publishes on `interface.data_port`) and the place
+/// carrying the unchanged token onward.
 fn park_outputs(
     ctx: &mut Context,
     id: &str,
@@ -938,7 +916,6 @@ fn lower_human_task(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     cx.fixups
         .groups
         .push((format!("grp_{id}"), label.clone(), scope_group));
-    cx.fixups.data_places.insert(id.clone(), data_place_id);
 
     cx.ports.insert(
         id.clone(),
@@ -949,6 +926,9 @@ fn lower_human_task(cx: &mut LoweringCtx) -> Result<(), CompileError> {
             input_handles: HashMap::new(),
         },
     );
+    // HumanTask is a parked producer: split_outputs forks into a data
+    // envelope (borrowable via `<slug>.<field>`) + a slim control token.
+    cx.publish_interface().data_port = Some(data_place_id);
     Ok(())
 }
 
@@ -1132,7 +1112,6 @@ fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     // forward only the slim control token on the success path. The error
     // path is not a data token (it routes to error handlers) — left as-is.
     let (data_place_id, p_ctrl) = split_outputs(ctx, id, label, &p_output);
-    cx.fixups.data_places.insert(id.clone(), data_place_id);
 
     cx.ports.insert(
         id.clone(),
@@ -1150,6 +1129,9 @@ fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileError> {
             input_handles: HashMap::new(),
         },
     );
+    // AutomatedStep is a parked producer: borrow `<slug>.<field>` reads
+    // through the data port.
+    cx.publish_interface().data_port = Some(data_place_id);
     Ok(())
 }
 
@@ -1260,7 +1242,6 @@ fn lower_automated_step_scheduled(cx: &mut LoweringCtx) -> Result<(), CompileErr
 
     // Same data/control split + port registration tail as the inline path.
     let (data_place_id, p_ctrl) = split_outputs(ctx, &id, &label, &p_output);
-    cx.fixups.data_places.insert(id.clone(), data_place_id);
     cx.ports.insert(
         id.clone(),
         NodePorts {
@@ -1273,6 +1254,7 @@ fn lower_automated_step_scheduled(cx: &mut LoweringCtx) -> Result<(), CompileErr
             input_handles: HashMap::new(),
         },
     );
+    cx.publish_interface().data_port = Some(data_place_id);
     Ok(())
 }
 
@@ -1335,7 +1317,6 @@ fn lower_catalogue_query(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     .builtin_effect(&effects::CATALOGUE_LOOKUP);
 
     let (data_place_id, p_ctrl) = split_outputs(ctx, &id, &label, &p_output);
-    cx.fixups.data_places.insert(id.clone(), data_place_id);
     cx.ports.insert(
         id.clone(),
         NodePorts {
@@ -1348,6 +1329,7 @@ fn lower_catalogue_query(cx: &mut LoweringCtx) -> Result<(), CompileError> {
             input_handles: HashMap::new(),
         },
     );
+    cx.publish_interface().data_port = Some(data_place_id);
     Ok(())
 }
 
@@ -1475,6 +1457,7 @@ fn lower_decision(cx: &mut LoweringCtx) -> Result<(), CompileError> {
             input_handles: HashMap::new(),
         },
     );
+    cx.publish_interface();
     Ok(())
 }
 
@@ -1528,6 +1511,7 @@ fn lower_parallel_split(cx: &mut LoweringCtx) -> Result<(), CompileError> {
             input_handles: HashMap::new(),
         },
     );
+    cx.publish_interface();
     Ok(())
 }
 
@@ -1596,6 +1580,7 @@ fn lower_parallel_join(cx: &mut LoweringCtx) -> Result<(), CompileError> {
             input_handles: HashMap::new(),
         },
     );
+    cx.publish_interface();
     Ok(())
 }
 
@@ -1711,13 +1696,6 @@ fn lower_loop(cx: &mut LoweringCtx) -> Result<(), CompileError> {
         .logic_rhai("#{ output: input }")
         .done();
 
-    // Register the parked counter for the foundation pass — schemas
-    // `p_{id}_data` as `Data__{id}` and the (c) read-arc synthesis pass
-    // routes `<slug>.iteration` references in downstream guards / End
-    // mappings here. Our own pre-wired `d_<slug>` ports/arcs above are
-    // detected by the (c) pass and not duplicated.
-    cx.fixups.data_places.insert(id.clone(), format!("p_{id}_data"));
-
     cx.fixups
         .groups
         .push((format!("grp_{id}"), label.clone(), scope_group));
@@ -1737,6 +1715,11 @@ fn lower_loop(cx: &mut LoweringCtx) -> Result<(), CompileError> {
             input_handles,
         },
     );
+    // Loop is a parked producer: the iteration counter is stored as a
+    // write-once-per-iteration envelope at `p_{id}_data`, schemed as
+    // `Data__{id}` by the foundation pass and used by the read-arc
+    // synthesis to route `<slug>.iteration` references downstream.
+    cx.publish_interface().data_port = Some(format!("p_{id}_data"));
     Ok(())
 }
 
@@ -1745,11 +1728,15 @@ fn lower_scope(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     let WorkflowNodeData::Scope { label, .. } = &cx.node.data else {
         unreachable!("lower_scope on non-Scope node")
     };
-    // Scope compiles to a ScenarioGroup. No places/transitions —
-    // children are compiled as normal nodes and tagged with this group's ID.
+    // Scope compiles to a ScenarioGroup. No places/transitions of its own —
+    // children are compiled as normal nodes and tagged with this group's ID
+    // via the centralised scope-tagging pass in `compile.rs`.
     let group_id = format!("grp_{id}");
     let parent_group = cx.fixups.scope_groups.get(id).cloned();
     cx.fixups.groups.push((group_id, label.clone(), parent_group));
+    // Protocol: publish the interface even though Scope has no boundary
+    // places (kind alone marks its presence; ownership is filled centrally).
+    cx.publish_interface();
     Ok(())
 }
 
@@ -1840,6 +1827,7 @@ fn lower_phase_update(cx: &mut LoweringCtx) -> Result<(), CompileError> {
             input_handles: HashMap::new(),
         },
     );
+    cx.publish_interface();
     Ok(())
 }
 
@@ -1925,6 +1913,7 @@ fn lower_progress_update(cx: &mut LoweringCtx) -> Result<(), CompileError> {
             input_handles: HashMap::new(),
         },
     );
+    cx.publish_interface();
     Ok(())
 }
 
@@ -2011,6 +2000,7 @@ fn lower_failure(cx: &mut LoweringCtx) -> Result<(), CompileError> {
             input_handles: HashMap::new(),
         },
     );
+    cx.publish_interface();
     Ok(())
 }
 
@@ -2191,7 +2181,6 @@ fn lower_subworkflow(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     // Foundation split: park the child result as write-once data, forward the
     // slim control token. Identical tail to lower_automated_step.
     let (data_place_id, p_ctrl) = split_outputs(ctx, id, label, &p_output);
-    cx.fixups.data_places.insert(id.clone(), data_place_id);
 
     cx.ports.insert(
         id.clone(),
@@ -2205,5 +2194,9 @@ fn lower_subworkflow(cx: &mut LoweringCtx) -> Result<(), CompileError> {
             input_handles: HashMap::new(),
         },
     );
+    // SubWorkflow is a parked producer: child's reply envelope is borrowable
+    // as `<slug>.<field>` via the same read-arc machinery used for
+    // AutomatedStep.
+    cx.publish_interface().data_port = Some(data_place_id);
     Ok(())
 }
