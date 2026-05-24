@@ -6,6 +6,7 @@
  * the first hit.
  */
 import HumanTaskEnvelope from './HumanTaskEnvelope.svelte';
+import AutomatedStepEnvelope from './AutomatedStepEnvelope.svelte';
 import FileReference from './FileReference.svelte';
 import TabularArray from './TabularArray.svelte';
 import KeyValueList from './KeyValueList.svelte';
@@ -34,6 +35,19 @@ function matchesHumanTask(value: unknown, ctx: RenderContext): boolean {
 	// the shape matches and we don't know the kind (we still trust the shape —
 	// the `data` envelope key isn't a coincidence).
 	return ctx.nodeKind === undefined || ctx.nodeKind === 'human_task';
+}
+
+/** Executor result envelope from an AutomatedStep — see
+ *  `service/src/compiler/token_shape.rs` `WorkflowNodeData::AutomatedStep` arm.
+ *  Stable signature is `{execution_id, job_id, detail: {outputs, outcome,
+ *  progress, ...}}`. The renderer leads with `detail.outputs` (the actual
+ *  business result) and surfaces metrics + phase timeline + logs/streams. */
+function matchesAutomatedStep(value: unknown, ctx: RenderContext): boolean {
+	if (!isObj(value)) return false;
+	if (typeof value.execution_id !== 'string') return false;
+	if (typeof value.job_id !== 'string') return false;
+	if (!isObj(value.detail)) return false;
+	return ctx.nodeKind === undefined || ctx.nodeKind === 'automated_step';
 }
 
 /** Catalogue file reference — `{url, filename?, content_type?}`. */
@@ -89,6 +103,12 @@ export const REGISTRY: OutputRenderer[] = [
 		label: 'Human task response',
 		matches: matchesHumanTask,
 		component: HumanTaskEnvelope
+	},
+	{
+		name: 'automated-step',
+		label: 'Automated step result',
+		matches: matchesAutomatedStep,
+		component: AutomatedStepEnvelope
 	},
 	{
 		name: 'file-ref',
