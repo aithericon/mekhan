@@ -17,8 +17,10 @@
 //! fine; the leak is on the read side.
 
 use std::collections::{BTreeMap, HashMap};
+use std::fmt;
+use std::str::FromStr;
 
-use serde::{Deserialize, Serialize};
+use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 
 /// Discriminates which lowering variant produced an interface. Mirrors
 /// `WorkflowNodeData` so consumers can dispatch without re-inspecting the
@@ -46,7 +48,12 @@ pub enum NodeKind {
 /// `Vec<(Option<String>, PlaceHandle)>`) but lifts the meaning into named
 /// variants so consumers don't have to guess what `Some("branch_1")` means
 /// vs `Some("e_42")`.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+///
+/// Serializes as a flat string so `BTreeMap<OutputKey, _>` is JSON-object-safe
+/// (JSON requires string keys; the default derived enum would emit `{"Edge":
+/// "e1"}` which `serde_json` refuses as a map key). Wire shape:
+/// `"default"` | `"edge:<id>"` | `"named:<id>"`.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum OutputKey {
     /// Single-output nodes: Start.main, HumanTask.out, AutomatedStep.success,
     /// End/Failure (no outputs — never present), CatalogueQuery.out, ...
@@ -56,6 +63,44 @@ pub enum OutputKey {
     Edge(String),
     /// Decision branches, Loop body/exit, AutomatedStep success/error pair.
     Named(String),
+}
+
+impl fmt::Display for OutputKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            OutputKey::Default => f.write_str("default"),
+            OutputKey::Edge(s) => write!(f, "edge:{s}"),
+            OutputKey::Named(s) => write!(f, "named:{s}"),
+        }
+    }
+}
+
+impl FromStr for OutputKey {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s == "default" {
+            Ok(OutputKey::Default)
+        } else if let Some(rest) = s.strip_prefix("edge:") {
+            Ok(OutputKey::Edge(rest.to_string()))
+        } else if let Some(rest) = s.strip_prefix("named:") {
+            Ok(OutputKey::Named(rest.to_string()))
+        } else {
+            Err(format!("unknown OutputKey: {s}"))
+        }
+    }
+}
+
+impl Serialize for OutputKey {
+    fn serialize<S: Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
+        ser.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for OutputKey {
+    fn deserialize<D: Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(de)?;
+        s.parse().map_err(de::Error::custom)
+    }
 }
 
 /// The explicit shape a single lowered node exposes to the rest of the

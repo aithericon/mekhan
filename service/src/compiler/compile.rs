@@ -1560,6 +1560,87 @@ mod tests {
         assert!(deadend.get("guard").is_none());
     }
 
+    /// Regression: a graph with non-Default outputs (Decision's per-edge
+    /// branches → `OutputKey::Edge("econd1")`, etc.) used to fail to
+    /// serialize the interface registry to JSON because the derived
+    /// serde repr of `OutputKey::Edge(...)` was an object, not a string,
+    /// and `BTreeMap` requires string-shaped keys for JSON serialization.
+    /// Surfaced live as `failed to serialize interfaces: key must be a
+    /// string` during demo 03/04/05/invoice-processing seeding. The custom
+    /// flat-string serde impl (`"default"` | `"edge:<id>"` | `"named:<id>"`)
+    /// closes it.
+    #[test]
+    fn interface_registry_serializes_multi_output_nodes() {
+        let graph = WorkflowGraph {
+            nodes: vec![
+                start_node("s"),
+                WorkflowNode {
+                    id: "d".to_string(),
+                    node_type: "decision".to_string(),
+                    slug: None,
+                    position: Position { x: 0.0, y: 50.0 },
+                    data: WorkflowNodeData::Decision {
+                        label: "Route".to_string(),
+                        description: None,
+                        conditions: vec![BranchCondition {
+                            edge_id: "cond1".to_string(),
+                            label: "Yes".to_string(),
+                            guard: "true".to_string(),
+                        }],
+                        default_branch: Some("default1".to_string()),
+                    },
+                    parent_id: None,
+                    width: None,
+                    height: None,
+                },
+                end_node("e1"),
+                end_node_with_id("e2"),
+            ],
+            edges: vec![
+                edge("e0", "s", "d"),
+                edge_with_handle("econd1", "d", "e1", "cond1"),
+                edge_with_handle("edefault", "d", "e2", "default1"),
+            ],
+            viewport: None,
+            instance_concurrency: Default::default(),
+        };
+        let files: NodeFiles = std::collections::HashMap::new();
+        let inline: HashMap<String, HashMap<String, String>> = std::collections::HashMap::new();
+        let (_scn, registry) = compile_to_scenario_and_interfaces(
+            &graph,
+            "test",
+            "desc",
+            &files,
+            &inline,
+            &SubWorkflowAir::new(),
+        )
+        .expect("compile");
+
+        // The Decision node has Edge("econd1") and Edge("edefault") outputs —
+        // both non-Default OutputKey variants. Serialization must succeed.
+        let json = serde_json::to_value(&registry).expect("registry must serialize");
+        let d_outputs = &json["d"]["outputs"];
+        assert!(
+            d_outputs.is_object(),
+            "decision outputs should be an object (string keys): {d_outputs}"
+        );
+        let keys: Vec<&str> = d_outputs
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert!(
+            keys.iter().any(|k| k.starts_with("edge:")),
+            "expected at least one `edge:` key in {keys:?}",
+        );
+
+        // Round-trip: deserialize back and confirm the structural identity.
+        let back: crate::compiler::interface::InterfaceRegistry =
+            serde_json::from_value(json).expect("registry must round-trip");
+        assert!(back.contains_key("d"));
+    }
+
     fn end_node_with_id(id: &str) -> WorkflowNode {
         WorkflowNode {
             id: id.to_string(),
