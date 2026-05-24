@@ -7,6 +7,7 @@
  */
 import HumanTaskEnvelope from './HumanTaskEnvelope.svelte';
 import AutomatedStepEnvelope from './AutomatedStepEnvelope.svelte';
+import LlmResponseEnvelope from './LlmResponseEnvelope.svelte';
 import ProcessTokenEnvelope from './ProcessTokenEnvelope.svelte';
 import FileReference from './FileReference.svelte';
 import TabularArray from './TabularArray.svelte';
@@ -59,6 +60,24 @@ function matchesAutomatedStep(value: unknown, ctx: RenderContext): boolean {
 function matchesProcessToken(value: unknown): boolean {
 	if (!isObj(value)) return false;
 	return typeof value._instance_id === 'string';
+}
+
+/** Canonical LLM output envelope from `executor-llm` (see
+ *  `executor/crates/executor-llm/src/backend.rs:203-212`). Signature is
+ *  `{response, model, usage, finish_reason}`. The renderer prints the
+ *  response prominently below a compact metadata strip so the markdown
+ *  body doesn't get squeezed into KeyValueList's right column. */
+function matchesLlmResponse(value: unknown): boolean {
+	if (!isObj(value)) return false;
+	// `response` may be string or JSON depending on the spec's output
+	// declarations; `model` is always a string. Pair them as the
+	// distinguishing signature.
+	if (typeof value.model !== 'string') return false;
+	if (!('response' in value)) return false;
+	// Distinguish from arbitrary objects that happen to have a `model`
+	// field by also requiring `usage` or `finish_reason` (one of the
+	// other backend.rs-stamped keys).
+	return 'usage' in value || 'finish_reason' in value;
 }
 
 /** Catalogue file reference — `{url, filename?, content_type?}`. */
@@ -120,6 +139,12 @@ export const REGISTRY: OutputRenderer[] = [
 		label: 'Automated step result',
 		matches: matchesAutomatedStep,
 		component: AutomatedStepEnvelope
+	},
+	{
+		name: 'llm-response',
+		label: 'LLM response',
+		matches: matchesLlmResponse,
+		component: LlmResponseEnvelope
 	},
 	{
 		name: 'process-token',
