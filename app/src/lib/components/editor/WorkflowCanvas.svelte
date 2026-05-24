@@ -69,26 +69,33 @@
 	// NodeResizer has already mutated the bound `nodes` array with the new
 	// dims/pos by the time `onResizeEnd` fires, so the canvas just forwards
 	// the change to the granular sink or runs the bulk serializer.
-	const reportResize: ResizeReport = (id, params) => {
-		if (readonly) return;
-		const change = {
-			id,
-			width: params.width,
-			height: params.height,
-			// Position only travels with the change when xyflow moved it
-			// (top/left-edge resize). For bottom-right resizes x/y match the
-			// node's pre-gesture position, but we still pass them through
-			// since the binding writes `position` only when present and the
-			// extra write is a no-op against an unchanged value.
-			position: { x: params.x, y: params.y }
+	//
+	// Context is registered only when editable. On readonly canvases the
+	// children see `undefined` and `NodeResizer.isVisible` collapses to false,
+	// so the handles never render — without this gate the resizer would draw,
+	// xyflow would mutate the local nodes array on drag, but persistence
+	// would silently no-op, leaving the user with a phantom resize.
+	if (!readonly) {
+		const reportResize: ResizeReport = (id, params) => {
+			const change = {
+				id,
+				width: params.width,
+				height: params.height,
+				// Position only travels with the change when xyflow moved it
+				// (top/left-edge resize). For bottom-right resizes x/y match the
+				// node's pre-gesture position, but we still pass them through
+				// since the binding writes `position` only when present and the
+				// extra write is a no-op against an unchanged value.
+				position: { x: params.x, y: params.y }
+			};
+			if (useGranular && onResizeNodes) {
+				onResizeNodes([change]);
+			} else {
+				serializeAndEmit();
+			}
 		};
-		if (useGranular && onResizeNodes) {
-			onResizeNodes([change]);
-		} else {
-			serializeAndEmit();
-		}
-	};
-	setContext<ResizeReport>(RESIZE_REPORT_CONTEXT_KEY, reportResize);
+		setContext<ResizeReport>(RESIZE_REPORT_CONTEXT_KEY, reportResize);
+	}
 
 	// Track graph identity to avoid re-syncing our own changes
 	let lastGraphRef: WorkflowGraph | null = graph;
