@@ -1,0 +1,764 @@
+//! Phase B.9 — Resource CRUD endpoints.
+//!
+//! Eight handlers under the `resources` tag. The split between public
+//! fields (DB `public_config` JSONB) and secret fields (Vault) happens
+//! once, in [`split_config`], using the `ResourceTypeDescriptor.{public,
+//! secret}_fields` lists. The handler then:
+//!
+//! 1. Looks up the descriptor from the registry — unknown type → 400.
+//! 2. Structurally validates the config against the descriptor's lists
+//!    (no stray keys, all secret fields present).
+//! 3. Inserts the `resources` row (create only), then inserts the new
+//!    `resource_versions` row.
+//! 4. Calls [`ResourceSecretStore::put_version`] for the secret half.
+//! 5. Writes one `resource_audit` row.
+//!
+//! Reads bypass the store entirely — they only need the DB-side
+//! `public_config` and `latest_version`. The secret content lives in
+//! Vault and is never re-emitted on the wire (the admin view returns
+//! `<redacted>` placeholders via `redacted_secret_fields`).
+//!
+//! No workspace concept exists in v1. Every endpoint accepts an optional
+//! `workspace_id` and resolves a missing one to `Uuid::nil()` — the
+//! placeholder until the workspaces table lands.
+
+use std::sync::LazyLock;
+
+use axum::{
+    extract::{Path, Query, State},
+    http::StatusCode,
+    Json,
+};
+use chrono::Utc;
+use regex::Regex;
+use serde_json::{Map as JsonMap, Value};
+use uuid::Uuid;
+
+use aithericon_resources::registry::{all, lookup, schema_json_cached};
+
+use crate::auth::AuthUser;
+use crate::models::error::{ApiError, ErrorResponse};
+use crate::models::resource::{
+    CreateResourceRequest, ListResourceAuditQuery, ListResourcesQuery, ResourceAuditEntry,
+    ResourceDetail, ResourceRow, ResourceSummary, ResourceTypeInfo, ResourceVersionRow,
+    RotateResourceRequest, UpdateResourceRequest,
+};
+use crate::models::template::PaginatedResponse;
+use crate::petri::resource_resolver::AuditAction;
+use crate::AppState;
+
+/// Windmill-style identifier — `u`ser, `f`older, or `g`roup namespace at
+/// the head, then `<owner>/<name>`. Catches typos like `f/team` (missing
+/// `/<name>`) or uppercase in the segments.
+static PATH_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^[ufg]/[a-z0-9_-]+/[a-z0-9_-]+$").expect("PATH_REGEX must compile")
+});
+
+/// Default workspace until the workspaces table lands. Centralized so the
+/// migration that introduces real workspaces can flip every call site by
+/// changing this one constant — and tests can lean on the same value when
+/// asserting create→list round-trips.
+fn default_workspace() -> Uuid {
+    Uuid::nil()
+}
+
+/// Resolve the resource type or fail 400.
+fn descriptor_or_400(
+    type_name: &str,
+) -> Result<&'static aithericon_resources::ResourceTypeDescriptor, ApiError> {
+    lookup(type_name).ok_or_else(|| {
+        ApiError::bad_request(format!(
+            "unknown resource_type '{type_name}' — see GET /api/resources/types"
+        ))
+    })
+}
+
+/// Split a raw config map into `(public, secret)` JsonMaps based on the
+/// descriptor's field lists. Strays (keys that match neither list) become
+/// a structured 400 so the picker can highlight the offending field.
+fn split_config(
+    descriptor: &aithericon_resources::ResourceTypeDescriptor,
+    config: Value,
+) -> Result<(JsonMap<String, Value>, JsonMap<String, Value>), ApiError> {
+    let Value::Object(map) = config else {
+        return Err(ApiError::bad_request(
+            "config must be a JSON object keyed by field name",
+        ));
+    };
+    let mut public = JsonMap::new();
+    let mut secret = JsonMap::new();
+    let mut stray = Vec::new();
+    for (k, v) in map {
+        if descriptor.public_fields.contains(&k.as_str()) {
+            public.insert(k, v);
+        } else if descriptor.secret_fields.contains(&k.as_str()) {
+            secret.insert(k, v);
+        } else {
+            stray.push(k);
+        }
+    }
+    if !stray.is_empty() {
+        stray.sort();
+        return Err(ApiError::bad_request(format!(
+            "unknown config field(s) for type '{}': {} (allowed: {} public, {} secret)",
+            descriptor.name,
+            stray.join(", "),
+            descriptor.public_fields.join(", "),
+            descriptor.secret_fields.join(", "),
+        )));
+    }
+
+    // Required-field gate: every secret field must be supplied (we can't
+    // synthesize Vault writes from nothing). Public fields use the type's
+    // own optionality semantics; we keep the schema check shallow and
+    // delegate field-kind enforcement to the type's JSON Schema, surfaced
+    // to the frontend via `GET /types` so the form is self-validating.
+    let mut missing = Vec::new();
+    for f in descriptor.secret_fields {
+        if !secret.contains_key(*f) {
+            missing.push((*f).to_string());
+        }
+    }
+    // Required *public* fields — read off the schema's "required" array.
+    // The schemars-derived schema lists non-Option fields as required;
+    // optional ones (e.g. Postgres.sslmode) are absent from the list.
+    let schema = schema_json_cached(descriptor);
+    if let Some(required) = schema.get("required").and_then(Value::as_array) {
+        for r in required {
+            if let Some(name) = r.as_str() {
+                // Skip fields that are secret — already checked above.
+                if descriptor.secret_fields.contains(&name) {
+                    continue;
+                }
+                if !public.contains_key(name) {
+                    missing.push(name.to_string());
+                }
+            }
+        }
+    }
+    if !missing.is_empty() {
+        missing.sort();
+        missing.dedup();
+        return Err(ApiError::bad_request(format!(
+            "required config field(s) missing for type '{}': {}",
+            descriptor.name,
+            missing.join(", "),
+        )));
+    }
+
+    Ok((public, secret))
+}
+
+/// Compose the launcher-deterministic vault path for a given version.
+fn vault_path_for(workspace_id: Uuid, resource_id: Uuid, version: i32) -> String {
+    format!("aithericon/resources/{workspace_id}/{resource_id}/v{version}")
+}
+
+/// Audit-row helper: every successful write goes through this so the
+/// row shape stays consistent across endpoints.
+async fn write_audit(
+    db: &sqlx::PgPool,
+    resource_id: Uuid,
+    version: i32,
+    principal_id: Uuid,
+    action: AuditAction,
+) -> Result<(), ApiError> {
+    sqlx::query(
+        "INSERT INTO resource_audit \
+            (resource_id, resource_version, principal_id, action, site) \
+         VALUES ($1, $2, $3, $4, 'api')",
+    )
+    .bind(resource_id)
+    .bind(version)
+    .bind(principal_id)
+    .bind(action.as_str())
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
+/// `GET /api/resources` — paginated list, optionally filtered by type.
+#[utoipa::path(
+    get,
+    path = "/api/resources",
+    params(ListResourcesQuery),
+    responses(
+        (status = 200, description = "Paginated list of resources", body = PaginatedResponse<ResourceSummary>),
+    ),
+    tag = "resources",
+)]
+pub async fn list_resources(
+    State(state): State<AppState>,
+    Query(params): Query<ListResourcesQuery>,
+) -> Json<PaginatedResponse<ResourceSummary>> {
+    let workspace_id = params.workspace_id.unwrap_or_else(default_workspace);
+    let offset = (params.page - 1) * params.per_page;
+
+    let (rows, total) = if let Some(ref ty) = params.resource_type {
+        let rows = sqlx::query_as::<_, ResourceRow>(
+            "SELECT * FROM resources \
+             WHERE workspace_id = $1 AND resource_type = $2 AND deleted_at IS NULL \
+             ORDER BY created_at DESC LIMIT $3 OFFSET $4",
+        )
+        .bind(workspace_id)
+        .bind(ty)
+        .bind(params.per_page)
+        .bind(offset)
+        .fetch_all(&state.db)
+        .await
+        .unwrap_or_default();
+        let total: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM resources \
+             WHERE workspace_id = $1 AND resource_type = $2 AND deleted_at IS NULL",
+        )
+        .bind(workspace_id)
+        .bind(ty)
+        .fetch_one(&state.db)
+        .await
+        .unwrap_or(0);
+        (rows, total)
+    } else {
+        let rows = sqlx::query_as::<_, ResourceRow>(
+            "SELECT * FROM resources \
+             WHERE workspace_id = $1 AND deleted_at IS NULL \
+             ORDER BY created_at DESC LIMIT $2 OFFSET $3",
+        )
+        .bind(workspace_id)
+        .bind(params.per_page)
+        .bind(offset)
+        .fetch_all(&state.db)
+        .await
+        .unwrap_or_default();
+        let total: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM resources \
+             WHERE workspace_id = $1 AND deleted_at IS NULL",
+        )
+        .bind(workspace_id)
+        .fetch_one(&state.db)
+        .await
+        .unwrap_or(0);
+        (rows, total)
+    };
+
+    Json(PaginatedResponse {
+        items: rows.into_iter().map(ResourceSummary::from).collect(),
+        total,
+        page: params.page,
+        per_page: params.per_page,
+    })
+}
+
+/// `GET /api/resources/types` — registry introspection. Powers the
+/// frontend picker's type list and the schema-driven create form.
+#[utoipa::path(
+    get,
+    path = "/api/resources/types",
+    responses(
+        (status = 200, description = "Registered resource types", body = Vec<ResourceTypeInfo>),
+    ),
+    tag = "resources",
+)]
+pub async fn list_resource_types() -> Json<Vec<ResourceTypeInfo>> {
+    let infos: Vec<ResourceTypeInfo> = all()
+        .iter()
+        .map(|d| ResourceTypeInfo {
+            name: d.name.to_string(),
+            display_name: d.display_name.to_string(),
+            icon: d.icon.to_string(),
+            oauth_provider: d.oauth_provider.map(str::to_string),
+            secret_fields: d.secret_fields.iter().map(|s| (*s).to_string()).collect(),
+            public_fields: d.public_fields.iter().map(|s| (*s).to_string()).collect(),
+            schema: schema_json_cached(d).clone(),
+        })
+        .collect();
+    Json(infos)
+}
+
+/// `POST /api/resources` — create a logical resource and its v1 row.
+#[utoipa::path(
+    post,
+    path = "/api/resources",
+    request_body = CreateResourceRequest,
+    responses(
+        (status = 201, description = "Resource created", body = ResourceSummary),
+        (status = 400, description = "Validation failure", body = ErrorResponse),
+        (status = 409, description = "Path already exists in workspace", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse),
+        (status = 502, description = "Secret backend write failed", body = ErrorResponse),
+    ),
+    tag = "resources",
+)]
+pub async fn create_resource(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Json(req): Json<CreateResourceRequest>,
+) -> Result<(StatusCode, Json<ResourceSummary>), ApiError> {
+    if !PATH_REGEX.is_match(&req.path) {
+        return Err(ApiError::bad_request(format!(
+            "path '{}' does not match the required format `[ufg]/<owner>/<name>` \
+             (lowercase identifiers only)",
+            req.path
+        )));
+    }
+    let descriptor = descriptor_or_400(&req.resource_type)?;
+    let (public, secret) = split_config(descriptor, req.config)?;
+
+    let workspace_id = req.workspace_id.unwrap_or_else(default_workspace);
+    let resource_id = Uuid::new_v4();
+    let version = 1;
+    let vault_path = vault_path_for(workspace_id, resource_id, version);
+    let principal_id = user.subject_as_uuid();
+    let display_name = req
+        .display_name
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| req.path.clone());
+
+    // Lay down `resources` first — its UNIQUE(workspace_id, path) constraint
+    // is the canonical conflict gate.
+    let insert_resource = sqlx::query(
+        "INSERT INTO resources \
+            (id, workspace_id, path, resource_type, display_name, latest_version, created_by) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7)",
+    )
+    .bind(resource_id)
+    .bind(workspace_id)
+    .bind(&req.path)
+    .bind(&req.resource_type)
+    .bind(&display_name)
+    .bind(version)
+    .bind(principal_id)
+    .execute(&state.db)
+    .await;
+    if let Err(e) = insert_resource {
+        // Unique-violation on (workspace_id, path) → 409.
+        if let Some(db_err) = e.as_database_error() {
+            if db_err.is_unique_violation() {
+                return Err(ApiError::conflict(format!(
+                    "resource path '{}' already exists in this workspace",
+                    req.path
+                )));
+            }
+        }
+        return Err(ApiError::internal(e.to_string()));
+    }
+
+    // Then the v1 row. Failure here would leave a `resources` row with no
+    // matching version — clean up explicitly.
+    let insert_version = sqlx::query(
+        "INSERT INTO resource_versions \
+            (resource_id, version, vault_path, public_config, created_by) \
+         VALUES ($1, $2, $3, $4, $5)",
+    )
+    .bind(resource_id)
+    .bind(version)
+    .bind(&vault_path)
+    .bind(Value::Object(public.clone()))
+    .bind(principal_id)
+    .execute(&state.db)
+    .await;
+    if let Err(e) = insert_version {
+        let _ = sqlx::query("DELETE FROM resources WHERE id = $1")
+            .bind(resource_id)
+            .execute(&state.db)
+            .await;
+        return Err(ApiError::internal(e.to_string()));
+    }
+
+    // Finally the Vault write. If this fails the DB rows are rolled back
+    // so the next attempt with the same path doesn't get a 409 from a
+    // half-created resource.
+    if let Err(e) = state.resource_store.put_version(&vault_path, &secret).await {
+        let _ = sqlx::query("DELETE FROM resource_versions WHERE resource_id = $1")
+            .bind(resource_id)
+            .execute(&state.db)
+            .await;
+        let _ = sqlx::query("DELETE FROM resources WHERE id = $1")
+            .bind(resource_id)
+            .execute(&state.db)
+            .await;
+        return Err(ApiError::new(
+            StatusCode::BAD_GATEWAY,
+            format!("secret backend write failed: {e}"),
+        ));
+    }
+
+    // Grant the creator `read` so the resolver works out of the box.
+    let _ = sqlx::query(
+        "INSERT INTO resource_acl \
+            (resource_id, principal_id, principal_kind, permission, granted_by) \
+         VALUES ($1, $2, 'user', 'read', $3) \
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(resource_id)
+    .bind(principal_id)
+    .bind(principal_id)
+    .execute(&state.db)
+    .await;
+
+    write_audit(&state.db, resource_id, version, principal_id, AuditAction::Create).await?;
+
+    let summary = ResourceSummary {
+        id: resource_id,
+        path: req.path,
+        resource_type: req.resource_type,
+        display_name,
+        latest_version: version,
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+    };
+    Ok((StatusCode::CREATED, Json(summary)))
+}
+
+/// `GET /api/resources/{id}` — admin view. Secret fields are listed by
+/// name only; values never leave Vault on the read path.
+#[utoipa::path(
+    get,
+    path = "/api/resources/{id}",
+    params(("id" = Uuid, Path, description = "Resource id")),
+    responses(
+        (status = 200, description = "Resource detail", body = ResourceDetail),
+        (status = 404, description = "Resource not found", body = ErrorResponse),
+    ),
+    tag = "resources",
+)]
+pub async fn get_resource(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<ResourceDetail>, ApiError> {
+    let row = sqlx::query_as::<_, ResourceRow>(
+        "SELECT * FROM resources WHERE id = $1 AND deleted_at IS NULL",
+    )
+    .bind(id)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or_else(|| ApiError::not_found("resource not found"))?;
+
+    let version = sqlx::query_as::<_, ResourceVersionRow>(
+        "SELECT * FROM resource_versions WHERE resource_id = $1 AND version = $2",
+    )
+    .bind(row.id)
+    .bind(row.latest_version)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or_else(|| ApiError::internal("latest_version row missing — DB inconsistent"))?;
+
+    let descriptor = descriptor_or_400(&row.resource_type)?;
+    let detail = ResourceDetail {
+        id: row.id,
+        path: row.path,
+        resource_type: row.resource_type,
+        display_name: row.display_name,
+        latest_version: row.latest_version,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+        public_config: version.public_config,
+        redacted_secret_fields: descriptor
+            .secret_fields
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect(),
+    };
+    Ok(Json(detail))
+}
+
+/// `PUT /api/resources/{id}` — update display_name and/or config. Setting
+/// `config` bumps `latest_version` and writes a fresh vault_path; name-only
+/// updates do not.
+#[utoipa::path(
+    put,
+    path = "/api/resources/{id}",
+    params(("id" = Uuid, Path, description = "Resource id")),
+    request_body = UpdateResourceRequest,
+    responses(
+        (status = 200, description = "Resource updated", body = ResourceSummary),
+        (status = 400, description = "Validation failure", body = ErrorResponse),
+        (status = 404, description = "Resource not found", body = ErrorResponse),
+        (status = 502, description = "Secret backend write failed", body = ErrorResponse),
+    ),
+    tag = "resources",
+)]
+pub async fn update_resource(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<Uuid>,
+    Json(req): Json<UpdateResourceRequest>,
+) -> Result<Json<ResourceSummary>, ApiError> {
+    let row = sqlx::query_as::<_, ResourceRow>(
+        "SELECT * FROM resources WHERE id = $1 AND deleted_at IS NULL",
+    )
+    .bind(id)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or_else(|| ApiError::not_found("resource not found"))?;
+
+    if req.display_name.is_none() && req.config.is_none() {
+        return Err(ApiError::bad_request(
+            "update body must set at least one of `display_name` or `config`",
+        ));
+    }
+
+    let principal_id = user.subject_as_uuid();
+    let mut latest_version = row.latest_version;
+    let mut display_name = row.display_name.clone();
+
+    if let Some(name) = req.display_name {
+        let trimmed = name.trim().to_string();
+        if trimmed.is_empty() {
+            return Err(ApiError::bad_request("display_name cannot be empty"));
+        }
+        sqlx::query(
+            "UPDATE resources SET display_name = $1, updated_at = NOW() WHERE id = $2",
+        )
+        .bind(&trimmed)
+        .bind(row.id)
+        .execute(&state.db)
+        .await?;
+        display_name = trimmed;
+    }
+
+    if let Some(config) = req.config {
+        let descriptor = descriptor_or_400(&row.resource_type)?;
+        let (public, secret) = split_config(descriptor, config)?;
+
+        latest_version = row.latest_version + 1;
+        let vault_path = vault_path_for(row.workspace_id, row.id, latest_version);
+
+        sqlx::query(
+            "INSERT INTO resource_versions \
+                (resource_id, version, vault_path, public_config, created_by) \
+             VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind(row.id)
+        .bind(latest_version)
+        .bind(&vault_path)
+        .bind(Value::Object(public.clone()))
+        .bind(principal_id)
+        .execute(&state.db)
+        .await?;
+
+        if let Err(e) = state.resource_store.put_version(&vault_path, &secret).await {
+            // Roll back the new version row so the parent stays at the
+            // previous `latest_version`.
+            let _ = sqlx::query(
+                "DELETE FROM resource_versions WHERE resource_id = $1 AND version = $2",
+            )
+            .bind(row.id)
+            .bind(latest_version)
+            .execute(&state.db)
+            .await;
+            return Err(ApiError::new(
+                StatusCode::BAD_GATEWAY,
+                format!("secret backend write failed: {e}"),
+            ));
+        }
+
+        sqlx::query(
+            "UPDATE resources SET latest_version = $1, updated_at = NOW() WHERE id = $2",
+        )
+        .bind(latest_version)
+        .bind(row.id)
+        .execute(&state.db)
+        .await?;
+
+        write_audit(&state.db, row.id, latest_version, principal_id, AuditAction::Update).await?;
+    }
+
+    Ok(Json(ResourceSummary {
+        id: row.id,
+        path: row.path,
+        resource_type: row.resource_type,
+        display_name,
+        latest_version,
+        created_at: row.created_at,
+        updated_at: Utc::now(),
+    }))
+}
+
+/// `DELETE /api/resources/{id}` — soft delete. Preserves
+/// `resource_versions` rows + Vault paths so already-pinned instances keep
+/// resolving.
+#[utoipa::path(
+    delete,
+    path = "/api/resources/{id}",
+    params(("id" = Uuid, Path, description = "Resource id")),
+    responses(
+        (status = 204, description = "Resource soft-deleted"),
+        (status = 404, description = "Resource not found", body = ErrorResponse),
+    ),
+    tag = "resources",
+)]
+pub async fn delete_resource(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, ApiError> {
+    let row = sqlx::query_as::<_, ResourceRow>(
+        "SELECT * FROM resources WHERE id = $1 AND deleted_at IS NULL",
+    )
+    .bind(id)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or_else(|| ApiError::not_found("resource not found"))?;
+
+    sqlx::query(
+        "UPDATE resources SET deleted_at = NOW(), updated_at = NOW() WHERE id = $1",
+    )
+    .bind(row.id)
+    .execute(&state.db)
+    .await?;
+
+    write_audit(
+        &state.db,
+        row.id,
+        row.latest_version,
+        user.subject_as_uuid(),
+        AuditAction::Delete,
+    )
+    .await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `POST /api/resources/{id}/rotate` — write a new version. Identical to
+/// `update_resource` with only `config` set, plus a different audit verb.
+#[utoipa::path(
+    post,
+    path = "/api/resources/{id}/rotate",
+    params(("id" = Uuid, Path, description = "Resource id")),
+    request_body = RotateResourceRequest,
+    responses(
+        (status = 200, description = "Resource rotated to a new version", body = ResourceSummary),
+        (status = 400, description = "Validation failure", body = ErrorResponse),
+        (status = 404, description = "Resource not found", body = ErrorResponse),
+        (status = 502, description = "Secret backend write failed", body = ErrorResponse),
+    ),
+    tag = "resources",
+)]
+pub async fn rotate_resource(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<Uuid>,
+    Json(req): Json<RotateResourceRequest>,
+) -> Result<Json<ResourceSummary>, ApiError> {
+    let row = sqlx::query_as::<_, ResourceRow>(
+        "SELECT * FROM resources WHERE id = $1 AND deleted_at IS NULL",
+    )
+    .bind(id)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or_else(|| ApiError::not_found("resource not found"))?;
+
+    let descriptor = descriptor_or_400(&row.resource_type)?;
+    let (public, secret) = split_config(descriptor, req.config)?;
+
+    let principal_id = user.subject_as_uuid();
+    let new_version = row.latest_version + 1;
+    let vault_path = vault_path_for(row.workspace_id, row.id, new_version);
+
+    sqlx::query(
+        "INSERT INTO resource_versions \
+            (resource_id, version, vault_path, public_config, created_by) \
+         VALUES ($1, $2, $3, $4, $5)",
+    )
+    .bind(row.id)
+    .bind(new_version)
+    .bind(&vault_path)
+    .bind(Value::Object(public.clone()))
+    .bind(principal_id)
+    .execute(&state.db)
+    .await?;
+
+    if let Err(e) = state.resource_store.put_version(&vault_path, &secret).await {
+        let _ = sqlx::query(
+            "DELETE FROM resource_versions WHERE resource_id = $1 AND version = $2",
+        )
+        .bind(row.id)
+        .bind(new_version)
+        .execute(&state.db)
+        .await;
+        return Err(ApiError::new(
+            StatusCode::BAD_GATEWAY,
+            format!("secret backend write failed: {e}"),
+        ));
+    }
+
+    sqlx::query(
+        "UPDATE resources SET latest_version = $1, updated_at = NOW() WHERE id = $2",
+    )
+    .bind(new_version)
+    .bind(row.id)
+    .execute(&state.db)
+    .await?;
+
+    write_audit(&state.db, row.id, new_version, principal_id, AuditAction::Rotate).await?;
+
+    Ok(Json(ResourceSummary {
+        id: row.id,
+        path: row.path,
+        resource_type: row.resource_type,
+        display_name: row.display_name,
+        latest_version: new_version,
+        created_at: row.created_at,
+        updated_at: Utc::now(),
+    }))
+}
+
+/// `GET /api/resources/{id}/audit` — paginated audit trail for a resource.
+#[utoipa::path(
+    get,
+    path = "/api/resources/{id}/audit",
+    params(
+        ("id" = Uuid, Path, description = "Resource id"),
+        ListResourceAuditQuery
+    ),
+    responses(
+        (status = 200, description = "Paginated audit entries", body = PaginatedResponse<ResourceAuditEntry>),
+        (status = 404, description = "Resource not found", body = ErrorResponse),
+    ),
+    tag = "resources",
+)]
+pub async fn list_resource_audit(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Query(params): Query<ListResourceAuditQuery>,
+) -> Result<Json<PaginatedResponse<ResourceAuditEntry>>, ApiError> {
+    // Soft-delete tolerance: audit trail is still queryable for deleted
+    // resources (compliance), so we don't filter `deleted_at`.
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM resources WHERE id = $1)",
+    )
+    .bind(id)
+    .fetch_one(&state.db)
+    .await?;
+    if !exists {
+        return Err(ApiError::not_found("resource not found"));
+    }
+
+    let offset = (params.page - 1) * params.per_page;
+    let rows = sqlx::query_as::<_, ResourceAuditEntry>(
+        "SELECT id, resource_id, resource_version, action, principal_id, site, \
+                instance_id, step_id, occurred_at \
+         FROM resource_audit WHERE resource_id = $1 \
+         ORDER BY occurred_at DESC LIMIT $2 OFFSET $3",
+    )
+    .bind(id)
+    .bind(params.per_page)
+    .bind(offset)
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+    let total: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM resource_audit WHERE resource_id = $1",
+    )
+    .bind(id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap_or(0);
+
+    Ok(Json(PaginatedResponse {
+        items: rows,
+        total,
+        page: params.page,
+        per_page: params.per_page,
+    }))
+}

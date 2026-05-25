@@ -2063,6 +2063,95 @@ pub(crate) fn automated_step_borrow_plan(
     Ok(out)
 }
 
+/// One resolved Python `<alias>.<attr>` access where `<alias>` is a
+/// workflow-level `resources:` entry (Phase B.8). Direct sibling of
+/// [`AutomatedStepDataBorrow`] — same scanner input
+/// ([`extract_python_refs`]), but the head doesn't resolve to a producer
+/// slug; it resolves to a resource type in
+/// `aithericon_resources::registry`.
+///
+/// Unlike `AutomatedStepDataBorrow`, there is **no upstream producer**:
+/// the resource envelope is materialized by the launcher (B.7), not by
+/// another step in the workflow. The apply step for this borrow emits a
+/// `job_inputs.push` snippet that reads from the launcher-spliced
+/// `__resources` Rhai map; it does NOT call `wire_read_arc`.
+///
+/// One borrow per `(consumer, alias)` pair regardless of how many fields
+/// the Python source reads off the alias — the runner stages the whole
+/// envelope as `<alias>.json` and the Python `AccessibleDict` exposes the
+/// fields client-side.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AutomatedStepResourceBorrow {
+    /// Python AutomatedStep that authors the borrow.
+    pub consumer_node_id: String,
+    /// Workflow-declared alias (`db` in `db.host`). Also the staged
+    /// filename stem (`db.json`) and the Python global.
+    pub alias: String,
+    /// Resource type name (`postgres`, `openai`, …). Carried through to
+    /// downstream consumers (`.pyi` generation, telemetry) so they don't
+    /// have to re-lookup against `graph.resources`.
+    pub type_name: String,
+}
+
+/// Scan every Python `AutomatedStep`'s entrypoint for `<alias>.<attr>`
+/// accesses whose `<alias>` is a workflow-level resource alias. Returns
+/// one [`AutomatedStepResourceBorrow`] per `(consumer, alias)` pair.
+///
+/// Same lexical scanner as [`automated_step_borrow_plan`]; the
+/// discrimination happens via [`crate::compiler::resource_refs::is_resource_alias`]
+/// rather than the slug index. A `<head>.<attr>` access where the head
+/// matches *both* a slug and an alias is impossible because
+/// [`validate_resource_refs`] rejects alias-slug collisions at compile
+/// time — see [`CompileError::ResourceAliasCollidesWithSlug`].
+pub(crate) fn automated_step_resource_borrow_plan(
+    graph: &WorkflowGraph,
+    inline_sources: &std::collections::HashMap<String, std::collections::HashMap<String, String>>,
+) -> Result<Vec<AutomatedStepResourceBorrow>, CompileError> {
+    use crate::models::template::ExecutionBackendType;
+
+    if graph.resources.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut out: Vec<AutomatedStepResourceBorrow> = Vec::new();
+    let mut seen: std::collections::BTreeSet<(String, String)> = std::collections::BTreeSet::new();
+
+    for node in &graph.nodes {
+        let WorkflowNodeData::AutomatedStep { execution_spec, .. } = &node.data else {
+            continue;
+        };
+        if execution_spec.backend_type != ExecutionBackendType::Python {
+            continue;
+        }
+        let entrypoint = execution_spec
+            .entrypoint
+            .clone()
+            .unwrap_or_else(|| "main.py".to_string());
+        let Some(node_files) = inline_sources.get(&node.id) else {
+            continue;
+        };
+        let Some(source) = node_files.get(&entrypoint) else {
+            continue;
+        };
+
+        for r in crate::compiler::python_refs::extract_python_refs(source) {
+            let Some(type_name) = graph.resources.get(&r.head) else {
+                continue;
+            };
+            let key = (node.id.clone(), r.head.clone());
+            if !seen.insert(key) {
+                continue;
+            }
+            out.push(AutomatedStepResourceBorrow {
+                consumer_node_id: node.id.clone(),
+                alias: r.head,
+                type_name: type_name.clone(),
+            });
+        }
+    }
+    Ok(out)
+}
+
 /// One slug-namespaced `{{ <slug>.<field> }}` placeholder access on a
 /// HumanTask, resolved into a Petri read-arc against the upstream parked
 /// place. Direct sibling of [`AutomatedStepDataBorrow`] — same lifecycle,

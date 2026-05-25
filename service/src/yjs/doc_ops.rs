@@ -184,6 +184,13 @@ pub fn doc_to_graph(doc: &Doc) -> Result<WorkflowGraph, String> {
         edges,
         viewport,
         instance_concurrency,
+        // Phase B: `resources` is authored at the YAML/wire level (B.6) but
+        // the Yjs CRDT path doesn't model it yet — clean-cut introduction
+        // here keeps existing collaborative-editing sessions roundtripping
+        // unchanged. The picker UI populates `graph.resources` when it
+        // lands (B.10) by writing a sibling Yjs key the deserializer here
+        // will then read.
+        resources: Default::default(),
     })
 }
 
@@ -602,7 +609,7 @@ mod tests {
                 },
             ],
             edges: vec![],
-            viewport: None, instance_concurrency: Default::default(),
+            viewport: None, instance_concurrency: Default::default(), resources: Default::default(),
         };
 
         let doc = graph_to_doc(&graph);
@@ -662,7 +669,7 @@ mod tests {
                     height: None,
                 }],
                 edges: vec![],
-                viewport: None, instance_concurrency: Default::default(),
+                viewport: None, instance_concurrency: Default::default(), resources: Default::default(),
             }
         }
 
@@ -751,7 +758,7 @@ mod tests {
             }],
             edges: Vec::<WorkflowEdge>::new(),
             viewport: None,
-            instance_concurrency: Default::default(),
+            instance_concurrency: Default::default(), resources: Default::default(),
         };
 
         let rt = doc_to_graph(&graph_to_doc(&graph)).expect("parse Y.Doc");

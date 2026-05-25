@@ -76,6 +76,18 @@ async-trait = "0.1"
 
 # SDK for compiling workflow graphs to AIR
 aithericon-sdk = { path = "../engine/sdk" }
+
+# Typed Resource registry (built-in types: postgres, openai, slack, s3,
+# google_oauth). The resolver in petri/resource_resolver.rs looks types up
+# by name via `aithericon_resources::lookup`. The `vault` feature pulls in
+# `VaultResourceStore` so the CRUD handlers can write Vault-backed secret
+# storage when `VAULT_ADDR` is set.
+aithericon-resources = { path = "../shared/resources", features = ["vault"] }
+
+# Path-format regex for the B.9 Resource CRUD validator
+# (`POST /api/resources`).
+regex = "1"
+
 schemars = "0.8"
 petgraph = "0.6"
 

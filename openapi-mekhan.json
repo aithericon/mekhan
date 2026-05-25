@@ -2311,6 +2311,447 @@
         }
       }
     },
+    "/api/resources": {
+      "get": {
+        "tags": [
+          "resources"
+        ],
+        "summary": "`GET /api/resources` — paginated list, optionally filtered by type.",
+        "operationId": "list_resources",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "resource_type",
+            "in": "query",
+            "description": "Optional filter: only return resources of this type.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "workspace_id",
+            "in": "query",
+            "description": "Optional workspace filter. v1 default is `Uuid::nil()` so the\nno-workspace deployment Just Works; when workspaces land, the auth\nlayer fills this in.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated list of resources",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedResponse_ResourceSummary"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "resources"
+        ],
+        "summary": "`POST /api/resources` — create a logical resource and its v1 row.",
+        "operationId": "create_resource",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateResourceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Resource created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResourceSummary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Path already exists in workspace",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Secret backend write failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/resources/types": {
+      "get": {
+        "tags": [
+          "resources"
+        ],
+        "summary": "`GET /api/resources/types` — registry introspection. Powers the\nfrontend picker's type list and the schema-driven create form.",
+        "operationId": "list_resource_types",
+        "responses": {
+          "200": {
+            "description": "Registered resource types",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ResourceTypeInfo"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/resources/{id}": {
+      "get": {
+        "tags": [
+          "resources"
+        ],
+        "summary": "`GET /api/resources/{id}` — admin view. Secret fields are listed by\nname only; values never leave Vault on the read path.",
+        "operationId": "get_resource",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Resource id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Resource detail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResourceDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "resources"
+        ],
+        "summary": "`PUT /api/resources/{id}` — update display_name and/or config. Setting\n`config` bumps `latest_version` and writes a fresh vault_path; name-only\nupdates do not.",
+        "operationId": "update_resource",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Resource id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateResourceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Resource updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResourceSummary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Secret backend write failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "resources"
+        ],
+        "summary": "`DELETE /api/resources/{id}` — soft delete. Preserves\n`resource_versions` rows + Vault paths so already-pinned instances keep\nresolving.",
+        "operationId": "delete_resource",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Resource id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Resource soft-deleted"
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/resources/{id}/audit": {
+      "get": {
+        "tags": [
+          "resources"
+        ],
+        "summary": "`GET /api/resources/{id}/audit` — paginated audit trail for a resource.",
+        "operationId": "list_resource_audit",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Resource id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated audit entries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedResponse_ResourceAuditEntry"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/resources/{id}/rotate": {
+      "post": {
+        "tags": [
+          "resources"
+        ],
+        "summary": "`POST /api/resources/{id}/rotate` — write a new version. Identical to\n`update_resource` with only `config` set, plus a different audit verb.",
+        "operationId": "rotate_resource",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Resource id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RotateResourceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Resource rotated to a new version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResourceSummary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Secret backend write failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/tasks": {
       "get": {
         "tags": [
@@ -4090,6 +4531,16 @@
           "metadata": {
             "description": "Free-form audit metadata stored on the instance row. Unlike pre-typed-ports\nbehavior, this is NOT merged into initial Petri tokens — token shape is\ndriven solely by `start_tokens`."
           },
+          "resource_bindings": {
+            "type": "object",
+            "description": "Phase B.7 — deploy-time alias binding. For every `alias` declared in\nthe template's `WorkflowGraph.resources`, the caller supplies a\nconcrete resource path (`f/team/local_pg`); the launcher resolves\neach path against the `resources` table and pins it to the resource's\n`latest_version`. Aliases declared but unbound here cause a 400.\nEmpty map is fine for templates that don't declare any resources.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
           "start_tokens": {
             "type": "array",
             "items": {
@@ -4100,6 +4551,43 @@
           "template_id": {
             "type": "string",
             "format": "uuid"
+          }
+        }
+      },
+      "CreateResourceRequest": {
+        "type": "object",
+        "description": "Request body for `POST /api/resources`. Carries every field needed to\nland both a `resources` row and the first `resource_versions` row.",
+        "required": [
+          "path",
+          "resource_type",
+          "config"
+        ],
+        "properties": {
+          "config": {
+            "description": "Full config map — both public and secret fields. The handler splits\nit by descriptor lists."
+          },
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "UI label. Defaults to `path` if empty."
+          },
+          "path": {
+            "type": "string",
+            "description": "Windmill-style path identifier: `^[ufg]/[a-z0-9_-]+/[a-z0-9_-]+$`."
+          },
+          "resource_type": {
+            "type": "string",
+            "description": "Wire identifier from `ResourceTypeDescriptor.name`."
+          },
+          "workspace_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Optional workspace scoping. No `workspaces` table exists in v1; a\n`None` here resolves to `Uuid::nil()`. When the table lands, this\nwill be set by the auth layer."
           }
         }
       },
@@ -5835,6 +6323,152 @@
           }
         }
       },
+      "PaginatedResponse_ResourceAuditEntry": {
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "per_page"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "One row from `resource_audit`. Returned by `GET /api/resources/{id}/audit`.",
+              "required": [
+                "id",
+                "resource_id",
+                "resource_version",
+                "action",
+                "principal_id",
+                "site",
+                "occurred_at"
+              ],
+              "properties": {
+                "action": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "instance_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid"
+                },
+                "occurred_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "principal_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "resource_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "resource_version": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "site": {
+                  "type": "string"
+                },
+                "step_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              }
+            }
+          },
+          "page": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "per_page": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "PaginatedResponse_ResourceSummary": {
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "per_page"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "Compact list-row shape. Returned by `GET /api/resources` — never carries\nper-version data (`public_config`, `vault_path`) so the list endpoint\nstays cheap to render.",
+              "required": [
+                "id",
+                "path",
+                "resource_type",
+                "display_name",
+                "latest_version",
+                "created_at",
+                "updated_at"
+              ],
+              "properties": {
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "display_name": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "latest_version": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "resource_type": {
+                  "type": "string"
+                },
+                "updated_at": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              }
+            }
+          },
+          "page": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "per_page": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
       "PaginatedResponse_WorkflowTemplate": {
         "type": "object",
         "required": [
@@ -6485,6 +7119,60 @@
           "sse"
         ]
       },
+      "ResourceAuditEntry": {
+        "type": "object",
+        "description": "One row from `resource_audit`. Returned by `GET /api/resources/{id}/audit`.",
+        "required": [
+          "id",
+          "resource_id",
+          "resource_version",
+          "action",
+          "principal_id",
+          "site",
+          "occurred_at"
+        ],
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "instance_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "occurred_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "principal_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "resource_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "resource_version": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "site": {
+            "type": "string"
+          },
+          "step_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "ResourceConfig": {
         "type": "object",
         "description": "Optional resource hints forwarded to the scheduler for a `Scheduled` step.",
@@ -6515,6 +7203,142 @@
           }
         }
       },
+      "ResourceDetail": {
+        "type": "object",
+        "description": "Admin view returned by `GET /api/resources/{id}`. Secret fields appear\nin `redacted_secret_fields` so the picker can render \"<redacted>\"\nplaceholders without ever shipping the real values.",
+        "required": [
+          "id",
+          "path",
+          "resource_type",
+          "display_name",
+          "latest_version",
+          "created_at",
+          "updated_at",
+          "public_config",
+          "redacted_secret_fields"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "latest_version": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "path": {
+            "type": "string"
+          },
+          "public_config": {
+            "description": "Public fields of the latest version, inline. Same shape the resolver\nwould assemble (minus the secret-template refs)."
+          },
+          "redacted_secret_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Names of fields the type marks as secret. The frontend renders these\nas redacted inputs; the real values live in Vault only."
+          },
+          "resource_type": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ResourceSummary": {
+        "type": "object",
+        "description": "Compact list-row shape. Returned by `GET /api/resources` — never carries\nper-version data (`public_config`, `vault_path`) so the list endpoint\nstays cheap to render.",
+        "required": [
+          "id",
+          "path",
+          "resource_type",
+          "display_name",
+          "latest_version",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "latest_version": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "path": {
+            "type": "string"
+          },
+          "resource_type": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ResourceTypeInfo": {
+        "type": "object",
+        "description": "One descriptor surfaced by `GET /api/resources/types`. Drives the\npicker's type list and the schema-driven create form. `schema` is the\nschemars JSON Schema of the underlying ResourceType struct; the frontend\nrenders it field-by-field.",
+        "required": [
+          "name",
+          "display_name",
+          "icon",
+          "secret_fields",
+          "public_fields",
+          "schema"
+        ],
+        "properties": {
+          "display_name": {
+            "type": "string"
+          },
+          "icon": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "oauth_provider": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "public_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "schema": {
+            "description": "JSON Schema of the type. Cached at first request, then reused."
+          },
+          "secret_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "RetryPolicy": {
         "type": "object",
         "description": "Retry behaviour for an `AutomatedStep` whose execution fails or times out.\n\nOn failure the compiler re-dispatches the job (a fresh executor submit)\nwhile `retries < max_retries`, optionally after a `backoff` delay, then\nroutes the exhausted token to the node's error output.",
@@ -6535,6 +7359,16 @@
             "description": "Maximum number of retry attempts after the initial run. `0` disables\nretries (a single failure routes straight to the error output).",
             "minimum": 0
           }
+        }
+      },
+      "RotateResourceRequest": {
+        "type": "object",
+        "description": "Request body for `POST /api/resources/{id}/rotate`. Always bumps\nversion. The body carries the new config — the type cannot change at\nrotation time (`resource_type` is immutable for a logical resource).",
+        "required": [
+          "config"
+        ],
+        "properties": {
+          "config": {}
         }
       },
       "ScopeEntryDto": {
@@ -7463,6 +8297,19 @@
           }
         }
       },
+      "UpdateResourceRequest": {
+        "type": "object",
+        "description": "Request body for `PUT /api/resources/{id}`. Either `display_name` or\n`config` (or both) may be set; if `config` is set the call bumps\n`latest_version` and writes a new vault_path. `display_name`-only\nupdates do **not** bump version.",
+        "properties": {
+          "config": {},
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "UpdateTemplateRequest": {
         "type": "object",
         "properties": {
@@ -7706,6 +8553,16 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/WorkflowNode"
+            }
+          },
+          "resources": {
+            "type": "object",
+            "description": "Typed Resource declarations — `alias -> resource_type_name`. The author\nwrites `db: postgres` to claim a `db` alias that downstream\n`AutomatedStep` Python sources can read as `db.host`, `db.password`,\netc. Type names must match an entry in\n`aithericon_resources::registry`; alias names cannot collide with a\nstep slug or a reserved control-token field. Bound to concrete\nresource paths at instance-launch time via\n`CreateInstanceRequest.resource_bindings`.\n\n`BTreeMap` so wire / serialization order is deterministic — the\ncompiler emits splice snippets in this order, and stable order keeps\nthe AIR diff-friendly.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
             }
           },
           "viewport": {
@@ -8544,6 +9401,10 @@
     {
       "name": "auth-tokens",
       "description": "Embedded per-user automation tokens (Zitadel-backed PATs)."
+    },
+    {
+      "name": "resources",
+      "description": "Typed credential CRUD (`postgres`, `openai`, `s3`, `slack`, `google_oauth`). Workflows bind aliases to resources at launch; secrets live in Vault."
     },
     {
       "name": "health",

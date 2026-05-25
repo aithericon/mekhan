@@ -88,6 +88,12 @@ pub struct AppState {
     pub triggers: Arc<TriggerDispatcher>,
     /// In-flight WaitForResult waiters, shared with the lifecycle consumer.
     pub result_waiters: Arc<crate::triggers::ResultWaiters>,
+    /// Phase B.9 — write-side secret backend used by the Resource CRUD
+    /// handlers. `VaultResourceStore` when `VAULT_ADDR`/`VAULT_TOKEN` are
+    /// set; `InMemoryResourceStore` (dev/test fallback) otherwise. The
+    /// engine's wrap path still reads through the existing `SecretStore`
+    /// path — this trait is write-only by design.
+    pub resource_store: Arc<dyn aithericon_resources::ResourceSecretStore>,
 }
 
 /// Build the `OpenApiRouter` containing every `#[utoipa::path]`-annotated
@@ -181,6 +187,22 @@ fn build_openapi_router() -> OpenApiRouter<AppState> {
         // since utoipa-axum doesn't expose per-route layers here)
         .routes(routes!(handlers::files::upload_file))
         .routes(routes!(handlers::files::get_file))
+        // Resources (Phase B.9) — typed credential CRUD. Read paths hit
+        // the DB only; write paths (POST/PUT/rotate/delete) also touch the
+        // configured `ResourceSecretStore` (Vault in prod, in-memory in
+        // dev/test). The `/types` introspection route powers the picker.
+        .routes(routes!(
+            handlers::resources::list_resources,
+            handlers::resources::create_resource
+        ))
+        .routes(routes!(handlers::resources::list_resource_types))
+        .routes(routes!(
+            handlers::resources::get_resource,
+            handlers::resources::update_resource,
+            handlers::resources::delete_resource
+        ))
+        .routes(routes!(handlers::resources::rotate_resource))
+        .routes(routes!(handlers::resources::list_resource_audit))
         // Triggers (Phase 5)
         .routes(routes!(handlers::triggers::list_triggers))
         .routes(routes!(handlers::triggers::list_template_triggers))

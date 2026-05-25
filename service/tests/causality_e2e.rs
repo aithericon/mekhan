@@ -309,6 +309,7 @@ async fn causality_full_pipeline() {
         zitadel_mgmt: None,
         triggers,
         result_waiters: mekhan_service::triggers::ResultWaiters::new(),
+        resource_store: Arc::new(aithericon_resources::InMemoryResourceStore::new()),
     });
 
     // ── 2. Spawn Mekhan consumers ────────────────────────────────────────

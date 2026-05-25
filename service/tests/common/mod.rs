@@ -146,6 +146,7 @@ pub async fn test_app_with_authenticator(
         zitadel_mgmt: None,
         triggers,
         result_waiters: mekhan_service::triggers::ResultWaiters::new(),
+        resource_store: std::sync::Arc::new(aithericon_resources::InMemoryResourceStore::new()),
     };
 
     let router = build_router(state);
@@ -191,6 +192,7 @@ pub async fn test_app_with_introspection(
         zitadel_mgmt: None,
         triggers,
         result_waiters: mekhan_service::triggers::ResultWaiters::new(),
+        resource_store: std::sync::Arc::new(aithericon_resources::InMemoryResourceStore::new()),
     };
 
     let router = build_router(state);
@@ -234,6 +236,7 @@ pub async fn test_app_with_mgmt(mgmt: Arc<ZitadelMgmt>) -> (Router, PgPool) {
         zitadel_mgmt: Some(mgmt),
         triggers,
         result_waiters: mekhan_service::triggers::ResultWaiters::new(),
+        resource_store: std::sync::Arc::new(aithericon_resources::InMemoryResourceStore::new()),
     };
 
     let router = build_router(state);
@@ -279,6 +282,7 @@ pub async fn test_app() -> (Router, PgPool) {
         zitadel_mgmt: None,
         triggers,
         result_waiters: mekhan_service::triggers::ResultWaiters::new(),
+        resource_store: std::sync::Arc::new(aithericon_resources::InMemoryResourceStore::new()),
     };
 
     let router = build_router(state);
@@ -323,6 +327,7 @@ pub async fn test_app_with_nats(nats_url: &str) -> (Router, PgPool) {
         zitadel_mgmt: None,
         triggers,
         result_waiters: mekhan_service::triggers::ResultWaiters::new(),
+        resource_store: std::sync::Arc::new(aithericon_resources::InMemoryResourceStore::new()),
     };
 
     let router = build_router(state);
@@ -369,6 +374,7 @@ pub async fn test_app_with_petri_url(nats_url: &str, petri_url: &str) -> (Router
         zitadel_mgmt: None,
         triggers,
         result_waiters: mekhan_service::triggers::ResultWaiters::new(),
+        resource_store: std::sync::Arc::new(aithericon_resources::InMemoryResourceStore::new()),
     };
 
     let router = build_router(state);
@@ -429,6 +435,7 @@ pub async fn test_app_waiters(
         zitadel_mgmt: None,
         triggers,
         result_waiters: result_waiters.clone(),
+        resource_store: std::sync::Arc::new(aithericon_resources::InMemoryResourceStore::new()),
     };
 
     let router = build_router(state);
@@ -485,6 +492,7 @@ pub async fn test_app_with_petri_url_and_triggers(
         zitadel_mgmt: None,
         triggers: triggers.clone(),
         result_waiters: mekhan_service::triggers::ResultWaiters::new(),
+        resource_store: std::sync::Arc::new(aithericon_resources::InMemoryResourceStore::new()),
     };
 
     let router = build_router(state);

@@ -31,8 +31,8 @@ use crate::compiler::compile::{
 };
 use crate::compiler::interface::InterfaceRegistry;
 use crate::compiler::token_shape::{
-    automated_step_borrow_plan, guard_readarc_plan, human_task_borrow_plan, kreuzberg_borrow_plan,
-    llm_borrow_plan,
+    automated_step_borrow_plan, automated_step_resource_borrow_plan, guard_readarc_plan,
+    human_task_borrow_plan, kreuzberg_borrow_plan, llm_borrow_plan,
 };
 use crate::compiler::CompileError;
 use crate::models::template::{FieldKind, WorkflowGraph};
@@ -100,6 +100,21 @@ pub(crate) enum BorrowResolution {
     /// share the same needle).
     HumanTaskInputRewrite,
 
+    /// Python AutomatedStep with a workflow-level Resource ref (Phase B.8).
+    /// Stage `<alias>.json` from the launcher-spliced `__resources` envelope
+    /// — there is no upstream producer to wire a read-arc from, so this
+    /// variant intentionally skips `wire_read_arc`. The launcher (B.7)
+    /// guarantees the prepare transition's Rhai opens with a
+    /// `let __resources = #{ ... };` declaration whose keys match the
+    /// aliases this borrow set names.
+    ///
+    /// `type_name` is plumbed through so future telemetry / `.pyi`
+    /// generation doesn't need a second pass against `graph.resources`.
+    ResourceEnvelope {
+        alias: String,
+        type_name: String,
+    },
+
     /// LLM / Kreuzberg AutomatedStep: stage one input file per `(slug, attr)`
     /// via a `job_inputs.push(...)` snippet at `BORROW_MARKER` AND
     /// rewrite the `{{<slug>.<attr>}}` placeholder in the embedded config
@@ -153,6 +168,24 @@ pub(crate) fn collect_borrows(
             producer_node: b.producer_node,
             slug: b.slug,
             resolution: BorrowResolution::PythonEnvelope,
+        });
+    }
+
+    // Phase B.8 — Python `<alias>.<attr>` references against workflow-level
+    // resources. `producer_node` is set to `__resources__` as a sentinel:
+    // it identifies the borrow source on inspection but is never consumed
+    // by `wire_read_arc` (the `ResourceEnvelope` arm skips it). Using
+    // `__alias` so a future inspection tool isn't tempted to treat it as
+    // a real graph node id.
+    for b in automated_step_resource_borrow_plan(graph, inline_sources)? {
+        out.push(Borrow {
+            consumer_node_id: b.consumer_node_id,
+            producer_node: format!("__resources__/{}", b.alias),
+            slug: b.alias.clone(),
+            resolution: BorrowResolution::ResourceEnvelope {
+                alias: b.alias,
+                type_name: b.type_name,
+            },
         });
     }
 
@@ -230,6 +263,9 @@ pub(crate) fn apply_borrows(
     let mut python: HashMap<String, Vec<Borrow>> = HashMap::new();
     let mut human_task: HashMap<String, Vec<Borrow>> = HashMap::new();
     let mut backend: HashMap<String, Vec<Borrow>> = HashMap::new();
+    // Phase B.8 — resource-envelope borrows: keyed by consumer like Python
+    // borrows, but the per-borrow apply has no read-arc step.
+    let mut resources: HashMap<String, Vec<Borrow>> = HashMap::new();
 
     for b in borrows {
         match &b.resolution {
@@ -246,6 +282,10 @@ pub(crate) fn apply_borrows(
                 .entry(b.consumer_node_id.clone())
                 .or_default()
                 .push(b),
+            BorrowResolution::ResourceEnvelope { .. } => resources
+                .entry(b.consumer_node_id.clone())
+                .or_default()
+                .push(b),
         }
     }
 
@@ -258,6 +298,9 @@ pub(crate) fn apply_borrows(
     }
     for (consumer, group) in &backend {
         apply_backend_borrows(scenario, interfaces, graph, consumer, group);
+    }
+    for (consumer, group) in &resources {
+        apply_resource_borrows(scenario, consumer, group);
     }
 
     strip_borrow_markers(scenario);
@@ -587,6 +630,55 @@ fn apply_backend_borrows(
     }
 }
 
+/// Phase B.8 apply step — Python AutomatedStep with resource borrows.
+/// Per-consumer: locate the prepare transition, then for each borrow emit
+/// a `job_inputs.push` snippet that stages the resource envelope as
+/// `<alias>.json`. The Rhai value comes from a `__resources` map that the
+/// launcher (B.7) splices into the transition's `logic` before deploy.
+///
+/// **No `wire_read_arc` call** and **no `__h_` hoist**: the envelope is
+/// already flat (`{ alias: { field: value, ... } }`) and there is no
+/// upstream parked place to read from.
+///
+/// The marker contract is the same as the Python arm — we splice into
+/// `BORROW_MARKER` so multiple borrow arms can co-exist on one prepare
+/// transition. If the prepare transition references both producer slugs
+/// and resource aliases, both arms write into the same marker site.
+fn apply_resource_borrows(
+    scenario: &mut ScenarioDefinition,
+    consumer_id: &str,
+    consumer_borrows: &[Borrow],
+) {
+    let prepare_a = format!("{}/prepare", consumer_id);
+    let prepare_b = format!("t_{}_prepare", consumer_id);
+    for t in &mut scenario.transitions {
+        if t.id != prepare_a && t.id != prepare_b {
+            continue;
+        }
+        let mut pushes = String::new();
+        for b in consumer_borrows {
+            let BorrowResolution::ResourceEnvelope { alias, .. } = &b.resolution else {
+                continue; // unreachable per partition
+            };
+            // The launcher splices `let __resources = #{ ... };` at the top
+            // of this transition's logic. The expression below reads from
+            // it and stages the per-alias subtree as a JSON sidecar that
+            // the Python runner picks up via its `<slug>.json` ->
+            // `AccessibleDict` auto-promotion path.
+            pushes.push_str(&format!(
+                r#"job_inputs.push(#{{ "name": "{alias}.json", "source": #{{ "type": "inline", "value": __resources["{alias}"] }} }}); "#,
+                alias = alias,
+            ));
+        }
+        if let TransitionLogic::Rhai { source } = &t.logic {
+            if source.contains(BORROW_MARKER) {
+                let new_source = source.replace(BORROW_MARKER, &pushes);
+                t.logic = TransitionLogic::Rhai { source: new_source };
+            }
+        }
+    }
+}
+
 /// Strip leftover `BORROW_MARKER` sentinels from any prepare transition
 /// whose backend didn't have c2/c4/c5 borrows. Final cleanup after all
 /// borrow arms.
@@ -717,6 +809,237 @@ mod tests {
             }
             other => panic!("LLM borrow must be BackendFieldStage, got {other:?}"),
         }
+    }
+
+    // ── Phase B.8 — resource-envelope borrows ─────────────────────────────
+
+    /// Build a minimal `Start → AutomatedStep(python) → End` graph plus an
+    /// inline-source map for the step. `resources` carries the top-level
+    /// `alias -> type` declarations. Used by the three B.8 tests below to
+    /// avoid repeating the same ~30-line JSON literal.
+    ///
+    /// The Python source goes into `inline_sources["step"]["main.py"]`.
+    fn make_python_step_graph(
+        resources: std::collections::BTreeMap<String, String>,
+        extra_nodes_json: &str,
+        extra_edges_json: &str,
+        python_source: &str,
+    ) -> (
+        crate::models::template::WorkflowGraph,
+        std::collections::HashMap<String, std::collections::HashMap<String, String>>,
+    ) {
+        // Build the graph from JSON because that matches how the existing
+        // token_shape tests construct fixtures — and serde defaults handle
+        // every nullable field uniformly.
+        let nodes = format!(
+            r#"{extra}{maybe_comma}
+                {{"id":"start","type":"start","position":{{"x":0,"y":0}},
+                 "data":{{"type":"start","label":"Start"}}}},
+                {{"id":"step","type":"automated_step","slug":"step","position":{{"x":0,"y":0}},
+                 "data":{{"type":"automated_step","label":"Step",
+                         "executionSpec":{{"backendType":"python","entrypoint":"main.py","config":{{"entrypoint":"main.py","python":"python3","sdk":true}}}},
+                         "retryPolicy":{{"maxRetries":0,"strategy":{{"type":"immediate"}}}},
+                         "deploymentModel":{{"mode":"inline"}}}}}},
+                {{"id":"end","type":"end","position":{{"x":0,"y":0}},
+                 "data":{{"type":"end","label":"End"}}}}"#,
+            extra = extra_nodes_json,
+            maybe_comma = if extra_nodes_json.trim().is_empty() { "" } else { "," },
+        );
+        let edges = format!(
+            r#"{extra}{maybe_comma}
+                {{"id":"e_start_step","source":"start","target":"step","type":"sequence"}},
+                {{"id":"e_step_end","source":"step","target":"end","type":"sequence"}}"#,
+            extra = extra_edges_json,
+            maybe_comma = if extra_edges_json.trim().is_empty() { "" } else { "," },
+        );
+
+        let resources_json = serde_json::to_string(&resources).unwrap_or_else(|_| "{}".to_string());
+        let full = format!(
+            r#"{{"nodes":[{nodes}],"edges":[{edges}],"resources":{resources_json}}}"#
+        );
+        let g: crate::models::template::WorkflowGraph =
+            serde_json::from_str(&full).expect("deser python-step graph");
+
+        let mut inline: std::collections::HashMap<
+            String,
+            std::collections::HashMap<String, String>,
+        > = std::collections::HashMap::new();
+        let mut step_files = std::collections::HashMap::new();
+        step_files.insert("main.py".to_string(), python_source.to_string());
+        inline.insert("step".to_string(), step_files);
+
+        (g, inline)
+    }
+
+    /// Python source `print(db.host)` against a graph that declares
+    /// `resources: { db: postgres }` produces exactly one `Borrow` whose
+    /// resolution is `ResourceEnvelope { alias: "db", type_name: "postgres" }`.
+    #[test]
+    fn resource_envelope_borrow_for_python_step() {
+        let mut resources = std::collections::BTreeMap::new();
+        resources.insert("db".to_string(), "postgres".to_string());
+
+        let (graph, files) =
+            make_python_step_graph(resources, "", "", "print(db.host)\n");
+
+        let borrows = collect_borrows(&graph, &files).expect("collect_borrows");
+        let envelope: Vec<&Borrow> = borrows
+            .iter()
+            .filter(|b| matches!(b.resolution, BorrowResolution::ResourceEnvelope { .. }))
+            .collect();
+        assert_eq!(
+            envelope.len(),
+            1,
+            "expected exactly one ResourceEnvelope borrow; got all borrows: {borrows:?}"
+        );
+        match &envelope[0].resolution {
+            BorrowResolution::ResourceEnvelope { alias, type_name } => {
+                assert_eq!(alias, "db");
+                assert_eq!(type_name, "postgres");
+            }
+            _ => unreachable!(),
+        }
+        assert_eq!(envelope[0].consumer_node_id, "step");
+        assert_eq!(envelope[0].slug, "db");
+    }
+
+    /// `apply_resource_borrows` rewrites a prepare-transition's Rhai source
+    /// so the `BORROW_MARKER` becomes a `job_inputs.push(...)` snippet that
+    /// reads `__resources["db"]`. The launcher (B.7) splices the
+    /// `__resources` declaration in a separate stage; this test only
+    /// verifies the borrow-apply emits the push correctly.
+    #[test]
+    fn resource_envelope_apply_emits_job_inputs_push() {
+        use aithericon_sdk::scenario::{ScenarioDefinition, ScenarioTransition, TransitionLogic};
+
+        let mut resources = std::collections::BTreeMap::new();
+        resources.insert("db".to_string(), "postgres".to_string());
+
+        let (graph, files) =
+            make_python_step_graph(resources, "", "", "print(db.host)\n");
+        let borrows = collect_borrows(&graph, &files).expect("collect_borrows");
+
+        let mut scenario = ScenarioDefinition::new("test");
+        scenario.transitions.push(ScenarioTransition {
+            id: "step/prepare".to_string(),
+            name: "prepare".to_string(),
+            group_id: None,
+            input_ports: vec![],
+            output_ports: vec![],
+            inputs: vec![],
+            outputs: vec![],
+            guard: None,
+            priority: None,
+            logic: TransitionLogic::Rhai {
+                // The `BORROW_MARKER` is the splice point — the apply
+                // step replaces it with the per-alias push snippets.
+                source: format!("let job_inputs = []; {BORROW_MARKER} job_inputs"),
+            },
+            effect_config: None,
+            caused_signals: vec![],
+            input_schema: None,
+            output_schema: None,
+            process_step_started: None,
+            process_step_completed: None,
+        });
+
+        // Filter to just the resource-envelope borrows so the partition
+        // matches what `apply_borrows` would route here.
+        let resource_borrows: Vec<Borrow> = borrows
+            .into_iter()
+            .filter(|b| matches!(b.resolution, BorrowResolution::ResourceEnvelope { .. }))
+            .collect();
+        assert!(!resource_borrows.is_empty(), "fixture must have at least one resource borrow");
+
+        apply_resource_borrows(&mut scenario, "step", &resource_borrows);
+
+        let TransitionLogic::Rhai { source } = &scenario.transitions[0].logic else {
+            panic!("prepare transition must remain Rhai")
+        };
+        assert!(
+            source.contains(r#"job_inputs.push(#{ "name": "db.json", "source": #{ "type": "inline", "value": __resources["db"] } });"#),
+            "spliced source missing the expected job_inputs.push; got: {source}"
+        );
+        // The marker must be consumed.
+        assert!(
+            !source.contains(BORROW_MARKER),
+            "BORROW_MARKER must be replaced; got: {source}"
+        );
+    }
+
+    /// Python source touching both a workflow-declared resource alias (`db`)
+    /// AND an upstream producer slug (`prev`) must discriminate cleanly:
+    /// the `db` head resolves to a `ResourceEnvelope` borrow, the `prev`
+    /// head resolves to the existing `PythonEnvelope` arm.
+    ///
+    /// `prev` is a Python AutomatedStep producer here. Python-to-Python
+    /// borrowing produces `PythonEnvelope` (the runner stages the whole
+    /// upstream envelope as `<slug>.json`); this contrasts with LLM/
+    /// Kreuzberg upstreams which would produce `BackendFieldStage`. The
+    /// existing `python_borrow_dedupes_per_producer` fixture establishes
+    /// that producer-shape contract; we mirror it here.
+    #[test]
+    fn python_alias_vs_slug_discrimination() {
+        let mut resources = std::collections::BTreeMap::new();
+        resources.insert("db".to_string(), "postgres".to_string());
+
+        // Insert an upstream Python AutomatedStep with explicit slug `prev`
+        // before the `step` consumer. We need an edge `start → prev → step`
+        // instead of the default `start → step`, so we override the edges
+        // completely (the helper handles this by accepting raw extra-edges
+        // JSON; for the default `start → step` edge to be replaced we
+        // re-emit only the new edges via `extra_edges_json`). To keep the
+        // helper simple, we instead just inject `prev` as a sibling node
+        // and add a `prev → step` edge — the default `start → step` edge
+        // stays, which is fine for topological purposes (`prev` is a
+        // sibling parked producer).
+        let extra_nodes = r#"{"id":"prev","type":"automated_step","slug":"prev","position":{"x":0,"y":0},
+             "data":{"type":"automated_step","label":"Prev",
+                     "executionSpec":{"backendType":"python","entrypoint":"main.py","config":{"entrypoint":"main.py","python":"python3","sdk":true}},
+                     "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
+                     "deploymentModel":{"mode":"inline"},
+                     "output":{"id":"out","label":"Output","fields":[{"name":"field","label":"F","kind":"text","required":false}]}}}"#;
+        let extra_edges = r#"{"id":"e_start_prev","source":"start","target":"prev","type":"sequence"},
+            {"id":"e_prev_step","source":"prev","target":"step","type":"sequence"}"#;
+
+        let (graph, files) = make_python_step_graph(
+            resources,
+            extra_nodes,
+            extra_edges,
+            "x = db.host\ny = prev.field\n",
+        );
+
+        let borrows = collect_borrows(&graph, &files).expect("collect_borrows");
+
+        let resource_borrows: Vec<&Borrow> = borrows
+            .iter()
+            .filter(|b| matches!(b.resolution, BorrowResolution::ResourceEnvelope { .. }))
+            .collect();
+        let python_borrows: Vec<&Borrow> = borrows
+            .iter()
+            .filter(|b| matches!(b.resolution, BorrowResolution::PythonEnvelope))
+            .collect();
+
+        assert_eq!(
+            resource_borrows.len(),
+            1,
+            "expected exactly one ResourceEnvelope borrow (`db`); got borrows: {borrows:?}"
+        );
+        match &resource_borrows[0].resolution {
+            BorrowResolution::ResourceEnvelope { alias, type_name } => {
+                assert_eq!(alias, "db");
+                assert_eq!(type_name, "postgres");
+            }
+            _ => unreachable!(),
+        }
+
+        assert_eq!(
+            python_borrows.len(),
+            1,
+            "expected exactly one PythonEnvelope borrow (`prev`); got borrows: {borrows:?}"
+        );
+        assert_eq!(python_borrows[0].slug, "prev");
+        assert_eq!(python_borrows[0].producer_node, "prev");
     }
 
     /// Round-trip equivalence: chaining the five existing planners through

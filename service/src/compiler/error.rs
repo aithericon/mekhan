@@ -258,6 +258,40 @@ pub enum CompileError {
         field: String,
         actual_kind: String,
     },
+
+    // --- Phase B.6 — `WorkflowGraph.resources` validation. The workflow
+    //     declares typed Resource aliases (`db: postgres`); we enforce that
+    //     each type is registered in `aithericon_resources::registry` and
+    //     that the alias doesn't collide with another in-scope identifier
+    //     (a step slug or a reserved control-token field).
+    /// `resources: { <alias>: <type_name> }` references a resource type
+    /// that isn't registered in the `aithericon_resources` registry. Either
+    /// a typo (`postgress`) or a missing `#[derive(ResourceType)]` on a
+    /// new built-in. The picker UI only offers registered types so this
+    /// usually means the YAML was hand-edited.
+    #[error(
+        "resource alias '{alias}' references unknown resource type '{type_name}' — \
+         expected one of the built-in types in `aithericon_resources`"
+    )]
+    ResourceTypeUnknown { alias: String, type_name: String },
+
+    /// A resource alias name equals a step's explicit slug — `<alias>` would
+    /// be ambiguous between the staged resource envelope (`<alias>.json`)
+    /// and the producer's parked envelope. Rename one of them.
+    #[error(
+        "resource alias '{alias}' collides with a step slug of the same name — \
+         resource aliases must be unique from producer slugs"
+    )]
+    ResourceAliasCollidesWithSlug { alias: String },
+
+    /// A resource alias collides with a reserved control-token field
+    /// (`_instance_id`, `_template_id`, …). At runtime the system fields
+    /// would shadow the resource binding (or vice versa) silently.
+    #[error(
+        "resource alias '{alias}' collides with a reserved control-token field — \
+         pick a non-underscore-prefixed alias"
+    )]
+    ResourceAliasCollidesWithToken { alias: String },
 }
 
 impl CompileError {
@@ -293,6 +327,9 @@ impl CompileError {
             Self::BackendRefNotUpstream { .. } => "backend_ref_not_upstream",
             Self::BackendPlaceholderSyntax { .. } => "backend_placeholder_syntax",
             Self::LlmImageRefNotFileKind { .. } => "llm_image_ref_not_file_kind",
+            Self::ResourceTypeUnknown { .. } => "resource_type_unknown",
+            Self::ResourceAliasCollidesWithSlug { .. } => "resource_alias_collides_with_slug",
+            Self::ResourceAliasCollidesWithToken { .. } => "resource_alias_collides_with_token",
         }
     }
 
