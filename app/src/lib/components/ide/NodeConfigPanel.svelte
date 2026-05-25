@@ -9,10 +9,11 @@
 	import InScopeRefsSection from '$lib/components/editor/panels/property-sections/InScopeRefsSection.svelte';
 	import {
 		loadResourceTypes,
+		loadWorkspaceResources,
 		buildResourceScope,
 		type ScopeEntry
 	} from '$lib/editor/guard-scope';
-	import type { ResourceTypeInfo } from '$lib/api/resources';
+	import type { ResourceTypeInfo, ResourceSummary } from '$lib/api/resources';
 
 	type Props = {
 		binding: YjsGraphBinding;
@@ -39,19 +40,25 @@
 		oninsertref
 	}: Props = $props();
 
-	// Workflow-level resource refs for the RefPicker's Resources tab.
-	// Same module-cached fetch + derivation as the canvas-side panel.
+	// Workspace resources for the RefPicker's Resources tab. Same
+	// module-cached fetch + derivation as the canvas-side panel; the
+	// caches are shared so opening the IDE on top of the canvas doesn't
+	// double up the network calls.
 	let resourceTypes = $state<ResourceTypeInfo[]>([]);
+	let workspaceResources = $state<ResourceSummary[]>([]);
 	$effect(() => {
 		void loadResourceTypes()
 			.then((types) => {
 				resourceTypes = types;
 			})
 			.catch(() => {});
+		void loadWorkspaceResources()
+			.then((items) => {
+				workspaceResources = items;
+			})
+			.catch(() => {});
 	});
-	const resourceScope = $derived(
-		buildResourceScope(binding.graph.resources, resourceTypes)
-	);
+	const resourceScope = $derived(buildResourceScope(workspaceResources, resourceTypes));
 
 	const nodeData = $derived(
 		binding.graph.nodes.find((n) => n.id === nodeId)?.data ?? null

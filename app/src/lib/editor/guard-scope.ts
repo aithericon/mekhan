@@ -12,7 +12,12 @@
 
 import type { components } from '$lib/api/schema';
 import { analyzeGraph } from '$lib/api/client';
-import { listResourceTypes, type ResourceTypeInfo } from '$lib/api/resources';
+import {
+	listResourceTypes,
+	listResources,
+	type ResourceTypeInfo,
+	type ResourceSummary
+} from '$lib/api/resources';
 
 type WorkflowGraph = components['schemas']['WorkflowGraph'];
 type FieldKind = components['schemas']['FieldKind'];
@@ -120,8 +125,6 @@ export function loadResourceTypes(): Promise<ResourceTypeInfo[]> {
 	resourceTypesCache = promise;
 	resourceTypesCachedAt = Date.now();
 	promise.catch(() => {
-		// Reject cached only if the entry is still ours and the TTL elapsed,
-		// so a transient error doesn't pin a rejection forever.
 		setTimeout(() => {
 			if (resourceTypesCache === promise && Date.now() - resourceTypesCachedAt >= RESOURCE_TYPES_ERROR_TTL_MS) {
 				resourceTypesCache = null;
@@ -131,49 +134,84 @@ export function loadResourceTypes(): Promise<ResourceTypeInfo[]> {
 	return promise;
 }
 
-/** Test/HMR helper — drops the cache so the next `loadResourceTypes` re-fetches. */
+/**
+ * Workspace resources — like the type registry, fetched once per session
+ * and shared across all pickers. Cached promise + 5s error TTL mirror the
+ * type-registry pattern. Unlike types, resources DO change at runtime
+ * (CRUD from `/resources`), but the editor's "Refresh" affordance + a
+ * full page reload pick up changes — keeping the picker reactive to
+ * every mutation would require a websocket the resources kernel doesn't
+ * carry yet.
+ */
+let workspaceResourcesCache: Promise<ResourceSummary[]> | null = null;
+let workspaceResourcesCachedAt = 0;
+
+export function loadWorkspaceResources(): Promise<ResourceSummary[]> {
+	if (workspaceResourcesCache) return workspaceResourcesCache;
+	const promise = listResources({ perPage: 200 }).then((page) => page.items);
+	workspaceResourcesCache = promise;
+	workspaceResourcesCachedAt = Date.now();
+	promise.catch(() => {
+		setTimeout(() => {
+			if (workspaceResourcesCache === promise && Date.now() - workspaceResourcesCachedAt >= RESOURCE_TYPES_ERROR_TTL_MS) {
+				workspaceResourcesCache = null;
+			}
+		}, RESOURCE_TYPES_ERROR_TTL_MS);
+	});
+	return promise;
+}
+
+/** Test/HMR helper — drops the caches so the next loaders re-fetch. */
 export function _clearResourceTypesCache(): void {
 	resourceTypesCache = null;
+	workspaceResourcesCache = null;
 }
 
 /**
- * Project the workflow's `graph.resources: { alias -> type }` block plus
- * the type registry into `ScopeEntry[]` shaped for `RefPicker`'s resource
- * tab. Each alias contributes one entry per field (public + secret); the
- * synthetic `nodeId` is `resource:<alias>` so it never collides with a
- * real producer slug.
+ * Project the workspace's resources + the type registry into
+ * `ScopeEntry[]` shaped for `RefPicker`'s Resources tab. Each workspace
+ * resource contributes one entry per field of its declared type (public
+ * + secret); the synthetic `nodeId` is `resource:<name>` so it never
+ * collides with a real producer slug.
+ *
+ * The compiler resolves `<name>.<field>` directly against the workspace's
+ * resource list at publish time (no per-workflow alias indirection), so
+ * the picker shows the same set of resources for every workflow — they
+ * are workspace-scoped, not workflow-scoped.
  *
  * Field `kind` is best-effort:
- *  - `password`, `token`, `key`, `secret` → `text` (the value is a
- *    string; the kernel rewraps it before any inline use).
- *  - `port` → `number`.
- *  - everything else → `text` (most resource configs are strings).
+ *  - `port` → `number`
+ *  - everything else → `text` (most resource configs are strings)
  *
- * Returns `[]` when the workflow declares no resources OR the registry
- * doesn't know the alias's type — the picker hides its Resources tab
- * rather than rendering a stub.
+ * Resources whose type is not in the registry are dropped silently —
+ * the picker only surfaces what the user can actually consume.
  */
 export function buildResourceScope(
-	resources: Record<string, string> | undefined,
+	resources: ResourceSummary[] | undefined,
 	types: ResourceTypeInfo[]
 ): ScopeEntry[] {
-	if (!resources) return [];
+	if (!resources || resources.length === 0) return [];
 	const out: ScopeEntry[] = [];
-	const byName = new Map(types.map((t) => [t.name, t]));
-	// Match the BTreeMap alphabetisation we mirror in `YjsGraphBinding`.
-	const aliases = Object.keys(resources).sort();
-	for (const alias of aliases) {
-		const typeName = resources[alias];
-		const info = byName.get(typeName);
+	const byType = new Map(types.map((t) => [t.name, t]));
+	// `path` is the workspace-unique key the compiler matches against
+	// Python `<head>.<field>` source patterns — alphabetise by it so the
+	// picker order matches what the user types.
+	const sorted = [...resources].sort((a, b) => a.path.localeCompare(b.path));
+	for (const resource of sorted) {
+		const info = byType.get(resource.resource_type);
 		if (!info) continue;
 		const fields = [...(info.public_fields ?? []), ...(info.secret_fields ?? [])];
 		for (const field of fields) {
 			out.push({
-				nodeId: `resource:${alias}`,
-				nodeLabel: alias,
+				nodeId: `resource:${resource.id}`,
+				// Use display_name when present (more human-readable in the
+				// picker's left column); fall back to path so an unnamed
+				// resource still has a label. Pickers showing the full
+				// `<path>.<field>` qualified form keep the contract clear.
+				nodeLabel: resource.display_name || resource.path,
 				field,
 				kind: field === 'port' ? 'number' : 'text',
-				qualified: `${alias}.${field}`
+				qualified: `${resource.path}.${field}`
 			});
 		}
 	}

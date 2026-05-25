@@ -1513,17 +1513,6 @@ export interface components {
              */
             metadata?: unknown;
             /**
-             * @description Phase B.7 — deploy-time alias binding. For every `alias` declared in
-             *     the template's `WorkflowGraph.resources`, the caller supplies a
-             *     concrete resource path (`f/team/local_pg`); the launcher resolves
-             *     each path against the `resources` table and pins it to the resource's
-             *     `latest_version`. Aliases declared but unbound here cause a 400.
-             *     Empty map is fine for templates that don't declare any resources.
-             */
-            resource_bindings?: {
-                [key: string]: string;
-            };
-            /**
              * @description Typed seeds for each Start block in the template. A Start with a
              *     non-empty `initial` port requires a matching entry here; otherwise the
              *     API returns 400. Starts with an empty `initial` port can be omitted
@@ -2992,23 +2981,6 @@ export interface components {
              */
             instance_concurrency?: components["schemas"]["InstanceConcurrencyPolicy"];
             nodes: components["schemas"]["WorkflowNode"][];
-            /**
-             * @description Typed Resource declarations — `alias -> resource_type_name`. The author
-             *     writes `db: postgres` to claim a `db` alias that downstream
-             *     `AutomatedStep` Python sources can read as `db.host`, `db.password`,
-             *     etc. Type names must match an entry in
-             *     `aithericon_resources::registry`; alias names cannot collide with a
-             *     step slug or a reserved control-token field. Bound to concrete
-             *     resource paths at instance-launch time via
-             *     `CreateInstanceRequest.resource_bindings`.
-             *
-             *     `BTreeMap` so wire / serialization order is deterministic — the
-             *     compiler emits splice snippets in this order, and stable order keeps
-             *     the AIR diff-friendly.
-             */
-            resources?: {
-                [key: string]: string;
-            };
             viewport?: null | components["schemas"]["Viewport"];
         };
         WorkflowInstance: {

@@ -17,16 +17,10 @@ import type {
  * YjsGraphBinding observes a Y.Doc and exposes a reactive WorkflowGraph.
  *
  * Y.Doc schema:
- *   Y.Map("meta")      ← { name, description, author_id }
- *   Y.Map("nodes")     ← keyed by nodeId → Y.Map { type, label, description, config (Y.Map), position, files (Y.Map → Y.Text), parentId?, width?, height? }
- *   Y.Array("edges")   ← [{ id, source, target, sourceHandle?, label?, type }]
- *   Y.Map("viewport")  ← { x, y, zoom }
- *   Y.Map("resources") ← workflow-level `alias -> resource_type_name`. Matches
- *                        the Rust `WorkflowGraph.resources` BTreeMap; the
- *                        launcher binds each alias to a concrete resource at
- *                        instance-creation time. Empty Y.Map for templates
- *                        that don't declare any resources — older docs that
- *                        predate this field load unchanged.
+ *   Y.Map("meta")     ← { name, description, author_id }
+ *   Y.Map("nodes")    ← keyed by nodeId → Y.Map { type, label, description, config (Y.Map), position, files (Y.Map → Y.Text), parentId?, width?, height? }
+ *   Y.Array("edges")  ← [{ id, source, target, sourceHandle?, label?, type }]
+ *   Y.Map("viewport") ← { x, y, zoom }
  */
 export class YjsGraphBinding {
 	private doc: Y.Doc;
@@ -34,12 +28,10 @@ export class YjsGraphBinding {
 	private yEdges: Y.Array<Record<string, unknown>>;
 	private yMeta: Y.Map<unknown>;
 	private yViewport: Y.Map<number>;
-	private yResources: Y.Map<string>;
 
 	private nodesObserver: () => void;
 	private edgesObserver: () => void;
 	private viewportObserver: () => void;
-	private resourcesObserver: () => void;
 	private deepObservers: Map<string, () => void> = new Map();
 
 	graph: WorkflowGraph = $state({ nodes: [], edges: [] });
@@ -50,17 +42,14 @@ export class YjsGraphBinding {
 		this.yEdges = doc.getArray('edges') as Y.Array<Record<string, unknown>>;
 		this.yMeta = doc.getMap('meta');
 		this.yViewport = doc.getMap('viewport') as Y.Map<number>;
-		this.yResources = doc.getMap('resources') as Y.Map<string>;
 
 		this.nodesObserver = () => this.rematerialize();
 		this.edgesObserver = () => this.rematerialize();
 		this.viewportObserver = () => this.rematerialize();
-		this.resourcesObserver = () => this.rematerialize();
 
 		this.yNodes.observe(this.nodesObserver);
 		this.yEdges.observe(this.edgesObserver);
 		this.yViewport.observe(this.viewportObserver);
-		this.yResources.observe(this.resourcesObserver);
 
 		// Deep-observe each existing node map for sub-key changes
 		this.yNodes.forEach((_value, key) => {
@@ -146,24 +135,7 @@ export class YjsGraphBinding {
 		const viewport =
 			vx != null && vy != null && vz != null ? { x: vx, y: vy, zoom: vz } : undefined;
 
-		// Workflow-level `resources: { alias: type }` — Rust's BTreeMap
-		// is alphabetized, so mirror that here too. Stable order avoids
-		// noisy reactive churn in pickers when a sibling alias is renamed.
-		const resources: Record<string, string> = {};
-		const aliases = [...this.yResources.keys()].sort();
-		for (const alias of aliases) {
-			const t = this.yResources.get(alias);
-			if (typeof t === 'string' && t.length > 0) {
-				resources[alias] = t;
-			}
-		}
-
-		this.graph = {
-			nodes,
-			edges,
-			viewport,
-			...(aliases.length > 0 ? { resources } : {})
-		};
+		this.graph = { nodes, edges, viewport };
 	}
 
 	private materializeNodeData(yNode: Y.Map<unknown>, type: WorkflowNodeType): WorkflowNodeData {
@@ -671,38 +643,6 @@ export class YjsGraphBinding {
 		});
 	}
 
-	// --- Resources (workflow-level alias → type declarations) ---
-
-	/**
-	 * Declare or rename a typed Resource alias. `type` must match a
-	 * `ResourceTypeInfo.name` from `/api/resources/types` (validated server-
-	 * side at publish; the editor surfaces a picker that already filters
-	 * to that list, so wrong values are hard to author by accident).
-	 *
-	 * Re-setting an alias with a new type behaves as a rename of the type
-	 * binding — downstream `<alias>.<field>` accesses become invalid if the
-	 * new type doesn't expose the old field, which `compile_to_air` catches
-	 * at publish time.
-	 */
-	setResource(alias: string, type: string): void {
-		const trimmedAlias = alias.trim();
-		const trimmedType = type.trim();
-		if (!trimmedAlias || !trimmedType) return;
-		this.doc.transact(() => {
-			this.yResources.set(trimmedAlias, trimmedType);
-		});
-	}
-
-	/** Remove an alias from the workflow's `resources` block. Any
-	 *  `<alias>.<field>` references in step source become unresolved at
-	 *  next compile — the editor should warn before calling this, but the
-	 *  binding itself is unconditional. */
-	removeResource(alias: string): void {
-		this.doc.transact(() => {
-			this.yResources.delete(alias);
-		});
-	}
-
 	// --- Helpers ---
 
 	private writeDataToConfig(config: Y.Map<unknown>, data: WorkflowNodeData): void {
@@ -840,7 +780,6 @@ export class YjsGraphBinding {
 		this.yNodes.unobserve(this.nodesObserver);
 		this.yEdges.unobserve(this.edgesObserver);
 		this.yViewport.unobserve(this.viewportObserver);
-		this.yResources.unobserve(this.resourcesObserver);
 
 		// Clean up per-node deep observers
 		for (const cleanup of this.deepObservers.values()) {

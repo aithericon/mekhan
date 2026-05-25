@@ -25,10 +25,11 @@
 	import {
 		fetchNodeScopes,
 		loadResourceTypes,
+		loadWorkspaceResources,
 		buildResourceScope,
 		type ScopeEntry
 	} from '$lib/editor/guard-scope';
-	import type { ResourceTypeInfo } from '$lib/api/resources';
+	import type { ResourceTypeInfo, ResourceSummary } from '$lib/api/resources';
 	import { outputPortsFor } from '$lib/editor/derived-ports';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -151,26 +152,27 @@
 		binding && nodeId ? binding.graph.edges.filter((e) => e.target === nodeId).length : 0
 	);
 
-	// Workflow-level resource refs for the RefPicker's Resources tab. The
-	// type registry is fetched once per session (module-cached); the scope
-	// itself is derived live so renaming an alias or adding one reflects
-	// without an extra round-trip. Empty until the registry resolves —
-	// pickers degrade to the existing single-pane mode in the meantime.
+	// Workspace resources for the RefPicker's Resources tab. Direct-mode
+	// resources are workspace-scoped (no per-workflow alias layer) so the
+	// list is the same for every node and every workflow — one
+	// module-cached fetch covers the whole session. The type registry is
+	// fetched the same way; both run in parallel on mount, the picker
+	// degrades to a single-pane mode while either is pending.
 	let resourceTypes = $state<ResourceTypeInfo[]>([]);
+	let workspaceResources = $state<ResourceSummary[]>([]);
 	$effect(() => {
 		void loadResourceTypes()
 			.then((types) => {
 				resourceTypes = types;
 			})
-			.catch(() => {
-				// Best-effort — the picker just doesn't surface a Resources
-				// tab if the registry is unreachable. Network errors here
-				// are surfaced by the dedicated /resources page.
-			});
+			.catch(() => {});
+		void loadWorkspaceResources()
+			.then((items) => {
+				workspaceResources = items;
+			})
+			.catch(() => {});
 	});
-	const resourceScope = $derived(
-		buildResourceScope(binding?.graph.resources, resourceTypes)
-	);
+	const resourceScope = $derived(buildResourceScope(workspaceResources, resourceTypes));
 </script>
 
 <div
