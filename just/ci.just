@@ -221,6 +221,10 @@ package registry_image commit_sha ref_slug:
 
     cp "$target_dir/{{target_triple}}/release/mekhan-service" "$ctx/mekhan-service"
     cp -r app/build "$ctx/frontend/build"
+    # Built-in demo workflows. Seeded on service startup when
+    # MEKHAN__DEMOS__SEED=true (set in deploy/dev/mekhan.nomad.hcl.tpl).
+    # See deploy/docker/Dockerfile.service.prebuilt for the COPY.
+    cp -r demos "$ctx/demos"
 
     echo "▶ docker buildx build → {{registry_image}}/mekhan-service:$sha_tag"
     docker buildx build \

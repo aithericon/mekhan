@@ -144,6 +144,12 @@ EOH
         # post_logout_redirect_uris we registered (see zitadel.tf), and
         # Zitadel only allows absolute URLs — so we override the default `/`.
         MEKHAN__AUTH__POST_LOGIN_REDIRECT = "${auth_post_login_redirect}"
+        # Seed the built-in demo templates baked into the image at /app/demos
+        # (Dockerfile.service.prebuilt COPYs the demos/ folder + ENV sets
+        # MEKHAN__DEMOS__DIR=/app/demos). Seeder runs once on startup before
+        # the HTTP listener accepts requests; idempotent by templateId, so
+        # leaving this true across redeploys is safe.
+        MEKHAN__DEMOS__SEED        = "true"
         RUST_LOG                   = "${rust_log}"
       }
 
