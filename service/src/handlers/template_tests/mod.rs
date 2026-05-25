@@ -473,8 +473,14 @@ pub async fn promote_instance_to_test(
 }
 
 /// Pull the original Start-block tokens out of the causality event stream.
-/// For each Start node in the graph, look for the first `TokenCreated` on
-/// its `p_<id>_ready` place — that's the seed `parameterize_air` deposited.
+/// For each Start node in the graph, look for the first token produced on
+/// its `p_<id>_ready` place — that's the seed `parameterize_air` baked into
+/// the AIR's `initial_tokens`, surfaced into the event stream as a
+/// `produced` event when the engine boots the net.
+///
+/// Note: ingest writes `place_id` for engine events (place_name is reserved
+/// for bridge-typed events), and the engine emits a `produced` role — there
+/// is no `created` role.
 async fn extract_start_tokens(
     db: &PgPool,
     net_id: &str,
@@ -485,15 +491,15 @@ async fn extract_start_tokens(
         if !matches!(node.data, WorkflowNodeData::Start { .. }) {
             continue;
         }
-        let place = format!("p_{}_ready", node.id);
+        let place_id = format!("p_{}_ready", node.id);
         let row: Option<(Option<Value>,)> = sqlx::query_as(
             "SELECT cet.token_data FROM causality_event_tokens cet \
              JOIN causality_events ce ON ce.net_id = cet.net_id AND ce.event_seq = cet.event_seq \
-             WHERE cet.net_id = $1 AND cet.place_name = $2 AND cet.role = 'created' \
+             WHERE cet.net_id = $1 AND cet.place_id = $2 AND cet.role = 'produced' \
              ORDER BY ce.event_seq ASC LIMIT 1",
         )
         .bind(net_id)
-        .bind(&place)
+        .bind(&place_id)
         .fetch_optional(db)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
@@ -538,7 +544,7 @@ fn strip_system_fields(value: Value) -> Value {
 }
 
 /// Reconstruct `human_answers` keyed by node slug. For each HumanTask node,
-/// look at tokens deposited on its `sig_<id>` place — those are the engine's
+/// look at tokens produced on its `sig_<id>` place — those are the engine's
 /// signal-injected completions and carry the form data under `data`.
 async fn extract_human_answers(
     db: &PgPool,
@@ -550,15 +556,15 @@ async fn extract_human_answers(
         if !matches!(node.data, WorkflowNodeData::HumanTask { .. }) {
             continue;
         }
-        let place = format!("sig_{}", node.id);
+        let place_id = format!("sig_{}", node.id);
         let row: Option<(Option<Value>,)> = sqlx::query_as(
             "SELECT cet.token_data FROM causality_event_tokens cet \
              JOIN causality_events ce ON ce.net_id = cet.net_id AND ce.event_seq = cet.event_seq \
-             WHERE cet.net_id = $1 AND cet.place_name = $2 AND cet.role = 'created' \
+             WHERE cet.net_id = $1 AND cet.place_id = $2 AND cet.role = 'produced' \
              ORDER BY ce.event_seq ASC LIMIT 1",
         )
         .bind(net_id)
-        .bind(&place)
+        .bind(&place_id)
         .fetch_optional(db)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
