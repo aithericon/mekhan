@@ -42,6 +42,7 @@ use uuid::Uuid;
 
 use aithericon_resources::{registry::lookup, ResourcePin};
 
+use crate::compiler::resource_refs::KnownResources;
 use crate::models::resource::{ResourceRow, ResourceVersionRow};
 
 /// Per-call audit attribution. The resolver writes one `resource_audit` row
@@ -333,6 +334,47 @@ impl ResourceResolver {
         Ok(subtree)
     }
 
+    /// Publish-time variant of [`resolve`]. Takes the compiler's
+    /// [`KnownResources`] map directly (keyed by workspace resource name)
+    /// and projects it into the `HashMap<String, ResourcePin>` shape the
+    /// inner resolver expects. Returns the JSON envelope ready for splicing
+    /// into the AIR — same shape as `resolve` (`{ name: { ...inline...,
+    /// ...secret_refs... } }`).
+    ///
+    /// One audit row is written per known resource with action
+    /// [`AuditAction::Resolve`] and `site = "publish"`.
+    pub async fn resolve_known(
+        &self,
+        workspace_id: Uuid,
+        principal_id: Uuid,
+        known: &KnownResources,
+        instance_id: Option<Uuid>,
+    ) -> Result<JsonValue, ResolverError> {
+        let mut bindings: HashMap<String, ResourcePin> = HashMap::with_capacity(known.len());
+        for (name, info) in known {
+            bindings.insert(
+                name.clone(),
+                ResourcePin {
+                    resource_id: info.id,
+                    version: info.latest_version,
+                },
+            );
+        }
+        self.resolve(
+            workspace_id,
+            principal_id,
+            &bindings,
+            AuditContext {
+                instance_id,
+                step_id: None,
+                site: "publish".to_string(),
+                principal_id,
+                action: AuditAction::Resolve,
+            },
+        )
+        .await
+    }
+
     /// Write one audit row per resolved alias inside a single transaction.
     /// All-or-nothing: a midway failure rolls back so the audit table
     /// never partially reflects an aborted resolve.
@@ -366,3 +408,185 @@ impl ResourceResolver {
         Ok(())
     }
 }
+
+/// Splice `let __resources = #{ ... };` at the top of every prepare
+/// transition whose Rhai logic references any of the workspace resource
+/// names. One declaration per transition with **all** referenced names
+/// inside it — never a duplicate.
+///
+/// Called at publish time (not launch) so the AIR persisted in
+/// `workflow_template_versions.air_json` already carries the spliced
+/// envelope. Idempotent against a repeat call — a `let __resources`
+/// declaration already present in `logic.source` short-circuits the splice.
+pub fn splice_resources_into_air(
+    mut air: JsonValue,
+    envelope: &JsonValue,
+    names: &[&str],
+) -> JsonValue {
+    let rhai_decl = build_resources_decl(envelope, names);
+    if rhai_decl.is_empty() {
+        return air;
+    }
+
+    let Some(transitions) = air.get_mut("transitions").and_then(|t| t.as_array_mut()) else {
+        return air;
+    };
+
+    for t in transitions {
+        let Some(t_obj) = t.as_object_mut() else {
+            continue;
+        };
+
+        // Heuristic: target the prepare transition by id suffix. The two
+        // shapes in use today are `<node_id>/prepare` and `t_<node_id>_prepare`;
+        // either matches.
+        let is_prepare = t_obj
+            .get("id")
+            .and_then(JsonValue::as_str)
+            .map(|id| id.ends_with("/prepare") || id.ends_with("_prepare"))
+            .unwrap_or(false);
+        if !is_prepare {
+            continue;
+        }
+
+        let Some(logic) = t_obj.get_mut("logic") else {
+            continue;
+        };
+        let Some(logic_obj) = logic.as_object_mut() else {
+            continue;
+        };
+        let Some(source) = logic_obj.get("source").and_then(JsonValue::as_str) else {
+            continue;
+        };
+        let source = source.to_owned();
+
+        // Only splice into transitions whose logic actually references a
+        // known name. Avoids polluting unrelated prepare transitions.
+        let references_any = names.iter().any(|n| {
+            source.contains(&format!("__resources[\"{n}\"]"))
+                || source.contains(&format!("__resources['{n}']"))
+        });
+        if !references_any {
+            continue;
+        }
+
+        // Idempotent guard.
+        if source.contains("let __resources") {
+            continue;
+        }
+
+        let new_source = format!("{rhai_decl}\n{source}", source = source);
+        logic_obj.insert("source".to_string(), JsonValue::String(new_source));
+    }
+
+    air
+}
+
+/// Build `let __resources = #{ "name": #{ ... }, ... };` from the resolver's
+/// JSON envelope. Public fields are emitted as their literal JSON form;
+/// secret-template strings remain strings (the existing `extract_secret_keys`
+/// regex picks them up at executor stage time).
+fn build_resources_decl(envelope: &JsonValue, names: &[&str]) -> String {
+    let JsonValue::Object(top) = envelope else {
+        return String::new();
+    };
+    let mut entries: Vec<String> = Vec::with_capacity(names.len());
+    for name in names {
+        let Some(subtree) = top.get(*name) else {
+            continue;
+        };
+        let Some(subtree_obj) = subtree.as_object() else {
+            continue;
+        };
+        let mut field_entries: Vec<String> = Vec::with_capacity(subtree_obj.len());
+        for (k, v) in subtree_obj {
+            let v_lit = serde_json::to_string(v).unwrap_or_else(|_| "()".to_string());
+            field_entries.push(format!("\"{}\": {}", escape_rhai_key(k), v_lit));
+        }
+        entries.push(format!(
+            "\"{name}\": #{{ {body} }}",
+            name = escape_rhai_key(name),
+            body = field_entries.join(", "),
+        ));
+    }
+    if entries.is_empty() {
+        return String::new();
+    }
+    format!("let __resources = #{{ {} }};", entries.join(", "))
+}
+
+fn escape_rhai_key(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+#[cfg(test)]
+mod splice_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn build_resources_decl_basic() {
+        let env = json!({
+            "local_pg": {
+                "host": "h",
+                "port": 5432,
+                "password": "{{secret:resources/aaa/v1#password}}"
+            }
+        });
+        let decl = build_resources_decl(&env, &["local_pg"]);
+        assert!(decl.starts_with("let __resources = #{ "));
+        assert!(decl.contains("\"local_pg\": #{"));
+        assert!(decl.contains("\"host\": \"h\""));
+        assert!(decl.contains("\"port\": 5432"));
+        assert!(decl.contains("\"password\": \"{{secret:resources/aaa/v1#password}}\""));
+        assert!(decl.ends_with(" };"));
+    }
+
+    #[test]
+    fn build_resources_decl_empty_envelope_is_empty() {
+        let env = json!({});
+        assert_eq!(build_resources_decl(&env, &["local_pg"]), "");
+    }
+
+    #[test]
+    fn splice_skips_non_prepare() {
+        let air = json!({
+            "transitions": [
+                {
+                    "id": "t_x_consume",
+                    "logic": { "type": "Rhai", "source": "__resources[\"local_pg\"]" }
+                }
+            ]
+        });
+        let env = json!({ "local_pg": { "host": "h" } });
+        let out = splice_resources_into_air(air, &env, &["local_pg"]);
+        let src = out["transitions"][0]["logic"]["source"].as_str().unwrap();
+        assert!(!src.contains("let __resources"));
+    }
+
+    #[test]
+    fn splice_inserts_once_per_prepare() {
+        let air = json!({
+            "transitions": [
+                {
+                    "id": "t_step_prepare",
+                    "logic": {
+                        "type": "Rhai",
+                        "source": "job_inputs.push(#{ \"name\": \"local_pg.json\", \"source\": #{ \"type\": \"inline\", \"value\": __resources[\"local_pg\"] } });"
+                    }
+                }
+            ]
+        });
+        let env = json!({ "local_pg": { "host": "h", "port": 5432 } });
+        let out = splice_resources_into_air(air, &env, &["local_pg"]);
+        let src = out["transitions"][0]["logic"]["source"].as_str().unwrap();
+        assert!(src.contains("let __resources = #{"));
+        assert!(src.contains("\"host\": \"h\""));
+        // Idempotent — running again doesn't double-splice.
+        let env2 = json!({ "local_pg": { "host": "h", "port": 5432 } });
+        let out2 = splice_resources_into_air(out, &env2, &["local_pg"]);
+        let src2 = out2["transitions"][0]["logic"]["source"].as_str().unwrap();
+        assert_eq!(src2.matches("let __resources").count(), 1);
+    }
+}
+

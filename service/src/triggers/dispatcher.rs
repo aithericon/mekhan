@@ -747,8 +747,6 @@ impl TriggerDispatcher {
                 air_json: &air_json,
                 graph,
                 start_tokens: &start_tokens,
-                resource_bindings: std::collections::HashMap::new(),
-                workspace_id: None,
             })
             .await
             .map_err(|e| TriggerError::InstanceFailed(e.to_string()));

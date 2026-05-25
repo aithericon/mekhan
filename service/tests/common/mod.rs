@@ -147,6 +147,9 @@ pub async fn test_app_with_authenticator(
         triggers,
         result_waiters: mekhan_service::triggers::ResultWaiters::new(),
         resource_store: std::sync::Arc::new(aithericon_resources::InMemoryResourceStore::new()),
+        resource_resolver: std::sync::Arc::new(
+            mekhan_service::petri::resource_resolver::ResourceResolver::new(db.clone()),
+        ),
     };
 
     let router = build_router(state);
@@ -193,6 +196,9 @@ pub async fn test_app_with_introspection(
         triggers,
         result_waiters: mekhan_service::triggers::ResultWaiters::new(),
         resource_store: std::sync::Arc::new(aithericon_resources::InMemoryResourceStore::new()),
+        resource_resolver: std::sync::Arc::new(
+            mekhan_service::petri::resource_resolver::ResourceResolver::new(db.clone()),
+        ),
     };
 
     let router = build_router(state);
@@ -237,6 +243,9 @@ pub async fn test_app_with_mgmt(mgmt: Arc<ZitadelMgmt>) -> (Router, PgPool) {
         triggers,
         result_waiters: mekhan_service::triggers::ResultWaiters::new(),
         resource_store: std::sync::Arc::new(aithericon_resources::InMemoryResourceStore::new()),
+        resource_resolver: std::sync::Arc::new(
+            mekhan_service::petri::resource_resolver::ResourceResolver::new(db.clone()),
+        ),
     };
 
     let router = build_router(state);
@@ -283,6 +292,9 @@ pub async fn test_app() -> (Router, PgPool) {
         triggers,
         result_waiters: mekhan_service::triggers::ResultWaiters::new(),
         resource_store: std::sync::Arc::new(aithericon_resources::InMemoryResourceStore::new()),
+        resource_resolver: std::sync::Arc::new(
+            mekhan_service::petri::resource_resolver::ResourceResolver::new(db.clone()),
+        ),
     };
 
     let router = build_router(state);
@@ -328,6 +340,9 @@ pub async fn test_app_with_nats(nats_url: &str) -> (Router, PgPool) {
         triggers,
         result_waiters: mekhan_service::triggers::ResultWaiters::new(),
         resource_store: std::sync::Arc::new(aithericon_resources::InMemoryResourceStore::new()),
+        resource_resolver: std::sync::Arc::new(
+            mekhan_service::petri::resource_resolver::ResourceResolver::new(db.clone()),
+        ),
     };
 
     let router = build_router(state);
@@ -375,6 +390,9 @@ pub async fn test_app_with_petri_url(nats_url: &str, petri_url: &str) -> (Router
         triggers,
         result_waiters: mekhan_service::triggers::ResultWaiters::new(),
         resource_store: std::sync::Arc::new(aithericon_resources::InMemoryResourceStore::new()),
+        resource_resolver: std::sync::Arc::new(
+            mekhan_service::petri::resource_resolver::ResourceResolver::new(db.clone()),
+        ),
     };
 
     let router = build_router(state);
@@ -436,6 +454,9 @@ pub async fn test_app_waiters(
         triggers,
         result_waiters: result_waiters.clone(),
         resource_store: std::sync::Arc::new(aithericon_resources::InMemoryResourceStore::new()),
+        resource_resolver: std::sync::Arc::new(
+            mekhan_service::petri::resource_resolver::ResourceResolver::new(db.clone()),
+        ),
     };
 
     let router = build_router(state);
@@ -493,6 +514,9 @@ pub async fn test_app_with_petri_url_and_triggers(
         triggers: triggers.clone(),
         result_waiters: mekhan_service::triggers::ResultWaiters::new(),
         resource_store: std::sync::Arc::new(aithericon_resources::InMemoryResourceStore::new()),
+        resource_resolver: std::sync::Arc::new(
+            mekhan_service::petri::resource_resolver::ResourceResolver::new(db.clone()),
+        ),
     };
 
     let router = build_router(state);

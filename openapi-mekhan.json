@@ -4531,16 +4531,6 @@
           "metadata": {
             "description": "Free-form audit metadata stored on the instance row. Unlike pre-typed-ports\nbehavior, this is NOT merged into initial Petri tokens — token shape is\ndriven solely by `start_tokens`."
           },
-          "resource_bindings": {
-            "type": "object",
-            "description": "Phase B.7 — deploy-time alias binding. For every `alias` declared in\nthe template's `WorkflowGraph.resources`, the caller supplies a\nconcrete resource path (`f/team/local_pg`); the launcher resolves\neach path against the `resources` table and pins it to the resource's\n`latest_version`. Aliases declared but unbound here cause a 400.\nEmpty map is fine for templates that don't declare any resources.",
-            "additionalProperties": {
-              "type": "string"
-            },
-            "propertyNames": {
-              "type": "string"
-            }
-          },
           "start_tokens": {
             "type": "array",
             "items": {
@@ -8553,16 +8543,6 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/WorkflowNode"
-            }
-          },
-          "resources": {
-            "type": "object",
-            "description": "Typed Resource declarations — `alias -> resource_type_name`. The author\nwrites `db: postgres` to claim a `db` alias that downstream\n`AutomatedStep` Python sources can read as `db.host`, `db.password`,\netc. Type names must match an entry in\n`aithericon_resources::registry`; alias names cannot collide with a\nstep slug or a reserved control-token field. Bound to concrete\nresource paths at instance-launch time via\n`CreateInstanceRequest.resource_bindings`.\n\n`BTreeMap` so wire / serialization order is deterministic — the\ncompiler emits splice snippets in this order, and stable order keeps\nthe AIR diff-friendly.",
-            "additionalProperties": {
-              "type": "string"
-            },
-            "propertyNames": {
-              "type": "string"
             }
           },
           "viewport": {

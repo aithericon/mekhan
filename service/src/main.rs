@@ -219,6 +219,13 @@ async fn main() -> anyhow::Result<()> {
             }
         };
 
+    // Publish-time resource resolver. Stateless on construction — every call
+    // joins workspace + version + ACL inline. Shared as `Arc` so the publish
+    // path can clone it cheaply.
+    let resource_resolver = Arc::new(
+        mekhan_service::petri::resource_resolver::ResourceResolver::new(db.clone()),
+    );
+
     let state = AppState {
         db,
         petri,
@@ -239,6 +246,7 @@ async fn main() -> anyhow::Result<()> {
         triggers: trigger_dispatcher,
         result_waiters,
         resource_store,
+        resource_resolver,
     };
 
     // Seed built-in demos before the listener accepts requests. Idempotent

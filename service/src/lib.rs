@@ -94,6 +94,12 @@ pub struct AppState {
     /// engine's wrap path still reads through the existing `SecretStore`
     /// path — this trait is write-only by design.
     pub resource_store: Arc<dyn aithericon_resources::ResourceSecretStore>,
+    /// Publish-time resource resolver. Reads workspace resources +
+    /// per-version public config, runs ACL + audit, and returns the JSON
+    /// envelope the publish handler splices into the AIR before
+    /// persistence. The launcher never touches this — instances run against
+    /// already-spliced AIR.
+    pub resource_resolver: Arc<crate::petri::resource_resolver::ResourceResolver>,
 }
 
 /// Build the `OpenApiRouter` containing every `#[utoipa::path]`-annotated

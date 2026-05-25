@@ -2063,53 +2063,56 @@ pub(crate) fn automated_step_borrow_plan(
     Ok(out)
 }
 
-/// One resolved Python `<alias>.<attr>` access where `<alias>` is a
-/// workflow-level `resources:` entry (Phase B.8). Direct sibling of
-/// [`AutomatedStepDataBorrow`] — same scanner input
-/// ([`extract_python_refs`]), but the head doesn't resolve to a producer
-/// slug; it resolves to a resource type in
-/// `aithericon_resources::registry`.
+/// One resolved Python `<name>.<attr>` access where `<name>` is a known
+/// workspace resource. Direct sibling of [`AutomatedStepDataBorrow`] — same
+/// scanner input ([`extract_python_refs`]), but the head doesn't resolve to
+/// a producer slug; it resolves to a workspace resource the caller
+/// (publish handler) discovered before invoking the compiler.
 ///
 /// Unlike `AutomatedStepDataBorrow`, there is **no upstream producer**:
-/// the resource envelope is materialized by the launcher (B.7), not by
-/// another step in the workflow. The apply step for this borrow emits a
-/// `job_inputs.push` snippet that reads from the launcher-spliced
-/// `__resources` Rhai map; it does NOT call `wire_read_arc`.
+/// the resource envelope is materialized at publish time by the resolver
+/// and spliced into the AIR. The apply step for this borrow emits a
+/// `job_inputs.push` snippet that reads from the spliced `__resources` Rhai
+/// map; it does NOT call `wire_read_arc`.
 ///
-/// One borrow per `(consumer, alias)` pair regardless of how many fields
-/// the Python source reads off the alias — the runner stages the whole
-/// envelope as `<alias>.json` and the Python `AccessibleDict` exposes the
+/// One borrow per `(consumer, name)` pair regardless of how many fields
+/// the Python source reads off the name — the runner stages the whole
+/// envelope as `<name>.json` and the Python `AccessibleDict` exposes the
 /// fields client-side.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AutomatedStepResourceBorrow {
     /// Python AutomatedStep that authors the borrow.
     pub consumer_node_id: String,
-    /// Workflow-declared alias (`db` in `db.host`). Also the staged
-    /// filename stem (`db.json`) and the Python global.
-    pub alias: String,
+    /// Workspace-known resource name (`local_pg` in `local_pg.host`). Also
+    /// the staged filename stem (`local_pg.json`) and the Python global.
+    pub name: String,
+    /// Pinned resource_id — rename-safe across publishes.
+    pub resource_id: uuid::Uuid,
     /// Resource type name (`postgres`, `openai`, …). Carried through to
-    /// downstream consumers (`.pyi` generation, telemetry) so they don't
-    /// have to re-lookup against `graph.resources`.
+    /// downstream consumers (`.pyi` generation, telemetry).
     pub type_name: String,
+    /// Latest version at publish time.
+    pub latest_version: i32,
 }
 
-/// Scan every Python `AutomatedStep`'s entrypoint for `<alias>.<attr>`
-/// accesses whose `<alias>` is a workflow-level resource alias. Returns
-/// one [`AutomatedStepResourceBorrow`] per `(consumer, alias)` pair.
+/// Scan every Python `AutomatedStep`'s entrypoint for `<name>.<attr>`
+/// accesses whose `<name>` matches an entry in `known`. Returns one
+/// [`AutomatedStepResourceBorrow`] per `(consumer, name)` pair.
 ///
-/// Same lexical scanner as [`automated_step_borrow_plan`]; the
-/// discrimination happens via [`crate::compiler::resource_refs::is_resource_alias`]
-/// rather than the slug index. A `<head>.<attr>` access where the head
-/// matches *both* a slug and an alias is impossible because
-/// [`validate_resource_refs`] rejects alias-slug collisions at compile
-/// time — see [`CompileError::ResourceAliasCollidesWithSlug`].
+/// Same lexical scanner as [`automated_step_borrow_plan`]; the discrimination
+/// happens via [`crate::compiler::resource_refs::is_resource_name`] rather
+/// than the slug index. A `<head>.<attr>` access where the head matches
+/// *both* a slug and a known resource is impossible because
+/// [`validate_resource_refs`] rejects name/slug collisions at compile time
+/// — see [`CompileError::ResourceAliasCollidesWithSlug`].
 pub(crate) fn automated_step_resource_borrow_plan(
     graph: &WorkflowGraph,
     inline_sources: &std::collections::HashMap<String, std::collections::HashMap<String, String>>,
+    known: &crate::compiler::resource_refs::KnownResources,
 ) -> Result<Vec<AutomatedStepResourceBorrow>, CompileError> {
     use crate::models::template::ExecutionBackendType;
 
-    if graph.resources.is_empty() {
+    if known.is_empty() {
         return Ok(Vec::new());
     }
 
@@ -2135,7 +2138,7 @@ pub(crate) fn automated_step_resource_borrow_plan(
         };
 
         for r in crate::compiler::python_refs::extract_python_refs(source) {
-            let Some(type_name) = graph.resources.get(&r.head) else {
+            let Some(info) = known.get(&r.head) else {
                 continue;
             };
             let key = (node.id.clone(), r.head.clone());
@@ -2144,8 +2147,10 @@ pub(crate) fn automated_step_resource_borrow_plan(
             }
             out.push(AutomatedStepResourceBorrow {
                 consumer_node_id: node.id.clone(),
-                alias: r.head,
-                type_name: type_name.clone(),
+                name: r.head,
+                resource_id: info.id,
+                type_name: info.type_name.clone(),
+                latest_version: info.latest_version,
             });
         }
     }

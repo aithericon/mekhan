@@ -5,6 +5,7 @@
 use crate::compiler::graph::{topo_order, WorkflowDiGraph};
 use crate::compiler::interface::InterfaceRegistry;
 use crate::compiler::lower::{expand_node, NodeFiles, NodePorts, PostProcess};
+use crate::compiler::resource_refs::KnownResources;
 use crate::compiler::validate::{
     validate, validate_edges_typed, validate_guards, validate_triggers,
 };
@@ -209,6 +210,7 @@ pub fn compile_to_air(
     files: &NodeFiles,
 ) -> Result<Value, CompileError> {
     let inline = derive_inline_sources(files);
+    let known = KnownResources::new();
     let scenario = compile_to_scenario_with_inline_sources(
         graph,
         name,
@@ -216,6 +218,7 @@ pub fn compile_to_air(
         files,
         &inline,
         &SubWorkflowAir::new(),
+        &known,
     )?;
     serde_json::to_value(&scenario)
         .map_err(|e| CompileError::Compilation(format!("failed to serialize scenario: {e}")))
@@ -231,6 +234,7 @@ pub fn compile_to_air_with_subworkflows(
     sub_air: &SubWorkflowAir,
 ) -> Result<Value, CompileError> {
     let inline = derive_inline_sources(files);
+    let known = KnownResources::new();
     let scenario = compile_to_scenario_with_inline_sources(
         graph,
         name,
@@ -238,6 +242,7 @@ pub fn compile_to_air_with_subworkflows(
         files,
         &inline,
         sub_air,
+        &known,
     )?;
     serde_json::to_value(&scenario)
         .map_err(|e| CompileError::Compilation(format!("failed to serialize scenario: {e}")))
@@ -257,6 +262,7 @@ pub fn compile_to_air_with_subworkflows_inline(
     inline_sources: &HashMap<String, HashMap<String, String>>,
     sub_air: &SubWorkflowAir,
 ) -> Result<Value, CompileError> {
+    let known = KnownResources::new();
     let scenario = compile_to_scenario_with_inline_sources(
         graph,
         name,
@@ -264,6 +270,7 @@ pub fn compile_to_air_with_subworkflows_inline(
         files,
         inline_sources,
         sub_air,
+        &known,
     )?;
     serde_json::to_value(&scenario)
         .map_err(|e| CompileError::Compilation(format!("failed to serialize scenario: {e}")))
@@ -281,6 +288,7 @@ pub fn compile_to_air_with_subworkflows_and_interfaces(
     files: &NodeFiles,
     inline_sources: &HashMap<String, HashMap<String, String>>,
     sub_air: &SubWorkflowAir,
+    known_resources: &KnownResources,
 ) -> Result<(Value, Value), CompileError> {
     let (scenario, interfaces) = compile_to_scenario_and_interfaces(
         graph,
@@ -289,6 +297,7 @@ pub fn compile_to_air_with_subworkflows_and_interfaces(
         files,
         inline_sources,
         sub_air,
+        known_resources,
     )?;
     let air = serde_json::to_value(&scenario)
         .map_err(|e| CompileError::Compilation(format!("failed to serialize scenario: {e}")))?;
@@ -310,7 +319,16 @@ pub fn compile_to_scenario(
     sub_air: &SubWorkflowAir,
 ) -> Result<ScenarioDefinition, CompileError> {
     let inline = derive_inline_sources(files);
-    compile_to_scenario_with_inline_sources(graph, name, description, files, &inline, sub_air)
+    let known = KnownResources::new();
+    compile_to_scenario_with_inline_sources(
+        graph,
+        name,
+        description,
+        files,
+        &inline,
+        sub_air,
+        &known,
+    )
 }
 
 /// Internal entry that decouples the executor-side `files` (which may
@@ -323,6 +341,7 @@ pub fn compile_to_scenario_with_inline_sources(
     files: &NodeFiles,
     inline_sources: &HashMap<String, HashMap<String, String>>,
     sub_air: &SubWorkflowAir,
+    known_resources: &KnownResources,
 ) -> Result<ScenarioDefinition, CompileError> {
     let (scenario, _interfaces) = compile_to_scenario_and_interfaces(
         graph,
@@ -331,6 +350,7 @@ pub fn compile_to_scenario_with_inline_sources(
         files,
         inline_sources,
         sub_air,
+        known_resources,
     )?;
     Ok(scenario)
 }
@@ -352,6 +372,7 @@ pub fn compile_to_scenario_and_interfaces(
     files: &NodeFiles,
     inline_sources: &HashMap<String, HashMap<String, String>>,
     sub_air: &SubWorkflowAir,
+    known_resources: &KnownResources,
 ) -> Result<(ScenarioDefinition, InterfaceRegistry), CompileError> {
     // 1. Build directed graph
     let wg = WorkflowDiGraph::build(graph)?;
@@ -375,11 +396,11 @@ pub fn compile_to_scenario_and_interfaces(
     //     reference real target-port fields and parse as Rhai.
     validate_triggers(graph)?;
 
-    // 2e. Resource ref validation (Phase B.6). Every `resources: { alias:
-    //     type }` entry must reference a registered ResourceType and the
-    //     alias name must be unique against step slugs and the reserved
+    // 2e. Resource ref validation. Every workspace-known resource handed in
+    //     by the caller must reference a registered ResourceType, and its
+    //     name must be unique against step slugs and the reserved
     //     control-token vocabulary.
-    crate::compiler::resource_refs::validate_resource_refs(graph)?;
+    crate::compiler::resource_refs::validate_resource_refs(known_resources, graph)?;
 
     // 3. Topological sort (on DAG — loop_back edges excluded)
     let sorted = topo_order(&wg)?;
@@ -532,7 +553,13 @@ pub fn compile_to_scenario_and_interfaces(
     //     Decision/Loop guard physically `&`-borrows the parked data place
     //     that owns the field it references. Runs post-merge: place ids
     //     final. Reads exclusively from `interfaces.data_port`.
-    apply_control_data_foundation(graph, &mut scenario, &interfaces, inline_sources)?;
+    apply_control_data_foundation(
+        graph,
+        &mut scenario,
+        &interfaces,
+        inline_sources,
+        known_resources,
+    )?;
 
     Ok((scenario, interfaces))
 }
@@ -735,6 +762,7 @@ fn apply_control_data_foundation(
     scenario: &mut aithericon_sdk::scenario::ScenarioDefinition,
     interfaces: &InterfaceRegistry,
     inline_sources: &HashMap<String, HashMap<String, String>>,
+    known_resources: &KnownResources,
 ) -> Result<(), CompileError> {
     use crate::compiler::token_shape::{
         analyze, ctrl_def_name, data_def_name, def_ref, dynamic_token_definition,
@@ -801,7 +829,8 @@ fn apply_control_data_foundation(
     //     scanners (Python AST, HumanTask string walker, JSON-config
     //     walker, Rhai AST guard walker) stay per-surface; the rewrite
     //     dispatch is unified inside `apply_borrows`.
-    let unified_borrows = crate::compiler::borrow::collect_borrows(graph, inline_sources)?;
+    let unified_borrows =
+        crate::compiler::borrow::collect_borrows(graph, inline_sources, known_resources)?;
 
     // (c2-pre) Validate declared output.fields on every Python AutomatedStep
     //      against (a) reserved runner globals (b) slugs this node actually
@@ -1185,7 +1214,7 @@ mod tests {
         let graph = WorkflowGraph {
             nodes: vec![start_node("s"), end_node("e")],
             edges: vec![edge("e1", "s", "e")],
-            viewport: None, instance_concurrency: Default::default(), resources: Default::default(),
+            viewport: None, instance_concurrency: Default::default(),
         };
 
         let result = compile_to_air(&graph, "test", "desc", &std::collections::HashMap::new());
@@ -1225,7 +1254,7 @@ mod tests {
             nodes: vec![start_node("s"), end_node("e")],
             edges: vec![edge("e1", "s", "e")],
             viewport: None,
-            instance_concurrency: Default::default(), resources: Default::default(),
+            instance_concurrency: Default::default(),
         };
         let files: NodeFiles = std::collections::HashMap::new();
         let inline: HashMap<String, HashMap<String, String>> = std::collections::HashMap::new();
@@ -1236,6 +1265,7 @@ mod tests {
             &files,
             &inline,
             &SubWorkflowAir::new(),
+            &crate::compiler::resource_refs::KnownResources::new(),
         )
         .unwrap();
 
@@ -1289,7 +1319,7 @@ mod tests {
         let graph = WorkflowGraph {
             nodes: vec![s, end_node("e")],
             edges: vec![edge("e1", "s", "e")],
-            viewport: None, instance_concurrency: Default::default(), resources: Default::default(),
+            viewport: None, instance_concurrency: Default::default(),
         };
 
         let air = compile_to_air(&graph, "test", "desc", &std::collections::HashMap::new())
@@ -1341,7 +1371,7 @@ mod tests {
         let graph = WorkflowGraph {
             nodes: vec![s, end_node("e")],
             edges: vec![edge("e1", "s", "e")],
-            viewport: None, instance_concurrency: Default::default(), resources: Default::default(),
+            viewport: None, instance_concurrency: Default::default(),
         };
 
         let air = compile_to_air(&graph, "test", "desc", &std::collections::HashMap::new())
@@ -1376,7 +1406,7 @@ mod tests {
         let graph = WorkflowGraph {
             nodes: vec![start_node("s"), end_node("e")],
             edges: vec![edge("e1", "s", "e")],
-            viewport: None, instance_concurrency: Default::default(), resources: Default::default(),
+            viewport: None, instance_concurrency: Default::default(),
         };
 
         let air = compile_to_air(&graph, "test", "desc", &std::collections::HashMap::new())
@@ -1399,7 +1429,7 @@ mod tests {
         let graph = WorkflowGraph {
             nodes: vec![start_node("s"), end_node("e")],
             edges: vec![edge_with_handle("e1", "s", "e", "in")],
-            viewport: None, instance_concurrency: Default::default(), resources: Default::default(),
+            viewport: None, instance_concurrency: Default::default(),
         };
         let result = compile_to_air(&graph, "test", "desc", &std::collections::HashMap::new());
         assert!(
@@ -1433,7 +1463,7 @@ mod tests {
                 end_node("e"),
             ],
             edges: vec![edge("e1", "s", "ht"), edge("e2", "ht", "e")],
-            viewport: None, instance_concurrency: Default::default(), resources: Default::default(),
+            viewport: None, instance_concurrency: Default::default(),
         };
 
         let result = compile_to_air(&graph, "test", "desc", &std::collections::HashMap::new());
@@ -1490,7 +1520,7 @@ mod tests {
                 edge_with_handle("econd1", "d", "e1", "cond1"),
                 edge_with_handle("edefault", "d", "e2", "default1"),
             ],
-            viewport: None, instance_concurrency: Default::default(), resources: Default::default(),
+            viewport: None, instance_concurrency: Default::default(),
         };
 
         let result = compile_to_air(&graph, "test", "desc", &std::collections::HashMap::new());
@@ -1570,7 +1600,7 @@ mod tests {
                 edge_with_handle("edefault", "d", "e2", "default1"),
             ],
             viewport: None,
-            instance_concurrency: Default::default(), resources: Default::default(),
+            instance_concurrency: Default::default(),
         };
         let files: NodeFiles = std::collections::HashMap::new();
         let inline: HashMap<String, HashMap<String, String>> = std::collections::HashMap::new();
@@ -1581,6 +1611,7 @@ mod tests {
             &files,
             &inline,
             &SubWorkflowAir::new(),
+            &crate::compiler::resource_refs::KnownResources::new(),
         )
         .expect("compile");
 
@@ -1771,7 +1802,7 @@ mod tests {
                 edge("e_m_done", "merge", "done"),
             ],
             viewport: None,
-            instance_concurrency: Default::default(), resources: Default::default(),
+            instance_concurrency: Default::default(),
         };
 
         let air = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
@@ -1870,7 +1901,7 @@ mod tests {
                 edge("e_j_e", "j", "e"),
             ],
             viewport: None,
-            instance_concurrency: Default::default(), resources: Default::default(),
+            instance_concurrency: Default::default(),
         };
 
         let air = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
@@ -1920,7 +1951,7 @@ mod tests {
                 end_node("e"),
             ],
             edges: vec![edge("e1", "s", "a"), edge("e2", "a", "e")],
-            viewport: None, instance_concurrency: Default::default(), resources: Default::default(),
+            viewport: None, instance_concurrency: Default::default(),
         };
         let air = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
             .expect("retry graph should compile");
@@ -2097,7 +2128,7 @@ mod tests {
                 edge("esucc", "a", "e1"),
                 edge_with_handle("eerr", "a", "e2", "error"),
             ],
-            viewport: None, instance_concurrency: Default::default(), resources: Default::default(),
+            viewport: None, instance_concurrency: Default::default(),
         };
         let air = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
             .expect("error-handle edge should wire");
@@ -2475,6 +2506,7 @@ mod tests {
             &files,
             &inline_sources,
             &crate::compiler::SubWorkflowAir::new(),
+            &crate::compiler::resource_refs::KnownResources::new(),
         )
         .expect("compile");
 
@@ -2509,7 +2541,7 @@ mod tests {
             ],
             edges: vec![edge("e0", "s", "a"), edge("e1", "a", "e")],
             viewport: None,
-            instance_concurrency: Default::default(), resources: Default::default(),
+            instance_concurrency: Default::default(),
         };
         let scenario = crate::compiler::compile_to_scenario(
             &graph,
@@ -2544,7 +2576,7 @@ mod tests {
                 end_node("e"),
             ],
             edges: vec![edge("e0", "s", "a"), edge("e1", "a", "e")],
-            viewport: None, instance_concurrency: Default::default(), resources: Default::default(),
+            viewport: None, instance_concurrency: Default::default(),
         };
         assert!(
             compile_to_air(&graph, "t", "d", &std::collections::HashMap::new()).is_ok(),
@@ -2616,7 +2648,7 @@ mod tests {
             ],
             edges: vec![edge("e1", "s", "ht"), edge("e2", "ht", "e")],
             viewport: None,
-            instance_concurrency: Default::default(), resources: Default::default(),
+            instance_concurrency: Default::default(),
         };
 
         let air = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
@@ -2682,7 +2714,7 @@ mod tests {
             ],
             edges: vec![edge("e1", "s", "ht"), edge("e2", "ht", "e")],
             viewport: None,
-            instance_concurrency: Default::default(), resources: Default::default(),
+            instance_concurrency: Default::default(),
         };
 
         let air = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
@@ -2729,7 +2761,7 @@ mod tests {
             ],
             edges: vec![edge("e1", "s", "ht"), edge("e2", "ht", "e")],
             viewport: None,
-            instance_concurrency: Default::default(), resources: Default::default(),
+            instance_concurrency: Default::default(),
         };
 
         let air = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
@@ -3268,7 +3300,7 @@ mod tests {
             ],
             edges: vec![edge("e0", "s", "sub"), edge("e1", "sub", "e")],
             viewport: None,
-            instance_concurrency: Default::default(), resources: Default::default(),
+            instance_concurrency: Default::default(),
         };
 
         // SubWorkflow lowering only needs an opaque AIR Value to embed in the
@@ -3598,7 +3630,7 @@ mod tests {
                 },
             ],
             viewport: None,
-            instance_concurrency: Default::default(), resources: Default::default(),
+            instance_concurrency: Default::default(),
         };
         let air = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
             .expect("compile");

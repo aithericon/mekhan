@@ -310,6 +310,9 @@ async fn causality_full_pipeline() {
         triggers,
         result_waiters: mekhan_service::triggers::ResultWaiters::new(),
         resource_store: Arc::new(aithericon_resources::InMemoryResourceStore::new()),
+        resource_resolver: Arc::new(
+            mekhan_service::petri::resource_resolver::ResourceResolver::new(db.clone()),
+        ),
     });
 
     // ── 2. Spawn Mekhan consumers ────────────────────────────────────────

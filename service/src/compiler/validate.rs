@@ -285,14 +285,14 @@ pub fn node_input_scopes(
     crate::compiler::token_shape::node_input_field_kinds(graph)
 }
 
-/// Phase B.6 / B.8 — the union of identifier "heads" that resolve at
-/// `<head>.<attr>` Python sites. Combines:
+/// The union of identifier "heads" that resolve at `<head>.<attr>` Python
+/// sites. Combines:
 ///
 /// 1. Explicit step slugs (`SlugIndex.all_slugs()`).
-/// 2. Workflow-level resource aliases (`WorkflowGraph.resources` keys).
+/// 2. Workspace-known resource names (`KnownResources` keys).
 ///
 /// The borrow planner uses this to discriminate a `head` between
-/// producer-slug (existing path) and resource-alias (B.8's new
+/// producer-slug (existing path) and workspace-resource (the
 /// `ResourceEnvelope` arm). Control-token fields (`_instance_id`, …) are
 /// **not** in this set — they are leaves on the control token itself, not
 /// dotted heads.
@@ -302,13 +302,16 @@ pub fn node_input_scopes(
 /// alternative ordering.
 pub fn merged_identifier_scope(
     graph: &WorkflowGraph,
+    known_resources: &crate::compiler::resource_refs::KnownResources,
 ) -> Result<std::collections::BTreeSet<String>, CompileError> {
     let mut scope: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     let slugs = crate::compiler::token_shape::slug_index(graph)?;
     for s in slugs.all_slugs() {
         scope.insert(s.to_string());
     }
-    scope.extend(crate::compiler::resource_refs::resource_alias_scope(graph));
+    scope.extend(crate::compiler::resource_refs::resource_name_scope(
+        known_resources,
+    ));
     Ok(scope)
 }
 

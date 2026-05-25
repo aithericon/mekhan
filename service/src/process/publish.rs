@@ -14,6 +14,7 @@ use std::collections::HashMap;
 
 use uuid::Uuid;
 
+use crate::compiler::resource_refs::{KnownResource, KnownResources};
 use crate::compiler::{
     compile_to_air_with_subworkflows_and_interfaces, generate_py_io_files, make_child_callable,
     node_files_storage_path, node_input_scopes, node_namespace_scopes, node_output_fields,
@@ -23,6 +24,7 @@ use crate::models::error::ApiError;
 use crate::models::template::{
     ExecutionBackendType, VersionPin, WorkflowGraph, WorkflowNodeData, WorkflowTemplate,
 };
+use crate::petri::resource_resolver::splice_resources_into_air;
 use crate::AppState;
 use aithericon_sdk::scenario::ScenarioDefinition;
 
@@ -77,29 +79,63 @@ impl<'a> PublishService<'a> {
         version: i32,
         publishing_family: Option<Uuid>,
         files: &mut HashMap<String, HashMap<String, String>>,
+        principal_id: Uuid,
     ) -> Result<CompiledArtifacts, ApiError> {
         synthesize_py_io_files(graph, files);
 
         let sub_air =
             resolve_subworkflow_air(self.state, publishing_family, graph).await?;
 
+        // Discover workspace resources this graph touches by source-scanning
+        // Python entrypoints for `<head>.<field>` accesses and looking the
+        // heads up in the workspace's resources list. The compiler uses this
+        // map (a) to validate name/slug collisions, (b) to discriminate
+        // resource refs from slug refs in the borrow planner, and (c) to
+        // pin each ref to `(resource_id, latest_version)` in the AIR.
+        let known_resources = discover_known_resources(self.state, graph, files).await?;
+
         // Per-job NATS payloads only carry storage paths; the executor
         // downloads the file at stage time. The compile-time borrow
         // planner gets the inline source map directly via the `_inline`
         // entry point so it can still detect `<slug>.<field>` accesses.
         let air_files = node_files_storage_path(template_id, version, files);
-        let (air_json, interface_json) = compile_to_air_with_subworkflows_and_interfaces(
+        let (mut air_json, interface_json) = compile_to_air_with_subworkflows_and_interfaces(
             graph,
             name,
             description,
             &air_files,
             files,
             &sub_air,
+            &known_resources,
         )
         .map_err(|e| {
             let view = e.to_view();
             ApiError::compile(format!("compilation failed: {e}"), vec![view])
         })?;
+
+        // Resolve every known resource against the workspace + ACL, write
+        // audit rows, and splice the envelope into the AIR. The launcher
+        // never touches resources — the AIR persisted here already carries
+        // the baked-in `__resources` declarations for every prepare
+        // transition that needs them.
+        if !known_resources.is_empty() {
+            let envelope = self
+                .state
+                .resource_resolver
+                .resolve_known(
+                    default_workspace(),
+                    principal_id,
+                    &known_resources,
+                    None,
+                )
+                .await
+                .map_err(|e| {
+                    ApiError::bad_request(format!("resource resolution failed at publish: {e}"))
+                })?;
+            let names: Vec<&str> = known_resources.keys().map(String::as_str).collect();
+            air_json = splice_resources_into_air(air_json, &envelope, &names);
+        }
+
         let graph_json = serde_json::to_value(graph)
             .map_err(|e| ApiError::internal(format!("serialize graph: {e}")))?;
 
@@ -156,6 +192,97 @@ impl<'a> PublishService<'a> {
     pub async fn register_triggers(&self, template: &WorkflowTemplate) -> usize {
         self.state.triggers.register_template(template, true).await
     }
+}
+
+/// Default workspace id until the workspaces table lands. Mirrors the same
+/// constant used by the resource CRUD handlers — when real workspaces land,
+/// publish picks the workspace from the caller's session and this constant
+/// goes away.
+fn default_workspace() -> Uuid {
+    Uuid::nil()
+}
+
+/// Build a [`KnownResources`] map by source-scanning every Python entrypoint
+/// for `<head>.<field>` references and intersecting the head identifiers with
+/// the workspace's live (non-soft-deleted) resources.
+///
+/// The map keys are workspace resource names (the `path` column on the
+/// `resources` row, which the Python source author types verbatim);
+/// the values carry the stable `resource_id` and the `latest_version` to
+/// pin at publish time.
+///
+/// A head identifier that doesn't match any workspace resource is silently
+/// dropped — that ref might be a slug (handled by the slug index in the
+/// borrow planner) or genuinely unknown (Python is forgiving on dotted
+/// accesses; the runtime will raise its own NameError). Discrimination
+/// happens later in the compiler against the slug set + control-token
+/// vocabulary.
+async fn discover_known_resources(
+    state: &AppState,
+    graph: &WorkflowGraph,
+    inline_sources: &HashMap<String, HashMap<String, String>>,
+) -> Result<KnownResources, ApiError> {
+    use crate::compiler::python_refs::extract_python_refs;
+    use std::collections::BTreeSet;
+
+    // Pass 1: collect every distinct `<head>` the graph's Python sources
+    // reference, scoped to Python AutomatedSteps only — the resource layer
+    // only models Python today.
+    let mut heads: BTreeSet<String> = BTreeSet::new();
+    for node in &graph.nodes {
+        let WorkflowNodeData::AutomatedStep { execution_spec, .. } = &node.data else {
+            continue;
+        };
+        if execution_spec.backend_type != ExecutionBackendType::Python {
+            continue;
+        }
+        let entrypoint = execution_spec
+            .entrypoint
+            .clone()
+            .unwrap_or_else(|| "main.py".to_string());
+        let Some(node_files) = inline_sources.get(&node.id) else {
+            continue;
+        };
+        let Some(source) = node_files.get(&entrypoint) else {
+            continue;
+        };
+        for r in extract_python_refs(source) {
+            heads.insert(r.head);
+        }
+    }
+
+    if heads.is_empty() {
+        return Ok(KnownResources::new());
+    }
+
+    // Pass 2: look every head up in the workspace's resources table. We
+    // query in one pass (head IN $1) to keep this O(1) round-trips
+    // regardless of how many heads the source touches. Soft-deleted
+    // resources are invisible (NULL filter on `deleted_at`).
+    let head_vec: Vec<String> = heads.into_iter().collect();
+    let workspace = default_workspace();
+    let rows: Vec<(Uuid, String, String, i32)> = sqlx::query_as(
+        "SELECT id, path, resource_type, latest_version FROM resources \
+         WHERE workspace_id = $1 AND path = ANY($2) AND deleted_at IS NULL",
+    )
+    .bind(workspace)
+    .bind(&head_vec)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| ApiError::internal(format!("workspace resource lookup: {e}")))?;
+
+    let mut known = KnownResources::new();
+    for (id, path, resource_type, latest_version) in rows {
+        known.insert(
+            path,
+            KnownResource {
+                id,
+                type_name: resource_type,
+                latest_version,
+            },
+        );
+    }
+    Ok(known)
 }
 
 /// Inject the `_aithericon_io` `.py`/`.pyi` pair into every Python automated

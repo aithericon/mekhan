@@ -81,6 +81,9 @@ async fn resources_test_app() -> (Router, PgPool, Arc<InMemoryResourceStore>) {
         triggers,
         result_waiters: mekhan_service::triggers::ResultWaiters::new(),
         resource_store: resource_store.clone(),
+        resource_resolver: Arc::new(
+            mekhan_service::petri::resource_resolver::ResourceResolver::new(db.clone()),
+        ),
     };
 
     (build_router(state), db, resource_store)

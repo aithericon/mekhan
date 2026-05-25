@@ -91,8 +91,6 @@ pub async fn create_instance(
             air_json: &air_json,
             graph: &graph,
             start_tokens: &req.start_tokens,
-            resource_bindings: req.resource_bindings.clone(),
-            workspace_id: None,
         })
         .await
         .map_err(|e| match e {
@@ -102,13 +100,6 @@ pub async fn create_instance(
                 StatusCode::BAD_GATEWAY,
                 format!("failed to deploy to engine: {msg}"),
             ),
-            LaunchError::Resource(re) => match re {
-                crate::petri::launcher::ResourceBindError::MissingWorkspace { .. }
-                | crate::petri::launcher::ResourceBindError::Database(_) => {
-                    ApiError::internal(re.to_string())
-                }
-                _ => ApiError::bad_request(re.to_string()),
-            },
         })?;
 
     Ok((StatusCode::CREATED, Json(instance)))

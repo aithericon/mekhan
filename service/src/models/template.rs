@@ -67,20 +67,6 @@ pub struct WorkflowGraph {
     /// per-trigger gate and decides whether to spawn now or coalesce.
     #[serde(default, skip_serializing_if = "is_default_instance_concurrency")]
     pub instance_concurrency: InstanceConcurrencyPolicy,
-    /// Typed Resource declarations — `alias -> resource_type_name`. The author
-    /// writes `db: postgres` to claim a `db` alias that downstream
-    /// `AutomatedStep` Python sources can read as `db.host`, `db.password`,
-    /// etc. Type names must match an entry in
-    /// `aithericon_resources::registry`; alias names cannot collide with a
-    /// step slug or a reserved control-token field. Bound to concrete
-    /// resource paths at instance-launch time via
-    /// `CreateInstanceRequest.resource_bindings`.
-    ///
-    /// `BTreeMap` so wire / serialization order is deterministic — the
-    /// compiler emits splice snippets in this order, and stable order keeps
-    /// the AIR diff-friendly.
-    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
-    pub resources: std::collections::BTreeMap<String, String>,
 }
 
 fn is_default_instance_concurrency(c: &InstanceConcurrencyPolicy) -> bool {
@@ -1729,7 +1715,7 @@ impl WorkflowGraph {
                 edge_type: "sequence".to_string(),
             }],
             viewport: None,
-            instance_concurrency: Default::default(), resources: Default::default(),
+            instance_concurrency: Default::default(),
         }
     }
 }

@@ -438,8 +438,10 @@ pub async fn delete_template(
 )]
 pub async fn publish_template(
     State(state): State<AppState>,
+    user: AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<WorkflowTemplate>, ApiError> {
+    let principal_id = user.subject_as_uuid();
     let existing = sqlx::query_as::<_, WorkflowTemplate>(
         "SELECT * FROM workflow_templates WHERE id = $1",
     )
@@ -491,6 +493,7 @@ pub async fn publish_template(
             existing.version,
             Some(existing.base_template_id.unwrap_or(existing.id)),
             &mut ydoc_files,
+            principal_id,
         )
         .await?;
 
@@ -910,6 +913,7 @@ pub async fn apply_template(
             target_version,
             Some(latest.base_template_id.unwrap_or(latest.id)),
             &mut files_map,
+            user.subject_as_uuid(),
         )
         .await?;
     let source_ref_json = req
