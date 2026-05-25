@@ -566,7 +566,7 @@
 					y_label={block.y_label}
 				/>
 			{:else}
-				<BlockRenderer {block} />
+				<BlockRenderer {block} {renderMdsvex} mdsvexClass={MDSVEX_CLASS} />
 			{/if}
 		{/each}
 	{/if}

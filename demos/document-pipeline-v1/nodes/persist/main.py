@@ -41,6 +41,41 @@ for f in incoming:
         "_document_date":  classify.document_date,
     })
 
+# Pre-rendered markdown table for the downstream HumanTask review. The
+# mdsvex block in `nodes/review/task.json` embeds `{{ persist.summary_table }}`
+# verbatim; rendering happens in the reviewer's UI. Beats dumping
+# `{{ persist.fields }}` (which goes through Rhai's debug repr —
+# `#{...}`, `()` for null — and is unreadable in the reviewer's pane).
+def _md_escape(v):
+    if v is None:
+        return ""
+    s = str(v)
+    # Pipe + newline are the two table-breaking chars; escape pipe,
+    # collapse newlines so a multi-line citation doesn't shatter the row.
+    return s.replace("|", "\\|").replace("\n", " ")
+
+def _first_citation_text(f):
+    cits = f.get("citations") or []
+    if not cits:
+        return ""
+    return cits[0].get("supporting_text") or ""
+
+if fields:
+    header = "| Field | Value | Unit | Reference range | Confidence | OCR span |\n"
+    sep    = "| --- | --- | --- | --- | --- | --- |\n"
+    rows   = "".join(
+        f"| {_md_escape(f.get('key'))} "
+        f"| {_md_escape(f.get('value'))} "
+        f"| {_md_escape(f.get('unit'))} "
+        f"| {_md_escape(f.get('reference_range'))} "
+        f"| {_md_escape(f.get('confidence'))} "
+        f"| {_md_escape(_first_citation_text(f))} |\n"
+        for f in fields
+    )
+    summary_table = header + sep + rows
+else:
+    summary_table = "_No fields extracted._"
+
 log_info(
     "persisting extraction",
     document_class=classify.document_class,

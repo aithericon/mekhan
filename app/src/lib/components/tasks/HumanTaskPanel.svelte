@@ -1,6 +1,8 @@
 <script lang="ts">
 	import type { HumanTask, TaskStep } from '$lib/hpi/types';
 	import { BlockRenderer, FieldDisplay, ProcessBanner } from '$lib/hpi';
+	import { renderMdsvex } from '$lib/mdsvex';
+	import { MDSVEX_CLASS } from '$lib/mdsvex-styles';
 	import type { ProcessState } from '$lib/hpi/types';
 	import BlockChart from '$lib/components/ui/block-chart/block-chart.svelte';
 	import { Badge } from '$lib/components/ui/badge';
@@ -121,7 +123,7 @@
 							y_label={block.y_label}
 						/>
 					{:else if block.type !== 'input'}
-						<BlockRenderer {block} />
+						<BlockRenderer {block} {renderMdsvex} mdsvexClass={MDSVEX_CLASS} />
 					{/if}
 				{/each}
 			</div>

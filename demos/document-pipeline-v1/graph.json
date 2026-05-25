@@ -563,6 +563,12 @@
               "label": "Fields",
               "kind": "json",
               "required": true
+            },
+            {
+              "name": "summary_table",
+              "label": "Summary (markdown table)",
+              "kind": "text",
+              "required": false
             }
           ]
         }
