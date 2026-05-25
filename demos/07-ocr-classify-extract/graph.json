@@ -48,7 +48,11 @@
           "id": "out",
           "label": "OCR result",
           "fields": [
-            { "name": "content", "label": "Content", "kind": "text", "required": true }
+            { "name": "content",            "label": "Content",            "kind": "text", "required": true },
+            { "name": "mime_type",          "label": "MIME type",          "kind": "text", "required": false },
+            { "name": "metadata",           "label": "Metadata",           "kind": "json", "required": false },
+            { "name": "tables",             "label": "Tables",             "kind": "json", "required": false },
+            { "name": "detected_languages", "label": "Detected languages", "kind": "json", "required": false }
           ]
         }
       }
