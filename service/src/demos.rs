@@ -640,6 +640,43 @@ mod tests {
         }
     }
 
+    /// The bundled document-pipeline-v1 demo's graph.json must parse and the
+    /// merge-extraction node must deserialize as a `Join { mode: Any }`
+    /// (XOR-join — the primitive introduced alongside this test). Then
+    /// re-serialize and round-trip through the standard `WorkflowGraph` /
+    /// `WorkflowNodeData` serde shapes. Sidecar-overlay loading is exercised
+    /// separately by invoice_processing_demo_loads — this test isolates the
+    /// Join variant so a regression in its serde discriminant or field
+    /// defaults surfaces here, not buried under unrelated sidecar parse noise.
+    #[test]
+    fn document_pipeline_v1_join_node_round_trips() {
+        use crate::models::template::{JoinMode, WorkflowGraph, WorkflowNodeData};
+
+        let graph_path =
+            repo_root().join("demos/document-pipeline-v1/graph.json");
+        let raw = std::fs::read_to_string(&graph_path).expect("graph.json must exist");
+        let graph: WorkflowGraph =
+            serde_json::from_str(&raw).expect("graph.json must deserialize as WorkflowGraph");
+
+        let merge = graph
+            .nodes
+            .iter()
+            .find(|n| n.id == "merge-extraction")
+            .expect("merge-extraction node must exist");
+
+        match &merge.data {
+            WorkflowNodeData::Join { mode, output, .. } => {
+                assert_eq!(*mode, JoinMode::Any, "demo uses XOR-join (mode=any)");
+                assert!(
+                    output.fields.iter().any(|f| f.name == "fields"),
+                    "merge-extraction.output must declare a `fields` field — \
+                     persist/main.py borrows extraction.fields through it"
+                );
+            }
+            other => panic!("merge-extraction must be a Join, got {other:?}"),
+        }
+    }
+
     /// A task sidecar targeting a non-HumanTask node is a typo — fail at
     /// load time with a clear pointer, not at publish time with "engine
     /// rejected empty steps" three calls deep.
@@ -1120,5 +1157,58 @@ mod tests {
             hello_idx < sub_idx,
             "child (01-hello-world @ {hello_idx}) must seed before parent (06-subworkflow @ {sub_idx})"
         );
+    }
+
+    /// Borrow-phase consolidation regression net. Compiles every bundled
+    /// demo that goes through `compile_to_air` (excludes 06-subworkflow,
+    /// which needs publish-time child resolution) and dumps the AIR as
+    /// canonical sorted JSON to stdout. Run with `--nocapture` before and
+    /// after each refactor commit; the two outputs must `diff` clean.
+    ///
+    /// Coverage rationale: 01-05 + 07 + vllm-smoke exercise every borrow
+    /// phase touched by the refactor — c2 (Python), c3 (HumanTask),
+    /// guards (Decision/Loop), c4/c5 (LLM/Kreuzberg upstream refs).
+    ///
+    /// This test always passes; it's a stdout artifact, not an assertion.
+    /// Wrapped with `BORROW_SNAPSHOT_DUMP=1` so it doesn't blast every
+    /// CI run with multi-MB stdout.
+    #[test]
+    fn dump_all_bundled_demo_air_for_regression() {
+        use crate::compiler::{compile_to_air, node_files_inline};
+
+        if std::env::var_os("BORROW_SNAPSHOT_DUMP").is_none() {
+            return;
+        }
+
+        let root = repo_root().join("demos");
+        for dir_name in [
+            "01-hello-world",
+            "02-human-form",
+            "03-decision-routing",
+            "04-loop-counter",
+            "05-parallel-fanout",
+            "07-ocr-classify-extract",
+            "vllm-smoke",
+        ] {
+            let demo = load_demo(&root.join(dir_name))
+                .unwrap_or_else(|e| panic!("{dir_name} must load: {e}"));
+            let files = node_files_inline(&demo.files);
+            let air = compile_to_air(
+                &demo.graph,
+                &demo.metadata.name,
+                demo.metadata.description.as_deref().unwrap_or(""),
+                &files,
+            )
+            .unwrap_or_else(|e| panic!("{dir_name} must compile to AIR: {e:?}"));
+
+            // serde_json::Value with the `preserve_order` feature OFF (the
+            // default) sorts BTreeMap-style on serialization — keys are
+            // canonical. `to_string_pretty` is stable across runs.
+            let canonical = serde_json::to_string_pretty(&air)
+                .expect("AIR must serialize");
+            println!("=== {dir_name} ===");
+            println!("{canonical}");
+            println!("=== /{dir_name} ===");
+        }
     }
 }

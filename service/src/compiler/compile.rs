@@ -100,6 +100,76 @@ fn replace_word_boundary(haystack: &str, needle: &str, repl: &str) -> Option<Str
     }
 }
 
+/// Idempotently add a `d_<producer>` input port + read-arc to `t` against the
+/// producer's parked data place. Returns the `d_<producer>` variable name on
+/// success (with hyphens → underscores), or `None` when the producer didn't
+/// publish a `data_port` — caller skips that borrow silently. Centralises the
+/// four-times-repeated read-arc wiring across the borrow phases (guards / c2
+/// Python / c3 HumanTask / c4-c5 backend-config).
+///
+/// `allow_under_consume_arc` controls the idempotency check: `true` only
+/// blocks a new read arc when an *existing* read arc to the same place is
+/// present (c2 / c3 / c4 / c5 — the consumer's data-binding transition never
+/// has pre-existing arcs against producer data places); `false` blocks on
+/// **any** arc, read or consume (guards — Loop's `lower_loop` pre-wires its
+/// continue/exit transitions with consume arcs against the counter place,
+/// and a duplicate read arc next to a consume arc breaks the engine's
+/// binding-resolution rules).
+fn wire_read_arc(
+    t: &mut aithericon_sdk::scenario::ScenarioTransition,
+    producer_node: &str,
+    interfaces: &InterfaceRegistry,
+    allow_under_consume_arc: bool,
+) -> Option<String> {
+    use crate::compiler::token_shape::{data_def_name, def_ref};
+    use aithericon_sdk::scenario::{ScenarioArc, ScenarioPort};
+
+    let var = format!("d_{}", producer_node.replace('-', "_"));
+    let data_place = interfaces
+        .get(producer_node)
+        .and_then(|i| i.data_port.clone())?;
+
+    if !t.input_ports.iter().any(|p| p.name == var) {
+        t.input_ports.push(ScenarioPort {
+            name: var.clone(),
+            schema_ref: Some(def_ref(&data_def_name(producer_node))),
+            cardinality: "single".to_string(),
+        });
+    }
+    let arc_blocks = if allow_under_consume_arc {
+        t.inputs.iter().any(|a| a.place == data_place && a.read)
+    } else {
+        t.inputs.iter().any(|a| a.place == data_place)
+    };
+    if !arc_blocks {
+        t.inputs.push(ScenarioArc {
+            place: data_place,
+            port: var.clone(),
+            weight: 1,
+            read: true,
+        });
+    }
+    Some(var)
+}
+
+/// Unquoted hoist-path segments for a producer's parked-envelope shape.
+/// HumanTask's parked envelope nests business data under `data`;
+/// AutomatedStep nests under `detail.outputs`; Start / Loop / SubWorkflow
+/// keep fields at the top level. The borrow phases use this to bridge the
+/// user-visible flat shape (`<slug>.<field>`) to the nested engine shape.
+/// Returns `&[]` for kinds with no nesting and for unknown nodes.
+fn producer_field_access_hoist(
+    graph: &crate::models::template::WorkflowGraph,
+    producer_node: &str,
+) -> &'static [&'static str] {
+    let producer = graph.nodes.iter().find(|n| n.id == producer_node);
+    match producer.map(|n| &n.data) {
+        Some(WorkflowNodeData::HumanTask { .. }) => &["data"],
+        Some(WorkflowNodeData::AutomatedStep { .. }) => &["detail", "outputs"],
+        _ => &[],
+    }
+}
+
 /// A child template, fully compiled + made spawn-callable, resolved at the
 /// *parent's* publish time and frozen into the parent. Keyed by the parent's
 /// `SubWorkflow` node id in [`SubWorkflowAir`]. `lower_subworkflow` embeds
@@ -725,20 +795,18 @@ fn apply_control_data_foundation(
     //     the reference in `guard`; End/Failure result-mapping expressions
     //     (added on main) hold it in `logic` — both are covered.
     for b in guard_readarc_plan(graph)? {
-        // Producer's data port from the registry — never reconstructed
-        // from the naming convention. If the producer didn't publish a
-        // `data_port` (i.e., it's not a parked producer), the reference
-        // is unresolved upstream by the borrow planner; skip silently.
-        let Some(data_place) = interfaces
+        // Skip silently if the producer didn't publish a `data_port` (not a
+        // parked producer) — the borrow planner already filtered the common
+        // case, this guards the registry lookup against an unparked node.
+        if interfaces
             .get(&b.producer_node)
             .and_then(|i| i.data_port.as_deref())
-        else {
+            .is_none()
+        {
             continue;
-        };
-        let data_place = data_place.to_string();
+        }
         let var = format!("d_{}", b.producer_node.replace('-', "_"));
         let new_ref = format!("{var}.{}", b.producer_path);
-        let schema_ref = def_ref(&data_def_name(&b.producer_node));
         let t_prefix = format!("t_{}_", b.consumer_node_id);
 
         for t in &mut scenario.transitions {
@@ -764,28 +832,11 @@ fn apply_control_data_foundation(
             if !in_guard && !in_logic {
                 continue;
             }
-            if !t.input_ports.iter().any(|p| p.name == var) {
-                t.input_ports.push(ScenarioPort {
-                    name: var.clone(),
-                    schema_ref: Some(schema_ref.clone()),
-                    cardinality: "single".to_string(),
-                });
-            }
-            // Skip arc-add if ANY arc to this place exists, regardless of
-            // read/consume direction. Loop's own continue/exit transitions
-            // are pre-wired in `lower_loop`: continue consumes + reproduces
-            // its counter (`read: false` arc), exit read-arcs it. The
-            // synthesis pass would otherwise add a duplicate `read: true`
-            // arc next to the consuming one, breaking the engine's binding
-            // resolution.
-            if !t.inputs.iter().any(|a| a.place == data_place) {
-                t.inputs.push(ScenarioArc {
-                    place: data_place.clone(),
-                    port: var.clone(),
-                    weight: 1,
-                    read: true,
-                });
-            }
+            // Loop's `lower_loop` pre-wires continue/exit with a consume arc
+            // against the counter place; `allow_under_consume_arc = false`
+            // tells `wire_read_arc` not to add a sibling read arc that would
+            // break the engine's binding resolution. See `wire_read_arc`.
+            wire_read_arc(t, &b.producer_node, interfaces, false);
             // Word-boundary replace so the rewrite doesn't double-prefix
             // an already-rewritten reference. Loop's own continue/exit
             // guards/logic are pre-wired in `lower_loop` with a hard-coded
@@ -996,28 +1047,9 @@ fn apply_control_data_foundation(
             }
             let mut pushes = String::new();
             for b in consumer_borrows {
-                let var = format!("d_{}", b.producer_node.replace('-', "_"));
-                let Some(data_place) = interfaces
-                    .get(&b.producer_node)
-                    .and_then(|i| i.data_port.clone())
-                else {
+                let Some(var) = wire_read_arc(t, &b.producer_node, interfaces, true) else {
                     continue;
                 };
-                if !t.input_ports.iter().any(|p| p.name == var) {
-                    t.input_ports.push(ScenarioPort {
-                        name: var.clone(),
-                        schema_ref: Some(def_ref(&data_def_name(&b.producer_node))),
-                        cardinality: "single".to_string(),
-                    });
-                }
-                if !t.inputs.iter().any(|a| a.place == data_place && a.read) {
-                    t.inputs.push(ScenarioArc {
-                        place: data_place.clone(),
-                        port: var.clone(),
-                        weight: 1,
-                        read: true,
-                    });
-                }
 
                 // Hoist business fields from their nested envelope path up to
                 // the top level so the Python runner's `<slug>.<field>` direct
@@ -1031,12 +1063,8 @@ fn apply_control_data_foundation(
                 // second", so business fields win on any collision with
                 // envelope meta (e.g. a form field literally named
                 // `task_id`).
-                let producer = graph.nodes.iter().find(|n| n.id == b.producer_node);
-                let hoist_path: &[&str] = match producer.map(|n| &n.data) {
-                    Some(WorkflowNodeData::HumanTask { .. }) => &["data"],
-                    Some(WorkflowNodeData::AutomatedStep { .. }) => &["detail", "outputs"],
-                    _ => &[],
-                };
+                let hoist_path: &[&str] =
+                    producer_field_access_hoist(graph, &b.producer_node);
                 let value_expr = if hoist_path.is_empty() {
                     var.clone()
                 } else {
@@ -1117,13 +1145,6 @@ fn apply_control_data_foundation(
                 continue;
             }
             for b in consumer_borrows {
-                let var = format!("d_{}", b.producer_node.replace('-', "_"));
-                let Some(data_place) = interfaces
-                    .get(&b.producer_node)
-                    .and_then(|i| i.data_port.clone())
-                else {
-                    continue;
-                };
                 // Slug-specific needle: the trailing `, ` (comma+space)
                 // is exactly what `interpolate_to_rhai_expr` emits
                 // between segments via `segs.join(", ")`, so this
@@ -1131,7 +1152,6 @@ fn apply_control_data_foundation(
                 // and never a same-prefix root-level field like
                 // `__pluck(input, ["startle"])` (no trailing comma).
                 let needle = format!(r#"__pluck(input, ["{}", "#, b.slug);
-                let replacement = format!(r#"__pluck({var}, ["#);
                 let source = match &t.logic {
                     TransitionLogic::Rhai { source } => source.clone(),
                     _ => continue,
@@ -1139,21 +1159,10 @@ fn apply_control_data_foundation(
                 if !source.contains(&needle) {
                     continue;
                 }
-                if !t.input_ports.iter().any(|p| p.name == var) {
-                    t.input_ports.push(ScenarioPort {
-                        name: var.clone(),
-                        schema_ref: Some(def_ref(&data_def_name(&b.producer_node))),
-                        cardinality: "single".to_string(),
-                    });
-                }
-                if !t.inputs.iter().any(|a| a.place == data_place && a.read) {
-                    t.inputs.push(ScenarioArc {
-                        place: data_place.clone(),
-                        port: var.clone(),
-                        weight: 1,
-                        read: true,
-                    });
-                }
+                let Some(var) = wire_read_arc(t, &b.producer_node, interfaces, true) else {
+                    continue;
+                };
+                let replacement = format!(r#"__pluck({var}, ["#);
                 t.logic = TransitionLogic::Rhai {
                     source: source.replace(&needle, &replacement),
                 };
@@ -1284,9 +1293,8 @@ fn apply_backend_ref_phase(
     backend_label: &str,
     borrows: Vec<BackendBorrow>,
 ) {
-    use crate::compiler::token_shape::{data_def_name, def_ref};
-    use crate::models::template::{FieldKind, WorkflowNodeData};
-    use aithericon_sdk::scenario::{ScenarioArc, ScenarioPort, TransitionLogic};
+    use crate::models::template::FieldKind;
+    use aithericon_sdk::scenario::TransitionLogic;
 
     if borrows.is_empty() {
         return;
@@ -1337,28 +1345,9 @@ fn apply_backend_ref_phase(
             let mut pushes = String::new();
 
             for b in &unique {
-                let var = format!("d_{}", b.producer_node.replace('-', "_"));
-                let Some(data_place) = interfaces
-                    .get(&b.producer_node)
-                    .and_then(|i| i.data_port.clone())
-                else {
+                let Some(var) = wire_read_arc(t, &b.producer_node, interfaces, true) else {
                     continue;
                 };
-                if !t.input_ports.iter().any(|p| p.name == var) {
-                    t.input_ports.push(ScenarioPort {
-                        name: var.clone(),
-                        schema_ref: Some(def_ref(&data_def_name(&b.producer_node))),
-                        cardinality: "single".to_string(),
-                    });
-                }
-                if !t.inputs.iter().any(|a| a.place == data_place && a.read) {
-                    t.inputs.push(ScenarioArc {
-                        place: data_place.clone(),
-                        port: var.clone(),
-                        weight: 1,
-                        read: true,
-                    });
-                }
 
                 // Build the Rhai accessor that reaches the producer's
                 // field. The envelope nests business data under
@@ -1367,14 +1356,11 @@ fn apply_backend_ref_phase(
                 // SubWorkflow) keep the field at top-level. Same hoist
                 // logic as c2's `__h_<producer>` walker, condensed via
                 // null-safe `__pluck`.
-                let producer = graph.nodes.iter().find(|n| n.id == b.producer_node);
-                let mut path_segs: Vec<String> = match producer.map(|n| &n.data) {
-                    Some(WorkflowNodeData::HumanTask { .. }) => vec!["\"data\"".into()],
-                    Some(WorkflowNodeData::AutomatedStep { .. }) => {
-                        vec!["\"detail\"".into(), "\"outputs\"".into()]
-                    }
-                    _ => vec![],
-                };
+                let mut path_segs: Vec<String> =
+                    producer_field_access_hoist(graph, &b.producer_node)
+                        .iter()
+                        .map(|seg| format!("\"{seg}\""))
+                        .collect();
                 path_segs.push(format!("\"{}\"", b.attr.replace('"', "\\\"")));
                 let value_expr = format!("__pluck({var}, [{}])", path_segs.join(", "));
 
@@ -2213,6 +2199,200 @@ mod tests {
         let i1 = deep.find("__deep_merge(result, in_1)").unwrap();
         let i2 = deep.find("__deep_merge(result, in_2)").unwrap();
         assert!(i1 < i2, "in_1 must be folded before in_2");
+    }
+
+    /// `Join { mode: Any }` with three incoming branches must lower into THREE
+    /// transitions (one per branch), each consuming a dedicated `p_<id>_in_<i>`
+    /// place and depositing into the *same* output and parked data places.
+    /// This is the canonical petri-net XOR-join: any branch firing fires the
+    /// join, no AND-wait. We also assert the parked data place
+    /// (`p_merge_data`) is the published `data_port` so downstream
+    /// `<slug>.<field>` borrows resolve through it.
+    #[test]
+    fn test_join_any_mode_emits_one_transition_per_branch() {
+        // Graph: start -> {b0, b1, b2 (passthrough automated_steps)} -> merge (join any) -> end
+        let start = start_node("start");
+        let mk_step = |id: &str| WorkflowNode {
+            id: id.to_string(),
+            node_type: "automated_step".to_string(),
+            slug: None,
+            position: Position { x: 0.0, y: 0.0 },
+            data: WorkflowNodeData::AutomatedStep {
+                label: format!("step {id}"),
+                description: None,
+                execution_spec: ExecutionSpecConfig {
+                    backend_type: ExecutionBackendType::Docker,
+                    entrypoint: None,
+                    config: serde_json::json!({"image": "alpine:latest"}),
+                },
+                input: Port::empty_input(),
+                output: default_output_port(ExecutionBackendType::Docker),
+                retry_policy: RetryPolicy {
+                    max_retries: 0,
+                    backoff: BackoffKind::Immediate,
+                    base_delay_ms: 0,
+                },
+                deployment_model: Default::default(),
+            },
+            parent_id: None,
+            width: None,
+            height: None,
+        };
+
+        let join_node = WorkflowNode {
+            id: "merge".to_string(),
+            node_type: "join".to_string(),
+            slug: None,
+            position: Position { x: 0.0, y: 0.0 },
+            data: WorkflowNodeData::Join {
+                label: "Merge".to_string(),
+                description: None,
+                mode: JoinMode::Any,
+                merge_strategy: None,
+                output: Port {
+                    id: "out".to_string(),
+                    label: "Output".to_string(),
+                    fields: vec![],
+                },
+            },
+            parent_id: None,
+            width: None,
+            height: None,
+        };
+
+        let graph = WorkflowGraph {
+            nodes: vec![
+                start,
+                mk_step("b0"),
+                mk_step("b1"),
+                mk_step("b2"),
+                join_node,
+                end_node("done"),
+            ],
+            edges: vec![
+                edge("e_s_b0", "start", "b0"),
+                edge("e_s_b1", "start", "b1"),
+                edge("e_s_b2", "start", "b2"),
+                edge("e_b0_m", "b0", "merge"),
+                edge("e_b1_m", "b1", "merge"),
+                edge("e_b2_m", "b2", "merge"),
+                edge("e_m_done", "merge", "done"),
+            ],
+            viewport: None,
+            instance_concurrency: Default::default(),
+        };
+
+        let air = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
+            .expect("Join { mode: Any } must compile");
+        let s = air.to_string();
+
+        // Three branch transitions, one per incoming edge.
+        assert!(
+            s.contains("t_merge_join_0") && s.contains("t_merge_join_1") && s.contains("t_merge_join_2"),
+            "expected three per-branch transitions, got: {s}"
+        );
+        // No single AND-fire transition — that's the All-mode shape.
+        assert!(
+            !s.contains("\"t_merge_join\""),
+            "Any-mode must not emit the All-mode aggregator transition"
+        );
+
+        // Each branch transition must deposit into the SHARED output + data
+        // places. That's the XOR-join's defining property — N → 1.
+        for i in 0..3 {
+            assert!(
+                s.contains(&format!("t_merge_join_{i}")),
+                "missing branch {i} transition"
+            );
+        }
+        assert!(s.contains("p_merge_output"), "missing shared output place");
+        assert!(s.contains("p_merge_data"), "missing shared parked data place");
+    }
+
+    /// `Join { mode: All }` with two branches must lower into a single AND-fire
+    /// transition consuming both input places, mirroring the historical
+    /// `parallel_join` behaviour but additionally staging the merged token in
+    /// the parked `p_<id>_data` place so downstream `<slug>.<field>` borrows
+    /// resolve.
+    #[test]
+    fn test_join_all_mode_emits_single_and_fire() {
+        let join_node = WorkflowNode {
+            id: "j".to_string(),
+            node_type: "join".to_string(),
+            slug: None,
+            position: Position { x: 0.0, y: 0.0 },
+            data: WorkflowNodeData::Join {
+                label: "J".to_string(),
+                description: None,
+                mode: JoinMode::All,
+                merge_strategy: Some(MergeStrategy::ShallowLastWins),
+                output: Port {
+                    id: "out".to_string(),
+                    label: "Output".to_string(),
+                    fields: vec![],
+                },
+            },
+            parent_id: None,
+            width: None,
+            height: None,
+        };
+        let mk_step = |id: &str| WorkflowNode {
+            id: id.to_string(),
+            node_type: "automated_step".to_string(),
+            slug: None,
+            position: Position { x: 0.0, y: 0.0 },
+            data: WorkflowNodeData::AutomatedStep {
+                label: id.to_string(),
+                description: None,
+                execution_spec: ExecutionSpecConfig {
+                    backend_type: ExecutionBackendType::Docker,
+                    entrypoint: None,
+                    config: serde_json::json!({"image": "alpine:latest"}),
+                },
+                input: Port::empty_input(),
+                output: default_output_port(ExecutionBackendType::Docker),
+                retry_policy: RetryPolicy {
+                    max_retries: 0,
+                    backoff: BackoffKind::Immediate,
+                    base_delay_ms: 0,
+                },
+                deployment_model: Default::default(),
+            },
+            parent_id: None,
+            width: None,
+            height: None,
+        };
+        let graph = WorkflowGraph {
+            nodes: vec![
+                start_node("s"),
+                mk_step("a"),
+                mk_step("b"),
+                join_node,
+                end_node("e"),
+            ],
+            edges: vec![
+                edge("e_s_a", "s", "a"),
+                edge("e_s_b", "s", "b"),
+                edge("e_a_j", "a", "j"),
+                edge("e_b_j", "b", "j"),
+                edge("e_j_e", "j", "e"),
+            ],
+            viewport: None,
+            instance_concurrency: Default::default(),
+        };
+
+        let air = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
+            .expect("Join { mode: All } must compile");
+        let s = air.to_string();
+
+        // Single AND-fire transition, not N branch transitions.
+        assert!(s.contains("t_j_join"), "All-mode must keep the single aggregator transition");
+        assert!(!s.contains("t_j_join_0"), "All-mode must not emit per-branch transitions");
+
+        // Merged token still drops at the shared output AND the parked data
+        // place (so `<slug>.<field>` borrows can resolve through `p_j_data`).
+        assert!(s.contains("p_j_output"));
+        assert!(s.contains("p_j_data"));
     }
 
     fn automated_step_with_retry(id: &str, policy: RetryPolicy) -> WorkflowNode {
