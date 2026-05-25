@@ -23,7 +23,6 @@
 	let executions = $state<StepExecution[]>([]);
 	let loading = $state(true);
 	let error = $state<string | null>(null);
-	let selectedNodeId = $state<string | null>(null);
 	let drawerStep = $state<StepExecution | null>(null);
 	let drawerNode = $state<WorkflowNode | null>(null);
 	let drawerNodeInterface = $state<import('$lib/types/node-interface').NodeInterface | null>(null);
@@ -110,12 +109,7 @@
 		return () => clearInterval(t);
 	});
 
-	function handleSelect(nodeId: string | null) {
-		selectedNodeId = nodeId;
-		if (!nodeId) {
-			drawerOpen = false;
-			return;
-		}
+	function openDrawerFor(nodeId: string) {
 		const list = executionsByNode.get(nodeId) ?? [];
 		const node = nodesById.get(nodeId) ?? null;
 		drawerNode = node;
@@ -140,12 +134,6 @@
 
 	function closeDrawer() {
 		drawerOpen = false;
-		// Also clear xyflow's internal selection (via the controlled-selection
-		// prop on the canvas). Without this, the node stays `.selected=true`
-		// inside the flow store and the next time polled runtime data shifts
-		// node dimensions, xyflow re-fires `onselectionchange` for the still-
-		// selected node, which would reopen the sheet.
-		selectedNodeId = null;
 	}
 </script>
 
@@ -159,7 +147,16 @@
 			{error}
 		</div>
 	{:else if graph}
-		<WorkflowCanvas {graph} readonly {selectedNodeId} onselect={handleSelect} />
+		<!-- onNodeClick / onPaneClick (rather than onselect) drives the
+		     drawer: those fire only on real user pointer events, so the
+		     drawer never reopens on its own when xyflow re-emits selection
+		     after a `store.nodes` reassignment from polled runtime data. -->
+		<WorkflowCanvas
+			{graph}
+			readonly
+			onNodeClick={openDrawerFor}
+			onPaneClick={closeDrawer}
+		/>
 	{:else}
 		<div class="flex h-full items-center justify-center text-sm text-muted-foreground">
 			Template not available.
