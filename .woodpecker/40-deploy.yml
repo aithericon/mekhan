@@ -28,9 +28,8 @@
 # runner picking up `role: deploy` MUST be on the mesh. YAML can't enforce.
 # =============================================================================
 
-# Note: `depends_on: [30-build]` is commented out — 30-build.yml is currently
-# renamed to .yml.disabled so the deploy pipeline runs solo. Re-enable both
-# (uncomment + rename) when you want fresh-build-then-deploy chained again.
+depends_on:
+  - 30-build
 
 when:
   # Auto on main — chained off 30-build via the workflow-level depends_on
@@ -95,11 +94,7 @@ steps:
       - export TF_VAR_postgres_admin_host=postgres-primary.service.consul
       - 'echo "  ✓ Secrets loaded from Vault"'
 
-      # TEMP: hardcoded to the image SHA currently running in prod. The
-      # outstanding change is a jobspec-only update (EXECUTOR_STORAGE__*
-      # env vars on the executor task) — no fresh image needed. Roll back
-      # to "$CI_COMMIT_SHA" once 30-build.yml is re-enabled.
-      - just ci::deploy-dev "0c0d584bf233546972058074b38a003eb7b4aef9"
+      - just ci::deploy-dev "$CI_COMMIT_SHA"
     depends_on: []
 
   - name: verify-dev
