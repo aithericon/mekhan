@@ -85,7 +85,7 @@ fn simple_graph() -> WorkflowGraph {
             label: None,
             edge_type: "sequence".to_string(),
         }],
-        viewport: None, instance_concurrency: Default::default(),
+        viewport: None, instance_concurrency: Default::default(), resources: Default::default(),
     }
 }
 

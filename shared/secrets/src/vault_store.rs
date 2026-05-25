@@ -177,6 +177,107 @@ impl VaultSecretStore {
             );
         }
     }
+
+    /// Write a map of fields to a Vault KV v2 path. The endpoint takes the
+    /// envelope `{ "data": { ... } }` per the KV v2 protocol; Vault rejects
+    /// PUTs that lack the wrapping `data` key.
+    ///
+    /// Existing data at `path` is **replaced** (KV v2's POST is upsert-by-
+    /// version semantics — old versions remain readable via `?version=N`
+    /// query parameters until KV-level retention sweeps them). Callers that
+    /// need a deterministic per-version path should embed the version in
+    /// `path` (e.g. `aithericon/resources/<id>/v3`) so each version writes
+    /// to a unique location and rollback is just "read v(n-1)".
+    ///
+    /// Used by `aithericon-resources`'s `VaultResourceStore::put_version`
+    /// to lay down a resource version's secret fields. The corresponding
+    /// `get(...)` call reads them via the `path#field` key syntax.
+    pub async fn put_kv(
+        &self,
+        path: &str,
+        fields: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<(), SecretError> {
+        let full_path = format!("{}{}", self.key_prefix, path);
+        let url = format!("{}/v1/{}/data/{}", self.addr, self.mount, full_path);
+
+        let body = serde_json::json!({ "data": fields });
+
+        let response = self
+            .client
+            .post(&url)
+            .header("X-Vault-Token", &self.token)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| {
+                SecretError::StoreUnavailable(format!("vault put request failed: {e}"))
+            })?;
+
+        let status = response.status();
+        if status == reqwest::StatusCode::FORBIDDEN
+            || status == reqwest::StatusCode::UNAUTHORIZED
+        {
+            return Err(SecretError::AccessDenied(format!(
+                "vault denied write to {full_path} (HTTP {status})"
+            )));
+        }
+        if !status.is_success() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(SecretError::StoreUnavailable(format!(
+                "vault put returned HTTP {status}: {text}"
+            )));
+        }
+
+        // Invalidate cached reads for any field on this path — a freshly-
+        // written value would otherwise be shadowed by stale cache entries.
+        if let Ok(mut cache) = self.cache.write() {
+            let prefix = format!("{full_path}#");
+            cache.retain(|k, _| !k.starts_with(&prefix) && k != &full_path);
+        }
+
+        Ok(())
+    }
+
+    /// Delete (KV v2 soft-delete) the latest version at `path`. Vault keeps
+    /// older versions queryable; a full `destroy` would require a separate
+    /// KV v2 admin call. v1 uses the soft delete because pinned instances
+    /// still need to resolve against older versions.
+    pub async fn delete_kv(&self, path: &str) -> Result<(), SecretError> {
+        let full_path = format!("{}{}", self.key_prefix, path);
+        let url = format!("{}/v1/{}/data/{}", self.addr, self.mount, full_path);
+
+        let response = self
+            .client
+            .delete(&url)
+            .header("X-Vault-Token", &self.token)
+            .send()
+            .await
+            .map_err(|e| {
+                SecretError::StoreUnavailable(format!("vault delete request failed: {e}"))
+            })?;
+
+        let status = response.status();
+        if status == reqwest::StatusCode::FORBIDDEN
+            || status == reqwest::StatusCode::UNAUTHORIZED
+        {
+            return Err(SecretError::AccessDenied(format!(
+                "vault denied delete to {full_path} (HTTP {status})"
+            )));
+        }
+        // 404 → already gone; treat as success (idempotent delete).
+        if !status.is_success() && status != reqwest::StatusCode::NOT_FOUND {
+            return Err(SecretError::StoreUnavailable(format!(
+                "vault delete returned HTTP {status}"
+            )));
+        }
+
+        if let Ok(mut cache) = self.cache.write() {
+            let prefix = format!("{full_path}#");
+            cache.retain(|k, _| !k.starts_with(&prefix) && k != &full_path);
+        }
+
+        Ok(())
+    }
 }
 
 #[async_trait]

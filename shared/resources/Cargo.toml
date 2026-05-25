@@ -1,0 +1,37 @@
+[package]
+name = "aithericon-resources"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+authors = ["Aithericon GmbH"]
+description = "Typed Resource declarations for Aithericon workflows — built-in types (Postgres/OpenAI/Slack/S3/GoogleOAuth), compile-time registry, and reference shapes. Resolution layer (DB-backed resolver) lives in the service."
+readme = "README.md"
+
+[features]
+# Pulls in the Vault-backed `ResourceSecretStore` impl, which depends on
+# `aithericon-secrets`'s `vault` feature for the underlying KV v2 client.
+vault = ["aithericon-secrets/vault", "dep:aithericon-secrets"]
+
+[dependencies]
+aithericon-resources-derive = { path = "../resources-derive", version = "0.1.0" }
+async-trait = "0.1"
+inventory = "0.3"
+schemars = { version = "0.8", features = ["uuid1"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["sync"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# Optional — `vault` feature flips this on. The runtime impl
+# `VaultResourceStore` lives in this crate but delegates KV writes to
+# `VaultSecretStore::put_kv` / `delete_kv` (`shared/secrets`).
+aithericon-secrets = { path = "../secrets", optional = true }
+
+[dev-dependencies]
+# Phase B Risk #7 verification: the engine's existing wrap path uses the
+# `extract_secret_keys` regex on the resolved AIR. We assert that regex captures
+# the full `resources/<id>/v<n>#<field>` key without needing the service or
+# engine compiled.
+aithericon-secrets = { path = "../secrets" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync"] }

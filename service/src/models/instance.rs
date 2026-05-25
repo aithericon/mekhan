@@ -99,6 +99,14 @@ pub struct CreateInstanceRequest {
     /// driven solely by `start_tokens`.
     #[serde(default)]
     pub metadata: Option<serde_json::Value>,
+    /// Phase B.7 — deploy-time alias binding. For every `alias` declared in
+    /// the template's `WorkflowGraph.resources`, the caller supplies a
+    /// concrete resource path (`f/team/local_pg`); the launcher resolves
+    /// each path against the `resources` table and pins it to the resource's
+    /// `latest_version`. Aliases declared but unbound here cause a 400.
+    /// Empty map is fine for templates that don't declare any resources.
+    #[serde(default)]
+    pub resource_bindings: std::collections::HashMap<String, String>,
 }
 
 #[derive(Debug, Deserialize, ToSchema, utoipa::IntoParams)]

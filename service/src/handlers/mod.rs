@@ -4,6 +4,7 @@ pub mod health;
 pub mod instances;
 pub mod observability;
 pub mod process_live;
+pub mod resources;
 pub mod task_stream;
 pub mod templates;
 pub mod triggers;

@@ -24,6 +24,18 @@ use utoipa::OpenApi;
             crate::causality::live::LiveArtifactEvent,
             crate::models::template::ReplyMode,
             crate::triggers::TerminalOutcome,
+            // Phase B.9 — Resource CRUD DTOs. The handler bodies refer to
+            // these directly but utoipa's auto-discovery only walks the
+            // handler signature; nested types (e.g. ResourceTypeInfo
+            // appears only inside Vec<_>) need explicit registration so
+            // frontend codegen emits matching TS types.
+            crate::models::resource::ResourceSummary,
+            crate::models::resource::ResourceDetail,
+            crate::models::resource::ResourceTypeInfo,
+            crate::models::resource::CreateResourceRequest,
+            crate::models::resource::UpdateResourceRequest,
+            crate::models::resource::RotateResourceRequest,
+            crate::models::resource::ResourceAuditEntry,
         ),
     ),
     tags(
@@ -37,6 +49,7 @@ use utoipa::OpenApi;
         (name = "files", description = "Per-template file upload/download (50 MB limit, S3-backed)."),
         (name = "triggers", description = "Workflow triggers — cron/catalog/lifecycle/webhook/manual entry points."),
         (name = "auth-tokens", description = "Embedded per-user automation tokens (Zitadel-backed PATs)."),
+        (name = "resources", description = "Typed credential CRUD (`postgres`, `openai`, `s3`, `slack`, `google_oauth`). Workflows bind aliases to resources at launch; secrets live in Vault."),
         (name = "health", description = "Liveness probe."),
     ),
 )]

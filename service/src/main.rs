@@ -199,6 +199,26 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    // Phase B.9 — write-side secret store for the Resource CRUD handlers.
+    // `VAULT_ADDR` + `VAULT_TOKEN` set → real Vault; either missing → an
+    // in-memory placeholder + a WARN so operators notice before secrets
+    // start landing in process memory in prod.
+    let resource_store: Arc<dyn aithericon_resources::ResourceSecretStore> =
+        match aithericon_resources::VaultResourceStore::from_env() {
+            Some(vrs) => {
+                tracing::info!("resource_store: Vault-backed (VAULT_ADDR set)");
+                Arc::new(vrs)
+            }
+            None => {
+                tracing::warn!(
+                    "resource_store: VAULT_ADDR/VAULT_TOKEN unset — falling back to \
+                     in-memory store. Resource secrets WILL NOT SURVIVE A RESTART. \
+                     Configure Vault before production deployments."
+                );
+                Arc::new(aithericon_resources::InMemoryResourceStore::new())
+            }
+        };
+
     let state = AppState {
         db,
         petri,
@@ -218,6 +238,7 @@ async fn main() -> anyhow::Result<()> {
         zitadel_mgmt,
         triggers: trigger_dispatcher,
         result_waiters,
+        resource_store,
     };
 
     // Seed built-in demos before the listener accepts requests. Idempotent

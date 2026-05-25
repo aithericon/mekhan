@@ -1,0 +1,15 @@
+[package]
+name = "aithericon-resources-derive"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+authors = ["Aithericon GmbH"]
+description = "Derive macro `#[derive(ResourceType)]` for `aithericon-resources` — emits compile-time inventory submissions"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+quote = "1.0"
+syn = { version = "2.0", features = ["full", "parsing", "extra-traits"] }
+proc-macro2 = "1.0"
