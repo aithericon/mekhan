@@ -162,6 +162,7 @@
 		{binding}
 		{nodeId}
 		{templateId}
+		resources={binding?.graph.resources ?? {}}
 	/>
 {:else if data.executionSpec.backendType === 'docker'}
 	<DockerConfigPanel config={data.executionSpec.config as Record<string, unknown>} {readonly} onchange={handleConfigChange} />
