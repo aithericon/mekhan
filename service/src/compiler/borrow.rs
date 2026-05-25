@@ -24,12 +24,24 @@
 
 use std::collections::HashMap;
 
+use aithericon_sdk::scenario::{ScenarioDefinition, TransitionGuard, TransitionLogic};
+
+use crate::compiler::compile::{
+    producer_field_access_hoist, replace_word_boundary, wire_read_arc,
+};
+use crate::compiler::interface::InterfaceRegistry;
 use crate::compiler::token_shape::{
     automated_step_borrow_plan, guard_readarc_plan, human_task_borrow_plan, kreuzberg_borrow_plan,
     llm_borrow_plan,
 };
 use crate::compiler::CompileError;
 use crate::models::template::{FieldKind, WorkflowGraph};
+
+/// Rhai block-comment sentinel emitted by `lower_automated_step` /
+/// `lower_llm_classify` into the prepare-transition source. The borrow
+/// phases splice `job_inputs.push(...)` statements at this marker; any
+/// remaining occurrences are stripped at the end of apply_borrows.
+pub(super) const BORROW_MARKER: &str = "/*__BORROWED_INPUTS__*/";
 
 /// One scanned-and-resolved borrow record. The shape is uniform across the
 /// five authoring surfaces — what differs per surface is the rewrite
@@ -111,7 +123,6 @@ pub(crate) enum BorrowResolution {
 /// (next commit) groups by consumer and dispatches on
 /// [`BorrowResolution`] — order matters only inside a group for staging
 /// determinism.
-#[allow(dead_code)] // wired in commit 3 ("unified apply_borrows loop")
 pub(crate) fn collect_borrows(
     graph: &WorkflowGraph,
     inline_sources: &HashMap<String, HashMap<String, String>>,
@@ -181,6 +192,460 @@ pub(crate) fn collect_borrows(
     }
 
     Ok(out)
+}
+
+/// Drive every borrow's apply step from the unified [`Borrow`] shape.
+/// Partitions on [`BorrowResolution`], dispatches each variant to its
+/// sub-routine, then strips any leftover `BORROW_MARKER` sentinels.
+///
+/// Apply contract:
+/// - `Guard` borrows: per-borrow, scan all transitions matching
+///   `t_<consumer>_*`; for each whose guard / logic source contains
+///   the dotted reference, wire a read-arc and word-boundary-rewrite.
+/// - `PythonEnvelope` borrows: per-consumer, find the prepare
+///   transition (`{id}/prepare` or `t_{id}_prepare`); for each
+///   borrow, wire a read-arc and emit a whole-envelope-stage push.
+/// - `HumanTaskInputRewrite` borrows: per-consumer, find the
+///   wire-edge transition (the one whose output writes to
+///   `p_<id>_input`); for each borrow, substring-rewrite the
+///   lowering-emitted `__pluck(input, ["<slug>", ` needle.
+/// - `BackendFieldStage` borrows: per-consumer, find the prepare
+///   transition; dedupe by `(slug, attr)`; for each unique key,
+///   wire a read-arc, emit a per-field push, and rewrite the
+///   `{{<slug>.<attr>}}` placeholder.
+///
+/// All four arms call the same shared [`wire_read_arc`] and
+/// [`producer_field_access_hoist`] helpers. Iteration order within
+/// each consumer's borrow group is preserved from [`collect_borrows`]
+/// (planner-defined); HashMap iteration order across consumers is
+/// non-deterministic but doesn't affect AIR since different consumers
+/// modify disjoint transitions.
+pub(crate) fn apply_borrows(
+    scenario: &mut ScenarioDefinition,
+    interfaces: &InterfaceRegistry,
+    graph: &WorkflowGraph,
+    borrows: Vec<Borrow>,
+) {
+    let mut guards: Vec<Borrow> = Vec::new();
+    let mut python: HashMap<String, Vec<Borrow>> = HashMap::new();
+    let mut human_task: HashMap<String, Vec<Borrow>> = HashMap::new();
+    let mut backend: HashMap<String, Vec<Borrow>> = HashMap::new();
+
+    for b in borrows {
+        match &b.resolution {
+            BorrowResolution::Guard { .. } => guards.push(b),
+            BorrowResolution::PythonEnvelope => python
+                .entry(b.consumer_node_id.clone())
+                .or_default()
+                .push(b),
+            BorrowResolution::HumanTaskInputRewrite => human_task
+                .entry(b.consumer_node_id.clone())
+                .or_default()
+                .push(b),
+            BorrowResolution::BackendFieldStage { .. } => backend
+                .entry(b.consumer_node_id.clone())
+                .or_default()
+                .push(b),
+        }
+    }
+
+    apply_guard_borrows(scenario, interfaces, &guards);
+    for (consumer, group) in &python {
+        apply_python_borrows(scenario, interfaces, graph, consumer, group);
+    }
+    for (consumer, group) in &human_task {
+        apply_human_task_borrows(scenario, interfaces, consumer, group);
+    }
+    for (consumer, group) in &backend {
+        apply_backend_borrows(scenario, interfaces, graph, consumer, group);
+    }
+
+    strip_borrow_markers(scenario);
+}
+
+/// Apply the Decision/Loop guard arm. For each borrow, walk every
+/// transition whose id matches `t_<consumer>_*`; if the guard or logic
+/// source mentions the dotted ref, wire a read-arc (with the broader
+/// "any arc" collision check — Loop's lower_loop pre-wires consume arcs)
+/// and word-boundary-substitute `<dotted>` → `d_<producer>.<producer_path>`.
+fn apply_guard_borrows(
+    scenario: &mut ScenarioDefinition,
+    interfaces: &InterfaceRegistry,
+    borrows: &[Borrow],
+) {
+    for b in borrows {
+        let BorrowResolution::Guard { dotted, producer_path } = &b.resolution else {
+            continue; // unreachable per partition
+        };
+        if interfaces
+            .get(&b.producer_node)
+            .and_then(|i| i.data_port.as_deref())
+            .is_none()
+        {
+            continue;
+        }
+        let var = format!("d_{}", b.producer_node.replace('-', "_"));
+        let new_ref = format!("{var}.{producer_path}");
+        let t_prefix = format!("t_{}_", b.consumer_node_id);
+
+        for t in &mut scenario.transitions {
+            if !t.id.starts_with(&t_prefix) {
+                continue;
+            }
+            let guard_src = match &t.guard {
+                Some(TransitionGuard::Rhai { source }) => Some(source.clone()),
+                _ => None,
+            };
+            let logic_src = match &t.logic {
+                TransitionLogic::Rhai { source } => Some(source.clone()),
+                _ => None,
+            };
+            let in_guard = guard_src
+                .as_deref()
+                .map(|s| s.contains(dotted))
+                .unwrap_or(false);
+            let in_logic = logic_src
+                .as_deref()
+                .map(|s| s.contains(dotted))
+                .unwrap_or(false);
+            if !in_guard && !in_logic {
+                continue;
+            }
+            // Loop's `lower_loop` pre-wires continue/exit transitions with
+            // a consume arc against the counter place; `allow_under_consume_arc
+            // = false` ensures we don't add a sibling read arc that would
+            // break binding resolution.
+            wire_read_arc(t, &b.producer_node, interfaces, false);
+            if in_guard {
+                if let Some(s) = guard_src {
+                    if let Some(rewritten) = replace_word_boundary(&s, dotted, &new_ref) {
+                        t.guard = Some(TransitionGuard::Rhai { source: rewritten });
+                    }
+                }
+            }
+            if in_logic {
+                if let Some(s) = logic_src {
+                    if let Some(rewritten) = replace_word_boundary(&s, dotted, &new_ref) {
+                        t.logic = TransitionLogic::Rhai { source: rewritten };
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Apply the Python AutomatedStep arm. Per-consumer: find the prepare
+/// transition; for each borrow, wire the read-arc and emit a
+/// whole-envelope-stage `job_inputs.push(...)` snippet that copies the
+/// producer's parked envelope (with business fields hoisted to the top
+/// level) into a `<slug>.json` sidecar. The runner's AccessibleDict
+/// promotes that file to a Python global so `<slug>.<field>` resolves
+/// against it without any source rewrite.
+fn apply_python_borrows(
+    scenario: &mut ScenarioDefinition,
+    interfaces: &InterfaceRegistry,
+    graph: &WorkflowGraph,
+    consumer_id: &str,
+    consumer_borrows: &[Borrow],
+) {
+    let prepare_a = format!("{}/prepare", consumer_id);
+    let prepare_b = format!("t_{}_prepare", consumer_id);
+    for t in &mut scenario.transitions {
+        if t.id != prepare_a && t.id != prepare_b {
+            continue;
+        }
+        let mut pushes = String::new();
+        for b in consumer_borrows {
+            let Some(var) = wire_read_arc(t, &b.producer_node, interfaces, true) else {
+                continue;
+            };
+
+            // Hoist business fields up to the top level so the Python
+            // runner's `<slug>.<field>` direct access matches what the
+            // picker / `_aithericon_io.pyi` show. The shape model
+            // surfaces e.g. `review.invoice_amount` to the user even
+            // though the parked envelope nests it under `data`
+            // (HumanTask) or `detail.outputs` (AutomatedStep) — Rhai
+            // guards close that gap via rewriting; Python source
+            // isn't rewritten, so the staged envelope must be flat.
+            // Spread is "envelope first, business overlay second", so
+            // business fields win on any collision with envelope meta
+            // (e.g. a form field literally named `task_id`).
+            let hoist_path: &[&str] = producer_field_access_hoist(graph, &b.producer_node);
+            let value_expr = if hoist_path.is_empty() {
+                var.clone()
+            } else {
+                let flat = format!("__flat_{}", b.producer_node.replace('-', "_"));
+                pushes.push_str(&format!(
+                    "let {flat} = #{{}}; \
+                     for __k in {var}.keys() {{ \
+                         if __k != \"{top}\" {{ {flat}[__k] = {var}[__k]; }} \
+                     }} \
+                     let __h_{pid} = {var}; ",
+                    flat = flat,
+                    var = var,
+                    top = hoist_path[0],
+                    pid = b.producer_node.replace('-', "_"),
+                ));
+                for seg in hoist_path {
+                    pushes.push_str(&format!(
+                        "__h_{pid} = if type_of(__h_{pid}) == \"map\" {{ __h_{pid}[\"{seg}\"] }} else {{ () }}; ",
+                        pid = b.producer_node.replace('-', "_"),
+                        seg = seg,
+                    ));
+                }
+                pushes.push_str(&format!(
+                    "if type_of(__h_{pid}) == \"map\" {{ \
+                         for __k in __h_{pid}.keys() {{ {flat}[__k] = __h_{pid}[__k]; }} \
+                     }} ",
+                    pid = b.producer_node.replace('-', "_"),
+                    flat = flat,
+                ));
+                flat
+            };
+
+            pushes.push_str(&format!(
+                r#"job_inputs.push(#{{ "name": "{}.json", "source": #{{ "type": "inline", "value": {} }} }}); "#,
+                b.slug, value_expr
+            ));
+        }
+        if let TransitionLogic::Rhai { source } = &t.logic {
+            let new_source = source.replace(BORROW_MARKER, &pushes);
+            t.logic = TransitionLogic::Rhai { source: new_source };
+        }
+    }
+}
+
+/// Apply the HumanTask arm. Per-consumer: find the wire-edge transition
+/// (the one whose output writes to `p_<id>_input`) and substring-rewrite
+/// the lowering-emitted `__pluck(input, ["<slug>", ` needle to use
+/// `d_<producer>` instead of `input`. The trailing comma+space is what
+/// `interpolate_to_rhai_expr` emits between segments, so the needle
+/// matches only the multi-segment placeholder form and never a root-
+/// level field on the slim control token.
+fn apply_human_task_borrows(
+    scenario: &mut ScenarioDefinition,
+    interfaces: &InterfaceRegistry,
+    consumer_id: &str,
+    consumer_borrows: &[Borrow],
+) {
+    let input_place = format!("p_{}_input", consumer_id);
+    for t in &mut scenario.transitions {
+        if !t.outputs.iter().any(|a| a.place == input_place) {
+            continue;
+        }
+        for b in consumer_borrows {
+            let needle = format!(r#"__pluck(input, ["{}", "#, b.slug);
+            let source = match &t.logic {
+                TransitionLogic::Rhai { source } => source.clone(),
+                _ => continue,
+            };
+            if !source.contains(&needle) {
+                continue;
+            }
+            let Some(var) = wire_read_arc(t, &b.producer_node, interfaces, true) else {
+                continue;
+            };
+            let replacement = format!(r#"__pluck({var}, ["#);
+            t.logic = TransitionLogic::Rhai {
+                source: source.replace(&needle, &replacement),
+            };
+        }
+    }
+}
+
+/// Apply the LLM / Kreuzberg arm. Per-consumer: dedupe by `(slug, attr)`
+/// (multiple placeholder occurrences for the same field stage a single
+/// file); find the prepare transition; for each unique key, wire the
+/// read-arc, emit a per-field `job_inputs.push` (Raw vs StoragePath vs
+/// inline based on path-site + field kind), and rewrite each
+/// `{{<slug>.<attr>}}` placeholder in the embedded config Rhai literal
+/// to the executor-resolver form (`{{input:NAME}}` for content sites,
+/// `{{input_path:NAME}}` for path sites).
+fn apply_backend_borrows(
+    scenario: &mut ScenarioDefinition,
+    interfaces: &InterfaceRegistry,
+    graph: &WorkflowGraph,
+    consumer_id: &str,
+    consumer_borrows: &[Borrow],
+) {
+    let prepare_a = format!("{}/prepare", consumer_id);
+    let prepare_b = format!("t_{}_prepare", consumer_id);
+
+    let mut seen: std::collections::BTreeSet<(String, String)> = std::collections::BTreeSet::new();
+    let mut unique: Vec<&Borrow> = Vec::new();
+    for b in consumer_borrows {
+        if let BorrowResolution::BackendFieldStage { attr, .. } = &b.resolution {
+            if seen.insert((b.slug.clone(), attr.clone())) {
+                unique.push(b);
+            }
+        }
+    }
+
+    for t in &mut scenario.transitions {
+        if t.id != prepare_a && t.id != prepare_b {
+            continue;
+        }
+        let mut pushes = String::new();
+        for b in &unique {
+            let BorrowResolution::BackendFieldStage {
+                attr,
+                is_path_site,
+                field_kind,
+            } = &b.resolution
+            else {
+                continue;
+            };
+            let Some(var) = wire_read_arc(t, &b.producer_node, interfaces, true) else {
+                continue;
+            };
+
+            // Build the Rhai accessor that reaches the producer's field.
+            // The envelope nests business data under `data.<attr>`
+            // (HumanTask) or `detail.outputs.<attr>` (AutomatedStep);
+            // other producer kinds (Start, Loop, SubWorkflow) keep the
+            // field at top-level. Same hoist logic as the Python arm's
+            // `__h_<producer>` walker, condensed via null-safe `__pluck`.
+            let mut path_segs: Vec<String> = producer_field_access_hoist(graph, &b.producer_node)
+                .iter()
+                .map(|seg| format!("\"{seg}\""))
+                .collect();
+            path_segs.push(format!("\"{}\"", attr.replace('"', "\\\"")));
+            let value_expr = format!("__pluck({var}, [{}])", path_segs.join(", "));
+
+            let input_name = borrow_input_name(&b.slug, attr);
+
+            if *is_path_site && *field_kind == FieldKind::File {
+                // Producer field is a FileRef; stage StoragePath so the
+                // storage hook downloads the binary into the run dir.
+                let url_segs: Vec<String> = path_segs
+                    .iter()
+                    .cloned()
+                    .chain(std::iter::once("\"url\"".to_string()))
+                    .collect();
+                let url_expr = format!("__pluck({var}, [{}])", url_segs.join(", "));
+                pushes.push_str(&format!(
+                    r#"job_inputs.push(#{{ "name": "{input_name}", "source": #{{ "type": "storage_path", "path": {url_expr}, "storage": #{{}} }} }}); "#,
+                ));
+            } else if *is_path_site {
+                // Path-site with non-File producer: stringify the value
+                // into a Raw temp file. Kreuzberg with a text upstream
+                // (e.g. an LLM narrative output) lands here.
+                pushes.push_str(&format!(
+                    r#"let __c_{slug}_{attr_id} = {value_expr}; if type_of(__c_{slug}_{attr_id}) != "string" {{ __c_{slug}_{attr_id} = to_string(__c_{slug}_{attr_id}); }} job_inputs.push(#{{ "name": "{input_name}", "source": #{{ "type": "raw", "content": __c_{slug}_{attr_id} }} }}); "#,
+                    slug = sanitize_ident(&b.slug),
+                    attr_id = sanitize_ident(attr),
+                    value_expr = value_expr,
+                    input_name = input_name,
+                ));
+            } else {
+                // Content-site (LLM prompt/system_prompt/history). Stage
+                // inline { value } so the executor's `{{input:NAME}}`
+                // resolver loads it as the right type.
+                pushes.push_str(&format!(
+                    r#"let __c_{slug}_{attr_id} = {value_expr}; job_inputs.push(#{{ "name": "{input_name}", "source": #{{ "type": "inline", "value": __c_{slug}_{attr_id} }} }}); "#,
+                    slug = sanitize_ident(&b.slug),
+                    attr_id = sanitize_ident(attr),
+                    value_expr = value_expr,
+                    input_name = input_name,
+                ));
+            }
+        }
+
+        if let TransitionLogic::Rhai { source } = &t.logic {
+            if source.contains(BORROW_MARKER) {
+                let mut new_source = source.replace(BORROW_MARKER, &pushes);
+                for b in &unique {
+                    let BorrowResolution::BackendFieldStage {
+                        attr, is_path_site, ..
+                    } = &b.resolution
+                    else {
+                        continue;
+                    };
+                    let input_name = borrow_input_name(&b.slug, attr);
+                    let resolver_prefix = if *is_path_site { "input_path" } else { "input" };
+                    let replacement = format!("{{{{{resolver_prefix}:{input_name}}}}}");
+                    new_source = rewrite_slug_attr_placeholders(
+                        &new_source,
+                        &b.slug,
+                        attr,
+                        &replacement,
+                    );
+                }
+                t.logic = TransitionLogic::Rhai { source: new_source };
+            }
+        }
+    }
+}
+
+/// Strip leftover `BORROW_MARKER` sentinels from any prepare transition
+/// whose backend didn't have c2/c4/c5 borrows. Final cleanup after all
+/// borrow arms.
+fn strip_borrow_markers(scenario: &mut ScenarioDefinition) {
+    for t in &mut scenario.transitions {
+        if let TransitionLogic::Rhai { source } = &t.logic {
+            if source.contains(BORROW_MARKER) {
+                let new_source = source.replace(BORROW_MARKER, "");
+                t.logic = TransitionLogic::Rhai { source: new_source };
+            }
+        }
+    }
+}
+
+/// Stable input-declaration name for a given `(slug, attr)` borrow. Used
+/// as the staged file name AND the `{{input:NAME}}` / `{{input_path:NAME}}`
+/// substitution key.
+fn borrow_input_name(slug: &str, attr: &str) -> String {
+    format!("__borrow_{}__{}", sanitize_ident(slug), sanitize_ident(attr))
+}
+
+/// Sanitize an identifier-like string for use in generated Rhai variable
+/// names and staged file names. Non-alnum/underscore chars become `_`.
+fn sanitize_ident(s: &str) -> String {
+    s.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+/// Replace every `{{ <slug>.<attr> }}` placeholder (with optional
+/// whitespace around the inner segments) in `source` with `replacement`.
+/// Lexical scan — does not touch placeholders whose inner body differs
+/// or whose dots are nested deeper.
+fn rewrite_slug_attr_placeholders(
+    source: &str,
+    slug: &str,
+    attr: &str,
+    replacement: &str,
+) -> String {
+    let mut out = String::with_capacity(source.len());
+    let mut rest = source;
+    while let Some(open) = rest.find("{{") {
+        out.push_str(&rest[..open]);
+        let after = &rest[open + 2..];
+        let Some(close_rel) = after.find("}}") else {
+            out.push_str("{{");
+            out.push_str(after);
+            return out;
+        };
+        let inner = &after[..close_rel];
+        let trimmed = inner.trim();
+        if trimmed == format!("{slug}.{attr}") {
+            out.push_str(replacement);
+        } else {
+            out.push_str("{{");
+            out.push_str(inner);
+            out.push_str("}}");
+        }
+        rest = &after[close_rel + 2..];
+    }
+    out.push_str(rest);
+    out
 }
 
 #[cfg(test)]
