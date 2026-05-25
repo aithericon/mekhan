@@ -406,7 +406,7 @@ async fn seed_instance_with_events(
          VALUES ($1, 2, 'tok-sig', 'produced', $2, NULL, $3)",
     )
     .bind(&net_id)
-    .bind(format!("sig_{human_id}"))
+    .bind(format!("p_{human_id}_signal"))
     .bind(human_completion)
     .execute(db)
     .await

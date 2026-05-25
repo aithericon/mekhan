@@ -447,20 +447,32 @@ async fn persist_run(
 
 /// Best-effort `(detail, place)` → author slug. Prefer slug fields embedded
 /// in the task detail (the engine writes `node_slug` for HumanTask effects),
-/// fall back to looking up the WorkflowNode by id from the graph and
-/// returning its [`WorkflowNode::slug`], and finally strip the conventional
-/// `sig_<slug>` place-name prefix.
+/// then strip the compiler's `p_<id>_signal` place naming back to the node id
+/// and look up the node's [`WorkflowNode::slug`], and finally fall back to
+/// `node_id` from detail or the legacy `sig_<slug>` prefix.
+///
+/// The middle path (`p_<id>_signal` → node id → slug) is the live engine's
+/// shape: `hpi_tasks.detail.place` carries `p_<node_id>_signal`, never
+/// `node_id` directly, so the inverse map through `graph.nodes` is the only
+/// reliable way to recover the author slug for human_answers lookup.
 fn resolve_task_slug(graph: &WorkflowGraph, detail: &Value, place: &str) -> String {
     if let Some(s) = detail.get("node_slug").and_then(Value::as_str) {
         return s.to_string();
+    }
+    if let Some(inner) = place
+        .strip_prefix("p_")
+        .and_then(|s| s.strip_suffix("_signal"))
+    {
+        if let Some(node) = graph.nodes.iter().find(|n| n.id == inner) {
+            return node.slug();
+        }
     }
     if let Some(node_id) = detail.get("node_id").and_then(Value::as_str) {
         if let Some(node) = graph.nodes.iter().find(|n| n.id == node_id) {
             return node.slug();
         }
     }
-    // `sig_<slug>` is the petri-AIR convention for the signal place a
-    // HumanTask compiles to. Strip the prefix as a final fallback.
+    // Last-resort legacy fallback.
     place.strip_prefix("sig_").unwrap_or(place).to_string()
 }
 

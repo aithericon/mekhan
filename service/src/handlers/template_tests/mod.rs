@@ -544,8 +544,9 @@ fn strip_system_fields(value: Value) -> Value {
 }
 
 /// Reconstruct `human_answers` keyed by node slug. For each HumanTask node,
-/// look at tokens produced on its `sig_<id>` place — those are the engine's
-/// signal-injected completions and carry the form data under `data`.
+/// look at tokens produced on its `p_<id>_signal` place — those are the
+/// engine's signal-injected completions and carry the form data under `data`.
+/// (The compiler emits this in `lower_human_task`; see `compiler/lower.rs`.)
 async fn extract_human_answers(
     db: &PgPool,
     net_id: &str,
@@ -556,7 +557,7 @@ async fn extract_human_answers(
         if !matches!(node.data, WorkflowNodeData::HumanTask { .. }) {
             continue;
         }
-        let place_id = format!("sig_{}", node.id);
+        let place_id = format!("p_{}_signal", node.id);
         let row: Option<(Option<Value>,)> = sqlx::query_as(
             "SELECT cet.token_data FROM causality_event_tokens cet \
              JOIN causality_events ce ON ce.net_id = cet.net_id AND ce.event_seq = cet.event_seq \
