@@ -140,6 +140,12 @@
 
 	function closeDrawer() {
 		drawerOpen = false;
+		// Also clear xyflow's internal selection (via the controlled-selection
+		// prop on the canvas). Without this, the node stays `.selected=true`
+		// inside the flow store and the next time polled runtime data shifts
+		// node dimensions, xyflow re-fires `onselectionchange` for the still-
+		// selected node, which would reopen the sheet.
+		selectedNodeId = null;
 	}
 </script>
 
@@ -153,7 +159,7 @@
 			{error}
 		</div>
 	{:else if graph}
-		<WorkflowCanvas {graph} readonly onselect={handleSelect} />
+		<WorkflowCanvas {graph} readonly {selectedNodeId} onselect={handleSelect} />
 	{:else}
 		<div class="flex h-full items-center justify-center text-sm text-muted-foreground">
 			Template not available.

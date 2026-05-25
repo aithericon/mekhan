@@ -11,7 +11,7 @@
 	} from '@xyflow/svelte';
 	import '@xyflow/svelte/dist/style.css';
 
-	import { setContext } from 'svelte';
+	import { setContext, untrack } from 'svelte';
 	import { nodeTypes } from './nodes';
 	import { edgeTypes } from './edges';
 	import NodePalette from './NodePalette.svelte';
@@ -31,6 +31,16 @@
 		readonly?: boolean;
 		onchange?: (graph: WorkflowGraph) => void;
 		onselect?: (nodeId: string | null) => void;
+		/**
+		 * Optional controlled-selection prop. When provided, the canvas keeps
+		 * xyflow's internal `node.selected` state in sync with this value:
+		 * setting it to `null` deselects every node. Without this, xyflow's
+		 * selection persists across drawer/sheet closes — and any subsequent
+		 * `nodes` reassignment (e.g. node-internals/dimension updates from
+		 * polled runtime data) re-fires `onselectionchange` with the
+		 * still-selected node, which would reopen the consumer's drawer.
+		 */
+		selectedNodeId?: string | null;
 		onAddNode?: (id: string, type: WorkflowNodeType, position: { x: number; y: number }, data: WorkflowNodeData, opts?: { parentId?: string; width?: number; height?: number }) => void;
 		onRemoveNodes?: (ids: string[]) => void;
 		onMoveNodes?: (moves: Array<{ id: string; position: { x: number; y: number } }>) => void;
@@ -61,7 +71,7 @@
 		) => void;
 	};
 
-	let { graph, readonly = false, onchange, onselect, onAddNode, onRemoveNodes, onMoveNodes, onReparentNodes, onAddEdge, onRemoveEdges, onResizeNodes }: Props = $props();
+	let { graph, readonly = false, onchange, onselect, selectedNodeId, onAddNode, onRemoveNodes, onMoveNodes, onReparentNodes, onAddEdge, onRemoveEdges, onResizeNodes }: Props = $props();
 
 	const useGranular = $derived(!!(onAddNode || onRemoveNodes || onMoveNodes || onReparentNodes || onAddEdge || onRemoveEdges || onResizeNodes));
 
@@ -255,6 +265,28 @@
 			});
 			edges = toFlowEdges(graph, readonly);
 		}
+	});
+
+	// Controlled-selection sync. Only depends on `selectedNodeId` — reads of
+	// `nodes` are wrapped in `untrack` so this effect doesn't re-run on every
+	// xyflow-internal `nodes` reassignment (which happens whenever node
+	// dimensions update — frequent on instance overlays whose runtime badges
+	// shrink/grow with polled data).
+	$effect(() => {
+		if (selectedNodeId === undefined) return; // uncontrolled
+		const target = selectedNodeId;
+		untrack(() => {
+			let changed = false;
+			const next = nodes.map((n) => {
+				const shouldBeSelected = n.id === target;
+				if (!!n.selected !== shouldBeSelected) {
+					changed = true;
+					return { ...n, selected: shouldBeSelected };
+				}
+				return n;
+			});
+			if (changed) nodes = next;
+		});
 	});
 
 	function serializeAndEmit() {
