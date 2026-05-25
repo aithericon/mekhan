@@ -211,7 +211,27 @@ impl ExecutionBackend for LlmBackend {
                             ("model".into(), serde_json::json!(resp.model)),
                         ]);
 
-                        // Map spec-declared output names to the response value.
+                        // Per-key unpack: when the LLM returned a structured-JSON
+                        // object and the spec declares multiple output fields,
+                        // map each top-level key to the matching port by name —
+                        // mirrors the Python backend's name-based output sweep.
+                        // Declared port names WIN over built-ins (response/usage/
+                        // finish_reason/model) so workflow authors don't have to
+                        // dodge vendor-side reserved names.
+                        if let Some(ref extracted) = resp.structured_output {
+                            if let Some(obj) = extracted.as_object() {
+                                for decl in &run_context.spec.outputs {
+                                    if let Some(v) = obj.get(&decl.name) {
+                                        outputs.insert(decl.name.clone(), v.clone());
+                                    }
+                                }
+                            }
+                        }
+
+                        // Fallback: any declared output that still wasn't filled
+                        // gets the whole response_value. Keeps single-output and
+                        // non-structured shapes (free-text completions) working
+                        // unchanged.
                         for decl in &run_context.spec.outputs {
                             if !outputs.contains_key(&decl.name) {
                                 outputs.insert(decl.name.clone(), response_value.clone());
