@@ -662,7 +662,8 @@ fn apply_control_data_foundation(
 ) -> Result<(), CompileError> {
     use crate::compiler::token_shape::{
         analyze, automated_step_borrow_plan, ctrl_def_name, data_def_name, def_ref,
-        dynamic_token_definition, guard_readarc_plan, human_task_borrow_plan,
+        dynamic_token_definition, guard_readarc_plan, human_task_borrow_plan, kreuzberg_borrow_plan,
+        llm_borrow_plan,
     };
     use aithericon_sdk::scenario::{ScenarioArc, ScenarioPort, TransitionGuard, TransitionLogic};
 
@@ -1084,15 +1085,9 @@ fn apply_control_data_foundation(
             }
         }
     }
-    // Strip leftover markers from prepare transitions that had no borrows.
-    for t in &mut scenario.transitions {
-        if let TransitionLogic::Rhai { source } = &t.logic {
-            if source.contains(BORROW_MARKER) {
-                let new_source = source.replace(BORROW_MARKER, "");
-                t.logic = TransitionLogic::Rhai { source: new_source };
-            }
-        }
-    }
+    // Marker stripping is deferred until AFTER (c4) LLM and (c5)
+    // Kreuzberg phases run — those phases also consume BORROW_MARKER
+    // on prepare transitions whose backend isn't Python.
 
     // (c3) HumanTask placeholder borrows: direct sibling of (c2) for
     //      AutomatedStep — same read-arc, same `d_<producer>` var, same
@@ -1166,6 +1161,68 @@ fn apply_control_data_foundation(
         }
     }
 
+    // (c4) LLM AutomatedStep `{{<slug>.<field>}}` borrows in prompt /
+    //      system_prompt / history / images[].path. Structurally identical
+    //      to (c2) Python: same `d_<producer>` read-arc, same per-borrow
+    //      `job_inputs.push` against the producer's parked envelope, BUT
+    //      the staging is per-`(slug, attr)` (not per-slug) because LLM
+    //      consumers want field values, not the whole envelope blob.
+    //      Then rewrite each `{{<slug>.<attr>}}` placeholder in the
+    //      embedded config Rhai literal to either `{{input:NAME}}`
+    //      (content sites) or `{{input_path:NAME}}` (path sites) — the
+    //      executor-backend resolver handles both today.
+    let llm_borrows = llm_borrow_plan(graph)?;
+    apply_backend_ref_phase(
+        graph,
+        scenario,
+        interfaces,
+        "llm",
+        llm_borrows.into_iter().map(|b| BackendBorrow {
+            consumer_node_id: b.consumer_node_id,
+            slug: b.slug,
+            producer_node: b.producer_node,
+            attr: b.attr,
+            is_path_site: b.site.is_path_site(),
+            producer_field_kind: b.producer_field_kind,
+        }).collect(),
+    );
+
+    // (c5) Kreuzberg AutomatedStep `{{<slug>.<field>}}` borrows in
+    //      `file` / `files[]`. Symmetric to (c4) but Kreuzberg is always
+    //      a path-site (the backend takes a filesystem path). For File-
+    //      kind producers, stage `StoragePath` so the executor's storage
+    //      hook downloads the upstream binary; for other kinds, stage
+    //      `Raw` so the staging hook writes the stringified value to a
+    //      temp file. Either way the rewrite is `{{input_path:NAME}}`.
+    let kreuzberg_borrows = kreuzberg_borrow_plan(graph)?;
+    apply_backend_ref_phase(
+        graph,
+        scenario,
+        interfaces,
+        "kreuzberg",
+        kreuzberg_borrows.into_iter().map(|b| BackendBorrow {
+            consumer_node_id: b.consumer_node_id,
+            slug: b.slug,
+            producer_node: b.producer_node,
+            attr: b.attr,
+            is_path_site: true,
+            producer_field_kind: b.producer_field_kind,
+        }).collect(),
+    );
+
+    // Strip leftover BORROW_MARKER sentinels from any prepare transition
+    // whose backend didn't have c2/c4/c5 borrows. Final cleanup after all
+    // borrow phases.
+    const BORROW_MARKER_LATE: &str = "/*__BORROWED_INPUTS__*/";
+    for t in &mut scenario.transitions {
+        if let TransitionLogic::Rhai { source } = &t.logic {
+            if source.contains(BORROW_MARKER_LATE) {
+                let new_source = source.replace(BORROW_MARKER_LATE, "");
+                t.logic = TransitionLogic::Rhai { source: new_source };
+            }
+        }
+    }
+
     // (d) Safety net: any pre-existing schema ref (effect tokens, DynamicToken)
     //     not in `definitions` gets a permissive `{}` so the runtime
     //     `SchemaRegistry` resolves every ref (unresolvable refs *fail*).
@@ -1192,6 +1249,262 @@ fn apply_control_data_foundation(
     }
 
     Ok(())
+}
+
+/// Normalized per-occurrence borrow record consumed by
+/// [`apply_backend_ref_phase`]. Distilled from the backend-specific
+/// `LlmDataBorrow` / `KreuzbergDataBorrow` so the rewrite pass doesn't
+/// need to know which backend it's processing.
+struct BackendBorrow {
+    consumer_node_id: String,
+    slug: String,
+    producer_node: String,
+    attr: String,
+    /// True when this site needs a filesystem path (LLM `images[].path`,
+    /// all Kreuzberg sites). Path-sites stage `StoragePath` or `Raw` so
+    /// the executor's existing staging hook produces a local path; the
+    /// embedded placeholder rewrites to `{{input_path:NAME}}`. Content-
+    /// sites stage `Raw` (JSON-string-encoded text) so `{{input:NAME}}`
+    /// loads the string back at runtime.
+    is_path_site: bool,
+    producer_field_kind: crate::models::template::FieldKind,
+}
+
+/// Shared rewrite engine for the c4 (LLM) and c5 (Kreuzberg) phases of
+/// [`apply_control_data_foundation`]. Both backends adopt the same
+/// `{{<slug>.<field>}}` convention HumanTask uses; this function does the
+/// work — find the prepare transition, wire the `d_<producer>` read-arc,
+/// emit one `job_inputs.push` per distinct `(slug, attr)` against the
+/// BORROW_MARKER, and rewrite each `{{<slug>.<attr>}}` placeholder in the
+/// embedded config Rhai literal.
+fn apply_backend_ref_phase(
+    graph: &crate::models::template::WorkflowGraph,
+    scenario: &mut aithericon_sdk::scenario::ScenarioDefinition,
+    interfaces: &InterfaceRegistry,
+    backend_label: &str,
+    borrows: Vec<BackendBorrow>,
+) {
+    use crate::compiler::token_shape::{data_def_name, def_ref};
+    use crate::models::template::{FieldKind, WorkflowNodeData};
+    use aithericon_sdk::scenario::{ScenarioArc, ScenarioPort, TransitionLogic};
+
+    if borrows.is_empty() {
+        return;
+    }
+
+    const BORROW_MARKER: &str = "/*__BORROWED_INPUTS__*/";
+
+    // Group borrows by consumer. Within each consumer, dedupe by
+    // `(slug, attr)` — many occurrences of the same placeholder in the
+    // same prompt stage one file. Track the "is_path_site" disposition
+    // for each unique key; we've already ensured (by planner-side kind
+    // checks) that the same (slug, attr) can't appear in both content
+    // and path sites on the same consumer, so first-wins is correct.
+    let mut by_consumer: std::collections::HashMap<String, Vec<BackendBorrow>> =
+        std::collections::HashMap::new();
+    for b in borrows {
+        by_consumer
+            .entry(b.consumer_node_id.clone())
+            .or_default()
+            .push(b);
+    }
+
+    for (consumer_id, consumer_borrows) in &by_consumer {
+        // Mirror c2: find the prepare transition by id convention.
+        let prepare_a = format!("{}/prepare", consumer_id);
+        let prepare_b = format!("t_{}_prepare", consumer_id);
+
+        // Dedupe per (slug, attr) — preserving first-encountered site
+        // disposition + producer_field_kind for the staging strategy.
+        let mut seen: std::collections::BTreeSet<(String, String)> =
+            std::collections::BTreeSet::new();
+        let mut unique: Vec<&BackendBorrow> = Vec::new();
+        for b in consumer_borrows {
+            if seen.insert((b.slug.clone(), b.attr.clone())) {
+                unique.push(b);
+            }
+        }
+
+        for t in &mut scenario.transitions {
+            if t.id != prepare_a && t.id != prepare_b {
+                continue;
+            }
+
+            // Build the Rhai snippet that gets spliced into BORROW_MARKER.
+            // Two effects: (a) per-borrow `job_inputs.push` to stage the
+            // per-field file; (b) ensure d_<producer> input ports + read-
+            // arcs are present (idempotent — c2 may have added them).
+            let mut pushes = String::new();
+
+            for b in &unique {
+                let var = format!("d_{}", b.producer_node.replace('-', "_"));
+                let Some(data_place) = interfaces
+                    .get(&b.producer_node)
+                    .and_then(|i| i.data_port.clone())
+                else {
+                    continue;
+                };
+                if !t.input_ports.iter().any(|p| p.name == var) {
+                    t.input_ports.push(ScenarioPort {
+                        name: var.clone(),
+                        schema_ref: Some(def_ref(&data_def_name(&b.producer_node))),
+                        cardinality: "single".to_string(),
+                    });
+                }
+                if !t.inputs.iter().any(|a| a.place == data_place && a.read) {
+                    t.inputs.push(ScenarioArc {
+                        place: data_place.clone(),
+                        port: var.clone(),
+                        weight: 1,
+                        read: true,
+                    });
+                }
+
+                // Build the Rhai accessor that reaches the producer's
+                // field. The envelope nests business data under
+                // `data.<attr>` (HumanTask) or `detail.outputs.<attr>`
+                // (AutomatedStep); other producer kinds (Start, Loop,
+                // SubWorkflow) keep the field at top-level. Same hoist
+                // logic as c2's `__h_<producer>` walker, condensed via
+                // null-safe `__pluck`.
+                let producer = graph.nodes.iter().find(|n| n.id == b.producer_node);
+                let mut path_segs: Vec<String> = match producer.map(|n| &n.data) {
+                    Some(WorkflowNodeData::HumanTask { .. }) => vec!["\"data\"".into()],
+                    Some(WorkflowNodeData::AutomatedStep { .. }) => {
+                        vec!["\"detail\"".into(), "\"outputs\"".into()]
+                    }
+                    _ => vec![],
+                };
+                path_segs.push(format!("\"{}\"", b.attr.replace('"', "\\\"")));
+                let value_expr = format!("__pluck({var}, [{}])", path_segs.join(", "));
+
+                let input_name = borrow_input_name(&b.slug, &b.attr);
+
+                // Per-borrow staging strategy. See BackendBorrow docs.
+                if b.is_path_site && b.producer_field_kind == FieldKind::File {
+                    // Producer field is a FileRef; stage StoragePath so
+                    // the storage hook downloads the binary into the run
+                    // dir. The producer's parked envelope holds the
+                    // FileRef as `{ url, filename, content_type, ... }`.
+                    let url_segs: Vec<String> = path_segs
+                        .iter()
+                        .cloned()
+                        .chain(std::iter::once("\"url\"".to_string()))
+                        .collect();
+                    let url_expr = format!("__pluck({var}, [{}])", url_segs.join(", "));
+                    pushes.push_str(&format!(
+                        r#"job_inputs.push(#{{ "name": "{input_name}", "source": #{{ "type": "storage_path", "path": {url_expr}, "storage": #{{}} }} }}); "#,
+                    ));
+                } else if b.is_path_site {
+                    // Path-site with non-File producer: stringify the
+                    // value into a Raw temp file. Kreuzberg with a text
+                    // upstream (e.g. an LLM narrative output) lands here.
+                    pushes.push_str(&format!(
+                        r#"let __c_{slug}_{attr} = {value_expr}; if type_of(__c_{slug}_{attr}) != "string" {{ __c_{slug}_{attr} = to_string(__c_{slug}_{attr}); }} job_inputs.push(#{{ "name": "{input_name}", "source": #{{ "type": "raw", "content": __c_{slug}_{attr} }} }}); "#,
+                        slug = sanitize_ident(&b.slug),
+                        attr = sanitize_ident(&b.attr),
+                        value_expr = value_expr,
+                        input_name = input_name,
+                    ));
+                } else {
+                    // Content-site (LLM prompt/system_prompt/history).
+                    // Stage Raw with JSON-encoded value so the executor's
+                    // `{{input:NAME}}` resolver loads it as the right
+                    // type. For strings, JSON-encoding turns text into a
+                    // JSON string literal; the resolver re-parses it back
+                    // to a string for interpolation. Non-string values
+                    // serialize via Rhai's `to_json` (when available) or
+                    // `to_string` as fallback.
+                    pushes.push_str(&format!(
+                        r#"let __c_{slug}_{attr} = {value_expr}; job_inputs.push(#{{ "name": "{input_name}", "source": #{{ "type": "inline", "value": __c_{slug}_{attr} }} }}); "#,
+                        slug = sanitize_ident(&b.slug),
+                        attr = sanitize_ident(&b.attr),
+                        value_expr = value_expr,
+                        input_name = input_name,
+                    ));
+                }
+            }
+
+            // Splice into the BORROW_MARKER. If the marker is missing —
+            // e.g., a different phase already stripped it — leave logic
+            // untouched (shouldn't happen given c2/c4 order, but safe).
+            if let TransitionLogic::Rhai { source } = &t.logic {
+                if source.contains(BORROW_MARKER) {
+                    let mut new_source = source.replace(BORROW_MARKER, &pushes);
+                    // Now rewrite every `{{<slug>.<attr>}}` placeholder
+                    // inside the embedded config Rhai literal to the
+                    // executor-resolved form. For content-sites use
+                    // `{{input:NAME}}`; for path-sites `{{input_path:NAME}}`.
+                    for b in &unique {
+                        let input_name = borrow_input_name(&b.slug, &b.attr);
+                        let resolver_prefix = if b.is_path_site { "input_path" } else { "input" };
+                        let replacement = format!("{{{{{resolver_prefix}:{input_name}}}}}");
+                        new_source = rewrite_slug_attr_placeholders(
+                            &new_source,
+                            &b.slug,
+                            &b.attr,
+                            &replacement,
+                        );
+                    }
+                    t.logic = TransitionLogic::Rhai { source: new_source };
+                }
+            }
+            let _ = backend_label; // (kept for future error-attributed paths)
+        }
+    }
+}
+
+/// Stable input-declaration name for a given `(slug, attr)` borrow. Used
+/// as the staged file name AND the `{{input:NAME}}` / `{{input_path:NAME}}`
+/// substitution key. Underscores replace any non-identifier chars so the
+/// name is safe in both file paths and Rhai literals.
+fn borrow_input_name(slug: &str, attr: &str) -> String {
+    format!("__borrow_{}__{}", sanitize_ident(slug), sanitize_ident(attr))
+}
+
+/// Sanitize an identifier-like string for use in generated Rhai variable
+/// names and staged file names. Replaces hyphens (and other non-alnum/
+/// underscore chars) with underscores.
+fn sanitize_ident(s: &str) -> String {
+    s.chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' })
+        .collect()
+}
+
+/// Replace every `{{ <slug>.<attr> }}` placeholder in `source` (with
+/// optional whitespace around the inner segments) with `replacement`.
+/// Lexical scan — does NOT touch placeholders whose inner body differs
+/// or whose dots are nested deeper.
+fn rewrite_slug_attr_placeholders(
+    source: &str,
+    slug: &str,
+    attr: &str,
+    replacement: &str,
+) -> String {
+    let mut out = String::with_capacity(source.len());
+    let mut rest = source;
+    while let Some(open) = rest.find("{{") {
+        out.push_str(&rest[..open]);
+        let after = &rest[open + 2..];
+        let Some(close_rel) = after.find("}}") else {
+            // Unterminated `{{` — copy through and stop scanning.
+            out.push_str("{{");
+            out.push_str(after);
+            return out;
+        };
+        let inner = &after[..close_rel];
+        let trimmed = inner.trim();
+        if trimmed == format!("{slug}.{attr}") {
+            out.push_str(replacement);
+        } else {
+            out.push_str("{{");
+            out.push_str(inner);
+            out.push_str("}}");
+        }
+        rest = &after[close_rel + 2..];
+    }
+    out.push_str(rest);
+    out
 }
 
 #[cfg(test)]
@@ -2977,6 +3290,172 @@ mod tests {
     /// historical `outputs: []` since the runner sweep / strict
     /// validation only exists on the Python runner. Widening this to
     /// other backends needs their own validation path.
+    #[test]
+    /// LLM AutomatedStep with `{{<slug>.<field>}}` borrows in its prompt
+    /// gets rewritten by c4: per-borrow `job_inputs.push` against the
+    /// producer's read-arc'd envelope + the prompt's placeholder strings
+    /// rewritten to `{{input:__borrow_*}}` form the resolver knows.
+    fn llm_prompt_borrow_rewrites_placeholders_and_stages_field() {
+        let json = r#"{
+          "nodes":[
+            {"id":"start","type":"start","slug":"start","position":{"x":0,"y":0},
+             "data":{"type":"start","label":"Start"}},
+            {"id":"review","type":"human_task","slug":"review","position":{"x":0,"y":0},
+             "data":{"type":"human_task","label":"Review","taskTitle":"R",
+                     "steps":[{"id":"s","title":"S","blocks":[
+                       {"type":"input","field":{"name":"vendor_name","label":"V","kind":"text","required":true}}
+                     ]}]}},
+            {"id":"classify","type":"automated_step","slug":"classify","position":{"x":0,"y":0},
+             "data":{"type":"automated_step","label":"Classify",
+                     "executionSpec":{"backendType":"llm","config":{
+                        "provider":"openai","model":"gpt-4o-mini",
+                        "prompt":"Vendor: {{ review.vendor_name }} — classify"
+                     }},
+                     "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
+                     "deploymentModel":{"mode":"inline"}}},
+            {"id":"end","type":"end","position":{"x":0,"y":0},
+             "data":{"type":"end","label":"End"}}
+          ],
+          "edges":[
+            {"id":"e1","source":"start","target":"review","targetHandle":"in","type":"sequence"},
+            {"id":"e2","source":"review","target":"classify","targetHandle":"in","type":"sequence"},
+            {"id":"e3","source":"classify","target":"end","targetHandle":"in","type":"sequence"}
+          ]
+        }"#;
+        let graph: WorkflowGraph = serde_json::from_str(json).expect("deser graph");
+        let scenario = crate::compiler::compile_to_scenario(
+            &graph,
+            "llm-borrow-test",
+            "",
+            &std::collections::HashMap::new(),
+            &crate::compiler::SubWorkflowAir::new(),
+        )
+        .expect("compile llm-borrow graph");
+
+        let prepare = scenario
+            .transitions
+            .iter()
+            .find(|t| t.id == "classify/prepare")
+            .expect("classify prepare transition exists");
+
+        let source = match &prepare.logic {
+            aithericon_sdk::scenario::TransitionLogic::Rhai { source } => source,
+            other => panic!("expected Rhai logic, got {other:?}"),
+        };
+
+        // (1) The c4 phase replaced the BORROW_MARKER with a job_inputs.push.
+        assert!(
+            !source.contains("__BORROWED_INPUTS__"),
+            "marker should be substituted; source: {source}"
+        );
+        assert!(
+            source.contains(r#""name": "__borrow_review__vendor_name""#),
+            "prepare must stage __borrow_review__vendor_name; source: {source}"
+        );
+
+        // (2) The original placeholder `{{ review.vendor_name }}` in the
+        //     embedded config string got rewritten to the resolver-known form.
+        assert!(
+            source.contains("{{input:__borrow_review__vendor_name}}"),
+            "prompt placeholder must rewrite to {{input:__borrow_*}}; source: {source}"
+        );
+        assert!(
+            !source.contains("{{ review.vendor_name }}"),
+            "the original slug.field placeholder should be gone; source: {source}"
+        );
+
+        // (3) The read-arc port + arc landed on prepare.
+        assert!(
+            prepare.input_ports.iter().any(|p| p.name == "d_review"),
+            "d_review input port missing; got: {:?}",
+            prepare.input_ports
+        );
+        assert!(
+            prepare
+                .inputs
+                .iter()
+                .any(|a| a.place == "p_review_data" && a.read),
+            "read-arc into p_review_data missing; got: {:?}",
+            prepare.inputs
+        );
+    }
+
+    /// Kreuzberg with an upstream file ref stages StoragePath against the
+    /// HumanTask's parked FileRef.url, and the `file:` placeholder in the
+    /// config becomes `{{input_path:__borrow_*}}` for the resolver.
+    #[test]
+    fn kreuzberg_upstream_file_ref_rewrites_to_input_path() {
+        let json = r#"{
+          "nodes":[
+            {"id":"start","type":"start","slug":"start","position":{"x":0,"y":0},
+             "data":{"type":"start","label":"Start"}},
+            {"id":"uploader","type":"human_task","slug":"uploader","position":{"x":0,"y":0},
+             "data":{"type":"human_task","label":"U","taskTitle":"U",
+                     "steps":[{"id":"s","title":"S","blocks":[
+                       {"type":"input","field":{"name":"pdf","label":"P","kind":"file","required":true}}
+                     ]}]}},
+            {"id":"ocr","type":"automated_step","slug":"ocr","position":{"x":0,"y":0},
+             "data":{"type":"automated_step","label":"OCR",
+                     "executionSpec":{"backendType":"kreuzberg","config":{"file":"{{ uploader.pdf }}"}},
+                     "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
+                     "deploymentModel":{"mode":"inline"}}},
+            {"id":"end","type":"end","position":{"x":0,"y":0},
+             "data":{"type":"end","label":"End"}}
+          ],
+          "edges":[
+            {"id":"e1","source":"start","target":"uploader","targetHandle":"in","type":"sequence"},
+            {"id":"e2","source":"uploader","target":"ocr","targetHandle":"in","type":"sequence"},
+            {"id":"e3","source":"ocr","target":"end","targetHandle":"in","type":"sequence"}
+          ]
+        }"#;
+        let graph: WorkflowGraph = serde_json::from_str(json).expect("deser graph");
+        let scenario = crate::compiler::compile_to_scenario(
+            &graph,
+            "kz-borrow-test",
+            "",
+            &std::collections::HashMap::new(),
+            &crate::compiler::SubWorkflowAir::new(),
+        )
+        .expect("compile kreuzberg-borrow graph");
+
+        let prepare = scenario
+            .transitions
+            .iter()
+            .find(|t| t.id == "ocr/prepare")
+            .expect("ocr prepare transition exists");
+        let source = match &prepare.logic {
+            aithericon_sdk::scenario::TransitionLogic::Rhai { source } => source,
+            other => panic!("expected Rhai logic, got {other:?}"),
+        };
+
+        // (1) Per-borrow stage with type=storage_path because the field is FieldKind::File.
+        assert!(
+            source.contains(r#""type": "storage_path""#),
+            "File-kind producer must stage StoragePath; source: {source}"
+        );
+        assert!(
+            source.contains(r#""name": "__borrow_uploader__pdf""#),
+            "Kreuzberg must stage __borrow_uploader__pdf; source: {source}"
+        );
+
+        // (2) Config rewrite: `{{ uploader.pdf }}` → `{{input_path:__borrow_uploader__pdf}}`.
+        assert!(
+            source.contains("{{input_path:__borrow_uploader__pdf}}"),
+            "Kreuzberg path-site must rewrite to {{input_path:...}}; source: {source}"
+        );
+        assert!(
+            !source.contains("{{ uploader.pdf }}"),
+            "the original placeholder should be gone; source: {source}"
+        );
+
+        // (3) Read-arc landed.
+        assert!(
+            prepare.input_ports.iter().any(|p| p.name == "d_uploader"),
+            "d_uploader input port missing; got: {:?}",
+            prepare.input_ports
+        );
+    }
+
     #[test]
     fn non_python_automated_step_keeps_empty_outputs_in_prepare_rhai() {
         let json = r#"{

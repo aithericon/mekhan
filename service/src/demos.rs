@@ -738,6 +738,7 @@ mod tests {
             ("04-loop-counter",     "00000000-0000-0000-0000-000000000014", "04 · Loop Counter"),
             ("05-parallel-fanout",  "00000000-0000-0000-0000-000000000015", "05 · Parallel Fanout"),
             ("06-subworkflow",      "00000000-0000-0000-0000-000000000016", "06 · SubWorkflow (Flow-in-Flow)"),
+            ("07-ocr-classify-extract", "00000000-0000-0000-0000-000000000017", "07 · OCR Classify & Extract"),
         ] {
             let demo = load_demo(&root.join(dir_name))
                 .unwrap_or_else(|e| panic!("{dir_name} must load: {e}"));
@@ -785,6 +786,71 @@ mod tests {
                 "{dir_name} AIR must declare transitions"
             );
         }
+    }
+
+    /// `07-ocr-classify-extract` exercises the LLM + Kreuzberg upstream-ref
+    /// borrow plumbing on real bundled fixtures. The Kreuzberg `file` field
+    /// references `{{ start.document }}` (path-site, File kind →
+    /// StoragePath staging); the LLM `prompt` references
+    /// `{{ extract_text.full_text }}` (content-site → Raw staging). Both
+    /// must rewrite to the executor-resolver shape (`{{input_path:…}}` /
+    /// `{{input:…}}`) and emit corresponding `job_inputs.push` snippets in
+    /// the prepare-transition Rhai source. A break here means the LLM/
+    /// Kreuzberg borrow phase regressed on real graphs — the focused unit
+    /// tests in `compile.rs` would still pass but the demo would die at
+    /// publish.
+    #[test]
+    fn ocr_classify_extract_demo_loads_and_compiles_with_borrows() {
+        use crate::compiler::{compile_to_air, node_files_inline};
+
+        let root = repo_root().join("demos");
+        let demo = load_demo(&root.join("07-ocr-classify-extract"))
+            .expect("07-ocr-classify-extract must load");
+        assert_eq!(
+            demo.metadata.template_id,
+            "00000000-0000-0000-0000-000000000017"
+        );
+
+        let files = node_files_inline(&demo.files);
+        let air = compile_to_air(
+            &demo.graph,
+            &demo.metadata.name,
+            demo.metadata.description.as_deref().unwrap_or(""),
+            &files,
+        )
+        .unwrap_or_else(|e| panic!("07-ocr-classify-extract must compile to AIR: {e:?}"));
+
+        let air_str = air.to_string();
+
+        // Kreuzberg borrow: file kind producer → StoragePath staging.
+        // The compiler rewrites `{{ start.document }}` in the Kreuzberg
+        // `file` config to `{{input_path:__borrow_start__document}}` and
+        // emits a matching `job_inputs.push` with `storage_path`.
+        assert!(
+            air_str.contains("__borrow_start__document"),
+            "AIR must reference the start.document borrow input by its generated name; got: {air_str}"
+        );
+        assert!(
+            air_str.contains("input_path:__borrow_start__document"),
+            "Kreuzberg file field must be rewritten to {{input_path:…}}; got: {air_str}"
+        );
+        assert!(
+            air_str.contains("storage_path"),
+            "File-kind borrow must stage via storage_path; got: {air_str}"
+        );
+
+        // LLM borrow: text-kind producer → Raw staging. The compiler
+        // rewrites `{{ extract_text.full_text }}` in the LLM prompt to
+        // `{{input:__borrow_extract_text__full_text}}` and emits a
+        // matching `job_inputs.push` with `raw`.
+        assert!(
+            air_str.contains("__borrow_extract_text__full_text"),
+            "AIR must reference the extract_text.full_text borrow input by its generated name; got: {air_str}"
+        );
+        assert!(
+            air_str.contains("input:__borrow_extract_text__full_text"),
+            "LLM prompt must be rewritten to {{input:…}}; got: {air_str}"
+        );
     }
 
     /// `06-subworkflow` references `01-hello-world`'s templateId via its

@@ -4,14 +4,25 @@
 	import { Input } from '$lib/components/ui/input';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { FormField } from '$lib/components/ui/form-field';
+	import InsertRefButton from '../InsertRefButton.svelte';
+	import type { ScopeEntry } from '$lib/editor/guard-scope';
 
 	type Props = {
 		config: Record<string, unknown>;
 		readonly?: boolean;
 		onchange: (config: Record<string, unknown>) => void;
+		scope?: ScopeEntry[];
 	};
 
-	let { config, readonly = false, onchange }: Props = $props();
+	let { config, readonly = false, onchange, scope = [] }: Props = $props();
+
+	function appendToField(field: 'prompt' | 'system_prompt', snippet: string) {
+		const curr = (config[field] as string | undefined) ?? '';
+		onchange({
+			...config,
+			[field]: curr ? `${curr} ${snippet}` : snippet
+		});
+	}
 
 	const providerLabels: Record<string, string> = {
 		openai: 'OpenAI',
@@ -99,18 +110,34 @@
 			})}
 		rows={2}
 	/>
+	{#if scope.length > 0}
+		<InsertRefButton
+			{scope}
+			disabled={readonly}
+			placeholder="Insert upstream ref…"
+			oninsert={(snippet) => appendToField('system_prompt', snippet)}
+		/>
+	{/if}
 </div>
 
 <div class="space-y-1.5">
 	<span class="text-sm font-medium text-muted-foreground">Prompt</span>
 	<Textarea
 		value={(config.prompt as string) ?? ''}
-		placeholder={'User prompt (supports {{variable}} templates)...'}
+		placeholder={'User prompt (supports {{ upstream.field }} templates)…'}
 		disabled={readonly}
 		oninput={(e) =>
 			onchange({ ...config, prompt: (e.currentTarget as HTMLTextAreaElement).value })}
 		rows={4}
 	/>
+	{#if scope.length > 0}
+		<InsertRefButton
+			{scope}
+			disabled={readonly}
+			placeholder="Insert upstream ref…"
+			oninsert={(snippet) => appendToField('prompt', snippet)}
+		/>
+	{/if}
 </div>
 
 <div class="flex gap-3">

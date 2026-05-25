@@ -1009,6 +1009,7 @@ fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileError> {
             backend_type,
             &execution_spec.config,
             cx.node_files,
+            id,
         )?;
     let config_rhai = json_to_rhai_literal(&validated_config);
     let inputs_rhai =
@@ -1173,6 +1174,7 @@ fn lower_automated_step_scheduled(cx: &mut LoweringCtx) -> Result<(), CompileErr
             &backend_type,
             &execution_spec.config,
             cx.node_files,
+            &id,
         )?;
     let config_rhai = json_to_rhai_literal(&validated_config);
     let inputs_rhai =
@@ -1281,6 +1283,7 @@ fn lower_catalogue_query(cx: &mut LoweringCtx) -> Result<(), CompileError> {
             &backend_type,
             &execution_spec.config,
             cx.node_files,
+            &id,
         )?;
     let query_rhai = json_to_rhai_literal(&query_token);
 
