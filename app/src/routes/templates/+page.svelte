@@ -250,7 +250,7 @@
 				{#each templates as template (template.id)}
 					<a
 						href="/templates/{template.id}"
-						class="group flex items-center justify-between rounded-lg border border-border bg-card p-4 transition-colors hover:bg-accent/50"
+						class="group flex items-start justify-between rounded-lg border border-border bg-card p-4 transition-colors hover:bg-accent/50"
 						data-testid="template-item-{template.id}"
 					>
 						<div class="min-w-0">
@@ -283,37 +283,39 @@
 							{#if (ioByTemplate.get(template.id)?.inputs.length ?? 0) > 0 || (ioByTemplate.get(template.id)?.outputs.length ?? 0) > 0}
 								{@const io = ioByTemplate.get(template.id) ?? { inputs: [], outputs: [] }}
 								<div
-									class="mt-2 flex flex-wrap items-center gap-1.5 text-sm"
+									class="mt-2 grid grid-cols-2 gap-x-6 gap-y-1 text-sm"
 									data-testid="template-io-{template.id}"
 								>
-									{#if io.inputs.length > 0}
-										<span class="text-sm font-medium uppercase tracking-wider text-muted-foreground/70">
-											In
-										</span>
-										{#each io.inputs as name (name)}
-											<span class="rounded border border-node-start/40 bg-node-start/10 px-1.5 py-0.5 font-mono text-sm text-node-start">
-												{name}
+									<div class="flex flex-col gap-1">
+										{#if io.inputs.length > 0}
+											<span class="text-sm font-medium uppercase tracking-wider text-muted-foreground/70">
+												In
 											</span>
-										{/each}
-									{/if}
-									{#if io.inputs.length > 0 && io.outputs.length > 0}
-										<span class="text-muted-foreground/50">→</span>
-									{/if}
-									{#if io.outputs.length > 0}
-										<span class="text-sm font-medium uppercase tracking-wider text-muted-foreground/70">
-											Out
-										</span>
-										{#each io.outputs as name (name)}
-											<span class="rounded border border-node-end/40 bg-node-end/10 px-1.5 py-0.5 font-mono text-sm text-node-end">
-												{name}
+											<div class="flex flex-wrap gap-1.5">
+												{#each io.inputs as name (name)}
+													<span class="rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-sm text-foreground">
+														{name}
+													</span>
+												{/each}
+											</div>
+										{/if}
+									</div>
+									<div class="flex flex-col gap-1">
+										{#if io.outputs.length > 0}
+											<span class="text-sm font-medium uppercase tracking-wider text-muted-foreground/70">
+												Out
 											</span>
-										{/each}
-									{/if}
+											<div class="flex flex-wrap gap-1.5">
+												{#each io.outputs as name (name)}
+													<span class="rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-sm text-foreground">
+														{name}
+													</span>
+												{/each}
+											</div>
+										{/if}
+									</div>
 								</div>
 							{/if}
-							<p class="mt-1 text-sm text-muted-foreground">
-								Updated {formatDate(template.updated_at)}
-							</p>
 							{#if runCounts[template.id]}
 								{@const c = runCounts[template.id]}
 								<button
@@ -341,7 +343,14 @@
 								</button>
 							{/if}
 						</div>
-						<div class="flex items-center gap-1">
+						<div class="flex flex-col items-end gap-1">
+							<span
+								class="pt-0.5 text-sm leading-5 text-muted-foreground whitespace-nowrap"
+								data-testid="template-updated-{template.id}"
+							>
+								Updated {formatDate(template.updated_at)}
+							</span>
+							<div class="flex items-center gap-1">
 							{#if template.published}
 								<Button
 									variant="ghost"
@@ -400,6 +409,7 @@
 									</DropdownMenuItem>
 								</DropdownMenuContent>
 							</DropdownMenu>
+							</div>
 						</div>
 					</a>
 				{/each}
