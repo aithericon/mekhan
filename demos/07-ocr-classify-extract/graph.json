@@ -61,13 +61,14 @@
       "data": {
         "type": "automated_step",
         "label": "Classify (LLM)",
-        "description": "Borrows extract_text.full_text inline via {{ extract_text.full_text }} — compiler stages it as a Raw input, runner interpolates it into the prompt at dispatch time.",
+        "description": "Borrows extract_text.full_text inline via {{ extract_text.full_text }} — compiler stages it as a Raw input, runner interpolates it into the prompt at dispatch time. Dispatches against the local vllm-metal server (`just dev vllm-up`); model must match the one vllm-metal is serving (recipe default mlx-community/Qwen3.5-9B-MLX-4bit — override here AND in `just dev vllm-up`'s VLLM_MODEL env var if changed). Qwen3 emits `<think>...</think>` blocks before the JSON answer by default; downstream consumers must tolerate the prefix.",
         "executionSpec": {
           "backendType": "llm",
           "config": {
-            "provider": "ollama",
-            "model": "llama3.2:3b",
-            "base_url": "http://localhost:11434",
+            "provider": "openai",
+            "model": "mlx-community/Qwen3.5-9B-MLX-4bit",
+            "base_url": "http://localhost:8000",
+            "api_key": "not-needed",
             "temperature": 0,
             "max_tokens": 256,
             "system_prompt": "You are a document classifier. Return JSON.",

@@ -937,12 +937,34 @@ fn lower_human_task(cx: &mut LoweringCtx) -> Result<(), CompileError> {
 
 /// Serialize the declared `output.fields` as a Rhai array literal carrying
 /// `(name, required, kind)` per entry, suitable for embedding into the
-/// prepare transition's `d.spec.outputs` slot. Python-only — other backends
-/// keep the historical `outputs: []` for now (the runner sweep that consumes
-/// these declarations only exists on the Python runner; widening to other
-/// backends requires their own validation path first).
+/// prepare transition's `d.spec.outputs` slot.
+///
+/// Enabled for the backends that consume declared outputs at runtime:
+/// - **Python**: the runner sweeps `globals()` by declared name + validates
+///   each value against `kind` (executor-backend::python).
+/// - **Kreuzberg**: `build_single_outputs` writes its native keys
+///   (`content`, `mime_type`, `word_count`, …) then auto-fills any declared
+///   output absent from that set with the extracted text content
+///   (executor-kreuzberg::backend). Lets demo authors declare semantic
+///   names (`full_text`) on top of kreuzberg's native shape.
+/// - **LLM**: when the response has a structured-JSON payload, the backend
+///   unpacks each declared output by matching it to a top-level key; any
+///   unmatched declaration falls back to the whole response_value
+///   (executor-llm::backend). The structured-output path is the only way
+///   to expose multiple typed fields from one LLM call.
+///
+/// Other backends (process, docker, http, file_ops, postgres, …) don't
+/// auto-fill declared outputs; emitting names would force the executor's
+/// `required`-output check to fail. Keep `[]` for them until they grow
+/// their own auto-fill or output-validation path.
 fn declared_outputs_rhai(backend: ExecutionBackendType, output: &Port) -> String {
-    if backend != ExecutionBackendType::Python || output.fields.is_empty() {
+    let backend_consumes_declared = matches!(
+        backend,
+        ExecutionBackendType::Python
+            | ExecutionBackendType::Kreuzberg
+            | ExecutionBackendType::Llm
+    );
+    if !backend_consumes_declared || output.fields.is_empty() {
         return "[]".to_string();
     }
     let arr: Vec<serde_json::Value> = output
