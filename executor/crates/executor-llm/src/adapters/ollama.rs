@@ -100,6 +100,12 @@ struct OllamaChatResponse {
 #[derive(Deserialize)]
 struct OllamaResponseMessage {
     content: String,
+    /// Reasoning models (qwen3, deepseek-r1, …) on recent Ollama
+    /// surface their `<think>` block here instead of inlining it into
+    /// `content`. When `content` is empty (e.g. max_tokens hit during
+    /// reasoning) this is the only place output shows up.
+    #[serde(default)]
+    thinking: Option<String>,
 }
 
 fn role_str(role: &Role) -> &'static str {
@@ -195,7 +201,10 @@ async fn ollama_complete(
         total_tokens: resp.prompt_eval_count + resp.eval_count,
     };
 
-    // Parse structured output when using json_schema format
+    // Parse structured output when using json_schema format.
+    // Reasoning is hoisted to `message.thinking` by Ollama in this mode
+    // too, so the structured path doesn't need to see the think block —
+    // `content` is already pure JSON.
     let structured_output = match &request.response_format {
         ResponseFormat::JsonSchema { .. } => {
             let parsed: serde_json::Value =
@@ -210,8 +219,20 @@ async fn ollama_complete(
         ResponseFormat::Text => None,
     };
 
+    // For text mode, re-inline the reasoning block into `content` so
+    // downstream consumers see a single text stream — matches the qwen3
+    // native `<think>…</think>` shape Ollama used to emit before
+    // promoting thinking to a structured field. Without this, a run
+    // that hits max_tokens during reasoning returns empty content.
+    let content = match (&request.response_format, resp.message.thinking.as_deref()) {
+        (ResponseFormat::Text, Some(t)) if !t.is_empty() => {
+            format!("<think>{t}</think>{}", resp.message.content)
+        }
+        _ => resp.message.content,
+    };
+
     Ok(CompletionResponse {
-        content: resp.message.content,
+        content,
         usage,
         model: resp.model,
         finish_reason,
