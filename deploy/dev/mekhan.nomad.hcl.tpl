@@ -212,6 +212,20 @@ EOH
         # Cancel HTTP off by default — turn on + add a port stanza above
         # if the service ever needs to cancel executor jobs synchronously.
         EXECUTOR_CANCEL__HTTP = "false"
+        # S3 / object-storage backend for staging inputs (template scripts,
+        # generated .pyi stubs) and outputs. MUST match what mekhan-service
+        # uploads to — see MEKHAN__S3__* above. Symptom of mismatch: executor
+        # logs "staging failed: artifact not found" because it's looking in a
+        # different bucket (or with no S3 backend configured, just the local
+        # FS where nothing was uploaded). The double-underscore between
+        # STORAGE and its sub-fields is config-rs's nesting separator —
+        # storage.backend, storage.endpoint, storage.credentials.access_key.
+        EXECUTOR_STORAGE__BACKEND                  = "s3"
+        EXECUTOR_STORAGE__ENDPOINT                 = "${s3_endpoint}"
+        EXECUTOR_STORAGE__BUCKET                   = "${s3_bucket}"
+        EXECUTOR_STORAGE__REGION                   = "fsn1"
+        EXECUTOR_STORAGE__CREDENTIALS__ACCESS_KEY  = "${s3_access_key}"
+        EXECUTOR_STORAGE__CREDENTIALS__SECRET_KEY  = "${s3_secret_key}"
         RUST_LOG              = "${rust_log}"
       }
 
