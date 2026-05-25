@@ -243,6 +243,11 @@ fn build_container_body(config: &DockerConfig, run_context: &RunContext) -> Cont
 }
 
 /// Build the list of environment variables for the container.
+///
+/// Resolved secrets in `run_context.resolved_env` overlay `run_context.env`
+/// — `env` still contains the unresolved `{{secret:KEY}}` templates as a
+/// defense-in-depth guarantee against accidental persistence, so we must
+/// prefer the resolved value when present.
 fn build_env_vars(config: &DockerConfig, run_context: &RunContext) -> Vec<String> {
     let mut vars: Vec<String> = Vec::new();
 
@@ -251,10 +256,25 @@ fn build_env_vars(config: &DockerConfig, run_context: &RunContext) -> Vec<String
         vars.push(format!("{k}={v}"));
     }
 
-    // RunContext env vars (take precedence — AITHERICON_* and others from staging)
-    // Skip the host-path AITHERICON_* vars since we override them with container paths
+    // RunContext env vars (take precedence — AITHERICON_* and others from staging).
+    // Skip host-path AITHERICON_* vars since we override them with container paths.
+    // For any name present in `resolved_env`, use the resolved plaintext rather
+    // than the `{{secret:KEY}}` template that lives in `env`.
     for (k, v) in &run_context.env {
-        if !k.starts_with("AITHERICON_") {
+        if k.starts_with("AITHERICON_") {
+            continue;
+        }
+        let effective = run_context.resolved_env.get(k).unwrap_or(v);
+        vars.push(format!("{k}={effective}"));
+    }
+
+    // Resolved-only entries that don't appear in `env` (in practice the
+    // PlanSecretsHook only writes keys that exist in `env`, but be defensive).
+    for (k, v) in &run_context.resolved_env {
+        if k.starts_with("AITHERICON_") {
+            continue;
+        }
+        if !run_context.env.contains_key(k) {
             vars.push(format!("{k}={v}"));
         }
     }

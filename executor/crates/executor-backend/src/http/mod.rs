@@ -260,6 +260,22 @@ pub struct ResolvedHttpConfig {
     pub resolved_query: HashMap<String, String>,
 }
 
+/// Build the env view used for HTTP template/auth resolution.
+///
+/// Returns a map that contains every entry of `run_context.env` (with
+/// unresolved `{{secret:KEY}}` templates preserved) overlaid by
+/// `run_context.resolved_env` (the in-memory plaintext for any key that had
+/// a secret template). The HTTP backend has no spawned child to feed via
+/// `Command::env`, so this is the only path that connects PlanSecretsHook's
+/// resolved values to the outbound request.
+fn merged_env(run_context: &RunContext) -> HashMap<String, String> {
+    let mut view = run_context.env.clone();
+    for (k, v) in &run_context.resolved_env {
+        view.insert(k.clone(), v.clone());
+    }
+    view
+}
+
 /// Backend that executes a single HTTP request via reqwest.
 pub struct HttpBackend;
 
@@ -282,7 +298,18 @@ impl ExecutionBackend for HttpBackend {
         _job: &ExecutionJob,
         mut run_context: RunContext,
     ) -> Result<RunContext, ExecutorError> {
-        let mut config = HttpConfig::from_spec(&run_context.spec)?;
+        // HTTP is the special case: no spawned child, so there is no
+        // `Command::env(k, v)` side-channel for resolved secrets. When
+        // `PlanSecretsHook` resolved `spec.config`, it parked the resolved
+        // overlay in `run_context.resolved_config` (`#[serde(skip)]`). We
+        // consume that here at request-build time. When `resolved_config` is
+        // `None` (no secret templates in the config), fall back to
+        // `spec.config` — preserves the `vault_addr: None` test path.
+        let mut config = match run_context.resolved_config.as_ref() {
+            Some(resolved) => serde_json::from_value::<HttpConfig>(resolved.clone())
+                .map_err(|e| ExecutorError::Config(format!("invalid http backend config: {e}")))?,
+            None => HttpConfig::from_spec(&run_context.spec)?,
+        };
         config.validate()?;
 
         // Validate body_from_input references an existing staged input
@@ -294,25 +321,30 @@ impl ExecutionBackend for HttpBackend {
             }
         }
 
+        // For URL/header/query/auth template resolution we need the env view
+        // with any resolved secret values overlaid on top of `env` (which
+        // still holds the unresolved `{{secret:KEY}}` templates).
+        let env_view = merged_env(&run_context);
+
         // Resolve auth tokens from env
-        config.resolve_auth(&run_context.env)?;
+        config.resolve_auth(&env_view)?;
 
         // Resolve templates in URL, headers, query params
         let resolved_url = template::resolve(
             &config.url,
-            &run_context.env,
+            &env_view,
             &run_context.staged_inputs,
             &run_context.metadata,
         )?;
         let resolved_headers = template::resolve_map(
             &config.headers,
-            &run_context.env,
+            &env_view,
             &run_context.staged_inputs,
             &run_context.metadata,
         )?;
         let resolved_query = template::resolve_map(
             &config.query,
-            &run_context.env,
+            &env_view,
             &run_context.staged_inputs,
             &run_context.metadata,
         )?;

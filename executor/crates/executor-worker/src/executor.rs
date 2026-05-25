@@ -126,6 +126,10 @@ impl JobExecutor {
             run_dir,
             timeout,
             env: Default::default(),
+            resolved_env: Default::default(),
+            resolved_config: None,
+            resolved_input_storage: Default::default(),
+            resolved_output_storage: Default::default(),
             metadata: job.metadata.clone(),
             staged_inputs: Default::default(),
             expected_outputs: Default::default(),
@@ -343,11 +347,20 @@ impl JobExecutor {
                         {
                             let local_path = run_context.run_dir.outputs_dir.join(path_rel);
                             if local_path.exists() {
+                                // Prefer the resolved storage config from the
+                                // PlanSecretsHook side-channel; the
+                                // `upload_config.storage` view still carries
+                                // `{{secret:KEY}}` templates.
+                                let resolved_storage = run_context
+                                    .resolved_output_storage
+                                    .get(&decl.name)
+                                    .cloned();
                                 match upload_output(
                                     &local_path,
                                     &decl.name,
                                     &execution_id,
                                     upload_config,
+                                    resolved_storage.as_ref(),
                                 )
                                 .await
                                 {
@@ -605,19 +618,39 @@ impl JobExecutor {
 }
 
 /// Upload an output file to a per-output storage destination via OpenDAL.
+///
+/// `resolved_storage`, when `Some`, carries the post-`PlanSecretsHook` view of
+/// `config.storage` with `{{secret:KEY}}` templates substituted to plaintext.
+/// We use it in preference to `config.storage` (which still carries the
+/// unresolved templates) for the actual OpenDAL operator build.
 #[cfg(feature = "opendal")]
 async fn upload_output(
     local_path: &std::path::Path,
     output_name: &str,
     execution_id: &str,
     config: &aithericon_executor_domain::OutputUploadConfig,
+    resolved_storage: Option<&serde_json::Value>,
 ) -> Result<String, ExecutorError> {
+    let resolved_storage_owned: Option<aithericon_executor_storage::StorageConfig> =
+        if let Some(json) = resolved_storage {
+            Some(serde_json::from_value(json.clone()).map_err(|e| {
+                ExecutorError::StagingFailed(format!(
+                    "deserialize resolved storage config for output '{output_name}': {e}"
+                ))
+            })?)
+        } else {
+            None
+        };
+    let effective_storage = resolved_storage_owned.as_ref().unwrap_or(&config.storage);
+
     let (operator, prefix) =
-        aithericon_executor_storage::build_operator_with_prefix(&config.storage).map_err(|e| {
-            ExecutorError::StagingFailed(format!(
-                "storage operator for output '{output_name}': {e}"
-            ))
-        })?;
+        aithericon_executor_storage::build_operator_with_prefix(effective_storage).map_err(
+            |e| {
+                ExecutorError::StagingFailed(format!(
+                    "storage operator for output '{output_name}': {e}"
+                ))
+            },
+        )?;
 
     let destination = match &config.destination_path {
         Some(dest) => format!("{}{}", prefix, dest),

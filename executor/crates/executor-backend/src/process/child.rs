@@ -43,8 +43,15 @@ pub async fn run_process(
         cmd.env(k, v);
     }
 
-    // Then apply RunContext env vars (these take precedence, e.g. AITHERICON_* vars)
+    // Then apply RunContext env vars (these take precedence, e.g. AITHERICON_* vars).
+    // For any env name that had a `{{secret:KEY}}` template, `resolved_env`
+    // carries the plaintext from the in-memory side-channel (never serialized
+    // to context.json). Apply `env` first then overlay `resolved_env` so the
+    // resolved values win without leaking through `env` to disk.
     for (k, v) in &run_context.env {
+        cmd.env(k, v);
+    }
+    for (k, v) in &run_context.resolved_env {
         cmd.env(k, v);
     }
 
