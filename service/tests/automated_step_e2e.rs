@@ -433,16 +433,35 @@ async fn automated_step_python_native_assignment_reaches_step_executions() {
     // outputs into `step_execution.outputs`. With the implicit sweep
     // wired correctly, the declared `result` field must surface here —
     // not as null, and not as the raw user code text.
-    let outputs: Option<serde_json::Value> = sqlx::query_scalar(
-        "SELECT outputs FROM step_execution WHERE instance_id = $1 AND node_id = $2",
-    )
-    .bind(instance_id)
-    .bind(step_id)
-    .fetch_one(&db)
-    .await
-    .expect("step_execution row for the automated step");
+    //
+    // The lifecycle consumer (which flips `workflow_instances.status` to
+    // `completed`) and the step-executions consumer pull independently
+    // from `petri.events.>`, so the row + outputs land eventually after
+    // the instance shows completed — poll instead of fetch_one.
+    let projection_deadline = Duration::from_secs(30);
+    let projection_started = std::time::Instant::now();
+    let outputs = loop {
+        let row: Option<Option<serde_json::Value>> = sqlx::query_scalar(
+            "SELECT outputs FROM step_execution WHERE instance_id = $1 AND node_id = $2",
+        )
+        .bind(instance_id)
+        .bind(step_id)
+        .fetch_optional(&db)
+        .await
+        .unwrap();
+        if let Some(Some(outputs)) = row {
+            break outputs;
+        }
+        if projection_started.elapsed() > projection_deadline {
+            panic!(
+                "step_execution.outputs for node {step_id} did not materialize within \
+                 {projection_deadline:?} after instance completed (row present: {})",
+                row.is_some(),
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    };
 
-    let outputs = outputs.expect("step_execution.outputs populated by projector");
     assert_eq!(
         outputs.get("result").and_then(|v| v.as_str()),
         Some("swept-by-implicit-output-writes"),

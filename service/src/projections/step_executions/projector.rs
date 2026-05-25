@@ -539,11 +539,13 @@ impl State {
 
         // 5. Inspect produced_tokens for output-side terminations of this node.
         let iface = lookups.interface(&owner);
+        let owner_kind = lookups.kind_of(&owner);
         for (place_id, token) in produced_tokens {
             // 5a. data_port deposit (Start/HumanTask/AutomatedStep/Loop/SubWorkflow park)
             if let Some(dp_owner) = lookups.data_port_to_node.get(&place_id.0) {
                 if dp_owner == &owner {
-                    row.outputs = Some(token_color_to_json(&token.color));
+                    row.outputs =
+                        Some(canonical_output_payload(owner_kind, token_color_to_json(&token.color)));
                     if row.status != StepStatus::Failed {
                         row.status = StepStatus::Completed;
                         row.completed_at = Some(ts);
@@ -553,7 +555,8 @@ impl State {
             // 5b. Workflow-terminal deposit (End nodes)
             if let Some(t_owner) = lookups.workflow_terminal_to_node.get(&place_id.0) {
                 if t_owner == &owner {
-                    row.outputs = Some(token_color_to_json(&token.color));
+                    row.outputs =
+                        Some(canonical_output_payload(owner_kind, token_color_to_json(&token.color)));
                     if row.status != StepStatus::Failed {
                         row.status = StepStatus::Completed;
                         row.completed_at = Some(ts);
@@ -676,6 +679,29 @@ fn token_color_to_json(color: &TokenColor) -> serde_json::Value {
         TokenColor::Integer(n) => serde_json::Value::from(*n),
         TokenColor::Data(v) => v.clone(),
     }
+}
+
+/// Hoist the user-facing output payload out of a parked-envelope token so
+/// `step_execution.outputs` shows the same shape downstream borrowers read
+/// via `<slug>.<field>`. Mirrors `compile::producer_field_access_hoist`:
+/// AutomatedStep envelopes are `{ detail: { outputs: {...}, ... }, ... }`,
+/// HumanTask envelopes are `{ data: {...}, ... }`. Falls back to the raw
+/// value if the expected nesting isn't present (legacy events / synthetic
+/// tokens in unit tests stay shape-stable).
+fn canonical_output_payload(kind: NodeKind, raw: serde_json::Value) -> serde_json::Value {
+    let path: &[&str] = match kind {
+        NodeKind::AutomatedStep => &["detail", "outputs"],
+        NodeKind::HumanTask => &["data"],
+        _ => return raw,
+    };
+    let mut cur = &raw;
+    for seg in path {
+        match cur.get(*seg) {
+            Some(v) => cur = v,
+            None => return raw,
+        }
+    }
+    cur.clone()
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────────
@@ -1256,5 +1282,57 @@ mod tests {
             assert_eq!(a.outputs, b.outputs);
             assert_eq!(a.last_sequence, b.last_sequence);
         }
+    }
+
+    /// AutomatedStep parks the executor's full terminal-status envelope at
+    /// its `data_port`; the projector hoists `detail.outputs` so the
+    /// `step_execution.outputs` column shows the same user-payload view
+    /// that downstream `<slug>.<field>` borrows read (per
+    /// `compile::producer_field_access_hoist`).
+    #[test]
+    fn projector_unwraps_automated_step_executor_envelope() {
+        let reg = three_node_registry();
+        let envelope = serde_json::json!({
+            "detail": {
+                "outputs": { "result": "swept", "answer": 42 },
+                "outcome": { "type": "success" },
+                "duration_ms": 432,
+            },
+            "execution_id": "exec-1",
+            "job_id": "a",
+            "status": "completed",
+        });
+        let events = vec![
+            token_created(0, 100, place("p_s_ready"), unit_token()),
+            fired(
+                1,
+                101,
+                trans("t_s_park"),
+                vec![
+                    (place("p_s_data"), data_token(serde_json::json!({"name": "Alice"}))),
+                    (place("p_s_main"), unit_token()),
+                ],
+                vec![],
+            ),
+            fired(
+                2,
+                102,
+                trans("t_a_park"),
+                vec![
+                    (place("p_a_data"), data_token(envelope)),
+                    (place("p_a_main"), unit_token()),
+                ],
+                vec![],
+            ),
+        ];
+
+        let rows = project_step_executions(&events, &reg);
+        let a_row = rows.iter().find(|r| r.node_id == "a").expect("a row");
+        assert_eq!(a_row.node_kind, NodeKind::AutomatedStep);
+        assert_eq!(
+            a_row.outputs,
+            Some(serde_json::json!({ "result": "swept", "answer": 42 })),
+            "AutomatedStep outputs must be hoisted from detail.outputs"
+        );
     }
 }
