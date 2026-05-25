@@ -34,7 +34,7 @@
         "type": "callout",
         "severity": "warning",
         "title": "Unverified field keys",
-        "content": "The citations[].supporting_text on these keys did not match the OCR text verbatim: {{ verify.unverified_keys }}"
+        "content": "**Flagged:** {{ verify.unverified_keys }}\n\nVerification compares each citation's `supporting_text` against the OCR output (lowercased + whitespace collapsed). A field is flagged when its citation is **not a substring** of what kreuzberg actually read.\n\nCommon causes:\n\n- The LLM **silently corrected** an OCR glitch in its citation — e.g. it cites `0.6 - 1.1` when the OCR actually read `@.6- 1.1` for that reference range.\n- The LLM **rephrased** the source span instead of quoting it verbatim.\n- The OCR genuinely doesn't contain the cited value (LLM hallucination).\n\nCompare the citation in the **OCR span** column above against the document image. If the value is correct on the page, approve; if the LLM invented it, reject."
       },
       {
         "type": "input",
