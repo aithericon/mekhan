@@ -130,7 +130,13 @@ fn demo_graph() -> Value {
                         "id": "in", "label": "In",
                         "fields": [
                             { "name": "amount", "label": "Amount",
-                              "kind": "number", "required": true }
+                              "kind": "number", "required": true },
+                            // `name` is here to back the interpolation
+                            // assertion below: a `"Hello, {{ start.name }}!"`
+                            // template compares against `result.value.greeting`
+                            // built from the same field via End.resultMapping.
+                            { "name": "name", "label": "Name",
+                              "kind": "text", "required": true }
                         ]
                     }
                 }
@@ -160,14 +166,24 @@ fn demo_graph() -> Value {
                 "position": { "x": 400, "y": 0 },
                 "data": {
                     "type": "end", "label": "Done",
-                    // Populate result.value so the assertion picker + Rhai
-                    // self-reference checks have something to compare against.
-                    // The expression is a Rhai literal so it doesn't depend
-                    // on the inbound terminal token's exact shape — keeps
-                    // the e2e narrow to the runner's resolver, not End-token
-                    // semantics.
+                    // marker — Rhai literal, used by the self-reference and
+                    //   the "expected_resolved on failure" checks.
+                    // greeting — built from the inbound terminal token's
+                    //   `name` field (threaded through from Start), used by
+                    //   the interpolation assertion below.
                     "resultMapping": [
-                        { "targetField": "marker", "expression": "\"e2e\"" }
+                        { "targetField": "marker", "expression": "\"e2e\"" },
+                        {
+                            "targetField": "greeting",
+                            // Literal — matches what the interpolation
+                            // assertion below resolves to (`"Hello, {{ start.name }}!"`
+                            // with start_tokens.name = "Alice"). Can't pull
+                            // from `input.name` here: the End's `input` is
+                            // the slim control token, not the parked Start
+                            // data (control-data model — see
+                            // docs/10-control-data-token-model.md).
+                            "expression": "\"Hello, Alice!\""
+                        }
                     ]
                 }
             }
@@ -324,7 +340,7 @@ async fn template_tests_live_full_cycle() {
                         "template_id": template_id,
                         "start_tokens": [{
                             "start_block_id": "start",
-                            "token": { "amount": 1234 }
+                            "token": { "amount": 1234, "name": "Alice" }
                         }],
                         "created_by": Uuid::new_v4(),
                         "metadata": { "e2e": "template_tests_live" }
@@ -556,11 +572,53 @@ async fn template_tests_live_full_cycle() {
         "rhai self-reference must hold against live final_scope: {run}"
     );
 
-    // 7c. PATCH a Rhai template that resolves but compares unequal — the
-    //     failure_detail must carry BOTH `expected` (the raw template) and
-    //     `expected_resolved` (the concrete value the comparison actually
-    //     used), so the UI can show users what their `{{ … }}` actually
-    //     evaluated to instead of leaving them staring at the template text.
+    // 7c. PATCH a Mustache-style interpolated assertion:
+    //     `result.value.greeting == "Hello, {{ start.name }}!"`. The End's
+    //     resultMapping builds `greeting = "Hello, " + name + "!"` from the
+    //     same `name` field the template references, so the comparison is
+    //     a tautological "did the start token thread through to result?"
+    //     check — passes iff the interpolation resolver works.
+    let patch_body = json!({
+        "assertions": [
+            {
+                "path": "result.value.greeting",
+                "op": "eq",
+                "value": "Hello, {{ start.name }}!"
+            }
+        ]
+    });
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/api/templates/{template_id}/tests/{test_id}"))
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&patch_body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "patch interpolation assertion");
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/templates/{template_id}/tests/{test_id}/run"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let run = body_json(resp.into_body()).await;
+    assert_eq!(
+        run["status"], "passed",
+        "interpolation must resolve `Hello, {{{{ start.name }}}}!` to `Hello, Alice!` and match: {run}"
+    );
+
+    // 7d. PATCH a Rhai template that resolves but compares unequal — the
     let patch_body = json!({
         "assertions": [
             {
@@ -628,16 +686,18 @@ async fn template_tests_live_full_cycle() {
     let runs = body_json(resp.into_body()).await;
     let arr = runs.as_array().expect("runs array");
     assert!(
-        arr.len() >= 4,
-        "expected at least 4 runs in history, got {}: {runs}",
+        arr.len() >= 5,
+        "expected at least 5 runs in history, got {}: {runs}",
         arr.len()
     );
-    // Newest first: unequal-rhai (failed), passing-rhai (passed),
-    // exists-on-missing (failed), not-exists-on-missing (passed).
+    // Newest first: unequal-rhai (failed), interpolation (passed),
+    // passing-rhai (passed), exists-on-missing (failed),
+    // not-exists-on-missing (passed).
     assert_eq!(arr[0]["status"], "failed", "newest first: {runs}");
     assert_eq!(arr[1]["status"], "passed");
-    assert_eq!(arr[2]["status"], "failed");
-    assert_eq!(arr[3]["status"], "passed");
+    assert_eq!(arr[2]["status"], "passed");
+    assert_eq!(arr[3]["status"], "failed");
+    assert_eq!(arr[4]["status"], "passed");
 
     cleanup_durables(&cleanup_nats).await;
 }

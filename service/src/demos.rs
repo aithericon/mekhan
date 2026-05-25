@@ -74,6 +74,38 @@ pub struct LoadedDemo {
     /// `node_id → { filename → content }` — same shape every
     /// `/api/templates` consumer expects.
     pub files: HashMap<String, HashMap<String, String>>,
+    /// Pre-authored template tests bundled with the demo (one per
+    /// `tests/<name>.json` sidecar). Empty when the demo carries no
+    /// `tests/` directory. Seeded into `template_tests` alongside the
+    /// template row, keyed by `name` for idempotency.
+    pub tests: Vec<LoadedTest>,
+}
+
+/// A single bundled template test, parsed from `demos/<demo>/tests/<name>.json`.
+/// Field shapes match `CreateTemplateTestRequest`; the seeder writes them
+/// straight to `template_tests` as JSONB without re-validating (compile-time
+/// validation is the user's problem when they author the file).
+#[derive(Debug, serde::Deserialize)]
+pub struct LoadedTest {
+    pub name: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_empty_array")]
+    pub start_tokens: serde_json::Value,
+    #[serde(default = "default_empty_object")]
+    pub human_answers: serde_json::Value,
+    #[serde(default = "default_empty_array")]
+    pub assertions: serde_json::Value,
+}
+
+fn default_true() -> bool {
+    true
+}
+fn default_empty_array() -> serde_json::Value {
+    serde_json::Value::Array(Vec::new())
+}
+fn default_empty_object() -> serde_json::Value {
+    serde_json::Value::Object(Default::default())
 }
 
 #[derive(Debug, Error)]
@@ -116,6 +148,18 @@ pub enum DemoLoadError {
         "task sidecar at {path} targets a `{node_type}` node — task.json is only valid for human_task"
     )]
     TaskSidecarTypeMismatch { path: PathBuf, node_type: String },
+    #[error("test sidecar read failed at {path}: {source}")]
+    TestSidecar {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("test sidecar parse failed at {path}: {source}")]
+    TestSidecarParse {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
 }
 
 /// Load one demo directory. Skips files inside `nodes/<id>/` whose
@@ -163,11 +207,56 @@ pub fn load_demo(dir: &Path) -> Result<LoadedDemo, DemoLoadError> {
 
     let files = read_node_files(&nodes_dir)?;
 
+    let tests = read_tests_dir(&dir.join("tests"))?;
+
     Ok(LoadedDemo {
         metadata,
         graph,
         files,
+        tests,
     })
+}
+
+/// Parse every `<name>.json` under `tests/` into a `LoadedTest`. Missing
+/// directory is fine (most demos won't have one yet). Sorted by filename
+/// so seed order is deterministic and `template_tests.created_at` reflects
+/// the on-disk authoring order.
+fn read_tests_dir(tests_dir: &Path) -> Result<Vec<LoadedTest>, DemoLoadError> {
+    if !tests_dir.is_dir() {
+        return Ok(Vec::new());
+    }
+    let entries = std::fs::read_dir(tests_dir).map_err(|e| DemoLoadError::TestSidecar {
+        path: tests_dir.to_path_buf(),
+        source: e,
+    })?;
+    let mut paths: Vec<PathBuf> = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|e| DemoLoadError::TestSidecar {
+            path: tests_dir.to_path_buf(),
+            source: e,
+        })?;
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) == Some("json") {
+            paths.push(path);
+        }
+    }
+    paths.sort();
+
+    let mut out = Vec::with_capacity(paths.len());
+    for path in paths {
+        let bytes = std::fs::read(&path).map_err(|e| DemoLoadError::TestSidecar {
+            path: path.clone(),
+            source: e,
+        })?;
+        let test: LoadedTest = serde_json::from_slice(&bytes).map_err(|e| {
+            DemoLoadError::TestSidecarParse {
+                path: path.clone(),
+                source: e,
+            }
+        })?;
+        out.push(test);
+    }
+    Ok(out)
 }
 
 /// Filename used for HumanTask form-definition sidecars under `nodes/<id>/`.
@@ -555,6 +644,42 @@ pub async fn seed_one(
     let n = publisher.register_triggers(&row).await;
     if n > 0 {
         tracing::info!(template_id = %template_id, triggers = n, "demo triggers registered live");
+    }
+
+    // Seed any bundled template tests. Attached to the family root
+    // (`template_id` here since this is v1, so `base_template_id == id`).
+    // Failures are per-test best-effort — a malformed test fixture must
+    // not block the rest of the demo from being usable.
+    for test in &demo.tests {
+        let res = sqlx::query(
+            r#"
+            INSERT INTO template_tests
+                (template_id, name, enabled, start_tokens, human_answers, assertions, created_by)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            "#,
+        )
+        .bind(template_id)
+        .bind(&test.name)
+        .bind(test.enabled)
+        .bind(&test.start_tokens)
+        .bind(&test.human_answers)
+        .bind(&test.assertions)
+        .bind(DEMO_SEEDER_AUTHOR_ID)
+        .execute(&state.db)
+        .await;
+        match res {
+            Ok(_) => tracing::info!(
+                template_id = %template_id,
+                test_name = %test.name,
+                "demo test seeded"
+            ),
+            Err(e) => tracing::warn!(
+                template_id = %template_id,
+                test_name = %test.name,
+                error = %e,
+                "demo test seed failed (skipped)"
+            ),
+        }
     }
 
     Ok(SeedOutcome::Seeded)
@@ -1381,5 +1506,38 @@ mod tests {
             println!("{canonical}");
             println!("=== /{dir_name} ===");
         }
+    }
+
+    /// `demos/<demo>/tests/<name>.json` round-trips into `LoadedDemo.tests`,
+    /// preserves all five fields verbatim (JSONB sidecars are stored as-is —
+    /// the runner does its own validation at run time), and stays empty for
+    /// demos that carry no `tests/` directory.
+    #[test]
+    fn hello_world_demo_carries_bundled_test() {
+        let demo = load_demo(&repo_root().join("demos/01-hello-world"))
+            .expect("01-hello-world must load");
+        assert_eq!(demo.tests.len(), 1, "expected the hello-alice fixture");
+        let test = &demo.tests[0];
+        assert_eq!(test.name, "hello-alice");
+        assert!(test.enabled);
+        // start_tokens passes through as raw JSONB.
+        let st = test.start_tokens.as_array().expect("array");
+        assert_eq!(st[0]["token"]["name"], "Alice");
+        // The interpolation assertion is the whole point of the bundled
+        // test — round-trip the literal so a regression in the loader
+        // (e.g. accidental field rename) breaks here, not at runtime.
+        let assertions = test.assertions.as_array().expect("array");
+        assert_eq!(assertions[0]["path"], "result.value.greeting");
+        assert_eq!(assertions[0]["op"], "eq");
+        assert_eq!(assertions[0]["value"], "Hello, {{ start.name }}!");
+    }
+
+    #[test]
+    fn demos_without_tests_dir_yield_empty_tests_vec() {
+        // 02-human-form has no tests/ directory — must not error, must
+        // return an empty Vec rather than e.g. `None`.
+        let demo = load_demo(&repo_root().join("demos/02-human-form"))
+            .expect("02-human-form must load");
+        assert!(demo.tests.is_empty());
     }
 }

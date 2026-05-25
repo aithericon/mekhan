@@ -654,29 +654,83 @@ fn eval_assertion(scope: &Value, assertion: &Assertion) -> Result<AssertionOutco
     Ok(AssertionOutcome { passed, resolved_rhs })
 }
 
-/// If `raw` is a string of the form `{{ <expr> }}`, evaluate the inner Rhai
-/// expression against the synthetic scope (top-level scope keys — `result`,
-/// `steps` — become Rhai vars; same pattern as the trigger dispatcher's
-/// `evaluate_mapping`). Anything else is returned unchanged.
+/// Resolve `{{ … }}` Rhai templates in an assertion's expected value.
 ///
-/// Lets authors write `{{ result.value.amount }}` for cross-reference checks
-/// or richer expressions like `{{ steps.review.output.amount * 1.1 }}`.
+/// Two forms, in order of preference:
+///
+///   - **Pure-expression form** — the trimmed string is exactly `{{ <expr> }}`.
+///     Evaluates the inner Rhai expression and returns the raw typed value
+///     (number stays a number, bool stays a bool). Lets `{{ amount }} == 1234`
+///     compare as numbers, not stringified.
+///   - **Interpolation form** — the string contains `{{ … }}` segments mixed
+///     with literal text (e.g. `"Hello, {{ start.name }}!"`). Each segment
+///     is evaluated and rendered into a single output string.
+///
+/// Anything else (no `{{`, unterminated `{{` with no matching `}}`) is
+/// returned unchanged. Same Rhai engine pattern as `triggers/dispatcher.rs`.
 fn resolve_rhs(scope: &Value, raw: &Value) -> Result<Value, String> {
     let Some(s) = raw.as_str() else {
         return Ok(raw.clone());
     };
+    // Fast path: no template markers anywhere → keep the value verbatim.
+    if !s.contains("{{") {
+        return Ok(raw.clone());
+    }
+
+    // Pure-expression form: preserves the Rhai result's native type.
     let trimmed = s.trim();
-    let Some(inner) = trimmed
+    if let Some(inner) = trimmed
         .strip_prefix("{{")
         .and_then(|t| t.strip_suffix("}}"))
-    else {
-        return Ok(raw.clone());
-    };
-    let expr = inner.trim();
+    {
+        let expr = inner.trim();
+        // Reject the ambiguous case where the user wrote nested `{{` inside
+        // the outer braces — falls through to interpolation handling instead.
+        if !expr.contains("{{") {
+            return eval_rhai_expr(scope, expr);
+        }
+    }
+
+    // Interpolation form: walk the string, evaluating each `{{ … }}` segment
+    // and stringifying its result into the output buffer. Unterminated `{{`
+    // is preserved verbatim (no error) — matches how most template engines
+    // handle a stray brace.
+    let mut out = String::new();
+    let mut rest = s;
+    while !rest.is_empty() {
+        match rest.find("{{") {
+            Some(open) => {
+                out.push_str(&rest[..open]);
+                let after = &rest[open + 2..];
+                match after.find("}}") {
+                    Some(close) => {
+                        let expr = after[..close].trim();
+                        let val = eval_rhai_expr(scope, expr)?;
+                        out.push_str(&render_template_value(&val));
+                        rest = &after[close + 2..];
+                    }
+                    None => {
+                        // Stray `{{` with no closer — emit verbatim and stop.
+                        out.push_str(&rest[open..]);
+                        break;
+                    }
+                }
+            }
+            None => {
+                out.push_str(rest);
+                break;
+            }
+        }
+    }
+    Ok(Value::String(out))
+}
+
+/// Evaluate one trimmed Rhai expression against the synthetic scope. Top-level
+/// scope keys (`result`, `steps`, `start`) become Rhai variables.
+fn eval_rhai_expr(scope: &Value, expr: &str) -> Result<Value, String> {
     if expr.is_empty() {
         return Err("empty `{{ }}` expression".to_string());
     }
-
     let scope_map = scope.as_object().cloned().unwrap_or_default();
     let engine = rhai::Engine::new();
     let mut rhai_scope = rhai::Scope::new();
@@ -685,13 +739,23 @@ fn resolve_rhs(scope: &Value, raw: &Value) -> Result<Value, String> {
             .map_err(|e| format!("scope var `{k}` → Dynamic: {e}"))?;
         rhai_scope.push_dynamic(k.as_str(), dyn_v);
     }
-
     let result: rhai::Dynamic = engine
         .eval_expression_with_scope::<rhai::Dynamic>(&mut rhai_scope, expr)
         .map_err(|e| format!("rhai eval of `{expr}`: {e}"))?;
-    let json: Value = rhai::serde::from_dynamic(&result)
-        .map_err(|e| format!("rhai result of `{expr}` → JSON: {e}"))?;
-    Ok(json)
+    rhai::serde::from_dynamic(&result)
+        .map_err(|e| format!("rhai result of `{expr}` → JSON: {e}"))
+}
+
+/// How a Rhai value renders inside an interpolated string. Strings unwrap
+/// (so `"Hello, {{ name }}!"` doesn't produce `"Hello, \"Bob\"!"`); null
+/// becomes empty (matches most template engines); everything else uses its
+/// compact JSON form.
+fn render_template_value(v: &Value) -> String {
+    match v {
+        Value::String(s) => s.clone(),
+        Value::Null => String::new(),
+        _ => v.to_string(),
+    }
 }
 
 /// Walk a dot-separated path through a JSON value. `result.value.amount`,
@@ -874,6 +938,93 @@ mod tests {
             json!("yes"),
         );
         assert!(check(&scope(), &asn));
+    }
+
+    // --- Mustache-style interpolation ----------------------------------------
+
+    #[test]
+    fn interpolation_replaces_single_segment_in_string() {
+        // Mixed literal + expression → string interpolation.
+        let scope = json!({
+            "result": null, "steps": {},
+            "start": { "name": "Alice" }
+        });
+        let asn = a(
+            "result.value.greeting",
+            AssertOp::Eq,
+            json!("Hello, {{ start.name }}!"),
+        );
+        let out = eval_assertion(&scope, &asn).unwrap();
+        assert_eq!(out.resolved_rhs, json!("Hello, Alice!"));
+    }
+
+    #[test]
+    fn interpolation_handles_multiple_segments() {
+        let scope = json!({
+            "result": null, "steps": {},
+            "start": { "first": "Alice", "last": "Smith" }
+        });
+        let asn = a(
+            "x",
+            AssertOp::Eq,
+            json!("{{ start.first }} {{ start.last }}"),
+        );
+        let out = eval_assertion(&scope, &asn).unwrap();
+        assert_eq!(out.resolved_rhs, json!("Alice Smith"));
+    }
+
+    #[test]
+    fn interpolation_renders_number_as_string() {
+        // Numbers stringify into the surrounding text — not as JSON-quoted.
+        let scope = json!({
+            "result": null, "steps": {},
+            "start": { "amount": 1234 }
+        });
+        let asn = a("x", AssertOp::Eq, json!("Total: {{ start.amount }}"));
+        let out = eval_assertion(&scope, &asn).unwrap();
+        assert_eq!(out.resolved_rhs, json!("Total: 1234"));
+    }
+
+    #[test]
+    fn interpolation_renders_null_as_empty() {
+        // A missing start.name (null) renders empty inside an interpolation,
+        // not as the literal "null". Mirrors how most template engines behave.
+        let scope = json!({
+            "result": null, "steps": {},
+            "start": { "name": null }
+        });
+        let asn = a("x", AssertOp::Eq, json!("Hello, {{ start.name }}!"));
+        let out = eval_assertion(&scope, &asn).unwrap();
+        assert_eq!(out.resolved_rhs, json!("Hello, !"));
+    }
+
+    #[test]
+    fn pure_expression_form_preserves_native_type() {
+        // The single-expression form returns the raw Rhai value, not a string —
+        // so `{{ amount }} eq 1234` (number compare) keeps working.
+        let scope = json!({
+            "result": null, "steps": {},
+            "start": { "amount": 1234 }
+        });
+        let asn = a("x", AssertOp::Eq, json!("{{ start.amount }}"));
+        let out = eval_assertion(&scope, &asn).unwrap();
+        assert_eq!(out.resolved_rhs, json!(1234));
+    }
+
+    #[test]
+    fn interpolation_preserves_unterminated_braces_verbatim() {
+        let scope = json!({
+            "result": null, "steps": {},
+            "start": { "name": "Alice" }
+        });
+        // No closing `}}` after the second `{{` → emit verbatim, no eval error.
+        let asn = a(
+            "x",
+            AssertOp::Eq,
+            json!("Hello {{ start.name }} and {{ unfinished"),
+        );
+        let out = eval_assertion(&scope, &asn).unwrap();
+        assert_eq!(out.resolved_rhs, json!("Hello Alice and {{ unfinished"));
     }
 
     // --- Start-scope projection ----------------------------------------------
