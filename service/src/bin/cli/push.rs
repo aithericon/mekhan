@@ -9,6 +9,7 @@ use crate::diff;
 use crate::doc_ops;
 use crate::formats;
 use crate::fs_ops;
+use crate::tests_fs;
 use crate::ws_client;
 
 pub async fn run(_server: &str, directory: &str, dry_run: bool) -> Result<()> {
@@ -80,6 +81,22 @@ pub async fn run(_server: &str, directory: &str, dry_run: bool) -> Result<()> {
     // Upload binary assets via REST
     if has_assets {
         upload_assets(server_url, template_id, &local_assets).await?;
+    }
+
+    // Reconcile template tests in the bundle's `tests/` directory with the
+    // server. Name-keyed: POST new, PATCH changed, DELETE missing. Runs
+    // after the graph/file push so the test fixtures are validated against
+    // the version the user just authored.
+    let local_tests = tests_fs::read_tests(&dir)?;
+    if !local_tests.is_empty() || dir.join("tests").exists() {
+        let (created, updated, deleted) =
+            tests_fs::sync_to_server(server_url, template_id, &local_tests).await?;
+        if created + updated + deleted > 0 {
+            println!(
+                "  tests: {} created, {} updated, {} deleted",
+                created, updated, deleted
+            );
+        }
     }
 
     println!("Done.");

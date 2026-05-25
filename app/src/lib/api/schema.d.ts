@@ -354,6 +354,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/instances/{id}/promote-to-test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * POST /api/instances/{id}/promote-to-test — create a `template_tests` row
+         *     from an existing instance's event log.
+         * @description Scoops the instance's start tokens (from the initial Start-place tokens)
+         *     and human-task completions (from signal-place tokens) into a new test
+         *     fixture attached to the instance's template family. The user typically
+         *     completes authoring by adding assertions in the editor afterward.
+         */
+        post: operations["promote_instance_to_test"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/instances/{id}/state": {
         parameters: {
             query?: never;
@@ -1038,6 +1062,45 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/templates/{id}/tests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** GET /api/templates/{id}/tests — list tests for a template family. */
+        get: operations["list_tests"];
+        put?: never;
+        /** POST /api/templates/{id}/tests — create a new test. */
+        post: operations["create_test"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/templates/{id}/tests/run-all": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * POST /api/templates/{id}/tests/run-all — run every enabled test for a
+         *     template family. Used by the editor's "Run all" button and by the
+         *     publication gate.
+         */
+        post: operations["run_all"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/templates/{id}/triggers": {
         parameters: {
             query?: never;
@@ -1066,6 +1129,41 @@ export interface paths {
         get: operations["list_versions"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/templates/{template_id}/tests/{test_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** DELETE /api/templates/{template_id}/tests/{test_id} */
+        delete: operations["delete_test"];
+        options?: never;
+        head?: never;
+        /** PATCH /api/templates/{template_id}/tests/{test_id} — partial update. */
+        patch: operations["update_test"];
+        trace?: never;
+    };
+    "/api/templates/{template_id}/tests/{test_id}/run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** POST /api/templates/{template_id}/tests/{test_id}/run — execute one test. */
+        post: operations["run_one"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1279,6 +1377,25 @@ export interface components {
         ArtifactsListResponse: {
             entries: components["schemas"]["CatalogueEntry"][];
         };
+        /** @enum {string} */
+        AssertOp: "eq" | "neq" | "exists" | "not_exists" | "gt" | "gte" | "lt" | "lte" | "matches" | "contains";
+        /**
+         * @description A single check evaluated against the runner's synthetic post-instance scope
+         *     (`{ result, steps.<slug>.output }`). `path` is a dot-pathed JSON pointer
+         *     into that scope (e.g. `"result.value.invoice_amount"`,
+         *     `"steps.review.output.approved"`). Evaluation is intentionally data-driven —
+         *     no DSL parser. See `handlers::template_tests::runner::eval_assertion`.
+         */
+        Assertion: {
+            op: components["schemas"]["AssertOp"];
+            path: string;
+            /**
+             * @description Right-hand side. For `Exists`/`NotExists` this is ignored; for
+             *     `Matches` it must be a string (regex); for `Contains` it can be a
+             *     scalar (substring on string actual / membership on array actual).
+             */
+            value?: unknown;
+        };
         /**
          * @description Delay applied between automated-step retry attempts.
          *
@@ -1408,6 +1525,11 @@ export interface components {
              */
             metadata?: unknown;
             /**
+             * @description `live` (default) | `draft` | `test_run`. `test_run` is reserved for
+             *     the test runner — callers requesting it directly are rejected.
+             */
+            mode?: string | null;
+            /**
              * @description Typed seeds for each Start block in the template. A Start with a
              *     non-empty `initial` port requires a matching entry here; otherwise the
              *     API returns 400. Starts with an empty `initial` port can be omitted
@@ -1432,6 +1554,17 @@ export interface components {
             };
             graph?: null | components["schemas"]["WorkflowGraph"];
             name: string;
+        };
+        CreateTemplateTestRequest: {
+            assertions?: components["schemas"]["Assertion"][];
+            enabled?: boolean;
+            /**
+             * @description Map of `<node_slug>` → form data captured by the human-task UI.
+             *     Missing slugs fail the run at the first un-stubbed `human.request`.
+             */
+            human_answers?: unknown;
+            name: string;
+            start_tokens: components["schemas"]["StartToken"][];
         };
         /** @description Request body for `POST /api/auth/tokens`. */
         CreateTokenRequest: {
@@ -1557,6 +1690,13 @@ export interface components {
         ErrorResponse: {
             compile_errors?: components["schemas"]["CompileErrorView"][] | null;
             error: string;
+            /**
+             * @description Structured per-test failures returned by the publication gate when a
+             *     publish is blocked. Absent on non-gate errors. The shape mirrors
+             *     `models::template_test::FailingTestInfo`; declared as `Value` here to
+             *     avoid pulling the dependency into this module's signature.
+             */
+            failing_tests?: unknown;
         };
         EventDetail: {
             artifact?: null | components["schemas"]["CatalogueEntry"];
@@ -1596,6 +1736,14 @@ export interface components {
              *     editor still surfaces it for python/process/docker.
              */
             entrypoint?: string | null;
+        };
+        FailingTestInfo: {
+            name: string;
+            reason: string;
+            /** Format: uuid */
+            run_id?: string | null;
+            /** Format: uuid */
+            test_id: string;
         };
         /**
          * @description Type kind for a typed port field. Superset of `TaskFieldKind`: adds `Bool`
@@ -1817,6 +1965,7 @@ export interface components {
             /** Format: uuid */
             id: string;
             metadata: unknown;
+            mode: string;
             net_id: string;
             /** Format: date-time */
             started_at?: string | null;
@@ -1826,6 +1975,8 @@ export interface components {
             template_name: string;
             /** Format: int32 */
             template_version: number;
+            /** Format: uuid */
+            test_id?: string | null;
         };
         InstanceStateResponse: {
             current_step?: string | null;
@@ -2010,6 +2161,7 @@ export interface components {
                 /** Format: uuid */
                 id: string;
                 metadata: unknown;
+                mode: string;
                 net_id: string;
                 /** Format: date-time */
                 started_at?: string | null;
@@ -2019,6 +2171,8 @@ export interface components {
                 template_name: string;
                 /** Format: int32 */
                 template_version: number;
+                /** Format: uuid */
+                test_id?: string | null;
             }[];
             /** Format: int64 */
             page: number;
@@ -2228,10 +2382,28 @@ export interface components {
             owner?: string | null;
             status?: string | null;
         };
+        PromoteToTestRequest: {
+            /** @description Name for the new test. Must be unique within the template family. */
+            name: string;
+            /**
+             * @description Optional override for the start tokens. When omitted, the runner
+             *     best-effort-extracts them from the instance's initial TokenCreated
+             *     events; this override lets the UI pre-fill from a known-good source
+             *     (e.g. the original `CreateInstanceRequest`).
+             */
+            start_tokens?: unknown;
+        };
         /** @description Full provenance response: ancestry nodes + explicit cross-net edges. */
         ProvenanceResponse: {
             cross_net_edges: components["schemas"]["CrossNetEdge"][];
             nodes: components["schemas"]["AncestryNode"][];
+        };
+        /**
+         * @description Failure shape returned by the publication gate when one or more enabled
+         *     tests block publish. Surfaces in the editor's `PublishGateModal`.
+         */
+        PublishGateBlockedResponse: {
+            failing_tests: components["schemas"]["FailingTestInfo"][];
         };
         /**
          * @description How a `POST /api/triggers/{id}/fire` caller wants the response delivered.
@@ -2274,6 +2446,14 @@ export interface components {
              *     retries (a single failure routes straight to the error output).
              */
             maxRetries?: number;
+        };
+        /** @description Aggregate result for `run-all` (also returned to the publication gate). */
+        RunAllResponse: {
+            errored: number;
+            failed: number;
+            passed: number;
+            runs: components["schemas"]["TemplateTestRun"][];
+            total: number;
         };
         /**
          * @description One reachable, producer-attributed reference the guard picker should
@@ -2520,6 +2700,52 @@ export interface components {
             id: string;
             title: string;
         };
+        /**
+         * @description A test attached to a logical template family. `template_id` is the family
+         *     root (the row's `id` when `base_template_id` is NULL, else the
+         *     `base_template_id`), resolved by `handlers::template_tests::family_root`.
+         */
+        TemplateTest: {
+            assertions: unknown;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: uuid */
+            created_by: string;
+            enabled: boolean;
+            human_answers: unknown;
+            /** Format: uuid */
+            id: string;
+            /** Format: int32 */
+            last_run_against_version?: number | null;
+            /** Format: date-time */
+            last_run_at?: string | null;
+            last_run_passed?: boolean | null;
+            name: string;
+            start_tokens: unknown;
+            /** Format: uuid */
+            template_id: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        TemplateTestRun: {
+            /** Format: int32 */
+            duration_ms?: number | null;
+            failure_detail?: unknown;
+            final_scope?: unknown;
+            /** Format: date-time */
+            finished_at?: string | null;
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            instance_id: string;
+            /** Format: date-time */
+            started_at: string;
+            status: string;
+            /** Format: int32 */
+            template_version: number;
+            /** Format: uuid */
+            test_id: string;
+        };
         /** @description The terminal disposition handed back to a WaitForResult caller. */
         TerminalOutcome: {
             /**
@@ -2630,6 +2856,13 @@ export interface components {
             graph?: null | components["schemas"]["WorkflowGraph"];
             name?: string | null;
         };
+        UpdateTemplateTestRequest: {
+            assertions?: components["schemas"]["Assertion"][] | null;
+            enabled?: boolean | null;
+            human_answers?: unknown;
+            name?: string | null;
+            start_tokens?: components["schemas"]["StartToken"][] | null;
+        };
         /**
          * @description Which concrete child-template version a `SubWorkflow` embeds. Internally
          *     tagged on the wire: `{"mode":"latest"}` or `{"mode":"pinned","version":3}`.
@@ -2694,6 +2927,17 @@ export interface components {
             type: string;
         };
         WorkflowGraph: {
+            /**
+             * @description Workflow-scoped reusable JSON-Schema fragments. Referenced from
+             *     `executionSpec.config` (today: LLM `response_format.schema`) as
+             *     `{"$ref": "#/definitions/<name>"}` and inlined at compile time by
+             *     `compiler::schema_refs::inline_refs`. Local pointers only; external
+             *     `$ref`s and JSON-Schema 2020-12 sibling-key merge semantics are
+             *     rejected at validation. BTreeMap for byte-stable compile output.
+             */
+            definitions?: {
+                [key: string]: unknown;
+            };
             edges: components["schemas"]["WorkflowEdge"][];
             /**
              * @description How concurrent fires (from triggers / manual / API) interact with
@@ -2721,6 +2965,12 @@ export interface components {
             /** Format: uuid */
             id: string;
             metadata: unknown;
+            /**
+             * @description Categorizes the instance. `live` (default) is a production run.
+             *     `draft` is a user-initiated experimental run hidden from default
+             *     list views. `test_run` is spawned by the template-test runner.
+             */
+            mode: string;
             net_id: string;
             /**
              * @description Structured result envelope (`{ ok: true, value }` /
@@ -2729,6 +2979,12 @@ export interface components {
              *     state, and stays NULL for workflows with no result binding.
              */
             result?: unknown;
+            /**
+             * Format: uuid
+             * @description Set when a test was promoted from this instance — points back at the
+             *     instance whose event log seeded the test's fixture. Audit-only.
+             */
+            source_instance_id?: string | null;
             /** Format: date-time */
             started_at?: string | null;
             status: string;
@@ -2736,6 +2992,11 @@ export interface components {
             template_id: string;
             /** Format: int32 */
             template_version: number;
+            /**
+             * Format: uuid
+             * @description Set when `mode = 'test_run'`: the test this instance is running.
+             */
+            test_id?: string | null;
         };
         WorkflowNode: {
             data: components["schemas"]["WorkflowNodeData"];
@@ -3585,6 +3846,12 @@ export interface operations {
                 per_page?: number;
                 template_id?: string | null;
                 status?: string | null;
+                /**
+                 * @description Filter by `mode`. Default behavior when omitted is to return only
+                 *     `live` instances; pass `mode=any` to include drafts and test runs,
+                 *     or `mode=draft` / `mode=test_run` to scope explicitly.
+                 */
+                mode?: string | null;
             };
             header?: never;
             path?: never;
@@ -3777,6 +4044,49 @@ export interface operations {
             };
             /** @description Server error */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    promote_instance_to_test: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Source instance id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PromoteToTestRequest"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TemplateTest"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description A test with this name already exists */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -5245,7 +5555,14 @@ export interface operations {
     };
     publish_template: {
         parameters: {
-            query?: never;
+            query?: {
+                /**
+                 * @description Bypass the template-test gate. Failing or stale tests do not block
+                 *     publish when `true`; an audit-level log records the override. Use
+                 *     only when a test itself is broken and you need to ship.
+                 */
+                force?: boolean;
+            };
             header?: never;
             path: {
                 /** @description Template id */
@@ -5291,8 +5608,135 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            /** @description Template tests failing; publish blocked */
+            412: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublishGateBlockedResponse"];
+                };
+            };
             /** @description Server error */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_tests: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Template id (any version) */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TemplateTest"][];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    create_test: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Template id (any version) */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateTemplateTestRequest"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TemplateTest"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description A test with this name already exists */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    run_all: {
+        parameters: {
+            query?: {
+                /**
+                 * @description Run only enabled tests (default). `?include_disabled=true` runs every
+                 *     test — used by the editor's "Run all" button when authors want a
+                 *     total picture during debugging.
+                 */
+                include_disabled?: boolean;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunAllResponse"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description No published version */
+            412: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -5357,6 +5801,110 @@ export interface operations {
             };
             /** @description Server error */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    delete_test: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                template_id: string;
+                test_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    update_test: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Template id (any version) */
+                template_id: string;
+                /** @description Test id */
+                test_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateTemplateTestRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TemplateTest"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    run_one: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                template_id: string;
+                test_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TemplateTestRun"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description No published version */
+            412: {
                 headers: {
                     [name: string]: unknown;
                 };

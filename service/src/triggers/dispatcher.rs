@@ -747,6 +747,8 @@ impl TriggerDispatcher {
                 air_json: &air_json,
                 graph,
                 start_tokens: &start_tokens,
+                mode: None,
+                test_id: None,
             })
             .await
             .map_err(|e| TriggerError::InstanceFailed(e.to_string()));

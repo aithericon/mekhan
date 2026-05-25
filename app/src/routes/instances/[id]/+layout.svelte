@@ -11,11 +11,15 @@
 		provideInstanceContext,
 		type InstanceContext
 	} from '$lib/components/instances/instance-context';
+	import SaveAsTestDialog from '$lib/components/instances/SaveAsTestDialog.svelte';
 	import FileText from '@lucide/svelte/icons/file-text';
 	import LayoutDashboard from '@lucide/svelte/icons/layout-dashboard';
 	import ListChecks from '@lucide/svelte/icons/list-checks';
 	import Workflow from '@lucide/svelte/icons/workflow';
 	import Network from '@lucide/svelte/icons/network';
+	import FlaskConical from '@lucide/svelte/icons/flask-conical';
+
+	let saveAsTestOpen = $state(false);
 
 	let { children } = $props();
 
@@ -172,6 +176,16 @@
 						>
 							Cancel
 						</Button>
+					{:else if ctx.instance.mode !== 'test_run'}
+						<Button
+							variant="outline"
+							size="sm"
+							onclick={() => (saveAsTestOpen = true)}
+							data-testid="save-as-test"
+						>
+							<FlaskConical class="mr-1 size-3.5" />
+							Save as test
+						</Button>
 					{/if}
 				</div>
 			</div>
@@ -229,3 +243,12 @@
 		{/if}
 	{/if}
 </div>
+
+{#if ctx.instance}
+	<SaveAsTestDialog
+		open={saveAsTestOpen}
+		instanceId={ctx.instance.id}
+		templateId={ctx.instance.template_id}
+		onclose={() => (saveAsTestOpen = false)}
+	/>
+{/if}

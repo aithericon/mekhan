@@ -6,6 +6,11 @@
 	import NodePropertyPanel from '$lib/components/editor/panels/NodePropertyPanel.svelte';
 	import EditorToolbar from '$lib/components/editor/toolbar/EditorToolbar.svelte';
 	import CreateInstanceDialog from '$lib/components/instances/CreateInstanceDialog.svelte';
+	import TestsPanel from '$lib/components/templates/TestsPanel.svelte';
+	import PublishGateModal from '$lib/components/templates/PublishGateModal.svelte';
+	import { Sheet, SheetContent, SheetTitle } from '$lib/components/ui/sheet';
+	import { Button } from '$lib/components/ui/button';
+	import FlaskConical from '@lucide/svelte/icons/flask-conical';
 	import {
 		getTemplate,
 		publishTemplate,
@@ -13,7 +18,9 @@
 		createNewVersion,
 		compileGraph,
 		CompileApiError,
-		type Template
+		PublishGateError,
+		type Template,
+		type FailingTestInfo
 	} from '$lib/api/client';
 	import { compileErrors } from '$lib/editor/compile-errors.svelte';
 	import { getSession, releaseSession } from '$lib/yjs/session-store';
@@ -33,6 +40,8 @@
 	let selectedNodeId = $state<string | null>(null);
 	let airPreview = $state<object | null>(null);
 	let runDialogOpen = $state(false);
+	let testsPanelOpen = $state(false);
+	let publishGate = $state<FailingTestInfo[] | null>(null);
 
 	// Yjs session + binding
 	const session = getSession(templateId);
@@ -57,14 +66,17 @@
 		}
 	}
 
-	async function handlePublish() {
+	async function handlePublish(force = false) {
 		if (!template || template.published) return;
 		try {
 			saving = true;
-			template = await publishTemplate(template.id);
+			template = await publishTemplate(template.id, force);
 			compileErrors.clear();
+			publishGate = null;
 		} catch (e) {
-			if (e instanceof CompileApiError) {
+			if (e instanceof PublishGateError) {
+				publishGate = e.failingTests;
+			} else if (e instanceof CompileApiError) {
 				compileErrors.set(e.compileErrors);
 				error = `${e.message} — ${e.compileErrors.length} issue${e.compileErrors.length === 1 ? '' : 's'} highlighted on the canvas`;
 			} else {
@@ -233,6 +245,12 @@
 			: null
 	);
 
+	const humanTaskSlugs = $derived(
+		binding.graph.nodes
+			.filter((n) => (n.data as { type?: string } | null)?.type === 'human_task')
+			.map((n) => (n.slug && n.slug.trim() !== '' ? n.slug : n.id))
+	);
+
 	$effect(() => {
 		load();
 	});
@@ -276,6 +294,22 @@
 				>
 			</div>
 		{/if}
+
+		<!-- Floating "Tests" button: opens a slide-in panel showing the
+		     template's test suite. Positioned in the canvas overlay so the
+		     EditorToolbar layout stays untouched. -->
+		<div class="pointer-events-none absolute right-3 top-[64px] z-10">
+			<Button
+				class="pointer-events-auto"
+				variant="outline"
+				size="sm"
+				onclick={() => (testsPanelOpen = true)}
+				data-testid="open-tests-panel"
+			>
+				<FlaskConical class="mr-1.5 size-3.5" />
+				Tests
+			</Button>
+		</div>
 
 		<div class="relative flex flex-1 overflow-hidden">
 			<WorkflowCanvas
@@ -323,6 +357,29 @@
 		{/if}
 	</div>
 {/if}
+
+<Sheet.Root open={testsPanelOpen} onOpenChange={(o: boolean) => (testsPanelOpen = o)}>
+	<SheetContent class="w-full max-w-md p-0 sm:max-w-md">
+		<SheetTitle class="sr-only">Tests</SheetTitle>
+		{#if template}
+			<TestsPanel templateId={template.id} {humanTaskSlugs} />
+		{/if}
+	</SheetContent>
+</Sheet.Root>
+
+<PublishGateModal
+	open={publishGate !== null}
+	failingTests={publishGate ?? []}
+	onclose={() => (publishGate = null)}
+	onforce={async () => {
+		publishGate = null;
+		await handlePublish(true);
+	}}
+	onretry={async () => {
+		publishGate = null;
+		await handlePublish(false);
+	}}
+/>
 
 <CreateInstanceDialog
 	bind:open={runDialogOpen}

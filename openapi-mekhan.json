@@ -741,6 +741,18 @@
                 "null"
               ]
             }
+          },
+          {
+            "name": "mode",
+            "in": "query",
+            "description": "Filter by `mode`. Default behavior when omitted is to return only\n`live` instances; pass `mode=any` to include drafts and test runs,\nor `mode=draft` / `mode=test_run` to scope explicitly.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
           }
         ],
         "responses": {
@@ -973,6 +985,70 @@
           },
           "500": {
             "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/instances/{id}/promote-to-test": {
+      "post": {
+        "tags": [
+          "template_tests"
+        ],
+        "summary": "POST /api/instances/{id}/promote-to-test — create a `template_tests` row\nfrom an existing instance's event log.",
+        "description": "Scoops the instance's start tokens (from the initial Start-place tokens)\nand human-task completions (from signal-place tokens) into a new test\nfixture attached to the instance's template family. The user typically\ncompletes authoring by adding assertions in the editor afterward.",
+        "operationId": "promote_instance_to_test",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Source instance id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PromoteToTestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateTest"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A test with this name already exists",
             "content": {
               "application/json": {
                 "schema": {
@@ -3158,6 +3234,15 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "force",
+            "in": "query",
+            "description": "Bypass the template-test gate. Failing or stale tests do not block\npublish when `true`; an audit-level log records the override. Use\nonly when a test itself is broken and you need to ship.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -3201,8 +3286,186 @@
               }
             }
           },
+          "412": {
+            "description": "Template tests failing; publish blocked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishGateBlockedResponse"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/templates/{id}/tests": {
+      "get": {
+        "tags": [
+          "template_tests"
+        ],
+        "summary": "GET /api/templates/{id}/tests — list tests for a template family.",
+        "operationId": "list_tests",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Template id (any version)",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TemplateTest"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "template_tests"
+        ],
+        "summary": "POST /api/templates/{id}/tests — create a new test.",
+        "operationId": "create_test",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Template id (any version)",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTemplateTestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateTest"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A test with this name already exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/templates/{id}/tests/run-all": {
+      "post": {
+        "tags": [
+          "template_tests"
+        ],
+        "summary": "POST /api/templates/{id}/tests/run-all — run every enabled test for a\ntemplate family. Used by the editor's \"Run all\" button and by the\npublication gate.",
+        "operationId": "run_all",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "include_disabled",
+            "in": "query",
+            "description": "Run only enabled tests (default). `?include_disabled=true` runs every\ntest — used by the editor's \"Run all\" button when authors want a\ntotal picture during debugging.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunAllResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "No published version",
             "content": {
               "application/json": {
                 "schema": {
@@ -3292,6 +3555,172 @@
           },
           "500": {
             "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/templates/{template_id}/tests/{test_id}": {
+      "delete": {
+        "tags": [
+          "template_tests"
+        ],
+        "summary": "DELETE /api/templates/{template_id}/tests/{test_id}",
+        "operationId": "delete_test",
+        "parameters": [
+          {
+            "name": "template_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "test_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "template_tests"
+        ],
+        "summary": "PATCH /api/templates/{template_id}/tests/{test_id} — partial update.",
+        "operationId": "update_test",
+        "parameters": [
+          {
+            "name": "template_id",
+            "in": "path",
+            "description": "Template id (any version)",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "test_id",
+            "in": "path",
+            "description": "Test id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateTemplateTestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateTest"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/templates/{template_id}/tests/{test_id}/run": {
+      "post": {
+        "tags": [
+          "template_tests"
+        ],
+        "summary": "POST /api/templates/{template_id}/tests/{test_id}/run — execute one test.",
+        "operationId": "run_one",
+        "parameters": [
+          {
+            "name": "template_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "test_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateTestRun"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "No published version",
             "content": {
               "application/json": {
                 "schema": {
@@ -3720,6 +4149,40 @@
           }
         }
       },
+      "AssertOp": {
+        "type": "string",
+        "enum": [
+          "eq",
+          "neq",
+          "exists",
+          "not_exists",
+          "gt",
+          "gte",
+          "lt",
+          "lte",
+          "matches",
+          "contains"
+        ]
+      },
+      "Assertion": {
+        "type": "object",
+        "description": "A single check evaluated against the runner's synthetic post-instance scope\n(`{ result, steps.<slug>.output }`). `path` is a dot-pathed JSON pointer\ninto that scope (e.g. `\"result.value.invoice_amount\"`,\n`\"steps.review.output.approved\"`). Evaluation is intentionally data-driven —\nno DSL parser. See `handlers::template_tests::runner::eval_assertion`.",
+        "required": [
+          "path",
+          "op"
+        ],
+        "properties": {
+          "op": {
+            "$ref": "#/components/schemas/AssertOp"
+          },
+          "path": {
+            "type": "string"
+          },
+          "value": {
+            "description": "Right-hand side. For `Exists`/`NotExists` this is ignored; for\n`Matches` it must be a string (regex); for `Contains` it can be a\nscalar (substring on string actual / membership on array actual)."
+          }
+        }
+      },
       "BackoffKind": {
         "type": "string",
         "description": "Delay applied between automated-step retry attempts.\n\n`Immediate` re-dispatches at once. `Fixed` waits `base_delay_ms` before\nevery attempt. `Exponential` waits `base_delay_ms * 2^attempt` (attempt is\nthe zero-based retry index), capped by the engine's timer service.",
@@ -4090,6 +4553,13 @@
           "metadata": {
             "description": "Free-form audit metadata stored on the instance row. Unlike pre-typed-ports\nbehavior, this is NOT merged into initial Petri tokens — token shape is\ndriven solely by `start_tokens`."
           },
+          "mode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`live` (default) | `draft` | `test_run`. `test_run` is reserved for\nthe test runner — callers requesting it directly are rejected."
+          },
           "start_tokens": {
             "type": "array",
             "items": {
@@ -4143,6 +4613,36 @@
           },
           "name": {
             "type": "string"
+          }
+        }
+      },
+      "CreateTemplateTestRequest": {
+        "type": "object",
+        "required": [
+          "name",
+          "start_tokens"
+        ],
+        "properties": {
+          "assertions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Assertion"
+            }
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "human_answers": {
+            "description": "Map of `<node_slug>` → form data captured by the human-task UI.\nMissing slugs fail the run at the first un-stubbed `human.request`."
+          },
+          "name": {
+            "type": "string"
+          },
+          "start_tokens": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StartToken"
+            }
           }
         }
       },
@@ -4488,6 +4988,9 @@
           },
           "error": {
             "type": "string"
+          },
+          "failing_tests": {
+            "description": "Structured per-test failures returned by the publication gate when a\npublish is blocked. Absent on non-gate errors. The shape mirrors\n`models::template_test::FailingTestInfo`; declared as `Value` here to\navoid pulling the dependency into this module's signature."
           }
         }
       },
@@ -4625,6 +5128,33 @@
               "null"
             ],
             "description": "Filename of the entrypoint script within the node's staged files.\nBackends that don't run a user script (e.g. `http`) ignore this; the\neditor still surfaces it for python/process/docker."
+          }
+        }
+      },
+      "FailingTestInfo": {
+        "type": "object",
+        "required": [
+          "test_id",
+          "name",
+          "reason"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "test_id": {
+            "type": "string",
+            "format": "uuid"
           }
         }
       },
@@ -5225,7 +5755,8 @@
           "created_by",
           "created_at",
           "metadata",
-          "template_name"
+          "template_name",
+          "mode"
         ],
         "properties": {
           "completed_at": {
@@ -5254,6 +5785,9 @@
             "format": "uuid"
           },
           "metadata": {},
+          "mode": {
+            "type": "string"
+          },
           "net_id": {
             "type": "string"
           },
@@ -5277,6 +5811,13 @@
           "template_version": {
             "type": "integer",
             "format": "int32"
+          },
+          "test_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
           }
         }
       },
@@ -5765,7 +6306,8 @@
                 "created_by",
                 "created_at",
                 "metadata",
-                "template_name"
+                "template_name",
+                "mode"
               ],
               "properties": {
                 "completed_at": {
@@ -5794,6 +6336,9 @@
                   "format": "uuid"
                 },
                 "metadata": {},
+                "mode": {
+                  "type": "string"
+                },
                 "net_id": {
                   "type": "string"
                 },
@@ -5817,6 +6362,13 @@
                 "template_version": {
                   "type": "integer",
                   "format": "int32"
+                },
+                "test_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid"
                 }
               }
             }
@@ -6454,6 +7006,21 @@
           }
         }
       },
+      "PromoteToTestRequest": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Name for the new test. Must be unique within the template family."
+          },
+          "start_tokens": {
+            "description": "Optional override for the start tokens. When omitted, the runner\nbest-effort-extracts them from the instance's initial TokenCreated\nevents; this override lets the UI pre-fill from a known-good source\n(e.g. the original `CreateInstanceRequest`)."
+          }
+        }
+      },
       "ProvenanceResponse": {
         "type": "object",
         "description": "Full provenance response: ancestry nodes + explicit cross-net edges.",
@@ -6472,6 +7039,21 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/AncestryNode"
+            }
+          }
+        }
+      },
+      "PublishGateBlockedResponse": {
+        "type": "object",
+        "description": "Failure shape returned by the publication gate when one or more enabled\ntests block publish. Surfaces in the editor's `PublishGateModal`.",
+        "required": [
+          "failing_tests"
+        ],
+        "properties": {
+          "failing_tests": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FailingTestInfo"
             }
           }
         }
@@ -6533,6 +7115,41 @@
             "type": "integer",
             "format": "int32",
             "description": "Maximum number of retry attempts after the initial run. `0` disables\nretries (a single failure routes straight to the error output).",
+            "minimum": 0
+          }
+        }
+      },
+      "RunAllResponse": {
+        "type": "object",
+        "description": "Aggregate result for `run-all` (also returned to the publication gate).",
+        "required": [
+          "total",
+          "passed",
+          "failed",
+          "errored",
+          "runs"
+        ],
+        "properties": {
+          "errored": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "failed": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "passed": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "runs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TemplateTestRun"
+            }
+          },
+          "total": {
+            "type": "integer",
             "minimum": 0
           }
         }
@@ -7122,6 +7739,125 @@
           }
         }
       },
+      "TemplateTest": {
+        "type": "object",
+        "description": "A test attached to a logical template family. `template_id` is the family\nroot (the row's `id` when `base_template_id` is NULL, else the\n`base_template_id`), resolved by `handlers::template_tests::family_root`.",
+        "required": [
+          "id",
+          "template_id",
+          "name",
+          "enabled",
+          "start_tokens",
+          "human_answers",
+          "assertions",
+          "created_at",
+          "updated_at",
+          "created_by"
+        ],
+        "properties": {
+          "assertions": {},
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "human_answers": {},
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "last_run_against_version": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "last_run_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "last_run_passed": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "start_tokens": {},
+          "template_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "TemplateTestRun": {
+        "type": "object",
+        "required": [
+          "id",
+          "test_id",
+          "instance_id",
+          "template_version",
+          "status",
+          "started_at"
+        ],
+        "properties": {
+          "duration_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "failure_detail": {},
+          "final_scope": {},
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "instance_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string"
+          },
+          "template_version": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "test_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
       "TerminalOutcome": {
         "type": "object",
         "description": "The terminal disposition handed back to a WaitForResult caller.",
@@ -7490,6 +8226,42 @@
           }
         }
       },
+      "UpdateTemplateTestRequest": {
+        "type": "object",
+        "properties": {
+          "assertions": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/Assertion"
+            }
+          },
+          "enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "human_answers": {},
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "start_tokens": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/StartToken"
+            }
+          }
+        }
+      },
       "VersionPin": {
         "oneOf": [
           {
@@ -7692,6 +8464,14 @@
           "edges"
         ],
         "properties": {
+          "definitions": {
+            "type": "object",
+            "description": "Workflow-scoped reusable JSON-Schema fragments. Referenced from\n`executionSpec.config` (today: LLM `response_format.schema`) as\n`{\"$ref\": \"#/definitions/<name>\"}` and inlined at compile time by\n`compiler::schema_refs::inline_refs`. Local pointers only; external\n`$ref`s and JSON-Schema 2020-12 sibling-key merge semantics are\nrejected at validation. BTreeMap for byte-stable compile output.",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          },
           "edges": {
             "type": "array",
             "items": {
@@ -7730,7 +8510,8 @@
           "status",
           "created_by",
           "created_at",
-          "metadata"
+          "metadata",
+          "mode"
         ],
         "properties": {
           "completed_at": {
@@ -7759,11 +8540,23 @@
             "format": "uuid"
           },
           "metadata": {},
+          "mode": {
+            "type": "string",
+            "description": "Categorizes the instance. `live` (default) is a production run.\n`draft` is a user-initiated experimental run hidden from default\nlist views. `test_run` is spawned by the template-test runner."
+          },
           "net_id": {
             "type": "string"
           },
           "result": {
             "description": "Structured result envelope (`{ ok: true, value }` /\n`{ ok: false, error: { reason, value } }`) declared by the workflow's\nEnd/Failure result binding. NULL until the instance reaches a terminal\nstate, and stays NULL for workflows with no result binding."
+          },
+          "source_instance_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Set when a test was promoted from this instance — points back at the\ninstance whose event log seeded the test's fixture. Audit-only."
           },
           "started_at": {
             "type": [
@@ -7782,6 +8575,14 @@
           "template_version": {
             "type": "integer",
             "format": "int32"
+          },
+          "test_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Set when `mode = 'test_run'`: the test this instance is running."
           }
         }
       },

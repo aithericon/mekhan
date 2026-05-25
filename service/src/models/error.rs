@@ -18,6 +18,12 @@ pub struct ErrorResponse {
     pub error: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compile_errors: Option<Vec<crate::compiler::CompileErrorView>>,
+    /// Structured per-test failures returned by the publication gate when a
+    /// publish is blocked. Absent on non-gate errors. The shape mirrors
+    /// `models::template_test::FailingTestInfo`; declared as `Value` here to
+    /// avoid pulling the dependency into this module's signature.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failing_tests: Option<serde_json::Value>,
 }
 
 impl ErrorResponse {
@@ -25,11 +31,20 @@ impl ErrorResponse {
         Self {
             error: error.into(),
             compile_errors: None,
+            failing_tests: None,
         }
     }
 
     pub fn with_compile_errors(mut self, views: Vec<crate::compiler::CompileErrorView>) -> Self {
         self.compile_errors = Some(views);
+        self
+    }
+
+    /// Attach the publish gate's failing-test list so the editor can render
+    /// per-test detail in `PublishGateModal`. The value is serialized as JSON
+    /// to keep this module dependency-free.
+    pub fn with_failing_tests(mut self, value: serde_json::Value) -> Self {
+        self.failing_tests = Some(value);
         self
     }
 }

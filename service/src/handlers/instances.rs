@@ -74,6 +74,24 @@ pub async fn create_instance(
     let net_id = format!("mekhan-{instance_id}");
     let metadata = req.metadata.clone().unwrap_or(json!({}));
 
+    // Categorize the run. `test_run` is reserved for the template-test runner
+    // and rejected from the public endpoint; anything else falls back to
+    // `live`.
+    let mode = match req.mode.as_deref() {
+        None | Some("live") => "live",
+        Some("draft") => "draft",
+        Some("test_run") => {
+            return Err(ApiError::bad_request(
+                "mode 'test_run' is reserved for the template-test runner",
+            ));
+        }
+        Some(other) => {
+            return Err(ApiError::bad_request(format!(
+                "unknown instance mode: {other}"
+            )));
+        }
+    };
+
     // Parameterize → insert row (before deploy, for the lifecycle listener) →
     // deploy → roll back the row on deploy failure. The launcher owns that
     // sequence; here we only translate its failures to HTTP statuses:
@@ -91,6 +109,8 @@ pub async fn create_instance(
             air_json: &air_json,
             graph: &graph,
             start_tokens: &req.start_tokens,
+            mode: Some(mode),
+            test_id: None,
         })
         .await
         .map_err(|e| match e {
@@ -121,17 +141,30 @@ pub async fn list_instances(
 ) -> Json<PaginatedResponse<InstanceListItem>> {
     let offset = (params.page - 1) * params.per_page;
 
-    // Build WHERE clause based on filter parameters
-    let mut conditions = Vec::new();
+    // Resolve the `mode` filter. Missing/empty ⇒ default to live-only (the
+    // historical view). `any`/`all` returns everything. Anything else is an
+    // explicit category filter and binds as-is.
+    let mode_filter: Option<&str> = match params.mode.as_deref() {
+        None | Some("") => Some("live"),
+        Some("any") | Some("all") => None,
+        Some(other) => Some(other),
+    };
+
+    // Build WHERE clause based on filter parameters. Bind index tracks the
+    // next $N placeholder so each filter slots in without colliding.
+    let mut conditions: Vec<String> = Vec::new();
+    let mut bind_index: u8 = 1;
     if params.template_id.is_some() {
-        conditions.push("wi.template_id = $1");
+        conditions.push(format!("wi.template_id = ${bind_index}"));
+        bind_index += 1;
     }
     if params.status.is_some() {
-        conditions.push(if params.template_id.is_some() {
-            "wi.status = $2"
-        } else {
-            "wi.status = $1"
-        });
+        conditions.push(format!("wi.status = ${bind_index}"));
+        bind_index += 1;
+    }
+    if mode_filter.is_some() {
+        conditions.push(format!("wi.mode = ${bind_index}"));
+        bind_index += 1;
     }
     let where_clause = if conditions.is_empty() {
         String::new()
@@ -139,16 +172,14 @@ pub async fn list_instances(
         format!("WHERE {}", conditions.join(" AND "))
     };
 
-    let next_param = 1 + params.template_id.is_some() as u8 + params.status.is_some() as u8;
-
     let list_sql = format!(
         "SELECT wi.*, wt.name as template_name \
          FROM workflow_instances wi \
          JOIN workflow_templates wt ON wt.id = wi.template_id AND wt.version = wi.template_version \
          {} ORDER BY wi.created_at DESC LIMIT ${} OFFSET ${}",
         where_clause,
-        next_param,
-        next_param + 1
+        bind_index,
+        bind_index + 1
     );
     let count_sql = format!(
         "SELECT COUNT(*) FROM workflow_instances wi {}",
@@ -165,6 +196,10 @@ pub async fn list_instances(
     if let Some(ref status) = params.status {
         list_query = list_query.bind(status);
         count_query = count_query.bind(status);
+    }
+    if let Some(mode) = mode_filter {
+        list_query = list_query.bind(mode);
+        count_query = count_query.bind(mode);
     }
     list_query = list_query.bind(params.per_page).bind(offset);
 

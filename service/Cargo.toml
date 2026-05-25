@@ -89,6 +89,9 @@ rhai = { version = "1.19", features = ["sync", "serde"] }
 cron = "0.12"
 chrono-tz = "0.10"
 
+# Regex for the `Matches` assertion op in template tests.
+regex = "1"
+
 # Petri-net domain types (events, marking, tokens)
 petri-domain = { path = "../engine/core-engine/crates/domain" }
 
