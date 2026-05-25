@@ -27,11 +27,14 @@ pid_dir   := ".dev/pid"
 log_dir   := ".dev/log"
 work_dir  := ".dev/work"
 
-# Executor build features. Skip `kreuzberg` (heavy pdfium deps). `llm` is
-# included so an AutomatedStep with backendType=llm can dispatch against the
-# local vllm-metal server (`just dev vllm-up`); external-provider workflows
-# need API keys in the LlmConfig but the local OpenAI-compat path needs none.
-executor_features := "docker,python,http,http-cancel,file-ops,opendal-s3,url-inputs,llm"
+# Executor build features. `llm` is included so an AutomatedStep with
+# backendType=llm can dispatch against the local vllm-metal server
+# (`just dev vllm-up`); external-provider workflows need API keys in the
+# LlmConfig but the local OpenAI-compat path needs none. `kreuzberg` is
+# included so demo 07 (OCR + LLM classification) works out of the box —
+# first build pulls heavy pdfium deps, but the cached rebuild cost is
+# normal.
+executor_features := "docker,python,http,http-cancel,file-ops,opendal-s3,url-inputs,llm,kreuzberg"
 
 # Local infra endpoints (also baked into service/mekhan.toml + engine env)
 nats_url     := "nats://localhost:4333"
