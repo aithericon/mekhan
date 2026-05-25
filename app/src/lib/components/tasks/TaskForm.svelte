@@ -1,7 +1,6 @@
 <script lang="ts">
 	import type { TaskStep, TaskField } from '$lib/hpi/types';
 	import { BlockRenderer } from '$lib/hpi';
-	import BlockChart from '$lib/components/ui/block-chart/block-chart.svelte';
 	import * as Select from '$lib/components/ui/select';
 	import { Input } from '$lib/components/ui/input';
 	import { Textarea } from '$lib/components/ui/textarea';
@@ -554,19 +553,8 @@
 						</p>
 					{/if}
 				</div>
-			{:else if block.type === 'chart'}
-				<BlockChart
-					chart_type={block.chart_type}
-					data={block.data}
-					x={block.x}
-					series={block.series}
-					caption={block.caption}
-					height={block.height}
-					x_label={block.x_label}
-					y_label={block.y_label}
-				/>
 			{:else}
-				<BlockRenderer {block} {renderMdsvex} mdsvexClass={MDSVEX_CLASS} />
+				<BlockRenderer {block} />
 			{/if}
 		{/each}
 	{/if}
