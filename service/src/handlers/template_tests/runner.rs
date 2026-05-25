@@ -416,15 +416,26 @@ async fn persist_run(
     // Stamp the test row so the publication gate / list view sees a fresh
     // result. `passed=true` only when status='passed' — `failed` and `error`
     // both block publish.
+    //
+    // Also refresh `reference_scope` on a passing run: a green run is the
+    // most reliable evidence of what the synthetic scope actually looks like,
+    // so the editor's Available Scope panel stays honest as the template
+    // evolves. Skip the refresh on failed/errored runs — that final_scope
+    // might be partial (e.g. instance aborted) and would mislead authoring.
+    let refresh_scope = status == "passed";
     sqlx::query(
         "UPDATE template_tests SET \
-           last_run_at = $2, last_run_against_version = $3, last_run_passed = $4, updated_at = NOW() \
+           last_run_at = $2, last_run_against_version = $3, last_run_passed = $4, \
+           reference_scope = CASE WHEN $5 THEN $6 ELSE reference_scope END, \
+           updated_at = NOW() \
          WHERE id = $1",
     )
     .bind(test.id)
     .bind(finished_at)
     .bind(template_version)
     .bind(status == "passed")
+    .bind(refresh_scope)
+    .bind(&final_scope)
     .execute(&state.db)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
@@ -457,8 +468,10 @@ fn resolve_task_slug(graph: &WorkflowGraph, detail: &Value, place: &str) -> Stri
 
 /// Build the synthetic scope assertions see: `{ result, steps.<slug>.output }`.
 /// Reads from `workflow_instances.result` and `step_execution.outputs`,
-/// keyed by the node's author slug.
-async fn build_scope(
+/// keyed by the node's author slug. Also used by `promote_instance_to_test`
+/// to seed a fresh test's `reference_scope` from the source instance, so
+/// authors author against the exact same shape the runner will later check.
+pub(super) async fn build_scope(
     db: &PgPool,
     graph: &WorkflowGraph,
     instance_id: Uuid,

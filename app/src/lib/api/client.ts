@@ -327,6 +327,21 @@ export async function runAllTemplateTests(
 	);
 }
 
+export async function listTestRuns(
+	templateId: string,
+	testId: string,
+	limit = 10
+): Promise<TemplateTestRun[]> {
+	return unwrap(
+		await client.GET('/api/templates/{template_id}/tests/{test_id}/runs', {
+			params: {
+				path: { template_id: templateId, test_id: testId },
+				query: { limit }
+			}
+		})
+	);
+}
+
 export async function promoteInstanceToTest(
 	instanceId: string,
 	body: PromoteToTestRequest

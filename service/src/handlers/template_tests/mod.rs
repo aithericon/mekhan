@@ -304,6 +304,64 @@ pub struct RunAllQuery {
     pub include_disabled: bool,
 }
 
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+pub struct ListRunsQuery {
+    /// Cap on returned rows. Defaults to 10; ignored if non-positive.
+    #[serde(default)]
+    pub limit: Option<i32>,
+}
+
+/// GET /api/templates/{template_id}/tests/{test_id}/runs — recent run history.
+///
+/// Returns newest-first. The editor's detail sheet shows the latest one
+/// (failure_detail + final_scope + instance_id) so authors can diagnose a
+/// failure without chasing it through `/instances`.
+#[utoipa::path(
+    get,
+    path = "/api/templates/{template_id}/tests/{test_id}/runs",
+    params(
+        ("template_id" = Uuid, Path),
+        ("test_id" = Uuid, Path),
+        ListRunsQuery,
+    ),
+    responses(
+        (status = 200, body = Vec<TemplateTestRun>),
+        (status = 404, body = ErrorResponse),
+    ),
+    tag = "template_tests",
+)]
+pub async fn list_runs(
+    State(state): State<AppState>,
+    Path((template_id, test_id)): Path<(Uuid, Uuid)>,
+    Query(query): Query<ListRunsQuery>,
+) -> Result<Json<Vec<TemplateTestRun>>, ApiError> {
+    let family = family_root(&state.db, template_id).await?;
+    // Confirm the test exists under this family root before we leak run
+    // rows — otherwise a malformed URL returns a confusing empty array.
+    let exists: Option<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM template_tests WHERE id = $1 AND template_id = $2")
+            .bind(test_id)
+            .bind(family)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+    if exists.is_none() {
+        return Err(ApiError::not_found("test not found"));
+    }
+
+    let limit = query.limit.filter(|l| *l > 0).unwrap_or(10);
+    let rows = sqlx::query_as::<_, TemplateTestRun>(
+        "SELECT * FROM template_test_runs WHERE test_id = $1 \
+         ORDER BY started_at DESC LIMIT $2",
+    )
+    .bind(test_id)
+    .bind(limit as i64)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?;
+    Ok(Json(rows))
+}
+
 // --- Promote instance to test -----------------------------------------------
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -382,11 +440,17 @@ pub async fn promote_instance_to_test(
     // by node author slug for readability.
     let human_answers = extract_human_answers(&state.db, &instance.net_id, &graph).await?;
 
+    // Capture the source instance's synthetic scope so the editor can show
+    // authors what `result.*` and `steps.*.output.*` actually look like
+    // before they write any assertions. Same builder the runner uses, so the
+    // paths the user picks here are the exact paths runs will evaluate.
+    let reference_scope = runner::build_scope(&state.db, &graph, instance.id).await?;
+
     let row = sqlx::query_as::<_, TemplateTest>(
         r#"
         INSERT INTO template_tests
-            (template_id, name, enabled, start_tokens, human_answers, assertions, created_by)
-        VALUES ($1, $2, TRUE, $3, $4, '[]'::jsonb, $5)
+            (template_id, name, enabled, start_tokens, human_answers, assertions, reference_scope, created_by)
+        VALUES ($1, $2, TRUE, $3, $4, '[]'::jsonb, $5, $6)
         RETURNING *
         "#,
     )
@@ -394,6 +458,7 @@ pub async fn promote_instance_to_test(
     .bind(&req.name)
     .bind(&start_tokens)
     .bind(&human_answers)
+    .bind(&reference_scope)
     .bind(user.subject_as_uuid())
     .fetch_one(&state.db)
     .await
@@ -432,12 +497,28 @@ async fn extract_start_tokens(
         .fetch_optional(db)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
-        let token_data = row.and_then(|(d,)| d).unwrap_or(Value::Null);
+        let Some(token_data) = row.and_then(|(d,)| d) else {
+            // No TokenCreated yet on this place — the source instance never
+            // started (or was launched against a different graph version).
+            // Skip this entry rather than pushing a `null` token; the
+            // launcher will then apply its own defaults for fieldless Starts
+            // or surface a clear `MissingStartTokens` for required-field
+            // Starts. Either is far more actionable than the launcher's
+            // generic "token must be a JSON object" error.
+            continue;
+        };
         // Strip the system fields parameterize_air injects (`_instance_id`,
         // `_template_id`, `_template_version`, `_created_at`, `_created_by`)
         // so re-running the test with this fixture doesn't fight the next
         // launch's freshly-injected values.
         let token = strip_system_fields(token_data);
+        // Coerce non-object tokens (the engine technically allows scalar
+        // tokens on arbitrary places; Start places shouldn't see them but
+        // be defensive) to an empty object so the launcher accepts it.
+        let token = match token {
+            Value::Object(_) => token,
+            _ => Value::Object(serde_json::Map::new()),
+        };
         tokens.push(serde_json::json!({
             "start_block_id": node.id,
             "token": token,

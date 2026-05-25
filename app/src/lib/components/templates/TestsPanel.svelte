@@ -19,6 +19,7 @@
 		type TemplateTestRun
 	} from '$lib/api/client';
 	import TestEditorDialog from './TestEditorDialog.svelte';
+	import TestRunDetailSheet from './TestRunDetailSheet.svelte';
 
 	type Props = {
 		templateId: string;
@@ -35,6 +36,7 @@
 	let runningAll = $state(false);
 	let editing = $state<TemplateTest | null>(null);
 	let creating = $state(false);
+	let inspecting = $state<TemplateTest | null>(null);
 	let error = $state<string | null>(null);
 
 	// Most-recent run keyed by test id so the badge updates inline after
@@ -187,18 +189,25 @@
 							handleToggleEnabled(test, checked === true)}
 						aria-label="enabled"
 					/>
-					<div class="min-w-0 flex-1">
-						<div class="truncate font-medium">{test.name}</div>
-						<div class="flex items-center gap-1.5 text-xs {badge.class}">
-							<Icon class="size-3" />
-							<span>{badge.label}</span>
-							{#if test.last_run_against_version != null}
-								<span class="text-muted-foreground"
-									>· v{test.last_run_against_version}</span
-								>
-							{/if}
+					<Button
+						variant="ghost"
+						class="h-auto min-w-0 flex-1 justify-start px-2 py-1 text-left"
+						onclick={() => (inspecting = test)}
+						title="View run history"
+					>
+						<div class="min-w-0 flex-1">
+							<div class="truncate font-medium">{test.name}</div>
+							<div class="flex items-center gap-1.5 text-xs {badge.class}">
+								<Icon class="size-3" />
+								<span>{badge.label}</span>
+								{#if test.last_run_against_version != null}
+									<span class="text-muted-foreground"
+										>· v{test.last_run_against_version}</span
+									>
+								{/if}
+							</div>
 						</div>
-					</div>
+					</Button>
 					<Button
 						variant="ghost"
 						size="sm"
@@ -244,4 +253,11 @@
 		editing = null;
 		await load();
 	}}
+/>
+
+<TestRunDetailSheet
+	{templateId}
+	open={inspecting !== null}
+	test={inspecting}
+	onclose={() => (inspecting = null)}
 />

@@ -11,8 +11,11 @@
 	import { Label } from '$lib/components/ui/label';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import * as Select from '$lib/components/ui/select';
+	import { Card, CardContent, CardHeader, CardTitle } from '$lib/components/ui/card';
 	import Plus from '@lucide/svelte/icons/plus';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
+	import ChevronDown from '@lucide/svelte/icons/chevron-down';
+	import ChevronRight from '@lucide/svelte/icons/chevron-right';
 	import {
 		createTemplateTest,
 		updateTemplateTest,
@@ -38,10 +41,14 @@
 	let name = $state('');
 	let enabled = $state(true);
 	let startTokensText = $state('[]');
-	let humanAnswersText = $state('{}');
+	// One textarea per HumanTask slug in the template graph. Stored on disk
+	// as a single `{ <slug>: <answers> }` object, but authored per-slug so
+	// templates with multiple HumanTasks (or zero) get the right UI.
+	let humanAnswersBySlug = $state<Record<string, string>>({});
 	let assertions = $state<Assertion[]>([]);
 	let saving = $state(false);
 	let error = $state<string | null>(null);
+	let scopeOpen = $state(true);
 
 	$effect(() => {
 		if (!open) {
@@ -49,20 +56,33 @@
 			return;
 		}
 		// Seed editor fields whenever a different test (or "new test")
-		// becomes the target.
+		// becomes the target. The incoming `test` is already wrapped in
+		// Svelte's deep proxy (it lives in TestsPanel's `$state`), so
+		// `structuredClone` would throw — round-trip through JSON to get a
+		// plain, owned copy we can mutate freely without writing back to
+		// the parent.
 		if (test) {
 			name = test.name;
 			enabled = test.enabled;
 			startTokensText = JSON.stringify(test.start_tokens ?? [], null, 2);
-			humanAnswersText = JSON.stringify(test.human_answers ?? {}, null, 2);
+			const stored = (test.human_answers ?? {}) as Record<string, unknown>;
+			const seeded: Record<string, string> = {};
+			for (const slug of humanTaskSlugs) {
+				seeded[slug] = JSON.stringify(stored[slug] ?? {}, null, 2);
+			}
+			humanAnswersBySlug = seeded;
 			assertions = Array.isArray(test.assertions)
-				? structuredClone(test.assertions as Assertion[])
+				? (JSON.parse(JSON.stringify(test.assertions)) as Assertion[])
 				: [];
 		} else {
 			name = '';
 			enabled = true;
 			startTokensText = '[]';
-			humanAnswersText = '{}';
+			const seeded: Record<string, string> = {};
+			for (const slug of humanTaskSlugs) {
+				seeded[slug] = '{}';
+			}
+			humanAnswersBySlug = seeded;
 			assertions = [];
 		}
 	});
@@ -117,7 +137,15 @@
 		error = null;
 		try {
 			const startTokens = JSON.parse(startTokensText);
-			const humanAnswers = JSON.parse(humanAnswersText);
+			const humanAnswers: Record<string, unknown> = {};
+			for (const slug of humanTaskSlugs) {
+				const raw = humanAnswersBySlug[slug] ?? '{}';
+				try {
+					humanAnswers[slug] = JSON.parse(raw);
+				} catch {
+					throw new Error(`Invalid JSON in answers for '${slug}'`);
+				}
+			}
 			const cleanedAssertions = assertions.map((a) => ({
 				...a,
 				value: valueNeedsRhs(a.op) ? parseRhs(a.value) : null
@@ -179,6 +207,39 @@
 			{/if}
 
 			<div class="space-y-4 text-sm">
+				{#if test?.reference_scope}
+					<Card class="border-border bg-muted/30">
+						<CardHeader class="p-3">
+							<Button
+								variant="ghost"
+								size="sm"
+								class="h-auto justify-start gap-1.5 px-1 py-0 text-left font-medium hover:bg-transparent"
+								onclick={() => (scopeOpen = !scopeOpen)}
+							>
+								{#if scopeOpen}
+									<ChevronDown class="size-3.5" />
+								{:else}
+									<ChevronRight class="size-3.5" />
+								{/if}
+								<CardTitle class="text-sm">Available scope</CardTitle>
+								<span class="font-normal text-muted-foreground">
+									— write assertions against these paths
+								</span>
+							</Button>
+						</CardHeader>
+						{#if scopeOpen}
+							<CardContent class="px-3 pb-3 pt-0">
+								<pre
+									class="max-h-64 overflow-auto rounded bg-background/60 p-2 font-mono text-[11px] leading-snug">{JSON.stringify(
+										test.reference_scope,
+										null,
+										2
+									)}</pre>
+							</CardContent>
+						{/if}
+					</Card>
+				{/if}
+
 				<div class="space-y-1">
 					<Label for="test-name">Name</Label>
 					<Input
@@ -209,20 +270,33 @@
 					</p>
 				</div>
 
-				<div class="space-y-1">
-					<Label for="human-answers">Human task answers</Label>
-					<Textarea
-						id="human-answers"
-						bind:value={humanAnswersText}
-						class="h-32 font-mono text-xs"
-					/>
-					<p class="text-xs text-muted-foreground">
-						JSON object keyed by node slug.
-						{#if humanTaskSlugs.length > 0}
-							Slugs in this template: <code>{humanTaskSlugs.join(', ')}</code>.
-						{/if}
-					</p>
-				</div>
+				{#if humanTaskSlugs.length > 0}
+					<div class="space-y-2">
+						<Label>Human task answers</Label>
+						<p class="text-xs text-muted-foreground">
+							One block per HumanTask in this template. The runner publishes
+							these as the synthetic completion payload when each task fires.
+						</p>
+						{#each humanTaskSlugs as slug (slug)}
+							<div class="space-y-1">
+								<Label for={`ans-${slug}`} class="font-mono text-xs">
+									{slug}
+								</Label>
+								<Textarea
+									id={`ans-${slug}`}
+									value={humanAnswersBySlug[slug] ?? '{}'}
+									oninput={(e) => {
+										humanAnswersBySlug = {
+											...humanAnswersBySlug,
+											[slug]: (e.target as HTMLTextAreaElement).value
+										};
+									}}
+									class="h-24 font-mono text-xs"
+								/>
+							</div>
+						{/each}
+					</div>
+				{/if}
 
 				<div class="space-y-2">
 					<div class="flex items-center justify-between">

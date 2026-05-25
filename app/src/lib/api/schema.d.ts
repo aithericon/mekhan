@@ -1170,6 +1170,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/templates/{template_id}/tests/{test_id}/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/templates/{template_id}/tests/{test_id}/runs — recent run history.
+         * @description Returns newest-first. The editor's detail sheet shows the latest one
+         *     (failure_detail + final_scope + instance_id) so authors can diagnose a
+         *     failure without chasing it through `/instances`.
+         */
+        get: operations["list_runs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/triggers": {
         parameters: {
             query?: never;
@@ -2721,6 +2743,13 @@ export interface components {
             last_run_at?: string | null;
             last_run_passed?: boolean | null;
             name: string;
+            /**
+             * @description Snapshot of the synthetic scope the assertion DSL walks
+             *     (`{ result, steps.<slug>.output }`). Captured at promote-time from the
+             *     source instance, refreshed after each successful run. `NULL` for tests
+             *     authored from scratch that have never had a passing run.
+             */
+            reference_scope?: unknown;
             start_tokens: unknown;
             /** Format: uuid */
             template_id: string;
@@ -5905,6 +5934,39 @@ export interface operations {
             };
             /** @description No published version */
             412: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_runs: {
+        parameters: {
+            query?: {
+                /** @description Cap on returned rows. Defaults to 10; ignored if non-positive. */
+                limit?: number | null;
+            };
+            header?: never;
+            path: {
+                template_id: string;
+                test_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TemplateTestRun"][];
+                };
+            };
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

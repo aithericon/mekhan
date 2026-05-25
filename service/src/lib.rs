@@ -136,6 +136,7 @@ fn build_openapi_router() -> OpenApiRouter<AppState> {
         ))
         .routes(routes!(handlers::template_tests::run_one))
         .routes(routes!(handlers::template_tests::run_all))
+        .routes(routes!(handlers::template_tests::list_runs))
         .routes(routes!(handlers::template_tests::promote_instance_to_test))
         // Instances
         .routes(routes!(

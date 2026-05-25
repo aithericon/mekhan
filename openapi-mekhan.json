@@ -3732,6 +3732,74 @@
         }
       }
     },
+    "/api/templates/{template_id}/tests/{test_id}/runs": {
+      "get": {
+        "tags": [
+          "template_tests"
+        ],
+        "summary": "GET /api/templates/{template_id}/tests/{test_id}/runs — recent run history.",
+        "description": "Returns newest-first. The editor's detail sheet shows the latest one\n(failure_detail + final_scope + instance_id) so authors can diagnose a\nfailure without chasing it through `/instances`.",
+        "operationId": "list_runs",
+        "parameters": [
+          {
+            "name": "template_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "test_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Cap on returned rows. Defaults to 10; ignored if non-positive.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TemplateTestRun"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/triggers": {
       "get": {
         "tags": [
@@ -7794,6 +7862,9 @@
           },
           "name": {
             "type": "string"
+          },
+          "reference_scope": {
+            "description": "Snapshot of the synthetic scope the assertion DSL walks\n(`{ result, steps.<slug>.output }`). Captured at promote-time from the\nsource instance, refreshed after each successful run. `NULL` for tests\nauthored from scratch that have never had a passing run."
           },
           "start_tokens": {},
           "template_id": {

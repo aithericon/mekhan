@@ -22,6 +22,12 @@ pub struct TemplateTest {
     pub last_run_at: Option<DateTime<Utc>>,
     pub last_run_against_version: Option<i32>,
     pub last_run_passed: Option<bool>,
+    /// Snapshot of the synthetic scope the assertion DSL walks
+    /// (`{ result, steps.<slug>.output }`). Captured at promote-time from the
+    /// source instance, refreshed after each successful run. `NULL` for tests
+    /// authored from scratch that have never had a passing run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference_scope: Option<serde_json::Value>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub created_by: Uuid,
