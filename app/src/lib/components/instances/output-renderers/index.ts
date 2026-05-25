@@ -9,6 +9,7 @@ import HumanTaskEnvelope from './HumanTaskEnvelope.svelte';
 import AutomatedStepEnvelope from './AutomatedStepEnvelope.svelte';
 import LlmResponseEnvelope from './LlmResponseEnvelope.svelte';
 import KreuzbergExtractionEnvelope from './KreuzbergExtractionEnvelope.svelte';
+import EndTerminalEnvelope from './EndTerminalEnvelope.svelte';
 import ProcessTokenEnvelope from './ProcessTokenEnvelope.svelte';
 import FileReference from './FileReference.svelte';
 import TabularArray from './TabularArray.svelte';
@@ -51,6 +52,24 @@ function matchesAutomatedStep(value: unknown, ctx: RenderContext): boolean {
 	if (typeof value.job_id !== 'string') return false;
 	if (!isObj(value.detail)) return false;
 	return ctx.nodeKind === undefined || ctx.nodeKind === 'automated_step';
+}
+
+/** Workflow-exit terminal envelope deposited at `workflow_terminals[*]` by
+ *  End / Failure nodes. Built by `lower_end`'s result_shape transition
+ *  (`exit_code: { ok: true, value: <result_mapping> }`) and `lower_failure`
+ *  (`exit_code: { ok: false, error }`), riding atop the process token's
+ *  workflow-level `name` / `process_id` / `task_id` / `status` fields.
+ *  Distinguishing signature: all four workflow-metadata strings present.
+ *  `exit_code` is treated as optional so bare-End terminals (no result
+ *  mapping) still match and render the metadata cleanly. */
+function matchesEndTerminal(value: unknown, ctx: RenderContext): boolean {
+	if (!isObj(value)) return false;
+	if (typeof value.process_id !== 'string') return false;
+	if (typeof value.task_id !== 'string') return false;
+	if (typeof value.status !== 'string') return false;
+	if (typeof value.name !== 'string') return false;
+	if ('exit_code' in value && value.exit_code !== null && !isObj(value.exit_code)) return false;
+	return ctx.nodeKind === undefined || ctx.nodeKind === 'end';
 }
 
 /** Process-rooted token (carrying `_instance_id` stamped by Start, plus
@@ -168,6 +187,12 @@ export const REGISTRY: OutputRenderer[] = [
 		label: 'Document extraction',
 		matches: matchesKreuzbergExtraction,
 		component: KreuzbergExtractionEnvelope
+	},
+	{
+		name: 'end-terminal',
+		label: 'Workflow result',
+		matches: matchesEndTerminal,
+		component: EndTerminalEnvelope
 	},
 	{
 		name: 'process-token',
