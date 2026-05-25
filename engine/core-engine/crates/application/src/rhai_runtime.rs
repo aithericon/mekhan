@@ -8,12 +8,67 @@
 use std::collections::HashMap;
 
 use rand::Rng;
-use rhai::{Dynamic, Engine, Map, Scope, AST};
+use rhai::{Array, Dynamic, Engine, ImmutableString, Map, Scope, AST};
 use serde_json::Value as JsonValue;
 
 use petri_domain::TokenColor;
 
 use crate::ServiceError;
+
+/// Register `__pluck(root, segs)` — a null-safe walker the compiler emits
+/// for every `{{ <slug>.<field> }}` placeholder rewrite. The semantics
+/// mirror the historical script-side `PLUCK_HELPER` (defined in
+/// `service/src/compiler/rhai_gen.rs::PLUCK_HELPER`) but as a registered
+/// Rust function so transitions don't have to prepend a helper definition
+/// to every script they emit.
+///
+/// Walks `segs` left-to-right; on each segment, indexes `root` by a
+/// string key (when it's a map) or i64 index (when it's an array). Any
+/// type mismatch, out-of-bounds index, or missing key returns `()` —
+/// the unit value the compiler relies on for graceful degradation. If
+/// the script also defines `fn __pluck(__r, __segs)` (legacy AIR with
+/// the prelude still baked in), Rhai's user-defined-function precedence
+/// makes the script version win; the semantics are identical so behavior
+/// is unchanged. This keeps the migration off the script-side prelude
+/// incremental — old AIR keeps working, new AIR doesn't need to ship
+/// the helper at all.
+pub fn register_pluck(engine: &mut Engine) {
+    engine.register_fn("__pluck", |root: Dynamic, segs: Array| -> Dynamic {
+        let mut current = root;
+        for seg in segs {
+            if current.is_map() {
+                let Some(key) = seg.try_cast::<ImmutableString>() else {
+                    return Dynamic::UNIT;
+                };
+                // `cast::<Map>` won't panic — `is_map()` just guarded it.
+                let map = current.cast::<Map>();
+                let Some(next) = map.get(key.as_str()).cloned() else {
+                    return Dynamic::UNIT;
+                };
+                current = next;
+            } else if current.is_array() {
+                let Some(idx) = seg.try_cast::<i64>() else {
+                    return Dynamic::UNIT;
+                };
+                if idx < 0 {
+                    return Dynamic::UNIT;
+                }
+                let arr = current.cast::<Array>();
+                let Some(next) = arr.get(idx as usize).cloned() else {
+                    return Dynamic::UNIT;
+                };
+                current = next;
+            } else {
+                // String / int / bool / unit / etc. — indexing them isn't
+                // meaningful and the script-side helper returns `()` here
+                // (the whole point: a stale `{{ x.y }}` on a non-map x
+                // degrades gracefully instead of throwing).
+                return Dynamic::UNIT;
+            }
+        }
+        current
+    });
+}
 
 /// A sandboxed Rhai runtime with JSON conversion utilities.
 ///
@@ -45,6 +100,11 @@ impl RhaiRuntime {
         engine.set_max_string_size(1_000_000); // 1MB strings
         engine.set_max_array_size(10_000);
         engine.set_max_map_size(10_000);
+
+        // Compiler-emitted helpers. Registered natively so transitions
+        // don't have to ship a script-side definition for every emit
+        // site — see `register_pluck` for the migration rationale.
+        register_pluck(&mut engine);
 
         Self { engine }
     }
@@ -449,5 +509,88 @@ mod tests {
             .eval_with_scope(&mut scope, "timestamp()")
             .unwrap();
         assert!(ts > 0);
+    }
+
+    /// The compiler emits `__pluck(d_<producer>, [...])` from every
+    /// `{{ <slug>.<field> }}` rewrite in LLM/Kreuzberg prepare transitions.
+    /// Without a native registration (or a script-side prelude) those
+    /// transitions would fail at execution time with "Function not found:
+    /// __pluck (map, array)" — the exact symptom that hit the
+    /// 07-ocr-classify-extract demo on first live run.
+    #[test]
+    fn register_pluck_walks_map_keys_array_indices_and_null_safes() {
+        let runtime = RhaiRuntime::new();
+        let engine = runtime.engine();
+        let mut scope = Scope::new();
+
+        // Happy path: nested map walk.
+        let r: Dynamic = engine
+            .eval_with_scope(
+                &mut scope,
+                r#"__pluck(#{ "data": #{ "x": 42 } }, ["data", "x"])"#,
+            )
+            .expect("nested map walk must succeed");
+        assert_eq!(r.as_int().unwrap(), 42);
+
+        // Mixed map → array → map.
+        let r: Dynamic = engine
+            .eval_with_scope(
+                &mut scope,
+                r#"__pluck(#{ "items": [#{ "name": "ACME" }] }, ["items", 0, "name"])"#,
+            )
+            .expect("map → array → map walk must succeed");
+        assert_eq!(r.into_immutable_string().unwrap().as_str(), "ACME");
+
+        // Missing map key → unit (no hard error).
+        let r: Dynamic = engine
+            .eval_with_scope(&mut scope, r#"__pluck(#{ "a": 1 }, ["b"])"#)
+            .expect("missing key must degrade to ()");
+        assert!(r.is_unit());
+
+        // Indexing a string with a string → unit (compiler's null-safe
+        // contract: `{{ x.y }}` on a non-map x must NOT throw).
+        let r: Dynamic = engine
+            .eval_with_scope(&mut scope, r#"__pluck("scalar", ["y"])"#)
+            .expect("string root with a key seg must degrade to ()");
+        assert!(r.is_unit());
+
+        // Out-of-bounds array index → unit.
+        let r: Dynamic = engine
+            .eval_with_scope(&mut scope, r#"__pluck([1, 2], [5])"#)
+            .expect("oob array index must degrade to ()");
+        assert!(r.is_unit());
+
+        // Negative array index → unit (consistent with the script helper).
+        let r: Dynamic = engine
+            .eval_with_scope(&mut scope, r#"__pluck([1, 2], [-1])"#)
+            .expect("negative array index must degrade to ()");
+        assert!(r.is_unit());
+    }
+
+    /// If a script still ships the legacy `fn __pluck(...)` prelude, the
+    /// user-defined version takes precedence over the native registration
+    /// — proving the migration off the prelude is safe to roll out
+    /// incrementally (old AIR untouched, new AIR doesn't ship the helper).
+    #[test]
+    fn script_defined_pluck_shadows_native_with_identical_semantics() {
+        let runtime = RhaiRuntime::new();
+        let mut scope = Scope::new();
+        let script = r#"
+            fn __pluck(__r, __segs) {
+                for __s in __segs {
+                    let __t = type_of(__r);
+                    if __t == "map" && type_of(__s) == "string" { __r = __r[__s]; continue; }
+                    if __t == "array" && type_of(__s) == "i64" && __s >= 0 && __s < __r.len() { __r = __r[__s]; continue; }
+                    return ();
+                }
+                __r
+            }
+            __pluck(#{ "x": 99 }, ["x"])
+        "#;
+        let r: Dynamic = runtime
+            .engine()
+            .eval_with_scope(&mut scope, script)
+            .expect("script-defined __pluck must execute");
+        assert_eq!(r.as_int().unwrap(), 99);
     }
 }

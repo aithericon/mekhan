@@ -851,6 +851,229 @@ mod tests {
             air_str.contains("input:__borrow_extract_text__full_text"),
             "LLM prompt must be rewritten to {{input:…}}; got: {air_str}"
         );
+
+        // Regression guard: the `job_inputs.push` snippets we emit call
+        // `__pluck(d_<producer>, …)`. The engine registers `__pluck`
+        // natively (see `petri_application::rhai_runtime::register_pluck`),
+        // so transitions only need to reference it — they don't have to
+        // ship the helper definition. The first cut of the LLM/Kreuzberg
+        // borrow phase forgot both ends and shipped AIR that compiled
+        // cleanly but threw "Function not found: __pluck" the first
+        // time the engine tried to fire it; this assertion locks in
+        // the call shape, and the matching execution-level test
+        // (`ocr_classify_extract_demo_prepare_transitions_execute`)
+        // proves the native registration covers it at runtime.
+        assert!(
+            air_str.contains("__pluck(d_start"),
+            "Kreuzberg borrow must call __pluck on producer envelope; got: {air_str}"
+        );
+        assert!(
+            air_str.contains("__pluck(d_extract_text"),
+            "LLM borrow must call __pluck on producer envelope; got: {air_str}"
+        );
+    }
+
+    /// Execution-level companion to
+    /// `ocr_classify_extract_demo_loads_and_compiles_with_borrows`.
+    ///
+    /// The string-level test above asserts the AIR has the right shape;
+    /// this one drives the *actual* Rhai engine the runtime uses
+    /// (`petri_application::rhai_runtime::RhaiRuntime`) against the
+    /// compiled prepare transitions. Catches:
+    ///
+    ///   - Missing `__pluck` registration / prelude — the original bug
+    ///     ("Function not found: __pluck (map, array)" at fire time)
+    ///     was invisible to the compile path but would surface here on
+    ///     the first `eval_with_scope`.
+    ///   - Scope shape drift — the planner's producer-field hoist logic
+    ///     (HumanTask: `.data`, AutomatedStep: `.detail.outputs`, Start:
+    ///     top-level) is encoded in the generated Rhai. If that drifts
+    ///     out of sync with the parked envelope shape the engine actually
+    ///     produces, the eval here returns `()` for the staged value and
+    ///     the assertion below catches it.
+    ///   - Wrong staging strategy — File-kind producer needs `storage_path`
+    ///     with a `.url` pluck; non-File needs `raw` with stringified
+    ///     content. The assertion inspects the returned `job_inputs` map
+    ///     directly, so a swapped dispatch is caught at the source.
+    #[test]
+    fn ocr_classify_extract_demo_prepare_transitions_execute() {
+        use crate::compiler::compile_to_scenario;
+        use crate::compiler::SubWorkflowAir;
+        use aithericon_sdk::scenario::TransitionLogic;
+        use petri_application::rhai_runtime::RhaiRuntime;
+        use rhai::{Dynamic, Map, Scope};
+        use serde_json::json;
+
+        let root = repo_root().join("demos");
+        let demo = load_demo(&root.join("07-ocr-classify-extract"))
+            .expect("07-ocr-classify-extract must load");
+        let files = crate::compiler::node_files_inline(&demo.files);
+        let scenario = compile_to_scenario(
+            &demo.graph,
+            &demo.metadata.name,
+            demo.metadata.description.as_deref().unwrap_or(""),
+            &files,
+            &SubWorkflowAir::new(),
+        )
+        .expect("must compile to scenario");
+
+        // Helper to extract a transition's Rhai source by id-prefix.
+        let prepare_source = |id_prefix: &str| -> String {
+            scenario
+                .transitions
+                .iter()
+                .find(|t| {
+                    t.id == format!("{id_prefix}/prepare")
+                        || t.id == format!("t_{id_prefix}_prepare")
+                })
+                .and_then(|t| match &t.logic {
+                    TransitionLogic::Rhai { source } => Some(source.clone()),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("prepare transition for {id_prefix} not found"))
+        };
+
+        let runtime = RhaiRuntime::new();
+        let engine = runtime.engine();
+
+        // ── Kreuzberg prepare: borrows `start.document` (FieldKind::File)
+        // → staging strategy is `storage_path` with `__pluck(d_start,
+        // ["data", "document", "url"])`.
+        let extract_source = prepare_source("extract_text");
+        let mut scope = Scope::new();
+        scope.push("input", Map::new());
+        // Start envelope shape: input form fields land at the TOP LEVEL of
+        // the seeded token — no `.data` wrapper (unlike HumanTask). The
+        // `parameterize_air` path puts whatever the caller posted directly
+        // into `p_{id}_ready`; uploaded files become FileRef maps under
+        // their declared field name. See
+        // `token_shape::valid_uploaded_file_ref_passes` for the exact shape.
+        let d_start: Dynamic = engine
+            .parse_json(
+                &json!({ "document": {
+                    "key": "blob/abc",
+                    "url": "s3://bucket/key/uploaded.pdf",
+                    "filename": "uploaded.pdf",
+                    "content_type": "application/pdf",
+                    "size": 1234
+                } })
+                .to_string(),
+                true,
+            )
+            .expect("d_start parse")
+            .into();
+        scope.push_dynamic("d_start", d_start);
+
+        let result: Map = engine
+            .eval_with_scope(&mut scope, &extract_source)
+            .expect("extract_text/prepare must execute under the synthetic scope");
+
+        let inputs = result
+            .get("job")
+            .and_then(|v| v.clone().try_cast::<Map>())
+            .and_then(|m| m.get("spec").cloned())
+            .and_then(|v| v.try_cast::<Map>())
+            .and_then(|m| m.get("inputs").cloned())
+            .and_then(|v| v.try_cast::<rhai::Array>())
+            .expect("job.spec.inputs must be an array");
+        let borrow_entry = inputs
+            .iter()
+            .filter_map(|v| v.clone().try_cast::<Map>())
+            .find(|m| {
+                m.get("name")
+                    .and_then(|v| v.clone().try_cast::<String>())
+                    .as_deref()
+                    == Some("__borrow_start__document")
+            })
+            .expect("__borrow_start__document must be staged");
+        let source = borrow_entry
+            .get("source")
+            .and_then(|v| v.clone().try_cast::<Map>())
+            .expect("borrow source map");
+        assert_eq!(
+            source
+                .get("type")
+                .and_then(|v| v.clone().try_cast::<String>())
+                .as_deref(),
+            Some("storage_path"),
+            "File-kind producer must stage via storage_path; got: {source:?}"
+        );
+        assert_eq!(
+            source
+                .get("path")
+                .and_then(|v| v.clone().try_cast::<String>())
+                .as_deref(),
+            Some("s3://bucket/key/uploaded.pdf"),
+            "storage_path must resolve to producer's FileRef.url; got: {source:?}"
+        );
+
+        // ── LLM prepare: borrows `extract_text.full_text` (FieldKind::Text)
+        // → staging strategy is `raw` with `__pluck(d_extract_text,
+        // ["detail", "outputs", "full_text"])`.
+        let classify_source = prepare_source("classify");
+        let mut scope = Scope::new();
+        scope.push("input", Map::new());
+        // AutomatedStep envelope shape: `detail.outputs.<field>`.
+        let d_extract_text: Dynamic = engine
+            .parse_json(
+                &json!({ "detail": { "outputs": {
+                    "full_text": "Invoice #INV-001 Amount: $1,234.56 Vendor: ACME"
+                } } })
+                .to_string(),
+                true,
+            )
+            .expect("d_extract_text parse")
+            .into();
+        scope.push_dynamic("d_extract_text", d_extract_text);
+
+        let result: Map = engine
+            .eval_with_scope(&mut scope, &classify_source)
+            .expect("classify/prepare must execute under the synthetic scope");
+        let inputs = result
+            .get("job")
+            .and_then(|v| v.clone().try_cast::<Map>())
+            .and_then(|m| m.get("spec").cloned())
+            .and_then(|v| v.try_cast::<Map>())
+            .and_then(|m| m.get("inputs").cloned())
+            .and_then(|v| v.try_cast::<rhai::Array>())
+            .expect("job.spec.inputs must be an array");
+        let borrow_entry = inputs
+            .iter()
+            .filter_map(|v| v.clone().try_cast::<Map>())
+            .find(|m| {
+                m.get("name")
+                    .and_then(|v| v.clone().try_cast::<String>())
+                    .as_deref()
+                    == Some("__borrow_extract_text__full_text")
+            })
+            .expect("__borrow_extract_text__full_text must be staged");
+        let source = borrow_entry
+            .get("source")
+            .and_then(|v| v.clone().try_cast::<Map>())
+            .expect("borrow source map");
+        // Content sites stage via `inline { value }` — the executor's
+        // staging hook (`staging.rs::Inline` arm) serializes `value` as
+        // JSON and writes it to a temp file; the `{{input:NAME}}`
+        // resolver re-parses that JSON when interpolating. For a string
+        // producer field the value is a Rhai-side string and the file
+        // round-trips as a JSON-encoded string — exactly the contract
+        // the resolver expects for `{{input:NAME}}` inside a prompt.
+        assert_eq!(
+            source
+                .get("type")
+                .and_then(|v| v.clone().try_cast::<String>())
+                .as_deref(),
+            Some("inline"),
+            "Content-site (LLM prompt) must stage via inline; got: {source:?}"
+        );
+        assert_eq!(
+            source
+                .get("value")
+                .and_then(|v| v.clone().try_cast::<String>())
+                .as_deref(),
+            Some("Invoice #INV-001 Amount: $1,234.56 Vendor: ACME"),
+            "inline value must be the plucked text; got: {source:?}"
+        );
     }
 
     /// `06-subworkflow` references `01-hello-world`'s templateId via its

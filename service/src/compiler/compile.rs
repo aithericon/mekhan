@@ -1446,6 +1446,18 @@ fn apply_backend_ref_phase(
                             &replacement,
                         );
                     }
+                    // The `job_inputs.push` snippets we just spliced call
+                    // `__pluck(d_<producer>, …)`. `__pluck` is registered
+                    // natively on `petri_application::rhai_runtime::
+                    // RhaiRuntime` (see `register_pluck`), so transitions
+                    // that only acquired `__pluck` through this phase do
+                    // NOT need to ship the script-side `PLUCK_HELPER`
+                    // prelude — the engine resolves it from the native
+                    // registration at execution time. Legacy AIR that
+                    // still carries the prelude (because lowering wrapped
+                    // its source via `with_pluck_prelude`) keeps working
+                    // unchanged: Rhai's user-defined functions shadow
+                    // natives with identical semantics.
                     t.logic = TransitionLogic::Rhai { source: new_source };
                 }
             }

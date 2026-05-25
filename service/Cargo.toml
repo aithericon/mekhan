@@ -132,3 +132,9 @@ wiremock = "0.6"
 # Used by integration tests that share global NATS streams (e.g. PETRI_GLOBAL)
 # to force sequential execution and avoid stream-state collisions.
 serial_test = "3"
+# `petri-application` is the runtime that fires our transitions; tests that
+# need to assert a compiled prepare transition would actually EXECUTE under
+# the real engine (instead of just inspecting the AIR string) construct a
+# `RhaiRuntime` here — same engine, same registered helpers (`__pluck`, ...)
+# the service publishes to.
+petri-application = { path = "../engine/core-engine/crates/application" }
