@@ -158,7 +158,18 @@ fn demo_graph() -> Value {
             {
                 "id": "end", "type": "end",
                 "position": { "x": 400, "y": 0 },
-                "data": { "type": "end", "label": "Done" }
+                "data": {
+                    "type": "end", "label": "Done",
+                    // Populate result.value so the assertion picker + Rhai
+                    // self-reference checks have something to compare against.
+                    // The expression is a Rhai literal so it doesn't depend
+                    // on the inbound terminal token's exact shape — keeps
+                    // the e2e narrow to the runner's resolver, not End-token
+                    // semantics.
+                    "resultMapping": [
+                        { "targetField": "marker", "expression": "\"e2e\"" }
+                    ]
+                }
             }
         ],
         "edges": [
@@ -493,7 +504,113 @@ async fn template_tests_live_full_cycle() {
     assert_eq!(failure["op"], "exists");
     assert_eq!(failure["path"], "result.this.does.not.exist");
 
-    // 8. The run-history endpoint must show both runs newest-first.
+    // 7b. PATCH a Rhai-templated value that resolves against the live scope.
+    //     Two assertions exercise the lifted picker scope:
+    //       - `result.value.marker` self-reference (End resultMapping path)
+    //       - `start.<id>.amount` cross-reference (Start-token path, NEW —
+    //         proves `build_scope` actually exposes the start tokens)
+    let patch_body = json!({
+        "assertions": [
+            {
+                "path": "result.value.marker",
+                "op": "eq",
+                "value": "{{ result.value.marker }}"
+            },
+            {
+                "path": "start.amount",
+                "op": "eq",
+                "value": "{{ start.amount }}"
+            }
+        ]
+    });
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/api/templates/{template_id}/tests/{test_id}"))
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&patch_body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "patch rhai-template assertion");
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/templates/{template_id}/tests/{test_id}/run"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    let run = body_json(resp.into_body()).await;
+    assert_eq!(status, StatusCode::OK, "rhai-template run: {run}");
+    assert_eq!(
+        run["status"], "passed",
+        "rhai self-reference must hold against live final_scope: {run}"
+    );
+
+    // 7c. PATCH a Rhai template that resolves but compares unequal — the
+    //     failure_detail must carry BOTH `expected` (the raw template) and
+    //     `expected_resolved` (the concrete value the comparison actually
+    //     used), so the UI can show users what their `{{ … }}` actually
+    //     evaluated to instead of leaving them staring at the template text.
+    let patch_body = json!({
+        "assertions": [
+            {
+                "path": "result.value.marker",
+                "op": "eq",
+                "value": "{{ \"not_e2e\" }}"
+            }
+        ]
+    });
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/api/templates/{template_id}/tests/{test_id}"))
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&patch_body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "patch unequal rhai assertion");
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/templates/{template_id}/tests/{test_id}/run"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let run = body_json(resp.into_body()).await;
+    assert_eq!(run["status"], "failed", "unequal rhai → failed: {run}");
+    let failure = run["failure_detail"]
+        .as_object()
+        .expect("failure_detail object");
+    assert_eq!(
+        failure["expected"], "{{ \"not_e2e\" }}",
+        "raw template preserved in `expected`: {run}"
+    );
+    assert_eq!(
+        failure["expected_resolved"], "not_e2e",
+        "resolved value must surface in `expected_resolved`: {run}"
+    );
+    assert_eq!(failure["actual"], "e2e", "actual is the live marker: {run}");
+
+    // 8. The run-history endpoint must show every run newest-first.
     let resp = app
         .clone()
         .oneshot(
@@ -511,12 +628,16 @@ async fn template_tests_live_full_cycle() {
     let runs = body_json(resp.into_body()).await;
     let arr = runs.as_array().expect("runs array");
     assert!(
-        arr.len() >= 2,
-        "expected at least 2 runs in history, got {}: {runs}",
+        arr.len() >= 4,
+        "expected at least 4 runs in history, got {}: {runs}",
         arr.len()
     );
+    // Newest first: unequal-rhai (failed), passing-rhai (passed),
+    // exists-on-missing (failed), not-exists-on-missing (passed).
     assert_eq!(arr[0]["status"], "failed", "newest first: {runs}");
     assert_eq!(arr[1]["status"], "passed");
+    assert_eq!(arr[2]["status"], "failed");
+    assert_eq!(arr[3]["status"], "passed");
 
     cleanup_durables(&cleanup_nats).await;
 }

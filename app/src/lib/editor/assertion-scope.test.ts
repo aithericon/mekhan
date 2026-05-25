@@ -26,7 +26,12 @@ function endNode(
 	} as WorkflowNode;
 }
 
-function automatedNode(id: string, slug: string, label: string): WorkflowNode {
+function automatedNode(
+	id: string,
+	slug: string,
+	label: string,
+	outputFields: string[] = []
+): WorkflowNode {
 	return {
 		id,
 		type: 'automated_step',
@@ -49,7 +54,38 @@ function automatedNode(id: string, slug: string, label: string): WorkflowNode {
 			},
 			retryPolicy: { maxRetries: 0, strategy: { type: 'immediate' } },
 			deploymentModel: { mode: 'inline' },
-			output: { id: 'out', label: 'Out', fields: [] }
+			output: {
+				id: 'out',
+				label: 'Out',
+				fields: outputFields.map((name) => ({
+					name,
+					label: name,
+					kind: 'text',
+					required: true
+				}))
+			}
+		}
+	} as WorkflowNode;
+}
+
+function startNode(id: string, label: string, fields: string[] = []): WorkflowNode {
+	return {
+		id,
+		type: 'start',
+		position: { x: 0, y: 0 },
+		data: {
+			type: 'start',
+			label,
+			initial: {
+				id: 'in',
+				label: 'In',
+				fields: fields.map((name) => ({
+					name,
+					label: name,
+					kind: 'text',
+					required: true
+				}))
+			}
 		}
 	} as WorkflowNode;
 }
@@ -64,54 +100,86 @@ function graph(nodes: WorkflowNode[]): WorkflowGraph {
 }
 
 describe('buildAssertionScope', () => {
-	it('returns no entries when no End node has resultMapping', () => {
-		const g = graph([endNode('e1', 'Done', [])]);
+	it('returns no entries when no node contributes a path', () => {
+		const g = graph([endNode('e1', 'Done', []), startNode('s1', 'Start')]);
 		expect(buildAssertionScope(g)).toEqual([]);
 	});
 
-	it('emits one entry per resultMapping field, qualified as result.value.<field>', () => {
+	it('emits End resultMapping fields as result.value.<field>', () => {
 		const g = graph([
 			endNode('e1', 'Done', [{ target: 'amount' }, { target: 'approved' }])
 		]);
-		const entries = buildAssertionScope(g);
-		expect(entries.map((e) => e.qualified)).toEqual([
+		expect(buildAssertionScope(g).map((e) => e.qualified)).toEqual([
 			'result.value.amount',
 			'result.value.approved'
 		]);
 	});
 
+	it('emits AutomatedStep output fields as steps.<slug>.output.<field>', () => {
+		const g = graph([automatedNode('a1', 'extract', 'Extract', ['vendor', 'amount'])]);
+		expect(buildAssertionScope(g).map((e) => e.qualified)).toEqual([
+			'steps.extract.output.vendor',
+			'steps.extract.output.amount'
+		]);
+	});
+
+	it('hoists Start initial fields to start.<field> when there is only one Start', () => {
+		const g = graph([startNode('start', 'Start', ['invoice_id', 'amount'])]);
+		expect(buildAssertionScope(g).map((e) => e.qualified)).toEqual([
+			'start.invoice_id',
+			'start.amount'
+		]);
+	});
+
+	it('namespaces Start fields under <block_id> when there are multiple Starts', () => {
+		const g = graph([
+			startNode('manual', 'Manual', ['a']),
+			startNode('trigger', 'Trigger', ['b'])
+		]);
+		expect(new Set(buildAssertionScope(g).map((e) => e.qualified))).toEqual(
+			new Set(['start.manual.a', 'start.trigger.b'])
+		);
+	});
+
 	it('uses the End label as the group label when there is only one End', () => {
 		const g = graph([endNode('e1', 'Done', [{ target: 'amount' }])]);
-		const [entry] = buildAssertionScope(g);
-		expect(entry.nodeLabel).toBe('Done');
+		expect(buildAssertionScope(g)[0].nodeLabel).toBe('Done');
 	});
 
-	it('prefixes "End:" on group labels when there are multiple Ends', () => {
+	it('prefixes "End:" / "Start:" only when multiple of that kind exist', () => {
 		const g = graph([
-			endNode('e1', 'Approved', [{ target: 'amount' }]),
-			endNode('e2', 'Rejected', [{ target: 'reason' }])
+			startNode('s1', 'Manual', ['a']),
+			startNode('s2', 'Trigger', ['b']),
+			endNode('e1', 'Approved', [{ target: 'x' }]),
+			endNode('e2', 'Rejected', [{ target: 'y' }])
 		]);
-		const entries = buildAssertionScope(g);
-		const groups = new Set(entries.map((e) => e.nodeLabel));
-		expect(groups).toEqual(new Set(['End: Approved', 'End: Rejected']));
+		const groups = new Set(buildAssertionScope(g).map((e) => e.nodeLabel));
+		expect(groups).toEqual(
+			new Set(['Start: Manual', 'Start: Trigger', 'End: Approved', 'End: Rejected'])
+		);
 	});
 
-	it('falls back to "End" when an End node has no label', () => {
+	it('combines End + AutomatedStep + Start entries in one scope', () => {
 		const g = graph([
-			{ ...endNode('e1', '', [{ target: 'amount' }]) },
-			endNode('e2', 'Rejected', [{ target: 'reason' }])
-		]);
-		const entries = buildAssertionScope(g);
-		const groups = new Set(entries.map((e) => e.nodeLabel));
-		expect(groups).toEqual(new Set(['End: End', 'End: Rejected']));
-	});
-
-	it('skips non-End nodes entirely (AutomatedStep outputs are out of scope here)', () => {
-		const g = graph([
-			automatedNode('a1', 'extract', 'Extract'),
+			startNode('start', 'Start', ['amount']),
+			automatedNode('a1', 'review', 'Review', ['approved']),
 			endNode('e1', 'Done', [{ target: 'amount' }])
 		]);
-		const entries = buildAssertionScope(g);
-		expect(entries.map((e) => e.qualified)).toEqual(['result.value.amount']);
+		const quals = buildAssertionScope(g).map((e) => e.qualified);
+		expect(new Set(quals)).toEqual(
+			new Set([
+				// Single Start → hoisted to `start.<field>`.
+				'start.amount',
+				'steps.review.output.approved',
+				'result.value.amount'
+			])
+		);
+	});
+
+	it('falls back to node.id when an AutomatedStep has no slug', () => {
+		const node = automatedNode('a1', '', 'Extract', ['x']);
+		const g = graph([node]);
+		// The helper falls back to node.id when slug is blank/missing.
+		expect(buildAssertionScope(g)[0].qualified).toBe('steps.a1.output.x');
 	});
 });

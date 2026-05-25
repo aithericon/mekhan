@@ -323,7 +323,8 @@
 						<p class="text-xs text-muted-foreground">
 							Each assertion checks a value at a dot-path inside <code
 								>{`{ result, steps.<slug>.output }`}</code
-							>.
+							>. Wrap an expected value in <code>{`{{ … }}`}</code> to evaluate
+							it as a Rhai expression against the same scope.
 						</p>
 					{/if}
 					{#each assertions as a, idx (idx)}
@@ -364,15 +365,27 @@
 								</Select.Content>
 							</Select.Root>
 							{#if valueNeedsRhs(a.op)}
-								<Input
-									class="flex-1 font-mono text-xs"
-									placeholder='"yes" or 42 or {"{...}"}'
-									value={rhsTextValue(a.value)}
-									oninput={(e) =>
-										updateAssertion(idx, {
-											value: (e.target as HTMLInputElement).value
-										})}
-								/>
+								<div class="flex flex-1 flex-col gap-1">
+									<Input
+										class="font-mono text-xs"
+										placeholder={'"yes" / 42 / {{ result.value.amount }}'}
+										value={rhsTextValue(a.value)}
+										oninput={(e) =>
+											updateAssertion(idx, {
+												value: (e.target as HTMLInputElement).value
+											})}
+									/>
+									<RefPicker
+										scope={assertionScope}
+										placeholder={assertionScope.length === 0
+											? 'No scope refs'
+											: 'Insert {{ ref }}…'}
+										onpick={(entry) =>
+											updateAssertion(idx, {
+												value: `{{ ${entry.qualified} }}`
+											})}
+									/>
+								</div>
 							{:else}
 								<div class="flex-1 text-xs text-muted-foreground self-center pl-2">
 									(no value)

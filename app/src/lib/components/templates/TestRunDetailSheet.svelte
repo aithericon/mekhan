@@ -85,15 +85,20 @@
 	}
 
 	// `failure_detail` shape from the runner:
-	//   failed:  { assertion_idx, path, op, expected, actual }
+	//   failed:  { assertion_idx, path, op, expected, expected_resolved?, actual }
 	//   error:   { assertion_idx?, path?, op?, expected?, error } OR
 	//            { reason: 'instance_did_not_complete', terminal_status } OR
 	//            { reason: 'launch_failed', detail: <launcher error string> }.
+	//
+	// `expected_resolved` is present only when the literal `expected` value was
+	// a `{{ … }}` Rhai template that resolved to a different concrete value —
+	// otherwise it'd just duplicate `expected`.
 	type FailureDetail = {
 		assertion_idx?: number;
 		path?: string;
 		op?: string;
 		expected?: unknown;
+		expected_resolved?: unknown;
 		actual?: unknown;
 		error?: string;
 		reason?: string;
@@ -199,6 +204,16 @@
 												<span class="text-muted-foreground">expected:</span>
 												<code class="break-all">
 													{formatJson(detail.expected)}
+												</code>
+											</div>
+										{/if}
+										{#if 'expected_resolved' in detail}
+											<div class="flex gap-2">
+												<span class="text-muted-foreground">
+													→ resolved:
+												</span>
+												<code class="break-all text-foreground">
+													{formatJson(detail.expected_resolved)}
 												</code>
 											</div>
 										{/if}

@@ -441,10 +441,13 @@ pub async fn promote_instance_to_test(
     let human_answers = extract_human_answers(&state.db, &instance.net_id, &graph).await?;
 
     // Capture the source instance's synthetic scope so the editor can show
-    // authors what `result.*` and `steps.*.output.*` actually look like
-    // before they write any assertions. Same builder the runner uses, so the
-    // paths the user picks here are the exact paths runs will evaluate.
-    let reference_scope = runner::build_scope(&state.db, &graph, instance.id).await?;
+    // authors what `result.*`, `steps.*.output.*`, and `start.*` actually
+    // look like before they write any assertions. Same builder the runner
+    // uses, so the paths the user picks here are the exact paths runs will
+    // evaluate. Pass the same start_tokens we just extracted so the snapshot
+    // already has the start key populated.
+    let reference_scope =
+        runner::build_scope(&state.db, &graph, instance.id, &start_tokens).await?;
 
     let row = sqlx::query_as::<_, TemplateTest>(
         r#"

@@ -285,8 +285,10 @@ pub async fn run_test(
         tokio::time::sleep(POLL_INTERVAL).await;
     };
 
-    // Build the synthetic scope: { result, steps.<slug>.output }.
-    let scope = build_scope(&state.db, &ctx.graph, instance.id).await?;
+    // Build the synthetic scope: { result, steps.<slug>.output, start }.
+    // Pass the test's stored start_tokens straight through — same JSON shape
+    // `build_start_scope` projects into the `start` map.
+    let scope = build_scope(&state.db, &ctx.graph, instance.id, &test.start_tokens).await?;
 
     // Map instance termination status into a coarse run status before we
     // even look at assertions. A `failed`/`cancelled` instance with passing
@@ -315,15 +317,25 @@ pub async fn run_test(
         .map_err(|e| ApiError::internal(format!("invalid assertions: {e}")))?;
     for (idx, assertion) in assertions.iter().enumerate() {
         match eval_assertion(&scope, assertion) {
-            Ok(true) => continue,
-            Ok(false) => {
-                let detail = json!({
-                    "assertion_idx": idx,
-                    "path": assertion.path,
-                    "op": assertion.op,
-                    "expected": assertion.value,
-                    "actual": navigate(&scope, &assertion.path).cloned().unwrap_or(Value::Null),
-                });
+            Ok(AssertionOutcome { passed: true, .. }) => continue,
+            Ok(AssertionOutcome { passed: false, resolved_rhs }) => {
+                let mut detail = serde_json::Map::from_iter([
+                    ("assertion_idx".to_string(), json!(idx)),
+                    ("path".to_string(), json!(assertion.path)),
+                    ("op".to_string(), json!(assertion.op)),
+                    ("expected".to_string(), assertion.value.clone()),
+                    (
+                        "actual".to_string(),
+                        navigate(&scope, &assertion.path).cloned().unwrap_or(Value::Null),
+                    ),
+                ]);
+                // Show the resolved RHS only when it differs from the literal
+                // — a `{{ … }}` template otherwise looks like a comparison
+                // against the template string itself.
+                if resolved_rhs != assertion.value {
+                    detail.insert("expected_resolved".to_string(), resolved_rhs);
+                }
+                let detail = Value::Object(detail);
                 return persist_run(
                     state,
                     test,
@@ -478,15 +490,23 @@ fn resolve_task_slug(graph: &WorkflowGraph, detail: &Value, place: &str) -> Stri
 
 // --- Scope construction ------------------------------------------------------
 
-/// Build the synthetic scope assertions see: `{ result, steps.<slug>.output }`.
-/// Reads from `workflow_instances.result` and `step_execution.outputs`,
-/// keyed by the node's author slug. Also used by `promote_instance_to_test`
-/// to seed a fresh test's `reference_scope` from the source instance, so
-/// authors author against the exact same shape the runner will later check.
+/// Build the synthetic scope assertions see:
+/// `{ result, steps.<slug>.output, start.<block_id> }`.
+///
+/// Reads `result` from `workflow_instances.result`, `steps.<slug>.output` from
+/// `step_execution`, and threads through the test's `start_tokens` so authors
+/// can cross-reference input against output with `{{ start.<id>.<field> }}`.
+/// Same builder both `run_test` and `promote_instance_to_test` use, so the
+/// editor's Available-scope panel matches what the runner later evaluates.
+///
+/// `start_tokens_json` is the raw `Vec<StartToken>` serialization (an array
+/// of `{ start_block_id, token }`); pass `&Value::Null` (or an empty array)
+/// when no start tokens are available.
 pub(super) async fn build_scope(
     db: &PgPool,
     graph: &WorkflowGraph,
     instance_id: Uuid,
+    start_tokens_json: &Value,
 ) -> Result<Value, ApiError> {
     let row: Option<(Option<Value>,)> =
         sqlx::query_as("SELECT result FROM workflow_instances WHERE id = $1")
@@ -521,60 +541,157 @@ pub(super) async fn build_scope(
         steps.insert(slug, Value::Object(entry));
     }
 
+    let start = build_start_scope(start_tokens_json);
+
     Ok(json!({
         "result": result,
         "steps": steps,
+        "start": start,
     }))
+}
+
+/// Project `Vec<StartToken>` (as raw JSON) into the synthetic scope's `start`
+/// key. The shape is asymmetric for cleaner authoring:
+///
+///   - **0 starts** → `start = {}` (nothing to reference).
+///   - **1 start** → `start = <the_token>`, so a fixture with `{ amount: 1234 }`
+///     surfaces as `start.amount` — flat, no awkward `start.start.amount`.
+///   - **≥2 starts** → `start = { <block_id>: <token>, ... }`, namespaced by
+///     `start_block_id` so distinct Starts can carry colliding field names.
+///
+/// The picker mirrors this exact asymmetry. A workflow that gains a second
+/// Start later breaks any `start.<field>` assertions — that's an intentional
+/// load-bearing signal (the test fixture's contract changed), not a regression.
+fn build_start_scope(start_tokens_json: &Value) -> Value {
+    let Some(arr) = start_tokens_json.as_array() else {
+        return Value::Object(Default::default());
+    };
+    let mut tokens_by_block: Vec<(String, Value)> = Vec::new();
+    for entry in arr {
+        let Some(obj) = entry.as_object() else { continue };
+        let Some(block_id) = obj.get("start_block_id").and_then(Value::as_str) else {
+            continue;
+        };
+        let token = obj.get("token").cloned().unwrap_or(Value::Null);
+        tokens_by_block.push((block_id.to_string(), token));
+    }
+    match tokens_by_block.len() {
+        0 => Value::Object(Default::default()),
+        1 => tokens_by_block.into_iter().next().unwrap().1,
+        _ => {
+            let mut out = serde_json::Map::new();
+            for (block_id, token) in tokens_by_block {
+                out.insert(block_id, token);
+            }
+            Value::Object(out)
+        }
+    }
 }
 
 // --- Assertion evaluator -----------------------------------------------------
 
-fn eval_assertion(scope: &Value, assertion: &Assertion) -> Result<bool, String> {
+/// Outcome of evaluating one assertion. `resolved_rhs` is the actually-compared
+/// right-hand side after `{{ … }}` template resolution, so the failure
+/// reporter can show "expected `1100`" instead of "expected `{{ amount * 1.1 }}`".
+#[derive(Debug)]
+pub(super) struct AssertionOutcome {
+    pub passed: bool,
+    pub resolved_rhs: Value,
+}
+
+fn eval_assertion(scope: &Value, assertion: &Assertion) -> Result<AssertionOutcome, String> {
     let actual = navigate(scope, &assertion.path);
-    match assertion.op {
-        AssertOp::Exists => Ok(actual.is_some_and(|v| !v.is_null())),
-        AssertOp::NotExists => Ok(actual.map_or(true, Value::is_null)),
-        AssertOp::Eq => Ok(actual == Some(&assertion.value)),
-        AssertOp::Neq => Ok(actual != Some(&assertion.value)),
+    // Exists/NotExists never look at the RHS — skip Rhai eval (and any error
+    // it would surface) so a placeholder template in the value field doesn't
+    // break a pure existence check.
+    let resolved_rhs = if matches!(assertion.op, AssertOp::Exists | AssertOp::NotExists) {
+        Value::Null
+    } else {
+        resolve_rhs(scope, &assertion.value)?
+    };
+    let rhs = &resolved_rhs;
+    let passed = match assertion.op {
+        AssertOp::Exists => actual.is_some_and(|v| !v.is_null()),
+        AssertOp::NotExists => actual.map_or(true, Value::is_null),
+        AssertOp::Eq => actual == Some(rhs),
+        AssertOp::Neq => actual != Some(rhs),
         AssertOp::Gt | AssertOp::Gte | AssertOp::Lt | AssertOp::Lte => {
             let a = actual
                 .and_then(Value::as_f64)
                 .ok_or_else(|| format!("path '{}' is not a number", assertion.path))?;
-            let b = assertion
-                .value
+            let b = rhs
                 .as_f64()
                 .ok_or_else(|| "rhs is not a number".to_string())?;
-            Ok(match assertion.op {
+            match assertion.op {
                 AssertOp::Gt => a > b,
                 AssertOp::Gte => a >= b,
                 AssertOp::Lt => a < b,
                 AssertOp::Lte => a <= b,
                 _ => unreachable!(),
-            })
+            }
         }
         AssertOp::Matches => {
-            let pattern = assertion
-                .value
+            let pattern = rhs
                 .as_str()
                 .ok_or_else(|| "Matches rhs must be a string regex".to_string())?;
             let actual_str = actual
                 .and_then(Value::as_str)
                 .ok_or_else(|| format!("path '{}' is not a string", assertion.path))?;
             let re = regex::Regex::new(pattern).map_err(|e| format!("invalid regex: {e}"))?;
-            Ok(re.is_match(actual_str))
+            re.is_match(actual_str)
         }
         AssertOp::Contains => match actual {
             Some(Value::String(s)) => {
-                let needle = assertion
-                    .value
+                let needle = rhs
                     .as_str()
                     .ok_or_else(|| "Contains rhs must be a string for string actual".to_string())?;
-                Ok(s.contains(needle))
+                s.contains(needle)
             }
-            Some(Value::Array(arr)) => Ok(arr.contains(&assertion.value)),
-            _ => Ok(false),
+            Some(Value::Array(arr)) => arr.contains(rhs),
+            _ => false,
         },
+    };
+    Ok(AssertionOutcome { passed, resolved_rhs })
+}
+
+/// If `raw` is a string of the form `{{ <expr> }}`, evaluate the inner Rhai
+/// expression against the synthetic scope (top-level scope keys — `result`,
+/// `steps` — become Rhai vars; same pattern as the trigger dispatcher's
+/// `evaluate_mapping`). Anything else is returned unchanged.
+///
+/// Lets authors write `{{ result.value.amount }}` for cross-reference checks
+/// or richer expressions like `{{ steps.review.output.amount * 1.1 }}`.
+fn resolve_rhs(scope: &Value, raw: &Value) -> Result<Value, String> {
+    let Some(s) = raw.as_str() else {
+        return Ok(raw.clone());
+    };
+    let trimmed = s.trim();
+    let Some(inner) = trimmed
+        .strip_prefix("{{")
+        .and_then(|t| t.strip_suffix("}}"))
+    else {
+        return Ok(raw.clone());
+    };
+    let expr = inner.trim();
+    if expr.is_empty() {
+        return Err("empty `{{ }}` expression".to_string());
     }
+
+    let scope_map = scope.as_object().cloned().unwrap_or_default();
+    let engine = rhai::Engine::new();
+    let mut rhai_scope = rhai::Scope::new();
+    for (k, v) in &scope_map {
+        let dyn_v: rhai::Dynamic = rhai::serde::to_dynamic(v.clone())
+            .map_err(|e| format!("scope var `{k}` → Dynamic: {e}"))?;
+        rhai_scope.push_dynamic(k.as_str(), dyn_v);
+    }
+
+    let result: rhai::Dynamic = engine
+        .eval_expression_with_scope::<rhai::Dynamic>(&mut rhai_scope, expr)
+        .map_err(|e| format!("rhai eval of `{expr}`: {e}"))?;
+    let json: Value = rhai::serde::from_dynamic(&result)
+        .map_err(|e| format!("rhai result of `{expr}` → JSON: {e}"))?;
+    Ok(json)
 }
 
 /// Walk a dot-separated path through a JSON value. `result.value.amount`,
@@ -612,56 +729,65 @@ mod tests {
         Assertion { path: path.to_string(), op, value }
     }
 
+    /// Convenience: assert the eval succeeded with the given pass/fail.
+    fn check(scope: &Value, assertion: &Assertion) -> bool {
+        eval_assertion(scope, assertion).unwrap().passed
+    }
+
+    fn check_err(scope: &Value, assertion: &Assertion) -> String {
+        eval_assertion(scope, assertion).unwrap_err()
+    }
+
     #[test]
     fn eq_on_string_passes() {
-        assert!(eval_assertion(&scope(), &a("result.value.approved", AssertOp::Eq, json!("yes"))).unwrap());
+        assert!(check(&scope(), &a("result.value.approved", AssertOp::Eq, json!("yes"))));
     }
 
     #[test]
     fn eq_on_string_mismatch_fails() {
-        assert!(!eval_assertion(&scope(), &a("result.value.approved", AssertOp::Eq, json!("no"))).unwrap());
+        assert!(!check(&scope(), &a("result.value.approved", AssertOp::Eq, json!("no"))));
     }
 
     #[test]
     fn nested_step_output_path() {
-        assert!(eval_assertion(&scope(), &a("steps.review.output.approved", AssertOp::Eq, json!(true))).unwrap());
+        assert!(check(&scope(), &a("steps.review.output.approved", AssertOp::Eq, json!(true))));
     }
 
     #[test]
     fn array_index_path() {
-        assert!(eval_assertion(&scope(), &a("steps.extract.output.items.1", AssertOp::Eq, json!(2))).unwrap());
+        assert!(check(&scope(), &a("steps.extract.output.items.1", AssertOp::Eq, json!(2))));
     }
 
     #[test]
     fn gt_on_number() {
-        assert!(eval_assertion(&scope(), &a("result.value.amount", AssertOp::Gt, json!(1000))).unwrap());
-        assert!(!eval_assertion(&scope(), &a("result.value.amount", AssertOp::Gt, json!(9999))).unwrap());
+        assert!(check(&scope(), &a("result.value.amount", AssertOp::Gt, json!(1000))));
+        assert!(!check(&scope(), &a("result.value.amount", AssertOp::Gt, json!(9999))));
     }
 
     #[test]
     fn gt_on_non_numeric_errors() {
-        let err = eval_assertion(&scope(), &a("result.value.approved", AssertOp::Gt, json!(1))).unwrap_err();
+        let err = check_err(&scope(), &a("result.value.approved", AssertOp::Gt, json!(1)));
         assert!(err.contains("not a number"), "got: {err}");
     }
 
     #[test]
     fn exists_handles_missing() {
-        assert!(eval_assertion(&scope(), &a("result.value.amount", AssertOp::Exists, Value::Null)).unwrap());
-        assert!(!eval_assertion(&scope(), &a("result.value.nope", AssertOp::Exists, Value::Null)).unwrap());
-        assert!(eval_assertion(&scope(), &a("result.value.nope", AssertOp::NotExists, Value::Null)).unwrap());
+        assert!(check(&scope(), &a("result.value.amount", AssertOp::Exists, Value::Null)));
+        assert!(!check(&scope(), &a("result.value.nope", AssertOp::Exists, Value::Null)));
+        assert!(check(&scope(), &a("result.value.nope", AssertOp::NotExists, Value::Null)));
     }
 
     #[test]
     fn matches_regex() {
-        assert!(eval_assertion(&scope(), &a("steps.review.output.comments", AssertOp::Matches, json!("looks .*"))).unwrap());
-        assert!(!eval_assertion(&scope(), &a("steps.review.output.comments", AssertOp::Matches, json!("^bad"))).unwrap());
+        assert!(check(&scope(), &a("steps.review.output.comments", AssertOp::Matches, json!("looks .*"))));
+        assert!(!check(&scope(), &a("steps.review.output.comments", AssertOp::Matches, json!("^bad"))));
     }
 
     #[test]
     fn contains_substring_and_array() {
-        assert!(eval_assertion(&scope(), &a("steps.review.output.comments", AssertOp::Contains, json!("good"))).unwrap());
-        assert!(eval_assertion(&scope(), &a("steps.extract.output.items", AssertOp::Contains, json!(2))).unwrap());
-        assert!(!eval_assertion(&scope(), &a("steps.extract.output.items", AssertOp::Contains, json!(99))).unwrap());
+        assert!(check(&scope(), &a("steps.review.output.comments", AssertOp::Contains, json!("good"))));
+        assert!(check(&scope(), &a("steps.extract.output.items", AssertOp::Contains, json!(2))));
+        assert!(!check(&scope(), &a("steps.extract.output.items", AssertOp::Contains, json!(99))));
     }
 
     #[test]
@@ -670,5 +796,133 @@ mod tests {
         assert_eq!(navigate(&s, "result.value.amount").and_then(Value::as_f64), Some(1234.5));
         assert_eq!(navigate(&s, "steps.extract.output.items.0").and_then(Value::as_i64), Some(1));
         assert!(navigate(&s, "no.such.path").is_none());
+    }
+
+    // --- Rhai-templated expected values --------------------------------------
+
+    #[test]
+    fn rhai_template_resolves_to_scope_value() {
+        // `{{ … }}` evaluates against the runner's synthetic scope, so an
+        // author can write a tautological "result matches step output" check.
+        let asn = a(
+            "result.value.amount",
+            AssertOp::Eq,
+            json!("{{ result.value.amount }}"),
+        );
+        let out = eval_assertion(&scope(), &asn).unwrap();
+        assert!(out.passed, "self-reference must compare equal");
+        assert_eq!(out.resolved_rhs, json!(1234.5));
+    }
+
+    #[test]
+    fn rhai_template_supports_arithmetic() {
+        let asn = a(
+            "result.value.amount",
+            AssertOp::Eq,
+            // 1234.5 * 2 == 2469
+            json!("{{ result.value.amount * 2 - 1234.5 }}"),
+        );
+        let out = eval_assertion(&scope(), &asn).unwrap();
+        assert!(out.passed, "arithmetic identity must hold: {:?}", out.resolved_rhs);
+    }
+
+    #[test]
+    fn rhai_template_cross_step_reference() {
+        // Numbers come back as floats from Rhai; `2.0 == json!(2)` would
+        // fail under serde_json's strict equality. Use Gt/Lt for cross-type
+        // numeric checks, or be explicit about the expected float.
+        let asn = a(
+            "steps.review.output.approved",
+            AssertOp::Eq,
+            json!("{{ steps.review.output.approved }}"),
+        );
+        assert!(check(&scope(), &asn));
+    }
+
+    #[test]
+    fn rhai_template_skipped_for_exists() {
+        // Exists ignores the RHS, so a broken expression in `value` must not
+        // turn a pure existence check into an error.
+        let asn = a("result.value.amount", AssertOp::Exists, json!("{{ totally_broken !! }}"));
+        assert!(check(&scope(), &asn));
+    }
+
+    #[test]
+    fn rhai_template_eval_error_propagates() {
+        let asn = a(
+            "result.value.amount",
+            AssertOp::Eq,
+            json!("{{ nonexistent.variable + 1 }}"),
+        );
+        let err = check_err(&scope(), &asn);
+        assert!(err.contains("rhai eval"), "got: {err}");
+    }
+
+    #[test]
+    fn empty_template_errors() {
+        let asn = a("result.value.amount", AssertOp::Eq, json!("{{  }}"));
+        let err = check_err(&scope(), &asn);
+        assert!(err.contains("empty"), "got: {err}");
+    }
+
+    #[test]
+    fn plain_string_not_treated_as_template() {
+        // No `{{ }}` wrapper → literal string compare.
+        let asn = a(
+            "result.value.approved",
+            AssertOp::Eq,
+            json!("yes"),
+        );
+        assert!(check(&scope(), &asn));
+    }
+
+    // --- Start-scope projection ----------------------------------------------
+
+    #[test]
+    fn build_start_scope_hoists_single_start_token() {
+        // The common case: one Start → token fields land flat at `start.*`,
+        // not `start.<id>.*`. Makes `start.amount` the natural assertion path.
+        let raw = json!([{ "start_block_id": "start", "token": { "amount": 1234 } }]);
+        let s = build_start_scope(&raw);
+        assert_eq!(s, json!({ "amount": 1234 }));
+    }
+
+    #[test]
+    fn build_start_scope_namespaces_multi_start() {
+        let raw = json!([
+            { "start_block_id": "manual", "token": { "amount": 1234 } },
+            { "start_block_id": "trigger", "token": { "id": "abc" } }
+        ]);
+        let s = build_start_scope(&raw);
+        assert_eq!(s["manual"]["amount"], 1234);
+        assert_eq!(s["trigger"]["id"], "abc");
+    }
+
+    #[test]
+    fn build_start_scope_handles_empty_and_malformed() {
+        assert_eq!(build_start_scope(&Value::Null), json!({}));
+        assert_eq!(build_start_scope(&json!([])), json!({}));
+        // Entries missing start_block_id are silently dropped — the runner
+        // never invented their key shape, so swallowing is safer than panic.
+        assert_eq!(build_start_scope(&json!([{ "token": {} }])), json!({}));
+    }
+
+    #[test]
+    fn start_scope_is_referenceable_by_rhai() {
+        // Sanity-check `{{ start.<field> }}` resolves through a scope object
+        // the same shape build_scope emits for a single-Start workflow.
+        let scope = json!({
+            "result": null,
+            "steps": {},
+            "start": { "amount": 1234 }
+        });
+        let asn = a(
+            "start.amount",
+            AssertOp::Eq,
+            json!("{{ start.amount }}"),
+        );
+        let out = eval_assertion(&scope, &asn).unwrap();
+        assert!(out.passed, "got: {:?}", out);
+        assert_eq!(out.resolved_rhs, json!(1234));
     }
 }
