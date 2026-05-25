@@ -829,8 +829,9 @@ mod tests {
     /// borrow plumbing on real bundled fixtures. The Kreuzberg `file` field
     /// references `{{ start.document }}` (path-site, File kind →
     /// StoragePath staging); the LLM `prompt` references
-    /// `{{ extract_text.full_text }}` (content-site → Raw staging). Both
-    /// must rewrite to the executor-resolver shape (`{{input_path:…}}` /
+    /// `{{ extract_text.content }}` (content-site → Raw staging; `content`
+    /// is kreuzberg's native ExtractionResult key — no remap). Both must
+    /// rewrite to the executor-resolver shape (`{{input_path:…}}` /
     /// `{{input:…}}`) and emit corresponding `job_inputs.push` snippets in
     /// the prepare-transition Rhai source. A break here means the LLM/
     /// Kreuzberg borrow phase regressed on real graphs — the focused unit
@@ -877,15 +878,15 @@ mod tests {
         );
 
         // LLM borrow: text-kind producer → Raw staging. The compiler
-        // rewrites `{{ extract_text.full_text }}` in the LLM prompt to
-        // `{{input:__borrow_extract_text__full_text}}` and emits a
+        // rewrites `{{ extract_text.content }}` in the LLM prompt to
+        // `{{input:__borrow_extract_text__content}}` and emits a
         // matching `job_inputs.push` with `raw`.
         assert!(
-            air_str.contains("__borrow_extract_text__full_text"),
-            "AIR must reference the extract_text.full_text borrow input by its generated name; got: {air_str}"
+            air_str.contains("__borrow_extract_text__content"),
+            "AIR must reference the extract_text.content borrow input by its generated name; got: {air_str}"
         );
         assert!(
-            air_str.contains("input:__borrow_extract_text__full_text"),
+            air_str.contains("input:__borrow_extract_text__content"),
             "LLM prompt must be rewritten to {{input:…}}; got: {air_str}"
         );
 
@@ -1121,9 +1122,10 @@ mod tests {
             }
         }
 
-        // ── LLM prepare: borrows `extract_text.full_text` (FieldKind::Text)
+        // ── LLM prepare: borrows `extract_text.content` (FieldKind::Text)
         // → staging strategy is `raw` with `__pluck(d_extract_text,
-        // ["detail", "outputs", "full_text"])`.
+        // ["detail", "outputs", "content"])`. `content` is kreuzberg's
+        // native ExtractionResult key — declarations match 1:1, no remap.
         let classify_source = prepare_source("classify");
         let mut scope = Scope::new();
         scope.push("input", Map::new());
@@ -1131,7 +1133,7 @@ mod tests {
         let d_extract_text: Dynamic = engine
             .parse_json(
                 &json!({ "detail": { "outputs": {
-                    "full_text": "Invoice #INV-001 Amount: $1,234.56 Vendor: ACME"
+                    "content": "Invoice #INV-001 Amount: $1,234.56 Vendor: ACME"
                 } } })
                 .to_string(),
                 true,
@@ -1158,9 +1160,9 @@ mod tests {
                 m.get("name")
                     .and_then(|v| v.clone().try_cast::<String>())
                     .as_deref()
-                    == Some("__borrow_extract_text__full_text")
+                    == Some("__borrow_extract_text__content")
             })
-            .expect("__borrow_extract_text__full_text must be staged");
+            .expect("__borrow_extract_text__content must be staged");
         let source = borrow_entry
             .get("source")
             .and_then(|v| v.clone().try_cast::<Map>())

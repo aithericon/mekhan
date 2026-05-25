@@ -52,12 +52,12 @@
       "data": {
         "type": "automated_step",
         "label": "OCR (kreuzberg)",
-        "description": "Extract text + tables + per-page metadata from the uploaded document. Tesseract backend with German+English models and table detection enabled.",
+        "description": "Extract text + tables + metadata from the uploaded document. Tesseract backend with German+English models and table detection enabled. Outputs are kreuzberg's native ExtractionResult shape 1:1 — `content`, `mime_type`, `metadata`, `tables`, `detected_languages`. No renaming or remapping.",
         "executionSpec": {
           "backendType": "kreuzberg",
           "config": {
             "mode": "single",
-            "target_file": "{{ start.document_file }}",
+            "file": "{{ start.document_file }}",
             "force_ocr": false,
             "ocr": {
               "backend": "tesseract",
@@ -73,9 +73,9 @@
           "id": "out",
           "label": "OCR result",
           "fields": [
-            { "name": "full_text",  "label": "Full text",     "kind": "text",   "required": true },
-            { "name": "tables_text","label": "Tables (md)",   "kind": "text",   "required": false },
-            { "name": "page_count", "label": "Pages",         "kind": "number", "required": true }
+            { "name": "content",  "label": "Content",  "kind": "text", "required": true },
+            { "name": "tables",   "label": "Tables",   "kind": "json", "required": false },
+            { "name": "metadata", "label": "Metadata", "kind": "json", "required": false }
           ]
         }
       }
@@ -97,7 +97,7 @@
             "temperature": 0,
             "max_tokens": 512,
             "system_prompt": "You are a medical document classification assistant. Look at the document image and the OCR text. Group the page(s) into a single logical document and classify it.",
-            "prompt": "Classify this medical document into ONE of: lab_result, prescription, referral_letter, imaging_report, discharge_summary, consultation_note, insurance_form, invoice, consent_form, other.\n\nOCR text (supplementary, truncated to 4000 chars):\n---\n{{ ocr.full_text }}\n---\n\nReturn JSON: {document_class, document_date (YYYY-MM-DD or null), confidence (0..1), reasoning}.",
+            "prompt": "Classify this medical document into ONE of: lab_result, prescription, referral_letter, imaging_report, discharge_summary, consultation_note, insurance_form, invoice, consent_form, other.\n\nOCR text (supplementary, truncated to 4000 chars):\n---\n{{ ocr.content }}\n---\n\nReturn JSON: {document_class, document_date (YYYY-MM-DD or null), confidence (0..1), reasoning}.",
             "images": [
               {
                 "path": "{{ start.document_file }}"
@@ -188,7 +188,7 @@
             "temperature": 0,
             "max_tokens": 4096,
             "system_prompt": "You are a medical lab-result extractor. Each row of the lab table = one test. Distinguish test NAME (text label like GOT, GPT, ALT, Hämoglobin, Leukozyten, Glucose) from VALUE (the number). NEVER put the test name in the value field. Every extracted field MUST carry a citations[] array with kind=ocr_span and supporting_text quoted verbatim from the OCR text.",
-            "prompt": "Extract every lab value from this document.\n\nOCR text:\n---\n{{ ocr.full_text }}\n---\n\nTables (markdown):\n---\n{{ ocr.tables_text }}\n---\n\nReturn JSON: {fields: [{key, value, unit, reference_range, confidence, citations:[{kind, supporting_text, confidence}]}]}.",
+            "prompt": "Extract every lab value from this document.\n\nOCR text:\n---\n{{ ocr.content }}\n---\n\nTables (JSON; each entry has `markdown`, `cells`, `page_number`):\n---\n{{ ocr.tables }}\n---\n\nReturn JSON: {fields: [{key, value, unit, reference_range, confidence, citations:[{kind, supporting_text, confidence}]}]}.",
             "images": [{ "path": "{{ start.document_file }}" }],
             "response_format": {
               "type": "json_schema",
@@ -222,7 +222,7 @@
             "temperature": 0,
             "max_tokens": 2048,
             "system_prompt": "You are a medical prescription extractor. Extract every medication with its dose, frequency, route, duration, prescriber, date, and indication. Each field MUST carry a citations[] array.",
-            "prompt": "Extract all prescription details.\n\nOCR text:\n---\n{{ ocr.full_text }}\n---\n\nReturn JSON: {fields: [{key, value, unit, reference_range, confidence, citations:[{kind, supporting_text, confidence}]}]} where key ∈ {medication, dose, frequency, route, duration, prescriber, date, indication, patient_name, svnr}.",
+            "prompt": "Extract all prescription details.\n\nOCR text:\n---\n{{ ocr.content }}\n---\n\nReturn JSON: {fields: [{key, value, unit, reference_range, confidence, citations:[{kind, supporting_text, confidence}]}]} where key ∈ {medication, dose, frequency, route, duration, prescriber, date, indication, patient_name, svnr}.",
             "images": [{ "path": "{{ start.document_file }}" }],
             "response_format": {
               "type": "json_schema",
@@ -256,7 +256,7 @@
             "temperature": 0,
             "max_tokens": 4096,
             "system_prompt": "You are a clinical document extractor. Pull structured fields out of this narrative document. For discharge/consultation include admission/discharge dates, ICD-10-coded diagnoses, procedures, meds-at-discharge, follow-up. For imaging include exam type, body region, findings, impression. Every field MUST carry a citations[] array.",
-            "prompt": "Extract structured fields from this {{ classify.document_class }}.\n\nOCR text:\n---\n{{ ocr.full_text }}\n---\n\nReturn JSON: {fields: [{key, value, unit, reference_range, confidence, citations:[{kind, supporting_text, confidence}]}]}.",
+            "prompt": "Extract structured fields from this {{ classify.document_class }}.\n\nOCR text:\n---\n{{ ocr.content }}\n---\n\nReturn JSON: {fields: [{key, value, unit, reference_range, confidence, citations:[{kind, supporting_text, confidence}]}]}.",
             "images": [{ "path": "{{ start.document_file }}" }],
             "response_format": {
               "type": "json_schema",
@@ -290,7 +290,7 @@
             "temperature": 0,
             "max_tokens": 2048,
             "system_prompt": "You are a form-field extractor. Pull every labelled field out of this administrative document. Every field MUST carry a citations[] array.",
-            "prompt": "Extract all labelled form fields from this {{ classify.document_class }}.\n\nOCR text:\n---\n{{ ocr.full_text }}\n---\n\nReturn JSON: {fields: [{key, value, unit, reference_range, confidence, citations:[{kind, supporting_text, confidence}]}]}.",
+            "prompt": "Extract all labelled form fields from this {{ classify.document_class }}.\n\nOCR text:\n---\n{{ ocr.content }}\n---\n\nReturn JSON: {fields: [{key, value, unit, reference_range, confidence, citations:[{kind, supporting_text, confidence}]}]}.",
             "images": [{ "path": "{{ start.document_file }}" }],
             "response_format": {
               "type": "json_schema",
@@ -324,7 +324,7 @@
             "temperature": 0,
             "max_tokens": 2048,
             "system_prompt": "You are a general-purpose document extractor. Pull every identifiable structured or semi-structured field. Every field MUST carry a citations[] array.",
-            "prompt": "Extract every identifiable field from this document.\n\nOCR text:\n---\n{{ ocr.full_text }}\n---\n\nReturn JSON: {fields: [{key, value, unit, reference_range, confidence, citations:[{kind, supporting_text, confidence}]}]}.",
+            "prompt": "Extract every identifiable field from this document.\n\nOCR text:\n---\n{{ ocr.content }}\n---\n\nReturn JSON: {fields: [{key, value, unit, reference_range, confidence, citations:[{kind, supporting_text, confidence}]}]}.",
             "images": [{ "path": "{{ start.document_file }}" }],
             "response_format": {
               "type": "json_schema",
@@ -398,7 +398,7 @@
       "data": {
         "type": "automated_step",
         "label": "Verify citations",
-        "description": "Match each field's citations[].supporting_text against ocr.full_text via case-insensitive normalized substring search. The mekhan analogue of online-clinic's `provenance` step kind (`Citation::OcrSpan`, matcher=hybrid_auto).",
+        "description": "Match each field's citations[].supporting_text against ocr.content via case-insensitive normalized substring search. The mekhan analogue of online-clinic's `provenance` step kind (`Citation::OcrSpan`, matcher=hybrid_auto).",
         "executionSpec": {
           "backendType": "python",
           "entrypoint": "main.py",

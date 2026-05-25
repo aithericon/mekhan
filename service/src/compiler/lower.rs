@@ -942,11 +942,11 @@ fn lower_human_task(cx: &mut LoweringCtx) -> Result<(), CompileError> {
 /// Enabled for the backends that consume declared outputs at runtime:
 /// - **Python**: the runner sweeps `globals()` by declared name + validates
 ///   each value against `kind` (executor-backend::python).
-/// - **Kreuzberg**: `build_single_outputs` writes its native keys
-///   (`content`, `mime_type`, `word_count`, …) then auto-fills any declared
-///   output absent from that set with the extracted text content
-///   (executor-kreuzberg::backend). Lets demo authors declare semantic
-///   names (`full_text`) on top of kreuzberg's native shape.
+/// - **Kreuzberg**: `build_single_outputs` emits kreuzberg's native
+///   `ExtractionResult` shape 1:1 — `content`, `mime_type`, `metadata`,
+///   `tables`, `detected_languages`, and optional `chunks`/`images`/`pages`/
+///   `elements`/`djot_content`. Declarations must match these names; the
+///   executor's required-output check fires on mismatch. No aliasing.
 /// - **LLM**: when the response has a structured-JSON payload, the backend
 ///   unpacks each declared output by matching it to a top-level key; any
 ///   unmatched declaration falls back to the whole response_value

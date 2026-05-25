@@ -6,7 +6,6 @@
 # Upstream borrows (read-arcs synthesized by the compiler):
 #   start.patient_id
 #   classify.document_class, classify.document_date, classify.confidence
-#   ocr.page_count
 #   extraction.fields
 #
 # Outputs:
@@ -40,7 +39,6 @@ for f in incoming:
         "_patient_id":     start.patient_id,
         "_document_class": classify.document_class,
         "_document_date":  classify.document_date,
-        "_page_count":     ocr.page_count,
     })
 
 log_info(

@@ -701,7 +701,8 @@ mod tests {
             other => panic!("Kreuzberg borrow must be BackendFieldStage, got {other:?}"),
         }
 
-        // LLM consumer 'classify' borrows extract_text.full_text (Text kind)
+        // LLM consumer 'classify' borrows extract_text.content (Text kind)
+        // — `content` is kreuzberg's native ExtractionResult key.
         let llm = borrows
             .iter()
             .find(|b| b.consumer_node_id == "classify")
@@ -712,7 +713,7 @@ mod tests {
                 is_path_site,
                 field_kind: _,
             } => {
-                assert_eq!(attr, "full_text");
+                assert_eq!(attr, "content");
                 assert!(!*is_path_site, "LLM prompt is a content site");
             }
             other => panic!("LLM borrow must be BackendFieldStage, got {other:?}"),

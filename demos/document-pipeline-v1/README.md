@@ -36,12 +36,12 @@ On the data side, `merge-extraction` re-parks the inbound payload under slug
 
 | Step | Backend | Model | Notes |
 |---|---|---|---|
-| `ocr` | kreuzberg | — | Tesseract `deu+eng`, table detection on. Reads `{{ start.document_file }}`. Emits `full_text`, `tables_text`, `page_count`. |
-| `classify` | llm (Ollama) | `qwen3.6:35b-a3b` | Vision MoE. Image = `{{ start.document_file }}`. OCR text injected via `{{ ocr.full_text }}`. JSON-schema response. |
+| `ocr` | kreuzberg | — | Tesseract `deu+eng`, table detection on. Reads `{{ start.document_file }}`. Emits kreuzberg's native `ExtractionResult` shape 1:1 — `content`, `mime_type`, `metadata`, `tables`, `detected_languages` (no remap). |
+| `classify` | llm (Ollama) | `qwen3.6:35b-a3b` | Vision MoE. Image = `{{ start.document_file }}`. OCR text injected via `{{ ocr.content }}`. JSON-schema response. |
 | `extract-bloodwork` / `extract-prescription` / `extract-clinical-note` / `extract-form-fields` / `extract-generic` | llm (Ollama) | `qwen3.5:9b` | Type-specific system prompts. JSON-schema response with mandatory `citations[]` per field. |
 | `merge-extraction` | join (`mode: "any"`) | — | Branches converge. Re-parks whichever branch's payload under slug `extraction`. |
 | `persist` | python | — | Single borrow `extraction.fields`. Stamps patient/class/date, emits a unified field list. |
-| `verify` | python | — | Citation matcher (mekhan analogue of online-clinic's `provenance` step kind). Normalized substring match of every `citations[].supporting_text` against `{{ ocr.full_text }}`. |
+| `verify` | python | — | Citation matcher (mekhan analogue of online-clinic's `provenance` step kind). Normalized substring match of every `citations[].supporting_text` against `{{ ocr.content }}`. |
 | `review` | human_task | — | Two-step form: shows the original doc image, asks for approve / edit / re-OCR / reject. Only triggered when `verify.any_unverified || classify.confidence < 0.85`. |
 
 ## Slug-ref usage
@@ -49,9 +49,9 @@ On the data side, `merge-extraction` re-parks the inbound payload under slug
 Every cross-step borrow uses the producer-namespaced `<slug>.<field>` model from
 `docs/10-control-data-token-model.md`. Examples in this graph:
 
-- LLM prompt: `prompt: "...\n{{ ocr.full_text }}\n..."`
+- LLM prompt: `prompt: "...\n{{ ocr.content }}\n..."` (kreuzberg's native key)
 - LLM image input: `images: [{ path: "{{ start.document_file }}" }]`
-- Kreuzberg target: `target_file: "{{ start.document_file }}"`
+- Kreuzberg target: `file: "{{ start.document_file }}"`
 - Decision guard: `classify.document_class in ["referral_letter", ...]`
 - HumanTask body: `"Classification confidence: **{{ classify.confidence }}**"`
 - End mapping: `{ targetField: "ma_decision", expression: "review.decision" }`
@@ -70,7 +70,7 @@ but they're the deltas vs. what currently ships.
 
 2. **Backend-config string interpolation with `{{ slug.field }}`.** Mustache
    interpolation already works for HumanTask content blocks and `processName`.
-   We're writing the LLM `prompt`, `system_prompt`, and Kreuzberg `target_file`
+   We're writing the LLM `prompt`, `system_prompt`, and Kreuzberg `file`
    as if the same interpolation reaches into `executionSpec.config` strings.
    The natural extension of the existing slug system.
 

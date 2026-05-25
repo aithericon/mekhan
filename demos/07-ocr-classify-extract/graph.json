@@ -30,7 +30,7 @@
       "data": {
         "type": "automated_step",
         "label": "Extract text (Kreuzberg)",
-        "description": "Borrows the uploaded file from Start via {{ start.document }} — compiler stages it via StoragePath, runner resolves to a local path, Kreuzberg reads it.",
+        "description": "Borrows the uploaded file from Start via {{ start.document }} — compiler stages it via StoragePath, runner resolves to a local path, Kreuzberg reads it. Outputs are kreuzberg's native ExtractionResult shape 1:1 — `content` (string), `mime_type`, `metadata`, `tables`, `detected_languages`. No renaming or remapping.",
         "executionSpec": {
           "backendType": "kreuzberg",
           "config": {
@@ -48,8 +48,7 @@
           "id": "out",
           "label": "OCR result",
           "fields": [
-            { "name": "full_text",  "label": "Full text", "kind": "text",   "required": true },
-            { "name": "page_count", "label": "Pages",     "kind": "number", "required": false }
+            { "name": "content", "label": "Content", "kind": "text", "required": true }
           ]
         }
       }
@@ -61,7 +60,7 @@
       "data": {
         "type": "automated_step",
         "label": "Classify (LLM)",
-        "description": "Borrows extract_text.full_text inline via {{ extract_text.full_text }} — compiler stages it as a Raw input, runner interpolates it into the prompt at dispatch time. Dispatches against the local vllm-metal server (`just dev vllm-up`); model must match the one vllm-metal is serving (recipe default mlx-community/Qwen3.5-9B-MLX-4bit — override here AND in `just dev vllm-up`'s VLLM_MODEL env var if changed). Qwen3 emits `<think>...</think>` blocks before the JSON answer by default; downstream consumers must tolerate the prefix.",
+        "description": "Borrows extract_text.content inline via {{ extract_text.content }} — compiler stages it as a Raw input, runner interpolates it into the prompt at dispatch time. `content` is kreuzberg's native key for the extracted text. Dispatches against the local vllm-metal server (`just dev vllm-up`); model must match the one vllm-metal is serving (recipe default mlx-community/Qwen3.5-9B-MLX-4bit — override here AND in `just dev vllm-up`'s VLLM_MODEL env var if changed). Qwen3 emits `<think>...</think>` blocks before the JSON answer by default; downstream consumers must tolerate the prefix.",
         "executionSpec": {
           "backendType": "llm",
           "config": {
@@ -72,7 +71,7 @@
             "temperature": 0,
             "max_tokens": 256,
             "system_prompt": "You are a document classifier. Return JSON.",
-            "prompt": "Classify this document into one of: invoice, receipt, contract, other.\n\nText:\n---\n{{ extract_text.full_text }}\n---\n\nReturn JSON: {document_class}.",
+            "prompt": "Classify this document into one of: invoice, receipt, contract, other.\n\nText:\n---\n{{ extract_text.content }}\n---\n\nReturn JSON: {document_class}.",
             "response_format": {
               "type": "json_schema",
               "schema": {
@@ -107,7 +106,7 @@
         "label": "Done",
         "resultMapping": [
           { "targetField": "document_class", "expression": "classify.document_class" },
-          { "targetField": "full_text",      "expression": "extract_text.full_text" }
+          { "targetField": "content",        "expression": "extract_text.content" }
         ]
       }
     }
