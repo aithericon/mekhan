@@ -975,7 +975,7 @@ mod tests {
 
         // ── Kreuzberg prepare: borrows `start.document` (FieldKind::File)
         // → staging strategy is `storage_path` with `__pluck(d_start,
-        // ["data", "document", "url"])`.
+        // ["document", "key"])`.
         let extract_source = prepare_source("extract_text");
         let mut scope = Scope::new();
         scope.push("input", Map::new());
@@ -983,13 +983,19 @@ mod tests {
         // the seeded token — no `.data` wrapper (unlike HumanTask). The
         // `parameterize_air` path puts whatever the caller posted directly
         // into `p_{id}_ready`; uploaded files become FileRef maps under
-        // their declared field name. See
-        // `token_shape::valid_uploaded_file_ref_passes` for the exact shape.
+        // their declared field name. The FileRef shape mirrors what the
+        // platform's `/api/files/upload/{id}/{node_id}` returns: `key` is
+        // the S3 object key (`templates/{id}/blobs/{node_id}/{filename}`)
+        // and `url` is the platform-facing HTTP endpoint
+        // (`/api/files/<key>`). See `token_shape::
+        // valid_uploaded_file_ref_passes` for the exact shape and
+        // `app/.../CreateInstanceDialog.svelte` for the frontend
+        // construction.
         let d_start: Dynamic = engine
             .parse_json(
                 &json!({ "document": {
-                    "key": "blob/abc",
-                    "url": "s3://bucket/key/uploaded.pdf",
+                    "key": "templates/abc/blobs/start/uploaded.pdf",
+                    "url": "/api/files/templates/abc/blobs/start/uploaded.pdf",
                     "filename": "uploaded.pdf",
                     "content_type": "application/pdf",
                     "size": 1234
@@ -1035,14 +1041,85 @@ mod tests {
             Some("storage_path"),
             "File-kind producer must stage via storage_path; got: {source:?}"
         );
+        // The executor's global ArtifactStore concatenates `path` with its
+        // configured prefix to address S3 — `path` must be the S3 key
+        // (FileRef.key), NOT the platform-facing URL (FileRef.url) which
+        // would 404 against S3. Regression for the bug where demo 07's
+        // first live run failed with "Failed to deserialize ExecutionSpec:
+        // missing field `backend`" because the emitted source carried an
+        // empty `storage: {}` AND pointed at `.url` instead of `.key`.
         assert_eq!(
             source
                 .get("path")
                 .and_then(|v| v.clone().try_cast::<String>())
                 .as_deref(),
-            Some("s3://bucket/key/uploaded.pdf"),
-            "storage_path must resolve to producer's FileRef.url; got: {source:?}"
+            Some("templates/abc/blobs/start/uploaded.pdf"),
+            "storage_path must resolve to producer's FileRef.key (the S3 \
+             object key the executor's global ArtifactStore can download); \
+             got: {source:?}"
         );
+        // `storage` must be ABSENT (Option<StorageConfig>::None) so the
+        // input falls through to the global ArtifactStore. Emitting an
+        // empty `{}` here used to deserialize as a partial `StorageConfig`
+        // and fail with "missing field `backend`" — see
+        // `executor::executor-domain::lib.rs::
+        // input_source_storage_path_backward_compat` for the contract.
+        assert!(
+            !source.contains_key("storage"),
+            "storage key must be omitted so the global ArtifactStore is \
+             used; emitting {{}} would fail StorageConfig deserialization \
+             with 'missing field `backend`'. got: {source:?}"
+        );
+
+        // Belt-and-braces: round-trip the entire `job.spec` map through
+        // `serde_json` -> `aithericon_executor_domain::ExecutionSpec`. This
+        // is the EXACT path
+        // `engine::core-engine::executor::client::build_execution_job`
+        // walks at runtime, so a regression that re-introduces a partial
+        // `storage` map (or any other shape drift) trips here at unit-test
+        // speed instead of at first live execution.
+        {
+            use aithericon_executor_domain::{ExecutionSpec, InputSource};
+            let job_value = result
+                .get("job")
+                .cloned()
+                .and_then(|v| v.try_cast::<Map>())
+                .expect("job map");
+            let spec_dyn = job_value.get("spec").cloned().expect("job.spec");
+            let runtime = RhaiRuntime::new();
+            let spec_json = runtime
+                .dynamic_to_json(spec_dyn)
+                .expect("spec dynamic must convert to JSON");
+            let spec: ExecutionSpec = serde_json::from_value(spec_json.clone())
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "ExecutionSpec must deserialize from the prepare \
+                         transition's emitted spec (regression for the \
+                         empty-storage / wrong-path bug): {e}; spec_json = {}",
+                        serde_json::to_string_pretty(&spec_json).unwrap()
+                    )
+                });
+            assert_eq!(spec.backend, "kreuzberg");
+            let storage_input = spec
+                .inputs
+                .iter()
+                .find(|i| i.name == "__borrow_start__document")
+                .expect("borrow input must round-trip");
+            match &storage_input.source {
+                InputSource::StoragePath { path, storage } => {
+                    assert_eq!(
+                        path, "templates/abc/blobs/start/uploaded.pdf",
+                        "storage_path must carry the S3 key"
+                    );
+                    assert!(
+                        storage.is_none(),
+                        "storage must round-trip as None so the global \
+                         ArtifactStore handles the download"
+                    );
+                }
+                other => panic!("expected StoragePath, got {other:?}"),
+            }
+        }
 
         // ── LLM prepare: borrows `extract_text.full_text` (FieldKind::Text)
         // → staging strategy is `raw` with `__pluck(d_extract_text,

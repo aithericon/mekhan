@@ -517,15 +517,24 @@ fn apply_backend_borrows(
 
             if *is_path_site && *field_kind == FieldKind::File {
                 // Producer field is a FileRef; stage StoragePath so the
-                // storage hook downloads the binary into the run dir.
-                let url_segs: Vec<String> = path_segs
+                // storage hook downloads the binary into the run dir. The
+                // executor's global ArtifactStore concatenates `path` with
+                // its configured prefix, so `path` must be the S3 object
+                // key (`templates/{id}/blobs/{node_id}/{filename}`) — not
+                // the platform-facing URL (`/api/files/<key>`), which would
+                // 404 against S3. The `storage` key is *omitted* so the
+                // input falls through to the global store; emitting an
+                // empty `{}` would deserialize as a partial `StorageConfig`
+                // and fail with "missing field `backend`" (the executor
+                // domain's `StorageConfig` requires `backend` + `endpoint`).
+                let key_segs: Vec<String> = path_segs
                     .iter()
                     .cloned()
-                    .chain(std::iter::once("\"url\"".to_string()))
+                    .chain(std::iter::once("\"key\"".to_string()))
                     .collect();
-                let url_expr = format!("__pluck({var}, [{}])", url_segs.join(", "));
+                let key_expr = format!("__pluck({var}, [{}])", key_segs.join(", "));
                 pushes.push_str(&format!(
-                    r#"job_inputs.push(#{{ "name": "{input_name}", "source": #{{ "type": "storage_path", "path": {url_expr}, "storage": #{{}} }} }}); "#,
+                    r#"job_inputs.push(#{{ "name": "{input_name}", "source": #{{ "type": "storage_path", "path": {key_expr} }} }}); "#,
                 ));
             } else if *is_path_site {
                 // Path-site with non-File producer: stringify the value
