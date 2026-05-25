@@ -102,6 +102,7 @@ fn dummy_job() -> ExecutionJob {
             inputs: vec![],
             outputs: vec![],
             config: serde_json::Value::Object(Default::default()),
+            config_ref: None,
         },
         metadata: HashMap::new(),
         timeout: None,

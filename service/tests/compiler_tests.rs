@@ -841,7 +841,7 @@ fn decision_with_default_branch() {
                         label: "Yes".to_string(),
                         guard: "true".to_string(),
                     }],
-                    default_branch: Some("cond_no".to_string()),
+                    default_branch: Some("default".to_string()),
                 },
                 parent_id: None,
                 width: None,
@@ -853,7 +853,7 @@ fn decision_with_default_branch() {
         edges: vec![
             edge("e_in", "s", "dec"),
             edge_with_handle("e_yes_out", "dec", "e_yes", "cond_yes"),
-            edge_with_handle("e_no_out", "dec", "e_no", "cond_no"),
+            edge_with_handle("e_no_out", "dec", "e_no", "default"),
         ],
         viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
@@ -925,7 +925,7 @@ fn decision_lowers_as_switch_cascade() {
                             guard: "5 < 6".to_string(),
                         },
                     ],
-                    default_branch: Some("cd".to_string()),
+                    default_branch: Some("default".to_string()),
                 },
                 parent_id: None,
                 width: None,
@@ -941,7 +941,7 @@ fn decision_lowers_as_switch_cascade() {
             edge_with_handle("e0", "dec", "ea", "c0"),
             edge_with_handle("e1", "dec", "eb", "c1"),
             edge_with_handle("e2", "dec", "ec", "c2"),
-            edge_with_handle("e3", "dec", "ed", "cd"),
+            edge_with_handle("e3", "dec", "ed", "default"),
         ],
         viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
@@ -1475,7 +1475,7 @@ fn multi_input_non_join_retains_pass_through_transitions() {
                         label: "Yes".to_string(),
                         guard: "true".to_string(),
                     }],
-                    default_branch: Some("cond_no".to_string()),
+                    default_branch: Some("default".to_string()),
                 },
                 parent_id: None,
                 width: None,
@@ -1491,7 +1491,7 @@ fn multi_input_non_join_retains_pass_through_transitions() {
             edge("e_to_dec_a", "a", "dec"),
             edge("e_to_dec_b", "b", "dec"),
             edge_with_handle("e_yes", "dec", "ey", "cond_yes"),
-            edge_with_handle("e_no", "dec", "en", "cond_no"),
+            edge_with_handle("e_no", "dec", "en", "default"),
         ],
         viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
@@ -1824,7 +1824,7 @@ fn decision_with_guard(id: &str, guard: &str) -> WorkflowNode {
                 label: "Yes".to_string(),
                 guard: guard.to_string(),
             }],
-            default_branch: Some("cond_no".to_string()),
+            default_branch: Some("default".to_string()),
         },
         parent_id: None,
         width: None,
@@ -1846,7 +1846,7 @@ fn guard_qualified_reference_resolves() {
         edges: vec![
             edge("e_in", "s", "d"),
             edge_with_handle("e_yes", "d", "ea", "cond_yes"),
-            edge_with_handle("e_no", "d", "eb", "cond_no"),
+            edge_with_handle("e_no", "d", "eb", "default"),
         ],
         viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
@@ -1866,7 +1866,7 @@ fn guard_syntax_error_is_reported() {
         edges: vec![
             edge("e_in", "s", "d"),
             edge_with_handle("e_yes", "d", "ea", "cond_yes"),
-            edge_with_handle("e_no", "d", "eb", "cond_no"),
+            edge_with_handle("e_no", "d", "eb", "default"),
         ],
         viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
@@ -1896,7 +1896,7 @@ fn guard_unresolved_identifier_is_reported() {
         edges: vec![
             edge("e_in", "s", "d"),
             edge_with_handle("e_yes", "d", "ea", "cond_yes"),
-            edge_with_handle("e_no", "d", "eb", "cond_no"),
+            edge_with_handle("e_no", "d", "eb", "default"),
         ],
         viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
@@ -1939,7 +1939,7 @@ fn guard_input_unknown_field_is_rejected() {
         edges: vec![
             edge("e_in", "s", "d"),
             edge_with_handle("e_yes", "d", "ea", "cond_yes"),
-            edge_with_handle("e_no", "d", "eb", "cond_no"),
+            edge_with_handle("e_no", "d", "eb", "default"),
         ],
         viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
@@ -2032,7 +2032,7 @@ fn guard_multi_hop_scope_walk() {
             edge("e_sa", "s", "a"),
             edge("e_ad", "a", "d"),
             edge_with_handle("e_yes", "d", "ea", "cond_yes"),
-            edge_with_handle("e_no", "d", "eb", "cond_no"),
+            edge_with_handle("e_no", "d", "eb", "default"),
         ],
         viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
@@ -2168,7 +2168,7 @@ fn empty_guard_is_skipped() {
         edges: vec![
             edge("e_in", "s", "d"),
             edge_with_handle("e_yes", "d", "ea", "cond_yes"),
-            edge_with_handle("e_no", "d", "eb", "cond_no"),
+            edge_with_handle("e_no", "d", "eb", "default"),
         ],
         viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
@@ -2306,7 +2306,7 @@ fn decision_output_ports_one_per_branch_plus_default() {
                     guard: "false".to_string(),
                 },
             ],
-            default_branch: Some("default1".to_string()),
+            default_branch: Some("default".to_string()),
         },
         parent_id: None,
         width: None,
@@ -2318,7 +2318,7 @@ fn decision_output_ports_one_per_branch_plus_default() {
     let ids: Vec<&str> = ports.iter().map(|p| p.id.as_str()).collect();
     assert!(ids.contains(&"high"));
     assert!(ids.contains(&"low"));
-    assert!(ids.contains(&"default1"));
+    assert!(ids.contains(&"default"));
     // Phase 4 stub: branches are pass-through.
     assert!(ports.iter().all(|p| p.fields.is_empty()));
 }
@@ -2420,7 +2420,7 @@ fn guard_can_reference_human_task_derived_field() {
             edge("e_si", "s", "ht"),
             edge("e_id", "ht", "d"),
             edge_with_handle("e_yes", "d", "ea", "cond_yes"),
-            edge_with_handle("e_no", "d", "eb", "cond_no"),
+            edge_with_handle("e_no", "d", "eb", "default"),
         ],
         viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };

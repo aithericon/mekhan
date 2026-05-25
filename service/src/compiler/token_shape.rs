@@ -269,6 +269,14 @@ impl TokenShape {
     /// the lowering stamps on, etc.). `Opaque`/`Any`/`FileRef` are permissive
     /// `{}` — undeclared executor outputs and catalogue refs must not be
     /// rejected (the declared→enforced ramp tightens these later).
+    ///
+    /// Scalar types also accept `null` — the executor backends (LLM,
+    /// Python) legitimately set declared-but-unset optional outputs to
+    /// `null` so downstream consumers (Python `<slug>.<field>` access)
+    /// see `None` instead of `AttributeError`. Without the `null`
+    /// alternative, the engine's `t_<id>_yield` schema validator rejects
+    /// the parked envelope on the first nullable scalar and the whole
+    /// instance fails.
     pub fn to_json_schema(&self) -> Value {
         match self {
             TokenShape::Object(map) => {
@@ -286,10 +294,14 @@ impl TokenShape {
                 "type": "array",
                 "items": inner.to_json_schema()
             }),
-            TokenShape::Scalar(ScalarTy::Number) => serde_json::json!({ "type": "number" }),
-            TokenShape::Scalar(ScalarTy::Bool) => serde_json::json!({ "type": "boolean" }),
+            TokenShape::Scalar(ScalarTy::Number) => {
+                serde_json::json!({ "type": ["number", "null"] })
+            }
+            TokenShape::Scalar(ScalarTy::Bool) => {
+                serde_json::json!({ "type": ["boolean", "null"] })
+            }
             TokenShape::Scalar(ScalarTy::String) | TokenShape::Scalar(ScalarTy::Timestamp) => {
-                serde_json::json!({ "type": "string" })
+                serde_json::json!({ "type": ["string", "null"] })
             }
             // FileRef is a catalogue handle (string or object at runtime),
             // Json/Any/Opaque are deliberately unconstrained.

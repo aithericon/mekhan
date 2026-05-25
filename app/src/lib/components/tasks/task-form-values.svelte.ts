@@ -146,7 +146,7 @@ export function validateField(field: TaskField, formData: Record<string, unknown
 		(field.kind === 'select' || field.kind === 'radio') &&
 		field.options?.length &&
 		trimmed.length > 0 &&
-		!field.options.includes(trimmed)
+		!field.options.some((o) => o.value === trimmed)
 	)
 		return `Select a valid value for ${field.label}`;
 	if (

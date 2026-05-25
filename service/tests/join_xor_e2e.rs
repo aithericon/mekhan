@@ -221,7 +221,7 @@ fn join_any_graph() -> Value {
                       "edgeId": "cond_high", "label": "High",
                       "guard": "input.amount > 100"
                   }],
-                  "defaultBranch": "cond_low"
+                  "defaultBranch": "default"
               } },
             { "id": "merge", "type": "join", "slug": "merged",
               "position": { "x": 480, "y": 0 },
@@ -250,7 +250,7 @@ fn join_any_graph() -> Value {
             { "id": "cond_high", "source": "dec", "target": "merge",
               "sourceHandle": "cond_high", "targetHandle": "in", "type": "sequence" },
             { "id": "cond_low",  "source": "dec", "target": "merge",
-              "sourceHandle": "cond_low",  "targetHandle": "in", "type": "sequence" },
+              "sourceHandle": "default",  "targetHandle": "in", "type": "sequence" },
             { "id": "e_out",  "source": "merge", "target": "e",
               "targetHandle": "in", "type": "sequence" }
         ]

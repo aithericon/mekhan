@@ -82,6 +82,7 @@ fn http_config_from_spec() {
             "method": "PUT",
             "url": "https://example.com",
         }),
+            config_ref: None,
     };
     let config = HttpConfig::from_spec(&spec).unwrap();
     assert_eq!(config.method, HttpMethod::PUT);
@@ -98,6 +99,7 @@ fn http_config_from_spec_invalid() {
             "method": "INVALID_METHOD",
             "url": "https://example.com",
         }),
+            config_ref: None,
     };
     assert!(HttpConfig::from_spec(&spec).is_err());
 }
@@ -281,12 +283,14 @@ fn supports_only_http_backend() {
         inputs: vec![],
         outputs: vec![],
         config: serde_json::Value::Object(Default::default()),
+        config_ref: None,
     };
     let process_spec = ExecutionSpec {
         backend: "process".into(),
         inputs: vec![],
         outputs: vec![],
         config: serde_json::Value::Object(Default::default()),
+        config_ref: None,
     };
     assert!(backend.supports(&http_spec));
     assert!(!backend.supports(&process_spec));

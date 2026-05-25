@@ -71,6 +71,7 @@ mod tests {
                     "args": ["train.py"],
                     "inherit_env": true
                 }),
+                    config_ref: None,
             },
             run_dir: RunDirectory::new(&PathBuf::from("/tmp"), "exec-789"),
             timeout: Duration::from_secs(3600),

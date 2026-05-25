@@ -2372,7 +2372,13 @@ export interface components {
             kind: components["schemas"]["FieldKind"];
             label: string;
             name: string;
-            options?: string[] | null;
+            /**
+             * @description Choice list for `kind = Select`. Same `{value, label}` shape as
+             *     [`TaskFieldConfig::options`]; the deserializer accepts either bare
+             *     strings or `{value, label}` objects and normalizes to the rich
+             *     form. See [`SelectOption`].
+             */
+            options?: components["schemas"]["SelectOption"][] | null;
             required?: boolean;
         };
         Position: {
@@ -2500,6 +2506,16 @@ export interface components {
             kind: components["schemas"]["FieldKind"];
             /** @description Rhai identifier the expression references (e.g. `fire_time`). */
             name: string;
+        };
+        /**
+         * @description One choice in a `kind = "select"` field. `value` is what the form
+         *     submits / what guards downstream compare against; `label` is what the
+         *     UI renders. Authors typically write `{value, label}`; the deserializer
+         *     also accepts a bare string and stretches it to `{value: s, label: s}`.
+         */
+        SelectOption: {
+            label: string;
+            value: string;
         };
         SetTriggerEnabledRequest: {
             enabled: boolean;
@@ -2685,7 +2701,16 @@ export interface components {
             kind: components["schemas"]["TaskFieldKind"];
             label: string;
             name: string;
-            options?: string[] | null;
+            /**
+             * @description Choice list for `kind = "select"`. Authored as
+             *     `[{"value": "approve", "label": "Approve"}, …]` — `value` is the
+             *     canonical wire value submitted by the form, `label` is the
+             *     human-facing display string. A bare string shorthand
+             *     (`["approve", "reject"]`) is accepted at deserialize time and
+             *     normalized to `{value, label}` where `label = value` — convenient
+             *     for trivial sets while keeping the runtime representation uniform.
+             */
+            options?: components["schemas"]["SelectOption"][] | null;
             placeholder?: string | null;
             required?: boolean | null;
         };
@@ -3141,6 +3166,15 @@ export interface components {
             type: "automated_step";
         } | {
             conditions: components["schemas"]["BranchCondition"][];
+            /**
+             * @description Otherwise/else branch handle id. The wire shape is `Option<String>`
+             *     for forward-compat with future multi-default-branch decisions, but
+             *     today the only accepted value is `DEFAULT_BRANCH_HANDLE_ID`
+             *     (`"default"`) — both the editor's xyflow Handle id and the
+             *     compiler's default output place use that literal, so any other
+             *     value would render as a floating edge in the editor and is
+             *     rejected at compile time (see `compiler::validate`).
+             */
             defaultBranch?: string | null;
             description?: string | null;
             label: string;

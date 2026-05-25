@@ -796,6 +796,7 @@ mod tests {
                 "query": "SELECT id FROM things",
                 "projection": ["id"],
             }),
+                config_ref: None,
         };
         let job = ExecutionJob {
             execution_id: "test-no-tenant".into(),
@@ -843,6 +844,7 @@ mod tests {
                 "projection": ["id"],
                 "read_only": false,
             }),
+                config_ref: None,
         };
         let job = ExecutionJob {
             execution_id: "test-no-rw".into(),
@@ -888,6 +890,7 @@ mod tests {
                 "query": "SELECT 1",
                 "projection": [],
             }),
+                config_ref: None,
         };
         let job = ExecutionJob {
             execution_id: "test-empty-proj".into(),
@@ -925,6 +928,7 @@ mod tests {
             inputs: vec![],
             outputs: vec![],
             config: Value::Null,
+            config_ref: None,
         };
         assert!(backend.supports(&spec));
 
@@ -933,6 +937,7 @@ mod tests {
             inputs: vec![],
             outputs: vec![],
             config: Value::Null,
+            config_ref: None,
         };
         assert!(!backend.supports(&spec_other));
     }

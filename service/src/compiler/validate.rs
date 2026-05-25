@@ -3,7 +3,9 @@
 
 use crate::compiler::error::CompileError;
 use crate::compiler::graph::WorkflowDiGraph;
-use crate::models::template::{FieldKind, WorkflowGraph, WorkflowNode, WorkflowNodeData};
+use crate::models::template::{
+    FieldKind, WorkflowGraph, WorkflowNode, WorkflowNodeData, DEFAULT_BRANCH_HANDLE_ID,
+};
 use petgraph::visit::Bfs;
 use petgraph::{algo::is_cyclic_directed, Direction};
 use std::collections::{HashMap, HashSet};
@@ -86,6 +88,26 @@ pub(crate) fn validate(graph: &WorkflowGraph, wg: &WorkflowDiGraph) -> Result<()
                     "loop '{}' must have a non-empty condition",
                     node.id
                 )));
+            }
+        }
+    }
+
+    // Decision.defaultBranch is a free string on the wire (forward-compat
+    // for future multi-default decisions), but today the editor's
+    // `DecisionNode.svelte` hardcodes the Otherwise xyflow Handle id to
+    // `DEFAULT_BRANCH_HANDLE_ID`, so any other value would render as a
+    // floating edge in the UI even though the compiler would happily lower
+    // it. Reject at publish so hand-authored JSON can't silently produce a
+    // graph the editor won't render correctly.
+    for node in &graph.nodes {
+        if let WorkflowNodeData::Decision { default_branch, .. } = &node.data {
+            if let Some(db) = default_branch {
+                if db != DEFAULT_BRANCH_HANDLE_ID {
+                    return Err(CompileError::Validation(format!(
+                        "decision '{}' defaultBranch must be exactly \"{}\", got \"{}\"",
+                        node.id, DEFAULT_BRANCH_HANDLE_ID, db
+                    )));
+                }
             }
         }
     }

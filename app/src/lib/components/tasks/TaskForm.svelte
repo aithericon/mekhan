@@ -361,8 +361,8 @@
 								{/if}
 							</Select.Trigger>
 							<Select.Content>
-								{#each field.options ?? [] as option (option)}
-									<Select.Item value={option} label={option} />
+								{#each field.options ?? [] as option (option.value)}
+									<Select.Item value={option.value} label={option.label} />
 								{/each}
 							</Select.Content>
 						</Select.Root>
@@ -425,11 +425,11 @@
 							class="flex flex-col gap-2 py-1"
 							data-testid={`field-${field.name}`}
 						>
-							{#each field.options ?? [] as option, i (option)}
+							{#each field.options ?? [] as option, i (option.value)}
 								{@const optionId = `${field.name}-${i}`}
 								<div class="flex items-center space-x-2 rounded-lg px-2 py-1.5 transition-colors hover:bg-muted/50">
-									<RadioGroup.Item value={option} id={optionId} />
-									<Label for={optionId} class="cursor-pointer font-normal">{option}</Label>
+									<RadioGroup.Item value={option.value} id={optionId} />
+									<Label for={optionId} class="cursor-pointer font-normal">{option.label}</Label>
 								</div>
 							{/each}
 						</RadioGroup.Root>

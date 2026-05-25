@@ -258,6 +258,7 @@ fn make_spec(config: Value) -> ExecutionSpec {
         inputs: vec![],
         outputs: vec![],
         config,
+        config_ref: None,
     }
 }
 

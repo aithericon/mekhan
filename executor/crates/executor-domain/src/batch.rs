@@ -49,6 +49,7 @@ mod tests {
                 inputs: vec![],
                 outputs: vec![],
                 config: serde_json::json!({"command": "echo", "args": ["hello"]}),
+                config_ref: None,
             },
             metadata: HashMap::new(),
             timeout: None,

@@ -6953,8 +6953,9 @@
               "null"
             ],
             "items": {
-              "type": "string"
-            }
+              "$ref": "#/components/schemas/SelectOption"
+            },
+            "description": "Choice list for `kind = Select`. Same `{value, label}` shape as\n[`TaskFieldConfig::options`]; the deserializer accepts either bare\nstrings or `{value, label}` objects and normalizes to the rich\nform. See [`SelectOption`]."
           },
           "required": {
             "type": "boolean"
@@ -7267,6 +7268,22 @@
           "name": {
             "type": "string",
             "description": "Rhai identifier the expression references (e.g. `fire_time`)."
+          }
+        }
+      },
+      "SelectOption": {
+        "type": "object",
+        "description": "One choice in a `kind = \"select\"` field. `value` is what the form\nsubmits / what guards downstream compare against; `label` is what the\nUI renders. Authors typically write `{value, label}`; the deserializer\nalso accepts a bare string and stretches it to `{value: s, label: s}`.",
+        "required": [
+          "value",
+          "label"
+        ],
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
           }
         }
       },
@@ -7708,8 +7725,9 @@
               "null"
             ],
             "items": {
-              "type": "string"
-            }
+              "$ref": "#/components/schemas/SelectOption"
+            },
+            "description": "Choice list for `kind = \"select\"`. Authored as\n`[{\"value\": \"approve\", \"label\": \"Approve\"}, …]` — `value` is the\ncanonical wire value submitted by the form, `label` is the\nhuman-facing display string. A bare string shorthand\n(`[\"approve\", \"reject\"]`) is accepted at deserialize time and\nnormalized to `{value, label}` where `label = value` — convenient\nfor trivial sets while keeping the runtime representation uniform."
           },
           "placeholder": {
             "type": [
@@ -8885,7 +8903,8 @@
                 "type": [
                   "string",
                   "null"
-                ]
+                ],
+                "description": "Otherwise/else branch handle id. The wire shape is `Option<String>`\nfor forward-compat with future multi-default-branch decisions, but\ntoday the only accepted value is `DEFAULT_BRANCH_HANDLE_ID`\n(`\"default\"`) — both the editor's xyflow Handle id and the\ncompiler's default output place use that literal, so any other\nvalue would render as a floating edge in the editor and is\nrejected at compile time (see `compiler::validate`)."
               },
               "description": {
                 "type": [

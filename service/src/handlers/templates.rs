@@ -500,6 +500,7 @@ pub async fn publish_template(
         air_json,
         graph_json,
         interface_json,
+        node_configs,
     } = publisher
         .compile_artifacts(
             &graph,
@@ -516,6 +517,16 @@ pub async fn publish_template(
     // runtime. Non-fatal for UI publish (legacy behavior).
     if let Err(e) = publisher.upload_files(id, existing.version, &ydoc_files).await {
         tracing::warn!("S3 file upload failed (non-fatal): {e}");
+    }
+    // Upload the per-node static configs the compiler offloaded so the
+    // executor's `FetchConfigHook` can resolve `config_ref` at run time.
+    // Non-fatal in UI publish — matches the upload_files behavior so a
+    // transient S3 hiccup doesn't strand a draft.
+    if let Err(e) = publisher
+        .upload_node_configs(id, existing.version, &node_configs)
+        .await
+    {
+        tracing::warn!("S3 node-config upload failed (non-fatal): {e}");
     }
 
     // Template-test gate. Run every enabled test for this template family
@@ -946,6 +957,7 @@ pub async fn apply_template(
         air_json,
         graph_json,
         interface_json,
+        node_configs,
     } = publisher
         .compile_artifacts(
             &graph,
@@ -973,6 +985,17 @@ pub async fn apply_template(
         .await
     {
         return Err(ApiError::internal(format!("S3 file upload failed: {e}")));
+    }
+    // Per-node static configs offloaded by the compiler. Fatal for apply —
+    // the executor `FetchConfigHook` would fail at run-time if a node's
+    // blob is missing, leaving a hard-to-trace runtime breakage.
+    if let Err(e) = publisher
+        .upload_node_configs(target_id, target_version, &node_configs)
+        .await
+    {
+        return Err(ApiError::internal(format!(
+            "S3 node-config upload failed: {e}"
+        )));
     }
 
     // 4. Single transaction: the only persisted, queryable transition. The

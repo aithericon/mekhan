@@ -490,6 +490,7 @@ pub async fn seed_one(
         air_json,
         graph_json,
         interface_json,
+        node_configs,
     } = publisher
         .compile_artifacts(
             &demo.graph,
@@ -505,6 +506,10 @@ pub async fn seed_one(
 
     publisher
         .upload_files(template_id, 1, &files)
+        .await
+        .map_err(DemoSeedError::Upload)?;
+    publisher
+        .upload_node_configs(template_id, 1, &node_configs)
         .await
         .map_err(DemoSeedError::Upload)?;
 
@@ -677,6 +682,72 @@ mod tests {
         }
     }
 
+    /// Regression: the document-pipeline-v1 demo carries five LLM extractor
+    /// nodes whose `response_format.schema` resolves to a $ref against a
+    /// deeply-nested `ExtractionFields` definition. Before the
+    /// `config_ref` offload, each extractor's prepare-transition Rhai
+    /// literal would blow Rhai's expression-complexity limit and the demo
+    /// failed to seed. This test exercises the full compile path against
+    /// the actual demo file and asserts that every LLM node parks its
+    /// config in the side-channel — proving the panic is gone.
+    #[test]
+    fn document_pipeline_v1_compiles_with_strict_schemas() {
+        use crate::compiler::{
+            compile_to_air_with_subworkflows_interfaces_and_configs, node_files_inline,
+            ConfigStorage, SubWorkflowAir,
+        };
+
+        let demo = load_demo(&repo_root().join("demos/document-pipeline-v1"))
+            .expect("document-pipeline-v1 must load");
+
+        let files = node_files_inline(&demo.files);
+        let (_air, _iface, node_configs) =
+            compile_to_air_with_subworkflows_interfaces_and_configs(
+                &demo.graph,
+                &demo.metadata.name,
+                demo.metadata.description.as_deref().unwrap_or(""),
+                &files,
+                &demo.files,
+                &SubWorkflowAir::new(),
+                ConfigStorage::ephemeral(),
+            )
+            .expect("document-pipeline-v1 must compile (no Rhai-complexity panic)");
+
+        // Every LLM extractor's resolved config must land in the
+        // side-channel — that's the proof the literal-inline path is
+        // gone. The classify node uses response_format: text (no schema),
+        // but the five extractors each carry a deeply-nested
+        // ExtractionFields shape.
+        for node_id in [
+            "classify",
+            "extract-bloodwork",
+            "extract-prescription",
+            "extract-clinical-note",
+            "extract-form-fields",
+            "extract-generic",
+        ] {
+            assert!(
+                node_configs.contains_key(node_id),
+                "node config for `{node_id}` must be parked in side-channel; got keys: {:?}",
+                node_configs.keys().collect::<Vec<_>>()
+            );
+        }
+        // And the heavy `$ref`-expanded schema must have made it into the
+        // side-channel (proves `inline_refs` ran before the offload).
+        let bw = node_configs
+            .get("extract-bloodwork")
+            .expect("extract-bloodwork config")
+            .to_string();
+        assert!(
+            bw.contains("ocr_span"),
+            "extract-bloodwork config must contain the expanded ExtractionFields schema: {bw}"
+        );
+        assert!(
+            !bw.contains("\"$ref\""),
+            "$ref must have been inlined before parking: {bw}"
+        );
+    }
+
     /// A task sidecar targeting a non-HumanTask node is a typo — fail at
     /// load time with a clear pointer, not at publish time with "engine
     /// rejected empty steps" three calls deep.
@@ -726,18 +797,18 @@ mod tests {
         );
     }
 
-    /// The vllm-smoke demo (text-only LLM step pointed at a local
-    /// OpenAI-compat server) must parse + compile cleanly through the same
-    /// AIR pipeline `/api/templates/{id}/publish` uses. The demo has no
-    /// node files, so this also covers the "LLM step with zero staged
-    /// inputs" case which the existing learning-path tests don't exercise.
+    /// The llm-smoke demo (text-only LLM step pointed at a local Ollama
+    /// daemon) must parse + compile cleanly through the same AIR pipeline
+    /// `/api/templates/{id}/publish` uses. The demo has no node files, so
+    /// this also covers the "LLM step with zero staged inputs" case which
+    /// the existing learning-path tests don't exercise.
     #[test]
-    fn vllm_smoke_demo_loads_and_compiles() {
+    fn llm_smoke_demo_loads_and_compiles() {
         use crate::compiler::{compile_to_air, node_files_inline};
 
         let root = repo_root().join("demos");
-        let demo = load_demo(&root.join("vllm-smoke")).expect("vllm-smoke must load");
-        assert_eq!(demo.metadata.name, "vLLM Smoke Test");
+        let demo = load_demo(&root.join("llm-smoke")).expect("llm-smoke must load");
+        assert_eq!(demo.metadata.name, "LLM Smoke Test");
         assert_eq!(
             demo.metadata.template_id,
             "00000000-0000-0000-0000-000000000020"
@@ -750,10 +821,10 @@ mod tests {
             demo.metadata.description.as_deref().unwrap_or(""),
             &files,
         )
-        .unwrap_or_else(|e| panic!("vllm-smoke must compile to AIR: {e:?}"));
+        .unwrap_or_else(|e| panic!("llm-smoke must compile to AIR: {e:?}"));
         assert!(
             air.to_string().contains("\"transitions\""),
-            "vllm-smoke AIR must declare transitions"
+            "llm-smoke AIR must declare transitions"
         );
     }
 
@@ -839,7 +910,10 @@ mod tests {
     /// publish.
     #[test]
     fn ocr_classify_extract_demo_loads_and_compiles_with_borrows() {
-        use crate::compiler::{compile_to_air, node_files_inline};
+        use crate::compiler::{
+            compile_to_air_with_subworkflows_interfaces_and_configs, node_files_inline,
+            ConfigStorage, SubWorkflowAir,
+        };
 
         let root = repo_root().join("demos");
         let demo = load_demo(&root.join("07-ocr-classify-extract"))
@@ -850,15 +924,33 @@ mod tests {
         );
 
         let files = node_files_inline(&demo.files);
-        let air = compile_to_air(
-            &demo.graph,
-            &demo.metadata.name,
-            demo.metadata.description.as_deref().unwrap_or(""),
-            &files,
-        )
-        .unwrap_or_else(|e| panic!("07-ocr-classify-extract must compile to AIR: {e:?}"));
+        let (air, _iface, node_configs) =
+            compile_to_air_with_subworkflows_interfaces_and_configs(
+                &demo.graph,
+                &demo.metadata.name,
+                demo.metadata.description.as_deref().unwrap_or(""),
+                &files,
+                &demo.files,
+                &SubWorkflowAir::new(),
+                ConfigStorage::ephemeral(),
+            )
+            .unwrap_or_else(|e| panic!("07-ocr-classify-extract must compile to AIR: {e:?}"));
 
         let air_str = air.to_string();
+
+        // The placeholder rewrites now land in the parked side-channel
+        // blob the publish layer uploads, not the AIR. The AIR still
+        // carries the borrow-input *staging* (the `job_inputs.push` with
+        // the `__pluck(d_<producer>, …)` call) — that's what binds the
+        // upstream envelope to the staged file name at runtime.
+        let ocr_cfg = node_configs
+            .get("extract_text")
+            .expect("extract_text node config must be parked")
+            .to_string();
+        let llm_cfg = node_configs
+            .get("classify")
+            .expect("classify node config must be parked")
+            .to_string();
 
         // Kreuzberg borrow: file kind producer → StoragePath staging.
         // The compiler rewrites `{{ start.document }}` in the Kreuzberg
@@ -869,8 +961,8 @@ mod tests {
             "AIR must reference the start.document borrow input by its generated name; got: {air_str}"
         );
         assert!(
-            air_str.contains("input_path:__borrow_start__document"),
-            "Kreuzberg file field must be rewritten to {{input_path:…}}; got: {air_str}"
+            ocr_cfg.contains("input_path:__borrow_start__document"),
+            "Kreuzberg file field must be rewritten to {{input_path:…}} in side-channel; got: {ocr_cfg}"
         );
         assert!(
             air_str.contains("storage_path"),
@@ -886,8 +978,8 @@ mod tests {
             "AIR must reference the extract_text.content borrow input by its generated name; got: {air_str}"
         );
         assert!(
-            air_str.contains("input:__borrow_extract_text__content"),
-            "LLM prompt must be rewritten to {{input:…}}; got: {air_str}"
+            llm_cfg.contains("input:__borrow_extract_text__content"),
+            "LLM prompt must be rewritten to {{input:…}} in side-channel; got: {llm_cfg}"
         );
 
         // Regression guard: the `job_inputs.push` snippets we emit call
@@ -1244,7 +1336,7 @@ mod tests {
     /// canonical sorted JSON to stdout. Run with `--nocapture` before and
     /// after each refactor commit; the two outputs must `diff` clean.
     ///
-    /// Coverage rationale: 01-05 + 07 + vllm-smoke exercise every borrow
+    /// Coverage rationale: 01-05 + 07 + llm-smoke exercise every borrow
     /// phase touched by the refactor — c2 (Python), c3 (HumanTask),
     /// guards (Decision/Loop), c4/c5 (LLM/Kreuzberg upstream refs).
     ///
@@ -1267,7 +1359,7 @@ mod tests {
             "04-loop-counter",
             "05-parallel-fanout",
             "07-ocr-classify-extract",
-            "vllm-smoke",
+            "llm-smoke",
         ] {
             let demo = load_demo(&root.join(dir_name))
                 .unwrap_or_else(|e| panic!("{dir_name} must load: {e}"));

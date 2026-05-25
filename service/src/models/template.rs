@@ -284,6 +284,13 @@ pub enum WorkflowNodeData {
         #[serde(skip_serializing_if = "Option::is_none")]
         description: Option<String>,
         conditions: Vec<BranchCondition>,
+        /// Otherwise/else branch handle id. The wire shape is `Option<String>`
+        /// for forward-compat with future multi-default-branch decisions, but
+        /// today the only accepted value is `DEFAULT_BRANCH_HANDLE_ID`
+        /// (`"default"`) — both the editor's xyflow Handle id and the
+        /// compiler's default output place use that literal, so any other
+        /// value would render as a floating edge in the editor and is
+        /// rejected at compile time (see `compiler::validate`).
         #[serde(rename = "defaultBranch", skip_serializing_if = "Option::is_none")]
         default_branch: Option<String>,
     },
@@ -1057,8 +1064,99 @@ pub struct TaskFieldConfig {
     pub required: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub placeholder: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub options: Option<Vec<String>>,
+    /// Choice list for `kind = "select"`. Authored as
+    /// `[{"value": "approve", "label": "Approve"}, …]` — `value` is the
+    /// canonical wire value submitted by the form, `label` is the
+    /// human-facing display string. A bare string shorthand
+    /// (`["approve", "reject"]`) is accepted at deserialize time and
+    /// normalized to `{value, label}` where `label = value` — convenient
+    /// for trivial sets while keeping the runtime representation uniform.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_task_field_options"
+    )]
+    pub options: Option<Vec<SelectOption>>,
+}
+
+/// One choice in a `kind = "select"` field. `value` is what the form
+/// submits / what guards downstream compare against; `label` is what the
+/// UI renders. Authors typically write `{value, label}`; the deserializer
+/// also accepts a bare string and stretches it to `{value: s, label: s}`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct SelectOption {
+    pub value: String,
+    pub label: String,
+}
+
+/// Hand-rolled deserializer for `TaskFieldConfig::options`. Accepts two
+/// authoring shapes and normalizes to `Vec<SelectOption>`:
+///
+///   - `["approve", "reject"]` — bare string shorthand for the common
+///     case where the value doubles as the label. Stretched to
+///     `{value: "approve", label: "approve"}` etc.
+///   - `[{"value": "approve", "label": "Approve as-extracted"}, …]` —
+///     full rich shape.
+///
+/// Any other shape (numbers, bools, mixed arrays without those exact
+/// keys) is rejected with an actionable error that names the field
+/// index — much better than serde's default "invalid type" surface that
+/// doesn't point at the offending entry.
+fn deserialize_task_field_options<'de, D>(de: D) -> Result<Option<Vec<SelectOption>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error;
+    let value = Option::<serde_json::Value>::deserialize(de)?;
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let arr = value
+        .as_array()
+        .ok_or_else(|| D::Error::custom(
+            "task field `options` must be a list (either of strings or of `{value,label}` objects)",
+        ))?;
+    let mut out = Vec::with_capacity(arr.len());
+    for (i, item) in arr.iter().enumerate() {
+        match item {
+            serde_json::Value::String(s) => out.push(SelectOption {
+                value: s.clone(),
+                label: s.clone(),
+            }),
+            serde_json::Value::Object(map) => {
+                let value = map
+                    .get("value")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| {
+                        D::Error::custom(format!(
+                            "task field `options[{i}]` is an object but missing a string `value` key"
+                        ))
+                    })?
+                    .to_string();
+                // `label` is optional — defaults to `value` so trivial
+                // entries can be authored as `{"value": "approve"}`.
+                let label = map
+                    .get("label")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| value.clone());
+                out.push(SelectOption { value, label });
+            }
+            other => {
+                return Err(D::Error::custom(format!(
+                    "task field `options[{i}]` must be a string or `{{value,label}}` object; got {}",
+                    match other {
+                        serde_json::Value::Null => "null",
+                        serde_json::Value::Bool(_) => "a boolean",
+                        serde_json::Value::Number(_) => "a number",
+                        serde_json::Value::Array(_) => "a list",
+                        _ => "an unsupported value",
+                    }
+                )));
+            }
+        }
+    }
+    Ok(Some(out))
 }
 
 /// Form-field control kind for `input` task blocks. Snake-case wire values
@@ -1125,8 +1223,16 @@ pub struct PortField {
     pub kind: FieldKind,
     #[serde(default)]
     pub required: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub options: Option<Vec<String>>,
+    /// Choice list for `kind = Select`. Same `{value, label}` shape as
+    /// [`TaskFieldConfig::options`]; the deserializer accepts either bare
+    /// strings or `{value, label}` objects and normalizes to the rich
+    /// form. See [`SelectOption`].
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_task_field_options"
+    )]
+    pub options: Option<Vec<SelectOption>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     /// For `File` kind: accepted formats as an HTML input `accept` list
@@ -1498,6 +1604,16 @@ pub enum ReplyMode {
 }
 
 // --- Branch conditions ---
+
+/// xyflow Handle id for a Decision node's otherwise/else branch. The editor's
+/// `DecisionNode.svelte` hardcodes this literal as the source-handle id for
+/// the Otherwise row, and the compiler's default output place uses the same
+/// literal — so an edge with `sourceHandle = "default"` is the only wiring
+/// shape that renders correctly in the editor and lowers correctly in the
+/// compiler. `WorkflowNodeData::Decision::default_branch` stays
+/// `Option<String>` for forward-compat with future multi-default-branch
+/// decisions, but `compiler::validate` rejects any other value today.
+pub const DEFAULT_BRANCH_HANDLE_ID: &str = "default";
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]

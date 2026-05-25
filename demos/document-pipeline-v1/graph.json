@@ -3,15 +3,27 @@
     {
       "id": "trigger-intake",
       "type": "trigger",
-      "position": { "x": 40, "y": 40 },
+      "position": {
+        "x": 52,
+        "y": 60
+      },
       "data": {
         "type": "trigger",
         "label": "Intake API",
-        "source": { "kind": "manual", "form": [] },
+        "source": {
+          "kind": "manual",
+          "form": []
+        },
         "concurrency": "allow",
         "payloadMapping": [
-          { "targetField": "document_file", "expression": "document_file" },
-          { "targetField": "patient_id",    "expression": "patient_id" }
+          {
+            "targetField": "document_file",
+            "expression": "document_file"
+          },
+          {
+            "targetField": "patient_id",
+            "expression": "patient_id"
+          }
         ],
         "enabled": true
       }
@@ -19,11 +31,14 @@
     {
       "id": "start",
       "type": "start",
-      "position": { "x": 40, "y": 220 },
+      "position": {
+        "x": 52,
+        "y": 330
+      },
       "data": {
         "type": "start",
         "label": "Start",
-        "processName": "Document intake — patient {{ patient_id }}",
+        "processName": "Document intake \u2014 patient {{ patient_id }}",
         "initial": {
           "id": "in",
           "label": "Document Intake",
@@ -48,11 +63,14 @@
     {
       "id": "ocr",
       "type": "automated_step",
-      "position": { "x": 280, "y": 220 },
+      "position": {
+        "x": 364,
+        "y": 330
+      },
       "data": {
         "type": "automated_step",
         "label": "OCR (kreuzberg)",
-        "description": "Extract text + tables + metadata from the uploaded document. Tesseract backend with German+English models and table detection enabled. Outputs are kreuzberg's native ExtractionResult shape 1:1 — `content`, `mime_type`, `metadata`, `tables`, `detected_languages`. No renaming or remapping.",
+        "description": "Extract text + tables + metadata from the uploaded document. Tesseract backend with German+English models and table detection enabled. Outputs are kreuzberg's native ExtractionResult shape 1:1 \u2014 `content`, `mime_type`, `metadata`, `tables`, `detected_languages`. No renaming or remapping.",
         "executionSpec": {
           "backendType": "kreuzberg",
           "config": {
@@ -73,9 +91,24 @@
           "id": "out",
           "label": "OCR result",
           "fields": [
-            { "name": "content",  "label": "Content",  "kind": "text", "required": true },
-            { "name": "tables",   "label": "Tables",   "kind": "json", "required": false },
-            { "name": "metadata", "label": "Metadata", "kind": "json", "required": false }
+            {
+              "name": "content",
+              "label": "Content",
+              "kind": "text",
+              "required": true
+            },
+            {
+              "name": "tables",
+              "label": "Tables",
+              "kind": "json",
+              "required": false
+            },
+            {
+              "name": "metadata",
+              "label": "Metadata",
+              "kind": "json",
+              "required": false
+            }
           ]
         }
       }
@@ -83,7 +116,10 @@
     {
       "id": "classify",
       "type": "automated_step",
-      "position": { "x": 540, "y": 220 },
+      "position": {
+        "x": 702,
+        "y": 330
+      },
       "data": {
         "type": "automated_step",
         "label": "Classify (vision LLM)",
@@ -91,9 +127,9 @@
         "executionSpec": {
           "backendType": "llm",
           "config": {
-            "provider": "openai",
-            "model": "mlx-community/Qwen3.5-9B-MLX-4bit",
-            "base_url": "http://localhost:8000",
+            "provider": "ollama",
+            "model": "llama3.2-vision:11b",
+            "base_url": "http://localhost:11434",
             "temperature": 0,
             "max_tokens": 512,
             "system_prompt": "You are a medical document classification assistant. Look at the document image and the OCR text. Group the page(s) into a single logical document and classify it.",
@@ -107,19 +143,41 @@
               "type": "json_schema",
               "schema": {
                 "type": "object",
-                "required": ["document_class", "confidence", "reasoning"],
+                "required": [
+                  "document_class",
+                  "confidence",
+                  "reasoning"
+                ],
                 "properties": {
                   "document_class": {
                     "type": "string",
                     "enum": [
-                      "lab_result", "prescription", "referral_letter",
-                      "imaging_report", "discharge_summary", "consultation_note",
-                      "insurance_form", "invoice", "consent_form", "other"
+                      "lab_result",
+                      "prescription",
+                      "referral_letter",
+                      "imaging_report",
+                      "discharge_summary",
+                      "consultation_note",
+                      "insurance_form",
+                      "invoice",
+                      "consent_form",
+                      "other"
                     ]
                   },
-                  "document_date": { "type": ["string", "null"] },
-                  "confidence":    { "type": "number", "minimum": 0, "maximum": 1 },
-                  "reasoning":     { "type": "string" }
+                  "document_date": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "confidence": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  "reasoning": {
+                    "type": "string"
+                  }
                 },
                 "additionalProperties": false
               }
@@ -130,10 +188,30 @@
           "id": "out",
           "label": "Classification",
           "fields": [
-            { "name": "document_class", "label": "Class",      "kind": "text",   "required": true },
-            { "name": "document_date",  "label": "Date",       "kind": "text",   "required": false },
-            { "name": "confidence",     "label": "Confidence", "kind": "number", "required": true },
-            { "name": "reasoning",      "label": "Reasoning",  "kind": "text",   "required": false }
+            {
+              "name": "document_class",
+              "label": "Class",
+              "kind": "text",
+              "required": true
+            },
+            {
+              "name": "document_date",
+              "label": "Date",
+              "kind": "text",
+              "required": false
+            },
+            {
+              "name": "confidence",
+              "label": "Confidence",
+              "kind": "number",
+              "required": true
+            },
+            {
+              "name": "reasoning",
+              "label": "Reasoning",
+              "kind": "text",
+              "required": false
+            }
           ]
         }
       }
@@ -141,7 +219,10 @@
     {
       "id": "route-by-class",
       "type": "decision",
-      "position": { "x": 820, "y": 220 },
+      "position": {
+        "x": 1066,
+        "y": 330
+      },
       "data": {
         "type": "decision",
         "label": "Route by class",
@@ -149,50 +230,59 @@
         "conditions": [
           {
             "edgeId": "branch-lab",
-            "label":  "lab_result",
-            "guard":  "classify.document_class == \"lab_result\""
+            "label": "lab_result",
+            "guard": "classify.document_class == \"lab_result\""
           },
           {
             "edgeId": "branch-rx",
-            "label":  "prescription",
-            "guard":  "classify.document_class == \"prescription\""
+            "label": "prescription",
+            "guard": "classify.document_class == \"prescription\""
           },
           {
             "edgeId": "branch-clinical",
-            "label":  "narrative clinical doc",
-            "guard":  "classify.document_class in [\"referral_letter\", \"imaging_report\", \"discharge_summary\", \"consultation_note\"]"
+            "label": "narrative clinical doc",
+            "guard": "classify.document_class in [\"referral_letter\", \"imaging_report\", \"discharge_summary\", \"consultation_note\"]"
           },
           {
             "edgeId": "branch-form",
-            "label":  "admin form",
-            "guard":  "classify.document_class in [\"insurance_form\", \"invoice\", \"consent_form\"]"
+            "label": "admin form",
+            "guard": "classify.document_class in [\"insurance_form\", \"invoice\", \"consent_form\"]"
           }
         ],
-        "defaultBranch": "branch-generic"
+        "defaultBranch": "default"
       }
     },
     {
       "id": "extract-bloodwork",
       "type": "automated_step",
-      "position": { "x": 1100, "y": 20 },
+      "position": {
+        "x": 1430,
+        "y": 30
+      },
       "data": {
         "type": "automated_step",
-        "label": "Extract — Bloodwork",
+        "label": "Extract \u2014 Bloodwork",
         "description": "Lab-result extractor. Each row of the result table becomes one field with citations.",
         "executionSpec": {
           "backendType": "llm",
           "config": {
-            "provider": "openai",
-            "model": "mlx-community/Qwen3.5-9B-MLX-4bit",
-            "base_url": "http://localhost:8000",
+            "provider": "ollama",
+            "model": "qwen3.5:9b",
+            "base_url": "http://localhost:11434",
             "temperature": 0,
             "max_tokens": 4096,
-            "system_prompt": "You are a medical lab-result extractor. Each row of the lab table = one test. Distinguish test NAME (text label like GOT, GPT, ALT, Hämoglobin, Leukozyten, Glucose) from VALUE (the number). NEVER put the test name in the value field. Every extracted field MUST carry a citations[] array with kind=ocr_span and supporting_text quoted verbatim from the OCR text.",
+            "system_prompt": "You are a medical lab-result extractor. Each row of the lab table = one test. Distinguish test NAME (text label like GOT, GPT, ALT, H\u00e4moglobin, Leukozyten, Glucose) from VALUE (the number). NEVER put the test name in the value field. Every extracted field MUST carry a citations[] array with kind=ocr_span and supporting_text quoted verbatim from the OCR text.",
             "prompt": "Extract every lab value from this document.\n\nOCR text:\n---\n{{ ocr.content }}\n---\n\nTables (JSON; each entry has `markdown`, `cells`, `page_number`):\n---\n{{ ocr.tables }}\n---\n\nReturn JSON: {fields: [{key, value, unit, reference_range, confidence, citations:[{kind, supporting_text, confidence}]}]}.",
-            "images": [{ "path": "{{ start.document_file }}" }],
+            "images": [
+              {
+                "path": "{{ start.document_file }}"
+              }
+            ],
             "response_format": {
               "type": "json_schema",
-              "schema": { "$ref": "#/definitions/ExtractionFields" }
+              "schema": {
+                "$ref": "#/definitions/ExtractionFields"
+              }
             }
           }
         },
@@ -200,7 +290,12 @@
           "id": "out",
           "label": "Bloodwork fields",
           "fields": [
-            { "name": "fields", "label": "Extracted fields", "kind": "json", "required": true }
+            {
+              "name": "fields",
+              "label": "Extracted fields",
+              "kind": "json",
+              "required": true
+            }
           ]
         }
       }
@@ -208,25 +303,34 @@
     {
       "id": "extract-prescription",
       "type": "automated_step",
-      "position": { "x": 1100, "y": 160 },
+      "position": {
+        "x": 1430,
+        "y": 240
+      },
       "data": {
         "type": "automated_step",
-        "label": "Extract — Prescription",
+        "label": "Extract \u2014 Prescription",
         "description": "Prescription extractor. One field per medication.",
         "executionSpec": {
           "backendType": "llm",
           "config": {
-            "provider": "openai",
-            "model": "mlx-community/Qwen3.5-9B-MLX-4bit",
-            "base_url": "http://localhost:8000",
+            "provider": "ollama",
+            "model": "qwen3.5:9b",
+            "base_url": "http://localhost:11434",
             "temperature": 0,
             "max_tokens": 2048,
             "system_prompt": "You are a medical prescription extractor. Extract every medication with its dose, frequency, route, duration, prescriber, date, and indication. Each field MUST carry a citations[] array.",
-            "prompt": "Extract all prescription details.\n\nOCR text:\n---\n{{ ocr.content }}\n---\n\nReturn JSON: {fields: [{key, value, unit, reference_range, confidence, citations:[{kind, supporting_text, confidence}]}]} where key ∈ {medication, dose, frequency, route, duration, prescriber, date, indication, patient_name, svnr}.",
-            "images": [{ "path": "{{ start.document_file }}" }],
+            "prompt": "Extract all prescription details.\n\nOCR text:\n---\n{{ ocr.content }}\n---\n\nReturn JSON: {fields: [{key, value, unit, reference_range, confidence, citations:[{kind, supporting_text, confidence}]}]} where key \u2208 {medication, dose, frequency, route, duration, prescriber, date, indication, patient_name, svnr}.",
+            "images": [
+              {
+                "path": "{{ start.document_file }}"
+              }
+            ],
             "response_format": {
               "type": "json_schema",
-              "schema": { "$ref": "#/definitions/ExtractionFields" }
+              "schema": {
+                "$ref": "#/definitions/ExtractionFields"
+              }
             }
           }
         },
@@ -234,7 +338,12 @@
           "id": "out",
           "label": "Prescription fields",
           "fields": [
-            { "name": "fields", "label": "Extracted fields", "kind": "json", "required": true }
+            {
+              "name": "fields",
+              "label": "Extracted fields",
+              "kind": "json",
+              "required": true
+            }
           ]
         }
       }
@@ -242,25 +351,34 @@
     {
       "id": "extract-clinical-note",
       "type": "automated_step",
-      "position": { "x": 1100, "y": 300 },
+      "position": {
+        "x": 1430,
+        "y": 450
+      },
       "data": {
         "type": "automated_step",
-        "label": "Extract — Clinical Note",
+        "label": "Extract \u2014 Clinical Note",
         "description": "Narrative clinical doc extractor (referral / imaging / discharge / consultation).",
         "executionSpec": {
           "backendType": "llm",
           "config": {
-            "provider": "openai",
-            "model": "mlx-community/Qwen3.5-9B-MLX-4bit",
-            "base_url": "http://localhost:8000",
+            "provider": "ollama",
+            "model": "qwen3.5:9b",
+            "base_url": "http://localhost:11434",
             "temperature": 0,
             "max_tokens": 4096,
             "system_prompt": "You are a clinical document extractor. Pull structured fields out of this narrative document. For discharge/consultation include admission/discharge dates, ICD-10-coded diagnoses, procedures, meds-at-discharge, follow-up. For imaging include exam type, body region, findings, impression. Every field MUST carry a citations[] array.",
             "prompt": "Extract structured fields from this {{ classify.document_class }}.\n\nOCR text:\n---\n{{ ocr.content }}\n---\n\nReturn JSON: {fields: [{key, value, unit, reference_range, confidence, citations:[{kind, supporting_text, confidence}]}]}.",
-            "images": [{ "path": "{{ start.document_file }}" }],
+            "images": [
+              {
+                "path": "{{ start.document_file }}"
+              }
+            ],
             "response_format": {
               "type": "json_schema",
-              "schema": { "$ref": "#/definitions/ExtractionFields" }
+              "schema": {
+                "$ref": "#/definitions/ExtractionFields"
+              }
             }
           }
         },
@@ -268,7 +386,12 @@
           "id": "out",
           "label": "Clinical fields",
           "fields": [
-            { "name": "fields", "label": "Extracted fields", "kind": "json", "required": true }
+            {
+              "name": "fields",
+              "label": "Extracted fields",
+              "kind": "json",
+              "required": true
+            }
           ]
         }
       }
@@ -276,25 +399,34 @@
     {
       "id": "extract-form-fields",
       "type": "automated_step",
-      "position": { "x": 1100, "y": 440 },
+      "position": {
+        "x": 1430,
+        "y": 660
+      },
       "data": {
         "type": "automated_step",
-        "label": "Extract — Form Fields",
+        "label": "Extract \u2014 Form Fields",
         "description": "Administrative form extractor (insurance / invoice / consent).",
         "executionSpec": {
           "backendType": "llm",
           "config": {
-            "provider": "openai",
-            "model": "mlx-community/Qwen3.5-9B-MLX-4bit",
-            "base_url": "http://localhost:8000",
+            "provider": "ollama",
+            "model": "qwen3.5:9b",
+            "base_url": "http://localhost:11434",
             "temperature": 0,
             "max_tokens": 2048,
             "system_prompt": "You are a form-field extractor. Pull every labelled field out of this administrative document. Every field MUST carry a citations[] array.",
             "prompt": "Extract all labelled form fields from this {{ classify.document_class }}.\n\nOCR text:\n---\n{{ ocr.content }}\n---\n\nReturn JSON: {fields: [{key, value, unit, reference_range, confidence, citations:[{kind, supporting_text, confidence}]}]}.",
-            "images": [{ "path": "{{ start.document_file }}" }],
+            "images": [
+              {
+                "path": "{{ start.document_file }}"
+              }
+            ],
             "response_format": {
               "type": "json_schema",
-              "schema": { "$ref": "#/definitions/ExtractionFields" }
+              "schema": {
+                "$ref": "#/definitions/ExtractionFields"
+              }
             }
           }
         },
@@ -302,7 +434,12 @@
           "id": "out",
           "label": "Form fields",
           "fields": [
-            { "name": "fields", "label": "Extracted fields", "kind": "json", "required": true }
+            {
+              "name": "fields",
+              "label": "Extracted fields",
+              "kind": "json",
+              "required": true
+            }
           ]
         }
       }
@@ -310,25 +447,34 @@
     {
       "id": "extract-generic",
       "type": "automated_step",
-      "position": { "x": 1100, "y": 580 },
+      "position": {
+        "x": 1430,
+        "y": 870
+      },
       "data": {
         "type": "automated_step",
-        "label": "Extract — Generic",
+        "label": "Extract \u2014 Generic",
         "description": "Best-effort extractor for documents that did not match any specialist branch.",
         "executionSpec": {
           "backendType": "llm",
           "config": {
-            "provider": "openai",
-            "model": "mlx-community/Qwen3.5-9B-MLX-4bit",
-            "base_url": "http://localhost:8000",
+            "provider": "ollama",
+            "model": "qwen3.5:9b",
+            "base_url": "http://localhost:11434",
             "temperature": 0,
             "max_tokens": 2048,
             "system_prompt": "You are a general-purpose document extractor. Pull every identifiable structured or semi-structured field. Every field MUST carry a citations[] array.",
             "prompt": "Extract every identifiable field from this document.\n\nOCR text:\n---\n{{ ocr.content }}\n---\n\nReturn JSON: {fields: [{key, value, unit, reference_range, confidence, citations:[{kind, supporting_text, confidence}]}]}.",
-            "images": [{ "path": "{{ start.document_file }}" }],
+            "images": [
+              {
+                "path": "{{ start.document_file }}"
+              }
+            ],
             "response_format": {
               "type": "json_schema",
-              "schema": { "$ref": "#/definitions/ExtractionFields" }
+              "schema": {
+                "$ref": "#/definitions/ExtractionFields"
+              }
             }
           }
         },
@@ -336,7 +482,12 @@
           "id": "out",
           "label": "Generic fields",
           "fields": [
-            { "name": "fields", "label": "Extracted fields", "kind": "json", "required": true }
+            {
+              "name": "fields",
+              "label": "Extracted fields",
+              "kind": "json",
+              "required": true
+            }
           ]
         }
       }
@@ -345,17 +496,25 @@
       "id": "merge-extraction",
       "type": "join",
       "slug": "extraction",
-      "position": { "x": 1380, "y": 300 },
+      "position": {
+        "x": 1794,
+        "y": 450
+      },
       "data": {
         "type": "join",
         "label": "Merge branches",
-        "description": "Branches converge. `mode: \"any\"` — fires on the first incoming control token (XOR-join, dual of decision). The other mode, `\"all\"`, waits for every incoming branch and merges their payloads (what `parallel_join` does today). One node type, one knob — the wait-vs-fire-immediately semantics are explicit in the config, not encoded in the type name.",
+        "description": "Branches converge. `mode: \"any\"` \u2014 fires on the first incoming control token (XOR-join, dual of decision). The other mode, `\"all\"`, waits for every incoming branch and merges their payloads (what `parallel_join` does today). One node type, one knob \u2014 the wait-vs-fire-immediately semantics are explicit in the config, not encoded in the type name.",
         "mode": "any",
         "output": {
           "id": "out",
           "label": "Extraction",
           "fields": [
-            { "name": "fields", "label": "Extracted fields", "kind": "json", "required": true }
+            {
+              "name": "fields",
+              "label": "Extracted fields",
+              "kind": "json",
+              "required": true
+            }
           ]
         }
       }
@@ -363,7 +522,10 @@
     {
       "id": "persist",
       "type": "automated_step",
-      "position": { "x": 1620, "y": 300 },
+      "position": {
+        "x": 2106,
+        "y": 450
+      },
       "data": {
         "type": "automated_step",
         "label": "Persist",
@@ -384,9 +546,24 @@
           "id": "out",
           "label": "Persisted",
           "fields": [
-            { "name": "patient_data_kind", "label": "Kind",         "kind": "text",   "required": true },
-            { "name": "field_count",       "label": "Field count",  "kind": "number", "required": true },
-            { "name": "fields",            "label": "Fields",       "kind": "json",   "required": true }
+            {
+              "name": "patient_data_kind",
+              "label": "Kind",
+              "kind": "text",
+              "required": true
+            },
+            {
+              "name": "field_count",
+              "label": "Field count",
+              "kind": "number",
+              "required": true
+            },
+            {
+              "name": "fields",
+              "label": "Fields",
+              "kind": "json",
+              "required": true
+            }
           ]
         }
       }
@@ -394,7 +571,10 @@
     {
       "id": "verify",
       "type": "automated_step",
-      "position": { "x": 1880, "y": 300 },
+      "position": {
+        "x": 2444,
+        "y": 450
+      },
       "data": {
         "type": "automated_step",
         "label": "Verify citations",
@@ -415,10 +595,30 @@
           "id": "out",
           "label": "Verification",
           "fields": [
-            { "name": "verified_count",   "label": "Verified",    "kind": "number", "required": true },
-            { "name": "unverified_count", "label": "Unverified",  "kind": "number", "required": true },
-            { "name": "any_unverified",   "label": "Any issues",  "kind": "bool",   "required": true },
-            { "name": "unverified_keys",  "label": "Unverified keys", "kind": "json", "required": false }
+            {
+              "name": "verified_count",
+              "label": "Verified",
+              "kind": "number",
+              "required": true
+            },
+            {
+              "name": "unverified_count",
+              "label": "Unverified",
+              "kind": "number",
+              "required": true
+            },
+            {
+              "name": "any_unverified",
+              "label": "Any issues",
+              "kind": "bool",
+              "required": true
+            },
+            {
+              "name": "unverified_keys",
+              "label": "Unverified keys",
+              "kind": "json",
+              "required": false
+            }
           ]
         }
       }
@@ -426,7 +626,10 @@
     {
       "id": "gate",
       "type": "decision",
-      "position": { "x": 2160, "y": 300 },
+      "position": {
+        "x": 2808,
+        "y": 450
+      },
       "data": {
         "type": "decision",
         "label": "Needs review?",
@@ -434,21 +637,24 @@
         "conditions": [
           {
             "edgeId": "branch-review",
-            "label":  "review",
-            "guard":  "verify.any_unverified || classify.confidence < 0.85"
+            "label": "review",
+            "guard": "verify.any_unverified || classify.confidence < 0.85"
           }
         ],
-        "defaultBranch": "branch-clean"
+        "defaultBranch": "default"
       }
     },
     {
       "id": "review",
       "type": "human_task",
-      "position": { "x": 2440, "y": 200 },
+      "position": {
+        "x": 3172,
+        "y": 300
+      },
       "data": {
         "type": "human_task",
         "label": "Medical-assistant review",
-        "taskTitle": "Review extraction — {{ classify.document_class }}",
+        "taskTitle": "Review extraction \u2014 {{ classify.document_class }}",
         "instructionsMdsvex": "The extraction for patient **{{ patient_id }}** needs a quick eyes-on. Classification confidence was **{{ classify.confidence }}**; **{{ verify.unverified_count }}** field(s) failed citation verification.\n\nApprove, edit, or send back for re-OCR.",
         "steps": []
       }
@@ -456,88 +662,289 @@
     {
       "id": "end-reviewed",
       "type": "end",
-      "position": { "x": 2720, "y": 200 },
+      "position": {
+        "x": 3536,
+        "y": 300
+      },
       "data": {
         "type": "end",
         "label": "Reviewed",
         "resultMapping": [
-          { "targetField": "patient_data_kind", "expression": "persist.patient_data_kind" },
-          { "targetField": "field_count",       "expression": "persist.field_count" },
-          { "targetField": "verified_count",    "expression": "verify.verified_count" },
-          { "targetField": "needed_review",     "expression": "true" },
-          { "targetField": "ma_decision",       "expression": "review.decision" }
+          {
+            "targetField": "patient_data_kind",
+            "expression": "persist.patient_data_kind"
+          },
+          {
+            "targetField": "field_count",
+            "expression": "persist.field_count"
+          },
+          {
+            "targetField": "verified_count",
+            "expression": "verify.verified_count"
+          },
+          {
+            "targetField": "needed_review",
+            "expression": "true"
+          },
+          {
+            "targetField": "ma_decision",
+            "expression": "review.decision"
+          }
         ]
       }
     },
     {
       "id": "end-clean",
       "type": "end",
-      "position": { "x": 2440, "y": 420 },
+      "position": {
+        "x": 3172,
+        "y": 630
+      },
       "data": {
         "type": "end",
         "label": "Auto-approved",
         "resultMapping": [
-          { "targetField": "patient_data_kind", "expression": "persist.patient_data_kind" },
-          { "targetField": "field_count",       "expression": "persist.field_count" },
-          { "targetField": "verified_count",    "expression": "verify.verified_count" },
-          { "targetField": "needed_review",     "expression": "false" }
+          {
+            "targetField": "patient_data_kind",
+            "expression": "persist.patient_data_kind"
+          },
+          {
+            "targetField": "field_count",
+            "expression": "persist.field_count"
+          },
+          {
+            "targetField": "verified_count",
+            "expression": "verify.verified_count"
+          },
+          {
+            "targetField": "needed_review",
+            "expression": "false"
+          }
         ]
       }
     }
   ],
   "edges": [
-    { "id": "e-trigger-start",    "source": "trigger-intake",  "target": "start",                "targetHandle": "in", "type": "sequence" },
-    { "id": "e-start-ocr",        "source": "start",           "target": "ocr",                  "targetHandle": "in", "type": "sequence" },
-    { "id": "e-ocr-classify",     "source": "ocr",             "target": "classify",             "targetHandle": "in", "type": "sequence" },
-    { "id": "e-classify-route",   "source": "classify",        "target": "route-by-class",       "targetHandle": "in", "type": "sequence" },
-
-    { "id": "e-route-lab",        "source": "route-by-class",  "target": "extract-bloodwork",    "sourceHandle": "branch-lab",      "targetHandle": "in", "label": "lab_result",      "type": "conditional" },
-    { "id": "e-route-rx",         "source": "route-by-class",  "target": "extract-prescription", "sourceHandle": "branch-rx",       "targetHandle": "in", "label": "prescription",    "type": "conditional" },
-    { "id": "e-route-clinical",   "source": "route-by-class",  "target": "extract-clinical-note","sourceHandle": "branch-clinical", "targetHandle": "in", "label": "clinical narrative","type": "conditional" },
-    { "id": "e-route-form",       "source": "route-by-class",  "target": "extract-form-fields",  "sourceHandle": "branch-form",     "targetHandle": "in", "label": "admin form",      "type": "conditional" },
-    { "id": "e-route-generic",    "source": "route-by-class",  "target": "extract-generic",      "sourceHandle": "branch-generic",  "targetHandle": "in", "label": "default",         "type": "conditional" },
-
-    { "id": "e-bloodwork-merge", "source": "extract-bloodwork",    "target": "merge-extraction", "targetHandle": "in", "type": "sequence" },
-    { "id": "e-rx-merge",        "source": "extract-prescription", "target": "merge-extraction", "targetHandle": "in", "type": "sequence" },
-    { "id": "e-clinical-merge",  "source": "extract-clinical-note","target": "merge-extraction", "targetHandle": "in", "type": "sequence" },
-    { "id": "e-form-merge",      "source": "extract-form-fields",  "target": "merge-extraction", "targetHandle": "in", "type": "sequence" },
-    { "id": "e-generic-merge",   "source": "extract-generic",      "target": "merge-extraction", "targetHandle": "in", "type": "sequence" },
-
-    { "id": "e-merge-persist",    "source": "merge-extraction","target": "persist",              "targetHandle": "in", "type": "sequence" },
-    { "id": "e-persist-verify",   "source": "persist",         "target": "verify",               "targetHandle": "in", "type": "sequence" },
-    { "id": "e-verify-gate",      "source": "verify",          "target": "gate",                 "targetHandle": "in", "type": "sequence" },
-
-    { "id": "e-gate-review",      "source": "gate",            "target": "review",               "sourceHandle": "branch-review", "targetHandle": "in", "label": "needs review",   "type": "conditional" },
-    { "id": "e-gate-clean",       "source": "gate",            "target": "end-clean",            "sourceHandle": "branch-clean",  "targetHandle": "in", "label": "auto-approved",  "type": "conditional" },
-
-    { "id": "e-review-end",       "source": "review",          "target": "end-reviewed",         "targetHandle": "in", "type": "sequence" }
+    {
+      "id": "e-trigger-start",
+      "source": "trigger-intake",
+      "target": "start",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e-start-ocr",
+      "source": "start",
+      "target": "ocr",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e-ocr-classify",
+      "source": "ocr",
+      "target": "classify",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e-classify-route",
+      "source": "classify",
+      "target": "route-by-class",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e-route-lab",
+      "source": "route-by-class",
+      "target": "extract-bloodwork",
+      "sourceHandle": "branch-lab",
+      "targetHandle": "in",
+      "label": "lab_result",
+      "type": "conditional"
+    },
+    {
+      "id": "e-route-rx",
+      "source": "route-by-class",
+      "target": "extract-prescription",
+      "sourceHandle": "branch-rx",
+      "targetHandle": "in",
+      "label": "prescription",
+      "type": "conditional"
+    },
+    {
+      "id": "e-route-clinical",
+      "source": "route-by-class",
+      "target": "extract-clinical-note",
+      "sourceHandle": "branch-clinical",
+      "targetHandle": "in",
+      "label": "clinical narrative",
+      "type": "conditional"
+    },
+    {
+      "id": "e-route-form",
+      "source": "route-by-class",
+      "target": "extract-form-fields",
+      "sourceHandle": "branch-form",
+      "targetHandle": "in",
+      "label": "admin form",
+      "type": "conditional"
+    },
+    {
+      "id": "e-route-generic",
+      "source": "route-by-class",
+      "target": "extract-generic",
+      "sourceHandle": "default",
+      "targetHandle": "in",
+      "label": "default",
+      "type": "conditional"
+    },
+    {
+      "id": "e-bloodwork-merge",
+      "source": "extract-bloodwork",
+      "target": "merge-extraction",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e-rx-merge",
+      "source": "extract-prescription",
+      "target": "merge-extraction",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e-clinical-merge",
+      "source": "extract-clinical-note",
+      "target": "merge-extraction",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e-form-merge",
+      "source": "extract-form-fields",
+      "target": "merge-extraction",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e-generic-merge",
+      "source": "extract-generic",
+      "target": "merge-extraction",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e-merge-persist",
+      "source": "merge-extraction",
+      "target": "persist",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e-persist-verify",
+      "source": "persist",
+      "target": "verify",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e-verify-gate",
+      "source": "verify",
+      "target": "gate",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e-gate-review",
+      "source": "gate",
+      "target": "review",
+      "sourceHandle": "branch-review",
+      "targetHandle": "in",
+      "label": "needs review",
+      "type": "conditional"
+    },
+    {
+      "id": "e-gate-clean",
+      "source": "gate",
+      "target": "end-clean",
+      "sourceHandle": "default",
+      "targetHandle": "in",
+      "label": "auto-approved",
+      "type": "conditional"
+    },
+    {
+      "id": "e-review-end",
+      "source": "review",
+      "target": "end-reviewed",
+      "targetHandle": "in",
+      "type": "sequence"
+    }
   ],
   "definitions": {
     "ExtractionFields": {
       "type": "object",
-      "required": ["fields"],
+      "required": [
+        "fields"
+      ],
       "properties": {
         "fields": {
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["key", "value", "confidence", "citations"],
+            "required": [
+              "key",
+              "value",
+              "confidence",
+              "citations"
+            ],
             "properties": {
-              "key":             { "type": "string" },
-              "value":           { "type": "string" },
-              "unit":            { "type": ["string", "null"] },
-              "reference_range": { "type": ["string", "null"] },
-              "confidence":      { "type": "number", "minimum": 0, "maximum": 1 },
+              "key": {
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              },
+              "unit": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "reference_range": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "confidence": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
               "citations": {
                 "type": "array",
                 "minItems": 1,
                 "items": {
                   "type": "object",
-                  "required": ["kind", "supporting_text"],
+                  "required": [
+                    "kind",
+                    "supporting_text"
+                  ],
                   "properties": {
-                    "kind":            { "type": "string", "enum": ["ocr_span"] },
-                    "supporting_text": { "type": "string" },
-                    "confidence":      { "type": "number", "minimum": 0, "maximum": 1 }
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "ocr_span"
+                      ]
+                    },
+                    "supporting_text": {
+                      "type": "string"
+                    },
+                    "confidence": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1
+                    }
                   },
                   "additionalProperties": false
                 }

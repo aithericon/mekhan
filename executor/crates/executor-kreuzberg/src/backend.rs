@@ -562,6 +562,7 @@ mod tests {
             inputs: vec![],
             outputs: vec![],
             config,
+            config_ref: None,
         }
     }
 
@@ -590,6 +591,7 @@ mod tests {
             inputs: vec![],
             outputs: vec![],
             config: serde_json::json!({}),
+            config_ref: None,
         };
         assert!(!backend.supports(&spec));
     }

@@ -290,8 +290,8 @@
 														{selected || '— select —'}
 													</Select.Trigger>
 													<Select.Content>
-														{#each field.options ?? [] as opt (opt)}
-															<Select.Item value={opt} label={opt} />
+														{#each field.options ?? [] as opt (opt.value)}
+															<Select.Item value={opt.value} label={opt.label} />
 														{/each}
 													</Select.Content>
 												</Select.Root>
