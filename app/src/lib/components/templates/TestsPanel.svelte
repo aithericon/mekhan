@@ -47,7 +47,17 @@
 		try {
 			tests = await listTemplateTests(templateId);
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'failed to load tests';
+			const msg = e instanceof Error ? e.message : 'failed to load tests';
+			// A 404 here typically means the running service doesn't yet have
+			// the `/tests` route (the schema was regenerated, mekhan needs a
+			// restart). Treat it as "no tests yet" so the empty state lands
+			// cleanly; the more informative "service out of date" hint is
+			// covered by the regular empty state copy.
+			if (/\b404\b/.test(msg)) {
+				tests = [];
+			} else {
+				error = msg;
+			}
 		} finally {
 			loading = false;
 		}
@@ -154,14 +164,12 @@
 		</div>
 	</header>
 
-	{#if error}
+	{#if loading}
+		<div class="p-3 text-muted-foreground">Loading…</div>
+	{:else if error}
 		<div class="border-b border-amber-200 bg-amber-50 px-3 py-2 text-amber-800">
 			{error}
 		</div>
-	{/if}
-
-	{#if loading}
-		<div class="p-3 text-muted-foreground">Loading…</div>
 	{:else if tests.length === 0}
 		<div class="p-4 text-muted-foreground">
 			No tests yet. Click <strong>New</strong> to author one, or open a completed instance and use

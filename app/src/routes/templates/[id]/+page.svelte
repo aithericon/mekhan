@@ -9,8 +9,6 @@
 	import TestsPanel from '$lib/components/templates/TestsPanel.svelte';
 	import PublishGateModal from '$lib/components/templates/PublishGateModal.svelte';
 	import { Sheet, SheetContent, SheetTitle } from '$lib/components/ui/sheet';
-	import { Button } from '$lib/components/ui/button';
-	import FlaskConical from '@lucide/svelte/icons/flask-conical';
 	import {
 		getTemplate,
 		publishTemplate,
@@ -280,6 +278,7 @@
 			onpreview={handlePreview}
 			onnewversion={handleNewVersion}
 			onrun={handleRun}
+			ontests={() => (testsPanelOpen = true)}
 			onrename={handleRename}
 			ondescriptionchange={handleDescriptionChange}
 		/>
@@ -294,22 +293,6 @@
 				>
 			</div>
 		{/if}
-
-		<!-- Floating "Tests" button: opens a slide-in panel showing the
-		     template's test suite. Positioned in the canvas overlay so the
-		     EditorToolbar layout stays untouched. -->
-		<div class="pointer-events-none absolute right-3 top-[64px] z-10">
-			<Button
-				class="pointer-events-auto"
-				variant="outline"
-				size="sm"
-				onclick={() => (testsPanelOpen = true)}
-				data-testid="open-tests-panel"
-			>
-				<FlaskConical class="mr-1.5 size-3.5" />
-				Tests
-			</Button>
-		</div>
 
 		<div class="relative flex flex-1 overflow-hidden">
 			<WorkflowCanvas

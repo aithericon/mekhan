@@ -6,6 +6,7 @@
 	import Eye from '@lucide/svelte/icons/eye';
 	import Code from '@lucide/svelte/icons/code';
 	import Pencil from '@lucide/svelte/icons/pencil';
+	import FlaskConical from '@lucide/svelte/icons/flask-conical';
 	import type { Awareness } from 'y-protocols/awareness';
 	import type { MekhanWsProvider } from '$lib/yjs/ws-provider';
 	import AwarenessBar from '../AwarenessBar.svelte';
@@ -32,6 +33,8 @@
 		onnewversion?: () => void;
 		/** Start a run of a published template (opens the instance dialog). */
 		onrun?: () => void;
+		/** Open the template-tests panel. */
+		ontests?: () => void;
 		/** Commit a new template name (parent does the API call + state). */
 		onrename?: (name: string) => void;
 		/** Commit a new template description (parent does the API call + state). */
@@ -52,6 +55,7 @@
 		onpreview,
 		onnewversion,
 		onrun,
+		ontests,
 		onrename,
 		ondescriptionchange
 	}: Props = $props();
@@ -223,6 +227,18 @@
 			<Eye class="size-3.5" />
 			Preview AIR
 		</Button>
+
+		{#if ontests}
+			<Button
+				variant="ghost"
+				size="sm"
+				data-testid="btn-tests"
+				onclick={ontests}
+			>
+				<FlaskConical class="size-3.5" />
+				Tests
+			</Button>
+		{/if}
 
 		{#if onsave}
 			<Button
