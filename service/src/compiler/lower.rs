@@ -183,6 +183,11 @@ pub(crate) struct LoweringCtx<'a, 'c> {
     /// `publish_interface()` exactly once (except Trigger). See
     /// `service/src/compiler/interface.rs` for the protocol.
     pub(crate) interfaces: &'c mut InterfaceRegistry,
+    /// Workflow-level reusable JSON-Schema fragments. `lower_automated_step`
+    /// passes its node's `executionSpec.config` through
+    /// `compiler::schema_refs::inline_refs` so backends never see a
+    /// `{"$ref": "#/definitions/<name>"}`.
+    pub(crate) definitions: &'a std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 impl LoweringCtx<'_, '_> {
@@ -264,6 +269,7 @@ pub(crate) fn expand_node(
     node_files: &HashMap<String, InputSource>,
     sub_air: &SubWorkflowAir,
     interfaces: &mut InterfaceRegistry,
+    definitions: &std::collections::BTreeMap<String, serde_json::Value>,
 ) -> Result<(), CompileError> {
     let mut cx = LoweringCtx {
         node,
@@ -276,6 +282,7 @@ pub(crate) fn expand_node(
         node_files,
         sub_air,
         interfaces,
+        definitions,
     };
     node.lower(&mut cx)?;
     // Protocol enforcement: every non-Trigger lowering MUST call
@@ -1029,13 +1036,25 @@ fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileError> {
 
     // Validate and transform editor config → executor format (before closure)
     let backend_type = &execution_spec.backend_type;
-    let (validated_config, staged_inputs) =
+    let (mut validated_config, staged_inputs) =
         crate::compiler::backend_configs::validate_and_transform(
             backend_type,
             &execution_spec.config,
             cx.node_files,
             id,
         )?;
+    // Inline `{"$ref": "#/definitions/<name>"}` against the workflow-level
+    // `definitions` map. After this, the value rhai-literal'd into the job
+    // spec is fully self-contained — backends never see a `$ref`. The
+    // pre-lowering `validate_schema_refs` pass already surfaced unresolved
+    // refs with node id + JSON path, so a failure here would be a logic
+    // bug (validation drifted from inlining); still propagate cleanly.
+    crate::compiler::schema_refs::inline_refs(&mut validated_config, cx.definitions)
+        .map_err(|e| CompileError::SchemaRefUnresolved {
+            node_id: id.clone(),
+            path: String::new(),
+            message: e.to_string(),
+        })?;
     let config_rhai = json_to_rhai_literal(&validated_config);
     let inputs_rhai =
         json_to_rhai_literal(&serde_json::to_value(&staged_inputs).unwrap_or_default());
@@ -1194,13 +1213,19 @@ fn lower_automated_step_scheduled(cx: &mut LoweringCtx) -> Result<(), CompileErr
     let resources: Option<ResourceConfig> = resources.clone();
     let backend_type = execution_spec.backend_type;
 
-    let (validated_config, staged_inputs) =
+    let (mut validated_config, staged_inputs) =
         crate::compiler::backend_configs::validate_and_transform(
             &backend_type,
             &execution_spec.config,
             cx.node_files,
             &id,
         )?;
+    crate::compiler::schema_refs::inline_refs(&mut validated_config, cx.definitions)
+        .map_err(|e| CompileError::SchemaRefUnresolved {
+            node_id: id.clone(),
+            path: String::new(),
+            message: e.to_string(),
+        })?;
     let config_rhai = json_to_rhai_literal(&validated_config);
     let inputs_rhai =
         json_to_rhai_literal(&serde_json::to_value(&staged_inputs).unwrap_or_default());
@@ -1303,13 +1328,19 @@ fn lower_catalogue_query(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     let label = label.clone();
     let backend_type = execution_spec.backend_type;
 
-    let (query_token, _no_inputs) =
+    let (mut query_token, _no_inputs) =
         crate::compiler::backend_configs::validate_and_transform(
             &backend_type,
             &execution_spec.config,
             cx.node_files,
             &id,
         )?;
+    crate::compiler::schema_refs::inline_refs(&mut query_token, cx.definitions)
+        .map_err(|e| CompileError::SchemaRefUnresolved {
+            node_id: id.clone(),
+            path: String::new(),
+            message: e.to_string(),
+        })?;
     let query_rhai = json_to_rhai_literal(&query_token);
 
     let ctx = &mut *cx.ctx;

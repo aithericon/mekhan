@@ -91,9 +91,9 @@
         "executionSpec": {
           "backendType": "llm",
           "config": {
-            "provider": "ollama",
-            "model": "qwen3.6:35b-a3b",
-            "base_url": "http://localhost:11435",
+            "provider": "openai",
+            "model": "mlx-community/Qwen3.5-9B-MLX-4bit",
+            "base_url": "http://localhost:8000",
             "temperature": 0,
             "max_tokens": 512,
             "system_prompt": "You are a medical document classification assistant. Look at the document image and the OCR text. Group the page(s) into a single logical document and classify it.",
@@ -182,9 +182,9 @@
         "executionSpec": {
           "backendType": "llm",
           "config": {
-            "provider": "ollama",
-            "model": "qwen3.5:9b",
-            "base_url": "http://localhost:11435",
+            "provider": "openai",
+            "model": "mlx-community/Qwen3.5-9B-MLX-4bit",
+            "base_url": "http://localhost:8000",
             "temperature": 0,
             "max_tokens": 4096,
             "system_prompt": "You are a medical lab-result extractor. Each row of the lab table = one test. Distinguish test NAME (text label like GOT, GPT, ALT, Hämoglobin, Leukozyten, Glucose) from VALUE (the number). NEVER put the test name in the value field. Every extracted field MUST carry a citations[] array with kind=ocr_span and supporting_text quoted verbatim from the OCR text.",
@@ -216,9 +216,9 @@
         "executionSpec": {
           "backendType": "llm",
           "config": {
-            "provider": "ollama",
-            "model": "qwen3.5:9b",
-            "base_url": "http://localhost:11435",
+            "provider": "openai",
+            "model": "mlx-community/Qwen3.5-9B-MLX-4bit",
+            "base_url": "http://localhost:8000",
             "temperature": 0,
             "max_tokens": 2048,
             "system_prompt": "You are a medical prescription extractor. Extract every medication with its dose, frequency, route, duration, prescriber, date, and indication. Each field MUST carry a citations[] array.",
@@ -250,9 +250,9 @@
         "executionSpec": {
           "backendType": "llm",
           "config": {
-            "provider": "ollama",
-            "model": "qwen3.5:9b",
-            "base_url": "http://localhost:11435",
+            "provider": "openai",
+            "model": "mlx-community/Qwen3.5-9B-MLX-4bit",
+            "base_url": "http://localhost:8000",
             "temperature": 0,
             "max_tokens": 4096,
             "system_prompt": "You are a clinical document extractor. Pull structured fields out of this narrative document. For discharge/consultation include admission/discharge dates, ICD-10-coded diagnoses, procedures, meds-at-discharge, follow-up. For imaging include exam type, body region, findings, impression. Every field MUST carry a citations[] array.",
@@ -284,9 +284,9 @@
         "executionSpec": {
           "backendType": "llm",
           "config": {
-            "provider": "ollama",
-            "model": "qwen3.5:9b",
-            "base_url": "http://localhost:11435",
+            "provider": "openai",
+            "model": "mlx-community/Qwen3.5-9B-MLX-4bit",
+            "base_url": "http://localhost:8000",
             "temperature": 0,
             "max_tokens": 2048,
             "system_prompt": "You are a form-field extractor. Pull every labelled field out of this administrative document. Every field MUST carry a citations[] array.",
@@ -318,9 +318,9 @@
         "executionSpec": {
           "backendType": "llm",
           "config": {
-            "provider": "ollama",
-            "model": "qwen3.5:9b",
-            "base_url": "http://localhost:11435",
+            "provider": "openai",
+            "model": "mlx-community/Qwen3.5-9B-MLX-4bit",
+            "base_url": "http://localhost:8000",
             "temperature": 0,
             "max_tokens": 2048,
             "system_prompt": "You are a general-purpose document extractor. Pull every identifiable structured or semi-structured field. Every field MUST carry a citations[] array.",

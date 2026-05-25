@@ -258,6 +258,22 @@ pub enum CompileError {
         field: String,
         actual_kind: String,
     },
+
+    /// `executionSpec.config` (or a nested value) carries a
+    /// `{"$ref": "#/definitions/<name>"}` that the workflow-level
+    /// `definitions` map can't resolve — unknown name, cycle,
+    /// unsupported pointer shape, etc. Surfaced before lowering by the
+    /// `validate_schema_refs` pass so the editor can highlight the node.
+    /// `path` is the JSON pointer to the offending `$ref` inside the
+    /// node's `executionSpec.config`.
+    #[error(
+        "node '{node_id}': schema ref at config{path}: {message}"
+    )]
+    SchemaRefUnresolved {
+        node_id: String,
+        path: String,
+        message: String,
+    },
 }
 
 impl CompileError {
@@ -293,6 +309,7 @@ impl CompileError {
             Self::BackendRefNotUpstream { .. } => "backend_ref_not_upstream",
             Self::BackendPlaceholderSyntax { .. } => "backend_placeholder_syntax",
             Self::LlmImageRefNotFileKind { .. } => "llm_image_ref_not_file_kind",
+            Self::SchemaRefUnresolved { .. } => "schema_ref_unresolved",
         }
     }
 
@@ -331,7 +348,8 @@ impl CompileError {
             | Self::BackendRefUnresolved { node_id, .. }
             | Self::BackendRefNotUpstream { node_id, .. }
             | Self::BackendPlaceholderSyntax { node_id, .. }
-            | Self::LlmImageRefNotFileKind { node_id, .. } => Some(node_id),
+            | Self::LlmImageRefNotFileKind { node_id, .. }
+            | Self::SchemaRefUnresolved { node_id, .. } => Some(node_id),
             _ => None,
         }
     }

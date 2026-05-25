@@ -184,6 +184,11 @@ pub fn doc_to_graph(doc: &Doc) -> Result<WorkflowGraph, String> {
         edges,
         viewport,
         instance_concurrency,
+        // YJS read path does not yet carry workflow-level `definitions`
+        // (no editor surface; see `compiler::schema_refs`). Templates that
+        // need definitions are loaded from JSON-on-disk via the demo
+        // seeder — that path uses serde and populates the field correctly.
+        definitions: Default::default(),
     })
 }
 
@@ -602,7 +607,7 @@ mod tests {
                 },
             ],
             edges: vec![],
-            viewport: None, instance_concurrency: Default::default(),
+            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
         };
 
         let doc = graph_to_doc(&graph);
@@ -662,7 +667,7 @@ mod tests {
                     height: None,
                 }],
                 edges: vec![],
-                viewport: None, instance_concurrency: Default::default(),
+                viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
             }
         }
 
@@ -752,6 +757,7 @@ mod tests {
             edges: Vec::<WorkflowEdge>::new(),
             viewport: None,
             instance_concurrency: Default::default(),
+            definitions: Default::default(),
         };
 
         let rt = doc_to_graph(&graph_to_doc(&graph)).expect("parse Y.Doc");

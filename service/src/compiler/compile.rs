@@ -6,7 +6,7 @@ use crate::compiler::graph::{topo_order, WorkflowDiGraph};
 use crate::compiler::interface::InterfaceRegistry;
 use crate::compiler::lower::{expand_node, NodeFiles, NodePorts, PostProcess};
 use crate::compiler::validate::{
-    validate, validate_edges_typed, validate_guards, validate_triggers,
+    validate, validate_edges_typed, validate_guards, validate_schema_refs, validate_triggers,
 };
 use crate::compiler::wire::{apply_merges, resolve_aliases, wire_edge};
 use crate::compiler::CompileError;
@@ -375,6 +375,15 @@ pub fn compile_to_scenario_and_interfaces(
     //     reference real target-port fields and parse as Rhai.
     validate_triggers(graph)?;
 
+    // 2e. Workflow-level `$ref` / `definitions` validation. Walk every
+    //     `automated_step`'s `executionSpec.config`; every
+    //     `{"$ref": "#/definitions/<name>"}` must resolve cleanly. Run
+    //     before lowering so unresolved/cyclic/unsupported refs surface as
+    //     a typed `SchemaRefUnresolved` with the offending node id + JSON
+    //     pointer to the `$ref` inside the config — the editor highlights
+    //     the node instead of getting a generic "lowering failed".
+    validate_schema_refs(graph)?;
+
     // 3. Topological sort (on DAG — loop_back edges excluded)
     let sorted = topo_order(&wg)?;
 
@@ -435,6 +444,7 @@ pub fn compile_to_scenario_and_interfaces(
             node_files,
             sub_air,
             &mut interfaces,
+            &graph.definitions,
         )?;
     }
 
@@ -1179,7 +1189,7 @@ mod tests {
         let graph = WorkflowGraph {
             nodes: vec![start_node("s"), end_node("e")],
             edges: vec![edge("e1", "s", "e")],
-            viewport: None, instance_concurrency: Default::default(),
+            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
         };
 
         let result = compile_to_air(&graph, "test", "desc", &std::collections::HashMap::new());
@@ -1219,7 +1229,7 @@ mod tests {
             nodes: vec![start_node("s"), end_node("e")],
             edges: vec![edge("e1", "s", "e")],
             viewport: None,
-            instance_concurrency: Default::default(),
+            instance_concurrency: Default::default(), definitions: Default::default(),
         };
         let files: NodeFiles = std::collections::HashMap::new();
         let inline: HashMap<String, HashMap<String, String>> = std::collections::HashMap::new();
@@ -1283,7 +1293,7 @@ mod tests {
         let graph = WorkflowGraph {
             nodes: vec![s, end_node("e")],
             edges: vec![edge("e1", "s", "e")],
-            viewport: None, instance_concurrency: Default::default(),
+            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
         };
 
         let air = compile_to_air(&graph, "test", "desc", &std::collections::HashMap::new())
@@ -1335,7 +1345,7 @@ mod tests {
         let graph = WorkflowGraph {
             nodes: vec![s, end_node("e")],
             edges: vec![edge("e1", "s", "e")],
-            viewport: None, instance_concurrency: Default::default(),
+            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
         };
 
         let air = compile_to_air(&graph, "test", "desc", &std::collections::HashMap::new())
@@ -1370,7 +1380,7 @@ mod tests {
         let graph = WorkflowGraph {
             nodes: vec![start_node("s"), end_node("e")],
             edges: vec![edge("e1", "s", "e")],
-            viewport: None, instance_concurrency: Default::default(),
+            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
         };
 
         let air = compile_to_air(&graph, "test", "desc", &std::collections::HashMap::new())
@@ -1393,7 +1403,7 @@ mod tests {
         let graph = WorkflowGraph {
             nodes: vec![start_node("s"), end_node("e")],
             edges: vec![edge_with_handle("e1", "s", "e", "in")],
-            viewport: None, instance_concurrency: Default::default(),
+            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
         };
         let result = compile_to_air(&graph, "test", "desc", &std::collections::HashMap::new());
         assert!(
@@ -1427,7 +1437,7 @@ mod tests {
                 end_node("e"),
             ],
             edges: vec![edge("e1", "s", "ht"), edge("e2", "ht", "e")],
-            viewport: None, instance_concurrency: Default::default(),
+            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
         };
 
         let result = compile_to_air(&graph, "test", "desc", &std::collections::HashMap::new());
@@ -1484,7 +1494,7 @@ mod tests {
                 edge_with_handle("econd1", "d", "e1", "cond1"),
                 edge_with_handle("edefault", "d", "e2", "default1"),
             ],
-            viewport: None, instance_concurrency: Default::default(),
+            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
         };
 
         let result = compile_to_air(&graph, "test", "desc", &std::collections::HashMap::new());
@@ -1564,7 +1574,7 @@ mod tests {
                 edge_with_handle("edefault", "d", "e2", "default1"),
             ],
             viewport: None,
-            instance_concurrency: Default::default(),
+            instance_concurrency: Default::default(), definitions: Default::default(),
         };
         let files: NodeFiles = std::collections::HashMap::new();
         let inline: HashMap<String, HashMap<String, String>> = std::collections::HashMap::new();
@@ -1765,7 +1775,7 @@ mod tests {
                 edge("e_m_done", "merge", "done"),
             ],
             viewport: None,
-            instance_concurrency: Default::default(),
+            instance_concurrency: Default::default(), definitions: Default::default(),
         };
 
         let air = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
@@ -1864,7 +1874,7 @@ mod tests {
                 edge("e_j_e", "j", "e"),
             ],
             viewport: None,
-            instance_concurrency: Default::default(),
+            instance_concurrency: Default::default(), definitions: Default::default(),
         };
 
         let air = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
@@ -1914,7 +1924,7 @@ mod tests {
                 end_node("e"),
             ],
             edges: vec![edge("e1", "s", "a"), edge("e2", "a", "e")],
-            viewport: None, instance_concurrency: Default::default(),
+            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
         };
         let air = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
             .expect("retry graph should compile");
@@ -2091,7 +2101,7 @@ mod tests {
                 edge("esucc", "a", "e1"),
                 edge_with_handle("eerr", "a", "e2", "error"),
             ],
-            viewport: None, instance_concurrency: Default::default(),
+            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
         };
         let air = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
             .expect("error-handle edge should wire");
@@ -2503,7 +2513,7 @@ mod tests {
             ],
             edges: vec![edge("e0", "s", "a"), edge("e1", "a", "e")],
             viewport: None,
-            instance_concurrency: Default::default(),
+            instance_concurrency: Default::default(), definitions: Default::default(),
         };
         let scenario = crate::compiler::compile_to_scenario(
             &graph,
@@ -2538,7 +2548,7 @@ mod tests {
                 end_node("e"),
             ],
             edges: vec![edge("e0", "s", "a"), edge("e1", "a", "e")],
-            viewport: None, instance_concurrency: Default::default(),
+            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
         };
         assert!(
             compile_to_air(&graph, "t", "d", &std::collections::HashMap::new()).is_ok(),
@@ -2610,7 +2620,7 @@ mod tests {
             ],
             edges: vec![edge("e1", "s", "ht"), edge("e2", "ht", "e")],
             viewport: None,
-            instance_concurrency: Default::default(),
+            instance_concurrency: Default::default(), definitions: Default::default(),
         };
 
         let air = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
@@ -2676,7 +2686,7 @@ mod tests {
             ],
             edges: vec![edge("e1", "s", "ht"), edge("e2", "ht", "e")],
             viewport: None,
-            instance_concurrency: Default::default(),
+            instance_concurrency: Default::default(), definitions: Default::default(),
         };
 
         let air = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
@@ -2723,7 +2733,7 @@ mod tests {
             ],
             edges: vec![edge("e1", "s", "ht"), edge("e2", "ht", "e")],
             viewport: None,
-            instance_concurrency: Default::default(),
+            instance_concurrency: Default::default(), definitions: Default::default(),
         };
 
         let air = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
@@ -3262,7 +3272,7 @@ mod tests {
             ],
             edges: vec![edge("e0", "s", "sub"), edge("e1", "sub", "e")],
             viewport: None,
-            instance_concurrency: Default::default(),
+            instance_concurrency: Default::default(), definitions: Default::default(),
         };
 
         // SubWorkflow lowering only needs an opaque AIR Value to embed in the
@@ -3592,7 +3602,7 @@ mod tests {
                 },
             ],
             viewport: None,
-            instance_concurrency: Default::default(),
+            instance_concurrency: Default::default(), definitions: Default::default(),
         };
         let air = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
             .expect("compile");
@@ -3632,5 +3642,140 @@ mod tests {
             deadend_ports.iter().any(|p| p["name"] == "d_s"),
             "deadend must declare the mirrored input_port: {deadend_ports:?}"
         );
+    }
+
+    /// End-to-end proof that `WorkflowGraph.definitions` is inlined at
+    /// lowering: an `automated_step` whose LLM `response_format.schema` is a
+    /// `$ref` to a workflow-scoped definition is compiled to AIR that
+    /// contains the resolved schema and no surviving `"$ref"` token.
+    #[test]
+    fn lowering_inlines_workflow_definitions_into_llm_config() {
+        let mut definitions = std::collections::BTreeMap::new();
+        definitions.insert(
+            "ExtractionFields".to_string(),
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "fields": { "type": "array", "items": { "type": "object" } }
+                }
+            }),
+        );
+        let graph = WorkflowGraph {
+            nodes: vec![
+                start_node("s"),
+                WorkflowNode {
+                    id: "extract".to_string(),
+                    node_type: "automated_step".to_string(),
+                    slug: None,
+                    position: Position { x: 0.0, y: 0.0 },
+                    data: WorkflowNodeData::AutomatedStep {
+                        label: "Extract".to_string(),
+                        description: None,
+                        execution_spec: ExecutionSpecConfig {
+                            backend_type: ExecutionBackendType::Llm,
+                            entrypoint: None,
+                            config: serde_json::json!({
+                                "provider": "openai",
+                                "model": "mlx-community/Qwen3.5-9B-MLX-4bit",
+                                "base_url": "http://localhost:8000",
+                                "prompt": "extract",
+                                "response_format": {
+                                    "type": "json_schema",
+                                    "schema": { "$ref": "#/definitions/ExtractionFields" }
+                                }
+                            }),
+                        },
+                        input: Port::empty_input(),
+                        output: default_output_port(ExecutionBackendType::Llm),
+                        retry_policy: RetryPolicy::default(),
+                        deployment_model: Default::default(),
+                    },
+                    parent_id: None,
+                    width: None,
+                    height: None,
+                },
+                end_node("e"),
+            ],
+            edges: vec![edge("e1", "s", "extract"), edge("e2", "extract", "e")],
+            viewport: None,
+            instance_concurrency: Default::default(),
+            definitions,
+        };
+        let air = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
+            .expect("compile with schema ref should succeed");
+        let s = air.to_string();
+        // The AIR naturally contains many `$ref` tokens — every schemars-
+        // generated petri-domain type schema uses internal `#/definitions/...`
+        // refs for its type registry (Ctrl__, Data__, DynamicToken, …). Those
+        // are NOT what this test is about. What we care about: the *specific*
+        // workflow-level definition name we authored must not survive
+        // anywhere as a `$ref` payload — every consumer that referenced
+        // `ExtractionFields` should now carry the inlined object literal.
+        assert!(
+            !s.contains("#/definitions/ExtractionFields"),
+            "workflow-level $ref to ExtractionFields must be inlined; got: {s}"
+        );
+        assert!(
+            !s.contains("ExtractionFields"),
+            "definition name should not appear anywhere in lowered AIR; got: {s}"
+        );
+    }
+
+    /// Unknown `$ref` surfaces a `SchemaRefUnresolved` compile error tagged
+    /// with the offending node id.
+    #[test]
+    fn lowering_unknown_schema_ref_errors_with_node_id() {
+        let graph = WorkflowGraph {
+            nodes: vec![
+                start_node("s"),
+                WorkflowNode {
+                    id: "extract".to_string(),
+                    node_type: "automated_step".to_string(),
+                    slug: None,
+                    position: Position { x: 0.0, y: 0.0 },
+                    data: WorkflowNodeData::AutomatedStep {
+                        label: "Extract".to_string(),
+                        description: None,
+                        execution_spec: ExecutionSpecConfig {
+                            backend_type: ExecutionBackendType::Llm,
+                            entrypoint: None,
+                            config: serde_json::json!({
+                                "provider": "openai",
+                                "model": "x",
+                                "prompt": "p",
+                                "response_format": {
+                                    "type": "json_schema",
+                                    "schema": { "$ref": "#/definitions/Missing" }
+                                }
+                            }),
+                        },
+                        input: Port::empty_input(),
+                        output: default_output_port(ExecutionBackendType::Llm),
+                        retry_policy: RetryPolicy::default(),
+                        deployment_model: Default::default(),
+                    },
+                    parent_id: None,
+                    width: None,
+                    height: None,
+                },
+                end_node("e"),
+            ],
+            edges: vec![edge("e1", "s", "extract"), edge("e2", "extract", "e")],
+            viewport: None,
+            instance_concurrency: Default::default(),
+            definitions: std::collections::BTreeMap::new(),
+        };
+        let err = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
+            .expect_err("unknown $ref must fail compilation");
+        match err {
+            CompileError::SchemaRefUnresolved { node_id, message, .. } => {
+                assert_eq!(node_id, "extract");
+                assert!(
+                    message.contains("Missing"),
+                    "error message should mention the unknown definition name: {message}"
+                );
+            }
+            other => panic!("expected SchemaRefUnresolved, got {other:?}"),
+        }
     }
 }

@@ -67,6 +67,14 @@ pub struct WorkflowGraph {
     /// per-trigger gate and decides whether to spawn now or coalesce.
     #[serde(default, skip_serializing_if = "is_default_instance_concurrency")]
     pub instance_concurrency: InstanceConcurrencyPolicy,
+    /// Workflow-scoped reusable JSON-Schema fragments. Referenced from
+    /// `executionSpec.config` (today: LLM `response_format.schema`) as
+    /// `{"$ref": "#/definitions/<name>"}` and inlined at compile time by
+    /// `compiler::schema_refs::inline_refs`. Local pointers only; external
+    /// `$ref`s and JSON-Schema 2020-12 sibling-key merge semantics are
+    /// rejected at validation. BTreeMap for byte-stable compile output.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub definitions: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 fn is_default_instance_concurrency(c: &InstanceConcurrencyPolicy) -> bool {
@@ -1716,6 +1724,7 @@ impl WorkflowGraph {
             }],
             viewport: None,
             instance_concurrency: Default::default(),
+            definitions: Default::default(),
         }
     }
 }
@@ -2256,6 +2265,45 @@ mod tests {
             description: None,
             accept: None,
         }
+    }
+
+    #[test]
+    fn workflow_graph_definitions_roundtrip() {
+        let mut defs = std::collections::BTreeMap::new();
+        defs.insert(
+            "ExtractionFields".to_string(),
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "fields": { "type": "array", "items": { "type": "object" } }
+                }
+            }),
+        );
+        let graph = WorkflowGraph {
+            nodes: vec![],
+            edges: vec![],
+            viewport: None,
+            instance_concurrency: InstanceConcurrencyPolicy::Unlimited,
+            definitions: defs,
+        };
+        let s = serde_json::to_string(&graph).unwrap();
+        let parsed: WorkflowGraph = serde_json::from_str(&s).unwrap();
+        assert_eq!(parsed.definitions.len(), 1);
+        assert!(parsed.definitions.contains_key("ExtractionFields"));
+        assert_eq!(
+            parsed.definitions["ExtractionFields"]["properties"]["fields"]["type"],
+            "array"
+        );
+
+        let empty = WorkflowGraph {
+            nodes: vec![],
+            edges: vec![],
+            viewport: None,
+            instance_concurrency: InstanceConcurrencyPolicy::Unlimited,
+            definitions: std::collections::BTreeMap::new(),
+        };
+        let s2 = serde_json::to_string(&empty).unwrap();
+        assert!(!s2.contains("definitions"));
     }
 
     #[test]

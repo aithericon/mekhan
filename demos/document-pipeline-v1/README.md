@@ -37,8 +37,8 @@ On the data side, `merge-extraction` re-parks the inbound payload under slug
 | Step | Backend | Model | Notes |
 |---|---|---|---|
 | `ocr` | kreuzberg | — | Tesseract `deu+eng`, table detection on. Reads `{{ start.document_file }}`. Emits kreuzberg's native `ExtractionResult` shape 1:1 — `content`, `mime_type`, `metadata`, `tables`, `detected_languages` (no remap). |
-| `classify` | llm (Ollama) | `qwen3.6:35b-a3b` | Vision MoE. Image = `{{ start.document_file }}`. OCR text injected via `{{ ocr.content }}`. JSON-schema response. |
-| `extract-bloodwork` / `extract-prescription` / `extract-clinical-note` / `extract-form-fields` / `extract-generic` | llm (Ollama) | `qwen3.5:9b` | Type-specific system prompts. JSON-schema response with mandatory `citations[]` per field. |
+| `classify` | llm (OpenAI-compat, vllm-metal at `:8000`) | `mlx-community/Qwen3.5-9B-MLX-4bit` | Vision MoE. Image = `{{ start.document_file }}`. OCR text injected via `{{ ocr.content }}`. JSON-schema response. Requires `just dev vllm-up`. |
+| `extract-bloodwork` / `extract-prescription` / `extract-clinical-note` / `extract-form-fields` / `extract-generic` | llm (OpenAI-compat, vllm-metal at `:8000`) | `mlx-community/Qwen3.5-9B-MLX-4bit` | Type-specific system prompts. JSON-schema response with mandatory `citations[]` per field. Schema factored via top-level `definitions.ExtractionFields` (inlined by `compiler::schema_refs::inline_refs` at lowering). |
 | `merge-extraction` | join (`mode: "any"`) | — | Branches converge. Re-parks whichever branch's payload under slug `extraction`. |
 | `persist` | python | — | Single borrow `extraction.fields`. Stamps patient/class/date, emits a unified field list. |
 | `verify` | python | — | Citation matcher (mekhan analogue of online-clinic's `provenance` step kind). Normalized substring match of every `citations[].supporting_text` against `{{ ocr.content }}`. |
@@ -101,16 +101,6 @@ but they're the deltas vs. what currently ships.
    `text` (so the UI can render it as a table) but not strict per-field
    typing. Today the `TaskFieldKind` enum has `file/text/number/bool/...` —
    we're assuming `json` (or `object`) exists or gets added.
-
-5. **`output_schema` reuse via `definitions/`.** The graph has a top-level
-   `definitions.ExtractionFields` block; the five extractors all reference
-   it as `{ "$ref": "#/definitions/ExtractionFields" }` in their LLM
-   `response_format`. Mirrors the petri-runtime's `SchemaRegistry` /
-   `Data__{id}` model from §3 of `docs/10-control-data-token-model.md`.
-   The LLM backend's `ResponseFormat::JsonSchema` may not currently
-   resolve `$ref` against a workflow-level definitions table — if not,
-   inline each schema (verbose) or teach the compiler to expand refs at
-   lowering time.
 
 ## Out of scope (vs. online-clinic source)
 
