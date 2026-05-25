@@ -301,6 +301,7 @@ describe('YjsGraphBinding', () => {
 			'decision',
 			'parallel_split',
 			'parallel_join',
+			'join',
 			'loop',
 			'scope',
 			'phase_update',

@@ -39,6 +39,10 @@ export function outputPortsFor(data: WorkflowNodeData): Port[] {
 			// it at render time via the outgoing edge. Statically we expose an
 			// empty pass-through port so handles render correctly.
 			return [{ id: 'out', label: 'Output', fields: [] }];
+		case 'join':
+			// Join carries an explicit output Port whose fields describe what
+			// downstream `<slug>.<field>` borrows can read.
+			return [data.output ?? { id: 'out', label: 'Output', fields: [] }];
 		default:
 			return [];
 	}
@@ -56,6 +60,7 @@ export function inputPortsFor(data: WorkflowNodeData): Port[] {
 		case 'decision':
 		case 'parallel_split':
 		case 'parallel_join':
+		case 'join':
 		case 'loop':
 		case 'scope':
 		case 'phase_update':

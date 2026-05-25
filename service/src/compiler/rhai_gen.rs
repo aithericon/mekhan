@@ -412,17 +412,43 @@ pub(crate) fn build_merge_logic(state_var: &str, signal_var: &str) -> String {
     )
 }
 
-/// Rhai for a `ParallelJoin` that folds the tokens arriving on `port_names`
-/// (`in_0`, `in_1`, …) into a single `output` token.
+/// Rhai for a `Join { mode: Any }` branch: single-input passthrough whose
+/// output token is the inbound payload and whose `data` output mirrors it
+/// (so the parked `p_<id>_data` place holds the same payload). Used per
+/// transition by `lower_join` in `Any` mode.
+pub(crate) fn build_join_passthrough_logic(port_name: &str) -> String {
+    format!("#{{ output: {port_name}, data: {port_name} }}")
+}
+
+/// Rhai for a `Join { mode: All }` (and `ParallelJoin`'s back-compat path)
+/// that folds the tokens arriving on `port_names` (`in_0`, `in_1`, …) into a
+/// single `output` token plus a mirror `data` token deposited at the parked
+/// `p_<id>_data` place. When `also_stage_data` is false the `data` output is
+/// omitted (back-compat `ParallelJoin` path, which has no parked place).
 ///
 /// One input → straight pass-through. `ShallowLastWins` copies top-level keys
 /// left-to-right so the last branch wins on a collision (the historical
 /// intent — the old code emitted an unregistered `merge_maps`, so this also
 /// fixes a latent runtime bug). `DeepMerge` recursively merges nested object
 /// values via a script-local helper.
-pub(crate) fn build_join_merge_logic(port_names: &[String], strategy: MergeStrategy) -> String {
+pub(crate) fn build_join_merge_logic_full(
+    port_names: &[String],
+    strategy: MergeStrategy,
+    also_stage_data: bool,
+) -> String {
+    let tail = if also_stage_data {
+        "#{ output: result, data: result }"
+    } else {
+        "#{ output: result }"
+    };
+
     if port_names.len() == 1 {
-        return format!("#{{ output: {} }}", port_names[0]);
+        let only = &port_names[0];
+        return if also_stage_data {
+            format!("let result = {only}; {tail}")
+        } else {
+            format!("#{{ output: {only} }}")
+        };
     }
 
     let first = &port_names[0];
@@ -434,7 +460,7 @@ pub(crate) fn build_join_merge_logic(port_names: &[String], strategy: MergeStrat
             for name in rest {
                 s.push_str(&format!("for k in {name}.keys() {{ result[k] = {name}[k]; }} "));
             }
-            s.push_str("#{ output: result }");
+            s.push_str(tail);
             s
         }
         MergeStrategy::DeepMerge => {
@@ -455,10 +481,17 @@ pub(crate) fn build_join_merge_logic(port_names: &[String], strategy: MergeStrat
             for name in rest {
                 s.push_str(&format!("result = __deep_merge(result, {name}); "));
             }
-            s.push_str("#{ output: result }");
+            s.push_str(tail);
             s
         }
     }
+}
+
+/// Back-compat wrapper preserving the `ParallelJoin` byte-identical output —
+/// no parked-data mirror, original `#{ output: result }` tail. Defers to
+/// `build_join_merge_logic_full` so the merge algorithm stays single-sourced.
+pub(crate) fn build_join_merge_logic(port_names: &[String], strategy: MergeStrategy) -> String {
+    build_join_merge_logic_full(port_names, strategy, false)
 }
 
 pub(crate) fn build_human_task_injection_logic(target_node: &WorkflowNode) -> String {

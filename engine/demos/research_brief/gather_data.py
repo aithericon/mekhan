@@ -194,8 +194,10 @@ def gather_research(request):
 # ---------------------------------------------------------------------------
 
 request_data = inputs.get("request.json", {})
+# `result` matches the orchestrator-declared output port; the runner's
+# post-exec sweep promotes it into the executor's terminal status. The
+# explicit `set_output` would be redundant.
 result = gather_research(request_data)
-set_output("result", result)
 log_info(
     "Research gathering complete",
     topic=result["topic"],

@@ -45,6 +45,7 @@ export type AutomatedStepNodeData = Extract<SchemaWorkflowNodeData, { type: 'aut
 export type DecisionNodeData = Extract<SchemaWorkflowNodeData, { type: 'decision' }>;
 export type ParallelSplitNodeData = Extract<SchemaWorkflowNodeData, { type: 'parallel_split' }>;
 export type ParallelJoinNodeData = Extract<SchemaWorkflowNodeData, { type: 'parallel_join' }>;
+export type JoinNodeData = Extract<SchemaWorkflowNodeData, { type: 'join' }>;
 export type LoopNodeData = Extract<SchemaWorkflowNodeData, { type: 'loop' }>;
 export type ScopeNodeData = Extract<SchemaWorkflowNodeData, { type: 'scope' }>;
 export type PhaseUpdateNodeData = Extract<SchemaWorkflowNodeData, { type: 'phase_update' }>;
@@ -121,6 +122,13 @@ export const NODE_PALETTE: NodePaletteItem[] = [
 		type: 'parallel_join',
 		label: 'Parallel Join',
 		description: 'Wait for all parallel paths',
+		icon: 'git-merge',
+		color: '#06b6d4'
+	},
+	{
+		type: 'join',
+		label: 'Join',
+		description: 'Converge branches — wait for all, or fire on any (XOR-join)',
 		icon: 'git-merge',
 		color: '#06b6d4'
 	},
@@ -221,6 +229,14 @@ export function createDefaultNodeData(type: WorkflowNodeType): SchemaWorkflowNod
 			return { type: 'parallel_split', label: 'Parallel Split' };
 		case 'parallel_join':
 			return { type: 'parallel_join', label: 'Parallel Join', mergeStrategy: 'shallow_last_wins' };
+		case 'join':
+			return {
+				type: 'join',
+				label: 'Join',
+				mode: 'all',
+				mergeStrategy: 'shallow_last_wins',
+				output: { id: 'out', label: 'Output', fields: [] }
+			};
 		case 'loop':
 			return {
 				type: 'loop',

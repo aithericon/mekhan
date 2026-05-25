@@ -113,6 +113,7 @@ pub enum NodeKind {
     Loop,
     ParallelSplit,
     ParallelJoin,
+    Join,
     Scope,
     SubWorkflow,
     PhaseUpdate,

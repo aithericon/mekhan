@@ -450,6 +450,21 @@ pub fn write_node_config(
         WorkflowNodeData::ParallelSplit { .. }
         | WorkflowNodeData::ParallelJoin { .. }
         | WorkflowNodeData::Scope { .. } => {}
+        WorkflowNodeData::Join {
+            mode,
+            merge_strategy,
+            output,
+            ..
+        } => {
+            let mode_val = serde_json::to_value(mode).unwrap_or_default();
+            config.insert(txn, "mode", json_value_to_any(&mode_val));
+            if let Some(ms) = merge_strategy {
+                let ms_val = serde_json::to_value(ms).unwrap_or_default();
+                config.insert(txn, "mergeStrategy", json_value_to_any(&ms_val));
+            }
+            let out_val = serde_json::to_value(output).unwrap_or_default();
+            config.insert(txn, "output", json_value_to_any(&out_val));
+        }
         WorkflowNodeData::Loop {
             max_iterations,
             loop_condition,

@@ -234,6 +234,26 @@ export class YjsGraphBinding {
 						(config?.mergeStrategy as 'shallow_last_wins' | 'deep_merge') ??
 						'shallow_last_wins'
 				};
+			case 'join': {
+				type JoinDataT = Extract<WorkflowNodeData, { type: 'join' }>;
+				const mode = (config?.mode as 'all' | 'any') ?? 'all';
+				const output =
+					(config?.output as JoinDataT['output'] | undefined) ??
+					({ id: 'out', label: 'Output', fields: [] } as JoinDataT['output']);
+				return {
+					...base,
+					type: 'join',
+					mode,
+					...(mode === 'all'
+						? {
+								mergeStrategy:
+									(config?.mergeStrategy as 'shallow_last_wins' | 'deep_merge') ??
+									'shallow_last_wins'
+							}
+						: {}),
+					output
+				};
+			}
 			case 'loop':
 				return {
 					...base,
@@ -366,15 +386,19 @@ export class YjsGraphBinding {
 							'#   amount = review.invoice_amount      # borrowed from upstream "review"',
 							'#   vendor = review.vendor_name',
 							'#',
-							'# Helpers `set_output`, `log_*`, `update_progress` are injected by',
-							'# the runner. The Reference panel on the right lists every',
-							'# `<slug>.<field>` in scope at this node.',
+							'# Outputs: assign declared output field names at top level — the',
+							'# runner sweeps them into this node\'s output port after exec. Add',
+							'# fields in the right-hand "Output" panel, then write them here:',
+							'#',
+							'#   result = { "ok": True }            # if "result" is declared',
+							'#',
+							'# Escape hatch: `set_output(name, value)` is also injected for',
+							'# dynamic names or writes from inside branches/loops. Logging',
+							'# helpers `log_*`, `update_progress`, `define_phases`/`update_phase`,',
+							'# `log_metric`, `log_artifact` are injected too. The Reference panel',
+							'# on the right lists every `<slug>.<field>` in scope at this node.',
 							'',
 							'log_info("step started")',
-							'',
-							'# set_output(name, value) adds a field to this node\'s output port.',
-							'# Downstream steps borrow it as <this-node-slug>.<name>.',
-							'# set_output("result", { "ok": True })',
 							''
 						].join('\n')
 					)
@@ -671,6 +695,18 @@ export class YjsGraphBinding {
 				break;
 			case 'parallel_join':
 				config.set('mergeStrategy', data.mergeStrategy ?? 'shallow_last_wins');
+				break;
+			case 'join':
+				config.set('mode', data.mode ?? 'all');
+				if ((data.mode ?? 'all') === 'all') {
+					config.set('mergeStrategy', data.mergeStrategy ?? 'shallow_last_wins');
+				} else {
+					config.delete('mergeStrategy');
+				}
+				config.set(
+					'output',
+					data.output ?? { id: 'out', label: 'Output', fields: [] }
+				);
 				break;
 			case 'loop':
 				config.set('maxIterations', data.maxIterations);

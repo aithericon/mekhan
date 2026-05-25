@@ -66,7 +66,7 @@ use serde_json::Value;
 use crate::compiler::error::CompileError;
 use crate::compiler::graph::{topo_order, WorkflowDiGraph};
 use crate::models::template::{
-    FieldKind, MergeStrategy, Port, WorkflowGraph, WorkflowNode, WorkflowNodeData,
+    FieldKind, JoinMode, MergeStrategy, Port, WorkflowGraph, WorkflowNode, WorkflowNodeData,
 };
 
 // ─── Structural token type ──────────────────────────────────────────────────
@@ -623,6 +623,7 @@ fn output_place_ids(node: &WorkflowNode) -> Vec<String> {
             (0..8).map(|i| format!("p_{id}_out_{i}")).collect()
         }
         WorkflowNodeData::ParallelJoin { .. } => vec![format!("p_{id}_output")],
+        WorkflowNodeData::Join { .. } => vec![format!("p_{id}_output")],
         WorkflowNodeData::Loop { .. } => vec![
             format!("p_{id}_body_in"),
             format!("p_{id}_body_out"),
@@ -826,6 +827,7 @@ fn out_shape(node: &WorkflowNode, in_shape: &TokenShape) -> TokenShape {
         WorkflowNodeData::Decision { .. }
         | WorkflowNodeData::ParallelSplit { .. }
         | WorkflowNodeData::ParallelJoin { .. }
+        | WorkflowNodeData::Join { .. }
         | WorkflowNodeData::Scope { .. }
         | WorkflowNodeData::PhaseUpdate { .. }
         | WorkflowNodeData::ProgressUpdate { .. }
@@ -853,11 +855,18 @@ pub fn analyze(graph: &WorkflowGraph) -> Result<ShapeReport, CompileError> {
         let node = *wg.dag.node_weight(*ni).unwrap();
 
         // Inbound = shallow-merge of every DAG predecessor's outbound shape.
-        // (ParallelJoin's strategy can be DeepMerge; honour it.)
+        // (ParallelJoin / Join's strategy can be DeepMerge; honour it.)
         let deep = matches!(
-            node.data,
+            &node.data,
             WorkflowNodeData::ParallelJoin {
                 merge_strategy: MergeStrategy::DeepMerge,
+                ..
+            }
+        ) || matches!(
+            &node.data,
+            WorkflowNodeData::Join {
+                mode: JoinMode::All,
+                merge_strategy: Some(MergeStrategy::DeepMerge),
                 ..
             }
         );
@@ -1002,6 +1011,7 @@ fn is_parked_producer(graph: &WorkflowGraph, id: &str) -> bool {
                     | WorkflowNodeData::SubWorkflow { .. }
                     | WorkflowNodeData::Start { .. }
                     | WorkflowNodeData::Loop { .. }
+                    | WorkflowNodeData::Join { .. }
             )
     })
 }
