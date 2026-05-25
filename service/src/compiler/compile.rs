@@ -63,7 +63,7 @@ fn derive_inline_sources(
 /// untouched. Tail boundary is unconstrained — the needle ends in either an
 /// identifier (`.iteration`) or a closing dot; what comes next doesn't matter
 /// for safe matching.
-fn replace_word_boundary(haystack: &str, needle: &str, repl: &str) -> Option<String> {
+pub(super) fn replace_word_boundary(haystack: &str, needle: &str, repl: &str) -> Option<String> {
     if needle.is_empty() || !haystack.contains(needle) {
         return None;
     }
@@ -97,6 +97,76 @@ fn replace_word_boundary(haystack: &str, needle: &str, repl: &str) -> Option<Str
         Some(out)
     } else {
         None
+    }
+}
+
+/// Idempotently add a `d_<producer>` input port + read-arc to `t` against the
+/// producer's parked data place. Returns the `d_<producer>` variable name on
+/// success (with hyphens → underscores), or `None` when the producer didn't
+/// publish a `data_port` — caller skips that borrow silently. Centralises the
+/// four-times-repeated read-arc wiring across the borrow phases (guards / c2
+/// Python / c3 HumanTask / c4-c5 backend-config).
+///
+/// `allow_under_consume_arc` controls the idempotency check: `true` only
+/// blocks a new read arc when an *existing* read arc to the same place is
+/// present (c2 / c3 / c4 / c5 — the consumer's data-binding transition never
+/// has pre-existing arcs against producer data places); `false` blocks on
+/// **any** arc, read or consume (guards — Loop's `lower_loop` pre-wires its
+/// continue/exit transitions with consume arcs against the counter place,
+/// and a duplicate read arc next to a consume arc breaks the engine's
+/// binding-resolution rules).
+pub(super) fn wire_read_arc(
+    t: &mut aithericon_sdk::scenario::ScenarioTransition,
+    producer_node: &str,
+    interfaces: &InterfaceRegistry,
+    allow_under_consume_arc: bool,
+) -> Option<String> {
+    use crate::compiler::token_shape::{data_def_name, def_ref};
+    use aithericon_sdk::scenario::{ScenarioArc, ScenarioPort};
+
+    let var = format!("d_{}", producer_node.replace('-', "_"));
+    let data_place = interfaces
+        .get(producer_node)
+        .and_then(|i| i.data_port.clone())?;
+
+    if !t.input_ports.iter().any(|p| p.name == var) {
+        t.input_ports.push(ScenarioPort {
+            name: var.clone(),
+            schema_ref: Some(def_ref(&data_def_name(producer_node))),
+            cardinality: "single".to_string(),
+        });
+    }
+    let arc_blocks = if allow_under_consume_arc {
+        t.inputs.iter().any(|a| a.place == data_place && a.read)
+    } else {
+        t.inputs.iter().any(|a| a.place == data_place)
+    };
+    if !arc_blocks {
+        t.inputs.push(ScenarioArc {
+            place: data_place,
+            port: var.clone(),
+            weight: 1,
+            read: true,
+        });
+    }
+    Some(var)
+}
+
+/// Unquoted hoist-path segments for a producer's parked-envelope shape.
+/// HumanTask's parked envelope nests business data under `data`;
+/// AutomatedStep nests under `detail.outputs`; Start / Loop / SubWorkflow
+/// keep fields at the top level. The borrow phases use this to bridge the
+/// user-visible flat shape (`<slug>.<field>`) to the nested engine shape.
+/// Returns `&[]` for kinds with no nesting and for unknown nodes.
+pub(super) fn producer_field_access_hoist(
+    graph: &crate::models::template::WorkflowGraph,
+    producer_node: &str,
+) -> &'static [&'static str] {
+    let producer = graph.nodes.iter().find(|n| n.id == producer_node);
+    match producer.map(|n| &n.data) {
+        Some(WorkflowNodeData::HumanTask { .. }) => &["data"],
+        Some(WorkflowNodeData::AutomatedStep { .. }) => &["detail", "outputs"],
+        _ => &[],
     }
 }
 
@@ -395,6 +465,7 @@ pub fn compile_to_scenario_and_interfaces(
     //     `e5ed9fc` / `674408e` SubWorkflow terminal-filter leak: consumers
     //     never have to re-derive collapse-stable ids.
     derive_node_ownership(&scenario, &mut interfaces);
+    populate_borrowed_paths(graph, inline_sources, &mut interfaces);
     for iface in interfaces.values_mut() {
         iface.rewrite_places(&alias);
     }
@@ -471,6 +542,22 @@ fn derive_node_ownership(
     let mut by_len: Vec<String> = interfaces.keys().cloned().collect();
     by_len.sort_by(|a, b| b.len().cmp(&a.len()));
 
+    // Match a Petri id back to its owning workflow node. Two naming
+    // conventions are in play:
+    //
+    //   - `lower.rs` emits underscore-style ids directly (`t_{node}_role`,
+    //     `p_{node}_role`). Decision, the wire-edge transitions, the top
+    //     `to_output` / `to_error` of AutomatedStep, all look like this.
+    //   - The SDK's `ctx.scoped_prefix(id, …)` joins nested ids with `/`
+    //     (e.g. `extract/prepare`, `extract/t_accepted`, `extract/submitted`).
+    //     The AutomatedStep `prepare` transition (which carries the
+    //     `<slug>.<field>` read-arcs) and the entire `executor_lifecycle`
+    //     sub-net live here. No `p_`/`t_` prefix is emitted on nested ids.
+    //
+    // Without the slash-form match the step-execution projector silently
+    // skips owned-transition fires for AutomatedStep, so `inputs` is never
+    // captured on the step row even though the read-arcs fire normally
+    // at runtime.
     fn match_owner<'a>(id: &str, kind: char, by_len: &'a [String]) -> Option<&'a str> {
         for node_id in by_len {
             let prefix = match kind {
@@ -482,6 +569,11 @@ fn derive_node_ownership(
             }
             if id == &prefix[..prefix.len() - 1] {
                 // Bare `p_{id}` / `t_{id}` (no trailing role) — counts too.
+                return Some(node_id.as_str());
+            }
+            // SDK-style slash-nested id from `ctx.scoped_prefix(node_id, …)`.
+            let slash_prefix = format!("{node_id}/");
+            if id.starts_with(&slash_prefix) {
                 return Some(node_id.as_str());
             }
         }
@@ -506,6 +598,125 @@ fn derive_node_ownership(
             }
         }
     }
+
+    // Wire-edge transitions (`t_edge_<edge_id>`) belong to no node by the
+    // prefix rule above — their ids are keyed on the edge, not either
+    // endpoint. But for HumanTask consumers, `build_human_task_injection_logic`
+    // runs on the wire transition (see `service/src/compiler/wire.rs:17-21`),
+    // and `apply_control_data_foundation`'s (c3) phase synthesizes the
+    // `<slug>.<field>` read-arcs on it. The read-arc payloads are exactly
+    // the HumanTask's inputs, so credit the transition to whichever node's
+    // entry the wire produces into. That puts the read_tokens on the right
+    // step-execution row when the projector folds the event log.
+    let mut wire_edge_owners: Vec<(String, String)> = Vec::new();
+    for transition in &scenario.transitions {
+        if !transition.id.starts_with("t_edge_") {
+            continue;
+        }
+        for arc in &transition.outputs {
+            for (node_id, iface) in interfaces.iter() {
+                if iface.entry.as_deref() == Some(&arc.place) {
+                    wire_edge_owners.push((transition.id.clone(), node_id.clone()));
+                }
+            }
+        }
+    }
+    for (tid, owner) in wire_edge_owners {
+        if let Some(iface) = interfaces.get_mut(&owner) {
+            if !iface.owned_transitions.iter().any(|t| t == &tid) {
+                iface.owned_transitions.push(tid);
+            }
+        }
+    }
+}
+
+/// Author-visible borrow surface. For each node that authors
+/// `<slug>.<attr>` references — Python AutomatedSteps (Python source) and
+/// HumanTasks (`{{ }}` placeholders in title/instructions/step blocks) —
+/// resolve every reference's `slug` to its upstream `producer_node_id` and
+/// record the `attr` field name. The frontend's step drawer reads this to
+/// show *what the step actually read* from each upstream envelope (the
+/// runtime input is the whole envelope; this narrows it to the fields the
+/// author asked for).
+///
+/// Stored on `NodeInterface.borrowed_paths` and shipped to the frontend
+/// as part of `interface_json`. Decision/Loop guards are not yet covered
+/// (they use a different scanner; their `<slug>.<field>` refs already
+/// surface in the picker via `reachable_scope`).
+fn populate_borrowed_paths(
+    graph: &crate::models::template::WorkflowGraph,
+    inline_sources: &HashMap<String, HashMap<String, String>>,
+    interfaces: &mut InterfaceRegistry,
+) {
+    use crate::compiler::human_task_refs::extract_human_task_refs;
+    use crate::compiler::python_refs::extract_python_refs;
+    use crate::compiler::token_shape::slug_index;
+    use crate::models::template::{ExecutionBackendType, WorkflowNodeData};
+    use std::collections::{BTreeMap, BTreeSet};
+
+    let Ok(slugs) = slug_index(graph) else {
+        return;
+    };
+
+    for node in &graph.nodes {
+        // `BTreeSet` dedupes per (producer, attr); we then materialize to
+        // the persisted `Vec<String>` shape.
+        let mut paths: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        match &node.data {
+            WorkflowNodeData::HumanTask { .. } => {
+                for r in extract_human_task_refs(node) {
+                    let Some(prod_id) = slugs.node_for(&r.head) else {
+                        continue;
+                    };
+                    if prod_id == node.id {
+                        continue;
+                    }
+                    paths
+                        .entry(prod_id.to_string())
+                        .or_default()
+                        .insert(r.attr);
+                }
+            }
+            WorkflowNodeData::AutomatedStep { execution_spec, .. } => {
+                if execution_spec.backend_type != ExecutionBackendType::Python {
+                    continue;
+                }
+                let entrypoint = execution_spec
+                    .entrypoint
+                    .clone()
+                    .unwrap_or_else(|| "main.py".to_string());
+                let Some(node_files) = inline_sources.get(&node.id) else {
+                    continue;
+                };
+                let Some(source) = node_files.get(&entrypoint) else {
+                    continue;
+                };
+                for r in extract_python_refs(source) {
+                    let Some(prod_id) = slugs.node_for(&r.head) else {
+                        continue;
+                    };
+                    if prod_id == node.id {
+                        continue;
+                    }
+                    paths
+                        .entry(prod_id.to_string())
+                        .or_default()
+                        .insert(r.attr);
+                }
+            }
+            _ => continue,
+        }
+
+        if paths.is_empty() {
+            continue;
+        }
+        if let Some(iface) = interfaces.get_mut(&node.id) {
+            iface.borrowed_paths = paths
+                .into_iter()
+                .map(|(k, v)| (k, v.into_iter().collect()))
+                .collect();
+        }
+    }
 }
 
 /// Post-merge foundation phase. See call site (step 10). Reads exclusively
@@ -520,10 +731,9 @@ fn apply_control_data_foundation(
     inline_sources: &HashMap<String, HashMap<String, String>>,
 ) -> Result<(), CompileError> {
     use crate::compiler::token_shape::{
-        analyze, automated_step_borrow_plan, ctrl_def_name, data_def_name, def_ref,
-        dynamic_token_definition, guard_readarc_plan, human_task_borrow_plan,
+        analyze, ctrl_def_name, data_def_name, def_ref, dynamic_token_definition,
     };
-    use aithericon_sdk::scenario::{ScenarioArc, ScenarioPort, TransitionGuard, TransitionLogic};
+    use aithericon_sdk::scenario::{ScenarioArc, ScenarioPort};
 
     let report = analyze(graph)?;
 
@@ -577,102 +787,91 @@ fn apply_control_data_foundation(
         }
     }
 
-    // (c) Read-arc synthesis: lower each logical `input.<path>` reference to a
-    //     physical `&`-borrow of the owning parked data place, rebinding it in
-    //     the consuming transition's guard AND/OR logic. Decision/Loop hold
-    //     the reference in `guard`; End/Failure result-mapping expressions
-    //     (added on main) hold it in `logic` — both are covered.
-    for b in guard_readarc_plan(graph)? {
-        // Producer's data port from the registry — never reconstructed
-        // from the naming convention. If the producer didn't publish a
-        // `data_port` (i.e., it's not a parked producer), the reference
-        // is unresolved upstream by the borrow planner; skip silently.
-        let Some(data_place) = interfaces
-            .get(&b.producer_node)
-            .and_then(|i| i.data_port.as_deref())
+    // (c) Plan every borrow phase in one shot. The unified `Borrow` shape
+    //     (`compiler::borrow`) collapses the five formerly-separate phases —
+    //     Decision/Loop guards, Python AutomatedStep `<slug>.<field>`,
+    //     HumanTask `{{<slug>.<field>}}` placeholders, LLM and Kreuzberg
+    //     `{{<slug>.<field>}}` config refs — into one `Vec<Borrow>`. The
+    //     scanners (Python AST, HumanTask string walker, JSON-config
+    //     walker, Rhai AST guard walker) stay per-surface; the rewrite
+    //     dispatch is unified inside `apply_borrows`.
+    let unified_borrows = crate::compiler::borrow::collect_borrows(graph, inline_sources)?;
+
+    // (c2-pre) Validate declared output.fields on every Python AutomatedStep
+    //      against (a) reserved runner globals (b) slugs this node actually
+    //      borrows. The runner sweeps declared output names from globals()
+    //      after exec(); without these guards, a field named `token` would
+    //      shadow the inbound control token, and a field colliding with a
+    //      borrowed upstream slug would silently re-export the input as
+    //      output. Mirror of runner.rs _RESERVED_GLOBALS (executor-backend) —
+    //      keep both lists in sync when adding new injected globals.
+    const PY_RESERVED_GLOBALS: &[&str] = &[
+        "token",
+        "input",
+        "inputs",
+        "set_output",
+        "load_inputs",
+        "log_info",
+        "log_warn",
+        "log_error",
+        "log_debug",
+        "log_metric",
+        "log_artifact",
+        "update_progress",
+        "define_phases",
+        "update_phase",
+        "aithericon",
+        "sys",
+        "os",
+        "json",
+    ];
+    let python_borrows_by_consumer: std::collections::HashMap<&str, Vec<&crate::compiler::borrow::Borrow>> = {
+        let mut m: std::collections::HashMap<&str, Vec<&crate::compiler::borrow::Borrow>> =
+            std::collections::HashMap::new();
+        for b in &unified_borrows {
+            if matches!(b.resolution, crate::compiler::borrow::BorrowResolution::PythonEnvelope) {
+                m.entry(b.consumer_node_id.as_str()).or_default().push(b);
+            }
+        }
+        m
+    };
+    for node in &graph.nodes {
+        let WorkflowNodeData::AutomatedStep {
+            execution_spec,
+            output,
+            ..
+        } = &node.data
         else {
             continue;
         };
-        let data_place = data_place.to_string();
-        let var = format!("d_{}", b.producer_node.replace('-', "_"));
-        let new_ref = format!("{var}.{}", b.producer_path);
-        let schema_ref = def_ref(&data_def_name(&b.producer_node));
-        let t_prefix = format!("t_{}_", b.consumer_node_id);
-
-        for t in &mut scenario.transitions {
-            if !t.id.starts_with(&t_prefix) {
-                continue;
-            }
-            let guard_src = match &t.guard {
-                Some(TransitionGuard::Rhai { source }) => Some(source.clone()),
-                _ => None,
-            };
-            let logic_src = match &t.logic {
-                TransitionLogic::Rhai { source } => Some(source.clone()),
-                _ => None,
-            };
-            let in_guard = guard_src
-                .as_deref()
-                .map(|s| s.contains(&b.referenced))
-                .unwrap_or(false);
-            let in_logic = logic_src
-                .as_deref()
-                .map(|s| s.contains(&b.referenced))
-                .unwrap_or(false);
-            if !in_guard && !in_logic {
-                continue;
-            }
-            if !t.input_ports.iter().any(|p| p.name == var) {
-                t.input_ports.push(ScenarioPort {
-                    name: var.clone(),
-                    schema_ref: Some(schema_ref.clone()),
-                    cardinality: "single".to_string(),
+        if execution_spec.backend_type != crate::models::template::ExecutionBackendType::Python {
+            continue;
+        }
+        for field in &output.fields {
+            if PY_RESERVED_GLOBALS.contains(&field.name.as_str()) {
+                return Err(CompileError::OutputFieldShadowsReserved {
+                    node_id: node.id.clone(),
+                    field_name: field.name.clone(),
                 });
             }
-            // Skip arc-add if ANY arc to this place exists, regardless of
-            // read/consume direction. Loop's own continue/exit transitions
-            // are pre-wired in `lower_loop`: continue consumes + reproduces
-            // its counter (`read: false` arc), exit read-arcs it. The
-            // synthesis pass would otherwise add a duplicate `read: true`
-            // arc next to the consuming one, breaking the engine's binding
-            // resolution.
-            if !t.inputs.iter().any(|a| a.place == data_place) {
-                t.inputs.push(ScenarioArc {
-                    place: data_place.clone(),
-                    port: var.clone(),
-                    weight: 1,
-                    read: true,
-                });
-            }
-            // Word-boundary replace so the rewrite doesn't double-prefix
-            // an already-rewritten reference. Loop's own continue/exit
-            // guards/logic are pre-wired in `lower_loop` with a hard-coded
-            // `d_<slug>.iteration` (when expanding the user `loop_condition`
-            // through this pipeline). A naïve `str::replace("<slug>.",
-            // "d_<slug>.")` would then turn `d_<slug>.iteration` into
-            // `d_d_<slug>.iteration` because the inner `<slug>.iteration`
-            // matches as a substring. The boundary check (prior byte is
-            // not an identifier-continuation byte) stops that.
-            if in_guard {
-                if let Some(s) = guard_src {
-                    if let Some(rewritten) =
-                        replace_word_boundary(&s, &b.referenced, &new_ref)
-                    {
-                        t.guard = Some(TransitionGuard::Rhai { source: rewritten });
-                    }
-                }
-            }
-            if in_logic {
-                if let Some(s) = logic_src {
-                    if let Some(rewritten) =
-                        replace_word_boundary(&s, &b.referenced, &new_ref)
-                    {
-                        t.logic = TransitionLogic::Rhai { source: rewritten };
-                    }
+            if let Some(borrows) = python_borrows_by_consumer.get(node.id.as_str()) {
+                if let Some(clash) = borrows.iter().find(|b| b.slug == field.name) {
+                    return Err(CompileError::OutputFieldShadowsInput {
+                        node_id: node.id.clone(),
+                        field_name: field.name.clone(),
+                        upstream_slug: clash.slug.clone(),
+                        upstream_node_id: clash.producer_node.clone(),
+                    });
                 }
             }
         }
     }
+    drop(python_borrows_by_consumer);
+
+    // Apply every borrow's rewrite + read-arc wiring. Handles guards,
+    // Python envelope staging, HumanTask substring rewriting, and LLM /
+    // Kreuzberg per-field staging in one pass.
+    crate::compiler::borrow::apply_borrows(scenario, interfaces, graph, unified_borrows);
 
     // (c-deadend) Decision deadend enabling-time alignment. The Decision
     //      lowering emits one transition per branch + a default + an unguarded
@@ -763,267 +962,6 @@ fn apply_control_data_foundation(
         }
     }
 
-    // (c2) Python AutomatedStep direct slug access: for every
-    //      `<slug>.<field>` access in a Python step's source, stage the
-    //      producer's parked envelope as `<slug>.json` alongside
-    //      `input.json` (the runner exposes `<slug>` as a Python global so
-    //      `review.invoice_amount` is a plain attribute lookup — no
-    //      `token[...]` ceremony, no IPC). The borrow plan resolves the
-    //      slug to the parked producer via the same machinery as guards.
-    let borrows = automated_step_borrow_plan(graph, inline_sources)?;
-    let mut by_consumer: std::collections::HashMap<String, Vec<_>> =
-        std::collections::HashMap::new();
-    for b in borrows {
-        by_consumer
-            .entry(b.consumer_node_id.clone())
-            .or_default()
-            .push(b);
-    }
-
-    // (c2-pre) Validate declared output.fields on every Python AutomatedStep
-    //      against (a) reserved runner globals (b) slugs this node actually
-    //      borrows. The runner sweeps declared output names from globals()
-    //      after exec(); without these guards, a field named `token` would
-    //      shadow the inbound control token, and a field colliding with a
-    //      borrowed upstream slug would silently re-export the input as
-    //      output. Mirror of runner.rs _RESERVED_GLOBALS (executor-backend) —
-    //      keep both lists in sync when adding new injected globals.
-    const PY_RESERVED_GLOBALS: &[&str] = &[
-        "token",
-        "input",
-        "inputs",
-        "set_output",
-        "load_inputs",
-        "log_info",
-        "log_warn",
-        "log_error",
-        "log_debug",
-        "log_metric",
-        "log_artifact",
-        "update_progress",
-        "define_phases",
-        "update_phase",
-        "aithericon",
-        "sys",
-        "os",
-        "json",
-    ];
-    for node in &graph.nodes {
-        let WorkflowNodeData::AutomatedStep {
-            execution_spec,
-            output,
-            ..
-        } = &node.data
-        else {
-            continue;
-        };
-        if execution_spec.backend_type != crate::models::template::ExecutionBackendType::Python {
-            continue;
-        }
-        for field in &output.fields {
-            if PY_RESERVED_GLOBALS.contains(&field.name.as_str()) {
-                return Err(CompileError::OutputFieldShadowsReserved {
-                    node_id: node.id.clone(),
-                    field_name: field.name.clone(),
-                });
-            }
-            if let Some(borrows) = by_consumer.get(&node.id) {
-                if let Some(clash) = borrows.iter().find(|b| b.slug == field.name) {
-                    return Err(CompileError::OutputFieldShadowsInput {
-                        node_id: node.id.clone(),
-                        field_name: field.name.clone(),
-                        upstream_slug: clash.slug.clone(),
-                        upstream_node_id: clash.producer_node.clone(),
-                    });
-                }
-            }
-        }
-    }
-
-    const BORROW_MARKER: &str = "/*__BORROWED_INPUTS__*/";
-    for (consumer_id, consumer_borrows) in &by_consumer {
-        // Two prepare-transition ID conventions: the inline AutomatedStep
-        // wraps `prepare` under `scoped_prefix({id})` so the id is
-        // `{id}/prepare`; the scheduled lifecycle emits `t_{id}_prepare`
-        // directly. Match either.
-        let prepare_a = format!("{}/prepare", consumer_id);
-        let prepare_b = format!("t_{}_prepare", consumer_id);
-        for t in &mut scenario.transitions {
-            if t.id != prepare_a && t.id != prepare_b {
-                continue;
-            }
-            let mut pushes = String::new();
-            for b in consumer_borrows {
-                let var = format!("d_{}", b.producer_node.replace('-', "_"));
-                let Some(data_place) = interfaces
-                    .get(&b.producer_node)
-                    .and_then(|i| i.data_port.clone())
-                else {
-                    continue;
-                };
-                if !t.input_ports.iter().any(|p| p.name == var) {
-                    t.input_ports.push(ScenarioPort {
-                        name: var.clone(),
-                        schema_ref: Some(def_ref(&data_def_name(&b.producer_node))),
-                        cardinality: "single".to_string(),
-                    });
-                }
-                if !t.inputs.iter().any(|a| a.place == data_place && a.read) {
-                    t.inputs.push(ScenarioArc {
-                        place: data_place.clone(),
-                        port: var.clone(),
-                        weight: 1,
-                        read: true,
-                    });
-                }
-
-                // Hoist business fields from their nested envelope path up to
-                // the top level so the Python runner's `<slug>.<field>` direct
-                // access matches what the picker / `_aithericon_io.pyi` show.
-                // The shape model surfaces e.g. `review.invoice_amount` to the
-                // user even though the parked envelope nests it under `data`
-                // (HumanTask) or `detail.outputs` (AutomatedStep) — Rhai
-                // guards close that gap via `producer_path` rewriting; Python
-                // source isn't rewritten, so the staged envelope must be the
-                // flat form. Spread is "envelope first, business overlay
-                // second", so business fields win on any collision with
-                // envelope meta (e.g. a form field literally named
-                // `task_id`).
-                let producer = graph.nodes.iter().find(|n| n.id == b.producer_node);
-                let hoist_path: &[&str] = match producer.map(|n| &n.data) {
-                    Some(WorkflowNodeData::HumanTask { .. }) => &["data"],
-                    Some(WorkflowNodeData::AutomatedStep { .. }) => &["detail", "outputs"],
-                    _ => &[],
-                };
-                let value_expr = if hoist_path.is_empty() {
-                    var.clone()
-                } else {
-                    let flat = format!("__flat_{}", b.producer_node.replace('-', "_"));
-                    // Build `__flat_x` by copying the envelope (sans the hoist
-                    // segment at the top) then overlaying the nested business
-                    // map. We narrow `__h` segment-by-segment with `type_of` /
-                    // `()`-guard so a missing intermediate key yields an
-                    // empty overlay rather than a Rhai hard error.
-                    pushes.push_str(&format!(
-                        "let {flat} = #{{}}; \
-                         for __k in {var}.keys() {{ \
-                             if __k != \"{top}\" {{ {flat}[__k] = {var}[__k]; }} \
-                         }} \
-                         let __h_{pid} = {var}; ",
-                        flat = flat,
-                        var = var,
-                        top = hoist_path[0],
-                        pid = b.producer_node.replace('-', "_"),
-                    ));
-                    for seg in hoist_path {
-                        pushes.push_str(&format!(
-                            "__h_{pid} = if type_of(__h_{pid}) == \"map\" {{ __h_{pid}[\"{seg}\"] }} else {{ () }}; ",
-                            pid = b.producer_node.replace('-', "_"),
-                            seg = seg,
-                        ));
-                    }
-                    pushes.push_str(&format!(
-                        "if type_of(__h_{pid}) == \"map\" {{ \
-                             for __k in __h_{pid}.keys() {{ {flat}[__k] = __h_{pid}[__k]; }} \
-                         }} ",
-                        pid = b.producer_node.replace('-', "_"),
-                        flat = flat,
-                    ));
-                    flat
-                };
-
-                pushes.push_str(&format!(
-                    r#"job_inputs.push(#{{ "name": "{}.json", "source": #{{ "type": "inline", "value": {} }} }}); "#,
-                    b.slug, value_expr
-                ));
-            }
-            if let TransitionLogic::Rhai { source } = &t.logic {
-                let new_source = source.replace(BORROW_MARKER, &pushes);
-                t.logic = TransitionLogic::Rhai { source: new_source };
-            }
-        }
-    }
-    // Strip leftover markers from prepare transitions that had no borrows.
-    for t in &mut scenario.transitions {
-        if let TransitionLogic::Rhai { source } = &t.logic {
-            if source.contains(BORROW_MARKER) {
-                let new_source = source.replace(BORROW_MARKER, "");
-                t.logic = TransitionLogic::Rhai { source: new_source };
-            }
-        }
-    }
-
-    // (c3) HumanTask placeholder borrows: direct sibling of (c2) for
-    //      AutomatedStep — same read-arc, same `d_<producer>` var, same
-    //      schema ref. `build_human_task_injection_logic` emits the
-    //      wire-edge transition's Rhai against `input` (the inbound slim
-    //      control token) with `__pluck(input, ["<slug>", …])` for every
-    //      slug-qualified placeholder; this phase rewrites those calls
-    //      to `__pluck(d_<producer>, […])` so they resolve against the
-    //      read-arc-bound parked envelope instead. One model.
-    let ht_borrows = human_task_borrow_plan(graph)?;
-    let mut ht_by_consumer: std::collections::HashMap<String, Vec<_>> =
-        std::collections::HashMap::new();
-    for b in ht_borrows {
-        ht_by_consumer
-            .entry(b.consumer_node_id.clone())
-            .or_default()
-            .push(b);
-    }
-    for (consumer_id, consumer_borrows) in &ht_by_consumer {
-        // The wire-edge transition is the one whose output writes to the
-        // HumanTask's `p_<id>_input`. Multi-inbound HumanTasks (rare —
-        // typically only via ParallelJoin) have one such transition per
-        // inbound edge; rewrite each independently.
-        let input_place = format!("p_{}_input", consumer_id);
-        for t in &mut scenario.transitions {
-            if !t.outputs.iter().any(|a| a.place == input_place) {
-                continue;
-            }
-            for b in consumer_borrows {
-                let var = format!("d_{}", b.producer_node.replace('-', "_"));
-                let Some(data_place) = interfaces
-                    .get(&b.producer_node)
-                    .and_then(|i| i.data_port.clone())
-                else {
-                    continue;
-                };
-                // Slug-specific needle: the trailing `, ` (comma+space)
-                // is exactly what `interpolate_to_rhai_expr` emits
-                // between segments via `segs.join(", ")`, so this
-                // matches only the multi-segment case `{{ <slug>.<f> }}`
-                // and never a same-prefix root-level field like
-                // `__pluck(input, ["startle"])` (no trailing comma).
-                let needle = format!(r#"__pluck(input, ["{}", "#, b.slug);
-                let replacement = format!(r#"__pluck({var}, ["#);
-                let source = match &t.logic {
-                    TransitionLogic::Rhai { source } => source.clone(),
-                    _ => continue,
-                };
-                if !source.contains(&needle) {
-                    continue;
-                }
-                if !t.input_ports.iter().any(|p| p.name == var) {
-                    t.input_ports.push(ScenarioPort {
-                        name: var.clone(),
-                        schema_ref: Some(def_ref(&data_def_name(&b.producer_node))),
-                        cardinality: "single".to_string(),
-                    });
-                }
-                if !t.inputs.iter().any(|a| a.place == data_place && a.read) {
-                    t.inputs.push(ScenarioArc {
-                        place: data_place.clone(),
-                        port: var.clone(),
-                        weight: 1,
-                        read: true,
-                    });
-                }
-                t.logic = TransitionLogic::Rhai {
-                    source: source.replace(&needle, &replacement),
-                };
-            }
-        }
-    }
 
     // (d) Safety net: any pre-existing schema ref (effect tokens, DynamicToken)
     //     not in `definitions` gets a permissive `{}` so the runtime
@@ -1749,6 +1687,200 @@ mod tests {
         assert!(i1 < i2, "in_1 must be folded before in_2");
     }
 
+    /// `Join { mode: Any }` with three incoming branches must lower into THREE
+    /// transitions (one per branch), each consuming a dedicated `p_<id>_in_<i>`
+    /// place and depositing into the *same* output and parked data places.
+    /// This is the canonical petri-net XOR-join: any branch firing fires the
+    /// join, no AND-wait. We also assert the parked data place
+    /// (`p_merge_data`) is the published `data_port` so downstream
+    /// `<slug>.<field>` borrows resolve through it.
+    #[test]
+    fn test_join_any_mode_emits_one_transition_per_branch() {
+        // Graph: start -> {b0, b1, b2 (passthrough automated_steps)} -> merge (join any) -> end
+        let start = start_node("start");
+        let mk_step = |id: &str| WorkflowNode {
+            id: id.to_string(),
+            node_type: "automated_step".to_string(),
+            slug: None,
+            position: Position { x: 0.0, y: 0.0 },
+            data: WorkflowNodeData::AutomatedStep {
+                label: format!("step {id}"),
+                description: None,
+                execution_spec: ExecutionSpecConfig {
+                    backend_type: ExecutionBackendType::Docker,
+                    entrypoint: None,
+                    config: serde_json::json!({"image": "alpine:latest"}),
+                },
+                input: Port::empty_input(),
+                output: default_output_port(ExecutionBackendType::Docker),
+                retry_policy: RetryPolicy {
+                    max_retries: 0,
+                    backoff: BackoffKind::Immediate,
+                    base_delay_ms: 0,
+                },
+                deployment_model: Default::default(),
+            },
+            parent_id: None,
+            width: None,
+            height: None,
+        };
+
+        let join_node = WorkflowNode {
+            id: "merge".to_string(),
+            node_type: "join".to_string(),
+            slug: None,
+            position: Position { x: 0.0, y: 0.0 },
+            data: WorkflowNodeData::Join {
+                label: "Merge".to_string(),
+                description: None,
+                mode: JoinMode::Any,
+                merge_strategy: None,
+                output: Port {
+                    id: "out".to_string(),
+                    label: "Output".to_string(),
+                    fields: vec![],
+                },
+            },
+            parent_id: None,
+            width: None,
+            height: None,
+        };
+
+        let graph = WorkflowGraph {
+            nodes: vec![
+                start,
+                mk_step("b0"),
+                mk_step("b1"),
+                mk_step("b2"),
+                join_node,
+                end_node("done"),
+            ],
+            edges: vec![
+                edge("e_s_b0", "start", "b0"),
+                edge("e_s_b1", "start", "b1"),
+                edge("e_s_b2", "start", "b2"),
+                edge("e_b0_m", "b0", "merge"),
+                edge("e_b1_m", "b1", "merge"),
+                edge("e_b2_m", "b2", "merge"),
+                edge("e_m_done", "merge", "done"),
+            ],
+            viewport: None,
+            instance_concurrency: Default::default(),
+        };
+
+        let air = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
+            .expect("Join { mode: Any } must compile");
+        let s = air.to_string();
+
+        // Three branch transitions, one per incoming edge.
+        assert!(
+            s.contains("t_merge_join_0") && s.contains("t_merge_join_1") && s.contains("t_merge_join_2"),
+            "expected three per-branch transitions, got: {s}"
+        );
+        // No single AND-fire transition — that's the All-mode shape.
+        assert!(
+            !s.contains("\"t_merge_join\""),
+            "Any-mode must not emit the All-mode aggregator transition"
+        );
+
+        // Each branch transition must deposit into the SHARED output + data
+        // places. That's the XOR-join's defining property — N → 1.
+        for i in 0..3 {
+            assert!(
+                s.contains(&format!("t_merge_join_{i}")),
+                "missing branch {i} transition"
+            );
+        }
+        assert!(s.contains("p_merge_output"), "missing shared output place");
+        assert!(s.contains("p_merge_data"), "missing shared parked data place");
+    }
+
+    /// `Join { mode: All }` with two branches must lower into a single AND-fire
+    /// transition consuming both input places, mirroring the historical
+    /// `parallel_join` behaviour but additionally staging the merged token in
+    /// the parked `p_<id>_data` place so downstream `<slug>.<field>` borrows
+    /// resolve.
+    #[test]
+    fn test_join_all_mode_emits_single_and_fire() {
+        let join_node = WorkflowNode {
+            id: "j".to_string(),
+            node_type: "join".to_string(),
+            slug: None,
+            position: Position { x: 0.0, y: 0.0 },
+            data: WorkflowNodeData::Join {
+                label: "J".to_string(),
+                description: None,
+                mode: JoinMode::All,
+                merge_strategy: Some(MergeStrategy::ShallowLastWins),
+                output: Port {
+                    id: "out".to_string(),
+                    label: "Output".to_string(),
+                    fields: vec![],
+                },
+            },
+            parent_id: None,
+            width: None,
+            height: None,
+        };
+        let mk_step = |id: &str| WorkflowNode {
+            id: id.to_string(),
+            node_type: "automated_step".to_string(),
+            slug: None,
+            position: Position { x: 0.0, y: 0.0 },
+            data: WorkflowNodeData::AutomatedStep {
+                label: id.to_string(),
+                description: None,
+                execution_spec: ExecutionSpecConfig {
+                    backend_type: ExecutionBackendType::Docker,
+                    entrypoint: None,
+                    config: serde_json::json!({"image": "alpine:latest"}),
+                },
+                input: Port::empty_input(),
+                output: default_output_port(ExecutionBackendType::Docker),
+                retry_policy: RetryPolicy {
+                    max_retries: 0,
+                    backoff: BackoffKind::Immediate,
+                    base_delay_ms: 0,
+                },
+                deployment_model: Default::default(),
+            },
+            parent_id: None,
+            width: None,
+            height: None,
+        };
+        let graph = WorkflowGraph {
+            nodes: vec![
+                start_node("s"),
+                mk_step("a"),
+                mk_step("b"),
+                join_node,
+                end_node("e"),
+            ],
+            edges: vec![
+                edge("e_s_a", "s", "a"),
+                edge("e_s_b", "s", "b"),
+                edge("e_a_j", "a", "j"),
+                edge("e_b_j", "b", "j"),
+                edge("e_j_e", "j", "e"),
+            ],
+            viewport: None,
+            instance_concurrency: Default::default(),
+        };
+
+        let air = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
+            .expect("Join { mode: All } must compile");
+        let s = air.to_string();
+
+        // Single AND-fire transition, not N branch transitions.
+        assert!(s.contains("t_j_join"), "All-mode must keep the single aggregator transition");
+        assert!(!s.contains("t_j_join_0"), "All-mode must not emit per-branch transitions");
+
+        // Merged token still drops at the shared output AND the parked data
+        // place (so `<slug>.<field>` borrows can resolve through `p_j_data`).
+        assert!(s.contains("p_j_output"));
+        assert!(s.contains("p_j_data"));
+    }
+
     fn automated_step_with_retry(id: &str, policy: RetryPolicy) -> WorkflowNode {
         WorkflowNode {
             id: id.to_string(),
@@ -2270,6 +2402,94 @@ mod tests {
         );
     }
 
+    /// The step-execution projector keys input/output attribution off the
+    /// node interface's `owned_transitions` list. AutomatedStep's `prepare`
+    /// transition (which holds the `<slug>.<field>` read-arcs) lives under
+    /// the SDK's `ctx.scoped_prefix({id}, …)`, so its actual id is
+    /// `{id}/prepare` — slash-separated, not the `t_{id}_prepare`
+    /// underscore form. The HumanTask `t_edge_<edge_id>` wire transition
+    /// (which `build_human_task_injection_logic` runs on and is rewritten
+    /// with read-arcs by phase (c3)) is keyed on the edge id and has no
+    /// node prefix at all. Both used to slip past `derive_node_ownership`,
+    /// leaving the projector unable to credit their read_tokens to the
+    /// step row — so the workflow-projection drawer showed empty Inputs
+    /// for HumanTask and AutomatedStep even when the run consumed inputs
+    /// correctly.
+    #[test]
+    fn ownership_credits_scoped_prepare_and_wire_edge_to_consumer_node() {
+        use aithericon_executor_domain::InputSource;
+        use serde_json::json;
+        use std::collections::HashMap;
+
+        // Same invoice-shaped graph as `human_task_borrow_stages_…` —
+        // a HumanTask that the AutomatedStep borrows from.
+        let graph_json = json!({
+          "nodes": [
+            {"id":"start","type":"start","position":{"x":0,"y":0},
+             "data":{"type":"start","label":"Start"}},
+            {"id":"review","type":"human_task","slug":"review",
+             "position":{"x":0,"y":0},
+             "data":{"type":"human_task","label":"Review","taskTitle":"Review",
+                     "steps":[{"id":"s","title":"S","blocks":[
+                       {"type":"input","field":{"name":"vendor_name","label":"V","kind":"text","required":true}},
+                       {"type":"input","field":{"name":"invoice_amount","label":"A","kind":"number","required":true}}
+                     ]}]}},
+            {"id":"extract","type":"automated_step","slug":"extract",
+             "position":{"x":0,"y":0},
+             "data":{"type":"automated_step","label":"Extract",
+                     "executionSpec":{"backendType":"python","entrypoint":"main.py","config":{"entrypoint":"main.py","python":"python3","sdk":true}},
+                     "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
+                     "deploymentModel":{"mode":"inline"}}},
+            {"id":"end","type":"end","position":{"x":0,"y":0},
+             "data":{"type":"end","label":"End"}}
+          ],
+          "edges":[
+            {"id":"e1","source":"start","target":"review","targetHandle":"in","type":"sequence"},
+            {"id":"e2","source":"review","target":"extract","targetHandle":"in","type":"sequence"},
+            {"id":"e3","source":"extract","target":"end","targetHandle":"in","type":"sequence"}
+          ]
+        });
+        let graph: WorkflowGraph = serde_json::from_value(graph_json).unwrap();
+
+        let mut step_files = HashMap::new();
+        step_files.insert(
+            "main.py".to_string(),
+            InputSource::Raw {
+                content: "v = review.vendor_name\na = review.invoice_amount\n".to_string(),
+            },
+        );
+        let mut files: HashMap<String, HashMap<String, InputSource>> = HashMap::new();
+        files.insert("extract".to_string(), step_files);
+
+        let inline_sources: HashMap<String, HashMap<String, String>> = HashMap::new();
+        let (_scenario, interfaces) = compile_to_scenario_and_interfaces(
+            &graph,
+            "ownership-test",
+            "test",
+            &files,
+            &inline_sources,
+            &crate::compiler::SubWorkflowAir::new(),
+        )
+        .expect("compile");
+
+        let extract = interfaces.get("extract").expect("extract interface");
+        assert!(
+            extract
+                .owned_transitions
+                .iter()
+                .any(|t| t == "extract/prepare"),
+            "extract should own its slash-nested `prepare` transition; got: {:?}",
+            extract.owned_transitions
+        );
+
+        let review = interfaces.get("review").expect("review interface");
+        assert!(
+            review.owned_transitions.iter().any(|t| t.starts_with("t_edge_")),
+            "review should own the `t_edge_*` wire transition that feeds its entry place (the wire holds the `<slug>.<field>` read-arcs synthesized for HumanTask injection); got: {:?}",
+            review.owned_transitions
+        );
+    }
+
     /// Non-Python AutomatedStep (e.g. Docker) must still have the marker
     /// stripped — leaving no residual `/*__BORROWED_INPUTS__*/` comment
     /// in the published scenario.
@@ -2748,6 +2968,172 @@ mod tests {
     /// historical `outputs: []` since the runner sweep / strict
     /// validation only exists on the Python runner. Widening this to
     /// other backends needs their own validation path.
+    #[test]
+    /// LLM AutomatedStep with `{{<slug>.<field>}}` borrows in its prompt
+    /// gets rewritten by c4: per-borrow `job_inputs.push` against the
+    /// producer's read-arc'd envelope + the prompt's placeholder strings
+    /// rewritten to `{{input:__borrow_*}}` form the resolver knows.
+    fn llm_prompt_borrow_rewrites_placeholders_and_stages_field() {
+        let json = r#"{
+          "nodes":[
+            {"id":"start","type":"start","slug":"start","position":{"x":0,"y":0},
+             "data":{"type":"start","label":"Start"}},
+            {"id":"review","type":"human_task","slug":"review","position":{"x":0,"y":0},
+             "data":{"type":"human_task","label":"Review","taskTitle":"R",
+                     "steps":[{"id":"s","title":"S","blocks":[
+                       {"type":"input","field":{"name":"vendor_name","label":"V","kind":"text","required":true}}
+                     ]}]}},
+            {"id":"classify","type":"automated_step","slug":"classify","position":{"x":0,"y":0},
+             "data":{"type":"automated_step","label":"Classify",
+                     "executionSpec":{"backendType":"llm","config":{
+                        "provider":"openai","model":"gpt-4o-mini",
+                        "prompt":"Vendor: {{ review.vendor_name }} — classify"
+                     }},
+                     "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
+                     "deploymentModel":{"mode":"inline"}}},
+            {"id":"end","type":"end","position":{"x":0,"y":0},
+             "data":{"type":"end","label":"End"}}
+          ],
+          "edges":[
+            {"id":"e1","source":"start","target":"review","targetHandle":"in","type":"sequence"},
+            {"id":"e2","source":"review","target":"classify","targetHandle":"in","type":"sequence"},
+            {"id":"e3","source":"classify","target":"end","targetHandle":"in","type":"sequence"}
+          ]
+        }"#;
+        let graph: WorkflowGraph = serde_json::from_str(json).expect("deser graph");
+        let scenario = crate::compiler::compile_to_scenario(
+            &graph,
+            "llm-borrow-test",
+            "",
+            &std::collections::HashMap::new(),
+            &crate::compiler::SubWorkflowAir::new(),
+        )
+        .expect("compile llm-borrow graph");
+
+        let prepare = scenario
+            .transitions
+            .iter()
+            .find(|t| t.id == "classify/prepare")
+            .expect("classify prepare transition exists");
+
+        let source = match &prepare.logic {
+            aithericon_sdk::scenario::TransitionLogic::Rhai { source } => source,
+            other => panic!("expected Rhai logic, got {other:?}"),
+        };
+
+        // (1) The c4 phase replaced the BORROW_MARKER with a job_inputs.push.
+        assert!(
+            !source.contains("__BORROWED_INPUTS__"),
+            "marker should be substituted; source: {source}"
+        );
+        assert!(
+            source.contains(r#""name": "__borrow_review__vendor_name""#),
+            "prepare must stage __borrow_review__vendor_name; source: {source}"
+        );
+
+        // (2) The original placeholder `{{ review.vendor_name }}` in the
+        //     embedded config string got rewritten to the resolver-known form.
+        assert!(
+            source.contains("{{input:__borrow_review__vendor_name}}"),
+            "prompt placeholder must rewrite to {{input:__borrow_*}}; source: {source}"
+        );
+        assert!(
+            !source.contains("{{ review.vendor_name }}"),
+            "the original slug.field placeholder should be gone; source: {source}"
+        );
+
+        // (3) The read-arc port + arc landed on prepare.
+        assert!(
+            prepare.input_ports.iter().any(|p| p.name == "d_review"),
+            "d_review input port missing; got: {:?}",
+            prepare.input_ports
+        );
+        assert!(
+            prepare
+                .inputs
+                .iter()
+                .any(|a| a.place == "p_review_data" && a.read),
+            "read-arc into p_review_data missing; got: {:?}",
+            prepare.inputs
+        );
+    }
+
+    /// Kreuzberg with an upstream file ref stages StoragePath against the
+    /// HumanTask's parked FileRef.url, and the `file:` placeholder in the
+    /// config becomes `{{input_path:__borrow_*}}` for the resolver.
+    #[test]
+    fn kreuzberg_upstream_file_ref_rewrites_to_input_path() {
+        let json = r#"{
+          "nodes":[
+            {"id":"start","type":"start","slug":"start","position":{"x":0,"y":0},
+             "data":{"type":"start","label":"Start"}},
+            {"id":"uploader","type":"human_task","slug":"uploader","position":{"x":0,"y":0},
+             "data":{"type":"human_task","label":"U","taskTitle":"U",
+                     "steps":[{"id":"s","title":"S","blocks":[
+                       {"type":"input","field":{"name":"pdf","label":"P","kind":"file","required":true}}
+                     ]}]}},
+            {"id":"ocr","type":"automated_step","slug":"ocr","position":{"x":0,"y":0},
+             "data":{"type":"automated_step","label":"OCR",
+                     "executionSpec":{"backendType":"kreuzberg","config":{"file":"{{ uploader.pdf }}"}},
+                     "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
+                     "deploymentModel":{"mode":"inline"}}},
+            {"id":"end","type":"end","position":{"x":0,"y":0},
+             "data":{"type":"end","label":"End"}}
+          ],
+          "edges":[
+            {"id":"e1","source":"start","target":"uploader","targetHandle":"in","type":"sequence"},
+            {"id":"e2","source":"uploader","target":"ocr","targetHandle":"in","type":"sequence"},
+            {"id":"e3","source":"ocr","target":"end","targetHandle":"in","type":"sequence"}
+          ]
+        }"#;
+        let graph: WorkflowGraph = serde_json::from_str(json).expect("deser graph");
+        let scenario = crate::compiler::compile_to_scenario(
+            &graph,
+            "kz-borrow-test",
+            "",
+            &std::collections::HashMap::new(),
+            &crate::compiler::SubWorkflowAir::new(),
+        )
+        .expect("compile kreuzberg-borrow graph");
+
+        let prepare = scenario
+            .transitions
+            .iter()
+            .find(|t| t.id == "ocr/prepare")
+            .expect("ocr prepare transition exists");
+        let source = match &prepare.logic {
+            aithericon_sdk::scenario::TransitionLogic::Rhai { source } => source,
+            other => panic!("expected Rhai logic, got {other:?}"),
+        };
+
+        // (1) Per-borrow stage with type=storage_path because the field is FieldKind::File.
+        assert!(
+            source.contains(r#""type": "storage_path""#),
+            "File-kind producer must stage StoragePath; source: {source}"
+        );
+        assert!(
+            source.contains(r#""name": "__borrow_uploader__pdf""#),
+            "Kreuzberg must stage __borrow_uploader__pdf; source: {source}"
+        );
+
+        // (2) Config rewrite: `{{ uploader.pdf }}` → `{{input_path:__borrow_uploader__pdf}}`.
+        assert!(
+            source.contains("{{input_path:__borrow_uploader__pdf}}"),
+            "Kreuzberg path-site must rewrite to {{input_path:...}}; source: {source}"
+        );
+        assert!(
+            !source.contains("{{ uploader.pdf }}"),
+            "the original placeholder should be gone; source: {source}"
+        );
+
+        // (3) Read-arc landed.
+        assert!(
+            prepare.input_ports.iter().any(|p| p.name == "d_uploader"),
+            "d_uploader input port missing; got: {:?}",
+            prepare.input_ports
+        );
+    }
+
     #[test]
     fn non_python_automated_step_keeps_empty_outputs_in_prepare_rhai() {
         let json = r#"{

@@ -27,6 +27,7 @@ use mekhan_service::models::template::{
     WorkflowEdge, WorkflowGraph, WorkflowNode, WorkflowNodeData,
 };
 use mekhan_service::nats::MekhanNats;
+use mekhan_service::projections::step_executions::start_step_executions_ingest;
 
 async fn body_json(body: Body) -> Value {
     let bytes = body.collect().await.unwrap().to_bytes();
@@ -274,4 +275,196 @@ async fn automated_step_python_runs_through_executor() {
         }
         tokio::time::sleep(Duration::from_millis(400)).await;
     }
+}
+
+/// `Start → AutomatedStep(python) → End` where the step writes its output
+/// via **native top-level assignment** (`result = "swept"`), not
+/// `set_output`. The runner's post-exec sweep (commit `c61bb8c`) must
+/// promote the declared output from globals into the executor's terminal
+/// status, the engine must thread it onto the AutomatedStep's data port,
+/// and the step-executions projector must materialize it into
+/// `step_execution.outputs`.
+///
+/// Covers the regression caught in `f3145be` where `lower.rs` had been
+/// hardcoding `"outputs": []` in the prepare-transition Rhai — with that
+/// bug, the runner would never know `result` was declared, the sweep
+/// would skip it, and `outputs` would land empty.
+const NATIVE_OUTPUT_MAIN_PY: &str = r#"# Native output assignment — declared port field is "result".
+log_info("native-output e2e ran", task_id=token.get("task_id"))
+result = "swept-by-implicit-output-writes"
+"#;
+
+#[tokio::test]
+async fn automated_step_python_native_assignment_reaches_step_executions() {
+    if !engine_available().await {
+        panic!(
+            "engine not available at {} — start the stack with `just dev up`",
+            engine_url()
+        );
+    }
+
+    let engine_nats_url =
+        std::env::var("ENGINE_NATS_URL").unwrap_or_else(|_| common::nats_url());
+    let (app, db) =
+        common::test_app_with_petri_url(&engine_nats_url, &engine_url()).await;
+
+    let listener_nats = MekhanNats::connect(&engine_nats_url, None).await.expect("nats");
+    let kv = listener_nats
+        .ensure_catalogue_subscriptions_kv()
+        .await
+        .expect("kv");
+    let sub_mgr = std::sync::Arc::new(SubscriptionManager::new(
+        kv,
+        listener_nats.jetstream().clone(),
+    ));
+    let listener_db = db.clone();
+    tokio::spawn(async move {
+        start_lifecycle_listener(
+            listener_nats,
+            listener_db,
+            sub_mgr,
+            None,
+            mekhan_service::triggers::ResultWaiters::new(),
+        )
+        .await;
+    });
+
+    // Spawn a prefixed step-executions consumer so the projector writes
+    // `step_execution` rows we can query — without colliding with the
+    // live dev daemon's durable `mekhan-step-executions`.
+    let step_prefix = format!("test_auto_native_{}", Uuid::new_v4().simple());
+    let step_nats = MekhanNats::connect(&engine_nats_url, None)
+        .await
+        .expect("nats")
+        .with_consumer_prefix(step_prefix);
+    {
+        let step_db = db.clone();
+        tokio::spawn(async move {
+            start_step_executions_ingest(step_nats, step_db).await;
+        });
+    }
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let step_id = "auto-native";
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/templates")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "AutomatedStep Native-Output E2E",
+                        "graph": python_graph(step_id),
+                        "files": { step_id: { "main.py": NATIVE_OUTPUT_MAIN_PY } },
+                        "author_id": Uuid::new_v4(),
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED, "create template");
+    let created = body_json(resp.into_body()).await;
+    let template_id: Uuid = created["id"].as_str().unwrap().parse().unwrap();
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/templates/{template_id}/publish"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    let pub_body = body_json(resp.into_body()).await;
+    assert_eq!(status, StatusCode::OK, "publish: {pub_body}");
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/instances")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "template_id": template_id,
+                        "created_by": Uuid::new_v4(),
+                        "metadata": { "e2e": "automated_step_native_output" }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let inst_status = resp.status();
+    let instance = body_json(resp.into_body()).await;
+    assert_eq!(inst_status, StatusCode::CREATED, "create instance: {instance}");
+    let instance_id: Uuid = instance["id"].as_str().unwrap().parse().unwrap();
+    assert_eq!(instance["status"], "running");
+
+    let deadline = Duration::from_secs(60);
+    let started = std::time::Instant::now();
+    loop {
+        let st: String =
+            sqlx::query_scalar("SELECT status FROM workflow_instances WHERE id = $1")
+                .bind(instance_id)
+                .fetch_one(&db)
+                .await
+                .unwrap();
+        if st == "completed" {
+            break;
+        }
+        assert_ne!(st, "failed", "instance failed — executor job did not succeed");
+        if started.elapsed() > deadline {
+            panic!("instance did not complete within {deadline:?} (status: {st})");
+        }
+        tokio::time::sleep(Duration::from_millis(400)).await;
+    }
+
+    // The step-executions projector folds the executor's terminal-status
+    // outputs into `step_execution.outputs`. With the implicit sweep
+    // wired correctly, the declared `result` field must surface here —
+    // not as null, and not as the raw user code text.
+    //
+    // The lifecycle consumer (which flips `workflow_instances.status` to
+    // `completed`) and the step-executions consumer pull independently
+    // from `petri.events.>`, so the row + outputs land eventually after
+    // the instance shows completed — poll instead of fetch_one.
+    let projection_deadline = Duration::from_secs(30);
+    let projection_started = std::time::Instant::now();
+    let outputs = loop {
+        let row: Option<Option<serde_json::Value>> = sqlx::query_scalar(
+            "SELECT outputs FROM step_execution WHERE instance_id = $1 AND node_id = $2",
+        )
+        .bind(instance_id)
+        .bind(step_id)
+        .fetch_optional(&db)
+        .await
+        .unwrap();
+        if let Some(Some(outputs)) = row {
+            break outputs;
+        }
+        if projection_started.elapsed() > projection_deadline {
+            panic!(
+                "step_execution.outputs for node {step_id} did not materialize within \
+                 {projection_deadline:?} after instance completed (row present: {})",
+                row.is_some(),
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    };
+
+    assert_eq!(
+        outputs.get("result").and_then(|v| v.as_str()),
+        Some("swept-by-implicit-output-writes"),
+        "expected the natively-assigned `result` to reach step_execution.outputs, got: {outputs}"
+    );
 }

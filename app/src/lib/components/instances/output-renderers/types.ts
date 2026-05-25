@@ -22,6 +22,20 @@ export type RenderContext = {
 	/** Where this value is being shown — slight visual tweaks (e.g. inputs get
 	 *  the producer name above; outputs don't). */
 	position: RenderPosition;
+	/** Owning workflow instance id (UUID). Renderers that need to reach back
+	 *  out to instance-scoped backend resources (e.g. AutomatedStepEnvelope
+	 *  fetching live log lines for an execution_id) read this; renderers
+	 *  without that need ignore it. */
+	instanceId?: string;
+	/** Step's ISO start time. AutomatedStepEnvelope uses this as the lower
+	 *  bound when fetching logs for this execution — robust to backends that
+	 *  don't stamp `execution_id` on every log line (e.g. the in-process LLM
+	 *  backend, whose tracing logs route through StreamContext without the
+	 *  IPC sidecar's field auto-stamping). */
+	stepStartedAt?: string;
+	/** Step's ISO completion time. Upper bound for the same log fetch.
+	 *  When the step is still running, the renderer falls back to "now". */
+	stepCompletedAt?: string;
 };
 
 export type RendererProps = {

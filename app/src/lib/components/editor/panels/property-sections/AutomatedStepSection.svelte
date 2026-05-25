@@ -170,11 +170,11 @@
 {:else if data.executionSpec.backendType === 'http'}
 	<HttpConfigPanel config={data.executionSpec.config as Record<string, unknown>} {readonly} onchange={handleConfigChange} />
 {:else if data.executionSpec.backendType === 'llm'}
-	<LlmConfigPanel config={data.executionSpec.config as Record<string, unknown>} {readonly} onchange={handleConfigChange} />
+	<LlmConfigPanel config={data.executionSpec.config as Record<string, unknown>} {readonly} onchange={handleConfigChange} {scope} />
 {:else if data.executionSpec.backendType === 'file_ops'}
 	<FileOpsConfigPanel config={data.executionSpec.config as Record<string, unknown>} {readonly} onchange={handleConfigChange} />
 {:else if data.executionSpec.backendType === 'kreuzberg'}
-	<KreuzbergConfigPanel config={data.executionSpec.config as Record<string, unknown>} {readonly} onchange={handleConfigChange} />
+	<KreuzbergConfigPanel config={data.executionSpec.config as Record<string, unknown>} {readonly} onchange={handleConfigChange} {scope} />
 {:else if data.executionSpec.backendType === 'catalogue_query'}
 	<CatalogueQueryConfigPanel config={data.executionSpec.config as Record<string, unknown>} {readonly} onchange={handleConfigChange} />
 {/if}

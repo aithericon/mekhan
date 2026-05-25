@@ -640,6 +640,43 @@ mod tests {
         }
     }
 
+    /// The bundled document-pipeline-v1 demo's graph.json must parse and the
+    /// merge-extraction node must deserialize as a `Join { mode: Any }`
+    /// (XOR-join — the primitive introduced alongside this test). Then
+    /// re-serialize and round-trip through the standard `WorkflowGraph` /
+    /// `WorkflowNodeData` serde shapes. Sidecar-overlay loading is exercised
+    /// separately by invoice_processing_demo_loads — this test isolates the
+    /// Join variant so a regression in its serde discriminant or field
+    /// defaults surfaces here, not buried under unrelated sidecar parse noise.
+    #[test]
+    fn document_pipeline_v1_join_node_round_trips() {
+        use crate::models::template::{JoinMode, WorkflowGraph, WorkflowNodeData};
+
+        let graph_path =
+            repo_root().join("demos/document-pipeline-v1/graph.json");
+        let raw = std::fs::read_to_string(&graph_path).expect("graph.json must exist");
+        let graph: WorkflowGraph =
+            serde_json::from_str(&raw).expect("graph.json must deserialize as WorkflowGraph");
+
+        let merge = graph
+            .nodes
+            .iter()
+            .find(|n| n.id == "merge-extraction")
+            .expect("merge-extraction node must exist");
+
+        match &merge.data {
+            WorkflowNodeData::Join { mode, output, .. } => {
+                assert_eq!(*mode, JoinMode::Any, "demo uses XOR-join (mode=any)");
+                assert!(
+                    output.fields.iter().any(|f| f.name == "fields"),
+                    "merge-extraction.output must declare a `fields` field — \
+                     persist/main.py borrows extraction.fields through it"
+                );
+            }
+            other => panic!("merge-extraction must be a Join, got {other:?}"),
+        }
+    }
+
     /// A task sidecar targeting a non-HumanTask node is a typo — fail at
     /// load time with a clear pointer, not at publish time with "engine
     /// rejected empty steps" three calls deep.
@@ -738,6 +775,7 @@ mod tests {
             ("04-loop-counter",     "00000000-0000-0000-0000-000000000014", "04 · Loop Counter"),
             ("05-parallel-fanout",  "00000000-0000-0000-0000-000000000015", "05 · Parallel Fanout"),
             ("06-subworkflow",      "00000000-0000-0000-0000-000000000016", "06 · SubWorkflow (Flow-in-Flow)"),
+            ("07-ocr-classify-extract", "00000000-0000-0000-0000-000000000017", "07 · OCR Classify & Extract"),
         ] {
             let demo = load_demo(&root.join(dir_name))
                 .unwrap_or_else(|e| panic!("{dir_name} must load: {e}"));
@@ -787,6 +825,371 @@ mod tests {
         }
     }
 
+    /// `07-ocr-classify-extract` exercises the LLM + Kreuzberg upstream-ref
+    /// borrow plumbing on real bundled fixtures. The Kreuzberg `file` field
+    /// references `{{ start.document }}` (path-site, File kind →
+    /// StoragePath staging); the LLM `prompt` references
+    /// `{{ extract_text.full_text }}` (content-site → Raw staging). Both
+    /// must rewrite to the executor-resolver shape (`{{input_path:…}}` /
+    /// `{{input:…}}`) and emit corresponding `job_inputs.push` snippets in
+    /// the prepare-transition Rhai source. A break here means the LLM/
+    /// Kreuzberg borrow phase regressed on real graphs — the focused unit
+    /// tests in `compile.rs` would still pass but the demo would die at
+    /// publish.
+    #[test]
+    fn ocr_classify_extract_demo_loads_and_compiles_with_borrows() {
+        use crate::compiler::{compile_to_air, node_files_inline};
+
+        let root = repo_root().join("demos");
+        let demo = load_demo(&root.join("07-ocr-classify-extract"))
+            .expect("07-ocr-classify-extract must load");
+        assert_eq!(
+            demo.metadata.template_id,
+            "00000000-0000-0000-0000-000000000017"
+        );
+
+        let files = node_files_inline(&demo.files);
+        let air = compile_to_air(
+            &demo.graph,
+            &demo.metadata.name,
+            demo.metadata.description.as_deref().unwrap_or(""),
+            &files,
+        )
+        .unwrap_or_else(|e| panic!("07-ocr-classify-extract must compile to AIR: {e:?}"));
+
+        let air_str = air.to_string();
+
+        // Kreuzberg borrow: file kind producer → StoragePath staging.
+        // The compiler rewrites `{{ start.document }}` in the Kreuzberg
+        // `file` config to `{{input_path:__borrow_start__document}}` and
+        // emits a matching `job_inputs.push` with `storage_path`.
+        assert!(
+            air_str.contains("__borrow_start__document"),
+            "AIR must reference the start.document borrow input by its generated name; got: {air_str}"
+        );
+        assert!(
+            air_str.contains("input_path:__borrow_start__document"),
+            "Kreuzberg file field must be rewritten to {{input_path:…}}; got: {air_str}"
+        );
+        assert!(
+            air_str.contains("storage_path"),
+            "File-kind borrow must stage via storage_path; got: {air_str}"
+        );
+
+        // LLM borrow: text-kind producer → Raw staging. The compiler
+        // rewrites `{{ extract_text.full_text }}` in the LLM prompt to
+        // `{{input:__borrow_extract_text__full_text}}` and emits a
+        // matching `job_inputs.push` with `raw`.
+        assert!(
+            air_str.contains("__borrow_extract_text__full_text"),
+            "AIR must reference the extract_text.full_text borrow input by its generated name; got: {air_str}"
+        );
+        assert!(
+            air_str.contains("input:__borrow_extract_text__full_text"),
+            "LLM prompt must be rewritten to {{input:…}}; got: {air_str}"
+        );
+
+        // Regression guard: the `job_inputs.push` snippets we emit call
+        // `__pluck(d_<producer>, …)`. The engine registers `__pluck`
+        // natively (see `petri_application::rhai_runtime::register_pluck`),
+        // so transitions only need to reference it — they don't have to
+        // ship the helper definition. The first cut of the LLM/Kreuzberg
+        // borrow phase forgot both ends and shipped AIR that compiled
+        // cleanly but threw "Function not found: __pluck" the first
+        // time the engine tried to fire it; this assertion locks in
+        // the call shape, and the matching execution-level test
+        // (`ocr_classify_extract_demo_prepare_transitions_execute`)
+        // proves the native registration covers it at runtime.
+        assert!(
+            air_str.contains("__pluck(d_start"),
+            "Kreuzberg borrow must call __pluck on producer envelope; got: {air_str}"
+        );
+        assert!(
+            air_str.contains("__pluck(d_extract_text"),
+            "LLM borrow must call __pluck on producer envelope; got: {air_str}"
+        );
+    }
+
+    /// Execution-level companion to
+    /// `ocr_classify_extract_demo_loads_and_compiles_with_borrows`.
+    ///
+    /// The string-level test above asserts the AIR has the right shape;
+    /// this one drives the *actual* Rhai engine the runtime uses
+    /// (`petri_application::rhai_runtime::RhaiRuntime`) against the
+    /// compiled prepare transitions. Catches:
+    ///
+    ///   - Missing `__pluck` registration / prelude — the original bug
+    ///     ("Function not found: __pluck (map, array)" at fire time)
+    ///     was invisible to the compile path but would surface here on
+    ///     the first `eval_with_scope`.
+    ///   - Scope shape drift — the planner's producer-field hoist logic
+    ///     (HumanTask: `.data`, AutomatedStep: `.detail.outputs`, Start:
+    ///     top-level) is encoded in the generated Rhai. If that drifts
+    ///     out of sync with the parked envelope shape the engine actually
+    ///     produces, the eval here returns `()` for the staged value and
+    ///     the assertion below catches it.
+    ///   - Wrong staging strategy — File-kind producer needs `storage_path`
+    ///     with a `.url` pluck; non-File needs `raw` with stringified
+    ///     content. The assertion inspects the returned `job_inputs` map
+    ///     directly, so a swapped dispatch is caught at the source.
+    #[test]
+    fn ocr_classify_extract_demo_prepare_transitions_execute() {
+        use crate::compiler::compile_to_scenario;
+        use crate::compiler::SubWorkflowAir;
+        use aithericon_sdk::scenario::TransitionLogic;
+        use petri_application::rhai_runtime::RhaiRuntime;
+        use rhai::{Dynamic, Map, Scope};
+        use serde_json::json;
+
+        let root = repo_root().join("demos");
+        let demo = load_demo(&root.join("07-ocr-classify-extract"))
+            .expect("07-ocr-classify-extract must load");
+        let files = crate::compiler::node_files_inline(&demo.files);
+        let scenario = compile_to_scenario(
+            &demo.graph,
+            &demo.metadata.name,
+            demo.metadata.description.as_deref().unwrap_or(""),
+            &files,
+            &SubWorkflowAir::new(),
+        )
+        .expect("must compile to scenario");
+
+        // Helper to extract a transition's Rhai source by id-prefix.
+        let prepare_source = |id_prefix: &str| -> String {
+            scenario
+                .transitions
+                .iter()
+                .find(|t| {
+                    t.id == format!("{id_prefix}/prepare")
+                        || t.id == format!("t_{id_prefix}_prepare")
+                })
+                .and_then(|t| match &t.logic {
+                    TransitionLogic::Rhai { source } => Some(source.clone()),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("prepare transition for {id_prefix} not found"))
+        };
+
+        let runtime = RhaiRuntime::new();
+        let engine = runtime.engine();
+
+        // ── Kreuzberg prepare: borrows `start.document` (FieldKind::File)
+        // → staging strategy is `storage_path` with `__pluck(d_start,
+        // ["document", "key"])`.
+        let extract_source = prepare_source("extract_text");
+        let mut scope = Scope::new();
+        scope.push("input", Map::new());
+        // Start envelope shape: input form fields land at the TOP LEVEL of
+        // the seeded token — no `.data` wrapper (unlike HumanTask). The
+        // `parameterize_air` path puts whatever the caller posted directly
+        // into `p_{id}_ready`; uploaded files become FileRef maps under
+        // their declared field name. The FileRef shape mirrors what the
+        // platform's `/api/files/upload/{id}/{node_id}` returns: `key` is
+        // the S3 object key (`templates/{id}/blobs/{node_id}/{filename}`)
+        // and `url` is the platform-facing HTTP endpoint
+        // (`/api/files/<key>`). See `token_shape::
+        // valid_uploaded_file_ref_passes` for the exact shape and
+        // `app/.../CreateInstanceDialog.svelte` for the frontend
+        // construction.
+        let d_start: Dynamic = engine
+            .parse_json(
+                &json!({ "document": {
+                    "key": "templates/abc/blobs/start/uploaded.pdf",
+                    "url": "/api/files/templates/abc/blobs/start/uploaded.pdf",
+                    "filename": "uploaded.pdf",
+                    "content_type": "application/pdf",
+                    "size": 1234
+                } })
+                .to_string(),
+                true,
+            )
+            .expect("d_start parse")
+            .into();
+        scope.push_dynamic("d_start", d_start);
+
+        let result: Map = engine
+            .eval_with_scope(&mut scope, &extract_source)
+            .expect("extract_text/prepare must execute under the synthetic scope");
+
+        let inputs = result
+            .get("job")
+            .and_then(|v| v.clone().try_cast::<Map>())
+            .and_then(|m| m.get("spec").cloned())
+            .and_then(|v| v.try_cast::<Map>())
+            .and_then(|m| m.get("inputs").cloned())
+            .and_then(|v| v.try_cast::<rhai::Array>())
+            .expect("job.spec.inputs must be an array");
+        let borrow_entry = inputs
+            .iter()
+            .filter_map(|v| v.clone().try_cast::<Map>())
+            .find(|m| {
+                m.get("name")
+                    .and_then(|v| v.clone().try_cast::<String>())
+                    .as_deref()
+                    == Some("__borrow_start__document")
+            })
+            .expect("__borrow_start__document must be staged");
+        let source = borrow_entry
+            .get("source")
+            .and_then(|v| v.clone().try_cast::<Map>())
+            .expect("borrow source map");
+        assert_eq!(
+            source
+                .get("type")
+                .and_then(|v| v.clone().try_cast::<String>())
+                .as_deref(),
+            Some("storage_path"),
+            "File-kind producer must stage via storage_path; got: {source:?}"
+        );
+        // The executor's global ArtifactStore concatenates `path` with its
+        // configured prefix to address S3 — `path` must be the S3 key
+        // (FileRef.key), NOT the platform-facing URL (FileRef.url) which
+        // would 404 against S3. Regression for the bug where demo 07's
+        // first live run failed with "Failed to deserialize ExecutionSpec:
+        // missing field `backend`" because the emitted source carried an
+        // empty `storage: {}` AND pointed at `.url` instead of `.key`.
+        assert_eq!(
+            source
+                .get("path")
+                .and_then(|v| v.clone().try_cast::<String>())
+                .as_deref(),
+            Some("templates/abc/blobs/start/uploaded.pdf"),
+            "storage_path must resolve to producer's FileRef.key (the S3 \
+             object key the executor's global ArtifactStore can download); \
+             got: {source:?}"
+        );
+        // `storage` must be ABSENT (Option<StorageConfig>::None) so the
+        // input falls through to the global ArtifactStore. Emitting an
+        // empty `{}` here used to deserialize as a partial `StorageConfig`
+        // and fail with "missing field `backend`" — see
+        // `executor::executor-domain::lib.rs::
+        // input_source_storage_path_backward_compat` for the contract.
+        assert!(
+            !source.contains_key("storage"),
+            "storage key must be omitted so the global ArtifactStore is \
+             used; emitting {{}} would fail StorageConfig deserialization \
+             with 'missing field `backend`'. got: {source:?}"
+        );
+
+        // Belt-and-braces: round-trip the entire `job.spec` map through
+        // `serde_json` -> `aithericon_executor_domain::ExecutionSpec`. This
+        // is the EXACT path
+        // `engine::core-engine::executor::client::build_execution_job`
+        // walks at runtime, so a regression that re-introduces a partial
+        // `storage` map (or any other shape drift) trips here at unit-test
+        // speed instead of at first live execution.
+        {
+            use aithericon_executor_domain::{ExecutionSpec, InputSource};
+            let job_value = result
+                .get("job")
+                .cloned()
+                .and_then(|v| v.try_cast::<Map>())
+                .expect("job map");
+            let spec_dyn = job_value.get("spec").cloned().expect("job.spec");
+            let runtime = RhaiRuntime::new();
+            let spec_json = runtime
+                .dynamic_to_json(spec_dyn)
+                .expect("spec dynamic must convert to JSON");
+            let spec: ExecutionSpec = serde_json::from_value(spec_json.clone())
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "ExecutionSpec must deserialize from the prepare \
+                         transition's emitted spec (regression for the \
+                         empty-storage / wrong-path bug): {e}; spec_json = {}",
+                        serde_json::to_string_pretty(&spec_json).unwrap()
+                    )
+                });
+            assert_eq!(spec.backend, "kreuzberg");
+            let storage_input = spec
+                .inputs
+                .iter()
+                .find(|i| i.name == "__borrow_start__document")
+                .expect("borrow input must round-trip");
+            match &storage_input.source {
+                InputSource::StoragePath { path, storage } => {
+                    assert_eq!(
+                        path, "templates/abc/blobs/start/uploaded.pdf",
+                        "storage_path must carry the S3 key"
+                    );
+                    assert!(
+                        storage.is_none(),
+                        "storage must round-trip as None so the global \
+                         ArtifactStore handles the download"
+                    );
+                }
+                other => panic!("expected StoragePath, got {other:?}"),
+            }
+        }
+
+        // ── LLM prepare: borrows `extract_text.full_text` (FieldKind::Text)
+        // → staging strategy is `raw` with `__pluck(d_extract_text,
+        // ["detail", "outputs", "full_text"])`.
+        let classify_source = prepare_source("classify");
+        let mut scope = Scope::new();
+        scope.push("input", Map::new());
+        // AutomatedStep envelope shape: `detail.outputs.<field>`.
+        let d_extract_text: Dynamic = engine
+            .parse_json(
+                &json!({ "detail": { "outputs": {
+                    "full_text": "Invoice #INV-001 Amount: $1,234.56 Vendor: ACME"
+                } } })
+                .to_string(),
+                true,
+            )
+            .expect("d_extract_text parse")
+            .into();
+        scope.push_dynamic("d_extract_text", d_extract_text);
+
+        let result: Map = engine
+            .eval_with_scope(&mut scope, &classify_source)
+            .expect("classify/prepare must execute under the synthetic scope");
+        let inputs = result
+            .get("job")
+            .and_then(|v| v.clone().try_cast::<Map>())
+            .and_then(|m| m.get("spec").cloned())
+            .and_then(|v| v.try_cast::<Map>())
+            .and_then(|m| m.get("inputs").cloned())
+            .and_then(|v| v.try_cast::<rhai::Array>())
+            .expect("job.spec.inputs must be an array");
+        let borrow_entry = inputs
+            .iter()
+            .filter_map(|v| v.clone().try_cast::<Map>())
+            .find(|m| {
+                m.get("name")
+                    .and_then(|v| v.clone().try_cast::<String>())
+                    .as_deref()
+                    == Some("__borrow_extract_text__full_text")
+            })
+            .expect("__borrow_extract_text__full_text must be staged");
+        let source = borrow_entry
+            .get("source")
+            .and_then(|v| v.clone().try_cast::<Map>())
+            .expect("borrow source map");
+        // Content sites stage via `inline { value }` — the executor's
+        // staging hook (`staging.rs::Inline` arm) serializes `value` as
+        // JSON and writes it to a temp file; the `{{input:NAME}}`
+        // resolver re-parses that JSON when interpolating. For a string
+        // producer field the value is a Rhai-side string and the file
+        // round-trips as a JSON-encoded string — exactly the contract
+        // the resolver expects for `{{input:NAME}}` inside a prompt.
+        assert_eq!(
+            source
+                .get("type")
+                .and_then(|v| v.clone().try_cast::<String>())
+                .as_deref(),
+            Some("inline"),
+            "Content-site (LLM prompt) must stage via inline; got: {source:?}"
+        );
+        assert_eq!(
+            source
+                .get("value")
+                .and_then(|v| v.clone().try_cast::<String>())
+                .as_deref(),
+            Some("Invoice #INV-001 Amount: $1,234.56 Vendor: ACME"),
+            "inline value must be the plucked text; got: {source:?}"
+        );
+    }
+
     /// `06-subworkflow` references `01-hello-world`'s templateId via its
     /// `sub_workflow` node. The seeder publishes demos in lexical order so
     /// `01-` is in place before `06-` resolves — this test pins the
@@ -831,5 +1234,58 @@ mod tests {
             hello_idx < sub_idx,
             "child (01-hello-world @ {hello_idx}) must seed before parent (06-subworkflow @ {sub_idx})"
         );
+    }
+
+    /// Borrow-phase consolidation regression net. Compiles every bundled
+    /// demo that goes through `compile_to_air` (excludes 06-subworkflow,
+    /// which needs publish-time child resolution) and dumps the AIR as
+    /// canonical sorted JSON to stdout. Run with `--nocapture` before and
+    /// after each refactor commit; the two outputs must `diff` clean.
+    ///
+    /// Coverage rationale: 01-05 + 07 + vllm-smoke exercise every borrow
+    /// phase touched by the refactor — c2 (Python), c3 (HumanTask),
+    /// guards (Decision/Loop), c4/c5 (LLM/Kreuzberg upstream refs).
+    ///
+    /// This test always passes; it's a stdout artifact, not an assertion.
+    /// Wrapped with `BORROW_SNAPSHOT_DUMP=1` so it doesn't blast every
+    /// CI run with multi-MB stdout.
+    #[test]
+    fn dump_all_bundled_demo_air_for_regression() {
+        use crate::compiler::{compile_to_air, node_files_inline};
+
+        if std::env::var_os("BORROW_SNAPSHOT_DUMP").is_none() {
+            return;
+        }
+
+        let root = repo_root().join("demos");
+        for dir_name in [
+            "01-hello-world",
+            "02-human-form",
+            "03-decision-routing",
+            "04-loop-counter",
+            "05-parallel-fanout",
+            "07-ocr-classify-extract",
+            "vllm-smoke",
+        ] {
+            let demo = load_demo(&root.join(dir_name))
+                .unwrap_or_else(|e| panic!("{dir_name} must load: {e}"));
+            let files = node_files_inline(&demo.files);
+            let air = compile_to_air(
+                &demo.graph,
+                &demo.metadata.name,
+                demo.metadata.description.as_deref().unwrap_or(""),
+                &files,
+            )
+            .unwrap_or_else(|e| panic!("{dir_name} must compile to AIR: {e:?}"));
+
+            // serde_json::Value with the `preserve_order` feature OFF (the
+            // default) sorts BTreeMap-style on serialization — keys are
+            // canonical. `to_string_pretty` is stable across runs.
+            let canonical = serde_json::to_string_pretty(&air)
+                .expect("AIR must serialize");
+            println!("=== {dir_name} ===");
+            println!("{canonical}");
+            println!("=== /{dir_name} ===");
+        }
     }
 }

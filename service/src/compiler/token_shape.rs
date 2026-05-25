@@ -66,7 +66,7 @@ use serde_json::Value;
 use crate::compiler::error::CompileError;
 use crate::compiler::graph::{topo_order, WorkflowDiGraph};
 use crate::models::template::{
-    FieldKind, MergeStrategy, Port, WorkflowGraph, WorkflowNode, WorkflowNodeData,
+    FieldKind, JoinMode, MergeStrategy, Port, WorkflowGraph, WorkflowNode, WorkflowNodeData,
 };
 
 // ─── Structural token type ──────────────────────────────────────────────────
@@ -623,6 +623,7 @@ fn output_place_ids(node: &WorkflowNode) -> Vec<String> {
             (0..8).map(|i| format!("p_{id}_out_{i}")).collect()
         }
         WorkflowNodeData::ParallelJoin { .. } => vec![format!("p_{id}_output")],
+        WorkflowNodeData::Join { .. } => vec![format!("p_{id}_output")],
         WorkflowNodeData::Loop { .. } => vec![
             format!("p_{id}_body_in"),
             format!("p_{id}_body_out"),
@@ -826,6 +827,7 @@ fn out_shape(node: &WorkflowNode, in_shape: &TokenShape) -> TokenShape {
         WorkflowNodeData::Decision { .. }
         | WorkflowNodeData::ParallelSplit { .. }
         | WorkflowNodeData::ParallelJoin { .. }
+        | WorkflowNodeData::Join { .. }
         | WorkflowNodeData::Scope { .. }
         | WorkflowNodeData::PhaseUpdate { .. }
         | WorkflowNodeData::ProgressUpdate { .. }
@@ -853,11 +855,18 @@ pub fn analyze(graph: &WorkflowGraph) -> Result<ShapeReport, CompileError> {
         let node = *wg.dag.node_weight(*ni).unwrap();
 
         // Inbound = shallow-merge of every DAG predecessor's outbound shape.
-        // (ParallelJoin's strategy can be DeepMerge; honour it.)
+        // (ParallelJoin / Join's strategy can be DeepMerge; honour it.)
         let deep = matches!(
-            node.data,
+            &node.data,
             WorkflowNodeData::ParallelJoin {
                 merge_strategy: MergeStrategy::DeepMerge,
+                ..
+            }
+        ) || matches!(
+            &node.data,
+            WorkflowNodeData::Join {
+                mode: JoinMode::All,
+                merge_strategy: Some(MergeStrategy::DeepMerge),
                 ..
             }
         );
@@ -1002,6 +1011,7 @@ fn is_parked_producer(graph: &WorkflowGraph, id: &str) -> bool {
                     | WorkflowNodeData::SubWorkflow { .. }
                     | WorkflowNodeData::Start { .. }
                     | WorkflowNodeData::Loop { .. }
+                    | WorkflowNodeData::Join { .. }
             )
     })
 }
@@ -1035,11 +1045,17 @@ pub(crate) struct SlugIndex {
 }
 
 impl SlugIndex {
-    fn node_for(&self, slug: &str) -> Option<&str> {
+    pub(crate) fn node_for(&self, slug: &str) -> Option<&str> {
         self.by_slug.get(slug).map(String::as_str)
     }
-    fn slug_for(&self, node_id: &str) -> Option<&str> {
+    pub(crate) fn slug_for(&self, node_id: &str) -> Option<&str> {
         self.by_node.get(node_id).map(String::as_str)
+    }
+    /// Sorted list of every declared slug — used by backend-ref error
+    /// messages to suggest alternatives for typo'd `{{<slug>.<field>}}`
+    /// references.
+    pub(crate) fn all_slugs(&self) -> Vec<&str> {
+        self.by_slug.keys().map(String::as_str).collect()
     }
 }
 
@@ -2121,6 +2137,392 @@ pub(crate) fn human_task_borrow_plan(
     Ok(out)
 }
 
+// ──────────────────────────────────────────────────────────────────────
+// LLM / Kreuzberg borrow planners
+//
+// Symmetric extension of [`human_task_borrow_plan`] / [`automated_step_borrow_plan`]
+// to LLM and Kreuzberg AutomatedSteps. The same `{{ <slug>.<field> }}`
+// syntax HumanTask uses for placeholders is supported in:
+//
+//   - LLM `prompt`, `system_prompt`, `history[].content` (content sites)
+//   - LLM `images[].path` (path site — producer field must be FieldKind::File)
+//   - Kreuzberg `file`, `files[]` (path sites — any field kind allowed;
+//     non-file kinds stage as Raw temp file so the path resolves to text)
+//
+// Critical difference from the Python planner: where Python silently
+// ignores unknown heads (`os.path`, locals, etc.), LLM/Kreuzberg HARD-
+// REJECT unknown slugs and unknown fields. The `{{...}}` syntax is
+// unambiguous; an unknown slug is a typo, an unknown field a contract
+// violation. Matches Decision-guard semantics (`GuardUnresolved`).
+// ──────────────────────────────────────────────────────────────────────
+
+/// Where on an LLM AutomatedStep's config a `{{<slug>.<field>}}` placeholder
+/// was found. Drives error messages and the staging-strategy dispatch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum LlmRefSite {
+    Prompt,
+    SystemPrompt,
+    HistoryContent(usize),
+    ImagePath(usize),
+}
+
+impl LlmRefSite {
+    /// Author-facing field name for error messages.
+    fn label(&self) -> String {
+        match self {
+            Self::Prompt => "prompt".into(),
+            Self::SystemPrompt => "system_prompt".into(),
+            Self::HistoryContent(i) => format!("history[{i}].content"),
+            Self::ImagePath(i) => format!("images[{i}].path"),
+        }
+    }
+
+    /// Path-sites need a filesystem path; content-sites need stringified
+    /// content. Drives the `{{input:...}}` vs `{{input_path:...}}` rewrite
+    /// in the foundation pass.
+    pub(crate) fn is_path_site(&self) -> bool {
+        matches!(self, Self::ImagePath(_))
+    }
+}
+
+/// One scanned `{{<slug>.<attr>}}` borrow on an LLM AutomatedStep.
+///
+/// One record per occurrence — the foundation pass groups them by
+/// `(consumer, slug, attr)` for staging and by `(consumer, producer)`
+/// for read-arc wiring. Distinct attr's on the same producer are stage
+/// per attr (the staged file is a *field value*, not the whole envelope —
+/// LLM consumers want strings, not blobs).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LlmDataBorrow {
+    pub consumer_node_id: String,
+    pub slug: String,
+    pub producer_node: String,
+    pub attr: String,
+    pub site: LlmRefSite,
+    /// FieldKind of `<attr>` on the producer's data output port. Used by
+    /// the foundation pass to pick Raw vs StoragePath staging.
+    pub producer_field_kind: crate::models::template::FieldKind,
+}
+
+/// Where on a Kreuzberg AutomatedStep's config a placeholder was found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum KreuzbergRefSite {
+    File,
+    Files(usize),
+}
+
+impl KreuzbergRefSite {
+    fn label(&self) -> String {
+        match self {
+            Self::File => "file".into(),
+            Self::Files(i) => format!("files[{i}]"),
+        }
+    }
+}
+
+/// One scanned `{{<slug>.<attr>}}` borrow on a Kreuzberg AutomatedStep.
+/// Kreuzberg always needs a path — the foundation pass uses
+/// `producer_field_kind` to decide between StoragePath (File kind →
+/// download binary from S3) and Raw (other kinds → write stringified
+/// value to a temp file). Either way the in-config placeholder rewrites
+/// to `{{input_path:...}}`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct KreuzbergDataBorrow {
+    pub consumer_node_id: String,
+    pub slug: String,
+    pub producer_node: String,
+    pub attr: String,
+    pub site: KreuzbergRefSite,
+    pub producer_field_kind: crate::models::template::FieldKind,
+}
+
+/// Resolve a `{{<slug>.<attr>}}` placeholder against the graph. Common
+/// validation used by both the LLM and Kreuzberg planners.
+///
+/// Returns the producer node id and the resolved field kind on its data
+/// port. Hard-errors on: unknown slug, slug not strictly upstream, slug
+/// not a parked producer, unknown field on the producer's port.
+fn resolve_backend_ref(
+    graph: &WorkflowGraph,
+    slugs: &SlugIndex,
+    pos: &BTreeMap<String, usize>,
+    consumer_id: &str,
+    backend_label: &str,
+    site_label: &str,
+    slug: &str,
+    attr: &str,
+) -> Result<(String, crate::models::template::FieldKind), CompileError> {
+    use crate::models::template::WorkflowNodeData;
+
+    // Unknown slug → BackendRefUnresolved (kind="slug").
+    let Some(prod_id) = slugs.node_for(slug).map(str::to_string) else {
+        return Err(CompileError::BackendRefUnresolved {
+            node_id: consumer_id.to_string(),
+            backend: backend_label.to_string(),
+            site: site_label.to_string(),
+            slug: slug.to_string(),
+            field: attr.to_string(),
+            kind: "slug".to_string(),
+            name: slug.to_string(),
+            available: slugs.all_slugs().into_iter().map(str::to_string).collect(),
+        });
+    };
+
+    if prod_id == consumer_id {
+        return Err(CompileError::BackendRefNotUpstream {
+            node_id: consumer_id.to_string(),
+            backend: backend_label.to_string(),
+            site: site_label.to_string(),
+            slug: slug.to_string(),
+            field: attr.to_string(),
+            producer_node_id: prod_id,
+        });
+    }
+
+    let up = pos.get(&prod_id).copied().unwrap_or(usize::MAX);
+    let me = pos.get(consumer_id).copied().unwrap_or(0);
+    if up >= me {
+        return Err(CompileError::BackendRefNotUpstream {
+            node_id: consumer_id.to_string(),
+            backend: backend_label.to_string(),
+            site: site_label.to_string(),
+            slug: slug.to_string(),
+            field: attr.to_string(),
+            producer_node_id: prod_id,
+        });
+    }
+
+    if !is_parked_producer(graph, &prod_id) {
+        return Err(CompileError::BackendRefNotUpstream {
+            node_id: consumer_id.to_string(),
+            backend: backend_label.to_string(),
+            site: site_label.to_string(),
+            slug: slug.to_string(),
+            field: attr.to_string(),
+            producer_node_id: prod_id,
+        });
+    }
+
+    // Resolve `<attr>` on the producer's data port (first output port,
+    // mirroring how interface.data_port is assigned in lowering).
+    let producer_node = graph
+        .nodes
+        .iter()
+        .find(|n| n.id == prod_id)
+        .ok_or_else(|| CompileError::Compilation(format!("producer node '{prod_id}' not found")))?;
+
+    let data_port = producer_node
+        .data
+        .output_ports()
+        .into_iter()
+        .next()
+        .ok_or_else(|| CompileError::BackendRefUnresolved {
+            node_id: consumer_id.to_string(),
+            backend: backend_label.to_string(),
+            site: site_label.to_string(),
+            slug: slug.to_string(),
+            field: attr.to_string(),
+            kind: "field".to_string(),
+            name: attr.to_string(),
+            available: vec![],
+        })?;
+
+    let Some(field) = data_port.fields.iter().find(|f| f.name == attr) else {
+        // Trigger nodes synthesize an empty pass-through port at the model
+        // level but their actual envelope shape is the resolved target
+        // port. Trigger borrows defer to `<slug>` as the whole envelope
+        // (single-segment placeholder), so unknown attrs on Trigger
+        // surface here. Mirror the rest of the planner: hard error.
+        return Err(CompileError::BackendRefUnresolved {
+            node_id: consumer_id.to_string(),
+            backend: backend_label.to_string(),
+            site: site_label.to_string(),
+            slug: slug.to_string(),
+            field: attr.to_string(),
+            kind: "field".to_string(),
+            name: attr.to_string(),
+            available: data_port.fields.iter().map(|f| f.name.clone()).collect(),
+        });
+    };
+
+    // Trigger producers carry a typed port at compile resolve time but
+    // their shape can change with retargeting — skip kind enforcement
+    // here. (Triggers are uncommon as direct borrow producers.)
+    let _ = matches!(producer_node.data, WorkflowNodeData::Trigger { .. });
+
+    Ok((prod_id, field.kind))
+}
+
+/// For every LLM AutomatedStep, scan its `prompt` / `system_prompt` /
+/// `history[].content` / `images[].path` strings for
+/// `{{<slug>.<field>}}` placeholders and resolve each to an upstream
+/// parked producer.
+///
+/// One record per `(consumer, slug, attr, site)` quad — duplicates within
+/// the same site are NOT deduped (the foundation pass groups for staging).
+/// Returns `Err` on the first unresolved reference.
+pub(crate) fn llm_borrow_plan(
+    graph: &WorkflowGraph,
+) -> Result<Vec<LlmDataBorrow>, CompileError> {
+    use crate::compiler::placeholder_refs::scan_placeholders;
+    use crate::models::template::{ExecutionBackendType, FieldKind, WorkflowNodeData};
+
+    let wg = WorkflowDiGraph::build(graph)?;
+    let order = topo_order(&wg)?;
+    let pos = topo_pos(&order, &wg);
+    let slugs = slug_index(graph)?;
+
+    let mut out: Vec<LlmDataBorrow> = Vec::new();
+
+    for node in &graph.nodes {
+        let WorkflowNodeData::AutomatedStep { execution_spec, .. } = &node.data else {
+            continue;
+        };
+        if execution_spec.backend_type != ExecutionBackendType::Llm {
+            continue;
+        }
+        // Deserialize the LLM config to walk the string fields.
+        let Ok(cfg) = serde_json::from_value::<aithericon_executor_backend_configs::llm::LlmConfig>(
+            execution_spec.config.clone(),
+        ) else {
+            // Malformed config — `validate_and_transform` will surface a
+            // structured error before this planner is called in practice,
+            // but be defensive and skip cleanly.
+            continue;
+        };
+
+        // (site, string-to-scan)
+        let mut sites: Vec<(LlmRefSite, String)> = Vec::new();
+        sites.push((LlmRefSite::Prompt, cfg.prompt.clone()));
+        if let Some(sys) = cfg.system_prompt.clone() {
+            sites.push((LlmRefSite::SystemPrompt, sys));
+        }
+        for (i, m) in cfg.history.iter().enumerate() {
+            sites.push((LlmRefSite::HistoryContent(i), m.content.clone()));
+        }
+        for (i, img) in cfg.images.iter().enumerate() {
+            sites.push((LlmRefSite::ImagePath(i), img.path.clone()));
+        }
+
+        for (site, raw) in sites {
+            for r in scan_placeholders(&raw) {
+                let site_label = site.label();
+                let (prod_id, kind) = resolve_backend_ref(
+                    graph,
+                    &slugs,
+                    &pos,
+                    &node.id,
+                    "llm",
+                    &site_label,
+                    &r.head,
+                    &r.attr,
+                )?;
+
+                // ImagePath site requires File kind — LLM vision needs real bytes.
+                if site.is_path_site() && kind != FieldKind::File {
+                    return Err(CompileError::LlmImageRefNotFileKind {
+                        node_id: node.id.clone(),
+                        site: site_label,
+                        slug: r.head.clone(),
+                        field: r.attr.clone(),
+                        actual_kind: format!("{kind:?}").to_lowercase(),
+                    });
+                }
+                // Content-site + File-kind producer — interpolating a File
+                // envelope (URL + filename JSON) into a prompt would emit
+                // structural garbage, not the content the author wants.
+                // Hard-reject; the user should add a Kreuzberg step to OCR
+                // the file first.
+                if !site.is_path_site() && kind == FieldKind::File {
+                    return Err(CompileError::LlmImageRefNotFileKind {
+                        node_id: node.id.clone(),
+                        site: site_label,
+                        slug: r.head.clone(),
+                        field: r.attr.clone(),
+                        actual_kind: "file (only valid in images[].path; add a Kreuzberg step to OCR)".to_string(),
+                    });
+                }
+
+                out.push(LlmDataBorrow {
+                    consumer_node_id: node.id.clone(),
+                    slug: r.head,
+                    producer_node: prod_id,
+                    attr: r.attr,
+                    site: site.clone(),
+                    producer_field_kind: kind,
+                });
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// For every Kreuzberg AutomatedStep, scan its `file` / `files[]`
+/// strings for `{{<slug>.<field>}}` placeholders. Kreuzberg accepts any
+/// field kind — text fields stage as Raw temp file, File fields stage as
+/// StoragePath (S3 download); either way the in-config placeholder
+/// resolves to a filesystem path the backend can OCR.
+pub(crate) fn kreuzberg_borrow_plan(
+    graph: &WorkflowGraph,
+) -> Result<Vec<KreuzbergDataBorrow>, CompileError> {
+    use crate::compiler::placeholder_refs::scan_placeholders;
+    use crate::models::template::{ExecutionBackendType, WorkflowNodeData};
+
+    let wg = WorkflowDiGraph::build(graph)?;
+    let order = topo_order(&wg)?;
+    let pos = topo_pos(&order, &wg);
+    let slugs = slug_index(graph)?;
+
+    let mut out: Vec<KreuzbergDataBorrow> = Vec::new();
+
+    for node in &graph.nodes {
+        let WorkflowNodeData::AutomatedStep { execution_spec, .. } = &node.data else {
+            continue;
+        };
+        if execution_spec.backend_type != ExecutionBackendType::Kreuzberg {
+            continue;
+        }
+        let Ok(cfg) = serde_json::from_value::<
+            aithericon_executor_backend_configs::kreuzberg::KreuzbergConfig,
+        >(execution_spec.config.clone()) else {
+            continue;
+        };
+
+        let mut sites: Vec<(KreuzbergRefSite, String)> = Vec::new();
+        if let Some(f) = cfg.file.clone() {
+            sites.push((KreuzbergRefSite::File, f));
+        }
+        for (i, f) in cfg.files.iter().enumerate() {
+            sites.push((KreuzbergRefSite::Files(i), f.clone()));
+        }
+
+        for (site, raw) in sites {
+            for r in scan_placeholders(&raw) {
+                let site_label = site.label();
+                let (prod_id, kind) = resolve_backend_ref(
+                    graph,
+                    &slugs,
+                    &pos,
+                    &node.id,
+                    "kreuzberg",
+                    &site_label,
+                    &r.head,
+                    &r.attr,
+                )?;
+                out.push(KreuzbergDataBorrow {
+                    consumer_node_id: node.id.clone(),
+                    slug: r.head,
+                    producer_node: prod_id,
+                    attr: r.attr,
+                    site: site.clone(),
+                    producer_field_kind: kind,
+                });
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// Per-node, per-slug field map — the picker model pivoted from a flat
 /// list to `slug → fields`. Drives the Python `.pyi` overlay's one
 /// `class _<Slug>NS:` per upstream producer so the IDE autocompletes
@@ -2874,6 +3276,224 @@ mod scope_reachability_tests {
         assert!(
             borrows.is_empty(),
             "unknown slugs and root-level placeholders must not become borrows; got: {borrows:?}"
+        );
+    }
+
+    // ──────────────────────────────────────────────────────────────────
+    // LLM / Kreuzberg borrow planner tests
+    // ──────────────────────────────────────────────────────────────────
+
+    /// Fixture: Start → review (HumanTask: invoice_amount:number, vendor_name:text)
+    ///          → ocr_step (Kreuzberg, attached PDF, outputs content:text)
+    ///          → classify (LLM, prompt references {{review.vendor_name}} +
+    ///                      {{ocr_step.content}})
+    ///          → end
+    fn ocr_classify_graph(prompt: &str) -> WorkflowGraph {
+        let json = format!(
+            r#"{{
+              "nodes": [
+                {{"id":"s","type":"start","slug":"start","position":{{"x":0,"y":0}},
+                 "data":{{"type":"start","label":"Start"}}}},
+                {{"id":"review","type":"human_task","slug":"review","position":{{"x":0,"y":0}},
+                 "data":{{"type":"human_task","label":"Review","taskTitle":"R",
+                         "steps":[{{"id":"s1","title":"S","blocks":[
+                           {{"type":"input","field":{{"name":"invoice_amount","label":"A","kind":"number","required":true}}}},
+                           {{"type":"input","field":{{"name":"vendor_name","label":"V","kind":"text","required":true}}}},
+                           {{"type":"input","field":{{"name":"invoice_pdf","label":"P","kind":"file","required":true}}}}
+                         ]}}]}}}},
+                {{"id":"ocr_step","type":"automated_step","slug":"ocr_step","position":{{"x":0,"y":0}},
+                 "data":{{"type":"automated_step","label":"OCR",
+                         "executionSpec":{{"backendType":"kreuzberg","config":{{"file":"sample.pdf"}}}},
+                         "retryPolicy":{{"maxRetries":0,"strategy":{{"type":"immediate"}}}},
+                         "deploymentModel":{{"mode":"inline"}},
+                         "output":{{"id":"out","label":"out","fields":[
+                           {{"name":"content","label":"Content","kind":"text","required":true}}
+                         ]}}}}}},
+                {{"id":"classify","type":"automated_step","slug":"classify","position":{{"x":0,"y":0}},
+                 "data":{{"type":"automated_step","label":"Classify",
+                         "executionSpec":{{"backendType":"llm","config":{{
+                            "provider":"openai","model":"gpt-4o-mini",
+                            "prompt":{prompt}
+                         }}}},
+                         "retryPolicy":{{"maxRetries":0,"strategy":{{"type":"immediate"}}}},
+                         "deploymentModel":{{"mode":"inline"}},
+                         "output":{{"id":"out","label":"out","fields":[
+                           {{"name":"klass","label":"K","kind":"text","required":true}}
+                         ]}}}}}},
+                {{"id":"end","type":"end","position":{{"x":0,"y":0}},
+                 "data":{{"type":"end","label":"End"}}}}
+              ],
+              "edges":[
+                {{"id":"e1","source":"s","target":"review","type":"sequence"}},
+                {{"id":"e2","source":"review","target":"ocr_step","type":"sequence"}},
+                {{"id":"e3","source":"ocr_step","target":"classify","type":"sequence"}},
+                {{"id":"e4","source":"classify","target":"end","type":"sequence"}}
+              ]
+            }}"#,
+            prompt = prompt
+        );
+        serde_json::from_str(&json).expect("deser ocr_classify graph")
+    }
+
+    #[test]
+    fn llm_prompt_simple_borrow() {
+        let g = ocr_classify_graph(r#""Classify: {{ ocr_step.content }} for {{ review.vendor_name }}""#);
+        let borrows = llm_borrow_plan(&g).expect("llm borrow plan");
+
+        let by_attr: Vec<(String, String)> = borrows
+            .iter()
+            .map(|b| (b.slug.clone(), b.attr.clone()))
+            .collect();
+        assert!(by_attr.contains(&("ocr_step".into(), "content".into())));
+        assert!(by_attr.contains(&("review".into(), "vendor_name".into())));
+        for b in &borrows {
+            assert_eq!(b.consumer_node_id, "classify");
+            assert_eq!(b.site, LlmRefSite::Prompt);
+        }
+    }
+
+    #[test]
+    fn llm_unknown_slug_is_hard_error() {
+        let g = ocr_classify_graph(r#""Classify: {{ typo_slug.content }}""#);
+        let err = llm_borrow_plan(&g).expect_err("unknown slug must error");
+        match err {
+            CompileError::BackendRefUnresolved {
+                backend,
+                kind,
+                name,
+                slug,
+                ..
+            } => {
+                assert_eq!(backend, "llm");
+                assert_eq!(kind, "slug");
+                assert_eq!(name, "typo_slug");
+                assert_eq!(slug, "typo_slug");
+            }
+            other => panic!("expected BackendRefUnresolved(slug), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn llm_unknown_field_on_known_slug_is_hard_error() {
+        let g = ocr_classify_graph(r#""Classify: {{ ocr_step.no_such_field }}""#);
+        let err = llm_borrow_plan(&g).expect_err("unknown field must error");
+        match err {
+            CompileError::BackendRefUnresolved {
+                kind,
+                name,
+                slug,
+                field,
+                available,
+                ..
+            } => {
+                assert_eq!(kind, "field");
+                assert_eq!(name, "no_such_field");
+                assert_eq!(slug, "ocr_step");
+                assert_eq!(field, "no_such_field");
+                assert!(
+                    available.contains(&"content".to_string()),
+                    "available fields must include 'content', got {available:?}"
+                );
+            }
+            other => panic!("expected BackendRefUnresolved(field), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn llm_content_site_rejects_file_kind_producer() {
+        // Interpolating a File-kind upstream into a text prompt is nonsense.
+        let g = ocr_classify_graph(r#""Inline PDF? {{ review.invoice_pdf }}""#);
+        let err = llm_borrow_plan(&g).expect_err("file-kind in prompt must error");
+        assert!(matches!(err, CompileError::LlmImageRefNotFileKind { .. }));
+    }
+
+    #[test]
+    fn llm_no_placeholders_yields_no_borrows() {
+        let g = ocr_classify_graph(r#""Just a static prompt, no placeholders""#);
+        let borrows = llm_borrow_plan(&g).expect("llm borrow plan");
+        assert!(borrows.is_empty());
+    }
+
+    #[test]
+    fn kreuzberg_borrow_resolves_file_kind() {
+        // Two AutomatedSteps:
+        //   1. uploader (HumanTask, slug=uploader, file field "pdf")
+        //   2. ocr (Kreuzberg, file: "{{uploader.pdf}}")
+        let json = r#"{
+          "nodes": [
+            {"id":"s","type":"start","slug":"start","position":{"x":0,"y":0},
+             "data":{"type":"start","label":"Start"}},
+            {"id":"uploader","type":"human_task","slug":"uploader","position":{"x":0,"y":0},
+             "data":{"type":"human_task","label":"U","taskTitle":"U",
+                     "steps":[{"id":"s1","title":"S","blocks":[
+                       {"type":"input","field":{"name":"pdf","label":"P","kind":"file","required":true}}
+                     ]}]}},
+            {"id":"ocr","type":"automated_step","slug":"ocr","position":{"x":0,"y":0},
+             "data":{"type":"automated_step","label":"OCR",
+                     "executionSpec":{"backendType":"kreuzberg","config":{"file":"{{ uploader.pdf }}"}},
+                     "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
+                     "deploymentModel":{"mode":"inline"}}},
+            {"id":"end","type":"end","position":{"x":0,"y":0},
+             "data":{"type":"end","label":"End"}}
+          ],
+          "edges":[
+            {"id":"e1","source":"s","target":"uploader","type":"sequence"},
+            {"id":"e2","source":"uploader","target":"ocr","type":"sequence"},
+            {"id":"e3","source":"ocr","target":"end","type":"sequence"}
+          ]
+        }"#;
+        let g: WorkflowGraph = serde_json::from_str(json).expect("deser graph");
+        let borrows = kreuzberg_borrow_plan(&g).expect("kreuzberg borrow plan");
+        assert_eq!(borrows.len(), 1, "got: {borrows:?}");
+        let b = &borrows[0];
+        assert_eq!(b.consumer_node_id, "ocr");
+        assert_eq!(b.slug, "uploader");
+        assert_eq!(b.producer_node, "uploader");
+        assert_eq!(b.attr, "pdf");
+        assert_eq!(b.site, KreuzbergRefSite::File);
+        assert_eq!(
+            b.producer_field_kind,
+            crate::models::template::FieldKind::File
+        );
+    }
+
+    #[test]
+    fn kreuzberg_allows_text_kind_fields() {
+        // Kreuzberg over an LLM's text output — temp-file path of the
+        // stringified content. Compiler accepts; foundation pass handles
+        // the Raw staging.
+        let json = r#"{
+          "nodes": [
+            {"id":"s","type":"start","slug":"start","position":{"x":0,"y":0},
+             "data":{"type":"start","label":"Start"}},
+            {"id":"genreport","type":"automated_step","slug":"genreport","position":{"x":0,"y":0},
+             "data":{"type":"automated_step","label":"Gen",
+                     "executionSpec":{"backendType":"llm","config":{"provider":"openai","model":"x","prompt":"hello"}},
+                     "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
+                     "deploymentModel":{"mode":"inline"},
+                     "output":{"id":"out","label":"out","fields":[
+                       {"name":"narrative","label":"N","kind":"text","required":true}
+                     ]}}},
+            {"id":"reocr","type":"automated_step","slug":"reocr","position":{"x":0,"y":0},
+             "data":{"type":"automated_step","label":"ReOCR",
+                     "executionSpec":{"backendType":"kreuzberg","config":{"file":"{{ genreport.narrative }}"}},
+                     "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
+                     "deploymentModel":{"mode":"inline"}}},
+            {"id":"end","type":"end","position":{"x":0,"y":0},
+             "data":{"type":"end","label":"End"}}
+          ],
+          "edges":[
+            {"id":"e1","source":"s","target":"genreport","type":"sequence"},
+            {"id":"e2","source":"genreport","target":"reocr","type":"sequence"},
+            {"id":"e3","source":"reocr","target":"end","type":"sequence"}
+          ]
+        }"#;
+        let g: WorkflowGraph = serde_json::from_str(json).expect("deser graph");
+        let borrows = kreuzberg_borrow_plan(&g).expect("kreuzberg borrow plan");
+        assert_eq!(borrows.len(), 1);
+        assert_eq!(
+            borrows[0].producer_field_kind,
+            crate::models::template::FieldKind::Text
         );
     }
 }

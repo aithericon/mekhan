@@ -1,0 +1,5 @@
+{
+  "templateId": "00000000-0000-0000-0000-000000000050",
+  "name": "Document Pipeline v1 (Intake DAG)",
+  "description": "Patient-uploaded medical document → kreuzberg OCR → vision-LLM classification → class-discriminant extraction (5 branches: bloodwork, prescription, clinical note, form fields, generic) → persistence → citation verification → optional medical-assistant review. Ports the online-clinic document_pipeline_v1 onto mekhan primitives (automated_step + decision + human_task), using the Petri-net engine's read-arc model so each extractor borrows {{ ocr.full_text }} / {{ start.document_file }} non-consuming."
+}

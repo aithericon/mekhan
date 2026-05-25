@@ -109,6 +109,18 @@
 		}
 	}
 
+	async function handleDescriptionChange(description: string) {
+		if (!template) return;
+		const prev = template;
+		template = { ...template, description }; // optimistic
+		try {
+			template = await updateTemplate(templateId, { description });
+		} catch (e) {
+			template = prev;
+			error = e instanceof Error ? e.message : 'Failed to update description';
+		}
+	}
+
 	async function handlePreview() {
 		try {
 			// Snapshot per-node files so the preview AIR shows the same staging
@@ -239,6 +251,7 @@
 	<div class="flex h-full flex-col" data-testid="template-editor-page">
 		<EditorToolbar
 			templateName={template?.name ?? 'New Workflow'}
+			templateDescription={template?.description ?? null}
 			published={template?.published ?? false}
 			{saving}
 			{templateId}
@@ -250,6 +263,7 @@
 			onnewversion={handleNewVersion}
 			onrun={handleRun}
 			onrename={handleRename}
+			ondescriptionchange={handleDescriptionChange}
 		/>
 
 		{#if error}

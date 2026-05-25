@@ -6,6 +6,7 @@
 	import X from '@lucide/svelte/icons/x';
 	import Settings2 from '@lucide/svelte/icons/settings-2';
 	import type { StepExecution, WorkflowNode } from '$lib/api/client';
+	import type { NodeInterface } from '$lib/types/node-interface';
 	import { nodeKindMeta } from './node-kind-meta';
 	import { SmartValue } from './output-renderers';
 
@@ -14,10 +15,19 @@
 		/** The node from the template graph this step instantiates. Optional —
 		 *  the drawer degrades gracefully when not supplied (e.g. older callers). */
 		node?: WorkflowNode | null;
+		/** The compiler-derived interface for this node. Carries the
+		 *  `borrowed_paths` map (`producer_node_id → [attr, …]`) the drawer
+		 *  uses to surface "what fields this step actually read" from each
+		 *  upstream envelope. */
+		nodeInterface?: NodeInterface | null;
 		/** Every iteration of this node in the current instance (oldest → newest).
 		 *  Drives the iteration picker for Loop bodies. When omitted or
 		 *  single-element, the picker is hidden. */
 		iterations?: StepExecution[];
+		/** Owning workflow instance id. Forwarded into the renderer context so
+		 *  envelope renderers can resolve instance-scoped backend resources
+		 *  (e.g. AutomatedStepEnvelope's log lookup). */
+		instanceId?: string;
 		open: boolean;
 		onClose: () => void;
 		/** When the user picks a different iteration in the drawer, the parent
@@ -25,7 +35,20 @@
 		onSelectIteration?: (iterationIndex: number) => void;
 	};
 
-	let { step, node = null, iterations = [], open, onClose, onSelectIteration }: Props = $props();
+	let {
+		step,
+		node = null,
+		nodeInterface = null,
+		iterations = [],
+		instanceId,
+		open,
+		onClose,
+		onSelectIteration
+	}: Props = $props();
+
+	function borrowedAttrsFor(producerNodeId: string): string[] {
+		return nodeInterface?.borrowed_paths?.[producerNodeId] ?? [];
+	}
 
 	const statusColor: Record<string, string> = {
 		pending: 'bg-gray-100 text-gray-700',
@@ -191,14 +214,37 @@
 					{#if inputEntries(step.inputs).length > 0}
 						<div class="space-y-3">
 							{#each inputEntries(step.inputs) as [producerNode, envelope] (producerNode)}
+								{@const reads = borrowedAttrsFor(producerNode)}
 								<div>
-									<div class="mb-1 text-sm font-mono text-muted-foreground">
-										from <span class="text-foreground">{producerNode}</span>
+									<div class="mb-1 flex flex-wrap items-center gap-1.5 text-sm">
+										<span class="font-mono text-muted-foreground">from</span>
+										<span class="font-mono text-foreground">{producerNode}</span>
+										{#if reads.length > 0}
+											<!-- Compiler-derived borrow surface: the field
+											     attrs this step's author actually referenced
+											     off `<producerNode>`. Narrows the full
+											     envelope below to "what was read". -->
+											<span class="text-muted-foreground">·</span>
+											<span class="text-muted-foreground">reads</span>
+											{#each reads as attr (attr)}
+												<Badge variant="outline" class="font-mono text-sm font-normal">
+													{producerNode}.{attr}
+												</Badge>
+											{/each}
+										{/if}
 									</div>
 									<!-- nodeKind is left undefined: `producerNode` is a slug,
 									     not a kind. The registry's shape predicates are specific
 									     enough to dispatch on shape alone. -->
-									<SmartValue value={envelope} ctx={{ position: 'input' }} />
+									<SmartValue
+										value={envelope}
+										ctx={{
+											position: 'input',
+											instanceId,
+											stepStartedAt: step.started_at ?? undefined,
+											stepCompletedAt: step.completed_at ?? undefined
+										}}
+									/>
 								</div>
 							{/each}
 						</div>
@@ -215,7 +261,13 @@
 					{#if step.outputs !== null && step.outputs !== undefined}
 						<SmartValue
 							value={step.outputs}
-							ctx={{ position: 'output', nodeKind: step.node_kind }}
+							ctx={{
+								position: 'output',
+								nodeKind: step.node_kind,
+								instanceId,
+								stepStartedAt: step.started_at ?? undefined,
+								stepCompletedAt: step.completed_at ?? undefined
+							}}
 						/>
 					{/if}
 				</section>

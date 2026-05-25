@@ -7,13 +7,14 @@ use crate::compiler::error::CompileError;
 use crate::compiler::interface::{InterfaceRegistry, NodeInterface, NodeKind, OutputKey};
 use crate::compiler::well_known;
 use crate::compiler::rhai_gen::{
-    build_join_merge_logic, build_merge_logic, build_retry_topology, interpolate_to_rhai_expr,
-    json_to_rhai_literal, rhai_str_escape, with_pluck_prelude,
+    build_join_merge_logic, build_join_merge_logic_full, build_join_passthrough_logic,
+    build_merge_logic, build_retry_topology, interpolate_to_rhai_expr, json_to_rhai_literal,
+    rhai_str_escape, with_pluck_prelude,
 };
 use crate::compiler::token_shape::YIELD_LOGIC;
 use crate::models::template::{
-    DeploymentModel, ExecutionBackendType, FieldMapping, PhaseUpdateStatus, Port, ResourceConfig,
-    WorkflowEdge, WorkflowNode, WorkflowNodeData,
+    DeploymentModel, ExecutionBackendType, FieldMapping, JoinMode, PhaseUpdateStatus, Port,
+    ResourceConfig, WorkflowEdge, WorkflowNode, WorkflowNodeData,
 };
 use aithericon_executor_domain::InputSource;
 use aithericon_sdk::components::executor_lifecycle::{executor_lifecycle, ExecutorBridges};
@@ -233,6 +234,7 @@ impl NodeLowering for WorkflowNode {
             WorkflowNodeData::Decision { .. } => lower_decision(cx),
             WorkflowNodeData::ParallelSplit { .. } => lower_parallel_split(cx),
             WorkflowNodeData::ParallelJoin { .. } => lower_parallel_join(cx),
+            WorkflowNodeData::Join { .. } => lower_join(cx),
             WorkflowNodeData::Loop { .. } => lower_loop(cx),
             WorkflowNodeData::Scope { .. } => lower_scope(cx),
             WorkflowNodeData::PhaseUpdate { .. } => lower_phase_update(cx),
@@ -302,6 +304,7 @@ fn node_kind_of(node: &WorkflowNode) -> NodeKind {
         WorkflowNodeData::Loop { .. } => NodeKind::Loop,
         WorkflowNodeData::ParallelSplit { .. } => NodeKind::ParallelSplit,
         WorkflowNodeData::ParallelJoin { .. } => NodeKind::ParallelJoin,
+        WorkflowNodeData::Join { .. } => NodeKind::Join,
         WorkflowNodeData::Scope { .. } => NodeKind::Scope,
         WorkflowNodeData::SubWorkflow { .. } => NodeKind::SubWorkflow,
         WorkflowNodeData::PhaseUpdate { .. } => NodeKind::PhaseUpdate,
@@ -934,12 +937,34 @@ fn lower_human_task(cx: &mut LoweringCtx) -> Result<(), CompileError> {
 
 /// Serialize the declared `output.fields` as a Rhai array literal carrying
 /// `(name, required, kind)` per entry, suitable for embedding into the
-/// prepare transition's `d.spec.outputs` slot. Python-only — other backends
-/// keep the historical `outputs: []` for now (the runner sweep that consumes
-/// these declarations only exists on the Python runner; widening to other
-/// backends requires their own validation path first).
+/// prepare transition's `d.spec.outputs` slot.
+///
+/// Enabled for the backends that consume declared outputs at runtime:
+/// - **Python**: the runner sweeps `globals()` by declared name + validates
+///   each value against `kind` (executor-backend::python).
+/// - **Kreuzberg**: `build_single_outputs` writes its native keys
+///   (`content`, `mime_type`, `word_count`, …) then auto-fills any declared
+///   output absent from that set with the extracted text content
+///   (executor-kreuzberg::backend). Lets demo authors declare semantic
+///   names (`full_text`) on top of kreuzberg's native shape.
+/// - **LLM**: when the response has a structured-JSON payload, the backend
+///   unpacks each declared output by matching it to a top-level key; any
+///   unmatched declaration falls back to the whole response_value
+///   (executor-llm::backend). The structured-output path is the only way
+///   to expose multiple typed fields from one LLM call.
+///
+/// Other backends (process, docker, http, file_ops, postgres, …) don't
+/// auto-fill declared outputs; emitting names would force the executor's
+/// `required`-output check to fail. Keep `[]` for them until they grow
+/// their own auto-fill or output-validation path.
 fn declared_outputs_rhai(backend: ExecutionBackendType, output: &Port) -> String {
-    if backend != ExecutionBackendType::Python || output.fields.is_empty() {
+    let backend_consumes_declared = matches!(
+        backend,
+        ExecutionBackendType::Python
+            | ExecutionBackendType::Kreuzberg
+            | ExecutionBackendType::Llm
+    );
+    if !backend_consumes_declared || output.fields.is_empty() {
         return "[]".to_string();
     }
     let arr: Vec<serde_json::Value> = output
@@ -1009,6 +1034,7 @@ fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileError> {
             backend_type,
             &execution_spec.config,
             cx.node_files,
+            id,
         )?;
     let config_rhai = json_to_rhai_literal(&validated_config);
     let inputs_rhai =
@@ -1173,6 +1199,7 @@ fn lower_automated_step_scheduled(cx: &mut LoweringCtx) -> Result<(), CompileErr
             &backend_type,
             &execution_spec.config,
             cx.node_files,
+            &id,
         )?;
     let config_rhai = json_to_rhai_literal(&validated_config);
     let inputs_rhai =
@@ -1281,6 +1308,7 @@ fn lower_catalogue_query(cx: &mut LoweringCtx) -> Result<(), CompileError> {
             &backend_type,
             &execution_spec.config,
             cx.node_files,
+            &id,
         )?;
     let query_rhai = json_to_rhai_literal(&query_token);
 
@@ -1581,6 +1609,116 @@ fn lower_parallel_join(cx: &mut LoweringCtx) -> Result<(), CompileError> {
         },
     );
     cx.publish_interface();
+    Ok(())
+}
+
+/// Unified `Join` lowering. `mode == All` mirrors `lower_parallel_join`'s
+/// AND-join (one transition consuming every input place, payloads merged per
+/// `merge_strategy`). `mode == Any` is the canonical petri-net XOR-join: N
+/// transitions, one per incoming branch, each consuming a single input place
+/// and depositing into a *shared* output place (and a shared parked data
+/// place). For both modes each branch's inbound payload lands at the parked
+/// `p_<id>_data` so downstream `<slug>.<field>` borrows resolve via the
+/// standard read-arc pipeline (interface `data_port = p_<id>_data`).
+fn lower_join(cx: &mut LoweringCtx) -> Result<(), CompileError> {
+    let id = &cx.node.id;
+    let WorkflowNodeData::Join {
+        label,
+        mode,
+        merge_strategy,
+        ..
+    } = &cx.node.data
+    else {
+        unreachable!("lower_join on non-Join node")
+    };
+    let mode = *mode;
+    let merge_strategy = merge_strategy.unwrap_or_default();
+    let incoming_edges = cx.incoming_edges;
+    let ctx = &mut *cx.ctx;
+
+    let p_output: PlaceHandle<DynamicToken> =
+        ctx.state(format!("p_{id}_output"), format!("{label} - Output"));
+    let p_data: PlaceHandle<DynamicToken> = ctx.state(
+        format!("p_{id}_data"),
+        format!("{label} - Parked data"),
+    );
+
+    // Pre-create one input place per incoming edge so wire.rs can route each
+    // edge to its dedicated input.
+    let mut input_place_ids: Vec<(Option<String>, PlaceHandle<DynamicToken>)> = Vec::new();
+    for (i, edge) in incoming_edges.iter().enumerate() {
+        let p_in: PlaceHandle<DynamicToken> = ctx.state(
+            format!("p_{id}_in_{i}"),
+            format!("{label} - Join Input {i}"),
+        );
+        input_place_ids.push((Some(edge.id.clone()), p_in));
+    }
+
+    match mode {
+        JoinMode::All => {
+            // Single transition consuming from every input place. AND-fire:
+            // requires a token in each branch before firing. Folds via the
+            // selected MergeStrategy into the output place, and the merged
+            // token also lands at the parked `p_<id>_data` place.
+            let mut tb = ctx.transition(format!("t_{id}_join"), format!("{label} - Join"));
+            for (i, (_, p_in)) in input_place_ids.iter().enumerate() {
+                tb = tb.auto_input(&format!("in_{i}"), p_in);
+            }
+            tb = tb
+                .auto_output("output", &p_output)
+                .auto_output("data", &p_data);
+
+            let port_names: Vec<String> = (0..incoming_edges.len())
+                .map(|i| format!("in_{i}"))
+                .collect();
+            let rhai_source = build_join_merge_logic_full(&port_names, merge_strategy, true);
+            tb.logic_rhai(rhai_source).done();
+        }
+        JoinMode::Any => {
+            // N transitions, one per branch. Each consumes its dedicated input
+            // place and deposits into the shared output + shared parked data
+            // place. Per-branch logic is a single-input passthrough.
+            for (i, (_, p_in)) in input_place_ids.iter().enumerate() {
+                let port_name = format!("in_{i}");
+                let rhai_source = build_join_passthrough_logic(&port_name);
+                ctx.transition(
+                    format!("t_{id}_join_{i}"),
+                    format!("{label} - Join branch {i}"),
+                )
+                .auto_input(&port_name, p_in)
+                .auto_output("output", &p_output)
+                .auto_output("data", &p_data)
+                .logic_rhai(rhai_source)
+                .done();
+            }
+        }
+    }
+
+    // Build edge_id -> input_place mapping so wire.rs can resolve each
+    // inbound edge to its dedicated input place (same shape used by
+    // ParallelJoin).
+    let join_input_map: HashMap<String, PlaceHandle<DynamicToken>> = input_place_ids
+        .iter()
+        .filter_map(|(edge_id, place)| edge_id.as_ref().map(|eid| (eid.clone(), place.clone())))
+        .collect();
+
+    let default_input = input_place_ids
+        .first()
+        .map(|(_, p)| p.clone())
+        .unwrap_or_else(|| ctx.state(format!("p_{id}_in_fallback"), "Fallback"));
+
+    cx.ports.insert(
+        id.clone(),
+        NodePorts {
+            input_place: default_input,
+            output_places: vec![(None, p_output)],
+            input_places: join_input_map,
+            input_handles: HashMap::new(),
+        },
+    );
+    // Publish the data port so `<slug>.<field>` borrows resolve through the
+    // standard read-arc machinery (matches SubWorkflow / Loop / AutomatedStep).
+    cx.publish_interface().data_port = Some(format!("p_{id}_data"));
     Ok(())
 }
 

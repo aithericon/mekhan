@@ -4,14 +4,22 @@
 	import { Input } from '$lib/components/ui/input';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import { FormField } from '$lib/components/ui/form-field';
+	import InsertRefButton from '../InsertRefButton.svelte';
+	import type { ScopeEntry } from '$lib/editor/guard-scope';
 
 	type Props = {
 		config: Record<string, unknown>;
 		readonly?: boolean;
 		onchange: (config: Record<string, unknown>) => void;
+		scope?: ScopeEntry[];
 	};
 
-	let { config, readonly = false, onchange }: Props = $props();
+	let { config, readonly = false, onchange, scope = [] }: Props = $props();
+
+	function appendFileEntry(snippet: string) {
+		const curr = (config.files as string[] | undefined) ?? [];
+		onchange({ ...config, files: [...curr, snippet] });
+	}
 
 	const ocr = $derived((config.ocr as Record<string, unknown>) ?? null);
 	const pdf = $derived((config.pdf as Record<string, unknown>) ?? null);
@@ -37,27 +45,47 @@
 
 {#if (config.mode as string) === 'batch'}
 	<div class="space-y-1.5">
-		<span class="text-sm font-medium text-muted-foreground">Files (input names)</span>
+		<span class="text-sm font-medium text-muted-foreground">Files (input names or upstream refs)</span>
 		<StringListEditor
 			items={(config.files as string[]) ?? []}
 			{readonly}
-			placeholder="Input name"
+			placeholder={'Attached filename or {{ upstream.field }}'}
 			onchange={(files) => onchange({ ...config, files })}
 		/>
-		<p class="text-sm italic text-muted-foreground">Empty = use all staged inputs</p>
+		{#if scope.length > 0}
+			<InsertRefButton
+				{scope}
+				disabled={readonly}
+				placeholder="Add upstream ref…"
+				oninsert={appendFileEntry}
+			/>
+		{/if}
+		<p class="text-sm italic text-muted-foreground">
+			Mix attached filenames and {`{{ upstream.field }}`} refs. Empty = use all staged inputs.
+		</p>
 	</div>
 {:else}
-	<FormField label="File (input name)" for="kz-file">
-		<Input
-			id="kz-file"
-			type="text"
-			value={(config.file as string) ?? ''}
-			placeholder="document"
-			disabled={readonly}
-			oninput={(e) =>
-				onchange({ ...config, file: (e.currentTarget as HTMLInputElement).value })}
-		/>
-	</FormField>
+	<div class="space-y-1.5">
+		<FormField label="File (attached name or upstream ref)" for="kz-file">
+			<Input
+				id="kz-file"
+				type="text"
+				value={(config.file as string) ?? ''}
+				placeholder={'document or {{ upstream.field }}'}
+				disabled={readonly}
+				oninput={(e) =>
+					onchange({ ...config, file: (e.currentTarget as HTMLInputElement).value })}
+			/>
+		</FormField>
+		{#if scope.length > 0}
+			<InsertRefButton
+				{scope}
+				disabled={readonly}
+				placeholder="Use upstream ref…"
+				oninsert={(snippet) => onchange({ ...config, file: snippet })}
+			/>
+		{/if}
+	</div>
 {/if}
 
 <FormField label="MIME Type (optional)" for="kz-mime">

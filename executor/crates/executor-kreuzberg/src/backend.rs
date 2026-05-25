@@ -173,11 +173,26 @@ async fn execute_single(
                 Ok(extraction) => {
                     let (outputs, metrics, stdout_tail) = build_single_outputs(&extraction, duration);
 
-                    // Map undeclared spec outputs to content (like LLM maps to response).
+                    // Map undeclared spec outputs to content. Gated on the
+                    // declared `kind`: only text-compatible kinds get the
+                    // extracted text as a sensible default. Number/bool/
+                    // json/file/timestamp kinds have no content-derived
+                    // value — leaving them unset lets the executor's
+                    // required-output check raise a clear error and lets
+                    // optional declarations flow through as missing
+                    // (downstream JSON-Schema validation treats omitted
+                    // optional fields as valid, matching the demo author's
+                    // intent — see demo 07's optional `page_count: number`
+                    // declaration, which mustn't be force-filled with the
+                    // OCR string).
                     let mut outputs = outputs;
                     let content_value = serde_json::json!(&extraction.content);
                     for decl in &run_context.spec.outputs {
-                        if !outputs.contains_key(&decl.name) {
+                        if outputs.contains_key(&decl.name) {
+                            continue;
+                        }
+                        let kind = decl.kind.as_deref().unwrap_or("text");
+                        if matches!(kind, "text" | "textarea" | "select") {
                             outputs.insert(decl.name.clone(), content_value.clone());
                         }
                     }

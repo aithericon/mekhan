@@ -1,0 +1,5 @@
+{
+  "templateId": "00000000-0000-0000-0000-000000000017",
+  "name": "07 · OCR Classify & Extract",
+  "description": "Step 7 of the learning path. Kreuzberg + LLM borrow upstream-producer fields directly via {{ <slug>.<field> }} placeholders — same convention HumanTask uses. Start uploads a PDF, extract_text consumes start.document via {{ start.document }}, classify reads extract_text.full_text inline in its prompt. Proves the LLM+Kreuzberg compiler-borrow plumbing end-to-end at compile time."
+}

@@ -8,6 +8,7 @@
 		type WorkflowNode
 	} from '$lib/api/client';
 	import type { WorkflowGraph } from '$lib/api/client';
+	import { parseInterfaceRegistry, type InterfaceRegistry } from '$lib/types/node-interface';
 	import WorkflowCanvas from '$lib/components/editor/WorkflowCanvas.svelte';
 	import StepDetailDrawer from './StepDetailDrawer.svelte';
 	import { provideNodeRuntime } from './runtime-context';
@@ -25,6 +26,7 @@
 	let selectedNodeId = $state<string | null>(null);
 	let drawerStep = $state<StepExecution | null>(null);
 	let drawerNode = $state<WorkflowNode | null>(null);
+	let drawerNodeInterface = $state<import('$lib/types/node-interface').NodeInterface | null>(null);
 	let drawerIterations = $state<StepExecution[]>([]);
 	let drawerOpen = $state(false);
 
@@ -66,6 +68,13 @@
 		for (const n of graph.nodes) map.set(n.id, n);
 		return map;
 	});
+
+	// Compiler-derived per-node interface (entry/data_port/owned_*/borrowed_paths).
+	// `template.interface_json` is typed as `unknown` over the wire; coerce
+	// once and look up by node id when opening the drawer.
+	const interfaceRegistry = $derived<InterfaceRegistry>(
+		parseInterfaceRegistry(template?.interface_json)
+	);
 
 	async function loadTemplate() {
 		try {
@@ -110,6 +119,7 @@
 		const list = executionsByNode.get(nodeId) ?? [];
 		const node = nodesById.get(nodeId) ?? null;
 		drawerNode = node;
+		drawerNodeInterface = interfaceRegistry[nodeId] ?? null;
 		drawerIterations = list;
 		if (list.length === 0) {
 			// Step hasn't fired yet — still open the drawer so the user gets
@@ -154,7 +164,9 @@
 <StepDetailDrawer
 	step={drawerStep}
 	node={drawerNode}
+	nodeInterface={drawerNodeInterface}
 	iterations={drawerIterations}
+	instanceId={instance.id}
 	open={drawerOpen}
 	onClose={closeDrawer}
 	onSelectIteration={selectIteration}

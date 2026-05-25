@@ -1,4 +1,5 @@
 pub mod backend_configs;
+mod borrow;
 mod compile;
 mod error;
 mod graph;
@@ -6,6 +7,7 @@ pub mod interface;
 mod lower;
 mod pyio;
 pub(crate) mod human_task_refs;
+pub(crate) mod placeholder_refs;
 pub(crate) mod python_refs;
 mod rhai_gen;
 pub mod rhai_scope;

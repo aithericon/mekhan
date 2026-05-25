@@ -186,6 +186,78 @@ pub enum CompileError {
         upstream_slug: String,
         upstream_node_id: String,
     },
+
+    // --- LLM / Kreuzberg upstream-producer refs (sibling of Python direct
+    //     slug access and HumanTask placeholders). The `{{}}` syntax is
+    //     unambiguous so unlike Python's silent-ignore semantics, an
+    //     unknown slug or field is a typo — hard-reject at compile.
+    /// `{{<slug>.<field>}}` references an unknown slug, or `<field>` is
+    /// not declared on the producer's output port. `backend` is `"llm"` or
+    /// `"kreuzberg"`; `site` names the offending config field (e.g.
+    /// `"prompt"`, `"system_prompt"`, `"file"`, `"images[0].path"`).
+    #[error(
+        "node '{node_id}' ({backend}): {site} references unknown {kind} '{name}' in `{{{{{slug}.{field}}}}}` (available {kind}s: {available:?})"
+    )]
+    BackendRefUnresolved {
+        node_id: String,
+        backend: String,
+        site: String,
+        slug: String,
+        field: String,
+        /// `"slug"` when the head doesn't match any graph slug; `"field"`
+        /// when the head is known but the attr isn't on its output port.
+        kind: String,
+        /// The unknown name (== `slug` when kind="slug", == `field` when
+        /// kind="field"). Surfaced separately so the editor can highlight
+        /// just the failing part of the path.
+        name: String,
+        /// Candidate names the author might have meant — slugs in the
+        /// graph (kind="slug") or fields on the producer (kind="field").
+        available: Vec<String>,
+    },
+
+    /// `{{<slug>.<field>}}` references a producer that lives downstream of
+    /// (or at) the consumer in the graph topology — a borrow cycle. The
+    /// `{{}}` syntax pre-binds the field at compile time, so circular
+    /// references aren't physically realizable.
+    #[error(
+        "node '{node_id}' ({backend}): {site} borrows '{{{{{slug}.{field}}}}}' from producer '{producer_node_id}' which is not strictly upstream"
+    )]
+    BackendRefNotUpstream {
+        node_id: String,
+        backend: String,
+        site: String,
+        slug: String,
+        field: String,
+        producer_node_id: String,
+    },
+
+    /// Malformed `{{...}}` placeholder body — not a dotted-identifier path.
+    /// Surfaces early from `validate_and_transform` so the author sees a
+    /// precise syntax error instead of a downstream "unresolved input".
+    #[error(
+        "node '{node_id}' ({backend}): {site} contains malformed placeholder '{{{{{body}}}}}' — expected `<slug>.<field>`"
+    )]
+    BackendPlaceholderSyntax {
+        node_id: String,
+        backend: String,
+        site: String,
+        body: String,
+    },
+
+    /// LLM `images[i].path` references an upstream producer field whose
+    /// declared kind is not `file`. Unlike Kreuzberg (which can stage text
+    /// as a temp file), LLM vision needs actual image bytes.
+    #[error(
+        "node '{node_id}' (llm): {site} requires a file-kind upstream field; '{{{{{slug}.{field}}}}}' resolves to kind '{actual_kind}'"
+    )]
+    LlmImageRefNotFileKind {
+        node_id: String,
+        site: String,
+        slug: String,
+        field: String,
+        actual_kind: String,
+    },
 }
 
 impl CompileError {
@@ -217,6 +289,10 @@ impl CompileError {
             Self::LoopEmpty { .. } => "loop_empty",
             Self::OutputFieldShadowsReserved { .. } => "output_field_shadows_reserved",
             Self::OutputFieldShadowsInput { .. } => "output_field_shadows_input",
+            Self::BackendRefUnresolved { .. } => "backend_ref_unresolved",
+            Self::BackendRefNotUpstream { .. } => "backend_ref_not_upstream",
+            Self::BackendPlaceholderSyntax { .. } => "backend_placeholder_syntax",
+            Self::LlmImageRefNotFileKind { .. } => "llm_image_ref_not_file_kind",
         }
     }
 
@@ -251,7 +327,11 @@ impl CompileError {
             | Self::SubWorkflowDepthExceeded { node_id, .. }
             | Self::LoopEmpty { node_id }
             | Self::OutputFieldShadowsReserved { node_id, .. }
-            | Self::OutputFieldShadowsInput { node_id, .. } => Some(node_id),
+            | Self::OutputFieldShadowsInput { node_id, .. }
+            | Self::BackendRefUnresolved { node_id, .. }
+            | Self::BackendRefNotUpstream { node_id, .. }
+            | Self::BackendPlaceholderSyntax { node_id, .. }
+            | Self::LlmImageRefNotFileKind { node_id, .. } => Some(node_id),
             _ => None,
         }
     }

@@ -107,11 +107,11 @@ def analyze_expense(inputs: dict[str, Any]) -> dict[str, Any]:
 # Get expense data from the staged input.json
 expense_data = inputs.get("input.json", {})
 
-# Run analysis
+# Run analysis. The orchestrator declares `outputs: [#{ name: "result" }]`
+# on the dispatching effect, so the runner's post-exec sweep promotes the
+# top-level `result` global into the executor's terminal status — no
+# explicit `set_output` needed.
 result = analyze_expense(expense_data)
-
-# Output result using SDK helper
-set_output("result", result)
 
 # Also log for debugging
 log_info(

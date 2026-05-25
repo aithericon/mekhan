@@ -296,6 +296,36 @@ pub enum WorkflowNodeData {
         #[serde(rename = "mergeStrategy", default)]
         merge_strategy: MergeStrategy,
     },
+    /// Unified converge primitive — superset of `ParallelJoin` (AND-join) plus
+    /// the previously-missing XOR-join. `mode == All` waits for every incoming
+    /// branch and merges payloads per `merge_strategy` (the same semantics as
+    /// `parallel_join`). `mode == Any` fires per arriving token — the
+    /// canonical petri-net XOR-join, dual of `Decision`'s XOR-split. Both
+    /// modes park each branch's inbound token in `p_<id>_data` so downstream
+    /// `<slug>.<field>` borrows resolve through the standard read-arc
+    /// pipeline (the `output` Port declares the addressable shape).
+    ///
+    /// `ParallelJoin` is kept as a back-compat variant; the editor's default
+    /// factory emits `Join { mode: All }`.
+    #[serde(rename = "join")]
+    Join {
+        label: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+        /// `All` (AND-join, the parallel_join semantics) waits for every
+        /// incoming branch. `Any` (XOR-join) fires per arriving token.
+        #[serde(default)]
+        mode: JoinMode,
+        /// Honoured only when `mode == All`. For `Any` only one payload ever
+        /// arrives per firing, so there is nothing to merge.
+        #[serde(rename = "mergeStrategy", default, skip_serializing_if = "Option::is_none")]
+        merge_strategy: Option<MergeStrategy>,
+        /// Declared output shape. Each branch's inbound payload is parked at
+        /// `p_<id>_data`; the declared fields here describe what downstream
+        /// `<slug>.<field>` borrows can read.
+        #[serde(default = "default_join_output_port")]
+        output: Port,
+    },
     #[serde(rename = "loop")]
     Loop {
         label: String,
@@ -468,6 +498,7 @@ impl WorkflowNodeData {
             | Self::Decision { label, .. }
             | Self::ParallelSplit { label, .. }
             | Self::ParallelJoin { label, .. }
+            | Self::Join { label, .. }
             | Self::Loop { label, .. }
             | Self::Scope { label, .. }
             | Self::PhaseUpdate { label, .. }
@@ -487,6 +518,7 @@ impl WorkflowNodeData {
             Self::Decision { .. } => "decision",
             Self::ParallelSplit { .. } => "parallel_split",
             Self::ParallelJoin { .. } => "parallel_join",
+            Self::Join { .. } => "join",
             Self::Loop { .. } => "loop",
             Self::Scope { .. } => "scope",
             Self::PhaseUpdate { .. } => "phase_update",
@@ -506,6 +538,7 @@ impl WorkflowNodeData {
             | Self::Decision { description, .. }
             | Self::ParallelSplit { description, .. }
             | Self::ParallelJoin { description, .. }
+            | Self::Join { description, .. }
             | Self::Loop { description, .. }
             | Self::Scope { description, .. }
             | Self::PhaseUpdate { description, .. }
@@ -539,6 +572,7 @@ impl WorkflowNodeData {
             | Self::Decision { .. }
             | Self::ParallelSplit { .. }
             | Self::ParallelJoin { .. }
+            | Self::Join { .. }
             | Self::Scope { .. }
             | Self::PhaseUpdate { .. }
             | Self::ProgressUpdate { .. }
@@ -640,6 +674,10 @@ impl WorkflowNodeData {
                 label: "Output".to_string(),
                 fields: vec![],
             }],
+
+            // Join carries an explicit output Port describing the parked
+            // `<slug>.<field>` shape downstream borrows can read.
+            Self::Join { output, .. } => vec![output.clone()],
 
             // Loop exposes its outer `out` plus a `body_in` handle that feeds
             // body children. Body children's outgoing edges back into the
@@ -831,7 +869,8 @@ pub enum ImageDisplay {
     Gallery,
 }
 
-/// How a `ParallelJoin` merges the tokens arriving on its joined branches.
+/// How a `ParallelJoin`/`Join { mode: All }` merges the tokens arriving on
+/// its joined branches.
 ///
 /// `ShallowLastWins` is the historical behaviour (top-level keys overwrite,
 /// last branch to arrive wins on a key collision). `DeepMerge` recursively
@@ -842,6 +881,18 @@ pub enum MergeStrategy {
     #[default]
     ShallowLastWins,
     DeepMerge,
+}
+
+/// Firing rule for a `Join` node. `All` (the default) waits for every
+/// incoming branch — the AND-join semantics inherited from `ParallelJoin`.
+/// `Any` fires per arriving token — the canonical petri-net XOR-join, dual
+/// of `Decision`'s XOR-split.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum JoinMode {
+    #[default]
+    All,
+    Any,
 }
 
 /// Author-selected status for a `PhaseUpdate` control node. Serialized
@@ -936,6 +987,17 @@ pub fn default_subworkflow_output_port() -> Port {
     Port {
         id: "out".to_string(),
         label: "Result".to_string(),
+        fields: vec![],
+    }
+}
+
+/// Deserialization default for `Join.output` — an empty `out` port. The
+/// editor or author fills in the fields the join exposes downstream via
+/// `<slug>.<field>`.
+pub fn default_join_output_port() -> Port {
+    Port {
+        id: "out".to_string(),
+        label: "Output".to_string(),
         fields: vec![],
     }
 }
@@ -1667,9 +1729,9 @@ impl WorkflowGraph {
 /// DSL→model direction can't silently swallow a known type.
 pub mod dsl {
     use super::{
-        default_output_port, default_terminal_port, BranchCondition, DeploymentModel,
-        ExecutionBackendType, ExecutionSpecConfig, Port, RetryPolicy, TaskBlockConfig,
-        TaskStepConfig, WorkflowNode, WorkflowNodeData,
+        default_join_output_port, default_output_port, default_terminal_port, BranchCondition,
+        DeploymentModel, ExecutionBackendType, ExecutionSpecConfig, JoinMode, MergeStrategy, Port,
+        RetryPolicy, TaskBlockConfig, TaskStepConfig, WorkflowNode, WorkflowNodeData,
     };
     use serde::{Deserialize, Serialize};
 
@@ -1971,6 +2033,13 @@ pub mod dsl {
                     description: step.description.clone(),
                     merge_strategy: Default::default(),
                 }),
+                "join" => Ok(WorkflowNodeData::Join {
+                    label: label.to_string(),
+                    description: step.description.clone(),
+                    mode: JoinMode::default(),
+                    merge_strategy: Some(MergeStrategy::default()),
+                    output: default_join_output_port(),
+                }),
                 "loop" => {
                     let max_iter = step
                         .max_iterations
@@ -2136,6 +2205,12 @@ pub mod dsl {
                 }
                 WorkflowNodeData::ParallelSplit { .. } => {}
                 WorkflowNodeData::ParallelJoin { .. } => {}
+                WorkflowNodeData::Join { .. } => {
+                    // Join's mode/merge_strategy/output are GUI-only for now —
+                    // the DSL has no schema for them. Round-trip through DSL
+                    // drops the join-specific config, mirroring how
+                    // process-control nodes behave.
+                }
                 WorkflowNodeData::Scope { .. } => {
                     // children are populated by the CLI envelope after the
                     // step map is built

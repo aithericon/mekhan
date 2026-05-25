@@ -4,10 +4,16 @@
     "title": "Verify Details",
     "blocks": [
       {
+        "type": "callout",
+        "severity": "info",
+        "title": "Invoice {{ invoice_id }}",
+        "content": "Please verify the details captured at intake. The invoice id was provided when this process was started."
+      },
+      {
         "type": "image",
         "url": "/api/files/{{ invoice_file.key }}",
-        "alt": "Uploaded invoice",
-        "caption": "Original invoice document (uploaded at instance start)"
+        "alt": "Uploaded invoice {{ invoice_id }}",
+        "caption": "Original document for invoice {{ invoice_id }} (uploaded at instance start)"
       },
       {
         "type": "download",
@@ -16,7 +22,7 @@
             "url": "/api/files/{{ invoice_file.key }}",
             "filename": "{{ invoice_file.filename }}",
             "mime_type": "{{ invoice_file.content_type }}",
-            "description": "Original uploaded invoice"
+            "description": "Original uploaded invoice ({{ invoice_id }})"
           }
         ]
       },
@@ -50,21 +56,6 @@
           "kind": "textarea",
           "required": false,
           "placeholder": "Describe the goods or services"
-        }
-      }
-    ]
-  },
-  {
-    "id": "step-confirm",
-    "title": "Confirmation",
-    "blocks": [
-      {
-        "type": "input",
-        "field": {
-          "name": "verified",
-          "label": "I confirm this invoice is accurate",
-          "kind": "checkbox",
-          "required": true
         }
       }
     ]

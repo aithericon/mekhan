@@ -176,24 +176,23 @@ log_info("Artifacts exported", artifact_count="2")
 update_phase("export", "completed", "All artifacts saved")
 
 # ---------------------------------------------------------------------------
-# 7. Set final output (picked up by executor as declared output "metrics")
+# 7. Set final output — `metrics` matches the declared output port; the
+#    runner's post-exec sweep promotes it into the executor's terminal
+#    status. Add fields here, declare matching names on the node.
 # ---------------------------------------------------------------------------
 update_progress(1.0, "Training complete", current_step=epochs + 2, total_steps=epochs + 2)
 
-set_output(
-    "metrics",
-    {
-        "model_name": model_name,
-        "epochs_trained": epochs,
-        "train_loss": round(loss, 4),
-        "val_loss": round(val_loss, 4),
-        "val_accuracy": round(val_accuracy, 4),
-        "val_f1_score": round(val_accuracy * 0.98, 4),
-        "learning_rate": lr,
-        "batch_size": batch_size,
-        "status": "converged",
-    },
-)
+metrics = {
+    "model_name": model_name,
+    "epochs_trained": epochs,
+    "train_loss": round(loss, 4),
+    "val_loss": round(val_loss, 4),
+    "val_accuracy": round(val_accuracy, 4),
+    "val_f1_score": round(val_accuracy * 0.98, 4),
+    "learning_rate": lr,
+    "batch_size": batch_size,
+    "status": "converged",
+}
 
 log_info(
     f"Training complete: {model_name} trained for {epochs} epochs, val_accuracy={val_accuracy:.4f}",

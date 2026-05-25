@@ -1,36 +1,21 @@
-//! HumanTask placeholder ref extractor — mirror of [`python_refs`] for
-//! authored markdown / interpolated strings.
+//! HumanTask placeholder ref extractor — node walker that hands each
+//! free-form string to the shared [`scan_placeholders`] scanner.
 //!
 //! Walks every author-visible string on a `HumanTask` node (title,
 //! instructions, every step's title/description, every block's
 //! markdown / callout / image-pdf caption / url) and returns each
-//! `{{ <head>.<attr> … }}` placeholder's first two path segments. The
-//! caller filters by whether `head` matches a known graph slug — exactly
-//! the same downstream resolution the Python borrow planner uses
-//! (`automated_step_borrow_plan`). One model.
+//! `{{ <head>.<attr> … }}` site. The caller filters by whether `head`
+//! matches a known graph slug — exactly the same downstream resolution
+//! the Python borrow planner uses (`automated_step_borrow_plan`).
 //!
-//! Lexical reuse: each candidate placeholder is run through
-//! [`parse_placeholder_segments`] so the validation rules (no Rhai
-//! expressions, identifier-safe heads, optional numeric indices) are
-//! shared byte-for-byte with the runtime accessor builder. A placeholder
-//! that doesn't parse is silently skipped — keeping the surface fully
-//! permissive on the authored side; the existing rhai_gen pass still
-//! leaves bad placeholders as literal text.
-//!
-//! [`python_refs`]: super::python_refs
-//! [`parse_placeholder_segments`]: super::rhai_gen::parse_placeholder_segments
+//! [`scan_placeholders`]: super::placeholder_refs::scan_placeholders
 
-use crate::compiler::rhai_gen::{parse_placeholder_segments, PathSegment};
+use crate::compiler::placeholder_refs::{scan_placeholders, PlaceholderRef};
 use crate::models::template::{TaskBlockConfig, TaskStepConfig, WorkflowNode, WorkflowNodeData};
 
-/// One `{{ <head>.<attr> … }}` placeholder site detected on a HumanTask.
-/// `head` is the first path segment (a candidate slug); `attr` is the
-/// second (the first field off the slug-namespaced producer envelope).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HumanTaskRef {
-    pub head: String,
-    pub attr: String,
-}
+/// Re-export of the shared placeholder site type so historical callers can
+/// keep the `HumanTaskRef` name they were importing.
+pub type HumanTaskRef = PlaceholderRef;
 
 /// Walk a HumanTask `node` and return every `{{ head.attr … }}` site in
 /// authoring order. Same-name duplicates are preserved so callers can
@@ -114,43 +99,8 @@ fn scan_block(block: &TaskBlockConfig, out: &mut Vec<HumanTaskRef>) {
     }
 }
 
-/// Scan one free-form string for `{{ … }}` placeholders, push every
-/// `(head, attr)` pair where the placeholder validates as a dotted-path
-/// accessor with at least two segments.
 fn scan_into(raw: &str, out: &mut Vec<HumanTaskRef>) {
-    let mut rest = raw;
-    while let Some(open) = rest.find("{{") {
-        let after = &rest[open + 2..];
-        let Some(close_rel) = after.find("}}") else {
-            return;
-        };
-        let inner = &after[..close_rel];
-        if let Some(segs) = parse_placeholder_segments(inner) {
-            // Need a `head.<attr>` pair to be a candidate borrow.
-            // Single-segment placeholders (`{{ invoice_id }}`) still work
-            // against the slim control token at runtime — they are not
-            // slug-namespaced borrows.
-            if let (Some(PathSegment::Field(head)), Some(second)) = (segs.first(), segs.get(1)) {
-                let attr = match second {
-                    PathSegment::Field(a) => a.clone(),
-                    // `{{ start[0].x }}` — an index immediately off the
-                    // head isn't a field access on a slug-namespaced
-                    // envelope. Skip; the runtime will still try
-                    // `__pluck(input, ["start", 0, "x"])` against the
-                    // slim token and degrade to `()` if absent.
-                    PathSegment::Index(_) => {
-                        rest = &after[close_rel + 2..];
-                        continue;
-                    }
-                };
-                out.push(HumanTaskRef {
-                    head: head.clone(),
-                    attr,
-                });
-            }
-        }
-        rest = &after[close_rel + 2..];
-    }
+    out.extend(scan_placeholders(raw));
 }
 
 #[cfg(test)]

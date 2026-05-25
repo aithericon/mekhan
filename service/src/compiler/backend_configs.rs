@@ -19,9 +19,47 @@ use aithericon_executor_backend_configs::{
 };
 use aithericon_executor_domain::{InputDeclaration, InputSource};
 
+use crate::compiler::rhai_gen::parse_placeholder_segments;
 use crate::models::template::ExecutionBackendType;
 
 use super::CompileError;
+
+/// Walk a free-form string looking for `{{ … }}` placeholder bodies; for each
+/// one, run the shared `parse_placeholder_segments` validator and surface a
+/// [`CompileError::BackendPlaceholderSyntax`] if the body isn't a dotted
+/// identifier path. Returns `true` if the string contains at least one
+/// well-formed `{{...}}` placeholder (so the caller can decide whether to
+/// skip `require_node_file`).
+///
+/// Caller passes `node_id`, `backend` and `site` for error attribution.
+fn validate_placeholders(
+    s: &str,
+    node_id: &str,
+    backend: &str,
+    site: &str,
+) -> Result<bool, CompileError> {
+    let mut rest = s;
+    let mut had_placeholder = false;
+    while let Some(open) = rest.find("{{") {
+        let after = &rest[open + 2..];
+        let Some(close_rel) = after.find("}}") else {
+            // Unterminated `{{` — keep author-friendly: it's not a placeholder.
+            return Ok(had_placeholder);
+        };
+        let inner = &after[..close_rel];
+        if parse_placeholder_segments(inner).is_none() {
+            return Err(CompileError::BackendPlaceholderSyntax {
+                node_id: node_id.to_string(),
+                backend: backend.to_string(),
+                site: site.to_string(),
+                body: inner.trim().to_string(),
+            });
+        }
+        had_placeholder = true;
+        rest = &after[close_rel + 2..];
+    }
+    Ok(had_placeholder)
+}
 
 /// Editor-side Python config. The script is selected by `entrypoint`, which
 /// must name one of the node's files.
@@ -175,10 +213,16 @@ fn require_node_file(
 /// `node_files` is the per-node map of filename → source. Backends that take
 /// files emit one `InputDeclaration` per entry; backends that don't (`file_ops`)
 /// ignore it.
+///
+/// `node_id` is used for attribution in placeholder-syntax errors raised by
+/// the LLM / Kreuzberg arms (where author-supplied strings can carry
+/// `{{<slug>.<field>}}` placeholders). Callers without a meaningful id (test
+/// harnesses) can pass `""` — the error message just shows blank.
 pub fn validate_and_transform(
     backend_type: &ExecutionBackendType,
     config: &Value,
     node_files: &HashMap<String, InputSource>,
+    node_id: &str,
 ) -> Result<(Value, Vec<InputDeclaration>), CompileError> {
     match backend_type {
         ExecutionBackendType::Python => {
@@ -242,8 +286,30 @@ pub fn validate_and_transform(
                     "llm config: prompt is required".into(),
                 ));
             }
+            // Validate placeholders in author-supplied strings — surfaces
+            // malformed `{{...}}` syntax with a precise field reference. The
+            // graph-aware slug-resolution happens later in
+            // `apply_control_data_foundation`.
+            validate_placeholders(&parsed.prompt, node_id, "llm", "prompt")?;
+            if let Some(ref sys) = parsed.system_prompt {
+                validate_placeholders(sys, node_id, "llm", "system_prompt")?;
+            }
+            for (i, m) in parsed.history.iter().enumerate() {
+                validate_placeholders(
+                    &m.content,
+                    node_id,
+                    "llm",
+                    &format!("history[{i}].content"),
+                )?;
+            }
             for (i, img) in parsed.images.iter().enumerate() {
-                require_node_file(&img.path, &format!("llm config: images[{i}].path"), node_files)?;
+                let site = format!("images[{i}].path");
+                let has_placeholder = validate_placeholders(&img.path, node_id, "llm", &site)?;
+                // Only attached-file paths get `require_node_file`'d; upstream
+                // refs (`{{...}}`) are resolved by the foundation pass.
+                if !has_placeholder {
+                    require_node_file(&img.path, &format!("llm config: {site}"), node_files)?;
+                }
             }
             Ok((config.clone(), stage_all_files(node_files)))
         }
@@ -251,16 +317,32 @@ pub fn validate_and_transform(
         ExecutionBackendType::Kreuzberg => {
             let parsed: KreuzbergConfig = serde_json::from_value(config.clone())
                 .map_err(|e| CompileError::Validation(format!("invalid kreuzberg config: {e}")))?;
-            // Validate file references against node files.
+            // Per-site placeholder validation + node-file gate. A node with
+            // ONLY upstream `{{...}}` refs and no attached files is OK
+            // (kreuzberg's runtime fetches via the foundation pass); we keep
+            // the "node has no files" gate but skip it when at least one
+            // placeholder is present.
+            let mut any_placeholder = false;
             if let Some(ref name) = parsed.file {
-                require_node_file(name, "kreuzberg config: file", node_files)?;
+                let had = validate_placeholders(name, node_id, "kreuzberg", "file")?;
+                if had {
+                    any_placeholder = true;
+                } else {
+                    require_node_file(name, "kreuzberg config: file", node_files)?;
+                }
             }
             for (i, name) in parsed.files.iter().enumerate() {
-                require_node_file(name, &format!("kreuzberg config: files[{i}]"), node_files)?;
+                let site = format!("files[{i}]");
+                let had = validate_placeholders(name, node_id, "kreuzberg", &site)?;
+                if had {
+                    any_placeholder = true;
+                } else {
+                    require_node_file(name, &format!("kreuzberg config: {site}"), node_files)?;
+                }
             }
-            if node_files.is_empty() {
+            if node_files.is_empty() && !any_placeholder {
                 return Err(CompileError::Validation(
-                    "kreuzberg config: node has no files; attach at least one document".into(),
+                    "kreuzberg config: node has no files; attach a document or reference an upstream `{{<slug>.<field>}}`".into(),
                 ));
             }
             Ok((config.clone(), stage_all_files(node_files)))
@@ -309,7 +391,7 @@ mod tests {
 
         let config = json!({"entrypoint": "main.py"});
         let (_, inputs) =
-            validate_and_transform(&ExecutionBackendType::Python, &config, &files).unwrap();
+            validate_and_transform(&ExecutionBackendType::Python, &config, &files, "test_node").unwrap();
         assert_eq!(inputs.len(), 1);
         assert_eq!(inputs[0].name, "main.py");
     }
@@ -320,7 +402,7 @@ mod tests {
         files.insert("helper.py".to_string(), raw(""));
 
         let config = json!({"entrypoint": "main.py"});
-        let err = validate_and_transform(&ExecutionBackendType::Python, &config, &files)
+        let err = validate_and_transform(&ExecutionBackendType::Python, &config, &files, "test_node")
             .unwrap_err()
             .to_string();
         assert!(err.contains("entrypoint 'main.py' not found"));
@@ -331,7 +413,7 @@ mod tests {
     fn python_rejects_empty_files() {
         let files = HashMap::new();
         let config = json!({"entrypoint": "main.py"});
-        let err = validate_and_transform(&ExecutionBackendType::Python, &config, &files)
+        let err = validate_and_transform(&ExecutionBackendType::Python, &config, &files, "test_node")
             .unwrap_err()
             .to_string();
         assert!(err.contains("node has no files"));
@@ -340,7 +422,7 @@ mod tests {
     #[test]
     fn process_rejects_empty_command() {
         let config = json!({"command": ""});
-        let err = validate_and_transform(&ExecutionBackendType::Process, &config, &HashMap::new())
+        let err = validate_and_transform(&ExecutionBackendType::Process, &config, &HashMap::new(), "test_node")
             .unwrap_err()
             .to_string();
         assert!(err.contains("command is required"));
@@ -352,7 +434,7 @@ mod tests {
         files.insert("run.sh".to_string(), raw("echo hi"));
         let config = json!({"command": "bash", "args": ["run.sh"]});
         let (_, inputs) =
-            validate_and_transform(&ExecutionBackendType::Process, &config, &files).unwrap();
+            validate_and_transform(&ExecutionBackendType::Process, &config, &files, "test_node").unwrap();
         assert_eq!(inputs.len(), 1);
         assert_eq!(inputs[0].name, "run.sh");
     }
@@ -360,7 +442,7 @@ mod tests {
     #[test]
     fn docker_rejects_empty_image() {
         let config = json!({"image": ""});
-        let err = validate_and_transform(&ExecutionBackendType::Docker, &config, &HashMap::new())
+        let err = validate_and_transform(&ExecutionBackendType::Docker, &config, &HashMap::new(), "test_node")
             .unwrap_err()
             .to_string();
         assert!(err.contains("image is required"));
@@ -373,7 +455,7 @@ mod tests {
             "method": "POST",
             "body_from_input": "payload.json"
         });
-        let err = validate_and_transform(&ExecutionBackendType::Http, &config, &HashMap::new())
+        let err = validate_and_transform(&ExecutionBackendType::Http, &config, &HashMap::new(), "test_node")
             .unwrap_err()
             .to_string();
         assert!(err.contains("body_from_input"));
@@ -387,7 +469,7 @@ mod tests {
             "body": {"k": "v"},
             "body_from_input": "payload.json"
         });
-        let err = validate_and_transform(&ExecutionBackendType::Http, &config, &HashMap::new())
+        let err = validate_and_transform(&ExecutionBackendType::Http, &config, &HashMap::new(), "test_node")
             .unwrap_err()
             .to_string();
         assert!(err.contains("mutually exclusive"));
@@ -403,7 +485,7 @@ mod tests {
             "body_from_input": "payload.json"
         });
         let (_, inputs) =
-            validate_and_transform(&ExecutionBackendType::Http, &config, &files).unwrap();
+            validate_and_transform(&ExecutionBackendType::Http, &config, &files, "test_node").unwrap();
         assert_eq!(inputs.len(), 1);
     }
 
@@ -415,7 +497,7 @@ mod tests {
             "prompt": "describe",
             "images": [{"path": "diagram.png"}]
         });
-        let err = validate_and_transform(&ExecutionBackendType::Llm, &config, &HashMap::new())
+        let err = validate_and_transform(&ExecutionBackendType::Llm, &config, &HashMap::new(), "test_node")
             .unwrap_err()
             .to_string();
         assert!(err.contains("images[0].path"));
@@ -429,7 +511,7 @@ mod tests {
             "model": "",
             "prompt": "hi"
         });
-        let err = validate_and_transform(&ExecutionBackendType::Llm, &config, &HashMap::new())
+        let err = validate_and_transform(&ExecutionBackendType::Llm, &config, &HashMap::new(), "test_node")
             .unwrap_err()
             .to_string();
         assert!(err.contains("model is required"));
@@ -440,7 +522,7 @@ mod tests {
         let mut files = HashMap::new();
         files.insert("other.pdf".to_string(), raw(""));
         let config = json!({"mode": "single", "file": "missing.pdf"});
-        let err = validate_and_transform(&ExecutionBackendType::Kreuzberg, &config, &files)
+        let err = validate_and_transform(&ExecutionBackendType::Kreuzberg, &config, &files, "test_node")
             .unwrap_err()
             .to_string();
         assert!(err.contains("kreuzberg config: file"));
@@ -451,7 +533,7 @@ mod tests {
     fn kreuzberg_rejects_empty_files() {
         let config = json!({"mode": "single"});
         let err =
-            validate_and_transform(&ExecutionBackendType::Kreuzberg, &config, &HashMap::new())
+            validate_and_transform(&ExecutionBackendType::Kreuzberg, &config, &HashMap::new(), "test_node")
                 .unwrap_err()
                 .to_string();
         assert!(err.contains("no files"));
@@ -460,7 +542,7 @@ mod tests {
     #[test]
     fn file_ops_validates_operation_tag() {
         let bad = json!({"op": "stat"});
-        let err = validate_and_transform(&ExecutionBackendType::FileOps, &bad, &HashMap::new())
+        let err = validate_and_transform(&ExecutionBackendType::FileOps, &bad, &HashMap::new(), "test_node")
             .unwrap_err()
             .to_string();
         assert!(err.contains("invalid file_ops config"));
@@ -474,8 +556,122 @@ mod tests {
             "storage": {"backend": "local", "endpoint": "/tmp"}
         });
         let (_, inputs) =
-            validate_and_transform(&ExecutionBackendType::FileOps, &config, &HashMap::new())
+            validate_and_transform(&ExecutionBackendType::FileOps, &config, &HashMap::new(), "test_node")
                 .unwrap();
         assert!(inputs.is_empty());
+    }
+
+    // ──────────────────────────────────────────────────────────────────
+    // Placeholder validation: `{{...}}` bodies in LLM / Kreuzberg strings
+    // must parse as dotted identifier paths. Slug resolution itself runs
+    // later in apply_control_data_foundation (it needs graph access).
+    // ──────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn llm_rejects_malformed_placeholder_in_prompt() {
+        let config = json!({
+            "provider": "openai",
+            "model": "gpt-4o",
+            "prompt": "Sum: {{ a + b }}"
+        });
+        let err = validate_and_transform(
+            &ExecutionBackendType::Llm,
+            &config,
+            &HashMap::new(),
+            "node-classify",
+        )
+        .unwrap_err();
+        match err {
+            CompileError::BackendPlaceholderSyntax {
+                node_id, backend, site, body,
+            } => {
+                assert_eq!(node_id, "node-classify");
+                assert_eq!(backend, "llm");
+                assert_eq!(site, "prompt");
+                assert_eq!(body, "a + b");
+            }
+            other => panic!("expected BackendPlaceholderSyntax, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn llm_accepts_well_formed_prompt_placeholders() {
+        // Slug resolution is deferred — at this stage we only check syntax.
+        let config = json!({
+            "provider": "openai",
+            "model": "gpt-4o",
+            "prompt": "Classify: {{ ocr.content }} for {{ review.vendor_name }}"
+        });
+        let (_, inputs) = validate_and_transform(
+            &ExecutionBackendType::Llm,
+            &config,
+            &HashMap::new(),
+            "test_node",
+        )
+        .expect("well-formed placeholders pass validation");
+        assert!(inputs.is_empty()); // No attached node files in this test.
+    }
+
+    #[test]
+    fn llm_images_path_skips_node_file_check_for_placeholder() {
+        // `images[0].path` may be either an attached file OR an upstream
+        // ref. The latter case skips `require_node_file` since the
+        // foundation pass resolves it from the producer's parked envelope.
+        let config = json!({
+            "provider": "openai",
+            "model": "gpt-4o",
+            "prompt": "Caption this image",
+            "images": [{"path": "{{ uploader.photo }}"}]
+        });
+        let (_, _) = validate_and_transform(
+            &ExecutionBackendType::Llm,
+            &config,
+            &HashMap::new(),
+            "test_node",
+        )
+        .expect("upstream image refs don't require an attached file");
+    }
+
+    #[test]
+    fn kreuzberg_accepts_upstream_ref_without_attached_files() {
+        // A Kreuzberg node with ONLY an upstream ref and no attached
+        // files is legal — the foundation pass produces the staging.
+        let config = json!({
+            "mode": "single",
+            "file": "{{ uploader.pdf }}"
+        });
+        let (_, _) = validate_and_transform(
+            &ExecutionBackendType::Kreuzberg,
+            &config,
+            &HashMap::new(),
+            "test_node",
+        )
+        .expect("upstream ref alone satisfies the no-files gate");
+    }
+
+    #[test]
+    fn kreuzberg_rejects_malformed_placeholder_in_file() {
+        let config = json!({
+            "mode": "single",
+            "file": "{{ a + b }}"
+        });
+        let err = validate_and_transform(
+            &ExecutionBackendType::Kreuzberg,
+            &config,
+            &HashMap::new(),
+            "ocr",
+        )
+        .unwrap_err();
+        match err {
+            CompileError::BackendPlaceholderSyntax {
+                node_id, backend, site, body,
+            } => {
+                assert_eq!(node_id, "ocr");
+                assert_eq!(backend, "kreuzberg");
+                assert_eq!(site, "file");
+                assert_eq!(body, "a + b");
+            }
+            other => panic!("expected BackendPlaceholderSyntax, got {other:?}"),
+        }
     }
 }

@@ -5329,6 +5329,14 @@
           }
         }
       },
+      "JoinMode": {
+        "type": "string",
+        "description": "Firing rule for a `Join` node. `All` (the default) waits for every\nincoming branch — the AND-join semantics inherited from `ParallelJoin`.\n`Any` fires per arriving token — the canonical petri-net XOR-join, dual\nof `Decision`'s XOR-split.",
+        "enum": [
+          "all",
+          "any"
+        ]
+      },
       "LineageResponse": {
         "type": "object",
         "description": "Lineage response: artifacts grouped by iteration/step.",
@@ -5607,7 +5615,7 @@
       },
       "MergeStrategy": {
         "type": "string",
-        "description": "How a `ParallelJoin` merges the tokens arriving on its joined branches.\n\n`ShallowLastWins` is the historical behaviour (top-level keys overwrite,\nlast branch to arrive wins on a key collision). `DeepMerge` recursively\nmerges nested object values instead of overwriting them.",
+        "description": "How a `ParallelJoin`/`Join { mode: All }` merges the tokens arriving on\nits joined branches.\n\n`ShallowLastWins` is the historical behaviour (top-level keys overwrite,\nlast branch to arrive wins on a key collision). `DeepMerge` recursively\nmerges nested object values instead of overwriting them.",
         "enum": [
           "shallow_last_wins",
           "deep_merge"
@@ -8072,6 +8080,50 @@
                 "type": "string",
                 "enum": [
                   "parallel_join"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Unified converge primitive — superset of `ParallelJoin` (AND-join) plus\nthe previously-missing XOR-join. `mode == All` waits for every incoming\nbranch and merges payloads per `merge_strategy` (the same semantics as\n`parallel_join`). `mode == Any` fires per arriving token — the\ncanonical petri-net XOR-join, dual of `Decision`'s XOR-split. Both\nmodes park each branch's inbound token in `p_<id>_data` so downstream\n`<slug>.<field>` borrows resolve through the standard read-arc\npipeline (the `output` Port declares the addressable shape).\n\n`ParallelJoin` is kept as a back-compat variant; the editor's default\nfactory emits `Join { mode: All }`.",
+            "required": [
+              "label",
+              "type"
+            ],
+            "properties": {
+              "description": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "label": {
+                "type": "string"
+              },
+              "mergeStrategy": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/MergeStrategy",
+                    "description": "Honoured only when `mode == All`. For `Any` only one payload ever\narrives per firing, so there is nothing to merge."
+                  }
+                ]
+              },
+              "mode": {
+                "$ref": "#/components/schemas/JoinMode",
+                "description": "`All` (AND-join, the parallel_join semantics) waits for every\nincoming branch. `Any` (XOR-join) fires per arriving token."
+              },
+              "output": {
+                "$ref": "#/components/schemas/Port",
+                "description": "Declared output shape. Each branch's inbound payload is parked at\n`p_<id>_data`; the declared fields here describe what downstream\n`<slug>.<field>` borrows can read."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "join"
                 ]
               }
             }

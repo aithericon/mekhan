@@ -97,19 +97,47 @@ pub struct ResolvedKreuzbergConfig {
 
 impl KreuzbergConfig {
     /// Resolve the target file for single-mode extraction.
+    ///
+    /// `config.file` may carry either:
+    ///   - an input name (key in `staged_inputs`) — the historical form, used
+    ///     when authors hand-write `file: "doc"` against a `doc` input; or
+    ///   - an absolute file path — the form the Mekhan compiler emits when
+    ///     `file: "{{ <slug>.<field> }}"` is rewritten to
+    ///     `file: "{{input_path:<borrow_name>}}"` and the executor's input
+    ///     resolver substitutes the staged file's absolute path before
+    ///     `prepare()` deserializes the config.
+    ///
+    /// We try the staged-name lookup first, then fall back to treating the
+    /// value as an absolute path; if it matches a staged input by value we
+    /// keep that input's name (for log/metric provenance), otherwise we
+    /// derive a name from the file stem.
     pub fn resolve_target_file(
         &self,
         staged_inputs: &HashMap<String, PathBuf>,
     ) -> Result<(String, PathBuf), ExecutorError> {
-        if let Some(ref name) = self.file {
-            let path = staged_inputs.get(name).ok_or_else(|| {
-                ExecutorError::Config(format!(
-                    "kreuzberg: input '{}' not found in staged inputs (available: {:?})",
-                    name,
-                    staged_inputs.keys().collect::<Vec<_>>()
-                ))
-            })?;
-            Ok((name.clone(), path.clone()))
+        if let Some(ref spec) = self.file {
+            if let Some(path) = staged_inputs.get(spec) {
+                return Ok((spec.clone(), path.clone()));
+            }
+            let p = PathBuf::from(spec);
+            if p.is_absolute() {
+                let name = staged_inputs
+                    .iter()
+                    .find(|(_, sp)| *sp == &p)
+                    .map(|(n, _)| n.clone())
+                    .unwrap_or_else(|| {
+                        p.file_stem()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("file")
+                            .to_string()
+                    });
+                return Ok((name, p));
+            }
+            return Err(ExecutorError::Config(format!(
+                "kreuzberg: input '{}' not found in staged inputs (available: {:?})",
+                spec,
+                staged_inputs.keys().collect::<Vec<_>>()
+            )));
         } else if staged_inputs.len() == 1 {
             let (name, path) = staged_inputs.iter().next().unwrap();
             Ok((name.clone(), path.clone()))
@@ -204,6 +232,51 @@ mod tests {
             ("b".into(), PathBuf::from("/tmp/b.pdf")),
         ]);
         assert!(config.resolve_target_file(&staged).is_err());
+    }
+
+    /// Regression: the Mekhan compiler rewrites `file: "{{ <slug>.<field> }}"`
+    /// to `file: "{{input_path:<borrow>}}"`, and the executor's input resolver
+    /// substitutes the staged file's absolute path BEFORE `prepare()`
+    /// deserializes the config. So `config.file` arrives as a path, not a
+    /// staged-input name. `resolve_target_file` must accept it and keep the
+    /// originating input's name (for log/metric provenance).
+    #[test]
+    fn resolve_target_file_accepts_absolute_path_from_input_path_resolver() {
+        let staged_path = PathBuf::from(
+            "/tmp/runs/exec-1/inputs/__borrow_start__document.png",
+        );
+        let staged = HashMap::from([
+            ("input.json".into(), PathBuf::from("/tmp/runs/exec-1/inputs/input.json")),
+            ("__borrow_start__document".into(), staged_path.clone()),
+        ]);
+        let config = KreuzbergConfig {
+            file: Some(staged_path.display().to_string()),
+            ..default_config()
+        };
+        let (name, path) = config.resolve_target_file(&staged).expect(
+            "absolute path that round-trips to a staged input must resolve",
+        );
+        assert_eq!(name, "__borrow_start__document");
+        assert_eq!(path, staged_path);
+    }
+
+    /// And: if the resolved path doesn't match any staged input by value
+    /// (e.g. an externally-staged file the executor hook placed on disk
+    /// without registering in `staged_inputs`), fall back to the path's
+    /// file stem as the input name. The file is still usable; only the
+    /// provenance label is synthetic.
+    #[test]
+    fn resolve_target_file_falls_back_to_file_stem_for_unregistered_path() {
+        let staged = HashMap::from([
+            ("input.json".into(), PathBuf::from("/tmp/runs/exec-1/inputs/input.json")),
+        ]);
+        let config = KreuzbergConfig {
+            file: Some("/var/data/external/report.pdf".into()),
+            ..default_config()
+        };
+        let (name, path) = config.resolve_target_file(&staged).unwrap();
+        assert_eq!(name, "report");
+        assert_eq!(path, PathBuf::from("/var/data/external/report.pdf"));
     }
 
     fn default_config() -> KreuzbergConfig {

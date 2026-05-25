@@ -1839,6 +1839,14 @@ export interface components {
             net_id: string;
             status: string;
         };
+        /**
+         * @description Firing rule for a `Join` node. `All` (the default) waits for every
+         *     incoming branch — the AND-join semantics inherited from `ParallelJoin`.
+         *     `Any` fires per arriving token — the canonical petri-net XOR-join, dual
+         *     of `Decision`'s XOR-split.
+         * @enum {string}
+         */
+        JoinMode: "all" | "any";
         /** @description Lineage response: artifacts grouped by iteration/step. */
         LineageResponse: {
             process_id: string;
@@ -1927,7 +1935,8 @@ export interface components {
             form?: components["schemas"]["TaskFieldConfig"][];
         };
         /**
-         * @description How a `ParallelJoin` merges the tokens arriving on its joined branches.
+         * @description How a `ParallelJoin`/`Join { mode: All }` merges the tokens arriving on
+         *     its joined branches.
          *
          *     `ShallowLastWins` is the historical behaviour (top-level keys overwrite,
          *     last branch to arrive wins on a key collision). `DeepMerge` recursively
@@ -2863,6 +2872,23 @@ export interface components {
             mergeStrategy?: components["schemas"]["MergeStrategy"];
             /** @enum {string} */
             type: "parallel_join";
+        } | {
+            description?: string | null;
+            label: string;
+            mergeStrategy?: null | components["schemas"]["MergeStrategy"];
+            /**
+             * @description `All` (AND-join, the parallel_join semantics) waits for every
+             *     incoming branch. `Any` (XOR-join) fires per arriving token.
+             */
+            mode?: components["schemas"]["JoinMode"];
+            /**
+             * @description Declared output shape. Each branch's inbound payload is parked at
+             *     `p_<id>_data`; the declared fields here describe what downstream
+             *     `<slug>.<field>` borrows can read.
+             */
+            output?: components["schemas"]["Port"];
+            /** @enum {string} */
+            type: "join";
         } | {
             description?: string | null;
             label: string;
