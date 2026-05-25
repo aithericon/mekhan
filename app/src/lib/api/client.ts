@@ -235,8 +235,14 @@ export class PublishGateError extends Error {
 }
 
 export async function publishTemplate(id: string, force = false): Promise<Template> {
+	// Coerce explicitly: callers that wire this as a DOM event handler
+	// (e.g. `onclick={() => publishTemplate(id)}`) may accidentally let an
+	// Event object land here. openapi-fetch's default querySerializer
+	// rejects non-primitive query values with the unhelpful
+	// "Deeply-nested arrays/objects aren't supported".
+	const forceBool = force === true;
 	const res = await client.POST('/api/templates/{id}/publish', {
-		params: { path: { id }, query: { force } }
+		params: { path: { id }, query: { force: forceBool } }
 	});
 	const rawErr = res.error as unknown;
 	if (rawErr !== undefined) {

@@ -274,7 +274,7 @@
 			version={template?.version}
 			awareness={session.awareness}
 			provider={session.provider}
-			onpublish={handlePublish}
+			onpublish={() => handlePublish(false)}
 			onpreview={handlePreview}
 			onnewversion={handleNewVersion}
 			onrun={handleRun}
