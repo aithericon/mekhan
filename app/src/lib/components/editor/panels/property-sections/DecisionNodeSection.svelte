@@ -21,9 +21,13 @@
 		 * the single source of truth). Empty if detached or unresolvable.
 		 */
 		scope?: ScopeEntry[];
+		/** Workflow-level resource refs surfaced as a second tab in the
+		 *  embedded RefPicker (see GuardEditor). Empty when no resources
+		 *  are declared on the workflow. */
+		resourceScope?: ScopeEntry[];
 	};
 
-	let { data, readonly = false, onchange, scope = [] }: Props = $props();
+	let { data, readonly = false, onchange, scope = [], resourceScope = [] }: Props = $props();
 
 	function addBranch() {
 		onchange({
@@ -162,6 +166,7 @@
 				<GuardEditor
 					guard={condition.guard}
 					{scope}
+					{resourceScope}
 					{readonly}
 					onchange={(val) => updateConditionGuard(i, val)}
 				/>

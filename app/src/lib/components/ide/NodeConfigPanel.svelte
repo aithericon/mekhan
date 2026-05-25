@@ -7,7 +7,12 @@
 	import DecisionNodeSection from '$lib/components/editor/panels/property-sections/DecisionNodeSection.svelte';
 	import LoopNodeSection from '$lib/components/editor/panels/property-sections/LoopNodeSection.svelte';
 	import InScopeRefsSection from '$lib/components/editor/panels/property-sections/InScopeRefsSection.svelte';
-	import type { ScopeEntry } from '$lib/editor/guard-scope';
+	import {
+		loadResourceTypes,
+		buildResourceScope,
+		type ScopeEntry
+	} from '$lib/editor/guard-scope';
+	import type { ResourceTypeInfo } from '$lib/api/resources';
 
 	type Props = {
 		binding: YjsGraphBinding;
@@ -33,6 +38,20 @@
 		onRefreshScope,
 		oninsertref
 	}: Props = $props();
+
+	// Workflow-level resource refs for the RefPicker's Resources tab.
+	// Same module-cached fetch + derivation as the canvas-side panel.
+	let resourceTypes = $state<ResourceTypeInfo[]>([]);
+	$effect(() => {
+		void loadResourceTypes()
+			.then((types) => {
+				resourceTypes = types;
+			})
+			.catch(() => {});
+	});
+	const resourceScope = $derived(
+		buildResourceScope(binding.graph.resources, resourceTypes)
+	);
 
 	const nodeData = $derived(
 		binding.graph.nodes.find((n) => n.id === nodeId)?.data ?? null
@@ -110,6 +129,7 @@
 			{#if showScopePicker}
 				<InScopeRefsSection
 					{scope}
+					{resourceScope}
 					busy={scopeBusy}
 					{incomingCount}
 					onRefresh={onRefreshScope}
@@ -128,9 +148,9 @@
 			{:else if nodeData.type === 'automated_step'}
 				<AutomatedStepSection data={nodeData} {readonly} onchange={handleChange} {binding} {nodeId} {scope} />
 			{:else if nodeData.type === 'decision'}
-				<DecisionNodeSection data={nodeData} {readonly} onchange={handleChange} {scope} />
+				<DecisionNodeSection data={nodeData} {readonly} onchange={handleChange} {scope} {resourceScope} />
 			{:else if nodeData.type === 'loop'}
-				<LoopNodeSection data={nodeData} {readonly} onchange={handleChange} {scope} />
+				<LoopNodeSection data={nodeData} {readonly} onchange={handleChange} {scope} {resourceScope} />
 			{/if}
 		</div>
 	{:else}

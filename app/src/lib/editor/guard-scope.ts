@@ -12,6 +12,7 @@
 
 import type { components } from '$lib/api/schema';
 import { analyzeGraph } from '$lib/api/client';
+import { listResourceTypes, type ResourceTypeInfo } from '$lib/api/resources';
 
 type WorkflowGraph = components['schemas']['WorkflowGraph'];
 type FieldKind = components['schemas']['FieldKind'];
@@ -99,6 +100,84 @@ export async function fetchNodeScopes(graph: WorkflowGraph): Promise<ScopeAnalys
 	} catch {
 		return { scopes: out, graphOk: false, diagnostics: [], requestFailed: true };
 	}
+}
+
+/**
+ * Lazy, module-cached fetch of `/api/resources/types`. The registry is
+ * compile-time on the server (built from `inventory::submit!`) — values
+ * never change at runtime, so one fetch per session is enough. The
+ * promise is cached so multiple pickers opening at once share one
+ * network round-trip. Failures cache a rejected promise for ~5s to
+ * avoid hammering the server, then refetch on the next call.
+ */
+let resourceTypesCache: Promise<ResourceTypeInfo[]> | null = null;
+let resourceTypesCachedAt = 0;
+const RESOURCE_TYPES_ERROR_TTL_MS = 5_000;
+
+export function loadResourceTypes(): Promise<ResourceTypeInfo[]> {
+	if (resourceTypesCache) return resourceTypesCache;
+	const promise = listResourceTypes();
+	resourceTypesCache = promise;
+	resourceTypesCachedAt = Date.now();
+	promise.catch(() => {
+		// Reject cached only if the entry is still ours and the TTL elapsed,
+		// so a transient error doesn't pin a rejection forever.
+		setTimeout(() => {
+			if (resourceTypesCache === promise && Date.now() - resourceTypesCachedAt >= RESOURCE_TYPES_ERROR_TTL_MS) {
+				resourceTypesCache = null;
+			}
+		}, RESOURCE_TYPES_ERROR_TTL_MS);
+	});
+	return promise;
+}
+
+/** Test/HMR helper — drops the cache so the next `loadResourceTypes` re-fetches. */
+export function _clearResourceTypesCache(): void {
+	resourceTypesCache = null;
+}
+
+/**
+ * Project the workflow's `graph.resources: { alias -> type }` block plus
+ * the type registry into `ScopeEntry[]` shaped for `RefPicker`'s resource
+ * tab. Each alias contributes one entry per field (public + secret); the
+ * synthetic `nodeId` is `resource:<alias>` so it never collides with a
+ * real producer slug.
+ *
+ * Field `kind` is best-effort:
+ *  - `password`, `token`, `key`, `secret` → `text` (the value is a
+ *    string; the kernel rewraps it before any inline use).
+ *  - `port` → `number`.
+ *  - everything else → `text` (most resource configs are strings).
+ *
+ * Returns `[]` when the workflow declares no resources OR the registry
+ * doesn't know the alias's type — the picker hides its Resources tab
+ * rather than rendering a stub.
+ */
+export function buildResourceScope(
+	resources: Record<string, string> | undefined,
+	types: ResourceTypeInfo[]
+): ScopeEntry[] {
+	if (!resources) return [];
+	const out: ScopeEntry[] = [];
+	const byName = new Map(types.map((t) => [t.name, t]));
+	// Match the BTreeMap alphabetisation we mirror in `YjsGraphBinding`.
+	const aliases = Object.keys(resources).sort();
+	for (const alias of aliases) {
+		const typeName = resources[alias];
+		const info = byName.get(typeName);
+		if (!info) continue;
+		const fields = [...(info.public_fields ?? []), ...(info.secret_fields ?? [])];
+		for (const field of fields) {
+			out.push({
+				nodeId: `resource:${alias}`,
+				nodeLabel: alias,
+				field,
+				kind: field === 'port' ? 'number' : 'text',
+				qualified: `${alias}.${field}`
+			});
+		}
+	}
+	return out;
 }
 
 /**

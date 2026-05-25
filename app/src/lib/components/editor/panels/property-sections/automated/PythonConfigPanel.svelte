@@ -2,7 +2,6 @@
 	import KeyValueEditor from '../../shared/KeyValueEditor.svelte';
 	import StringListEditor from '../../shared/StringListEditor.svelte';
 	import PythonRuntimeReference from './PythonRuntimeReference.svelte';
-	import ResourceBindings from './ResourceBindings.svelte';
 	import type { YjsGraphBinding } from '$lib/yjs/graph-binding.svelte';
 	import type * as Y from 'yjs';
 	import Plus from '@lucide/svelte/icons/plus';
@@ -20,14 +19,6 @@
 		binding?: YjsGraphBinding;
 		nodeId?: string;
 		templateId?: string;
-		/** Phase B.10 — workflow-level `resources: { alias: type }` block.
-		 *  When non-empty, the resource-bindings section renders below
-		 *  the environment editor. Empty / undefined → section hidden. */
-		resources?: Record<string, string>;
-		/** Current `alias -> resource_path` map. Updates flow via
-		 *  `onresourcebindings`. */
-		resource_bindings?: Record<string, string>;
-		onresourcebindings?: (bindings: Record<string, string>) => void;
 	};
 
 	let {
@@ -38,10 +29,7 @@
 		onentrypointchange,
 		binding,
 		nodeId,
-		templateId,
-		resources = {},
-		resource_bindings = {},
-		onresourcebindings
+		templateId
 	}: Props = $props();
 
 	function fileHref(filename: string): string | null {
@@ -230,12 +218,5 @@
 		onchange={(env) => onchange({ ...config, env })}
 	/>
 </div>
-
-<ResourceBindings
-	{resources}
-	bindings={resource_bindings}
-	{readonly}
-	onbindings={(b) => onresourcebindings?.(b)}
-/>
 
 <PythonRuntimeReference />

@@ -16,6 +16,10 @@
 	type Props = {
 		/** This node's in-scope refs (from `/api/analyze`). */
 		scope: ScopeEntry[];
+		/** Workflow-level resource refs — surfaced as a second tab in
+		 *  RefPicker. Empty by default so non-resource workflows render
+		 *  the existing single-pane picker unchanged. */
+		resourceScope?: ScopeEntry[];
 		/** Optional refresh affordance (IDE re-runs the analyzer; canvas
 		 *  auto-refetches on graph edits, so usually omits this). */
 		busy?: boolean;
@@ -34,6 +38,7 @@
 
 	let {
 		scope,
+		resourceScope = [],
 		busy = false,
 		onRefresh,
 		incomingCount = 0,
@@ -44,10 +49,10 @@
 	const unmergedFanIn = $derived(incomingCount > 1);
 
 	const triggerLabel = $derived.by(() => {
-		if (scope.length === 0) return 'No upstream fields in scope';
+		const total = scope.length + resourceScope.length;
+		if (total === 0) return 'No upstream fields in scope';
 		if (oninsertref) return 'Insert variable…';
-		const n = scope.length;
-		return `Browse ${n} field${n === 1 ? '' : 's'} in scope…`;
+		return `Browse ${total} field${total === 1 ? '' : 's'} in scope…`;
 	});
 
 	function onpick(entry: ScopeEntry) {
@@ -85,12 +90,13 @@
 
 	<RefPicker
 		{scope}
-		disabled={scope.length === 0}
+		{resourceScope}
+		disabled={scope.length === 0 && resourceScope.length === 0}
 		placeholder={triggerLabel}
 		{onpick}
 	/>
 
-	{#if scope.length === 0}
+	{#if scope.length === 0 && resourceScope.length === 0}
 		<p class="text-sm text-muted-foreground">
 			Wire a Start or AutomatedStep upstream and declare its output port to
 			reference fields here.

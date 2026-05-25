@@ -10,9 +10,12 @@
 		onchange: (data: LoopNodeData) => void;
 		/** Pre-computed scope at this node — includes `<id>.iteration`. */
 		scope?: ScopeEntry[];
+		/** Workflow-level resource refs surfaced as a second tab in the
+		 *  embedded RefPicker (see GuardEditor). */
+		resourceScope?: ScopeEntry[];
 	};
 
-	let { data, readonly = false, onchange, scope = [] }: Props = $props();
+	let { data, readonly = false, onchange, scope = [], resourceScope = [] }: Props = $props();
 </script>
 
 <!--
@@ -30,6 +33,7 @@
 	<GuardEditor
 		guard={data.loopCondition}
 		{scope}
+		{resourceScope}
 		{readonly}
 		onchange={(val) => onchange({ ...data, loopCondition: val })}
 	/>

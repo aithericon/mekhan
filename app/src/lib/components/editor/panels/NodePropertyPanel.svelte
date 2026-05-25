@@ -22,7 +22,13 @@
 	import EndNodeSection from './property-sections/EndNodeSection.svelte';
 	import SubWorkflowSection from './property-sections/SubWorkflowSection.svelte';
 	import InScopeRefsSection from './property-sections/InScopeRefsSection.svelte';
-	import { fetchNodeScopes, type ScopeEntry } from '$lib/editor/guard-scope';
+	import {
+		fetchNodeScopes,
+		loadResourceTypes,
+		buildResourceScope,
+		type ScopeEntry
+	} from '$lib/editor/guard-scope';
+	import type { ResourceTypeInfo } from '$lib/api/resources';
 	import { outputPortsFor } from '$lib/editor/derived-ports';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -144,6 +150,27 @@
 	const incomingCount = $derived(
 		binding && nodeId ? binding.graph.edges.filter((e) => e.target === nodeId).length : 0
 	);
+
+	// Workflow-level resource refs for the RefPicker's Resources tab. The
+	// type registry is fetched once per session (module-cached); the scope
+	// itself is derived live so renaming an alias or adding one reflects
+	// without an extra round-trip. Empty until the registry resolves —
+	// pickers degrade to the existing single-pane mode in the meantime.
+	let resourceTypes = $state<ResourceTypeInfo[]>([]);
+	$effect(() => {
+		void loadResourceTypes()
+			.then((types) => {
+				resourceTypes = types;
+			})
+			.catch(() => {
+				// Best-effort — the picker just doesn't surface a Resources
+				// tab if the registry is unreachable. Network errors here
+				// are surfaced by the dedicated /resources page.
+			});
+	});
+	const resourceScope = $derived(
+		buildResourceScope(binding?.graph.resources, resourceTypes)
+	);
 </script>
 
 <div
@@ -235,7 +262,7 @@
 		     refetches on every graph edit. No `oninsertref` here either:
 		     canvas rail has no code editor to target. -->
 		{#if showScopePicker}
-			<InScopeRefsSection {scope} {incomingCount} />
+			<InScopeRefsSection {scope} {resourceScope} {incomingCount} />
 		{/if}
 
 		<!-- Type-specific sections -->
@@ -269,9 +296,9 @@
 			<AutomatedStepSection {data} {readonly} {onchange} {binding} {nodeId} {templateId} {scope} />
 			<RetryPolicySection {data} {readonly} {onchange} />
 		{:else if data.type === 'decision'}
-			<DecisionNodeSection {data} {readonly} {onchange} {scope} />
+			<DecisionNodeSection {data} {readonly} {onchange} {scope} {resourceScope} />
 		{:else if data.type === 'loop'}
-			<LoopNodeSection {data} {readonly} {onchange} {scope} />
+			<LoopNodeSection {data} {readonly} {onchange} {scope} {resourceScope} />
 		{:else if data.type === 'trigger'}
 			<TriggerNodeSection {data} {readonly} {onchange} {nodeId} {binding} />
 		{:else if data.type === 'parallel_split'}

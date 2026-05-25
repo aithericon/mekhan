@@ -11,6 +11,11 @@
 
 	type Props = {
 		scope: ScopeEntry[];
+		/** Workflow-level resource refs surfaced as a second tab in
+		 *  RefPicker. Resource entries already lack any `input.` prefix
+		 *  (they're top-level `<alias>.<field>`), so the snippet rewriter
+		 *  passes them through unchanged. */
+		resourceScope?: ScopeEntry[];
 		disabled?: boolean;
 		placeholder?: string;
 		triggerClass?: string;
@@ -20,6 +25,7 @@
 
 	let {
 		scope,
+		resourceScope = [],
 		disabled = false,
 		placeholder = 'Insert variable…',
 		triggerClass = '',
@@ -36,6 +42,7 @@
 
 <RefPicker
 	{scope}
+	{resourceScope}
 	{disabled}
 	{placeholder}
 	{triggerClass}
