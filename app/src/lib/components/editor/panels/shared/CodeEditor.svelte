@@ -6,6 +6,11 @@
 		value: string;
 		language?: 'python' | 'json' | 'rhai';
 		readonly?: boolean;
+		/** Dim the editor when readonly. On by default — signals "you can't edit
+		 *  this here" in the property panels. Pure viewers (e.g. the runtime
+		 *  output JSON dump) should pass `false`, otherwise the syntax-highlit
+		 *  text washes out and gets hard to read. */
+		dimWhenReadonly?: boolean;
 		minHeight?: string;
 		maxHeight?: string;
 		onchange?: (value: string) => void;
@@ -15,6 +20,7 @@
 		value,
 		language = 'python',
 		readonly = false,
+		dimWhenReadonly = true,
 		minHeight = '120px',
 		maxHeight = '300px',
 		onchange
@@ -118,7 +124,7 @@
 	});
 </script>
 
-<div bind:this={containerEl} class="code-editor-container" class:opacity-70={readonly}></div>
+<div bind:this={containerEl} class="code-editor-container" class:opacity-70={readonly && dimWhenReadonly}></div>
 
 <style>
 	.code-editor-container {

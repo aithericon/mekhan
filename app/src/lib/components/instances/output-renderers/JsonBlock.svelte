@@ -23,7 +23,14 @@
      maximize affordance for the common case of deeply-nested executor outputs
      that would otherwise spill the entire drawer. -->
 <div class="relative">
-	<CodeEditor value={text} language="json" readonly minHeight="80px" maxHeight="320px" />
+	<CodeEditor
+		value={text}
+		language="json"
+		readonly
+		dimWhenReadonly={false}
+		minHeight="80px"
+		maxHeight="320px"
+	/>
 	<Button
 		variant="ghost"
 		size="icon"
@@ -62,6 +69,7 @@
 					value={text}
 					language="json"
 					readonly
+					dimWhenReadonly={false}
 					minHeight="200px"
 					maxHeight="calc(90vh - 8rem)"
 				/>

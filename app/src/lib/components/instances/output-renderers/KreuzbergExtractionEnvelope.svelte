@@ -3,7 +3,8 @@
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
 	import ChevronRight from '@lucide/svelte/icons/chevron-right';
 	import KeyValueList from './KeyValueList.svelte';
-	import Markdown from './Markdown.svelte';
+	import { renderMdsvex } from '$lib/mdsvex';
+	import { MDSVEX_CLASS } from '$lib/mdsvex-styles';
 	import type { RendererProps } from './types';
 
 	// Kreuzberg `ExtractionResult` shape, plus the derived fields the executor
@@ -148,7 +149,11 @@
 						</div>
 						<div class="overflow-x-auto p-3">
 							{#if typeof table.markdown === 'string' && table.markdown.length > 0}
-								<Markdown content={table.markdown} />
+								<!-- Reuse the task block-renderer's mdsvex pipeline: it supports
+								     GFM tables (output-renderers/Markdown.svelte explicitly
+								     doesn't) and the MDSVEX_CLASS already styles <th>/<td>. -->
+								<!-- eslint-disable-next-line svelte/no-at-html-tags -->
+								<div class={MDSVEX_CLASS}>{@html renderMdsvex(table.markdown)}</div>
 							{:else}
 								<p class="text-sm italic text-muted-foreground">
 									Table has no rendered body.
