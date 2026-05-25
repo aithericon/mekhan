@@ -50,7 +50,20 @@ export class MekhanWsProvider {
 		// Listen for local doc changes and send them as SyncUpdate
 		this.doc.on('update', this.handleDocUpdate);
 
+		// DIAGNOSTIC — temporary. Time every phase of the Yjs WS lifecycle so
+		// we can see where the cold-open gap actually sits.
+		this._traceT0 = performance.now();
+		this._traceTag = templateId.slice(0, 8);
+		this._trace('ctor → connect()', { url: this.wsUrl });
 		this.connect();
+	}
+
+	private _traceT0 = 0;
+	private _traceTag = '';
+	private _trace(label: string, extra?: Record<string, unknown>) {
+		const dt = (performance.now() - this._traceT0).toFixed(1);
+		// eslint-disable-next-line no-console
+		console.log(`[yjs-ws ${this._traceTag}] +${dt}ms ${label}`, extra ?? '');
 	}
 
 	private handleDocUpdate = (update: Uint8Array, origin: unknown) => {
@@ -62,16 +75,20 @@ export class MekhanWsProvider {
 	private connect() {
 		if (!this.shouldConnect) return;
 		this.setStatus('connecting');
+		this._trace('connect() → new WebSocket');
 
 		try {
 			this.ws = new WebSocket(this.wsUrl);
 			this.ws.binaryType = 'arraybuffer';
-		} catch {
+		} catch (e) {
+			this._trace('WebSocket ctor threw', { error: String(e) });
 			this.scheduleReconnect();
 			return;
 		}
+		this._trace('WebSocket created (readyState=CONNECTING)');
 
 		this.ws.onopen = () => {
+			this._trace('ws.onopen → setStatus(connected) + send SyncStep1');
 			this.reconnectDelay = RECONNECT_BASE_MS;
 			this.setStatus('connected');
 
@@ -80,6 +97,7 @@ export class MekhanWsProvider {
 			this.sendMessage(MSG_SYNC_STEP1, sv);
 		};
 
+		let firstMessage = true;
 		this.ws.onmessage = (event: MessageEvent) => {
 			const data = new Uint8Array(event.data as ArrayBuffer);
 			if (data.length < 1) return;
@@ -87,11 +105,17 @@ export class MekhanWsProvider {
 			const msgType = data[0];
 			const payload = data.slice(1);
 
+			if (firstMessage) {
+				this._trace(`ws.onmessage (first) type=${msgType} bytes=${payload.length}`);
+				firstMessage = false;
+			}
+
 			switch (msgType) {
 				case MSG_SYNC_STEP2:
 					// Server sends missing updates — apply them
 					Y.applyUpdate(this.doc, payload, this);
 					this.setSynced(true);
+					this._trace('SyncStep2 applied → setSynced(true)');
 					break;
 				case MSG_SYNC_UPDATE:
 					// Broadcast update from another client — apply it
@@ -102,15 +126,20 @@ export class MekhanWsProvider {
 			}
 		};
 
-		this.ws.onclose = () => {
+		this.ws.onclose = (ev) => {
+			this._trace('ws.onclose', {
+				code: ev.code,
+				reason: ev.reason,
+				wasClean: ev.wasClean
+			});
 			this.ws = null;
 			this.setSynced(false);
 			this.setStatus('disconnected');
 			this.scheduleReconnect();
 		};
 
-		this.ws.onerror = () => {
-			// onclose will fire after onerror
+		this.ws.onerror = (ev) => {
+			this._trace('ws.onerror', { type: (ev as Event).type });
 		};
 	}
 

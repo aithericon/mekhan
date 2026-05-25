@@ -28,9 +28,9 @@ log_dir   := ".dev/log"
 work_dir  := ".dev/work"
 
 # Executor build features. `llm` is included so an AutomatedStep with
-# backendType=llm can dispatch against the local vllm-metal server
-# (`just dev vllm-up`); external-provider workflows need API keys in the
-# LlmConfig but the local OpenAI-compat path needs none. `kreuzberg` is
+# backendType=llm can dispatch against the local Ollama daemon
+# (`just dev ollama-up`); external-provider workflows need API keys in the
+# LlmConfig but the local Ollama path needs none. `kreuzberg` is
 # included so demo 07 (OCR + LLM classification) works out of the box —
 # first build pulls heavy pdfium deps, but the cached rebuild cost is
 # normal.
@@ -46,16 +46,16 @@ s3_endpoint  := "http://localhost:9005"
 # Default recipe: bring up the full stack
 default: up
 
-# Start everything: infra + vllm + executor + engine + mekhan + app
-# (auth: dev_noop). vllm-metal starts BEFORE the executor so the first
-# LLM-step dispatch finds a ready server. If vllm-metal isn't installed
-# locally, `up-vllm` no-ops with a hint — the rest of the stack still
+# Start everything: infra + ollama + executor + engine + mekhan + app
+# (auth: dev_noop). Ollama starts BEFORE the executor so the first
+# LLM-step dispatch finds a ready server. If Ollama isn't installed
+# locally, `up-ollama` no-ops with a hint — the rest of the stack still
 # comes up; only LLM-using workflows would fail at dispatch time.
 up:
     @just dev::_dirs
     @just dev::_infra-up
     @just dev::_wait-infra
-    @just dev::up-vllm
+    @just dev::up-ollama
     @just dev::up-executor
     @just dev::up-engine
     @just dev::up-mekhan
@@ -69,7 +69,7 @@ up-auth:
     @just dev::_dirs
     @just dev::_infra-up
     @just dev::_wait-infra
-    @just dev::up-vllm
+    @just dev::up-ollama
     @just dev::up-executor
     @just dev::up-engine
     @just dev::up-mekhan bff
@@ -82,7 +82,7 @@ down:
     @just dev::down-mekhan   || true
     @just dev::down-engine   || true
     @just dev::down-executor || true
-    @just dev::down-vllm     || true
+    @just dev::down-ollama   || true
     @just dev::_kill nomad   || true
     @just dev::_infra-down
 
@@ -111,7 +111,7 @@ status:
     docker compose ps --format "table {{ '{{.Name}}' }}\t{{ '{{.Status}}' }}\t{{ '{{.Ports}}' }}" 2>/dev/null || echo "  (compose not running)"
     echo ""
     echo "── native daemons ─────────────────────────────────────"
-    for name in vllm executor engine nomad mekhan app; do
+    for name in ollama executor engine nomad mekhan app; do
       pf="{{pid_dir}}/$name.pid"
       if [ -s "$pf" ] && kill -0 "$(cat "$pf")" 2>/dev/null; then
         printf "  %-10s up  (pid %s)\n" "$name" "$(cat "$pf")"
@@ -196,86 +196,88 @@ _wait-infra:
       sleep 1
     done
 
-# ── vllm-metal (local OpenAI-compat inference server, Apple Silicon) ────────
+# ── Ollama (local inference daemon, native `provider:"ollama"` adapter) ─────
 #
-# Stands up a local vllm-metal `vllm serve` instance the executor's LLM backend
-# can dispatch against (provider=openai + base_url=http://localhost:8000 — no
-# api_key needed for the local path). vllm-metal is real vLLM with an MLX
-# compute backend; see https://github.com/vllm-project/vllm-metal.
+# Stands up a local Ollama daemon the executor's LLM backend dispatches against
+# (provider=ollama + base_url=http://localhost:11434 — no api_key needed). The
+# Ollama adapter supports vision-capable models via the native /api/chat
+# image-payload field; see executor/crates/executor-llm/src/adapters/ollama.rs.
 #
-# Prerequisite (per-machine, one-time): install vllm-metal into
-# `~/.venv-vllm-metal` and pre-pull the model (~5GB):
+# Prerequisite (per-machine, one-time): install Ollama. Either the macOS app
+# (https://ollama.com/download) or the CLI:
 #
-#   curl -fsSL https://raw.githubusercontent.com/vllm-project/vllm-metal/main/install.sh | bash
-#   source ~/.venv-vllm-metal/bin/activate
-#   hf download mlx-community/Qwen3.5-9B-MLX-4bit
+#   brew install ollama
 #
-# Native arm64 Python 3.12 required (NOT Rosetta).
+# The recipe defers to an already-running daemon (macOS app or external
+# `ollama serve`) and only spawns its own when nothing is listening on
+# OLLAMA_PORT. Model pulls are idempotent — first `up` downloads the default
+# model (~7.8 GB for llama3.2-vision:11b); subsequent runs are no-ops.
 #
 # Knobs (env-overridable on the recipe call):
-#   VLLM_MODEL                     — model id (default mlx-community/Qwen3.5-9B-MLX-4bit; uniform 4-bit
-#                                    MLX, ~5GB weights, ~10-20s cold load). Other picks workable on 48GB:
-#                                      mlx-community/Qwen3.5-9B-MLX-8bit        (~9GB, less quant loss)
-#                                      mlx-community/Qwen3.5-9B-MLX-bf16        (~18GB, full precision)
-#                                      mlx-community/Qwen3.6-27B-4bit           (~14GB, more capable, slower)
-#                                      mlx-community/Qwen3.6-27B-OptiQ-4bit     (mixed 4/8-bit; LOAD RISK
-#                                        — vllm-metal may not handle OptiQ's mixed-precision layout;
-#                                        try only after a uniform 4-bit is known-working)
-#                                    If you change VLLM_MODEL, update the model field in
-#                                    demos/vllm-smoke/graph.json to match (the demo carries the model id
-#                                    in its LlmConfig; vllm-metal serves under exactly the id it loaded).
-#   VLLM_PORT                      — port (default 8000)
-#   VLLM_METAL_MULTIMODAL_MODE     — auto | text-only-compat | multimodal-native (default auto;
-#                                    set text-only-compat if a Qwen3.5/3.6 checkpoint trips the
-#                                    native multimodal loader)
-#   VLLM_READY_TIMEOUT_SECS        — readiness poll budget (default 120; 9B 4-bit cold load is
-#                                    typically 10-20s, but first-ever load before OS file cache
-#                                    warms can be longer; raise for larger models)
-up-vllm:
+#   OLLAMA_MODEL                   — model tag (default qwen3.5:9b — direct Ollama-library equivalent
+#                                    of the prior vllm-metal default `mlx-community/Qwen3.5-9B-MLX-4bit`;
+#                                    ~5.5 GB GGUF Q4_K_M). Other workable picks:
+#                                      qwen3.5:2b                              (~1.4 GB, lightest)
+#                                      qwen3.5:27b                             (~16 GB, more capable)
+#                                      qwen3-vl:8b                             (~6 GB, vision-capable variant)
+#                                      llama3.2-vision:11b                     (~7.8 GB, alternative vision)
+#                                    If you change OLLAMA_MODEL, also update the `model` field in any
+#                                    demo whose LlmConfig pins the tag (the demo carries it explicitly;
+#                                    Ollama serves under exactly the tag it loaded).
+#   OLLAMA_PORT                    — port (default 11434)
+#   OLLAMA_READY_TIMEOUT_SECS      — readiness poll budget (default 60; the daemon itself starts in <1s,
+#                                    the budget covers the cold model pull on first run, which can take
+#                                    minutes; raise for larger models on slow connections)
+up-ollama:
     #!/usr/bin/env bash
     set -euo pipefail
     just dev::_dirs
-    if [ -s "{{pid_dir}}/vllm.pid" ] && kill -0 "$(cat {{pid_dir}}/vllm.pid)" 2>/dev/null; then
-      echo "  vllm already running (pid $(cat {{pid_dir}}/vllm.pid))"
-      exit 0
-    fi
-    venv="$HOME/.venv-vllm-metal"
-    if [ ! -x "$venv/bin/vllm" ]; then
-      echo "  · vllm-metal not installed at $venv — skipping"
-      echo "    install:  curl -fsSL https://raw.githubusercontent.com/vllm-project/vllm-metal/main/install.sh | bash"
-      echo "    (the rest of the dev stack still comes up; only LLM-using workflows would fail)"
-      exit 0
-    fi
-    model="${VLLM_MODEL:-mlx-community/Qwen3.5-9B-MLX-4bit}"
-    port="${VLLM_PORT:-8000}"
-    mm_mode="${VLLM_METAL_MULTIMODAL_MODE:-auto}"
-    ready_timeout="${VLLM_READY_TIMEOUT_SECS:-120}"
+    port="${OLLAMA_PORT:-11434}"
+    model="${OLLAMA_MODEL:-qwen3.5:9b}"
+    ready_timeout="${OLLAMA_READY_TIMEOUT_SECS:-60}"
 
-    echo "▶ starting vllm-metal (model=$model port=$port mm=$mm_mode)…"
-    # `bash -c` so the venv activation + exec live in a child shell nohup owns.
-    # `exec` replaces the bash so the pidfile points at the actual vllm process.
-    nohup env VLLM_METAL_MULTIMODAL_MODE="$mm_mode" \
-      bash -c 'source "$0"/bin/activate && exec vllm serve "$1" --host 127.0.0.1 --port "$2"' \
-      "$venv" "$model" "$port" \
-      > "{{log_dir}}/vllm.log" 2>&1 &
-    echo $! > "{{pid_dir}}/vllm.pid"
-
-    echo "▶ waiting for vllm (cold model load can take 60-90s)…"
-    ready=0
-    for _ in $(seq 1 "$ready_timeout"); do
-      if curl -sf "http://localhost:${port}/v1/models" >/dev/null 2>&1; then
-        ready=1; break
+    # Defer to an already-running daemon (macOS Ollama.app, system service,
+    # or a prior `ollama serve`). We only spawn — and pidfile — when nothing
+    # answers on the port.
+    if curl -sf "http://localhost:${port}/api/version" >/dev/null 2>&1; then
+      echo "  ollama already serving on :${port} (external — no pidfile)"
+    else
+      if ! command -v ollama >/dev/null 2>&1; then
+        echo "  · ollama not installed — skipping"
+        echo "    install:  brew install ollama   (or https://ollama.com/download for the macOS app)"
+        echo "    (the rest of the dev stack still comes up; only LLM-using workflows would fail)"
+        exit 0
       fi
-      sleep 1
-    done
-    if [ "$ready" != "1" ]; then
-      echo "✗ vllm did not become ready in ${ready_timeout}s (log: {{log_dir}}/vllm.log)" >&2
-      exit 1
+      echo "▶ starting ollama serve on :${port}…"
+      nohup env OLLAMA_HOST="127.0.0.1:${port}" ollama serve \
+        > "{{log_dir}}/ollama.log" 2>&1 &
+      echo $! > "{{pid_dir}}/ollama.pid"
+      ready=0
+      for _ in $(seq 1 "$ready_timeout"); do
+        if curl -sf "http://localhost:${port}/api/version" >/dev/null 2>&1; then
+          ready=1; break
+        fi
+        sleep 1
+      done
+      if [ "$ready" != "1" ]; then
+        echo "✗ ollama did not become ready in ${ready_timeout}s (log: {{log_dir}}/ollama.log)" >&2
+        exit 1
+      fi
+      echo "  ✓ ollama (pid $(cat {{pid_dir}}/ollama.pid))  http://localhost:${port}  log: {{log_dir}}/ollama.log"
     fi
-    echo "  ✓ vllm (pid $(cat {{pid_dir}}/vllm.pid))  http://localhost:${port}  log: {{log_dir}}/vllm.log"
 
-down-vllm:
-    @just dev::_kill vllm
+    # Idempotent model pull. `ollama list` enumerates installed tags; grep for
+    # the exact tag rather than substring so `:11b` doesn't also match `:11b-q8`.
+    if ollama list 2>/dev/null | awk 'NR>1 {print $1}' | grep -Fxq "$model"; then
+      echo "  ✓ model already present: $model"
+    else
+      echo "▶ pulling model: $model  (first run only; can take several minutes)"
+      ollama pull "$model"
+      echo "  ✓ pulled $model"
+    fi
+
+down-ollama:
+    @just dev::_kill ollama
 
 # ── Executor (aithericon-executor-service, daemon mode) ──────────────────────
 
@@ -893,7 +895,7 @@ _summary auth="DISABLED (dev_noop) — every request is the dev user":
     @echo "  postgres   → localhost:5439              (db: mekhan / user: mekhan / pw: mekhan)"
     @echo "  nats       → localhost:4333              (http monitor: http://localhost:8333)"
     @echo "  rustfs     → http://localhost:9005       (console: http://localhost:9006 / admin: rustfsadmin)"
-    @echo "  vllm       → http://localhost:8000       (OpenAI-compat; up if installed, see just/dev.just::up-vllm)"
+    @echo "  ollama     → http://localhost:11434      (native /api/chat; up if installed, see just/dev.just::up-ollama)"
     @echo "  executor   → daemon (NATS-driven)        (cancel: http://localhost:3105)"
     @echo "  engine     → http://localhost:3030"
     @echo "  mekhan     → http://localhost:3100"
@@ -901,7 +903,7 @@ _summary auth="DISABLED (dev_noop) — every request is the dev user":
     @echo ""
     @echo "  auth       → {{auth}}"
     @echo ""
-    @echo "  logs   : just dev logs <executor|engine|mekhan|app|infra>"
+    @echo "  logs   : just dev logs <ollama|executor|engine|mekhan|app|infra>"
     @echo "  status : just dev status"
     @echo "  stop   : just dev down"
     @echo "  wipe   : just dev reset   (destroys pg/nats/rustfs data)"

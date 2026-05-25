@@ -37,8 +37,8 @@ On the data side, `merge-extraction` re-parks the inbound payload under slug
 | Step | Backend | Model | Notes |
 |---|---|---|---|
 | `ocr` | kreuzberg | — | Tesseract `deu+eng`, table detection on. Reads `{{ start.document_file }}`. Emits kreuzberg's native `ExtractionResult` shape 1:1 — `content`, `mime_type`, `metadata`, `tables`, `detected_languages` (no remap). |
-| `classify` | llm (OpenAI-compat, vllm-metal at `:8000`) | `mlx-community/Qwen3.5-9B-MLX-4bit` | Vision MoE. Image = `{{ start.document_file }}`. OCR text injected via `{{ ocr.content }}`. JSON-schema response. Requires `just dev vllm-up`. |
-| `extract-bloodwork` / `extract-prescription` / `extract-clinical-note` / `extract-form-fields` / `extract-generic` | llm (OpenAI-compat, vllm-metal at `:8000`) | `mlx-community/Qwen3.5-9B-MLX-4bit` | Type-specific system prompts. JSON-schema response with mandatory `citations[]` per field. Schema factored via top-level `definitions.ExtractionFields` (inlined by `compiler::schema_refs::inline_refs` at lowering). |
+| `classify` | llm (Ollama, native `/api/chat` at `:11434`) | `qwen3.5:9b` | Vision-capable. Image = `{{ start.document_file }}`. OCR text injected via `{{ ocr.content }}`. JSON-schema response. Requires `just dev ollama-up`. |
+| `extract-bloodwork` / `extract-prescription` / `extract-clinical-note` / `extract-form-fields` / `extract-generic` | llm (Ollama, native `/api/chat` at `:11434`) | `qwen3.5:9b` | Type-specific system prompts. JSON-schema response with mandatory `citations[]` per field. Schema factored via top-level `definitions.ExtractionFields` (inlined by `compiler::schema_refs::inline_refs` at lowering). |
 | `merge-extraction` | join (`mode: "any"`) | — | Branches converge. Re-parks whichever branch's payload under slug `extraction`. |
 | `persist` | python | — | Single borrow `extraction.fields`. Stamps patient/class/date, emits a unified field list. |
 | `verify` | python | — | Citation matcher (mekhan analogue of online-clinic's `provenance` step kind). Normalized substring match of every `citations[].supporting_text` against `{{ ocr.content }}`. |
@@ -66,7 +66,7 @@ but they're the deltas vs. what currently ships.
    `images[].path` against `{{input:NAME}}` (staged-input pattern, executor-side).
    The compiler currently does **not** lower a slug-ref file field
    (`{{ start.document_file }}`) into a staged input for an `llm` step. The
-   `vllm-smoke` demo explicitly calls this out. **In flight.**
+   `llm-smoke` demo explicitly calls this out. **In flight.**
 
 2. **Backend-config string interpolation with `{{ slug.field }}`.** Mustache
    interpolation already works for HumanTask content blocks and `processName`.

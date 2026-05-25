@@ -1,17 +1,13 @@
 <script lang="ts">
 	import './layout.css';
 	import { onMount } from 'svelte';
-	import { goto } from '$app/navigation';
 	import { Button } from '$lib/components/ui/button';
 	import { TooltipProvider } from '$lib/components/ui/tooltip';
 	import User from '@lucide/svelte/icons/user';
-	import { findShowcaseTemplate } from '$lib/templates/showcase';
 	import { auth } from '$lib/auth/store.svelte';
 	import { ensureAuthInitialized, requireSession } from '$lib/auth/guard';
 
 	let { children } = $props();
-	let openingDemo = $state(false);
-	let demoMissing = $state(false);
 
 	onMount(async () => {
 		// BFF: the backend owns the OIDC callback (302s straight to the SPA),
@@ -24,26 +20,6 @@
 	async function signOut() {
 		await auth.signOut();
 	}
-
-	async function openDemo() {
-		if (openingDemo) return;
-		openingDemo = true;
-		demoMissing = false;
-		try {
-			const template = await findShowcaseTemplate();
-			if (!template) {
-				// Seeder hasn't run. The landing page `/` renders the full
-				// actionable diagnostic (the `MEKHAN__DEMOS__SEED=true`
-				// hint); the nav button just bounces there.
-				demoMissing = true;
-				await goto('/');
-				return;
-			}
-			await goto(`/templates/${template.id}`);
-		} finally {
-			openingDemo = false;
-		}
-	}
 </script>
 
 <TooltipProvider>
@@ -51,12 +27,8 @@
 	<header class="flex h-12 shrink-0 items-center border-b border-border bg-card px-4" data-testid="app-header">
 		<a href="/" class="text-sm font-semibold tracking-tight text-foreground" data-testid="nav-home">Mekhan</a>
 		<nav class="ml-8 flex flex-1 items-center gap-1 text-sm" data-testid="nav-bar">
-			<Button variant="ghost" size="sm" data-testid="nav-demo" disabled={openingDemo} onclick={openDemo}>
-				{openingDemo ? 'Opening…' : 'Demo'}
-			</Button>
 			<Button variant="ghost" size="sm" href="/templates" data-testid="nav-templates">Templates</Button>
 			<Button variant="ghost" size="sm" href="/instances" data-testid="nav-instances">Instances</Button>
-			<Button variant="ghost" size="sm" href="/processes" data-testid="nav-processes">Processes</Button>
 			<Button variant="ghost" size="sm" href="/tasks" data-testid="nav-tasks">Tasks</Button>
 			<Button variant="ghost" size="sm" href="/catalogue" data-testid="nav-catalogue">Catalogue</Button>
 			<span class="mx-1 h-4 w-px bg-border" aria-hidden="true"></span>
@@ -69,6 +41,16 @@
 				title="Engine debug: raw petri nets"
 			>
 				Engine
+			</Button>
+			<Button
+				variant="ghost"
+				size="sm"
+				href="/processes"
+				data-testid="nav-processes"
+				class="text-muted-foreground"
+				title="Engine debug: raw processes (usually accessed via an instance)"
+			>
+				Processes
 			</Button>
 			{#if auth.isAuthenticated}
 				<span class="ml-auto h-4 w-px bg-border" aria-hidden="true"></span>
