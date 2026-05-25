@@ -193,6 +193,12 @@ EOH
         # name; same value the service task uses.
         EXECUTOR_NATS_URL       = "${nats_url}"
         EXECUTOR_NATS_CREDS     = "$${NOMAD_SECRETS_DIR}/nats.creds"
+        # Must match the engine's EXECUTOR_NAMESPACE (set to "executor" in
+        # engine.nomad.hcl.tpl). Default in the executor service is
+        # "executor_jobs" — leaving it as default makes the executor listen on
+        # subjects engine never publishes to. Symptom: automated steps stay
+        # "pending" forever because dispatch messages sit in NATS unconsumed.
+        EXECUTOR_NAMESPACE      = "executor"
         EXECUTOR_BASE_DIR       = "/var/lib/aithericon/executor"
         EXECUTOR_CONCURRENCY    = "${executor_concurrency}"
         EXECUTOR_PYTHON__ENABLED   = "true"
