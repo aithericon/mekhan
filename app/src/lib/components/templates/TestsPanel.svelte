@@ -20,15 +20,19 @@
 	} from '$lib/api/client';
 	import TestEditorDialog from './TestEditorDialog.svelte';
 	import TestRunDetailSheet from './TestRunDetailSheet.svelte';
+	import type { ScopeEntry } from '$lib/editor/guard-scope';
 
 	type Props = {
 		templateId: string;
 		/// Optional `node_slug → form schema` map for nicer assertion / answer
 		/// authoring. Passed through to the dialog.
 		humanTaskSlugs?: string[];
+		/// Picker scope for the assertion path field. Derived in the parent
+		/// from the graph's End nodes; forwarded unchanged.
+		assertionScope?: ScopeEntry[];
 	};
 
-	let { templateId, humanTaskSlugs = [] }: Props = $props();
+	let { templateId, humanTaskSlugs = [], assertionScope = [] }: Props = $props();
 
 	let tests = $state<TemplateTest[]>([]);
 	let loading = $state(true);
@@ -242,6 +246,7 @@
 <TestEditorDialog
 	{templateId}
 	{humanTaskSlugs}
+	{assertionScope}
 	open={creating || editing !== null}
 	test={editing}
 	onclose={() => {

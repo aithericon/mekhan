@@ -23,6 +23,8 @@
 		type Assertion,
 		type AssertOp
 	} from '$lib/api/client';
+	import RefPicker from '$lib/components/editor/panels/property-sections/RefPicker.svelte';
+	import type { ScopeEntry } from '$lib/editor/guard-scope';
 
 	type Props = {
 		templateId: string;
@@ -32,11 +34,23 @@
 		/// reference list in the human_answers field so authors know which
 		/// keys to populate.
 		humanTaskSlugs?: string[];
+		/// Synthetic ScopeEntry list for the assertion path picker. Built by
+		/// the parent from each End node's `resultMapping` (see
+		/// `$lib/editor/assertion-scope`). Empty array → picker disables.
+		assertionScope?: ScopeEntry[];
 		onclose: () => void;
 		onsaved: () => void;
 	};
 
-	let { templateId, open, test, humanTaskSlugs = [], onclose, onsaved }: Props = $props();
+	let {
+		templateId,
+		open,
+		test,
+		humanTaskSlugs = [],
+		assertionScope = [],
+		onclose,
+		onsaved
+	}: Props = $props();
 
 	let name = $state('');
 	let enabled = $state(true);
@@ -314,13 +328,26 @@
 					{/if}
 					{#each assertions as a, idx (idx)}
 						<div class="flex items-start gap-2">
-							<Input
-								class="flex-1"
-								placeholder="result.value.invoice_amount"
-								bind:value={a.path}
-								oninput={(e) =>
-									updateAssertion(idx, { path: (e.target as HTMLInputElement).value })}
-							/>
+							<div class="flex flex-1 flex-col gap-1">
+								<Input
+									class="font-mono text-xs"
+									placeholder="result.value.invoice_amount"
+									bind:value={a.path}
+									oninput={(e) =>
+										updateAssertion(idx, {
+											path: (e.target as HTMLInputElement).value
+										})}
+								/>
+								<RefPicker
+									scope={assertionScope}
+									selected={a.path}
+									placeholder={assertionScope.length === 0
+										? 'Declare resultMapping on an End node'
+										: 'Pick result field…'}
+									onpick={(entry) =>
+										updateAssertion(idx, { path: entry.qualified })}
+								/>
+							</div>
 							<Select.Root
 								type="single"
 								value={a.op}

@@ -21,6 +21,7 @@
 		type FailingTestInfo
 	} from '$lib/api/client';
 	import { compileErrors } from '$lib/editor/compile-errors.svelte';
+	import { buildAssertionScope } from '$lib/editor/assertion-scope';
 	import { getSession, releaseSession } from '$lib/yjs/session-store';
 	import { YjsGraphBinding } from '$lib/yjs/graph-binding.svelte';
 	import type {
@@ -249,6 +250,8 @@
 			.map((n) => (n.slug && n.slug.trim() !== '' ? n.slug : n.id))
 	);
 
+	const assertionScope = $derived(buildAssertionScope(binding.graph));
+
 	$effect(() => {
 		load();
 	});
@@ -345,7 +348,7 @@
 	<SheetContent class="w-full max-w-md p-0 sm:max-w-md">
 		<SheetTitle class="sr-only">Tests</SheetTitle>
 		{#if template}
-			<TestsPanel templateId={template.id} {humanTaskSlugs} />
+			<TestsPanel templateId={template.id} {humanTaskSlugs} {assertionScope} />
 		{/if}
 	</SheetContent>
 </Sheet.Root>
