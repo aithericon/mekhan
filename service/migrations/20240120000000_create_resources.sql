@@ -32,8 +32,11 @@ CREATE TABLE resources (
 
     workspace_id        UUID         NOT NULL,
 
-    -- Windmill-style path identifier, e.g. `f/team/prod_pg`. Unique within a
-    -- workspace; the launcher uses (workspace_id, path) to bind aliases.
+    -- Snake_case identifier, e.g. `prod_pg`. Unique within a workspace.
+    -- Also doubles as the reference key in workflow Python source —
+    -- `prod_pg.host` resolves to this row at publish time (compiler
+    -- matches `path = $head` against scanned `<head>.<field>` patterns),
+    -- so the value must be a valid Python identifier.
     path                TEXT         NOT NULL,
 
     -- Stable wire identifier from `ResourceTypeDescriptor.name`

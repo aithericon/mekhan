@@ -161,6 +161,21 @@
 		fieldValues = { ...fieldValues, [name]: raw };
 	}
 
+	// Mirror the server-side regex (`service/src/handlers/resources.rs`).
+	// Workflow code references the resource as `<path>.<field>`, so the
+	// path itself must be a valid Python identifier — same shape the
+	// backend will accept. Surfacing the error here avoids a 400 round-
+	// trip on every typo.
+	const PATH_PATTERN = /^[a-z][a-z0-9_]*$/;
+	const pathError = $derived.by(() => {
+		if (mode === 'edit') return null; // path is locked on edit
+		if (!path) return null; // empty handled at submit
+		if (!PATH_PATTERN.test(path)) {
+			return 'Lowercase letter first, then letters / digits / underscores. Used as `<path>.<field>` in Python.';
+		}
+		return null;
+	});
+
 	function buildConfig(includeBlankSecrets: boolean): Record<string, unknown> {
 		const out: Record<string, unknown> = {};
 		for (const spec of fieldSpecs) {
@@ -188,6 +203,16 @@
 		if (!selectedType) {
 			error = 'Choose a resource type';
 			return;
+		}
+		if (mode === 'create') {
+			if (!path) {
+				error = 'Enter a path';
+				return;
+			}
+			if (pathError) {
+				error = pathError;
+				return;
+			}
 		}
 		loading = true;
 		error = null;
@@ -291,16 +316,25 @@
 						</Select.Root>
 					</FormField>
 
-					<FormField label="Path" description="Format: f/<owner>/<name> (Windmill-style, lowercase).">
+					<FormField
+						label="Path"
+						description="Snake_case identifier. Referenced in workflow code as `<path>.<field>`."
+					>
 						<Input
 							type="text"
 							value={path}
-							placeholder="f/team/main_pg"
+							placeholder="local_pg"
 							oninput={(e) => (path = (e.currentTarget as HTMLInputElement).value)}
 							disabled={mode === 'edit'}
+							aria-invalid={pathError ? 'true' : undefined}
 							class="font-mono text-sm"
 							data-testid="resource-modal-path"
 						/>
+						{#if pathError}
+							<p class="mt-1 text-sm text-destructive" data-testid="resource-modal-path-error">
+								{pathError}
+							</p>
+						{/if}
 					</FormField>
 
 					<FormField label="Display name">

@@ -47,11 +47,17 @@ use crate::models::template::PaginatedResponse;
 use crate::petri::resource_resolver::AuditAction;
 use crate::AppState;
 
-/// Windmill-style identifier — `u`ser, `f`older, or `g`roup namespace at
-/// the head, then `<owner>/<name>`. Catches typos like `f/team` (missing
-/// `/<name>`) or uppercase in the segments.
+/// Direct-mode resource identifier — a single snake_case identifier
+/// that doubles as the reference key in Python source (`local_pg.host`)
+/// and as the `WHERE path = $head` lookup at publish time. Must start
+/// with a lowercase letter, then lowercase letters / digits / underscore.
+/// Slashes and dashes are deliberately disallowed: a `<head>.<field>`
+/// access in Python source must be a valid Python identifier, and the
+/// path IS the head — the trailing-segment compromise would silently
+/// break renames and create ambiguity between two resources sharing
+/// the same trailing segment.
 static PATH_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^[ufg]/[a-z0-9_-]+/[a-z0-9_-]+$").expect("PATH_REGEX must compile")
+    Regex::new(r"^[a-z][a-z0-9_]*$").expect("PATH_REGEX must compile")
 });
 
 /// Default workspace until the workspaces table lands. Centralized so the
@@ -295,8 +301,10 @@ pub async fn create_resource(
 ) -> Result<(StatusCode, Json<ResourceSummary>), ApiError> {
     if !PATH_REGEX.is_match(&req.path) {
         return Err(ApiError::bad_request(format!(
-            "path '{}' does not match the required format `[ufg]/<owner>/<name>` \
-             (lowercase identifiers only)",
+            "path '{}' must be a snake_case identifier (e.g. `local_pg`): \
+             lowercase letter first, then letters / digits / underscores. \
+             Resources are referenced in workflow code as `<path>.<field>`, \
+             so the path itself must be a valid Python identifier.",
             req.path
         )));
     }

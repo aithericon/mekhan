@@ -190,7 +190,7 @@ async fn create_persists_public_config_and_writes_secret_via_store() {
     let (status, body) = post_create(
         &app,
         json!({
-            "path": "f/team/main_pg",
+            "path": "main_pg",
             "resource_type": "postgres",
             "display_name": "Main PG",
             "config": pg_config_full(),
@@ -254,7 +254,7 @@ async fn create_rejects_unknown_type() {
     let (status, body) = post_create(
         &app,
         json!({
-            "path": "f/team/bogus",
+            "path": "bogus",
             "resource_type": "definitely_not_real",
             "config": {},
         }),
@@ -292,7 +292,7 @@ async fn create_rejects_schema_violation() {
     let (status, body) = post_create(
         &app,
         json!({
-            "path": "f/team/partial_pg",
+            "path": "partial_pg",
             "resource_type": "postgres",
             // `host` and `database` are required; deliberately omitted.
             "config": {
@@ -317,7 +317,7 @@ async fn get_returns_404_for_soft_deleted() {
     let (_, body) = post_create(
         &app,
         json!({
-            "path": "f/team/soon_to_die",
+            "path": "soon_to_die",
             "resource_type": "postgres",
             "config": pg_config_full(),
         }),
@@ -353,7 +353,7 @@ async fn update_bumps_version_and_writes_new_vault_path() {
     let (_, body) = post_create(
         &app,
         json!({
-            "path": "f/team/rotates",
+            "path": "rotates",
             "resource_type": "postgres",
             "config": pg_config_full(),
         }),
@@ -420,7 +420,7 @@ async fn delete_marks_row_and_preserves_versions() {
     let (_, body) = post_create(
         &app,
         json!({
-            "path": "f/team/del_me",
+            "path": "del_me",
             "resource_type": "postgres",
             "config": pg_config_full(),
         }),
@@ -466,7 +466,7 @@ async fn rotate_bumps_version_without_changing_schema() {
     let (_, body) = post_create(
         &app,
         json!({
-            "path": "f/team/rotate_me",
+            "path": "rotate_me",
             "resource_type": "postgres",
             "config": pg_config_full(),
         }),
@@ -518,7 +518,7 @@ async fn audit_returns_one_row_per_write_action() {
     let (_, created) = post_create(
         &app,
         json!({
-            "path": "f/team/audited",
+            "path": "audited",
             "resource_type": "postgres",
             "config": pg_config_full(),
         }),

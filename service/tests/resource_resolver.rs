@@ -161,7 +161,7 @@ async fn resolve_returns_envelope_with_inline_public_and_secret_refs() {
         workspace_id,
         principal_id,
         "postgres",
-        "f/test/pg_main",
+        "pg_main",
         json!({
             "host": "db.example.internal",
             "port": 5432,
@@ -215,7 +215,7 @@ async fn resolve_writes_one_audit_row_per_alias() {
         workspace_id,
         principal_id,
         "postgres",
-        "f/test/pg",
+        "pg",
         json!({
             "host": "h", "port": 1, "database": "d", "username": "u", "sslmode": null
         }),
@@ -226,7 +226,7 @@ async fn resolve_writes_one_audit_row_per_alias() {
         workspace_id,
         principal_id,
         "openai",
-        "f/test/openai",
+        "openai_main",
         json!({ "organization": "org-x" }),
     )
     .await;
@@ -284,7 +284,7 @@ async fn resolve_acl_denied_returns_error_and_writes_no_audit() {
         workspace_id,
         owner_id,
         "postgres",
-        "f/test/forbidden",
+        "forbidden",
         json!({ "host": "h", "port": 1, "database": "d", "username": "u" }),
     )
     .await;
@@ -338,7 +338,7 @@ async fn resolve_unknown_resource_type_returns_error() {
         workspace_id,
         principal_id,
         "definitely_not_real",
-        "f/test/bogus",
+        "bogus",
         json!({}),
     )
     .await;
@@ -382,7 +382,7 @@ async fn resolve_pin_to_old_version_returns_old_public_config() {
         workspace_id,
         principal_id,
         "postgres",
-        "f/test/pg_rotated",
+        "pg_rotated",
         json!({
             "host": "old.example.internal",
             "port": 5432,

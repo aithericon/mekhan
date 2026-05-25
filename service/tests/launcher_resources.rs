@@ -141,7 +141,7 @@ async fn publish_resolves_and_splices_known_resources() {
         workspace_id,
         principal_id,
         "postgres",
-        "f/team/local_pg",
+        "local_pg",
         json!({
             "host": "db.example.internal",
             "port": 5432,
