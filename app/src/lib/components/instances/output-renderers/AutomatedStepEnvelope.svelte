@@ -276,14 +276,12 @@
 	</div>
 
 	{#if hasOutputs}
-		<div>
-			<div class="mb-1.5 text-sm font-semibold text-foreground">Outputs</div>
-			<!-- Cascade through SmartValue so shape-specific renderers (the
-			     LLM response envelope, file refs, etc.) get a chance to
-			     dispatch on `detail.outputs`. Without this the LLM markdown
-			     body gets squeezed into KeyValueList's right column. -->
-			<SmartValue value={detail.outputs} {ctx} />
-		</div>
+		<!-- Cascade through SmartValue so shape-specific renderers (the
+		     LLM response envelope, file refs, etc.) get a chance to
+		     dispatch on `detail.outputs`. The outer container (drawer
+		     "Outputs" section, or the "from <producer>" line in Inputs)
+		     already provides the framing label. -->
+		<SmartValue value={detail.outputs} {ctx} />
 	{:else}
 		<div class="text-sm text-muted-foreground italic">No business outputs.</div>
 	{/if}
