@@ -29,6 +29,7 @@
 	import GitBranch from '@lucide/svelte/icons/git-branch';
 	import Activity from '@lucide/svelte/icons/activity';
 	import EllipsisVertical from '@lucide/svelte/icons/ellipsis-vertical';
+	import Search from '@lucide/svelte/icons/search';
 	import CreateInstanceDialog from '$lib/components/instances/CreateInstanceDialog.svelte';
 
 	let templates = $state<TemplateSummary[]>([]);
@@ -37,6 +38,17 @@
 	let dialogOpen = $state(false);
 	let dialogTemplateId = $state<string | null>(null);
 	let runCounts = $state<Record<string, { running: number; completed: number }>>({});
+	let searchQuery = $state('');
+
+	const filteredTemplates = $derived.by(() => {
+		const q = searchQuery.trim().toLowerCase();
+		if (!q) return templates;
+		return templates.filter(
+			(t) =>
+				t.name.toLowerCase().includes(q) ||
+				(t.description ?? '').toLowerCase().includes(q)
+		);
+	});
 
 	// Per-template run tallies. Uses the paginated `total` from a perPage:1
 	// query so we never pull the full instance list just to count.
@@ -232,6 +244,17 @@
 			</div>
 		{/if}
 
+		<div class="relative mb-4">
+			<Search class="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+			<Input
+				type="search"
+				placeholder="Search templates"
+				bind:value={searchQuery}
+				data-testid="input-search-templates"
+				class="pl-9"
+			/>
+		</div>
+
 		{#if loading}
 			<div class="flex items-center justify-center py-16 text-sm text-muted-foreground">
 				Loading...
@@ -245,16 +268,23 @@
 					Create your first template
 				</Button>
 			</div>
+		{:else if filteredTemplates.length === 0}
+			<div class="flex flex-col items-center justify-center rounded-xl border border-dashed border-border py-16">
+				<Search class="size-10 text-muted-foreground/40" />
+				<p class="mt-3 text-sm text-muted-foreground">
+					No templates match “{searchQuery}”
+				</p>
+			</div>
 		{:else}
 			<div class="space-y-2" data-testid="template-list">
-				{#each templates as template (template.id)}
+				{#each filteredTemplates as template (template.id)}
 					<a
 						href="/templates/{template.id}"
-						class="group flex items-start justify-between rounded-lg border border-border bg-card p-4 transition-colors hover:bg-accent/50"
+						class="group flex flex-col gap-3 rounded-lg border border-border bg-card p-4 transition-colors hover:bg-accent/50"
 						data-testid="template-item-{template.id}"
 					>
-						<div class="min-w-0">
-							<div class="flex items-center gap-2">
+						<div class="flex items-center justify-between gap-3 border-b border-border/60 pb-3">
+							<div class="flex min-w-0 items-center gap-2">
 								{#if renamingId === template.id}
 									<Input
 										bind:ref={renameRef}
@@ -271,146 +301,137 @@
 										class="h-7 w-64 text-sm font-medium"
 									/>
 								{:else}
-									<span class="text-sm font-medium text-foreground">{template.name}</span>
+									<span class="truncate text-sm font-medium text-foreground">{template.name}</span>
 								{/if}
 								<Badge class={template.published ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'} variant="secondary">
 									{template.published ? 'Published' : 'Draft'} v{template.version}
 								</Badge>
 							</div>
-							{#if template.description}
-								<p class="mt-1 truncate text-sm text-muted-foreground">{template.description}</p>
-							{/if}
-							{#if (ioByTemplate.get(template.id)?.inputs.length ?? 0) > 0 || (ioByTemplate.get(template.id)?.outputs.length ?? 0) > 0}
-								{@const io = ioByTemplate.get(template.id) ?? { inputs: [], outputs: [] }}
-								<div
-									class="mt-2 grid grid-cols-2 gap-x-6 gap-y-1 text-sm"
-									data-testid="template-io-{template.id}"
-								>
-									<div class="flex flex-col gap-1">
-										{#if io.inputs.length > 0}
-											<span class="text-sm font-medium uppercase tracking-wider text-muted-foreground/70">
-												In
-											</span>
-											<div class="flex flex-wrap gap-1.5">
-												{#each io.inputs as name (name)}
-													<span class="rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-sm text-foreground">
-														{name}
-													</span>
-												{/each}
-											</div>
-										{/if}
-									</div>
-									<div class="flex flex-col gap-1">
-										{#if io.outputs.length > 0}
-											<span class="text-sm font-medium uppercase tracking-wider text-muted-foreground/70">
-												Out
-											</span>
-											<div class="flex flex-wrap gap-1.5">
-												{#each io.outputs as name (name)}
-													<span class="rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-sm text-foreground">
-														{name}
-													</span>
-												{/each}
-											</div>
-										{/if}
-									</div>
-								</div>
-							{/if}
-							{#if runCounts[template.id]}
-								{@const c = runCounts[template.id]}
-								<button
-									type="button"
-									class="mt-1.5 inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
-									data-testid="btn-template-runs-{template.id}"
-									onclick={(e: MouseEvent) => {
-										e.preventDefault();
-										e.stopPropagation();
-										goto(`/instances?template_id=${template.id}`);
-									}}
-								>
-									<Activity class="size-3" />
-									{#if c.running > 0}
-										<span class="text-blue-600">{c.running} running</span>
-									{/if}
-									{#if c.running > 0 && c.completed > 0}<span>&middot;</span>{/if}
-									{#if c.completed > 0}
-										<span>{c.completed} completed</span>
-									{/if}
-									{#if c.running === 0 && c.completed === 0}
-										<span>No runs yet</span>
-									{/if}
-									<span class="underline">View runs</span>
-								</button>
-							{/if}
-						</div>
-						<div class="flex flex-col items-end gap-1">
-							<span
-								class="pt-0.5 text-sm leading-5 text-muted-foreground whitespace-nowrap"
-								data-testid="template-updated-{template.id}"
-							>
-								Updated {formatDate(template.updated_at)}
-							</span>
-							<div class="flex items-center gap-1">
-							{#if template.published}
-								<Button
-									variant="ghost"
-									size="icon-sm"
-									class="text-muted-foreground opacity-0 transition-all hover:bg-primary/10 hover:text-primary group-hover:opacity-100"
-									data-testid="btn-run-template-{template.id}"
-									onclick={(e: MouseEvent) => {
-										e.preventDefault();
-										e.stopPropagation();
-										handleCreateInstance(template.id);
-									}}
-								>
-									<Rocket class="size-4" />
-								</Button>
-							{/if}
-							<DropdownMenu>
-								<DropdownMenuTrigger
-									data-testid="btn-template-menu-{template.id}"
-									aria-label="Template actions"
-									class="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-all hover:bg-accent hover:text-foreground group-hover:opacity-100 data-[state=open]:opacity-100"
-									onclick={(e: MouseEvent) => {
-										e.preventDefault();
-										e.stopPropagation();
-									}}
-								>
-									<EllipsisVertical class="size-4" />
-								</DropdownMenuTrigger>
-								<DropdownMenuContent align="end">
-									{#if !template.published}
-										<DropdownMenuItem
-											data-testid="btn-rename-template-{template.id}"
-											onSelect={() => startRename(template)}
-										>
-											<Pencil class="size-4" />
-											Rename
-										</DropdownMenuItem>
-										<DropdownMenuSeparator />
-									{:else}
-										<DropdownMenuItem
-											data-testid="btn-new-version-template-{template.id}"
-											disabled={versioningId === template.id}
-											onSelect={() => handleNewVersion(template.id)}
-										>
-											<GitBranch class="size-4" />
-											{versioningId === template.id ? 'Creating…' : 'New Version'}
-										</DropdownMenuItem>
-										<DropdownMenuSeparator />
-									{/if}
-									<DropdownMenuItem
-										variant="destructive"
-										data-testid="btn-delete-template-{template.id}"
-										onSelect={() => handleDelete(template.id)}
+							<div class="flex shrink-0 items-center gap-1">
+								{#if template.published}
+									<Button
+										size="sm"
+										data-testid="btn-run-template-{template.id}"
+										onclick={(e: MouseEvent) => {
+											e.preventDefault();
+											e.stopPropagation();
+											handleCreateInstance(template.id);
+										}}
 									>
-										<Trash2 class="size-4" />
-										Delete
-									</DropdownMenuItem>
-								</DropdownMenuContent>
-							</DropdownMenu>
+										<Rocket class="size-4" />
+										Run
+									</Button>
+								{/if}
+								<DropdownMenu>
+									<DropdownMenuTrigger
+										data-testid="btn-template-menu-{template.id}"
+										aria-label="Template actions"
+										class="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground data-[state=open]:bg-accent data-[state=open]:text-foreground"
+										onclick={(e: MouseEvent) => {
+											e.preventDefault();
+											e.stopPropagation();
+										}}
+									>
+										<EllipsisVertical class="size-4" />
+									</DropdownMenuTrigger>
+									<DropdownMenuContent align="end">
+										{#if !template.published}
+											<DropdownMenuItem
+												data-testid="btn-rename-template-{template.id}"
+												onSelect={() => startRename(template)}
+											>
+												<Pencil class="size-4" />
+												Rename
+											</DropdownMenuItem>
+											<DropdownMenuSeparator />
+										{:else}
+											<DropdownMenuItem
+												data-testid="btn-new-version-template-{template.id}"
+												disabled={versioningId === template.id}
+												onSelect={() => handleNewVersion(template.id)}
+											>
+												<GitBranch class="size-4" />
+												{versioningId === template.id ? 'Creating…' : 'New Version'}
+											</DropdownMenuItem>
+											<DropdownMenuSeparator />
+										{/if}
+										<DropdownMenuItem
+											variant="destructive"
+											data-testid="btn-delete-template-{template.id}"
+											onSelect={() => handleDelete(template.id)}
+										>
+											<Trash2 class="size-4" />
+											Delete
+										</DropdownMenuItem>
+									</DropdownMenuContent>
+								</DropdownMenu>
 							</div>
 						</div>
+						{#if template.description}
+							<p class="truncate text-sm text-muted-foreground">{template.description}</p>
+						{/if}
+						{#if (ioByTemplate.get(template.id)?.inputs.length ?? 0) > 0 || (ioByTemplate.get(template.id)?.outputs.length ?? 0) > 0}
+							{@const io = ioByTemplate.get(template.id) ?? { inputs: [], outputs: [] }}
+							<div
+								class="grid grid-cols-2 gap-x-6 gap-y-1 text-sm"
+								data-testid="template-io-{template.id}"
+							>
+								<div class="flex flex-col gap-1">
+									<span class="text-sm font-medium uppercase tracking-wider text-muted-foreground/70">
+										In
+									</span>
+									<div class="flex flex-wrap gap-1.5">
+										{#each io.inputs as name (name)}
+											<span class="rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-sm text-foreground">
+												{name}
+											</span>
+										{:else}
+											<span class="text-sm text-muted-foreground/60">—</span>
+										{/each}
+									</div>
+								</div>
+								<div class="flex flex-col gap-1">
+									<span class="text-sm font-medium uppercase tracking-wider text-muted-foreground/70">
+										Out
+									</span>
+									<div class="flex flex-wrap gap-1.5">
+										{#each io.outputs as name (name)}
+											<span class="rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-sm text-foreground">
+												{name}
+											</span>
+										{:else}
+											<span class="text-sm text-muted-foreground/60">—</span>
+										{/each}
+									</div>
+								</div>
+							</div>
+						{/if}
+						{#if runCounts[template.id]}
+							{@const c = runCounts[template.id]}
+							<button
+								type="button"
+								class="inline-flex w-fit items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
+								data-testid="btn-template-runs-{template.id}"
+								onclick={(e: MouseEvent) => {
+									e.preventDefault();
+									e.stopPropagation();
+									goto(`/instances?template_id=${template.id}`);
+								}}
+							>
+								<Activity class="size-3" />
+								{#if c.running > 0}
+									<span class="text-blue-600">{c.running} running</span>
+								{/if}
+								{#if c.running > 0 && c.completed > 0}<span>&middot;</span>{/if}
+								{#if c.completed > 0}
+									<span>{c.completed} completed</span>
+								{/if}
+								{#if c.running === 0 && c.completed === 0}
+									<span>No runs yet</span>
+								{/if}
+								<span class="underline">View runs</span>
+							</button>
+						{/if}
 					</a>
 				{/each}
 			</div>
