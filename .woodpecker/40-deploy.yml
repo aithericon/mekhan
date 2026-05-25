@@ -28,8 +28,11 @@
 # runner picking up `role: deploy` MUST be on the mesh. YAML can't enforce.
 # =============================================================================
 
-depends_on:
-  - 30-build
+# Note: `depends_on: [30-build]` was here. While 30-build.yml is disabled
+# (renamed to .yml.disabled), this dep is commented out so the deploy
+# pipeline can run on its own — using whatever image SHA is already in
+# the Forgejo registry for the commit being deployed. Restore the
+# depends_on when 30-build is re-enabled.
 
 when:
   # Auto on main — chained off 30-build via the workflow-level depends_on
@@ -94,7 +97,11 @@ steps:
       - export TF_VAR_postgres_admin_host=postgres-primary.service.consul
       - 'echo "  ✓ Secrets loaded from Vault"'
 
-      - just ci::deploy-dev "$CI_COMMIT_SHA"
+      # TEMP: hardcoded to the image SHA currently running in prod. Roll back
+      # to "$CI_COMMIT_SHA" once 30-build.yml is re-enabled and produces a
+      # fresh image per commit. The deploy pipeline only touches the Nomad
+      # jobspec — no image rebuild needed for the Traefik routing fix.
+      - just ci::deploy-dev "081ab9c6e4a9ec0dcbff05b383c2bdc602585cd7"
     depends_on: []
 
   - name: verify-dev
