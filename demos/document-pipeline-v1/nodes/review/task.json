@@ -1,0 +1,78 @@
+[
+  {
+    "id": "step-context",
+    "title": "Document context",
+    "blocks": [
+      {
+        "type": "callout",
+        "severity": "info",
+        "title": "Patient {{ patient_id }} — {{ classify.document_class }}",
+        "content": "Classification confidence: **{{ classify.confidence }}**. Reasoning: _{{ classify.reasoning }}_.\n\nCitations failed for **{{ verify.unverified_count }}** of {{ persist.field_count }} extracted field(s)."
+      },
+      {
+        "type": "image",
+        "url": "/api/files/{{ start.document_file.key }}",
+        "alt": "Uploaded document",
+        "caption": "Original document for patient {{ patient_id }}"
+      },
+      {
+        "type": "download",
+        "downloads": [
+          {
+            "url": "/api/files/{{ start.document_file.key }}",
+            "filename": "{{ start.document_file.filename }}",
+            "mime_type": "{{ start.document_file.content_type }}",
+            "description": "Original upload"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "step-decide",
+    "title": "Decide",
+    "blocks": [
+      {
+        "type": "callout",
+        "severity": "warning",
+        "title": "Unverified field keys",
+        "content": "{{ verify.unverified_keys }}"
+      },
+      {
+        "type": "input",
+        "field": {
+          "name": "decision",
+          "label": "Decision",
+          "kind": "select",
+          "required": true,
+          "options": [
+            { "value": "approve",   "label": "Approve as-extracted" },
+            { "value": "edit",      "label": "Approve with edits"  },
+            { "value": "re_ocr",    "label": "Send back — re-OCR"  },
+            { "value": "reject",    "label": "Reject document"     }
+          ]
+        }
+      },
+      {
+        "type": "input",
+        "field": {
+          "name": "edits",
+          "label": "Edited fields (JSON, optional)",
+          "kind": "textarea",
+          "required": false,
+          "placeholder": "{ \"hemoglobin\": \"14.2\", ... }"
+        }
+      },
+      {
+        "type": "input",
+        "field": {
+          "name": "note",
+          "label": "Reviewer note",
+          "kind": "textarea",
+          "required": false,
+          "placeholder": "Anything the next reviewer should know."
+        }
+      }
+    ]
+  }
+]
