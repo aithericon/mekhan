@@ -165,7 +165,7 @@ impl EditorPythonConfig {
 /// deterministic AIR output. Used by backends whose files are passed through
 /// without per-name validation (Python, Process, Docker, generic LLM/Kreuzberg
 /// inputs).
-fn stage_all_files(node_files: &HashMap<String, InputSource>) -> Vec<InputDeclaration> {
+pub(crate) fn stage_all_files(node_files: &HashMap<String, InputSource>) -> Vec<InputDeclaration> {
     let mut inputs: Vec<InputDeclaration> = node_files
         .iter()
         .map(|(name, source)| InputDeclaration {
@@ -225,6 +225,14 @@ pub fn validate_and_transform(
     node_files: &HashMap<String, InputSource>,
     node_id: &str,
 ) -> Result<(Value, Vec<InputDeclaration>), CompileError> {
+    // Registry-first dispatch. Backends migrated to `crate::backends` are
+    // looked up here and skip the legacy match arm below. Backends not yet
+    // in the registry fall through.
+    if let Some(decl) = crate::backends::lookup(*backend_type) {
+        let ctx = crate::backends::ValidationCtx { node_id, node_files };
+        return (decl.validate)(config, &ctx);
+    }
+
     match backend_type {
         ExecutionBackendType::Python => {
             let editor_config: EditorPythonConfig = serde_json::from_value(config.clone())

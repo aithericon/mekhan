@@ -1,9 +1,15 @@
 // Backend-defaulted output port shape for AutomatedStep, mirroring
-// `service/src/models/template.rs::default_output_port`. Keeping a TS twin so
-// the editor can offer a "Reset to backend default" affordance without an API
-// round-trip.
+// `service/src/models/template.rs::default_output_port`. A TS twin remains
+// here as a synchronous fallback so the "Reset to backend default" button
+// works on first paint before `/api/backends` resolves.
+//
+// PHASE 1: backends in `crate::backends::BACKENDS` (SMTP) check the cached
+// API descriptor first and only fall through to the hardcoded twin if the
+// registry hasn't loaded yet. As Phase 2 ports each backend the twin
+// shrinks until the whole switch can be deleted.
 
 import type { components } from '$lib/api/schema';
+import { getCachedBackend } from './backend-registry.svelte';
 
 type Port = components['schemas']['Port'];
 type PortField = components['schemas']['PortField'];
@@ -15,6 +21,15 @@ function f(name: string, label: string, kind: FieldKind): PortField {
 }
 
 export function defaultOutputPort(backend: ExecutionBackendType): Port {
+	// Registry-first: backends registered in `crate::backends::BACKENDS`
+	// carry their default port shape via the API. Fall through to the
+	// hardcoded twin for backends not yet ported AND for the first paint
+	// before `loadBackends()` resolves.
+	const fromRegistry = getCachedBackend(backend);
+	if (fromRegistry) {
+		return fromRegistry.defaultOutputPort;
+	}
+
 	let fields: PortField[];
 	switch (backend) {
 		case 'python':

@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 pub mod auth;
+pub mod backends;
 pub mod catalogue;
 pub mod causality;
 pub mod compiler;
@@ -109,6 +110,9 @@ fn build_openapi_router() -> OpenApiRouter<AppState> {
     OpenApiRouter::<AppState>::with_openapi(ApiDoc::openapi())
         // Health
         .routes(routes!(handlers::health::liveness))
+        // Backend registry — drives the editor's AutomatedStep panel
+        // (picker labels/icons, default config seed, default output port).
+        .routes(routes!(handlers::backends::list_backends))
         // Auth tokens — embedded per-user PAT management. Cookie-only by
         // construction (the `AuthUser` arg re-runs the cookie authenticator,
         // so a Bearer PAT behind `require_auth_middleware` can't reach these

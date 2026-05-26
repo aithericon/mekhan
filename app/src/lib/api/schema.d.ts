@@ -60,6 +60,39 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/backends": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/backends
+         * @description List every registered backend with its display metadata, default editor
+         *     config, default output port shape, dispatch mode (executor job vs.
+         *     engine effect), resource channel (staged file vs. config overlay), and
+         *     schedulability.
+         *
+         *     The frontend reads this once per session (cached in
+         *     `app/src/lib/editor/backend-registry.svelte.ts`) and drives the
+         *     AutomatedStep editor panel from it — backend picker label/icon,
+         *     default config seed, default output port. The Svelte config-panel
+         *     component map (`backend-panels.ts`) stays hand-written; everything
+         *     else flows from here.
+         *
+         *     Phase 1 ships SMTP only. The legacy match arms in `backend_configs.rs`,
+         *     `template.rs`, etc. cover the other 8 backends until they're migrated.
+         */
+        get: operations["list_backends"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/catalogue": {
         parameters: {
             query?: never;
@@ -1541,6 +1574,46 @@ export interface components {
             value?: unknown;
         };
         /**
+         * @description Frontend-visible metadata for one backend. Returned by `GET /api/backends`.
+         *
+         *     The Svelte component map (`backend-panels.ts`) stays hand-written — TS
+         *     can't import components dynamically from a JSON tag at runtime without
+         *     defeating Vite chunking — but every other per-backend constant
+         *     (display name, icon, default config, default output fields, dispatch
+         *     mode, resource channel) flows from here. This is what kills the
+         *     `automated-ports.ts` ↔ `default_output_port()` drift hazard.
+         */
+        BackendDescriptor: {
+            /**
+             * @description Whether this backend's declared output port fields drive a Rhai
+             *     `outputs:` constant (mostly informational for the frontend).
+             */
+            consumesDeclaredOutputs: boolean;
+            /**
+             * @description Seed config inserted into a fresh step when this backend is
+             *     selected. Opaque JSON — the backend's Svelte config panel decodes
+             *     its own structure.
+             */
+            defaultEditorConfig: unknown;
+            /**
+             * @description Canonical output port shape. Frontend uses this for the "Reset to
+             *     default" button on the output port editor.
+             */
+            defaultOutputPort: components["schemas"]["Port"];
+            dispatchMode: components["schemas"]["DispatchMode"];
+            displayName: string;
+            icon: string;
+            /**
+             * @description Snake-case wire tag (`"smtp"`, `"python"`, …). Matches
+             *     [`ExecutionBackendType`]'s wire encoding and the executor's
+             *     `ExecutionSpec.backend` string.
+             */
+            name: string;
+            resourceChannel: components["schemas"]["ResourceChannel"];
+            /** @description Whether the editor should show the Scheduled deployment toggle. */
+            schedulable: boolean;
+        };
+        /**
          * @description Delay applied between automated-step retry attempts.
          *
          *     `Immediate` re-dispatches at once. `Fixed` waits `base_delay_ms` before
@@ -1828,6 +1901,19 @@ export interface components {
             /** @enum {string} */
             mode: "scheduled";
             resources?: null | components["schemas"]["ResourceConfig"];
+        };
+        /**
+         * @description Lowering mode — intrinsic to the backend, decided at the decl, NOT the
+         *     step. Orthogonal to `DeploymentModel` (Inline / Scheduled) which is a
+         *     per-step author choice on any `ExecutorJob` backend.
+         */
+        DispatchMode: {
+            /** @enum {string} */
+            kind: "executor_job";
+        } | {
+            handler: string;
+            /** @enum {string} */
+            kind: "engine_effect";
         };
         /**
          * @description One entry in a `download` task block. Mirrors the frontend `DownloadItem`
@@ -2666,6 +2752,11 @@ export interface components {
             site: string;
             step_id?: string | null;
         };
+        /**
+         * @description How a resolved resource envelope reaches the running backend.
+         * @enum {string}
+         */
+        ResourceChannel: "staged_file" | "config_overlay" | "none";
         /** @description Optional resource hints forwarded to the scheduler for a `Scheduled` step. */
         ResourceConfig: {
             /** Format: int32 */
@@ -3850,6 +3941,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_backends: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Registered backends */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackendDescriptor"][];
                 };
             };
         };

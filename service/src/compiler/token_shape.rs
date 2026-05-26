@@ -2120,29 +2120,46 @@ pub(crate) fn automated_step_borrow_plan(
             continue;
         };
 
-        // Per-backend ref discovery. Python scans the entrypoint file; SMTP
-        // scans inline Tera templates on the config. Both share the same
-        // `<head>.<attr>` shape, so the resolve loop below works uniformly.
-        let refs: Vec<(String, String)> = match execution_spec.backend_type {
-            ExecutionBackendType::Python => {
-                let entrypoint = execution_spec
-                    .entrypoint
-                    .clone()
-                    .unwrap_or_else(|| "main.py".to_string());
-                let Some(node_files) = inline_sources.get(&node.id) else {
+        // Per-backend ref discovery. Registry-first: backends migrated to
+        // `crate::backends` plug a `ref_scanner` fn in their decl and we
+        // call it here. The legacy match below covers backends not yet in
+        // the registry (Python today).
+        let refs: Vec<(String, String)> =
+            if let Some(decl) = crate::backends::lookup(execution_spec.backend_type) {
+                let Some(scanner) = decl.ref_scanner else {
                     continue;
                 };
-                let Some(source) = node_files.get(&entrypoint) else {
-                    continue;
+                let ctx = crate::backends::ScanCtx {
+                    config: &execution_spec.config,
+                    node_id: &node.id,
+                    inline_sources,
+                    entrypoint: execution_spec.entrypoint.as_deref(),
                 };
-                crate::compiler::python_refs::extract_python_refs(source)
+                scanner(&ctx)
                     .into_iter()
                     .map(|r| (r.head, r.attr))
                     .collect()
-            }
-            ExecutionBackendType::Smtp => smtp_template_placeholder_refs(&execution_spec.config),
-            _ => continue,
-        };
+            } else {
+                match execution_spec.backend_type {
+                    ExecutionBackendType::Python => {
+                        let entrypoint = execution_spec
+                            .entrypoint
+                            .clone()
+                            .unwrap_or_else(|| "main.py".to_string());
+                        let Some(node_files) = inline_sources.get(&node.id) else {
+                            continue;
+                        };
+                        let Some(source) = node_files.get(&entrypoint) else {
+                            continue;
+                        };
+                        crate::compiler::python_refs::extract_python_refs(source)
+                            .into_iter()
+                            .map(|r| (r.head, r.attr))
+                            .collect()
+                    }
+                    _ => continue,
+                }
+            };
 
         for (head, _attr) in refs {
             let Some(prod_id) = slugs.node_for(&head).map(str::to_string) else {
@@ -2259,7 +2276,8 @@ pub(crate) fn automated_step_resource_borrow_plan(
     inline_sources: &std::collections::HashMap<String, std::collections::HashMap<String, String>>,
     known: &crate::compiler::resource_refs::KnownResources,
 ) -> Result<Vec<AutomatedStepResourceBorrow>, CompileError> {
-    use crate::compiler::resource_binding::{collect_resource_heads, ScanCtx};
+    use crate::backends::ScanCtx;
+    use crate::compiler::resource_binding::collect_resource_heads;
 
     if known.is_empty() {
         return Ok(Vec::new());

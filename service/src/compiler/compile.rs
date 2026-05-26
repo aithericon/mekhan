@@ -792,19 +792,22 @@ fn populate_borrowed_paths(
                         .insert(r.attr);
                 }
             }
-            WorkflowNodeData::AutomatedStep { execution_spec, .. } => match execution_spec.backend_type {
-                ExecutionBackendType::Python => {
-                    let entrypoint = execution_spec
-                        .entrypoint
-                        .clone()
-                        .unwrap_or_else(|| "main.py".to_string());
-                    let Some(node_files) = inline_sources.get(&node.id) else {
+            WorkflowNodeData::AutomatedStep { execution_spec, .. } => {
+                // Registry-first ref discovery for AutomatedStep borrowed
+                // paths. Backends migrated to `crate::backends` supply a
+                // `ref_scanner`; the legacy match below covers backends
+                // (Python today) not yet ported.
+                if let Some(decl) = crate::backends::lookup(execution_spec.backend_type) {
+                    let Some(scanner) = decl.ref_scanner else {
                         continue;
                     };
-                    let Some(source) = node_files.get(&entrypoint) else {
-                        continue;
+                    let ctx = crate::backends::ScanCtx {
+                        config: &execution_spec.config,
+                        node_id: &node.id,
+                        inline_sources,
+                        entrypoint: execution_spec.entrypoint.as_deref(),
                     };
-                    for r in extract_python_refs(source) {
+                    for r in scanner(&ctx) {
                         let Some(prod_id) = slugs.node_for(&r.head) else {
                             continue;
                         };
@@ -816,56 +819,36 @@ fn populate_borrowed_paths(
                             .or_default()
                             .insert(r.attr);
                     }
-                }
-                ExecutionBackendType::Smtp => {
-                    // SMTP carries Tera template sources inline on
-                    // `execution_spec.config` (one TemplateSource per
-                    // subject / body_text / body_html plus per-recipient
-                    // strings + optional from). Scan each surface with the
-                    // shared `{{...}}` scanner — Tera and the platform's
-                    // other placeholder surfaces share the same grammar.
-                    use crate::compiler::placeholder_refs::scan_placeholders;
-                    let mut texts: Vec<String> = Vec::new();
-                    if let Some(cfg) = execution_spec.config.as_object() {
-                        if let Some(subj) = cfg.get("subject").and_then(|v| v.get("source")).and_then(|v| v.as_str()) {
-                            texts.push(subj.to_string());
-                        }
-                        if let Some(bt) = cfg.get("body_text").and_then(|v| v.get("source")).and_then(|v| v.as_str()) {
-                            texts.push(bt.to_string());
-                        }
-                        if let Some(bh) = cfg.get("body_html").and_then(|v| v.get("source")).and_then(|v| v.as_str()) {
-                            texts.push(bh.to_string());
-                        }
-                        for field in ["to", "cc", "bcc"] {
-                            if let Some(arr) = cfg.get(field).and_then(|v| v.as_array()) {
-                                for el in arr {
-                                    if let Some(s) = el.as_str() {
-                                        texts.push(s.to_string());
-                                    }
-                                }
-                            }
-                        }
-                        if let Some(from) = cfg.get("from").and_then(|v| v.as_str()) {
-                            texts.push(from.to_string());
-                        }
-                    }
-                    for text in &texts {
-                        for r in scan_placeholders(text) {
-                            let Some(prod_id) = slugs.node_for(&r.head) else {
+                } else {
+                    match execution_spec.backend_type {
+                        ExecutionBackendType::Python => {
+                            let entrypoint = execution_spec
+                                .entrypoint
+                                .clone()
+                                .unwrap_or_else(|| "main.py".to_string());
+                            let Some(node_files) = inline_sources.get(&node.id) else {
                                 continue;
                             };
-                            if prod_id == node.id {
+                            let Some(source) = node_files.get(&entrypoint) else {
                                 continue;
+                            };
+                            for r in extract_python_refs(source) {
+                                let Some(prod_id) = slugs.node_for(&r.head) else {
+                                    continue;
+                                };
+                                if prod_id == node.id {
+                                    continue;
+                                }
+                                paths
+                                    .entry(prod_id.to_string())
+                                    .or_default()
+                                    .insert(r.attr);
                             }
-                            paths
-                                .entry(prod_id.to_string())
-                                .or_default()
-                                .insert(r.attr);
                         }
+                        _ => continue,
                     }
                 }
-                _ => continue,
-            },
+            }
             _ => continue,
         }
 

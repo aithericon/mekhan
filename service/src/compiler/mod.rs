@@ -12,7 +12,7 @@ pub(crate) mod python_refs;
 pub(crate) mod resource_binding;
 pub mod resource_refs;
 pub(crate) mod schema_refs;
-mod rhai_gen;
+pub(crate) mod rhai_gen;
 pub mod rhai_scope;
 pub mod subworkflow;
 pub mod token_shape;

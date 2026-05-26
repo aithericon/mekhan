@@ -6,6 +6,7 @@
 	import User from '@lucide/svelte/icons/user';
 	import { auth } from '$lib/auth/store.svelte';
 	import { ensureAuthInitialized, requireSession } from '$lib/auth/guard';
+	import { loadBackends } from '$lib/editor/backend-registry.svelte';
 
 	let { children } = $props();
 
@@ -15,6 +16,10 @@
 		// probe gates every route; dev_noop always passes.
 		await ensureAuthInitialized();
 		await requireSession();
+		// Warm the backend registry cache so the editor's "Reset to backend
+		// default" resolves synchronously on first paint. Non-fatal: the
+		// hardcoded TS twin in automated-ports.ts is the fallback.
+		loadBackends().catch(() => { /* swallowed: TS twin remains */ });
 	});
 
 	async function signOut() {

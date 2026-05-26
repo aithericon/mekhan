@@ -14,10 +14,9 @@
 //!   single field lookup. Python scans its `<name>.<attr>` accesses;
 //!   SMTP scans Tera placeholders across template surfaces.
 
-use std::collections::HashMap;
-
 use serde_json::Value;
 
+use crate::backends::ScanCtx;
 use crate::models::template::ExecutionBackendType;
 
 pub(crate) struct ResourceBindingDecl {
@@ -27,13 +26,6 @@ pub(crate) struct ResourceBindingDecl {
 }
 
 pub(crate) type ExtraScanner = fn(&ScanCtx<'_>) -> Vec<String>;
-
-pub(crate) struct ScanCtx<'a> {
-    pub config: &'a Value,
-    pub node_id: &'a str,
-    pub inline_sources: &'a HashMap<String, HashMap<String, String>>,
-    pub entrypoint: Option<&'a str>,
-}
 
 const SMTP_PATHS: &[&[&str]] = &[&["resource_alias"]];
 const LLM_PATHS: &[&[&str]] = &[&["resource_alias"]];
@@ -130,6 +122,7 @@ fn extract_str_at_path(v: &Value, path: &[&str]) -> Option<String> {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::collections::HashMap;
 
     fn empty_ctx<'a>(config: &'a Value) -> ScanCtx<'a> {
         static EMPTY: std::sync::OnceLock<HashMap<String, HashMap<String, String>>> =

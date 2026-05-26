@@ -1343,6 +1343,20 @@ pub fn default_automated_input_port() -> Port {
 /// reliably surfaces. Editor exposes "Reset to default" by re-deriving against
 /// the current `backendType`.
 pub fn default_output_port(backend: ExecutionBackendType) -> Port {
+    // Registry-first: backends migrated to `crate::backends` carry their
+    // default port shape in the decl. The legacy match below covers
+    // backends not yet in the registry.
+    if let Some(decl) = crate::backends::lookup(backend) {
+        return Port {
+            id: "out".to_string(),
+            label: "Output".to_string(),
+            fields: decl
+                .default_output_fields
+                .iter()
+                .map(|f| f.into_port_field())
+                .collect(),
+        };
+    }
     let fields = match backend {
         ExecutionBackendType::Python => vec![port_field("result", "Result", FieldKind::Json)],
         ExecutionBackendType::Process => vec![

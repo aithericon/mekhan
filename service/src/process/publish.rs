@@ -266,7 +266,8 @@ async fn discover_known_resources(
     graph: &WorkflowGraph,
     inline_sources: &HashMap<String, HashMap<String, String>>,
 ) -> Result<KnownResources, ApiError> {
-    use crate::compiler::resource_binding::{collect_resource_heads, ScanCtx};
+    use crate::backends::ScanCtx;
+    use crate::compiler::resource_binding::collect_resource_heads;
     use std::collections::BTreeSet;
 
     // Pass 1: collect every distinct `<head>` the graph references in any

@@ -198,6 +198,31 @@
         }
       }
     },
+    "/api/backends": {
+      "get": {
+        "tags": [
+          "backends"
+        ],
+        "summary": "GET /api/backends",
+        "description": "List every registered backend with its display metadata, default editor\nconfig, default output port shape, dispatch mode (executor job vs.\nengine effect), resource channel (staged file vs. config overlay), and\nschedulability.\n\nThe frontend reads this once per session (cached in\n`app/src/lib/editor/backend-registry.svelte.ts`) and drives the\nAutomatedStep editor panel from it — backend picker label/icon,\ndefault config seed, default output port. The Svelte config-panel\ncomponent map (`backend-panels.ts`) stays hand-written; everything\nelse flows from here.\n\nPhase 1 ships SMTP only. The legacy match arms in `backend_configs.rs`,\n`template.rs`, etc. cover the other 8 backends until they're migrated.",
+        "operationId": "list_backends",
+        "responses": {
+          "200": {
+            "description": "Registered backends",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/BackendDescriptor"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/catalogue": {
       "get": {
         "tags": [
@@ -4745,6 +4770,54 @@
           }
         }
       },
+      "BackendDescriptor": {
+        "type": "object",
+        "description": "Frontend-visible metadata for one backend. Returned by `GET /api/backends`.\n\nThe Svelte component map (`backend-panels.ts`) stays hand-written — TS\ncan't import components dynamically from a JSON tag at runtime without\ndefeating Vite chunking — but every other per-backend constant\n(display name, icon, default config, default output fields, dispatch\nmode, resource channel) flows from here. This is what kills the\n`automated-ports.ts` ↔ `default_output_port()` drift hazard.",
+        "required": [
+          "name",
+          "displayName",
+          "icon",
+          "defaultOutputPort",
+          "defaultEditorConfig",
+          "dispatchMode",
+          "resourceChannel",
+          "schedulable",
+          "consumesDeclaredOutputs"
+        ],
+        "properties": {
+          "consumesDeclaredOutputs": {
+            "type": "boolean",
+            "description": "Whether this backend's declared output port fields drive a Rhai\n`outputs:` constant (mostly informational for the frontend)."
+          },
+          "defaultEditorConfig": {
+            "description": "Seed config inserted into a fresh step when this backend is\nselected. Opaque JSON — the backend's Svelte config panel decodes\nits own structure."
+          },
+          "defaultOutputPort": {
+            "$ref": "#/components/schemas/Port",
+            "description": "Canonical output port shape. Frontend uses this for the \"Reset to\ndefault\" button on the output port editor."
+          },
+          "dispatchMode": {
+            "$ref": "#/components/schemas/DispatchMode"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "icon": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "description": "Snake-case wire tag (`\"smtp\"`, `\"python\"`, …). Matches\n[`ExecutionBackendType`]'s wire encoding and the executor's\n`ExecutionSpec.backend` string."
+          },
+          "resourceChannel": {
+            "$ref": "#/components/schemas/ResourceChannel"
+          },
+          "schedulable": {
+            "type": "boolean",
+            "description": "Whether the editor should show the Scheduled deployment toggle."
+          }
+        }
+      },
       "BackoffKind": {
         "type": "string",
         "description": "Delay applied between automated-step retry attempts.\n\n`Immediate` re-dispatches at once. `Fixed` waits `base_delay_ms` before\nevery attempt. `Exponential` waits `base_delay_ms * 2^attempt` (attempt is\nthe zero-based retry index), capped by the engine's timer service.",
@@ -5509,6 +5582,45 @@
           }
         ],
         "description": "Where an `AutomatedStep`'s job runs. Internally tagged on the wire:\n`{\"mode\":\"inline\"}` or `{\"mode\":\"scheduled\",\"jobTemplate\":\"...\",\n\"resources\":{...}}`. Keep the `mode` strings in lockstep with the\n`snake_case` derive."
+      },
+      "DispatchMode": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Standard executor dispatch. The compiler emits an executor job; the\nstep's `DeploymentModel` decides whether it's inline via NATS or\nsubmitted to a scheduler-net.",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "executor_job"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Engine builtin effect (e.g. CatalogueQuery → `catalogue_lookup`). The\ncompiler skips executor lowering entirely and emits an effect handler\ninvocation directly into the Petri transition.",
+            "required": [
+              "handler",
+              "kind"
+            ],
+            "properties": {
+              "handler": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "engine_effect"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Lowering mode — intrinsic to the backend, decided at the decl, NOT the\nstep. Orthogonal to `DeploymentModel` (Inline / Scheduled) which is a\nper-step author choice on any `ExecutorJob` backend."
       },
       "DownloadItemConfig": {
         "type": "object",
@@ -7878,6 +7990,15 @@
             ]
           }
         }
+      },
+      "ResourceChannel": {
+        "type": "string",
+        "description": "How a resolved resource envelope reaches the running backend.",
+        "enum": [
+          "staged_file",
+          "config_overlay",
+          "none"
+        ]
       },
       "ResourceConfig": {
         "type": "object",
@@ -10383,6 +10504,10 @@
     {
       "name": "resources",
       "description": "Typed credential CRUD (`postgres`, `openai`, `s3`, `slack`, `google_oauth`). Workflows bind aliases to resources at launch; secrets live in Vault."
+    },
+    {
+      "name": "backends",
+      "description": "AutomatedStep backend registry — display metadata, default config, default output port, dispatch mode."
     },
     {
       "name": "health",

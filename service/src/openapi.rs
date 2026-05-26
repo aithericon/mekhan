@@ -24,6 +24,12 @@ use utoipa::OpenApi;
             crate::causality::live::LiveArtifactEvent,
             crate::models::template::ReplyMode,
             crate::triggers::TerminalOutcome,
+            // Backend registry DTOs — referenced via Vec<_> in the
+            // GET /api/backends handler so utoipa's auto-discovery
+            // misses the nested types. Frontend codegen needs both.
+            crate::backends::BackendDescriptor,
+            crate::backends::DispatchMode,
+            crate::backends::ResourceChannel,
             // Phase B.9 — Resource CRUD DTOs. The handler bodies refer to
             // these directly but utoipa's auto-discovery only walks the
             // handler signature; nested types (e.g. ResourceTypeInfo
@@ -50,6 +56,7 @@ use utoipa::OpenApi;
         (name = "triggers", description = "Workflow triggers — cron/catalog/lifecycle/webhook/manual entry points."),
         (name = "auth-tokens", description = "Embedded per-user automation tokens (Zitadel-backed PATs)."),
         (name = "resources", description = "Typed credential CRUD (`postgres`, `openai`, `s3`, `slack`, `google_oauth`). Workflows bind aliases to resources at launch; secrets live in Vault."),
+        (name = "backends", description = "AutomatedStep backend registry — display metadata, default config, default output port, dispatch mode."),
         (name = "health", description = "Liveness probe."),
     ),
 )]
