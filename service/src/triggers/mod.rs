@@ -12,7 +12,7 @@
 //!   - Trigger node model lives in `models::template` (already wired through
 //!     compile/validate).
 //!   - Trigger registry hydrated from every published template's graph_json.
-//!   - Manual fire path via `POST /api/triggers/{node_id}/fire`.
+//!   - Manual fire path via `POST /api/v1/triggers/{node_id}/fire`.
 //!   - `TriggerDispatcher` skeleton handed to AppState so background sources
 //!     (cron, catalog, lifecycle, webhook) can be hung off in 5b–5e.
 //!

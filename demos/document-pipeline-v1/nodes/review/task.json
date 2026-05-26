@@ -11,7 +11,7 @@
       },
       {
         "type": "image",
-        "url": "/api/files/{{ start.document_file.key }}",
+        "url": "/api/v1/files/{{ start.document_file.key }}",
         "alt": "Uploaded document",
         "caption": "Original document for patient {{ patient_id }}"
       },
@@ -19,7 +19,7 @@
         "type": "download",
         "downloads": [
           {
-            "url": "/api/files/{{ start.document_file.key }}",
+            "url": "/api/v1/files/{{ start.document_file.key }}",
             "filename": "{{ start.document_file.filename }}",
             "mime_type": "{{ start.document_file.content_type }}",
             "description": "Original upload"

@@ -27,7 +27,7 @@ async fn body_json(body: Body) -> Value {
 }
 
 /// Seed an unpublished template directly via SQL. Keeps the harness from
-/// depending on Y.Doc / yjs init, which the public POST /api/templates
+/// depending on Y.Doc / yjs init, which the public POST /api/v1/templates
 /// helper triggers.
 async fn seed_template(db: &sqlx::PgPool) -> Uuid {
     let id = Uuid::new_v4();
@@ -61,7 +61,7 @@ async fn test_template_tests_crud() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri(format!("/api/templates/{template_id}/tests"))
+                .uri(format!("/api/v1/templates/{template_id}/tests"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -85,7 +85,7 @@ async fn test_template_tests_crud() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/templates/{template_id}/tests"))
+                .uri(format!("/api/v1/templates/{template_id}/tests"))
                 .header("content-type", "application/json")
                 .body(Body::from(serde_json::to_vec(&create_body).unwrap()))
                 .unwrap(),
@@ -107,7 +107,7 @@ async fn test_template_tests_crud() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri(format!("/api/templates/{template_id}/tests"))
+                .uri(format!("/api/v1/templates/{template_id}/tests"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -124,7 +124,7 @@ async fn test_template_tests_crud() {
         .oneshot(
             Request::builder()
                 .method("PATCH")
-                .uri(format!("/api/templates/{template_id}/tests/{test_id}"))
+                .uri(format!("/api/v1/templates/{template_id}/tests/{test_id}"))
                 .header("content-type", "application/json")
                 .body(Body::from(serde_json::to_vec(&patch_body).unwrap()))
                 .unwrap(),
@@ -151,7 +151,7 @@ async fn test_template_tests_crud() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/templates/{template_id}/tests"))
+                .uri(format!("/api/v1/templates/{template_id}/tests"))
                 .header("content-type", "application/json")
                 .body(Body::from(serde_json::to_vec(&dup_body).unwrap()))
                 .unwrap(),
@@ -166,7 +166,7 @@ async fn test_template_tests_crud() {
         .oneshot(
             Request::builder()
                 .method("DELETE")
-                .uri(format!("/api/templates/{template_id}/tests/{test_id}"))
+                .uri(format!("/api/v1/templates/{template_id}/tests/{test_id}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -178,7 +178,7 @@ async fn test_template_tests_crud() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri(format!("/api/templates/{template_id}/tests"))
+                .uri(format!("/api/v1/templates/{template_id}/tests"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -205,7 +205,7 @@ async fn test_run_one_returns_412_when_no_published_version() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/templates/{template_id}/tests"))
+                .uri(format!("/api/v1/templates/{template_id}/tests"))
                 .header("content-type", "application/json")
                 .body(Body::from(serde_json::to_vec(&create_body).unwrap()))
                 .unwrap(),
@@ -224,7 +224,7 @@ async fn test_run_one_returns_412_when_no_published_version() {
             Request::builder()
                 .method("POST")
                 .uri(format!(
-                    "/api/templates/{template_id}/tests/{test_id}/run"
+                    "/api/v1/templates/{template_id}/tests/{test_id}/run"
                 ))
                 .body(Body::empty())
                 .unwrap(),
@@ -471,7 +471,7 @@ async fn test_promote_extracts_start_tokens_and_human_answers() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/instances/{instance_id}/promote-to-test"))
+                .uri(format!("/api/v1/instances/{instance_id}/promote-to-test"))
                 .header("content-type", "application/json")
                 .body(Body::from(serde_json::to_vec(&body).unwrap()))
                 .unwrap(),

@@ -212,12 +212,12 @@ The compiler stays the source of truth for the AIR; ports never leak into the ru
 
 ## 5. Instance API Changes
 
-Today: `POST /api/instances { template_id, metadata: Value }`.
+Today: `POST /api/v1/instances { template_id, metadata: Value }`.
 
 After:
 
 ```jsonc
-POST /api/instances
+POST /api/v1/instances
 {
   "template_id": "...",
   "start_tokens": [
@@ -308,7 +308,7 @@ These are deferred decisions, not blockers — call them out when an owner picks
 
 Phase 1 ships when:
 - Existing templates load and publish unchanged.
-- A new template with a Start `initial` port containing two required fields rejects `POST /api/instances` without `start_tokens` matching the schema.
+- A new template with a Start `initial` port containing two required fields rejects `POST /api/v1/instances` without `start_tokens` matching the schema.
 - The editor's field-editor panel can add/remove/rename fields on a Start block, with the change round-tripping through publish and reload.
 - `instance_lifecycle_e2e.rs` covers both forms of the instance API (legacy blob, new `start_tokens`) until the legacy form is removed.
 

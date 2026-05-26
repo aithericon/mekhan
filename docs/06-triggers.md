@@ -13,7 +13,7 @@ Phases 5a–5f shipped. The design below is mostly realized, **but several safet
 | Mechanism | Status | Notes |
 |---|---|---|
 | Typed-port invariant across the trigger boundary | **Enforced** | `Port::validate_token` (`template.rs:645`), strict reject (no coercion), both spawn & signal paths (`dispatcher.rs:350`). Compile-time `TriggerUnresolvedRef` / `TriggerEmptyMappingRequiredFields`. |
-| Per-source Rhai scopes (`fire_time`, `headers`, `catalogue_entry`, …) | **Enforced** | `triggers::scope`; webhook body un-nested to `payload`. `GET /api/triggers/source-scope` + editor "In scope:" hint. |
+| Per-source Rhai scopes (`fire_time`, `headers`, `catalogue_entry`, …) | **Enforced** | `triggers::scope`; webhook body un-nested to `payload`. `GET /api/v1/triggers/source-scope` + editor "In scope:" hint. |
 | Fire history/metrics on type-contract violation | **Fixed** | Single `finalize` chokepoint in `fire()`; violations now surface as `Dropped`, no longer vanish. |
 | `ConcurrencyPolicy::Skip` | **Accepted, NOT enforced** | Parsed, shown in editor, inert at fire time. |
 | `ConcurrencyPolicy::Queue` | **Accepted, NOT enforced** | Same. Hardest to build (needs lifecycle coupling — see below). |
@@ -36,7 +36,7 @@ Phases 5a–5f shipped. The design below is mostly realized, **but several safet
 
 ## 1. Problem
 
-Workflows can only be instantiated by a human or external system calling `POST /api/instances`. Everything else either doesn't exist or is half-built:
+Workflows can only be instantiated by a human or external system calling `POST /api/v1/instances`. Everything else either doesn't exist or is half-built:
 
 - **No scheduling.** No cron, no time-based triggers anywhere in the codebase.
 - **No completion chaining.** When an instance terminates, `lifecycle.rs` updates the DB row and that's it. There's no mechanism to start template B because template A's instance just finished.
@@ -54,7 +54,7 @@ Typed ports unblock a clean fix. A trigger now has a concrete target to bind to:
 - A new `Trigger` block kind that lives in the graph and connects via an edge to a target input port.
 - One model covers both **spawn triggers** (edge → Start port → new instance) and **in-flight signal triggers** (edge → non-Start port → signal into a running net). The latter subsumes today's separate `CatalogueSubscription` side-channel.
 - Trigger config travels with the template's `graph_json` and is versioned alongside everything else (`base_template_id`, `parent_id`, `version`).
-- A `TriggerDispatcher` task running inside mekhan owns: cron scheduling, NATS subscriptions, webhook routing, and the funnel into `POST /api/instances` or `petri.signal.{net_id}.{place}`.
+- A `TriggerDispatcher` task running inside mekhan owns: cron scheduling, NATS subscriptions, webhook routing, and the funnel into `POST /api/v1/instances` or `petri.signal.{net_id}.{place}`.
 - Editor surfaces triggers as a "rail" of nodes attached to the canvas — same xyflow primitives as every other block, no special mode.
 
 **Non-goals**
@@ -105,7 +105,7 @@ The output port is derived: it has the same field shape as the target input port
 
 A trigger has exactly one outgoing edge. The compiler resolves the trigger's *effective target*:
 
-- **Spawn target**: edge lands on a Start block's input port (`Start.initial`). The dispatcher must call `POST /api/instances` when this trigger fires, with a `start_tokens` entry seeding that Start.
+- **Spawn target**: edge lands on a Start block's input port (`Start.initial`). The dispatcher must call `POST /api/v1/instances` when this trigger fires, with a `start_tokens` entry seeding that Start.
 - **In-flight target**: edge lands on any other input port (`AutomatedStep.input`, `HumanTask` derived port, `End.terminal`, etc.). The dispatcher must publish to `petri.signal.{net_id}.{target_place}` for every currently-running instance of this template. The target place id is computed from the target node's id following the same convention `catalogue/subscriptions.rs` already uses.
 
 A single trigger node has one target — split by adding more trigger nodes. Multiple triggers can target the same input port (e.g. cron + webhook both feeding the same Start).
@@ -202,7 +202,7 @@ Expression scope: every field on `CatalogueEntry` (`service/src/catalogue/model.
 **Reconciliation with the existing subscription manager**: the catalog trigger is an *additional* authoring surface, not a replacement. The engine's `catalogue_subscribe` effect handler (`engine/core-engine/crates/application/src/catalogue_handlers.rs:434`, ADR 17) lets a running net dynamically register subscriptions whose filters depend on runtime token data — e.g. "subscribe to future revisions of *this specific* document I just received." Static trigger nodes can't express that case and don't try to. Both surfaces write through the same `SubscriptionManager`:
 
 - **In-flight catalog trigger** (target = non-Start port): the dispatcher calls `SubscriptionManager::create_subscription` when an instance starts, with the trigger's literal filter values. Cleaned up on instance completion by the existing `cleanup_net_subscriptions` path.
-- **Spawn catalog trigger** (target = Start port): no `net_id` exists yet, so the dispatcher subscribes directly to catalog events (no KV row) and calls `POST /api/instances` on match.
+- **Spawn catalog trigger** (target = Start port): no `net_id` exists yet, so the dispatcher subscribes directly to catalog events (no KV row) and calls `POST /api/v1/instances` on match.
 - **Dynamic `catalogue_subscribe` effect**: unchanged. Runtime token-driven subscriptions stay; the engine effect handler and the dispatcher both write to the same KV bucket and the subscription manager is agnostic to who created a row.
 
 Static triggers are essentially sugar for "subscribe on instance start with literal filters" — they pull their weight when the filter is known at authoring time, without forcing the author to model a startup transition with a `catalogue_subscribe` effect.
@@ -267,7 +267,7 @@ Structure mirrors `lifecycle.rs`: a `start_trigger_dispatcher(state, ...)` entry
                               ├─ lifecycle event sub ┤        │              │
                               └─ webhook receiver ───┘        │              ▼
                                                      concurrency check    ┌── spawn:
-                                                              │           │   POST /api/instances
+                                                              │           │   POST /api/v1/instances
                                                               └─ dedup ───┤   { start_tokens }
                                                                           │
                                                                           └── signal:
@@ -277,7 +277,7 @@ Structure mirrors `lifecycle.rs`: a `start_trigger_dispatcher(state, ...)` entry
 
 **Registration**. On startup the dispatcher scans every `published = true` template, walks each graph for `Trigger` nodes, and registers them. On every subsequent template publish, it diffs the new published graph against the previously-registered set for that template and adds/removes accordingly. Unpublish/version-supersede tears down old registrations.
 
-**Spawn fire path**. Resolve the target Start block id. Evaluate `payload_mapping` against the event scope. Build a `StartToken { start_block_id, token }`. Call the existing `POST /api/instances` handler in-process (don't go through HTTP — cheaper and avoids self-auth dance). Tag the resulting instance with a `triggered_by: trigger_node_id` audit field in `metadata`.
+**Spawn fire path**. Resolve the target Start block id. Evaluate `payload_mapping` against the event scope. Build a `StartToken { start_block_id, token }`. Call the existing `POST /api/v1/instances` handler in-process (don't go through HTTP — cheaper and avoids self-auth dance). Tag the resulting instance with a `triggered_by: trigger_node_id` audit field in `metadata`.
 
 **Signal fire path**. Query the instance table for `template_id` = trigger's template, `status = 'running'`. For each, publish `ExternalSignal` to `petri.signal.{net_id}.{place}` exactly the same way `catalogue/subscriptions.rs:334` does today. Include a `signal_key` so receivers can dedup across dispatcher restarts.
 
@@ -285,17 +285,17 @@ Structure mirrors `lifecycle.rs`: a `start_trigger_dispatcher(state, ...)` entry
 
 ## 6. API Surface
 
-New endpoints under `/api/triggers`:
+New endpoints under `/api/v1/triggers`:
 
 | Method | Path                                   | Purpose                                                                                       |
 |--------|----------------------------------------|-----------------------------------------------------------------------------------------------|
-| GET    | `/api/triggers`                        | List all active triggers across templates (admin / debug).                                    |
-| GET    | `/api/templates/{id}/triggers`         | List triggers for a specific template (derived from `graph_json`; not a separate store).      |
+| GET    | `/api/v1/triggers`                        | List all active triggers across templates (admin / debug).                                    |
+| GET    | `/api/v1/templates/{id}/triggers`         | List triggers for a specific template (derived from `graph_json`; not a separate store).      |
 | POST   | `/api/triggers/webhook/{slug}`         | Webhook receiver. Authenticates per the trigger's `WebhookAuth`, fires.                       |
-| POST   | `/api/triggers/{node_id}/fire`         | Manual fire path (for the `Manual` trigger source and admin testing of any other source).     |
-| GET    | `/api/triggers/{node_id}/history`      | Last N fires with status, payload digest, resulting instance id.                              |
+| POST   | `/api/v1/triggers/{node_id}/fire`         | Manual fire path (for the `Manual` trigger source and admin testing of any other source).     |
+| GET    | `/api/v1/triggers/{node_id}/history`      | Last N fires with status, payload digest, resulting instance id.                              |
 
-Existing instance API (`POST /api/instances`) is unchanged — the dispatcher uses the same handler path that humans do.
+Existing instance API (`POST /api/v1/instances`) is unchanged — the dispatcher uses the same handler path that humans do.
 
 Existing standalone subscription API (whatever `service/src/catalogue/handlers.rs` exposes for direct `CatalogueSubscription` CRUD) gets a deprecation header and one release of overlap.
 
@@ -321,7 +321,7 @@ Each sub-phase is shippable on its own. Order matters: 5a is the spine, then sou
 - Add `WorkflowNodeData::Trigger`, `TriggerSource`, `FieldMapping`, `ConcurrencyPolicy`.
 - Editor renders trigger nodes (visual only — no kinds yet, no firing).
 - Compiler walks them, validates edges target a real input port, validates `payload_mapping` against the resolved port's schema.
-- New `service/src/triggers/` module with the dispatcher entry point spawned from `main.rs`, plus a `Manual` source that fires via the `/api/triggers/{node_id}/fire` endpoint.
+- New `service/src/triggers/` module with the dispatcher entry point spawned from `main.rs`, plus a `Manual` source that fires via the `/api/v1/triggers/{node_id}/fire` endpoint.
 - *Unblocks*: end-to-end manual firing through the trigger model, including in-flight signals replacing one-off direct signal injection.
 
 **Phase 5b — Cron source.** ~3 days.
@@ -347,7 +347,7 @@ Each sub-phase is shippable on its own. Order matters: 5a is the spine, then sou
 
 **Phase 5f — History + observability.** ~3 days.
 
-- `/api/triggers/{node_id}/history` endpoint, history tab in editor.
+- `/api/v1/triggers/{node_id}/history` endpoint, history tab in editor.
 - Metrics: fire counts per source kind, dedup hits, dispatcher lag.
 
 ## 9. Open Questions
@@ -359,7 +359,7 @@ These are deferred decisions, not blockers. Flag them when an owner picks this u
 3. **Authorization for spawn fires.** Whose identity does a triggered instance get attributed to? Recommendation: a synthetic `trigger:{node_id}` principal stored in `created_by`, with the original trigger metadata in `metadata.triggered_by` for audit. Don't try to forge a user identity.
 4. **Webhook slug rebinding on version supersede.** When a new template version supersedes the old, does the old version's webhook URL keep working? Recommendation: yes — slugs are template-scoped, not version-scoped. The dispatcher always routes to the latest published version's trigger config.
 5. **Backfill semantics for catalog spawn triggers.** Should `backfill: true` on a spawn trigger really spawn N instances retroactively when the trigger is first published, or should it only apply to in-flight targets? Recommendation: opt-in per trigger, with a hard limit (e.g. 100) to prevent accidental fan-out.
-6. **Pause vs. delete.** Need a "pause this trigger without unpublishing the template" affordance? The `enabled` field covers it, but the editor needs a place to toggle it without dragging the user into a full edit/publish cycle. Recommendation: pause = edit-publish a single-field change; if that's too heavy, add a separate `PATCH /api/triggers/{node_id}/enabled` that updates the live graph_json without bumping version (the only such fast-path on the template).
+6. **Pause vs. delete.** Need a "pause this trigger without unpublishing the template" affordance? The `enabled` field covers it, but the editor needs a place to toggle it without dragging the user into a full edit/publish cycle. Recommendation: pause = edit-publish a single-field change; if that's too heavy, add a separate `PATCH /api/v1/triggers/{node_id}/enabled` that updates the live graph_json without bumping version (the only such fast-path on the template).
 7. **`Skip`/`Queue` ↔ lifecycle coupling (settle before that work starts).** Correct `Skip`/`Queue` require the dispatcher to know when a spawned instance *completes*, which means consuming the `lifecycle.rs` `net.completed`/`cancelled`/`failed` stream the lifecycle listener already owns. Options: (a) the dispatcher subscribes to the same JetStream consumer (shared offset, risk of one starving the other); (b) the lifecycle listener gains a hook that notifies the dispatcher in-process (tighter coupling, simpler delivery). Recommendation: (b) — an in-process callback from `lifecycle.rs` into `TriggerDispatcher::on_instance_terminal`, since both already live in the mekhan process and the dispatcher holds the in-flight set. This is the only non-contained decision in the enforcement roadmap; everything else is fill-in at the single `fire()` chokepoint.
 
 ## 10. Out of Scope (future work)
@@ -372,7 +372,7 @@ These are deferred decisions, not blockers. Flag them when an owner picks this u
 ## 11. Acceptance Criteria
 
 **Phase 5a ships when**:
-- A `Trigger` node can be created in the editor, wired to a Start port with `payload_mapping` against that port's fields, published, and manually fired via `/api/triggers/{node_id}/fire` to create an instance with the correct `start_tokens`.
+- A `Trigger` node can be created in the editor, wired to a Start port with `payload_mapping` against that port's fields, published, and manually fired via `/api/v1/triggers/{node_id}/fire` to create an instance with the correct `start_tokens`.
 - A trigger wired to a non-Start port fires by publishing to `petri.signal.{net_id}.{place}` for all running instances of the template.
 - Compile errors for invalid payload mappings (missing target field, kind mismatch, unresolved expression identifier) surface in the editor like Phase 3 guard errors do.
 

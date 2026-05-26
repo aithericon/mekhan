@@ -155,7 +155,7 @@ async fn full_instance_lifecycle() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/templates")
+                .uri("/api/v1/templates")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     serde_json::to_string(&json!({
@@ -180,7 +180,7 @@ async fn full_instance_lifecycle() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/templates/{template_id}/publish"))
+                .uri(format!("/api/v1/templates/{template_id}/publish"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -199,7 +199,7 @@ async fn full_instance_lifecycle() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/instances")
+                .uri("/api/v1/instances")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     serde_json::to_string(&json!({
@@ -242,7 +242,7 @@ async fn full_instance_lifecycle() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri(format!("/api/instances/{instance_id}/state"))
+                .uri(format!("/api/v1/instances/{instance_id}/state"))
                 .body(Body::empty())
                 .unwrap(),
         )

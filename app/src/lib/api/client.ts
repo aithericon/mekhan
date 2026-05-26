@@ -15,7 +15,7 @@ import createClient, { type Middleware } from 'openapi-fetch';
 import { authFetch } from '$lib/auth/fetch';
 import type { components, paths } from './schema';
 
-const API_BASE = '/api';
+const API_BASE = '/api/v1';
 
 /**
  * BFF model: the `mekhan_session` HttpOnly cookie is sent automatically on
@@ -173,7 +173,7 @@ export async function listTemplates(
 	published?: boolean
 ): Promise<PaginatedTemplateResponse> {
 	return unwrap(
-		await client.GET('/api/templates', {
+		await client.GET('/api/v1/templates', {
 			params: {
 				query: { page, per_page: perPage, search, published }
 			}
@@ -183,17 +183,17 @@ export async function listTemplates(
 
 export async function getTemplate(id: string): Promise<Template> {
 	return unwrap(
-		await client.GET('/api/templates/{id}', { params: { path: { id } } })
+		await client.GET('/api/v1/templates/{id}', { params: { path: { id } } })
 	);
 }
 
 export async function createTemplate(data: CreateTemplateRequest): Promise<Template> {
-	return unwrap(await client.POST('/api/templates', { body: data }));
+	return unwrap(await client.POST('/api/v1/templates', { body: data }));
 }
 
 export async function updateTemplate(id: string, data: UpdateTemplateRequest): Promise<Template> {
 	return unwrap(
-		await client.PUT('/api/templates/{id}', {
+		await client.PUT('/api/v1/templates/{id}', {
 			params: { path: { id } },
 			body: data
 		})
@@ -201,7 +201,7 @@ export async function updateTemplate(id: string, data: UpdateTemplateRequest): P
 }
 
 export async function deleteTemplate(id: string): Promise<void> {
-	const res = await client.DELETE('/api/templates/{id}', { params: { path: { id } } });
+	const res = await client.DELETE('/api/v1/templates/{id}', { params: { path: { id } } });
 	if (res.error !== undefined && res.response.status >= 400) {
 		throw new Error(`API error ${res.response.status}: ${JSON.stringify(res.error)}`);
 	}
@@ -241,7 +241,7 @@ export async function publishTemplate(id: string, force = false): Promise<Templa
 	// rejects non-primitive query values with the unhelpful
 	// "Deeply-nested arrays/objects aren't supported".
 	const forceBool = force === true;
-	const res = await client.POST('/api/templates/{id}/publish', {
+	const res = await client.POST('/api/v1/templates/{id}/publish', {
 		params: { path: { id }, query: { force: forceBool } }
 	});
 	const rawErr = res.error as unknown;
@@ -273,7 +273,7 @@ export async function publishTemplate(id: string, force = false): Promise<Templa
 
 export async function listTemplateTests(templateId: string): Promise<TemplateTest[]> {
 	return unwrap(
-		await client.GET('/api/templates/{id}/tests', { params: { path: { id: templateId } } })
+		await client.GET('/api/v1/templates/{id}/tests', { params: { path: { id: templateId } } })
 	);
 }
 
@@ -282,7 +282,7 @@ export async function createTemplateTest(
 	body: CreateTemplateTestRequest
 ): Promise<TemplateTest> {
 	return unwrap(
-		await client.POST('/api/templates/{id}/tests', {
+		await client.POST('/api/v1/templates/{id}/tests', {
 			params: { path: { id: templateId } },
 			body
 		})
@@ -295,7 +295,7 @@ export async function updateTemplateTest(
 	body: UpdateTemplateTestRequest
 ): Promise<TemplateTest> {
 	return unwrap(
-		await client.PATCH('/api/templates/{template_id}/tests/{test_id}', {
+		await client.PATCH('/api/v1/templates/{template_id}/tests/{test_id}', {
 			params: { path: { template_id: templateId, test_id: testId } },
 			body
 		})
@@ -303,7 +303,7 @@ export async function updateTemplateTest(
 }
 
 export async function deleteTemplateTest(templateId: string, testId: string): Promise<void> {
-	const res = await client.DELETE('/api/templates/{template_id}/tests/{test_id}', {
+	const res = await client.DELETE('/api/v1/templates/{template_id}/tests/{test_id}', {
 		params: { path: { template_id: templateId, test_id: testId } }
 	});
 	if (res.error !== undefined && res.response.status >= 400) {
@@ -316,7 +316,7 @@ export async function runTemplateTest(
 	testId: string
 ): Promise<TemplateTestRun> {
 	return unwrap(
-		await client.POST('/api/templates/{template_id}/tests/{test_id}/run', {
+		await client.POST('/api/v1/templates/{template_id}/tests/{test_id}/run', {
 			params: { path: { template_id: templateId, test_id: testId } }
 		})
 	);
@@ -327,7 +327,7 @@ export async function runAllTemplateTests(
 	includeDisabled = false
 ): Promise<RunAllResponse> {
 	return unwrap(
-		await client.POST('/api/templates/{id}/tests/run-all', {
+		await client.POST('/api/v1/templates/{id}/tests/run-all', {
 			params: { path: { id: templateId }, query: { include_disabled: includeDisabled } }
 		})
 	);
@@ -339,7 +339,7 @@ export async function listTestRuns(
 	limit = 10
 ): Promise<TemplateTestRun[]> {
 	return unwrap(
-		await client.GET('/api/templates/{template_id}/tests/{test_id}/runs', {
+		await client.GET('/api/v1/templates/{template_id}/tests/{test_id}/runs', {
 			params: {
 				path: { template_id: templateId, test_id: testId },
 				query: { limit }
@@ -353,7 +353,7 @@ export async function promoteInstanceToTest(
 	body: PromoteToTestRequest
 ): Promise<TemplateTest> {
 	return unwrap(
-		await client.POST('/api/instances/{id}/promote-to-test', {
+		await client.POST('/api/v1/instances/{id}/promote-to-test', {
 			params: { path: { id: instanceId } },
 			body
 		})
@@ -362,30 +362,30 @@ export async function promoteInstanceToTest(
 
 export async function createNewVersion(id: string): Promise<Template> {
 	return unwrap(
-		await client.POST('/api/templates/{id}/new-version', { params: { path: { id } } })
+		await client.POST('/api/v1/templates/{id}/new-version', { params: { path: { id } } })
 	);
 }
 
 export async function getTemplateVersions(id: string): Promise<Template[]> {
 	return unwrap(
-		await client.GET('/api/templates/{id}/versions', { params: { path: { id } } })
+		await client.GET('/api/v1/templates/{id}/versions', { params: { path: { id } } })
 	) as unknown as Template[];
 }
 
 export async function compileTemplate(id: string): Promise<object> {
 	return unwrap(
-		await client.POST('/api/templates/{id}/compile', { params: { path: { id } } })
+		await client.POST('/api/v1/templates/{id}/compile', { params: { path: { id } } })
 	) as unknown as object;
 }
 
 export async function getTemplateAir(id: string): Promise<object> {
 	return unwrap(
-		await client.GET('/api/templates/{id}/air', { params: { path: { id } } })
+		await client.GET('/api/v1/templates/{id}/air', { params: { path: { id } } })
 	) as unknown as object;
 }
 
 export async function compileGraph(data: CompileRequest): Promise<object> {
-	return unwrap(await client.POST('/api/compile', { body: data })) as unknown as object;
+	return unwrap(await client.POST('/api/v1/compile', { body: data })) as unknown as object;
 }
 
 /** Shape-aware analysis surface — the editor's single source of truth for
@@ -393,7 +393,7 @@ export async function compileGraph(data: CompileRequest): Promise<object> {
 export type TypeSurfaceResponse = components['schemas']['TypeSurfaceResponse'];
 
 export async function analyzeGraph(data: CompileRequest): Promise<TypeSurfaceResponse> {
-	return unwrap(await client.POST('/api/analyze', { body: data })) as TypeSurfaceResponse;
+	return unwrap(await client.POST('/api/v1/analyze', { body: data })) as TypeSurfaceResponse;
 }
 
 /**
@@ -407,13 +407,13 @@ export async function getIoStubs(
 	id: string
 ): Promise<Record<string, Record<string, string>>> {
 	const res = unwrap(
-		await client.GET('/api/templates/{id}/io-stubs', { params: { path: { id } } })
+		await client.GET('/api/v1/templates/{id}/io-stubs', { params: { path: { id } } })
 	) as { generated?: Record<string, Record<string, string>> };
 	return res.generated ?? {};
 }
 
 /** A leaf field at a Python step's input scope. Picker UIs render this as
- *  the qualified `<slug>.<field>` / `input.<path>` form via `/api/analyze`;
+ *  the qualified `<slug>.<field>` / `input.<path>` form via `/api/v1/analyze`;
  *  at runtime the Python runner exposes each upstream `<slug>` as a
  *  module global, so the same identifier the picker shows is the exact
  *  identifier the user writes (no `token[...]` wrapping). Kept for the
@@ -436,7 +436,7 @@ export type StepScopes = {
 export async function getStepScopes(id: string): Promise<StepScopes> {
 	try {
 		const res = unwrap(
-			await client.GET('/api/templates/{id}/io-stubs', { params: { path: { id } } })
+			await client.GET('/api/v1/templates/{id}/io-stubs', { params: { path: { id } } })
 		) as { scopes?: Record<string, StepScopeField[]>; diagnostic?: string };
 		return { scopes: res.scopes ?? {}, diagnostic: res.diagnostic ?? 'ok' };
 	} catch (e) {
@@ -456,7 +456,7 @@ export async function listInstances(opts?: {
 	mode?: string;
 }): Promise<components['schemas']['PaginatedResponse_InstanceListItem']> {
 	return unwrap(
-		await client.GET('/api/instances', {
+		await client.GET('/api/v1/instances', {
 			params: {
 				query: {
 					page: opts?.page ?? 1,
@@ -472,17 +472,17 @@ export async function listInstances(opts?: {
 
 export async function getInstance(id: string): Promise<WorkflowInstance> {
 	return unwrap(
-		await client.GET('/api/instances/{id}', { params: { path: { id } } })
+		await client.GET('/api/v1/instances/{id}', { params: { path: { id } } })
 	);
 }
 
 export async function createInstance(data: CreateInstanceRequest): Promise<WorkflowInstance> {
-	return unwrap(await client.POST('/api/instances', { body: data }));
+	return unwrap(await client.POST('/api/v1/instances', { body: data }));
 }
 
 export async function getInstanceState(id: string): Promise<InstanceStateResponse> {
 	return unwrap(
-		await client.GET('/api/instances/{id}/state', { params: { path: { id } } })
+		await client.GET('/api/v1/instances/{id}/state', { params: { path: { id } } })
 	);
 }
 
@@ -494,14 +494,14 @@ export async function getInstanceState(id: string): Promise<InstanceStateRespons
  */
 export async function listStepExecutions(id: string): Promise<StepExecution[]> {
 	return unwrap(
-		await client.GET('/api/instances/{id}/step-executions', {
+		await client.GET('/api/v1/instances/{id}/step-executions', {
 			params: { path: { id } }
 		})
 	) as StepExecution[];
 }
 
 export async function cancelInstance(id: string): Promise<void> {
-	const res = await client.DELETE('/api/instances/{id}', { params: { path: { id } } });
+	const res = await client.DELETE('/api/v1/instances/{id}', { params: { path: { id } } });
 	if (res.error !== undefined && res.response.status >= 400) {
 		throw new Error(`API error ${res.response.status}: ${JSON.stringify(res.error)}`);
 	}
@@ -583,12 +583,12 @@ export async function listProcessesByInstance(
 }
 
 export async function getProcessStats(): Promise<ProcessStats> {
-	return unwrap(await client.GET('/api/processes/stats', {}));
+	return unwrap(await client.GET('/api/v1/processes/stats', {}));
 }
 
 export async function getProcess(processId: string): Promise<ProcessDetail> {
 	return unwrap(
-		await client.GET('/api/processes/{process_id}', { params: { path: { process_id: processId } } })
+		await client.GET('/api/v1/processes/{process_id}', { params: { path: { process_id: processId } } })
 	);
 }
 
@@ -597,7 +597,7 @@ export async function updateProcess(
 	data: { name?: string; kind?: string; status?: string; owner?: string }
 ): Promise<HpiProcess> {
 	return unwrap(
-		await client.PUT('/api/processes/{process_id}', {
+		await client.PUT('/api/v1/processes/{process_id}', {
 			params: { path: { process_id: processId } },
 			body: data
 		})
@@ -609,7 +609,7 @@ export async function getProcessMetrics(
 	params?: { key?: string; limit?: number }
 ): Promise<HpiMetric[]> {
 	return unwrap(
-		await client.GET('/api/processes/{process_id}/metrics', {
+		await client.GET('/api/v1/processes/{process_id}/metrics', {
 			params: { path: { process_id: processId }, query: params }
 		})
 	);
@@ -617,7 +617,7 @@ export async function getProcessMetrics(
 
 export async function getProcessMetricsSummary(processId: string): Promise<HpiMetricSummary[]> {
 	return unwrap(
-		await client.GET('/api/processes/{process_id}/metrics/summary', {
+		await client.GET('/api/v1/processes/{process_id}/metrics/summary', {
 			params: { path: { process_id: processId } }
 		})
 	);
@@ -639,7 +639,7 @@ export async function getProcessLogs(
 
 export async function getProcessTasks(processId: string): Promise<HpiTask[]> {
 	return unwrap(
-		await client.GET('/api/processes/{process_id}/tasks', {
+		await client.GET('/api/v1/processes/{process_id}/tasks', {
 			params: { path: { process_id: processId } }
 		})
 	) as unknown as HpiTask[];
@@ -838,23 +838,23 @@ export async function listCatalogueEntries(params?: {
 
 export async function getCatalogueEntry(executionId: string, id: string): Promise<CatalogueEntry> {
 	return unwrap(
-		await client.GET('/api/catalogue/{execution_id}/{id}', {
+		await client.GET('/api/v1/catalogue/{execution_id}/{id}', {
 			params: { path: { execution_id: executionId, id } }
 		})
 	);
 }
 
 export async function getCatalogueStats(): Promise<CatalogueStats> {
-	return unwrap(await client.GET('/api/catalogue/stats', {}));
+	return unwrap(await client.GET('/api/v1/catalogue/stats', {}));
 }
 
 export async function getCatalogueStatsByNet(): Promise<CatalogueNetStats[]> {
-	return unwrap(await client.GET('/api/catalogue/stats/by-net', {}));
+	return unwrap(await client.GET('/api/v1/catalogue/stats/by-net', {}));
 }
 
 export async function getCatalogueLineage(processId: string): Promise<LineageResponse> {
 	return unwrap(
-		await client.GET('/api/catalogue/lineage/{process_id}', {
+		await client.GET('/api/v1/catalogue/lineage/{process_id}', {
 			params: { path: { process_id: processId } }
 		})
 	);
@@ -862,13 +862,13 @@ export async function getCatalogueLineage(processId: string): Promise<LineageRes
 
 export async function getCatalogueDistinct(column: string): Promise<string[]> {
 	return unwrap(
-		await client.GET('/api/catalogue/distinct/{column}', { params: { path: { column } } })
+		await client.GET('/api/v1/catalogue/distinct/{column}', { params: { path: { column } } })
 	);
 }
 
 export async function getCatalogueDistinctJsonb(column: string, key: string): Promise<string[]> {
 	return unwrap(
-		await client.GET('/api/catalogue/distinct-jsonb/{column}/{key}', {
+		await client.GET('/api/v1/catalogue/distinct-jsonb/{column}/{key}', {
 			params: { path: { column, key } }
 		})
 	);
@@ -909,7 +909,7 @@ export async function getProvenanceFromArtifact(
 	depth = 20
 ): Promise<ProvenanceResponse> {
 	return unwrap(
-		await client.GET('/api/provenance/from-artifact/{execution_id}/{artifact_id}', {
+		await client.GET('/api/v1/provenance/from-artifact/{execution_id}/{artifact_id}', {
 			params: { path: { execution_id: executionId, artifact_id: artifactId }, query: { depth } }
 		})
 	);
@@ -921,7 +921,7 @@ export async function getTokenProvenance(
 	depth = 20
 ): Promise<ProvenanceResponse> {
 	return unwrap(
-		await client.GET('/api/provenance/{net_id}/{token_id}', {
+		await client.GET('/api/v1/provenance/{net_id}/{token_id}', {
 			params: { path: { net_id: netId, token_id: tokenId }, query: { depth } }
 		})
 	);
@@ -929,7 +929,7 @@ export async function getTokenProvenance(
 
 export async function getEventDetail(netId: string, eventSeq: number): Promise<EventDetail> {
 	return unwrap(
-		await client.GET('/api/provenance/{net_id}/{event_seq}/detail', {
+		await client.GET('/api/v1/provenance/{net_id}/{event_seq}/detail', {
 			params: { path: { net_id: netId, event_seq: eventSeq } }
 		})
 	);
@@ -937,7 +937,7 @@ export async function getEventDetail(netId: string, eventSeq: number): Promise<E
 
 export async function getCrossLink(signalKey: string): Promise<CrossLink> {
 	return unwrap(
-		await client.GET('/api/provenance/link/{signal_key}', {
+		await client.GET('/api/v1/provenance/link/{signal_key}', {
 			params: { path: { signal_key: signalKey } }
 		})
 	);
@@ -950,17 +950,17 @@ export async function getCrossLink(signalKey: string): Promise<CrossLink> {
 // broker configured) so the UI can simply hide the section.
 
 export async function listAccessTokens(): Promise<TokenSummary[] | null> {
-	const res = await client.GET('/api/auth/tokens', {});
+	const res = await client.GET('/api/v1/auth/tokens', {});
 	if (res.response.status === 503) return null;
 	return unwrap(res);
 }
 
 export async function createAccessToken(body: CreateTokenRequest): Promise<CreatedToken> {
-	return unwrap(await client.POST('/api/auth/tokens', { body }));
+	return unwrap(await client.POST('/api/v1/auth/tokens', { body }));
 }
 
 export async function revokeAccessToken(id: string): Promise<void> {
-	const res = await client.DELETE('/api/auth/tokens/{id}', { params: { path: { id } } });
+	const res = await client.DELETE('/api/v1/auth/tokens/{id}', { params: { path: { id } } });
 	if (res.error !== undefined && res.response.status >= 400) {
 		throw new Error(`API error ${res.response.status}: ${JSON.stringify(res.error)}`);
 	}

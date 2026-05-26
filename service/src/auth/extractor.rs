@@ -78,7 +78,7 @@ where
 /// A strictly **cookie-authenticated** principal — never the
 /// Bearer/introspection path, even behind `require_auth_middleware`. This is
 /// the pre-dual-use `AuthUser` behaviour, now opt-in and explicit. Used only
-/// where a machine PAT must be refused: the `/api/auth/tokens` endpoints, so a
+/// where a machine PAT must be refused: the `/api/v1/auth/tokens` endpoints, so a
 /// token can never be used to mint or revoke tokens (the privilege-escalation
 /// guard, now stated intentionally at the call site instead of being an
 /// accidental property of the extractor everywhere).
@@ -134,7 +134,7 @@ where
 }
 
 /// Tower middleware that gates a sub-router: rejects every request without a
-/// valid session cookie. Use it on the main `/api/*` router; mount routes that
+/// valid session cookie. Use it on the main `/api/v1/*` router; mount routes that
 /// must stay anonymous (health, the `/api/auth/*` endpoints, webhook
 /// receivers) OUTSIDE this layer.
 pub async fn require_auth_middleware(

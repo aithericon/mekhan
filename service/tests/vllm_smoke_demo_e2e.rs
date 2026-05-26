@@ -5,10 +5,10 @@
 //! same disk fixture the runtime seeder publishes at service startup — and
 //! drives it through:
 //!
-//! 1. POST `/api/templates` with the loaded `(graph, files)`.
-//! 2. POST `/api/templates/{id}/publish` (compiles AIR; no S3 files since
+//! 1. POST `/api/v1/templates` with the loaded `(graph, files)`.
+//! 2. POST `/api/v1/templates/{id}/publish` (compiles AIR; no S3 files since
 //!    the demo has no node-attached scripts).
-//! 3. POST `/api/instances` with no `start_tokens` (Start's `initial.fields`
+//! 3. POST `/api/v1/instances` with no `start_tokens` (Start's `initial.fields`
 //!    is `[]` — the workflow needs no inputs at all).
 //! 4. Wait for the AutomatedStep `ask` to dispatch via NATS → executor →
 //!    LlmBackend → HTTP `/v1/chat/completions` against vllm-metal at
@@ -220,7 +220,7 @@ async fn vllm_smoke_demo_completes_against_local_vllm() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/templates")
+                .uri("/api/v1/templates")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
@@ -250,7 +250,7 @@ async fn vllm_smoke_demo_completes_against_local_vllm() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/templates/{template_id}/publish"))
+                .uri(format!("/api/v1/templates/{template_id}/publish"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -267,7 +267,7 @@ async fn vllm_smoke_demo_completes_against_local_vllm() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/instances")
+                .uri("/api/v1/instances")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({

@@ -9,8 +9,8 @@ use crate::ws_client;
 pub async fn run(server: &str, name: &str, description: Option<&str>, format: WorkflowFormat) -> Result<()> {
     println!("Creating template '{}'...", name);
 
-    // 1. POST /api/templates to create the template
-    let url = format!("{}/api/templates", server);
+    // 1. POST /api/v1/templates to create the template
+    let url = format!("{}/api/v1/templates", server);
     let client = reqwest::Client::new();
     let resp = crate::http::auth(
         client.post(&url).json(&json!({

@@ -26,10 +26,10 @@ use crate::petri::events::fetch_events;
 use crate::petri::launcher::{InstanceLauncher, LaunchError, LaunchSpec};
 use crate::AppState;
 
-/// POST /api/instances
+/// POST /api/v1/instances
 #[utoipa::path(
     post,
-    path = "/api/instances",
+    path = "/api/v1/instances",
     request_body = CreateInstanceRequest,
     responses(
         (status = 201, description = "Instance created and deployed to engine", body = WorkflowInstance),
@@ -125,10 +125,10 @@ pub async fn create_instance(
     Ok((StatusCode::CREATED, Json(instance)))
 }
 
-/// GET /api/instances
+/// GET /api/v1/instances
 #[utoipa::path(
     get,
-    path = "/api/instances",
+    path = "/api/v1/instances",
     params(ListInstancesQuery),
     responses(
         (status = 200, description = "Paginated list of instances", body = PaginatedResponse<InstanceListItem>),
@@ -218,10 +218,10 @@ pub async fn list_instances(
     })
 }
 
-/// GET /api/instances/:id
+/// GET /api/v1/instances/:id
 #[utoipa::path(
     get,
-    path = "/api/instances/{id}",
+    path = "/api/v1/instances/{id}",
     params(("id" = Uuid, Path, description = "Instance id")),
     responses(
         (status = 200, description = "Instance", body = WorkflowInstance),
@@ -246,7 +246,7 @@ pub async fn get_instance(
     Ok(Json(instance))
 }
 
-/// GET /api/instances/{id}/stream
+/// GET /api/v1/instances/{id}/stream
 ///
 /// SSE stream of the instance's domain events, replayed from the start
 /// (`DeliverPolicy::All`) then live, terminated by a final `result` event
@@ -255,7 +255,7 @@ pub async fn get_instance(
 /// consistent with `get_instance` (auth middleware gates the route).
 #[utoipa::path(
     get,
-    path = "/api/instances/{id}/stream",
+    path = "/api/v1/instances/{id}/stream",
     params(("id" = Uuid, Path, description = "Instance id")),
     responses(
         (status = 200, description = "SSE stream of domain events + final result", content_type = "text/event-stream"),
@@ -387,13 +387,13 @@ pub async fn stream_instance(
     Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(10))))
 }
 
-/// GET /api/instances/:id/state
+/// GET /api/v1/instances/:id/state
 ///
 /// Returns instance state with marking projected from JetStream events (source
 /// of truth) and best-effort engine status for enabled transitions / run mode.
 #[utoipa::path(
     get,
-    path = "/api/instances/{id}/state",
+    path = "/api/v1/instances/{id}/state",
     params(("id" = Uuid, Path, description = "Instance id")),
     responses(
         (status = 200, description = "Instance state with marking + engine status", body = InstanceStateResponse),
@@ -472,12 +472,12 @@ pub async fn get_instance_state(
     }))
 }
 
-/// GET /api/instances/:id/events
+/// GET /api/v1/instances/:id/events
 ///
 /// Returns the full event log for an instance from JetStream.
 #[utoipa::path(
     get,
-    path = "/api/instances/{id}/events",
+    path = "/api/v1/instances/{id}/events",
     params(("id" = Uuid, Path, description = "Instance id")),
     responses(
         (status = 200, description = "JetStream events for this instance", body = InstanceEventsResponse),
@@ -519,14 +519,14 @@ pub async fn get_instance_events(
     }))
 }
 
-/// GET /api/instances/:id/step-executions
+/// GET /api/v1/instances/:id/step-executions
 ///
 /// Returns one row per workflow node × execution iteration for an instance.
 /// Materialized by the step-executions projection consumer; the frontend
 /// overlays this data on the canvas node cards.
 #[utoipa::path(
     get,
-    path = "/api/instances/{id}/step-executions",
+    path = "/api/v1/instances/{id}/step-executions",
     params(("id" = Uuid, Path, description = "Instance id")),
     responses(
         (status = 200, description = "Per-step execution rows for this instance", body = Vec<StepExecutionResponse>),
@@ -614,10 +614,10 @@ pub async fn list_step_executions(
     Ok(Json(response))
 }
 
-/// DELETE /api/instances/:id
+/// DELETE /api/v1/instances/:id
 #[utoipa::path(
     delete,
-    path = "/api/instances/{id}",
+    path = "/api/v1/instances/{id}",
     params(("id" = Uuid, Path, description = "Instance id")),
     responses(
         (status = 200, description = "Instance cancelled", body = WorkflowInstance),

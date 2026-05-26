@@ -80,10 +80,10 @@ async fn latest_published_in_family(
 
 // --- CRUD --------------------------------------------------------------------
 
-/// GET /api/templates/{id}/tests — list tests for a template family.
+/// GET /api/v1/templates/{id}/tests — list tests for a template family.
 #[utoipa::path(
     get,
-    path = "/api/templates/{id}/tests",
+    path = "/api/v1/templates/{id}/tests",
     params(("id" = Uuid, Path, description = "Template id (any version)")),
     responses(
         (status = 200, body = Vec<TemplateTest>),
@@ -106,10 +106,10 @@ pub async fn list_tests(
     Ok(Json(rows))
 }
 
-/// POST /api/templates/{id}/tests — create a new test.
+/// POST /api/v1/templates/{id}/tests — create a new test.
 #[utoipa::path(
     post,
-    path = "/api/templates/{id}/tests",
+    path = "/api/v1/templates/{id}/tests",
     params(("id" = Uuid, Path, description = "Template id (any version)")),
     request_body = CreateTemplateTestRequest,
     responses(
@@ -159,10 +159,10 @@ pub async fn create_test(
     Ok((StatusCode::CREATED, Json(row)))
 }
 
-/// PATCH /api/templates/{template_id}/tests/{test_id} — partial update.
+/// PATCH /api/v1/templates/{template_id}/tests/{test_id} — partial update.
 #[utoipa::path(
     patch,
-    path = "/api/templates/{template_id}/tests/{test_id}",
+    path = "/api/v1/templates/{template_id}/tests/{test_id}",
     params(
         ("template_id" = Uuid, Path, description = "Template id (any version)"),
         ("test_id" = Uuid, Path, description = "Test id"),
@@ -225,10 +225,10 @@ pub async fn update_test(
     Ok(Json(updated))
 }
 
-/// DELETE /api/templates/{template_id}/tests/{test_id}
+/// DELETE /api/v1/templates/{template_id}/tests/{test_id}
 #[utoipa::path(
     delete,
-    path = "/api/templates/{template_id}/tests/{test_id}",
+    path = "/api/v1/templates/{template_id}/tests/{test_id}",
     params(
         ("template_id" = Uuid, Path),
         ("test_id" = Uuid, Path),
@@ -258,10 +258,10 @@ pub async fn delete_test(
 
 // --- Run ---------------------------------------------------------------------
 
-/// POST /api/templates/{template_id}/tests/{test_id}/run — execute one test.
+/// POST /api/v1/templates/{template_id}/tests/{test_id}/run — execute one test.
 #[utoipa::path(
     post,
-    path = "/api/templates/{template_id}/tests/{test_id}/run",
+    path = "/api/v1/templates/{template_id}/tests/{test_id}/run",
     params(
         ("template_id" = Uuid, Path),
         ("test_id" = Uuid, Path),
@@ -311,14 +311,14 @@ pub struct ListRunsQuery {
     pub limit: Option<i32>,
 }
 
-/// GET /api/templates/{template_id}/tests/{test_id}/runs — recent run history.
+/// GET /api/v1/templates/{template_id}/tests/{test_id}/runs — recent run history.
 ///
 /// Returns newest-first. The editor's detail sheet shows the latest one
 /// (failure_detail + final_scope + instance_id) so authors can diagnose a
 /// failure without chasing it through `/instances`.
 #[utoipa::path(
     get,
-    path = "/api/templates/{template_id}/tests/{test_id}/runs",
+    path = "/api/v1/templates/{template_id}/tests/{test_id}/runs",
     params(
         ("template_id" = Uuid, Path),
         ("test_id" = Uuid, Path),
@@ -376,7 +376,7 @@ pub struct PromoteToTestRequest {
     pub start_tokens: Option<Value>,
 }
 
-/// POST /api/instances/{id}/promote-to-test — create a `template_tests` row
+/// POST /api/v1/instances/{id}/promote-to-test — create a `template_tests` row
 /// from an existing instance's event log.
 ///
 /// Scoops the instance's start tokens (from the initial Start-place tokens)
@@ -385,7 +385,7 @@ pub struct PromoteToTestRequest {
 /// completes authoring by adding assertions in the editor afterward.
 #[utoipa::path(
     post,
-    path = "/api/instances/{id}/promote-to-test",
+    path = "/api/v1/instances/{id}/promote-to-test",
     params(("id" = Uuid, Path, description = "Source instance id")),
     request_body = PromoteToTestRequest,
     responses(
@@ -587,12 +587,12 @@ async fn extract_human_answers(
     Ok(Value::Object(answers))
 }
 
-/// POST /api/templates/{id}/tests/run-all — run every enabled test for a
+/// POST /api/v1/templates/{id}/tests/run-all — run every enabled test for a
 /// template family. Used by the editor's "Run all" button and by the
 /// publication gate.
 #[utoipa::path(
     post,
-    path = "/api/templates/{id}/tests/run-all",
+    path = "/api/v1/templates/{id}/tests/run-all",
     params(
         ("id" = Uuid, Path),
         RunAllQuery,

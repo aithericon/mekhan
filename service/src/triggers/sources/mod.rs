@@ -1,7 +1,7 @@
 //! Per-source firing logic for trigger nodes. Phase 5a only ships `manual`;
 //! the other sources land in 5b–5e:
 //!
-//! - `manual` — fires from `POST /api/triggers/{node_id}/fire` (Phase 5a).
+//! - `manual` — fires from `POST /api/v1/triggers/{node_id}/fire` (Phase 5a).
 //! - `cron` — scheduled fires (Phase 5b).
 //! - `catalog` — fires from `CatalogueEntry` ingest matching filters (Phase 5c).
 //! - `net_completion` — fires from lifecycle event stream (Phase 5d).

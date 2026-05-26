@@ -1,14 +1,14 @@
 //! SSE + backfill endpoints for live process metrics and logs.
 //!
 //! Four endpoints:
-//! - GET `/api/processes/{pid}/metrics/series` — DB backfill, adaptive
+//! - GET `/api/v1/processes/{pid}/metrics/series` — DB backfill, adaptive
 //!   `time_bucket()` downsampling when the requested window exceeds `max_points`.
-//! - GET `/api/processes/{pid}/metrics/stream` — SSE: ring-buffer snapshot (skip
+//! - GET `/api/v1/processes/{pid}/metrics/stream` — SSE: ring-buffer snapshot (skip
 //!   ≤since_seq), then live broadcast filtered by process_id (+ optional
 //!   signal_key / key whitelist). Emits `resync` on broadcast lag, `gap` when
 //!   the client's since_seq predates the buffer.
-//! - GET `/api/processes/{pid}/logs/tail` — DB backfill of recent rows.
-//! - GET `/api/processes/{pid}/logs/stream` — SSE live tail (same shape as metrics).
+//! - GET `/api/v1/processes/{pid}/logs/tail` — DB backfill of recent rows.
+//! - GET `/api/v1/processes/{pid}/logs/stream` — SSE live tail (same shape as metrics).
 
 use std::collections::HashSet;
 use std::convert::Infallible;
@@ -85,7 +85,7 @@ fn choose_bucket_seconds(window_seconds: i64, max_points: i64) -> i64 {
 
 #[utoipa::path(
     get,
-    path = "/api/processes/{process_id}/metrics/series",
+    path = "/api/v1/processes/{process_id}/metrics/series",
     params(
         ("process_id" = String, Path, description = "Process id"),
         MetricsSeriesQuery,
@@ -212,7 +212,7 @@ pub struct MetricsStreamQuery {
 /// whose `data` field is a JSON-stringified `LiveMetricEvent`.
 #[utoipa::path(
     get,
-    path = "/api/processes/{process_id}/metrics/stream",
+    path = "/api/v1/processes/{process_id}/metrics/stream",
     params(
         ("process_id" = String, Path, description = "Process id"),
         MetricsStreamQuery,
@@ -363,7 +363,7 @@ pub struct LogRow {
 
 #[utoipa::path(
     get,
-    path = "/api/processes/{process_id}/logs/tail",
+    path = "/api/v1/processes/{process_id}/logs/tail",
     params(
         ("process_id" = String, Path, description = "Process id"),
         LogsTailQuery,
@@ -425,7 +425,7 @@ pub struct LogsStreamQuery {
 /// SSE: emits `log` events whose `data` field is a JSON-stringified `LiveLogEvent`.
 #[utoipa::path(
     get,
-    path = "/api/processes/{process_id}/logs/stream",
+    path = "/api/v1/processes/{process_id}/logs/stream",
     params(
         ("process_id" = String, Path, description = "Process id"),
         LogsStreamQuery,
@@ -574,7 +574,7 @@ fn default_artifact_limit() -> i64 {
 
 #[utoipa::path(
     get,
-    path = "/api/processes/{process_id}/artifacts/list",
+    path = "/api/v1/processes/{process_id}/artifacts/list",
     params(
         ("process_id" = String, Path, description = "Process id"),
         ArtifactsListQuery,
@@ -649,7 +649,7 @@ fn artifact_matches(
 /// SSE: emits `artifact` events whose `data` field is a JSON-stringified `LiveArtifactEvent`.
 #[utoipa::path(
     get,
-    path = "/api/processes/{process_id}/artifacts/stream",
+    path = "/api/v1/processes/{process_id}/artifacts/stream",
     params(
         ("process_id" = String, Path, description = "Process id"),
         ArtifactsStreamQuery,

@@ -1,4 +1,4 @@
-//! `/api/auth/tokens` — embedded per-user automation-token management.
+//! `/api/v1/auth/tokens` — embedded per-user automation-token management.
 //!
 //! Every handler takes [`CookieAuthUser`] — the explicit **cookie-only**
 //! extractor. Other endpoints use the dual-use `AuthUser` (Bearer or cookie),
@@ -44,10 +44,10 @@ fn map_err(e: MgmtError) -> ApiError {
     }
 }
 
-/// GET /api/auth/tokens — the caller's automation tokens.
+/// GET /api/v1/auth/tokens — the caller's automation tokens.
 #[utoipa::path(
     get,
-    path = "/api/auth/tokens",
+    path = "/api/v1/auth/tokens",
     responses(
         (status = 200, description = "The caller's tokens", body = [TokenSummary]),
         (status = 401, description = "No session", body = ErrorResponse),
@@ -66,10 +66,10 @@ pub async fn list_tokens(
     Ok(Json(tokens))
 }
 
-/// POST /api/auth/tokens — mint a token. The `secret` is returned once.
+/// POST /api/v1/auth/tokens — mint a token. The `secret` is returned once.
 #[utoipa::path(
     post,
-    path = "/api/auth/tokens",
+    path = "/api/v1/auth/tokens",
     request_body = CreateTokenRequest,
     responses(
         (status = 200, description = "Token created (secret shown once)", body = CreatedToken),
@@ -99,10 +99,10 @@ pub async fn create_token(
     Ok(Json(created))
 }
 
-/// DELETE /api/auth/tokens/{id} — revoke a token (ownership-guarded).
+/// DELETE /api/v1/auth/tokens/{id} — revoke a token (ownership-guarded).
 #[utoipa::path(
     delete,
-    path = "/api/auth/tokens/{id}",
+    path = "/api/v1/auth/tokens/{id}",
     params(("id" = String, Path, description = "Token id from the list")),
     responses(
         (status = 204, description = "Revoked"),

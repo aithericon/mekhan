@@ -58,7 +58,7 @@ pub async fn run(_server: &str, directory: &str) -> Result<()> {
         push::upload_assets(&server_url, template_id, &assets).await?;
     }
 
-    let url = format!("{}/api/templates/{}/apply", server_url, template_id);
+    let url = format!("{}/api/v1/templates/{}/apply", server_url, template_id);
     let body = ApplyBody {
         graph: &graph,
         files: &text_files,

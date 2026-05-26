@@ -878,7 +878,7 @@ up-mekhan auth_mode="dev_noop":
     # VAULT_ADDR + VAULT_TOKEN promote the resource_store from the
     # in-memory placeholder (which loses secrets on every mekhan restart)
     # to a real VaultResourceStore. Resource secrets created via the
-    # `/api/resources` CRUD path now land in Vault and survive restarts
+    # `/api/v1/resources` CRUD path now land in Vault and survive restarts
     # (until `just dev reset` wipes the dev vault container).
     nohup env \
       RUST_LOG="info,mekhan_service=debug" \

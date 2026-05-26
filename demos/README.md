@@ -32,7 +32,7 @@ shipped demos.
 ## Loading
 
 - **From Rust**: `mekhan_service::demos::load_demo(path)` returns the
-  `(metadata, graph, files)` triple any `/api/templates` consumer
+  `(metadata, graph, files)` triple any `/api/v1/templates` consumer
   expects. `list_demo_dirs(root)` enumerates the directory.
 - **From the CLI**: `mekhan apply demos/<name>/` (see
   `service/src/bin/cli/apply.rs`).

@@ -146,7 +146,7 @@ enum Commands {
 
     /// Print the OpenAPI 3 spec to stdout (no DB or NATS required).
     /// Used by the frontend codegen pipeline to regenerate
-    /// `app/src/lib/api/schema.d.ts`.
+    /// `app/src/lib/api/v1/schema.d.ts`.
     Openapi,
 
     /// Run template tests against the latest published version of a

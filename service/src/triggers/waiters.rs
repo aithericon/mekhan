@@ -1,6 +1,6 @@
 //! WaitForResult waiter registry.
 //!
-//! A `POST /api/triggers/{id}/fire?reply=wait` caller blocks until the spawned
+//! A `POST /api/v1/triggers/{id}/fire?reply=wait` caller blocks until the spawned
 //! instance reaches a terminal state. The fire path registers a one-shot keyed
 //! by `instance_id`; the lifecycle consumer resolves it when
 //! `net.completed`/`net.cancelled`/`net.failed` lands. The fire path *also*

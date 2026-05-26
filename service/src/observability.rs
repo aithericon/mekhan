@@ -22,7 +22,7 @@
 //!      background drainer task ([`drain_silent_drops`]) to publish to
 //!      the `MEKHAN_SILENT_DROPS` JetStream stream — the actual
 //!      dead-letter queue, queryable via
-//!      `GET /api/observability/silent-drops`.
+//!      `GET /api/v1/observability/silent-drops`.
 //!
 //! The channel is wired at service boot ([`install_drainer`] →
 //! [`drain_silent_drops`]). Tests don't install the drainer; the records

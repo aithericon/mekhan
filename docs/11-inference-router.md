@@ -469,7 +469,7 @@ capability-routing. ~4 weeks.
    `aithericon-executor-service`. Alternatives: `mekhan-inference`,
    `inference-gateway`. Bikeshed before any code lands.
 3. **Tenant auth transport.** Reuse mekhan's JWT verification (shared crate?),
-   or call mekhan's `/api/auth/verify` per request (simple, adds a hop)?
+   or call mekhan's `/api/v1/auth/verify` per request (simple, adds a hop)?
    Phase 1 can be a static dev-noop equivalent.
 4. **Where does fallback policy config live?** Postgres (mekhan-owned) or a
    TOML file shipped with the router? Postgres is consistent; TOML is simpler

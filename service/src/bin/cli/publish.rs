@@ -14,7 +14,7 @@ pub async fn run(_server: &str, directory: &str) -> Result<()> {
 
     println!("Publishing template {}...", template_id);
 
-    let url = format!("{}/api/templates/{}/publish", server_url, template_id);
+    let url = format!("{}/api/v1/templates/{}/publish", server_url, template_id);
     let client = reqwest::Client::new();
     let resp = crate::http::auth(client.post(&url))
         .send()

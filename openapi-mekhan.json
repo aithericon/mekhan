@@ -9,7 +9,7 @@
     "version": "0.1.0"
   },
   "paths": {
-    "/api/analyze": {
+    "/api/v1/analyze": {
       "post": {
         "tags": [
           "templates"
@@ -40,12 +40,12 @@
         }
       }
     },
-    "/api/auth/tokens": {
+    "/api/v1/auth/tokens": {
       "get": {
         "tags": [
           "auth-tokens"
         ],
-        "summary": "GET /api/auth/tokens — the caller's automation tokens.",
+        "summary": "GET /api/v1/auth/tokens — the caller's automation tokens.",
         "operationId": "list_tokens",
         "responses": {
           "200": {
@@ -87,7 +87,7 @@
         "tags": [
           "auth-tokens"
         ],
-        "summary": "POST /api/auth/tokens — mint a token. The `secret` is returned once.",
+        "summary": "POST /api/v1/auth/tokens — mint a token. The `secret` is returned once.",
         "operationId": "create_token",
         "requestBody": {
           "content": {
@@ -143,12 +143,12 @@
         }
       }
     },
-    "/api/auth/tokens/{id}": {
+    "/api/v1/auth/tokens/{id}": {
       "delete": {
         "tags": [
           "auth-tokens"
         ],
-        "summary": "DELETE /api/auth/tokens/{id} — revoke a token (ownership-guarded).",
+        "summary": "DELETE /api/v1/auth/tokens/{id} — revoke a token (ownership-guarded).",
         "operationId": "revoke_token",
         "parameters": [
           {
@@ -198,13 +198,13 @@
         }
       }
     },
-    "/api/catalogue": {
+    "/api/v1/catalogue": {
       "get": {
         "tags": [
           "catalogue"
         ],
-        "summary": "GET /api/catalogue",
-        "description": "List/search catalogue entries with full filter, sort, pagination support.\n\nQuery parameters:\n  - `page`, `page_size` — pagination (0-based)\n  - `sort` — e.g. `-created_at`, `+name`, `size_bytes`\n  - `search` — free-text search across name, filename, storage_path\n  - `filter[field][op]=value` — typed filters (eq, ne, gt, gte, lt, lte,\n    contains, starts_with, ends_with, in, not_in, is_null, is_not_null)\n  - `metadata` — JSONB containment on user_metadata (e.g. `{\"kernel\":\"rbf\"}`)\n  - `file_metadata` — JSONB containment on file_metadata\n\nExample:\n  GET /api/catalogue?filter[category][eq]=model&filter[source_net][contains]=surrogate&sort=-size_bytes&page=0&page_size=10",
+        "summary": "GET /api/v1/catalogue",
+        "description": "List/search catalogue entries with full filter, sort, pagination support.\n\nQuery parameters:\n  - `page`, `page_size` — pagination (0-based)\n  - `sort` — e.g. `-created_at`, `+name`, `size_bytes`\n  - `search` — free-text search across name, filename, storage_path\n  - `filter[field][op]=value` — typed filters (eq, ne, gt, gte, lt, lte,\n    contains, starts_with, ends_with, in, not_in, is_null, is_not_null)\n  - `metadata` — JSONB containment on user_metadata (e.g. `{\"kernel\":\"rbf\"}`)\n  - `file_metadata` — JSONB containment on file_metadata\n\nExample:\n  GET /api/v1/catalogue?filter[category][eq]=model&filter[source_net][contains]=surrogate&sort=-size_bytes&page=0&page_size=10",
         "operationId": "list_entries",
         "responses": {
           "200": {
@@ -230,13 +230,13 @@
         }
       }
     },
-    "/api/catalogue/distinct-jsonb/{column}/{key}": {
+    "/api/v1/catalogue/distinct-jsonb/{column}/{key}": {
       "get": {
         "tags": [
           "catalogue"
         ],
-        "summary": "GET /api/catalogue/distinct-jsonb/:column/:key",
-        "description": "Distinct values for a JSONB key within file_metadata or user_metadata.\nExample: GET /api/catalogue/distinct-jsonb/file_metadata/format → [\"json\", \"csv\"]",
+        "summary": "GET /api/v1/catalogue/distinct-jsonb/:column/:key",
+        "description": "Distinct values for a JSONB key within file_metadata or user_metadata.\nExample: GET /api/v1/catalogue/distinct-jsonb/file_metadata/format → [\"json\", \"csv\"]",
         "operationId": "distinct_jsonb_values",
         "parameters": [
           {
@@ -285,13 +285,13 @@
         }
       }
     },
-    "/api/catalogue/distinct/{column}": {
+    "/api/v1/catalogue/distinct/{column}": {
       "get": {
         "tags": [
           "catalogue"
         ],
-        "summary": "GET /api/catalogue/distinct/:column",
-        "description": "Returns distinct non-null values for a column (for populating filter dropdowns).\nColumn must be in the allowed filter fields whitelist.\n\nExample: GET /api/catalogue/distinct/category → [\"model\", \"dataset\", \"plot\"]",
+        "summary": "GET /api/v1/catalogue/distinct/:column",
+        "description": "Returns distinct non-null values for a column (for populating filter dropdowns).\nColumn must be in the allowed filter fields whitelist.\n\nExample: GET /api/v1/catalogue/distinct/category → [\"model\", \"dataset\", \"plot\"]",
         "operationId": "distinct_values",
         "parameters": [
           {
@@ -331,13 +331,13 @@
         }
       }
     },
-    "/api/catalogue/download/{*path}": {
+    "/api/v1/catalogue/download/{*path}": {
       "get": {
         "tags": [
           "catalogue"
         ],
-        "summary": "GET /api/catalogue/download/{path} — download artifact bytes by storage path.",
-        "description": "The path parameter is the S3 storage_path from the catalogue entry.\nExample: GET /api/catalogue/download/artifacts/exec-123/gp_model/gp_model.json",
+        "summary": "GET /api/v1/catalogue/download/{path} — download artifact bytes by storage path.",
+        "description": "The path parameter is the S3 storage_path from the catalogue entry.\nExample: GET /api/v1/catalogue/download/artifacts/exec-123/gp_model/gp_model.json",
         "operationId": "download_artifact",
         "parameters": [
           {
@@ -380,12 +380,12 @@
         }
       }
     },
-    "/api/catalogue/lineage/{process_id}": {
+    "/api/v1/catalogue/lineage/{process_id}": {
       "get": {
         "tags": [
           "catalogue"
         ],
-        "summary": "GET /api/catalogue/lineage/{process_id} — all artifacts for a campaign, grouped by step.",
+        "summary": "GET /api/v1/catalogue/lineage/{process_id} — all artifacts for a campaign, grouped by step.",
         "operationId": "lineage",
         "parameters": [
           {
@@ -422,12 +422,12 @@
         }
       }
     },
-    "/api/catalogue/stats": {
+    "/api/v1/catalogue/stats": {
       "get": {
         "tags": [
           "catalogue"
         ],
-        "summary": "GET /api/catalogue/stats",
+        "summary": "GET /api/v1/catalogue/stats",
         "description": "Aggregate statistics. Accepts the same filter params as the list endpoint,\nso you can get stats for a subset (e.g., stats for a specific net or category).",
         "operationId": "stats",
         "responses": {
@@ -454,12 +454,12 @@
         }
       }
     },
-    "/api/catalogue/stats/by-net": {
+    "/api/v1/catalogue/stats/by-net": {
       "get": {
         "tags": [
           "catalogue"
         ],
-        "summary": "GET /api/catalogue/stats/by-net — per-net breakdown.",
+        "summary": "GET /api/v1/catalogue/stats/by-net — per-net breakdown.",
         "operationId": "stats_by_net",
         "responses": {
           "200": {
@@ -488,12 +488,12 @@
         }
       }
     },
-    "/api/catalogue/{execution_id}/{id}": {
+    "/api/v1/catalogue/{execution_id}/{id}": {
       "get": {
         "tags": [
           "catalogue"
         ],
-        "summary": "GET /api/catalogue/{execution_id}/{id} — single catalogue entry.",
+        "summary": "GET /api/v1/catalogue/{execution_id}/{id} — single catalogue entry.",
         "operationId": "get_entry",
         "parameters": [
           {
@@ -542,12 +542,12 @@
         }
       }
     },
-    "/api/compile": {
+    "/api/v1/compile": {
       "post": {
         "tags": [
           "templates"
         ],
-        "summary": "POST /api/compile\nPOST /api/compile",
+        "summary": "POST /api/v1/compile\nPOST /api/v1/compile",
         "description": "Stateless compilation: accepts a graph (and optional inline file contents)\nand returns AIR JSON without database access. Used by the editor's \"Preview\nAIR\" button before publish.",
         "operationId": "compile_graph",
         "requestBody": {
@@ -582,12 +582,12 @@
         }
       }
     },
-    "/api/files/upload/{id}/{node_id}": {
+    "/api/v1/files/upload/{id}/{node_id}": {
       "post": {
         "tags": [
           "files"
         ],
-        "summary": "POST /api/files/upload/{id}/{node_id}\nAccepts multipart/form-data with a `file` field.",
+        "summary": "POST /api/v1/files/upload/{id}/{node_id}\nAccepts multipart/form-data with a `file` field.",
         "operationId": "upload_file",
         "parameters": [
           {
@@ -654,12 +654,12 @@
         }
       }
     },
-    "/api/files/{*key}": {
+    "/api/v1/files/{*key}": {
       "get": {
         "tags": [
           "files"
         ],
-        "summary": "GET /api/files/{key}\nServes a file from S3 with the correct content type.",
+        "summary": "GET /api/v1/files/{key}\nServes a file from S3 with the correct content type.",
         "description": "`key` is a multi-segment S3 path (templates/{id}/v{ver}/{node}/{file}).\nutoipa-axum 0.2 forwards the path string verbatim to axum::Router, so a\nplain `{key}` only matches a single segment and every real key 404s before\nreaching the handler. Use axum's catch-all `{*key}`; `Path<String>` still\nextracts the full remaining path. (Same fix as the catalogue download\nroute — see commit d61bccb.)",
         "operationId": "get_file",
         "parameters": [
@@ -693,12 +693,12 @@
         }
       }
     },
-    "/api/instances": {
+    "/api/v1/instances": {
       "get": {
         "tags": [
           "instances"
         ],
-        "summary": "GET /api/instances",
+        "summary": "GET /api/v1/instances",
         "operationId": "list_instances",
         "parameters": [
           {
@@ -772,7 +772,7 @@
         "tags": [
           "instances"
         ],
-        "summary": "POST /api/instances",
+        "summary": "POST /api/v1/instances",
         "operationId": "create_instance",
         "requestBody": {
           "content": {
@@ -838,12 +838,12 @@
         }
       }
     },
-    "/api/instances/{id}": {
+    "/api/v1/instances/{id}": {
       "get": {
         "tags": [
           "instances"
         ],
-        "summary": "GET /api/instances/:id",
+        "summary": "GET /api/v1/instances/:id",
         "operationId": "get_instance",
         "parameters": [
           {
@@ -894,7 +894,7 @@
         "tags": [
           "instances"
         ],
-        "summary": "DELETE /api/instances/:id",
+        "summary": "DELETE /api/v1/instances/:id",
         "operationId": "cancel_instance",
         "parameters": [
           {
@@ -942,12 +942,12 @@
         }
       }
     },
-    "/api/instances/{id}/events": {
+    "/api/v1/instances/{id}/events": {
       "get": {
         "tags": [
           "instances"
         ],
-        "summary": "GET /api/instances/:id/events",
+        "summary": "GET /api/v1/instances/:id/events",
         "description": "Returns the full event log for an instance from JetStream.",
         "operationId": "get_instance_events",
         "parameters": [
@@ -996,12 +996,12 @@
         }
       }
     },
-    "/api/instances/{id}/promote-to-test": {
+    "/api/v1/instances/{id}/promote-to-test": {
       "post": {
         "tags": [
           "template_tests"
         ],
-        "summary": "POST /api/instances/{id}/promote-to-test — create a `template_tests` row\nfrom an existing instance's event log.",
+        "summary": "POST /api/v1/instances/{id}/promote-to-test — create a `template_tests` row\nfrom an existing instance's event log.",
         "description": "Scoops the instance's start tokens (from the initial Start-place tokens)\nand human-task completions (from signal-place tokens) into a new test\nfixture attached to the instance's template family. The user typically\ncompletes authoring by adding assertions in the editor afterward.",
         "operationId": "promote_instance_to_test",
         "parameters": [
@@ -1060,12 +1060,12 @@
         }
       }
     },
-    "/api/instances/{id}/state": {
+    "/api/v1/instances/{id}/state": {
       "get": {
         "tags": [
           "instances"
         ],
-        "summary": "GET /api/instances/:id/state",
+        "summary": "GET /api/v1/instances/:id/state",
         "description": "Returns instance state with marking projected from JetStream events (source\nof truth) and best-effort engine status for enabled transitions / run mode.",
         "operationId": "get_instance_state",
         "parameters": [
@@ -1114,12 +1114,12 @@
         }
       }
     },
-    "/api/instances/{id}/step-executions": {
+    "/api/v1/instances/{id}/step-executions": {
       "get": {
         "tags": [
           "instances"
         ],
-        "summary": "GET /api/instances/:id/step-executions",
+        "summary": "GET /api/v1/instances/:id/step-executions",
         "description": "Returns one row per workflow node × execution iteration for an instance.\nMaterialized by the step-executions projection consumer; the frontend\noverlays this data on the canvas node cards.",
         "operationId": "list_step_executions",
         "parameters": [
@@ -1171,12 +1171,12 @@
         }
       }
     },
-    "/api/instances/{id}/stream": {
+    "/api/v1/instances/{id}/stream": {
       "get": {
         "tags": [
           "instances"
         ],
-        "summary": "GET /api/instances/{id}/stream",
+        "summary": "GET /api/v1/instances/{id}/stream",
         "description": "SSE stream of the instance's domain events, replayed from the start\n(`DeliverPolicy::All`) then live, terminated by a final `result` event\ncarrying the structured envelope. Composes with FireAndForget: fire, get\nthe instance id, then open this stream. No per-instance ownership check —\nconsistent with `get_instance` (auth middleware gates the route).",
         "operationId": "stream_instance",
         "parameters": [
@@ -1221,12 +1221,12 @@
         }
       }
     },
-    "/api/observability/silent-drops": {
+    "/api/v1/observability/silent-drops": {
       "get": {
         "tags": [
           "observability"
         ],
-        "summary": "`GET /api/observability/silent-drops`",
+        "summary": "`GET /api/v1/observability/silent-drops`",
         "description": "Reads the dead-letter queue: every record any consumer ACKed and\ndropped because it couldn't parse the input. Drains up to `limit`\nrecent records from `MEKHAN_SILENT_DROPS` and returns them along\nwith the process-wide counter.\n\nThe stream itself enforces retention (currently 7d / 10k msgs); this\nendpoint just exposes whatever is currently retained.",
         "operationId": "list_silent_drops",
         "parameters": [
@@ -1264,12 +1264,12 @@
         }
       }
     },
-    "/api/processes": {
+    "/api/v1/processes": {
       "get": {
         "tags": [
           "processes"
         ],
-        "summary": "GET /api/processes — list processes with filter/sort/pagination.",
+        "summary": "GET /api/v1/processes — list processes with filter/sort/pagination.",
         "description": "Query parameters use a custom DSL (see `query/extractor.rs`): `filter`,\n`sort`, `page`, `page_size`. Response shape is paginated.",
         "operationId": "list_processes",
         "responses": {
@@ -1296,12 +1296,12 @@
         }
       }
     },
-    "/api/processes/stats": {
+    "/api/v1/processes/stats": {
       "get": {
         "tags": [
           "processes"
         ],
-        "summary": "GET /api/processes/stats — aggregate process statistics.",
+        "summary": "GET /api/v1/processes/stats — aggregate process statistics.",
         "operationId": "process_stats",
         "responses": {
           "200": {
@@ -1327,12 +1327,12 @@
         }
       }
     },
-    "/api/processes/{process_id}": {
+    "/api/v1/processes/{process_id}": {
       "get": {
         "tags": [
           "processes"
         ],
-        "summary": "GET /api/processes/{process_id} — get process detail (with tasks, metrics, logs, artifact count).",
+        "summary": "GET /api/v1/processes/{process_id} — get process detail (with tasks, metrics, logs, artifact count).",
         "operationId": "get_process",
         "parameters": [
           {
@@ -1375,7 +1375,7 @@
         "tags": [
           "processes"
         ],
-        "summary": "PUT /api/processes/{process_id} — partial update of a process.",
+        "summary": "PUT /api/v1/processes/{process_id} — partial update of a process.",
         "operationId": "update_process",
         "parameters": [
           {
@@ -1425,12 +1425,12 @@
         }
       }
     },
-    "/api/processes/{process_id}/artifacts": {
+    "/api/v1/processes/{process_id}/artifacts": {
       "get": {
         "tags": [
           "processes"
         ],
-        "summary": "GET /api/processes/{process_id}/artifacts — list catalogue entries for a process.",
+        "summary": "GET /api/v1/processes/{process_id}/artifacts — list catalogue entries for a process.",
         "operationId": "get_process_artifacts",
         "parameters": [
           {
@@ -1467,7 +1467,7 @@
         }
       }
     },
-    "/api/processes/{process_id}/artifacts/list": {
+    "/api/v1/processes/{process_id}/artifacts/list": {
       "get": {
         "tags": [
           "processes-live"
@@ -1565,7 +1565,7 @@
         }
       }
     },
-    "/api/processes/{process_id}/artifacts/stream": {
+    "/api/v1/processes/{process_id}/artifacts/stream": {
       "get": {
         "tags": [
           "processes-live"
@@ -1628,12 +1628,12 @@
         }
       }
     },
-    "/api/processes/{process_id}/logs": {
+    "/api/v1/processes/{process_id}/logs": {
       "get": {
         "tags": [
           "processes"
         ],
-        "summary": "GET /api/processes/{process_id}/logs — list logs for a process with filter/pagination.",
+        "summary": "GET /api/v1/processes/{process_id}/logs — list logs for a process with filter/pagination.",
         "operationId": "get_process_logs",
         "parameters": [
           {
@@ -1670,7 +1670,7 @@
         }
       }
     },
-    "/api/processes/{process_id}/logs/stream": {
+    "/api/v1/processes/{process_id}/logs/stream": {
       "get": {
         "tags": [
           "processes-live"
@@ -1744,7 +1744,7 @@
         }
       }
     },
-    "/api/processes/{process_id}/logs/tail": {
+    "/api/v1/processes/{process_id}/logs/tail": {
       "get": {
         "tags": [
           "processes-live"
@@ -1851,12 +1851,12 @@
         }
       }
     },
-    "/api/processes/{process_id}/metrics": {
+    "/api/v1/processes/{process_id}/metrics": {
       "get": {
         "tags": [
           "processes"
         ],
-        "summary": "GET /api/processes/{process_id}/metrics — list metrics for a process.",
+        "summary": "GET /api/v1/processes/{process_id}/metrics — list metrics for a process.",
         "operationId": "get_process_metrics",
         "parameters": [
           {
@@ -1919,7 +1919,7 @@
         }
       }
     },
-    "/api/processes/{process_id}/metrics/series": {
+    "/api/v1/processes/{process_id}/metrics/series": {
       "get": {
         "tags": [
           "processes-live"
@@ -2016,7 +2016,7 @@
         }
       }
     },
-    "/api/processes/{process_id}/metrics/stream": {
+    "/api/v1/processes/{process_id}/metrics/stream": {
       "get": {
         "tags": [
           "processes-live"
@@ -2080,12 +2080,12 @@
         }
       }
     },
-    "/api/processes/{process_id}/metrics/summary": {
+    "/api/v1/processes/{process_id}/metrics/summary": {
       "get": {
         "tags": [
           "processes"
         ],
-        "summary": "GET /api/processes/{process_id}/metrics/summary — aggregated metric stats per key.",
+        "summary": "GET /api/v1/processes/{process_id}/metrics/summary — aggregated metric stats per key.",
         "operationId": "get_process_metrics_summary",
         "parameters": [
           {
@@ -2125,12 +2125,12 @@
         }
       }
     },
-    "/api/processes/{process_id}/tasks": {
+    "/api/v1/processes/{process_id}/tasks": {
       "get": {
         "tags": [
           "processes"
         ],
-        "summary": "GET /api/processes/{process_id}/tasks — list tasks for a process.",
+        "summary": "GET /api/v1/processes/{process_id}/tasks — list tasks for a process.",
         "operationId": "get_process_tasks",
         "parameters": [
           {
@@ -2168,12 +2168,12 @@
         }
       }
     },
-    "/api/provenance/from-artifact/{execution_id}/{artifact_id}": {
+    "/api/v1/provenance/from-artifact/{execution_id}/{artifact_id}": {
       "get": {
         "tags": [
           "provenance"
         ],
-        "summary": "GET /api/provenance/from-artifact/{execution_id}/{artifact_id}?depth=10",
+        "summary": "GET /api/v1/provenance/from-artifact/{execution_id}/{artifact_id}?depth=10",
         "description": "Resolves a catalogue entry to its producing token and returns the full\nancestry chain. Uses `source_event_sequence` for direct lookup when\navailable, falling back to signal_key → cross-link resolution.",
         "operationId": "provenance_from_artifact",
         "parameters": [
@@ -2233,12 +2233,12 @@
         }
       }
     },
-    "/api/provenance/link/{signal_key}": {
+    "/api/v1/provenance/link/{signal_key}": {
       "get": {
         "tags": [
           "provenance"
         ],
-        "summary": "GET /api/provenance/link/{signal_key}",
+        "summary": "GET /api/v1/provenance/link/{signal_key}",
         "description": "Look up a cross-net bridge link by signal_key.",
         "operationId": "cross_link",
         "parameters": [
@@ -2279,12 +2279,12 @@
         }
       }
     },
-    "/api/provenance/{net_id}/{event_seq}/detail": {
+    "/api/v1/provenance/{net_id}/{event_seq}/detail": {
       "get": {
         "tags": [
           "provenance"
         ],
-        "summary": "GET /api/provenance/{net_id}/{event_seq}/detail",
+        "summary": "GET /api/v1/provenance/{net_id}/{event_seq}/detail",
         "description": "Returns the full context for a causality event by joining to domain\ntables based on effect_handler. Enables rich detail views in the\nprovenance DAG visualization.",
         "operationId": "event_detail",
         "parameters": [
@@ -2325,12 +2325,12 @@
         }
       }
     },
-    "/api/provenance/{net_id}/{token_id}": {
+    "/api/v1/provenance/{net_id}/{token_id}": {
       "get": {
         "tags": [
           "provenance"
         ],
-        "summary": "GET /api/provenance/{net_id}/{token_id}?depth=10",
+        "summary": "GET /api/v1/provenance/{net_id}/{token_id}?depth=10",
         "description": "Recursive CTE walking token ancestry: for a given token, find which events\nproduced it, what tokens those events consumed, and recurse.",
         "operationId": "token_provenance",
         "parameters": [
@@ -2387,12 +2387,12 @@
         }
       }
     },
-    "/api/resources": {
+    "/api/v1/resources": {
       "get": {
         "tags": [
           "resources"
         ],
-        "summary": "`GET /api/resources` — paginated list, optionally filtered by type.",
+        "summary": "`GET /api/v1/resources` — paginated list, optionally filtered by type.",
         "operationId": "list_resources",
         "parameters": [
           {
@@ -2456,7 +2456,7 @@
         "tags": [
           "resources"
         ],
-        "summary": "`POST /api/resources` — create a logical resource and its v1 row.",
+        "summary": "`POST /api/v1/resources` — create a logical resource and its v1 row.",
         "operationId": "create_resource",
         "requestBody": {
           "content": {
@@ -2522,12 +2522,12 @@
         }
       }
     },
-    "/api/resources/types": {
+    "/api/v1/resources/types": {
       "get": {
         "tags": [
           "resources"
         ],
-        "summary": "`GET /api/resources/types` — registry introspection. Powers the\nfrontend picker's type list and the schema-driven create form.",
+        "summary": "`GET /api/v1/resources/types` — registry introspection. Powers the\nfrontend picker's type list and the schema-driven create form.",
         "operationId": "list_resource_types",
         "responses": {
           "200": {
@@ -2546,12 +2546,12 @@
         }
       }
     },
-    "/api/resources/{id}": {
+    "/api/v1/resources/{id}": {
       "get": {
         "tags": [
           "resources"
         ],
-        "summary": "`GET /api/resources/{id}` — admin view. Secret fields are listed by\nname only; values never leave Vault on the read path.",
+        "summary": "`GET /api/v1/resources/{id}` — admin view. Secret fields are listed by\nname only; values never leave Vault on the read path.",
         "operationId": "get_resource",
         "parameters": [
           {
@@ -2592,7 +2592,7 @@
         "tags": [
           "resources"
         ],
-        "summary": "`PUT /api/resources/{id}` — update display_name and/or config. Setting\n`config` bumps `latest_version` and writes a fresh vault_path; name-only\nupdates do not.",
+        "summary": "`PUT /api/v1/resources/{id}` — update display_name and/or config. Setting\n`config` bumps `latest_version` and writes a fresh vault_path; name-only\nupdates do not.",
         "operationId": "update_resource",
         "parameters": [
           {
@@ -2663,7 +2663,7 @@
         "tags": [
           "resources"
         ],
-        "summary": "`DELETE /api/resources/{id}` — soft delete. Preserves\n`resource_versions` rows + Vault paths so already-pinned instances keep\nresolving.",
+        "summary": "`DELETE /api/v1/resources/{id}` — soft delete. Preserves\n`resource_versions` rows + Vault paths so already-pinned instances keep\nresolving.",
         "operationId": "delete_resource",
         "parameters": [
           {
@@ -2694,12 +2694,12 @@
         }
       }
     },
-    "/api/resources/{id}/audit": {
+    "/api/v1/resources/{id}/audit": {
       "get": {
         "tags": [
           "resources"
         ],
-        "summary": "`GET /api/resources/{id}/audit` — paginated audit trail for a resource.",
+        "summary": "`GET /api/v1/resources/{id}/audit` — paginated audit trail for a resource.",
         "operationId": "list_resource_audit",
         "parameters": [
           {
@@ -2755,12 +2755,12 @@
         }
       }
     },
-    "/api/resources/{id}/rotate": {
+    "/api/v1/resources/{id}/rotate": {
       "post": {
         "tags": [
           "resources"
         ],
-        "summary": "`POST /api/resources/{id}/rotate` — write a new version. Identical to\n`update_resource` with only `config` set, plus a different audit verb.",
+        "summary": "`POST /api/v1/resources/{id}/rotate` — write a new version. Identical to\n`update_resource` with only `config` set, plus a different audit verb.",
         "operationId": "rotate_resource",
         "parameters": [
           {
@@ -2828,12 +2828,12 @@
         }
       }
     },
-    "/api/tasks": {
+    "/api/v1/tasks": {
       "get": {
         "tags": [
           "tasks"
         ],
-        "summary": "GET /api/tasks — list all tasks with filter/sort/pagination.",
+        "summary": "GET /api/v1/tasks — list all tasks with filter/sort/pagination.",
         "description": "Returns `{ tasks, total, page, page_size, total_pages, has_next, has_previous }`\nwhere each task is a `HumanTask`-shaped JSON object (see `to_human_task_json`).\nThe `tasks` key is what the Mekhan frontend's task store expects; the rest\nof the pagination envelope is preserved for richer clients.",
         "operationId": "list_tasks",
         "responses": {
@@ -2860,12 +2860,12 @@
         }
       }
     },
-    "/api/tasks/stream": {
+    "/api/v1/tasks/stream": {
       "get": {
         "tags": [
           "tasks"
         ],
-        "summary": "GET /api/tasks/stream — SSE endpoint for real-time task events from NATS.",
+        "summary": "GET /api/v1/tasks/stream — SSE endpoint for real-time task events from NATS.",
         "description": "Emits `{event, data}` lines for `task_created`, `task_completed`,\n`task_failed`, `task_cancelled`, `process_update`. `data` is the raw\nNATS payload as a JSON string (clients re-parse it).",
         "operationId": "task_stream",
         "responses": {
@@ -2878,12 +2878,12 @@
         }
       }
     },
-    "/api/tasks/{id}": {
+    "/api/v1/tasks/{id}": {
       "get": {
         "tags": [
           "tasks"
         ],
-        "summary": "GET /api/tasks/:id — get a single task.",
+        "summary": "GET /api/v1/tasks/:id — get a single task.",
         "description": "Returns a `HumanTask`-shaped JSON object built from the DB row + `detail`\nJSONB projected by the causality consumer. This includes `task_id`, `steps`,\n`instructions_mdsvex`, `net_id`, `place`, etc. — everything the frontend\ntask form needs to render.",
         "operationId": "get_task",
         "parameters": [
@@ -2922,12 +2922,12 @@
         }
       }
     },
-    "/api/tasks/{id}/cancel": {
+    "/api/v1/tasks/{id}/cancel": {
       "post": {
         "tags": [
           "tasks"
         ],
-        "summary": "POST /api/tasks/{id}/cancel — cancel a task and publish NATS signal.",
+        "summary": "POST /api/v1/tasks/{id}/cancel — cancel a task and publish NATS signal.",
         "operationId": "cancel_task",
         "parameters": [
           {
@@ -2984,12 +2984,12 @@
         }
       }
     },
-    "/api/tasks/{id}/complete": {
+    "/api/v1/tasks/{id}/complete": {
       "post": {
         "tags": [
           "tasks"
         ],
-        "summary": "POST /api/tasks/{id}/complete — complete a task and publish NATS signal.",
+        "summary": "POST /api/v1/tasks/{id}/complete — complete a task and publish NATS signal.",
         "operationId": "complete_task",
         "parameters": [
           {
@@ -3046,12 +3046,12 @@
         }
       }
     },
-    "/api/templates": {
+    "/api/v1/templates": {
       "get": {
         "tags": [
           "templates"
         ],
-        "summary": "GET /api/templates",
+        "summary": "GET /api/v1/templates",
         "operationId": "list_templates",
         "parameters": [
           {
@@ -3124,7 +3124,7 @@
         "tags": [
           "templates"
         ],
-        "summary": "POST /api/templates",
+        "summary": "POST /api/v1/templates",
         "operationId": "create_template",
         "requestBody": {
           "content": {
@@ -3160,12 +3160,12 @@
         }
       }
     },
-    "/api/templates/{id}": {
+    "/api/v1/templates/{id}": {
       "get": {
         "tags": [
           "templates"
         ],
-        "summary": "GET /api/templates/{id}",
+        "summary": "GET /api/v1/templates/{id}",
         "operationId": "get_template",
         "parameters": [
           {
@@ -3216,7 +3216,7 @@
         "tags": [
           "templates"
         ],
-        "summary": "PUT /api/templates/{id}",
+        "summary": "PUT /api/v1/templates/{id}",
         "operationId": "update_template",
         "parameters": [
           {
@@ -3287,7 +3287,7 @@
         "tags": [
           "templates"
         ],
-        "summary": "DELETE /api/templates/{id}\nPer Section 11.7: cascade cleanup for published templates with finished instances.",
+        "summary": "DELETE /api/v1/templates/{id}\nPer Section 11.7: cascade cleanup for published templates with finished instances.",
         "operationId": "delete_template",
         "parameters": [
           {
@@ -3338,12 +3338,12 @@
         }
       }
     },
-    "/api/templates/{id}/air": {
+    "/api/v1/templates/{id}/air": {
       "get": {
         "tags": [
           "templates"
         ],
-        "summary": "GET /api/templates/{id}/air",
+        "summary": "GET /api/v1/templates/{id}/air",
         "operationId": "get_air",
         "parameters": [
           {
@@ -3399,12 +3399,12 @@
         }
       }
     },
-    "/api/templates/{id}/apply": {
+    "/api/v1/templates/{id}/apply": {
       "post": {
         "tags": [
           "templates"
         ],
-        "summary": "POST /api/templates/{id}/apply",
+        "summary": "POST /api/v1/templates/{id}/apply",
         "description": "GitOps entry point: atomically publish a new version of the chain straight\nfrom a git-authored artifact. The supplied `graph` REPLACES the chain head\nwholesale (no CRDT merge). Either seeds-and-publishes a fresh `mekhan init`\ndraft as v1 in place, or bumps the published head to a new born-published\nversion. The collaborative Y.Doc draft window is collapsed to nothing, so\npublish-freeze itself is the isolation between git- and web-authored\ntemplates.",
         "operationId": "apply_template",
         "parameters": [
@@ -3483,12 +3483,12 @@
         }
       }
     },
-    "/api/templates/{id}/bundle": {
+    "/api/v1/templates/{id}/bundle": {
       "get": {
         "tags": [
           "templates"
         ],
-        "summary": "GET /api/templates/{id}/bundle",
+        "summary": "GET /api/v1/templates/{id}/bundle",
         "operationId": "get_template_bundle",
         "parameters": [
           {
@@ -3536,12 +3536,12 @@
         }
       }
     },
-    "/api/templates/{id}/compile": {
+    "/api/v1/templates/{id}/compile": {
       "post": {
         "tags": [
           "templates"
         ],
-        "summary": "POST /api/templates/{id}/compile",
+        "summary": "POST /api/v1/templates/{id}/compile",
         "operationId": "compile_preview",
         "parameters": [
           {
@@ -3597,12 +3597,12 @@
         }
       }
     },
-    "/api/templates/{id}/io-stubs": {
+    "/api/v1/templates/{id}/io-stubs": {
       "get": {
         "tags": [
           "templates"
         ],
-        "summary": "GET /api/templates/{id}/io-stubs\nGenerated `_aithericon_io` pair (`.py` SDK delegate + typed `.pyi` overlay)\nper Python automated step, derived from each node's input scope. An\nauthoring aid: unlike compile it does NOT require the graph to be\npublishable (missing entrypoints / dangling edges are fine) — it only needs\na DAG. The IDE surfaces these read-only so step code gets typed\n`load_input()` before publish. Non-fatal by design: a graph that can't be\nscoped yields an empty map, never an error, so the editor never breaks on\nthis.",
+        "summary": "GET /api/v1/templates/{id}/io-stubs\nGenerated `_aithericon_io` pair (`.py` SDK delegate + typed `.pyi` overlay)\nper Python automated step, derived from each node's input scope. An\nauthoring aid: unlike compile it does NOT require the graph to be\npublishable (missing entrypoints / dangling edges are fine) — it only needs\na DAG. The IDE surfaces these read-only so step code gets typed\n`load_input()` before publish. Non-fatal by design: a graph that can't be\nscoped yields an empty map, never an error, so the editor never breaks on\nthis.",
         "operationId": "io_stubs",
         "parameters": [
           {
@@ -3648,12 +3648,12 @@
         }
       }
     },
-    "/api/templates/{id}/new-version": {
+    "/api/v1/templates/{id}/new-version": {
       "post": {
         "tags": [
           "templates"
         ],
-        "summary": "POST /api/templates/{id}/new-version",
+        "summary": "POST /api/v1/templates/{id}/new-version",
         "operationId": "new_version",
         "parameters": [
           {
@@ -3711,12 +3711,12 @@
         }
       }
     },
-    "/api/templates/{id}/publish": {
+    "/api/v1/templates/{id}/publish": {
       "post": {
         "tags": [
           "templates"
         ],
-        "summary": "POST /api/templates/{id}/publish",
+        "summary": "POST /api/v1/templates/{id}/publish",
         "operationId": "publish_template",
         "parameters": [
           {
@@ -3803,12 +3803,12 @@
         }
       }
     },
-    "/api/templates/{id}/tests": {
+    "/api/v1/templates/{id}/tests": {
       "get": {
         "tags": [
           "template_tests"
         ],
-        "summary": "GET /api/templates/{id}/tests — list tests for a template family.",
+        "summary": "GET /api/v1/templates/{id}/tests — list tests for a template family.",
         "operationId": "list_tests",
         "parameters": [
           {
@@ -3852,7 +3852,7 @@
         "tags": [
           "template_tests"
         ],
-        "summary": "POST /api/templates/{id}/tests — create a new test.",
+        "summary": "POST /api/v1/templates/{id}/tests — create a new test.",
         "operationId": "create_test",
         "parameters": [
           {
@@ -3910,12 +3910,12 @@
         }
       }
     },
-    "/api/templates/{id}/tests/run-all": {
+    "/api/v1/templates/{id}/tests/run-all": {
       "post": {
         "tags": [
           "template_tests"
         ],
-        "summary": "POST /api/templates/{id}/tests/run-all — run every enabled test for a\ntemplate family. Used by the editor's \"Run all\" button and by the\npublication gate.",
+        "summary": "POST /api/v1/templates/{id}/tests/run-all — run every enabled test for a\ntemplate family. Used by the editor's \"Run all\" button and by the\npublication gate.",
         "operationId": "run_all",
         "parameters": [
           {
@@ -3971,12 +3971,12 @@
         }
       }
     },
-    "/api/templates/{id}/triggers": {
+    "/api/v1/templates/{id}/triggers": {
       "get": {
         "tags": [
           "triggers"
         ],
-        "summary": "GET /api/templates/{id}/triggers",
+        "summary": "GET /api/v1/templates/{id}/triggers",
         "operationId": "list_template_triggers",
         "parameters": [
           {
@@ -4004,12 +4004,12 @@
         }
       }
     },
-    "/api/templates/{id}/versions": {
+    "/api/v1/templates/{id}/versions": {
       "get": {
         "tags": [
           "templates"
         ],
-        "summary": "GET /api/templates/{id}/versions",
+        "summary": "GET /api/v1/templates/{id}/versions",
         "operationId": "list_versions",
         "parameters": [
           {
@@ -4060,12 +4060,12 @@
         }
       }
     },
-    "/api/templates/{template_id}/tests/{test_id}": {
+    "/api/v1/templates/{template_id}/tests/{test_id}": {
       "delete": {
         "tags": [
           "template_tests"
         ],
-        "summary": "DELETE /api/templates/{template_id}/tests/{test_id}",
+        "summary": "DELETE /api/v1/templates/{template_id}/tests/{test_id}",
         "operationId": "delete_test",
         "parameters": [
           {
@@ -4107,7 +4107,7 @@
         "tags": [
           "template_tests"
         ],
-        "summary": "PATCH /api/templates/{template_id}/tests/{test_id} — partial update.",
+        "summary": "PATCH /api/v1/templates/{template_id}/tests/{test_id} — partial update.",
         "operationId": "update_test",
         "parameters": [
           {
@@ -4165,12 +4165,12 @@
         }
       }
     },
-    "/api/templates/{template_id}/tests/{test_id}/run": {
+    "/api/v1/templates/{template_id}/tests/{test_id}/run": {
       "post": {
         "tags": [
           "template_tests"
         ],
-        "summary": "POST /api/templates/{template_id}/tests/{test_id}/run — execute one test.",
+        "summary": "POST /api/v1/templates/{template_id}/tests/{test_id}/run — execute one test.",
         "operationId": "run_one",
         "parameters": [
           {
@@ -4226,12 +4226,12 @@
         }
       }
     },
-    "/api/templates/{template_id}/tests/{test_id}/runs": {
+    "/api/v1/templates/{template_id}/tests/{test_id}/runs": {
       "get": {
         "tags": [
           "template_tests"
         ],
-        "summary": "GET /api/templates/{template_id}/tests/{test_id}/runs — recent run history.",
+        "summary": "GET /api/v1/templates/{template_id}/tests/{test_id}/runs — recent run history.",
         "description": "Returns newest-first. The editor's detail sheet shows the latest one\n(failure_detail + final_scope + instance_id) so authors can diagnose a\nfailure without chasing it through `/instances`.",
         "operationId": "list_runs",
         "parameters": [
@@ -4294,12 +4294,12 @@
         }
       }
     },
-    "/api/triggers": {
+    "/api/v1/triggers": {
       "get": {
         "tags": [
           "triggers"
         ],
-        "summary": "GET /api/triggers",
+        "summary": "GET /api/v1/triggers",
         "operationId": "list_triggers",
         "responses": {
           "200": {
@@ -4315,12 +4315,12 @@
         }
       }
     },
-    "/api/triggers/metrics": {
+    "/api/v1/triggers/metrics": {
       "get": {
         "tags": [
           "triggers"
         ],
-        "summary": "GET /api/triggers/metrics",
+        "summary": "GET /api/v1/triggers/metrics",
         "description": "Returns aggregate counters per source kind plus the registry size. Useful\nfor /admin dashboards and the editor's trigger landing page.",
         "operationId": "trigger_metrics",
         "responses": {
@@ -4337,12 +4337,12 @@
         }
       }
     },
-    "/api/triggers/preview/cron": {
+    "/api/v1/triggers/preview/cron": {
       "post": {
         "tags": [
           "triggers"
         ],
-        "summary": "POST /api/triggers/preview/cron",
+        "summary": "POST /api/v1/triggers/preview/cron",
         "description": "Returns the next N fire times for a cron schedule. Used by the editor's\ntrigger inspector to show users when their cron will fire next without\nhaving to ship the workflow first.",
         "operationId": "preview_cron",
         "requestBody": {
@@ -4369,12 +4369,12 @@
         }
       }
     },
-    "/api/triggers/source-scope": {
+    "/api/v1/triggers/source-scope": {
       "get": {
         "tags": [
           "triggers"
         ],
-        "summary": "GET /api/triggers/source-scope?kind=cron",
+        "summary": "GET /api/v1/triggers/source-scope?kind=cron",
         "description": "The per-source scope contract, surfaced so the editor can show authors\nexactly which identifiers are in scope under each mapping expression\ninstead of leaving them to guess.",
         "operationId": "trigger_source_scope",
         "parameters": [
@@ -4402,12 +4402,12 @@
         }
       }
     },
-    "/api/triggers/{node_id}/enabled": {
+    "/api/v1/triggers/{node_id}/enabled": {
       "patch": {
         "tags": [
           "triggers"
         ],
-        "summary": "PATCH /api/triggers/{node_id}/enabled",
+        "summary": "PATCH /api/v1/triggers/{node_id}/enabled",
         "description": "Arm or pause a single trigger on its **published** template. This is the\ndeliberate inverse of the rest of the template: a trigger's `source`,\n`payload_mapping` and target are frozen at publish, but whether it is\ncurrently armed is operational state of the live template — so it is\neditable exactly when everything else is locked, and *only* then (drafts\nare armed by editing the graph in the editor).\n\nThe published row's `graph` column is the runtime source of truth that\n`hydrate()` and `fire()` read, so we flip `enabled` on the trigger node\nthere and re-register the template to make the change live immediately;\nit then survives restarts via the normal `hydrate()` path.",
         "operationId": "set_trigger_enabled",
         "parameters": [
@@ -4475,7 +4475,7 @@
         }
       }
     },
-    "/api/triggers/{node_id}/fire": {
+    "/api/v1/triggers/{node_id}/fire": {
       "post": {
         "tags": [
           "triggers"
@@ -4537,17 +4537,17 @@
             }
           },
           "406": {
-            "description": "SSE requested on the fire endpoint — use GET /api/instances/{id}/stream"
+            "description": "SSE requested on the fire endpoint — use GET /api/v1/instances/{id}/stream"
           }
         }
       }
     },
-    "/api/triggers/{node_id}/history": {
+    "/api/v1/triggers/{node_id}/history": {
       "get": {
         "tags": [
           "triggers"
         ],
-        "summary": "GET /api/triggers/{node_id}/history",
+        "summary": "GET /api/v1/triggers/{node_id}/history",
         "operationId": "trigger_history",
         "parameters": [
           {
@@ -4661,7 +4661,7 @@
       },
       "ApplyTemplateRequest": {
         "type": "object",
-        "description": "Request body for `POST /api/templates/{id}/apply` — the GitOps path.\nThe `graph` REPLACES the chain head wholesale (no CRDT merge); binary\nassets are uploaded out-of-band via the files endpoint before this call.",
+        "description": "Request body for `POST /api/v1/templates/{id}/apply` — the GitOps path.\nThe `graph` REPLACES the chain head wholesale (no CRDT merge); binary\nassets are uploaded out-of-band via the files endpoint before this call.",
         "required": [
           "graph"
         ],
@@ -4698,7 +4698,7 @@
       },
       "ArtifactsListResponse": {
         "type": "object",
-        "description": "Response shape for `GET /api/processes/{process_id}/artifacts/list`.\n\nFrontend reads `body.entries[]` directly — keep the single-field envelope.",
+        "description": "Response shape for `GET /api/v1/processes/{process_id}/artifacts/list`.\n\nFrontend reads `body.entries[]` directly — keep the single-field envelope.",
         "required": [
           "entries"
         ],
@@ -5010,7 +5010,7 @@
       },
       "CompileRequest": {
         "type": "object",
-        "description": "Request body for stateless compilation. Used by `POST /api/compile` and\n`POST /api/templates/{id}/compile`. `files` is a per-node, per-filename map\nof inline contents; the preview compile emits `InputSource::Raw` entries so\nthe AIR matches the StoragePath-keyed shape produced by publish.",
+        "description": "Request body for stateless compilation. Used by `POST /api/v1/compile` and\n`POST /api/v1/templates/{id}/compile`. `files` is a per-node, per-filename map\nof inline contents; the preview compile emits `InputSource::Raw` entries so\nthe AIR matches the StoragePath-keyed shape produced by publish.",
         "required": [
           "name",
           "graph"
@@ -5137,7 +5137,7 @@
       },
       "CreateResourceRequest": {
         "type": "object",
-        "description": "Request body for `POST /api/resources`. Carries every field needed to\nland both a `resources` row and the first `resource_versions` row.",
+        "description": "Request body for `POST /api/v1/resources`. Carries every field needed to\nland both a `resources` row and the first `resource_versions` row.",
         "required": [
           "path",
           "resource_type",
@@ -5247,7 +5247,7 @@
       },
       "CreateTokenRequest": {
         "type": "object",
-        "description": "Request body for `POST /api/auth/tokens`.",
+        "description": "Request body for `POST /api/v1/auth/tokens`.",
         "required": [
           "name"
         ],
@@ -5274,7 +5274,7 @@
       },
       "CreatedToken": {
         "type": "object",
-        "description": "Response of `POST /api/auth/tokens`. Identical to [`TokenSummary`] plus the\none-time `secret` — Mekhan never stores or re-serves it.",
+        "description": "Response of `POST /api/v1/auth/tokens`. Identical to [`TokenSummary`] plus the\none-time `secret` — Mekhan never stores or re-serves it.",
         "required": [
           "id",
           "name",
@@ -5793,7 +5793,7 @@
       },
       "FileUploadResponse": {
         "type": "object",
-        "description": "Response shape for `POST /api/files/upload/{id}/{node_id}`.\n\nThe handler returns S3 metadata after a successful upload.",
+        "description": "Response shape for `POST /api/v1/files/upload/{id}/{node_id}`.\n\nThe handler returns S3 metadata after a successful upload.",
         "required": [
           "key",
           "filename",
@@ -6323,7 +6323,7 @@
       },
       "InstanceEventsResponse": {
         "type": "object",
-        "description": "Response shape for `GET /api/instances/{id}/events`.\n\nMirrors the literal `json!({ \"net_id\": ..., \"events\": [...], \"event_count\": ... })`\nenvelope the handler previously emitted. `events` stays `Vec<serde_json::Value>`\nbecause the petri-lab event shape is heterogeneous (one of many event types).",
+        "description": "Response shape for `GET /api/v1/instances/{id}/events`.\n\nMirrors the literal `json!({ \"net_id\": ..., \"events\": [...], \"event_count\": ... })`\nenvelope the handler previously emitted. `events` stays `Vec<serde_json::Value>`\nbecause the petri-lab event shape is heterogeneous (one of many event types).",
         "required": [
           "net_id",
           "events",
@@ -6730,7 +6730,7 @@
       },
       "LogsTailResponse": {
         "type": "object",
-        "description": "Response shape for `GET /api/processes/{process_id}/logs/tail`.\n\nFrontend reads `body.logs[]` directly — keep the single-field envelope.",
+        "description": "Response shape for `GET /api/v1/processes/{process_id}/logs/tail`.\n\nFrontend reads `body.logs[]` directly — keep the single-field envelope.",
         "required": [
           "logs"
         ],
@@ -7001,7 +7001,7 @@
             "type": "array",
             "items": {
               "type": "object",
-              "description": "One row from `resource_audit`. Returned by `GET /api/resources/{id}/audit`.",
+              "description": "One row from `resource_audit`. Returned by `GET /api/v1/resources/{id}/audit`.",
               "required": [
                 "id",
                 "resource_id",
@@ -7081,7 +7081,7 @@
             "type": "array",
             "items": {
               "type": "object",
-              "description": "Compact list-row shape. Returned by `GET /api/resources` — never carries\nper-version data (`public_config`, `vault_path`) so the list endpoint\nstays cheap to render.",
+              "description": "Compact list-row shape. Returned by `GET /api/v1/resources` — never carries\nper-version data (`public_config`, `vault_path`) so the list endpoint\nstays cheap to render.",
               "required": [
                 "id",
                 "path",
@@ -7818,7 +7818,7 @@
       },
       "ReplyMode": {
         "type": "string",
-        "description": "How a `POST /api/triggers/{id}/fire` caller wants the response delivered.\nThe caller selects per-request (query `?reply=`, `Prefer` header, or a\nJSON body field); a Trigger node's optional `replyDefault` is used only\nwhen the caller doesn't specify. `Sse` is never *executed* on the fire\nendpoint — SSE is the dedicated `GET /api/instances/{id}/stream` — but is\nmodeled so a node can advertise it as the intended consumption mode.",
+        "description": "How a `POST /api/v1/triggers/{id}/fire` caller wants the response delivered.\nThe caller selects per-request (query `?reply=`, `Prefer` header, or a\nJSON body field); a Trigger node's optional `replyDefault` is used only\nwhen the caller doesn't specify. `Sse` is never *executed* on the fire\nendpoint — SSE is the dedicated `GET /api/v1/instances/{id}/stream` — but is\nmodeled so a node can advertise it as the intended consumption mode.",
         "enum": [
           "fire_and_forget",
           "wait_for_result",
@@ -7827,7 +7827,7 @@
       },
       "ResourceAuditEntry": {
         "type": "object",
-        "description": "One row from `resource_audit`. Returned by `GET /api/resources/{id}/audit`.",
+        "description": "One row from `resource_audit`. Returned by `GET /api/v1/resources/{id}/audit`.",
         "required": [
           "id",
           "resource_id",
@@ -7911,7 +7911,7 @@
       },
       "ResourceDetail": {
         "type": "object",
-        "description": "Admin view returned by `GET /api/resources/{id}`. Secret fields appear\nin `redacted_secret_fields` so the picker can render \"<redacted>\"\nplaceholders without ever shipping the real values.",
+        "description": "Admin view returned by `GET /api/v1/resources/{id}`. Secret fields appear\nin `redacted_secret_fields` so the picker can render \"<redacted>\"\nplaceholders without ever shipping the real values.",
         "required": [
           "id",
           "path",
@@ -7963,7 +7963,7 @@
       },
       "ResourceSummary": {
         "type": "object",
-        "description": "Compact list-row shape. Returned by `GET /api/resources` — never carries\nper-version data (`public_config`, `vault_path`) so the list endpoint\nstays cheap to render.",
+        "description": "Compact list-row shape. Returned by `GET /api/v1/resources` — never carries\nper-version data (`public_config`, `vault_path`) so the list endpoint\nstays cheap to render.",
         "required": [
           "id",
           "path",
@@ -8013,7 +8013,7 @@
       },
       "ResourceTypeInfo": {
         "type": "object",
-        "description": "One descriptor surfaced by `GET /api/resources/types`. Drives the\npicker's type list and the schema-driven create form. `schema` is the\nschemars JSON Schema of the underlying ResourceType struct; the frontend\nrenders it field-by-field.",
+        "description": "One descriptor surfaced by `GET /api/v1/resources/types`. Drives the\npicker's type list and the schema-driven create form. `schema` is the\nschemars JSON Schema of the underlying ResourceType struct; the frontend\nrenders it field-by-field.",
         "required": [
           "name",
           "display_name",
@@ -8083,7 +8083,7 @@
       },
       "RotateResourceRequest": {
         "type": "object",
-        "description": "Request body for `POST /api/resources/{id}/rotate`. Always bumps\nversion. The body carries the new config — the type cannot change at\nrotation time (`resource_type` is immutable for a logical resource).",
+        "description": "Request body for `POST /api/v1/resources/{id}/rotate`. Always bumps\nversion. The body carries the new config — the type cannot change at\nrotation time (`resource_type` is immutable for a logical resource).",
         "required": [
           "config"
         ],
@@ -8341,7 +8341,7 @@
       },
       "StepExecutionResponse": {
         "type": "object",
-        "description": "Response shape for `GET /api/instances/{id}/step-executions`.\n\nOne row per `(workflow node, execution iteration)` for an instance.\nMaterialized by the step-executions projection consumer\n(`service/src/projections/step_executions/`). The frontend keys on\n`node_id` to overlay runtime info onto each node card on the canvas.",
+        "description": "Response shape for `GET /api/v1/instances/{id}/step-executions`.\n\nOne row per `(workflow node, execution iteration)` for an instance.\nMaterialized by the step-executions projection consumer\n(`service/src/projections/step_executions/`). The frontend keys on\n`node_id` to overlay runtime info onto each node card on the canvas.",
         "required": [
           "node_id",
           "iteration_index",
@@ -8661,7 +8661,7 @@
       },
       "TaskListResponse": {
         "type": "object",
-        "description": "Response shape for `GET /api/tasks`.\n\n`tasks` is `Vec<serde_json::Value>` because each task is a\n`HumanTask`-shaped JSON built by `to_human_task_json` from heterogeneous DB\nrows — the right level of typing for this endpoint.",
+        "description": "Response shape for `GET /api/v1/tasks`.\n\n`tasks` is `Vec<serde_json::Value>` because each task is a\n`HumanTask`-shaped JSON built by `to_human_task_json` from heterogeneous DB\nrows — the right level of typing for this endpoint.",
         "required": [
           "tasks",
           "total",
@@ -8924,7 +8924,7 @@
       },
       "TokenSummary": {
         "type": "object",
-        "description": "One token row in `GET /api/auth/tokens`. Never carries the secret.",
+        "description": "One token row in `GET /api/v1/auth/tokens`. Never carries the secret.",
         "required": [
           "id",
           "name"
@@ -8952,7 +8952,7 @@
           },
           "id": {
             "type": "string",
-            "description": "Opaque token id (the backing Zitadel machine-user id). Pass back to\n`DELETE /api/auth/tokens/{id}` to revoke."
+            "description": "Opaque token id (the backing Zitadel machine-user id). Pass back to\n`DELETE /api/v1/auth/tokens/{id}` to revoke."
           },
           "name": {
             "type": "string"
@@ -9221,7 +9221,7 @@
       },
       "UpdateResourceRequest": {
         "type": "object",
-        "description": "Request body for `PUT /api/resources/{id}`. Either `display_name` or\n`config` (or both) may be set; if `config` is set the call bumps\n`latest_version` and writes a new vault_path. `display_name`-only\nupdates do **not** bump version.",
+        "description": "Request body for `PUT /api/v1/resources/{id}`. Either `display_name` or\n`config` (or both) may be set; if `config` is set the call bumps\n`latest_version` and writes a new vault_path. `display_name`-only\nupdates do **not** bump version.",
         "properties": {
           "config": {},
           "display_name": {

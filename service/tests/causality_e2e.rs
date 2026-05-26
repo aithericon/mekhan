@@ -492,7 +492,7 @@ async fn causality_full_pipeline() {
         .oneshot(
             Request::builder()
                 .uri(&format!(
-                    "/api/provenance/{net_id}/{some_token}?depth=5"
+                    "/api/v1/provenance/{net_id}/{some_token}?depth=5"
                 ))
                 .body(Body::empty())
                 .unwrap(),
@@ -663,7 +663,7 @@ async fn interpolated_human_task_resolves_start_file_param() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/templates")
+                .uri("/api/v1/templates")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     serde_json::to_string(&json!({
@@ -687,7 +687,7 @@ async fn interpolated_human_task_resolves_start_file_param() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/templates/{template_id}/publish"))
+                .uri(format!("/api/v1/templates/{template_id}/publish"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -701,7 +701,7 @@ async fn interpolated_human_task_resolves_start_file_param() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/instances")
+                .uri("/api/v1/instances")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     serde_json::to_string(&json!({
@@ -821,7 +821,7 @@ async fn rrv_publish_and_create(
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/templates")
+                .uri("/api/v1/templates")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     serde_json::to_string(&json!({
@@ -846,7 +846,7 @@ async fn rrv_publish_and_create(
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/templates/{template_id}/publish"))
+                .uri(format!("/api/v1/templates/{template_id}/publish"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -859,7 +859,7 @@ async fn rrv_publish_and_create(
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/instances")
+                .uri("/api/v1/instances")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     serde_json::to_string(&json!({
@@ -936,7 +936,7 @@ async fn rrv_end_result_mapping_success_envelope() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri(format!("/api/instances/{id}"))
+                .uri(format!("/api/v1/instances/{id}"))
                 .body(Body::empty())
                 .unwrap(),
         )

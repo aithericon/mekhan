@@ -34,7 +34,7 @@ async fn publish_template_sets_published_and_air() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/templates")
+                .uri("/api/v1/templates")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
@@ -57,7 +57,7 @@ async fn publish_template_sets_published_and_air() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(&format!("/api/templates/{id}/publish"))
+                .uri(&format!("/api/v1/templates/{id}/publish"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -92,7 +92,7 @@ async fn publish_already_published_returns_409() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/templates")
+                .uri("/api/v1/templates")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
@@ -114,7 +114,7 @@ async fn publish_already_published_returns_409() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(&format!("/api/templates/{id}/publish"))
+                .uri(&format!("/api/v1/templates/{id}/publish"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -127,7 +127,7 @@ async fn publish_already_published_returns_409() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(&format!("/api/templates/{id}/publish"))
+                .uri(&format!("/api/v1/templates/{id}/publish"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -153,7 +153,7 @@ async fn new_version_from_published() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/templates")
+                .uri("/api/v1/templates")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
@@ -176,7 +176,7 @@ async fn new_version_from_published() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(&format!("/api/templates/{v1_id}/publish"))
+                .uri(&format!("/api/v1/templates/{v1_id}/publish"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -190,7 +190,7 @@ async fn new_version_from_published() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(&format!("/api/templates/{v1_id}/new-version"))
+                .uri(&format!("/api/v1/templates/{v1_id}/new-version"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -232,7 +232,7 @@ async fn new_version_from_draft_returns_409() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/templates")
+                .uri("/api/v1/templates")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
@@ -254,7 +254,7 @@ async fn new_version_from_draft_returns_409() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(&format!("/api/templates/{id}/new-version"))
+                .uri(&format!("/api/v1/templates/{id}/new-version"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -279,7 +279,7 @@ async fn list_versions_returns_ordered() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/templates")
+                .uri("/api/v1/templates")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
@@ -302,7 +302,7 @@ async fn list_versions_returns_ordered() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(&format!("/api/templates/{v1_id}/publish"))
+                .uri(&format!("/api/v1/templates/{v1_id}/publish"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -316,7 +316,7 @@ async fn list_versions_returns_ordered() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(&format!("/api/templates/{v1_id}/new-version"))
+                .uri(&format!("/api/v1/templates/{v1_id}/new-version"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -332,7 +332,7 @@ async fn list_versions_returns_ordered() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(&format!("/api/templates/{v2_id}/publish"))
+                .uri(&format!("/api/v1/templates/{v2_id}/publish"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -346,7 +346,7 @@ async fn list_versions_returns_ordered() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(&format!("/api/templates/{v2_id}/new-version"))
+                .uri(&format!("/api/v1/templates/{v2_id}/new-version"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -359,7 +359,7 @@ async fn list_versions_returns_ordered() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri(&format!("/api/templates/{v1_id}/versions"))
+                .uri(&format!("/api/v1/templates/{v1_id}/versions"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -383,7 +383,7 @@ async fn list_versions_returns_ordered() {
 }
 
 // ---------------------------------------------------------------------------
-// GET /api/templates/:id/air -> AIR for published template
+// GET /api/v1/templates/:id/air -> AIR for published template
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -397,7 +397,7 @@ async fn get_air_for_published_template() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/templates")
+                .uri("/api/v1/templates")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
@@ -419,7 +419,7 @@ async fn get_air_for_published_template() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(&format!("/api/templates/{id}/publish"))
+                .uri(&format!("/api/v1/templates/{id}/publish"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -432,7 +432,7 @@ async fn get_air_for_published_template() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri(&format!("/api/templates/{id}/air"))
+                .uri(&format!("/api/v1/templates/{id}/air"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -446,7 +446,7 @@ async fn get_air_for_published_template() {
 }
 
 // ---------------------------------------------------------------------------
-// GET /api/templates/:id/air -> 409 for unpublished template
+// GET /api/v1/templates/:id/air -> 409 for unpublished template
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -459,7 +459,7 @@ async fn get_air_for_unpublished_returns_409() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/templates")
+                .uri("/api/v1/templates")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
@@ -480,7 +480,7 @@ async fn get_air_for_unpublished_returns_409() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri(&format!("/api/templates/{id}/air"))
+                .uri(&format!("/api/v1/templates/{id}/air"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -508,7 +508,7 @@ async fn new_version_forks_authored_ydoc_graph() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/templates")
+                .uri("/api/v1/templates")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({ "name": "Forkable", "author_id": author_id }).to_string(),
@@ -546,7 +546,7 @@ async fn new_version_forks_authored_ydoc_graph() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(&format!("/api/templates/{v1_id}/publish"))
+                .uri(&format!("/api/v1/templates/{v1_id}/publish"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -559,7 +559,7 @@ async fn new_version_forks_authored_ydoc_graph() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(&format!("/api/templates/{v1_id}/new-version"))
+                .uri(&format!("/api/v1/templates/{v1_id}/new-version"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -603,7 +603,7 @@ async fn create_draft(app: &axum::Router, name: &str) -> String {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/templates")
+                .uri("/api/v1/templates")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({ "name": name, "author_id": Uuid::new_v4() }).to_string(),
@@ -629,7 +629,7 @@ async fn apply(app: &axum::Router, id: &str) -> axum::http::Response<Body> {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(&format!("/api/templates/{id}/apply"))
+                .uri(&format!("/api/v1/templates/{id}/apply"))
                 .header("content-type", "application/json")
                 .body(Body::from(apply_body()))
                 .unwrap(),
@@ -674,7 +674,7 @@ async fn apply_bumps_published_head() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(&format!("/api/templates/{v1_id}/publish"))
+                .uri(&format!("/api/v1/templates/{v1_id}/publish"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -713,7 +713,7 @@ async fn apply_rejects_ui_new_version_draft() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(&format!("/api/templates/{v1_id}/publish"))
+                .uri(&format!("/api/v1/templates/{v1_id}/publish"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -724,7 +724,7 @@ async fn apply_rejects_ui_new_version_draft() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(&format!("/api/templates/{v1_id}/new-version"))
+                .uri(&format!("/api/v1/templates/{v1_id}/new-version"))
                 .body(Body::empty())
                 .unwrap(),
         )

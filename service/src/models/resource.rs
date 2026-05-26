@@ -52,7 +52,7 @@ pub struct ResourceVersionRow {
 
 // ── Wire DTOs (Phase B.9) ─────────────────────────────────────────────────
 
-/// Compact list-row shape. Returned by `GET /api/resources` — never carries
+/// Compact list-row shape. Returned by `GET /api/v1/resources` — never carries
 /// per-version data (`public_config`, `vault_path`) so the list endpoint
 /// stays cheap to render.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -87,7 +87,7 @@ impl From<ResourceRow> for ResourceSummary {
     }
 }
 
-/// Admin view returned by `GET /api/resources/{id}`. Secret fields appear
+/// Admin view returned by `GET /api/v1/resources/{id}`. Secret fields appear
 /// in `redacted_secret_fields` so the picker can render "<redacted>"
 /// placeholders without ever shipping the real values.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -107,7 +107,7 @@ pub struct ResourceDetail {
     pub redacted_secret_fields: Vec<String>,
 }
 
-/// One descriptor surfaced by `GET /api/resources/types`. Drives the
+/// One descriptor surfaced by `GET /api/v1/resources/types`. Drives the
 /// picker's type list and the schema-driven create form. `schema` is the
 /// schemars JSON Schema of the underlying ResourceType struct; the frontend
 /// renders it field-by-field.
@@ -130,7 +130,7 @@ pub struct ResourceTypeInfo {
     pub dynamic_fields: bool,
 }
 
-/// Request body for `POST /api/resources`. Carries every field needed to
+/// Request body for `POST /api/v1/resources`. Carries every field needed to
 /// land both a `resources` row and the first `resource_versions` row.
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct CreateResourceRequest {
@@ -151,7 +151,7 @@ pub struct CreateResourceRequest {
     pub workspace_id: Option<Uuid>,
 }
 
-/// Request body for `PUT /api/resources/{id}`. Either `display_name` or
+/// Request body for `PUT /api/v1/resources/{id}`. Either `display_name` or
 /// `config` (or both) may be set; if `config` is set the call bumps
 /// `latest_version` and writes a new vault_path. `display_name`-only
 /// updates do **not** bump version.
@@ -163,7 +163,7 @@ pub struct UpdateResourceRequest {
     pub config: Option<serde_json::Value>,
 }
 
-/// Request body for `POST /api/resources/{id}/rotate`. Always bumps
+/// Request body for `POST /api/v1/resources/{id}/rotate`. Always bumps
 /// version. The body carries the new config — the type cannot change at
 /// rotation time (`resource_type` is immutable for a logical resource).
 #[derive(Debug, Clone, Deserialize, ToSchema)]
@@ -171,7 +171,7 @@ pub struct RotateResourceRequest {
     pub config: serde_json::Value,
 }
 
-/// One row from `resource_audit`. Returned by `GET /api/resources/{id}/audit`.
+/// One row from `resource_audit`. Returned by `GET /api/v1/resources/{id}/audit`.
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, ToSchema)]
 pub struct ResourceAuditEntry {
     pub id: i64,
@@ -185,7 +185,7 @@ pub struct ResourceAuditEntry {
     pub occurred_at: DateTime<Utc>,
 }
 
-/// Query params for `GET /api/resources`.
+/// Query params for `GET /api/v1/resources`.
 #[derive(Debug, Deserialize, ToSchema, utoipa::IntoParams)]
 pub struct ListResourcesQuery {
     #[serde(default = "default_page")]
@@ -200,7 +200,7 @@ pub struct ListResourcesQuery {
     pub workspace_id: Option<Uuid>,
 }
 
-/// Query params for `GET /api/resources/{id}/audit`.
+/// Query params for `GET /api/v1/resources/{id}/audit`.
 #[derive(Debug, Deserialize, ToSchema, utoipa::IntoParams)]
 pub struct ListResourceAuditQuery {
     #[serde(default = "default_page")]

@@ -61,7 +61,7 @@
 
 	function getImageSrc(filename: string): string | null {
 		const file = imageFiles.find((f) => f.name === filename);
-		return file?.key ? `/api/files/${file.key}` : null;
+		return file?.key ? `/api/v1/files/${file.key}` : null;
 	}
 
 	function addFile(name: string) {

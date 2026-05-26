@@ -11,7 +11,7 @@
       },
       {
         "type": "image",
-        "url": "/api/files/{{ invoice_file.key }}",
+        "url": "/api/v1/files/{{ invoice_file.key }}",
         "alt": "Uploaded invoice {{ invoice_id }}",
         "caption": "Original document for invoice {{ invoice_id }} (uploaded at instance start)"
       },
@@ -19,7 +19,7 @@
         "type": "download",
         "downloads": [
           {
-            "url": "/api/files/{{ invoice_file.key }}",
+            "url": "/api/v1/files/{{ invoice_file.key }}",
             "filename": "{{ invoice_file.filename }}",
             "mime_type": "{{ invoice_file.content_type }}",
             "description": "Original uploaded invoice ({{ invoice_id }})"

@@ -55,7 +55,7 @@
 	async function refreshLiveEnabled() {
 		if (!readonly || !nodeId) return;
 		try {
-			const res = await fetch('/api/triggers');
+			const res = await fetch('/api/v1/triggers');
 			if (!res.ok) return;
 			const body = await res.json();
 			const t = (body.triggers ?? []).find(
@@ -75,7 +75,7 @@
 		const prev = liveEnabled ?? enabled;
 		liveEnabled = next; // optimistic
 		try {
-			const res = await fetch(`/api/triggers/${encodeURIComponent(nodeId)}/enabled`, {
+			const res = await fetch(`/api/v1/triggers/${encodeURIComponent(nodeId)}/enabled`, {
 				method: 'PATCH',
 				headers: { 'content-type': 'application/json' },
 				body: JSON.stringify({ enabled: next })
@@ -263,7 +263,7 @@
 			return;
 		}
 		let cancelled = false;
-		fetch(`/api/triggers/source-scope?kind=${encodeURIComponent(kind)}`)
+		fetch(`/api/v1/triggers/source-scope?kind=${encodeURIComponent(kind)}`)
 			.then((r) => (r.ok ? r.json() : { scope: [] }))
 			.then((body) => {
 				if (!cancelled) scopeVars = body.scope ?? [];

@@ -238,7 +238,7 @@
 			fd.append('file', file);
 			fd.append('field_name', field.name);
 			try {
-				const res = await authFetch('/api/files/upload', { method: 'POST', body: fd });
+				const res = await authFetch('/api/v1/files/upload', { method: 'POST', body: fd });
 				if (res.ok) {
 					const result = (await res.json()) as UploadedFile;
 					const current = parseFileValue(getTextValue(field.name));

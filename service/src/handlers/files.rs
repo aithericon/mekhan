@@ -42,11 +42,11 @@ const ALLOWED_TYPES: &[&str] = &[
     "application/octet-stream",
 ];
 
-/// POST /api/files/upload/{id}/{node_id}
+/// POST /api/v1/files/upload/{id}/{node_id}
 /// Accepts multipart/form-data with a `file` field.
 #[utoipa::path(
     post,
-    path = "/api/files/upload/{id}/{node_id}",
+    path = "/api/v1/files/upload/{id}/{node_id}",
     params(
         ("id" = Uuid, Path, description = "Template id"),
         ("node_id" = String, Path, description = "Workflow node id"),
@@ -108,7 +108,7 @@ pub async fn upload_file(
     ))
 }
 
-/// GET /api/files/{key}
+/// GET /api/v1/files/{key}
 /// Serves a file from S3 with the correct content type.
 ///
 /// `key` is a multi-segment S3 path (templates/{id}/v{ver}/{node}/{file}).
@@ -119,7 +119,7 @@ pub async fn upload_file(
 /// route — see commit d61bccb.)
 #[utoipa::path(
     get,
-    path = "/api/files/{*key}",
+    path = "/api/v1/files/{*key}",
     params(("key" = String, Path, description = "S3 object key, may contain slashes (templates/{template_id}/v{ver}/{node_id}/{filename})")),
     responses(
         (status = 200, description = "Binary file contents", content_type = "application/octet-stream"),

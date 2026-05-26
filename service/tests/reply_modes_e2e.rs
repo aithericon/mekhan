@@ -1,5 +1,5 @@
 //! End-to-end coverage for **Part B — caller return paths** of rich return
-//! values: the `POST /api/triggers/{id}/fire` reply-mode selection, the
+//! values: the `POST /api/v1/triggers/{id}/fire` reply-mode selection, the
 //! WaitForResult success / timeout mechanics, the SSE stream endpoint, and the
 //! FireAndForget byte-compatibility guarantee.
 //!
@@ -250,7 +250,7 @@ async fn setup(
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/templates")
+                .uri("/api/v1/templates")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     serde_json::to_string(&json!({
@@ -275,7 +275,7 @@ async fn setup(
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/templates/{template_id}/publish"))
+                .uri(format!("/api/v1/templates/{template_id}/publish"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -286,11 +286,11 @@ async fn setup(
     (app, db, waiters, causality, lifecycle)
 }
 
-/// `POST /api/triggers/trig/fire{query}` with `{ "payload": { "amount": 42 } }`.
+/// `POST /api/v1/triggers/trig/fire{query}` with `{ "payload": { "amount": 42 } }`.
 fn fire_req(query: &str, accept: Option<&str>) -> Request<Body> {
     let mut b = Request::builder()
         .method("POST")
-        .uri(format!("/api/triggers/trig/fire{query}"))
+        .uri(format!("/api/v1/triggers/trig/fire{query}"))
         .header("content-type", "application/json");
     if let Some(a) = accept {
         b = b.header("accept", a);
@@ -478,7 +478,7 @@ async fn sse_already_terminal_emits_result_and_404() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/api/instances/{}/stream", Uuid::new_v4()))
+                .uri(format!("/api/v1/instances/{}/stream", Uuid::new_v4()))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -491,7 +491,7 @@ async fn sse_already_terminal_emits_result_and_404() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/api/instances/{iid}/stream"))
+                .uri(format!("/api/v1/instances/{iid}/stream"))
                 .body(Body::empty())
                 .unwrap(),
         )

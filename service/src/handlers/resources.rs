@@ -74,7 +74,7 @@ fn descriptor_or_400(
 ) -> Result<&'static aithericon_resources::ResourceTypeDescriptor, ApiError> {
     lookup(type_name).ok_or_else(|| {
         ApiError::bad_request(format!(
-            "unknown resource_type '{type_name}' — see GET /api/resources/types"
+            "unknown resource_type '{type_name}' — see GET /api/v1/resources/types"
         ))
     })
 }
@@ -313,10 +313,10 @@ fn rows_to_summaries(
         .collect()
 }
 
-/// `GET /api/resources` — paginated list, optionally filtered by type.
+/// `GET /api/v1/resources` — paginated list, optionally filtered by type.
 #[utoipa::path(
     get,
-    path = "/api/resources",
+    path = "/api/v1/resources",
     params(ListResourcesQuery),
     responses(
         (status = 200, description = "Paginated list of resources", body = PaginatedResponse<ResourceSummary>),
@@ -385,11 +385,11 @@ pub async fn list_resources(
     })
 }
 
-/// `GET /api/resources/types` — registry introspection. Powers the
+/// `GET /api/v1/resources/types` — registry introspection. Powers the
 /// frontend picker's type list and the schema-driven create form.
 #[utoipa::path(
     get,
-    path = "/api/resources/types",
+    path = "/api/v1/resources/types",
     responses(
         (status = 200, description = "Registered resource types", body = Vec<ResourceTypeInfo>),
     ),
@@ -412,10 +412,10 @@ pub async fn list_resource_types() -> Json<Vec<ResourceTypeInfo>> {
     Json(infos)
 }
 
-/// `POST /api/resources` — create a logical resource and its v1 row.
+/// `POST /api/v1/resources` — create a logical resource and its v1 row.
 #[utoipa::path(
     post,
-    path = "/api/resources",
+    path = "/api/v1/resources",
     request_body = CreateResourceRequest,
     responses(
         (status = 201, description = "Resource created", body = ResourceSummary),
@@ -563,11 +563,11 @@ fn extract_kv_keys(public: &JsonMap<String, Value>) -> Option<Vec<String>> {
     })
 }
 
-/// `GET /api/resources/{id}` — admin view. Secret fields are listed by
+/// `GET /api/v1/resources/{id}` — admin view. Secret fields are listed by
 /// name only; values never leave Vault on the read path.
 #[utoipa::path(
     get,
-    path = "/api/resources/{id}",
+    path = "/api/v1/resources/{id}",
     params(("id" = Uuid, Path, description = "Resource id")),
     responses(
         (status = 200, description = "Resource detail", body = ResourceDetail),
@@ -615,12 +615,12 @@ pub async fn get_resource(
     Ok(Json(detail))
 }
 
-/// `PUT /api/resources/{id}` — update display_name and/or config. Setting
+/// `PUT /api/v1/resources/{id}` — update display_name and/or config. Setting
 /// `config` bumps `latest_version` and writes a fresh vault_path; name-only
 /// updates do not.
 #[utoipa::path(
     put,
-    path = "/api/resources/{id}",
+    path = "/api/v1/resources/{id}",
     params(("id" = Uuid, Path, description = "Resource id")),
     request_body = UpdateResourceRequest,
     responses(
@@ -744,12 +744,12 @@ pub async fn update_resource(
     }))
 }
 
-/// `DELETE /api/resources/{id}` — soft delete. Preserves
+/// `DELETE /api/v1/resources/{id}` — soft delete. Preserves
 /// `resource_versions` rows + Vault paths so already-pinned instances keep
 /// resolving.
 #[utoipa::path(
     delete,
-    path = "/api/resources/{id}",
+    path = "/api/v1/resources/{id}",
     params(("id" = Uuid, Path, description = "Resource id")),
     responses(
         (status = 204, description = "Resource soft-deleted"),
@@ -789,11 +789,11 @@ pub async fn delete_resource(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `POST /api/resources/{id}/rotate` — write a new version. Identical to
+/// `POST /api/v1/resources/{id}/rotate` — write a new version. Identical to
 /// `update_resource` with only `config` set, plus a different audit verb.
 #[utoipa::path(
     post,
-    path = "/api/resources/{id}/rotate",
+    path = "/api/v1/resources/{id}/rotate",
     params(("id" = Uuid, Path, description = "Resource id")),
     request_body = RotateResourceRequest,
     responses(
@@ -875,10 +875,10 @@ pub async fn rotate_resource(
     }))
 }
 
-/// `GET /api/resources/{id}/audit` — paginated audit trail for a resource.
+/// `GET /api/v1/resources/{id}/audit` — paginated audit trail for a resource.
 #[utoipa::path(
     get,
-    path = "/api/resources/{id}/audit",
+    path = "/api/v1/resources/{id}/audit",
     params(
         ("id" = Uuid, Path, description = "Resource id"),
         ListResourceAuditQuery

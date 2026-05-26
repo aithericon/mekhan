@@ -252,7 +252,7 @@ fn trigger_ingestion_rejects_file_as_scalar_string() {
     let good = json!({
         "invoice_file": {
             "key": "tmpl/start/invoice.png",
-            "url": "/api/files/tmpl/start/invoice.png",
+            "url": "/api/v1/files/tmpl/start/invoice.png",
             "filename": "invoice.png",
             "content_type": "image/png",
             "size": 20418

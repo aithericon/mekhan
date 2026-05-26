@@ -81,7 +81,7 @@ pub struct AppState {
     /// unless an introspection API credential is configured — then the
     /// Bearer path in `require_auth_middleware` is disabled.
     pub introspection: Option<Arc<crate::auth::IntrospectionVerifier>>,
-    /// Zitadel Management broker for the embedded `/api/auth/tokens` feature
+    /// Zitadel Management broker for the embedded `/api/v1/auth/tokens` feature
     /// (per-user automation PATs). `None` unless `auth.broker_pat` is
     /// configured — then those endpoints 503 and the SPA hides the section.
     pub zitadel_mgmt: Option<Arc<crate::auth::ZitadelMgmt>>,
@@ -240,8 +240,15 @@ pub fn build_router(state: AppState) -> Router {
     let cors_config = state.config.clone();
 
     // Every #[utoipa::path]-annotated handler is registered via OpenApiRouter
-    // so the spec stays in sync with the runtime mounts. The Yjs WebSocket is
-    // out-of-band (binary protocol, not OpenAPI-modeled).
+    // so the spec stays in sync with the runtime mounts. Versioning policy:
+    // the JSON API surface lives under `/api/v1/*` (path attrs embed the
+    // version directly). Three sibling prefixes intentionally stay
+    // unversioned because they are NOT OpenAPI-modeled and have external
+    // contracts mekhan does not control:
+    //   - `/api/v1/auth/{login,callback,session,logout}` — OAuth bootstrap;
+    //      the callback URL is registered in Zitadel.
+    //   - `/api/yjs/{template_id}` — Yjs CRDT WebSocket (binary protocol).
+    //   - `/api/triggers/webhook/{slug}` — external webhook receivers.
     let (api_router, api_spec) = build_openapi_router().split_for_parts();
 
     // The auth middleware gates every JSON API route. The WS endpoint is
@@ -296,12 +303,19 @@ pub fn build_router(state: AppState) -> Router {
                 .patch(handlers::triggers::webhook_receiver)
                 .delete(handlers::triggers::webhook_receiver),
         )
-        .with_state(state);
+        .with_state(state.clone());
+
+    // Engine reverse proxy: `/petri/*` → `config.petri_lab_url`. Gives the
+    // SPA a single-origin posture in prod (no separate engine ingress) and
+    // closes the dev/prod parity gap the Vite proxy used to paper over.
+    // Inside `protected` so session-cookie auth gates engine access too.
+    let petri_proxy = petri::proxy::router(state);
 
     let protected = protected
         .merge(ws_router)
         .merge(webhook_router)
-        .merge(auth_router);
+        .merge(auth_router)
+        .merge(petri_proxy);
 
     let swagger = SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", api_spec);
 

@@ -43,7 +43,7 @@ pub type NodeFiles = HashMap<String, HashMap<String, InputSource>>;
 
 /// Wrap inline `node_id → filename → content` into a [`NodeFiles`]
 /// emitting `InputSource::Raw` for every entry. Right for the stateless
-/// preview (`POST /api/compile`) and compiler tests.
+/// preview (`POST /api/v1/compile`) and compiler tests.
 ///
 /// **Don't use for publish.** Every `Raw` entry gets embedded inline in
 /// the per-execution job spec dispatched over NATS; on workflows with

@@ -72,7 +72,7 @@ export interface ListResourcesParams {
 
 export async function listResources(params?: ListResourcesParams): Promise<PaginatedResources> {
 	return unwrap(
-		await client.GET('/api/resources', {
+		await client.GET('/api/v1/resources', {
 			params: {
 				query: {
 					page: params?.page ?? 1,
@@ -86,15 +86,15 @@ export async function listResources(params?: ListResourcesParams): Promise<Pagin
 }
 
 export async function listResourceTypes(): Promise<ResourceTypeInfo[]> {
-	return unwrap(await client.GET('/api/resources/types', {})) as ResourceTypeInfo[];
+	return unwrap(await client.GET('/api/v1/resources/types', {})) as ResourceTypeInfo[];
 }
 
 export async function createResource(body: CreateResourceRequest): Promise<ResourceSummary> {
-	return unwrap(await client.POST('/api/resources', { body }));
+	return unwrap(await client.POST('/api/v1/resources', { body }));
 }
 
 export async function getResource(id: string): Promise<ResourceDetail> {
-	return unwrap(await client.GET('/api/resources/{id}', { params: { path: { id } } }));
+	return unwrap(await client.GET('/api/v1/resources/{id}', { params: { path: { id } } }));
 }
 
 export async function updateResource(
@@ -102,12 +102,12 @@ export async function updateResource(
 	body: UpdateResourceRequest
 ): Promise<ResourceSummary> {
 	return unwrap(
-		await client.PUT('/api/resources/{id}', { params: { path: { id } }, body })
+		await client.PUT('/api/v1/resources/{id}', { params: { path: { id } }, body })
 	);
 }
 
 export async function deleteResource(id: string): Promise<void> {
-	const res = await client.DELETE('/api/resources/{id}', { params: { path: { id } } });
+	const res = await client.DELETE('/api/v1/resources/{id}', { params: { path: { id } } });
 	if (res.response.status >= 400) {
 		const detail = res.error ? JSON.stringify(res.error) : '';
 		throw new Error(`API error ${res.response.status}: ${detail}`);
@@ -119,7 +119,7 @@ export async function rotateResource(
 	body: RotateResourceRequest
 ): Promise<ResourceSummary> {
 	return unwrap(
-		await client.POST('/api/resources/{id}/rotate', { params: { path: { id } }, body })
+		await client.POST('/api/v1/resources/{id}/rotate', { params: { path: { id } }, body })
 	);
 }
 
@@ -128,7 +128,7 @@ export async function listResourceAudit(
 	params?: { page?: number; perPage?: number }
 ): Promise<PaginatedResourceAudit> {
 	return unwrap(
-		await client.GET('/api/resources/{id}/audit', {
+		await client.GET('/api/v1/resources/{id}/audit', {
 			params: {
 				path: { id },
 				query: {

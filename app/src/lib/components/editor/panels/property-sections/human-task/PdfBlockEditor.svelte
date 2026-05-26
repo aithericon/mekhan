@@ -42,7 +42,7 @@
 		return [...files.keys()].filter((name) => name.toLowerCase().endsWith('.pdf'));
 	});
 
-	const previewUrl = $derived(filename ? `/api/files/${filename}` : '');
+	const previewUrl = $derived(filename ? `/api/v1/files/${filename}` : '');
 
 	function setUrl(value: string) {
 		onchange(filename, caption, height, value || undefined);

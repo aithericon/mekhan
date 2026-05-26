@@ -27,7 +27,7 @@
 //! Two halves:
 //! - **Reader** ([`load_demo`], [`list_demo_dirs`]): turn a directory on
 //!   disk into the `(metadata, graph, files)` triple a caller can hand
-//!   to the `/api/templates/.../apply` path. Used by tests.
+//!   to the `/api/v1/templates/.../apply` path. Used by tests.
 //! - **Seeder** ([`seed_all`]): hand the loaded demos through the
 //!   identical compile → upload → publish pipeline the `apply` handler
 //!   uses, but bypass HTTP auth so the seeder can run at service startup
@@ -72,7 +72,7 @@ pub struct LoadedDemo {
     pub metadata: DemoMetadata,
     pub graph: WorkflowGraph,
     /// `node_id → { filename → content }` — same shape every
-    /// `/api/templates` consumer expects.
+    /// `/api/v1/templates` consumer expects.
     pub files: HashMap<String, HashMap<String, String>>,
     /// Pre-authored template tests bundled with the demo (one per
     /// `tests/<name>.json` sidecar). Empty when the demo carries no
@@ -701,7 +701,7 @@ mod tests {
     }
 
     /// The bundled invoice-processing demo must parse end-to-end through
-    /// the same types `/api/templates` accepts. Regressions in
+    /// the same types `/api/v1/templates` accepts. Regressions in
     /// `WorkflowNodeData` serde shape (a new required field, a renamed
     /// variant) will fail this with a precise field-name error rather
     /// than a wall of `serde_json` noise at runtime.
@@ -1128,7 +1128,7 @@ mod tests {
 
     /// The llm-smoke demo (text-only LLM step pointed at a local Ollama
     /// daemon) must parse + compile cleanly through the same AIR pipeline
-    /// `/api/templates/{id}/publish` uses. The demo has no node files, so
+    /// `/api/v1/templates/{id}/publish` uses. The demo has no node files, so
     /// this also covers the "LLM step with zero staged inputs" case which
     /// the existing learning-path tests don't exercise.
     #[test]
@@ -1159,7 +1159,7 @@ mod tests {
 
     /// The email-welcome demo (Start → HumanTask intake → SMTP send → End)
     /// must parse + compile cleanly through the same AIR pipeline
-    /// `/api/templates/{id}/publish` uses. This is the canonical SMTP-backend
+    /// `/api/v1/templates/{id}/publish` uses. This is the canonical SMTP-backend
     /// demo: it exercises the placeholder borrow scanner against an inline
     /// Tera template (a path Python doesn't cover) and asserts the SMTP
     /// backend dispatches without requiring a real mail server.
@@ -1244,7 +1244,7 @@ mod tests {
     }
 
     /// The learning-path demos (`01-` … `06-`) all parse through the same
-    /// types the live `/api/templates` consumer expects. A break here
+    /// types the live `/api/v1/templates` consumer expects. A break here
     /// catches a regression in `WorkflowNodeData` shape against the
     /// bundled fixtures before it hits a user editor session.
     ///
@@ -1274,7 +1274,7 @@ mod tests {
     /// Every numbered learning-path demo (except 06-subworkflow, which
     /// resolves a child at publish time and so can't be compiled through
     /// the in-process `compile_to_air` path) must compile cleanly through
-    /// the same AIR pipeline `/api/templates/{id}/publish` uses. A break
+    /// the same AIR pipeline `/api/v1/templates/{id}/publish` uses. A break
     /// here means the demo would seed but fail at publish time with a
     /// stack of compile errors — the seeder logs and continues, which is
     /// silent enough that this test is what catches it.
@@ -1495,10 +1495,10 @@ mod tests {
         // `parameterize_air` path puts whatever the caller posted directly
         // into `p_{id}_ready`; uploaded files become FileRef maps under
         // their declared field name. The FileRef shape mirrors what the
-        // platform's `/api/files/upload/{id}/{node_id}` returns: `key` is
+        // platform's `/api/v1/files/upload/{id}/{node_id}` returns: `key` is
         // the S3 object key (`templates/{id}/blobs/{node_id}/{filename}`)
         // and `url` is the platform-facing HTTP endpoint
-        // (`/api/files/<key>`). See `token_shape::
+        // (`/api/v1/files/<key>`). See `token_shape::
         // valid_uploaded_file_ref_passes` for the exact shape and
         // `app/.../CreateInstanceDialog.svelte` for the frontend
         // construction.
@@ -1506,7 +1506,7 @@ mod tests {
             .parse_json(
                 &json!({ "document": {
                     "key": "templates/abc/blobs/start/uploaded.pdf",
-                    "url": "/api/files/templates/abc/blobs/start/uploaded.pdf",
+                    "url": "/api/v1/files/templates/abc/blobs/start/uploaded.pdf",
                     "filename": "uploaded.pdf",
                     "content_type": "application/pdf",
                     "size": 1234

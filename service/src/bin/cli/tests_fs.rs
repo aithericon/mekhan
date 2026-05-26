@@ -148,7 +148,7 @@ struct RemoteTest {
 /// family root from any version's id, so the caller can pass the row's `id`
 /// or its `base_template_id`.
 pub async fn fetch_from_server(server: &str, template_id: &str) -> Result<Vec<TestFile>> {
-    let url = format!("{server}/api/templates/{template_id}/tests");
+    let url = format!("{server}/api/v1/templates/{template_id}/tests");
     let resp = crate::http::auth(reqwest::Client::new().get(&url))
         .send()
         .await
@@ -182,7 +182,7 @@ pub async fn sync_to_server(
 ) -> Result<(usize, usize, usize)> {
     let client = reqwest::Client::new();
 
-    let url = format!("{server}/api/templates/{template_id}/tests");
+    let url = format!("{server}/api/v1/templates/{template_id}/tests");
     let resp = crate::http::auth(client.get(&url))
         .send()
         .await
@@ -214,7 +214,7 @@ pub async fn sync_to_server(
                 continue;
             }
             let patch_url =
-                format!("{server}/api/templates/{template_id}/tests/{}", remote_row.id);
+                format!("{server}/api/v1/templates/{template_id}/tests/{}", remote_row.id);
             let body = serde_json::json!({
                 "enabled": test.enabled,
                 "start_tokens": test.start_tokens,
@@ -232,7 +232,7 @@ pub async fn sync_to_server(
             }
             updated += 1;
         } else {
-            let post_url = format!("{server}/api/templates/{template_id}/tests");
+            let post_url = format!("{server}/api/v1/templates/{template_id}/tests");
             let body = serde_json::json!({
                 "name": test.name,
                 "enabled": test.enabled,
@@ -259,7 +259,7 @@ pub async fn sync_to_server(
         if local_names.contains(remote_row.name.as_str()) {
             continue;
         }
-        let url = format!("{server}/api/templates/{template_id}/tests/{}", remote_row.id);
+        let url = format!("{server}/api/v1/templates/{template_id}/tests/{}", remote_row.id);
         let resp = crate::http::auth(client.delete(&url))
             .send()
             .await

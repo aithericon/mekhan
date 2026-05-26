@@ -271,7 +271,7 @@ async fn complete_task(app: &axum::Router, task_id: &str) {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/tasks/{task_id}/complete"))
+                .uri(format!("/api/v1/tasks/{task_id}/complete"))
                 .header("content-type", "application/json")
                 .body(Body::from(json!({ "data": {} }).to_string()))
                 .unwrap(),
@@ -300,7 +300,7 @@ async fn net_id_for(db: &sqlx::PgPool, instance_id: Uuid) -> String {
 ///
 /// Catalog trigger filters on a per-test-run `category` to isolate from
 /// any unrelated entries in the dev catalogue. The HumanTask body parks
-/// the instance until the test completes it via `POST /api/tasks/{id}/
+/// the instance until the test completes it via `POST /api/v1/tasks/{id}/
 /// complete`, giving a deterministic window for coalescing fire #2 and
 /// fire #3 while fire #1's instance is still active.
 fn template_graph(category: &str) -> Value {
@@ -349,7 +349,7 @@ async fn create_template(app: &axum::Router, name: &str, graph: Value) -> Uuid {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/templates")
+                .uri("/api/v1/templates")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({ "name": name, "graph": graph, "author_id": Uuid::new_v4() })
@@ -375,7 +375,7 @@ async fn publish(app: &axum::Router, id: Uuid) {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/templates/{id}/publish"))
+                .uri(format!("/api/v1/templates/{id}/publish"))
                 .body(Body::empty())
                 .unwrap(),
         )

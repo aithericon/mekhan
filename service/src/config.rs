@@ -125,7 +125,7 @@ pub struct AuthConfig {
     pub introspection_client_secret: Option<String>,
     /// Personal Access Token of the dedicated `mekhan-token-broker` Zitadel
     /// service user. Mekhan presents this as a Bearer when brokering the
-    /// embedded `/api/auth/tokens` feature (creating the per-token machine
+    /// embedded `/api/v1/auth/tokens` feature (creating the per-token machine
     /// users + their PATs via the Management API). Provisioned by
     /// `deploy/zitadel/bootstrap.sh`. Unset ⇒ token management is disabled
     /// (the endpoints 503 and the UI hides the section).

@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 
 pub async fn run(server: &str, instance_id: &str) -> Result<()> {
-    let url = format!("{}/api/instances/{}", server, instance_id);
+    let url = format!("{}/api/v1/instances/{}", server, instance_id);
     let client = reqwest::Client::new();
     let resp = crate::http::auth(client.delete(&url))
         .send()

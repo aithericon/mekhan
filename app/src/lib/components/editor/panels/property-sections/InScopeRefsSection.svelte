@@ -14,7 +14,7 @@
 	import RefPicker from './RefPicker.svelte';
 
 	type Props = {
-		/** This node's in-scope refs (from `/api/analyze`). */
+		/** This node's in-scope refs (from `/api/v1/analyze`). */
 		scope: ScopeEntry[];
 		/** Workflow-level resource refs — surfaced as a second tab in
 		 *  RefPicker. Empty by default so non-resource workflows render

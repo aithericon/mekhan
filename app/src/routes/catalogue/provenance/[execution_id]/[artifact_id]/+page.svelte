@@ -39,7 +39,7 @@
 
 			// Also load the artifact metadata for the header
 			try {
-				const res = await authFetch(`/api/catalogue/${encodeURIComponent(execId)}/${encodeURIComponent(artId)}`);
+				const res = await authFetch(`/api/v1/catalogue/${encodeURIComponent(execId)}/${encodeURIComponent(artId)}`);
 				if (res.ok) {
 					artifact = await res.json();
 				}
