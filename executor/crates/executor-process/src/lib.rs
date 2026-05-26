@@ -1,5 +1,4 @@
 pub mod child;
-pub mod stream;
 
 #[cfg(test)]
 mod tests;
@@ -7,11 +6,10 @@ mod tests;
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 
+use aithericon_executor_backend::traits::{ExecutionBackend, StatusCallback};
 use aithericon_executor_domain::{
     ExecutionJob, ExecutionResult, ExecutionSpec, ExecutorError, RunContext,
 };
-
-use crate::traits::{ExecutionBackend, StatusCallback};
 
 /// Default max output capture: 64 KB per stream.
 const DEFAULT_MAX_OUTPUT_BYTES: usize = 64 * 1024;
@@ -57,7 +55,7 @@ impl ExecutionBackend for ProcessBackend {
         &self,
         run_context: &RunContext,
         status_cb: StatusCallback,
-        _event_stream: Option<std::sync::Arc<dyn crate::traits::EventStream>>,
+        _event_stream: Option<std::sync::Arc<dyn aithericon_executor_backend::traits::EventStream>>,
         cancel: CancellationToken,
     ) -> Result<ExecutionResult, ExecutorError> {
         let process_config = ProcessConfig::from_spec(&run_context.spec)?;

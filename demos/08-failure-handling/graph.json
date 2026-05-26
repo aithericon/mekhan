@@ -71,8 +71,8 @@
       "data": {
         "type": "failure",
         "label": "Handle Failure",
-        "description": "Marks the owning HPI process `failed` and stamps a structured `{ ok: false, error: { reason, value } }` envelope onto the token. The downstream End preserves the envelope (instead of overwriting it with its own resultMapping). Only upstream parked producers reachable on the failure path are safe to reference here — `start.*` is always present, but `risky_step.*` would deadlock (the step never parked its outputs).",
-        "failureMessage": "Risky Step failed (mode={{ start.fail_mode }})",
+        "description": "Stamps a structured `{ ok: false, error: { reason, value } }` envelope onto the token. The downstream End preserves the envelope (instead of overwriting it with its own resultMapping) — so the instance completes with `result.ok = false`. `errorResultMapping` expressions are raw Rhai — they can borrow `<slug>.<field>` from upstream producers reachable on the failure path (here, `start.*`). Reaching for `risky_step.*` would deadlock at runtime — the failed step never parked its outputs. (Note: the Failure node *also* fires a `process_fail` effect, but on the AutomatedStep error path the retry topology rebuilds the token without its process tag, so the HPI process row stays `completed`. The error envelope is the authoritative signal.)",
+        "failureMessage": "Risky Step failed (see error.value for details)",
         "errorResultMapping": [
           { "targetField": "fail_mode", "expression": "start.fail_mode" },
           { "targetField": "payload",   "expression": "start.payload" }

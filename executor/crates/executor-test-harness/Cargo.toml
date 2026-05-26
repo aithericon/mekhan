@@ -10,6 +10,7 @@ homepage.workspace = true
 [dependencies]
 aithericon-executor-domain = { workspace = true }
 aithericon-executor-backend = { workspace = true }
+aithericon-executor-process = { workspace = true }
 aithericon-executor-worker = { workspace = true }
 aithericon-executor-storage = { workspace = true }
 aithericon-executor-metrics = { workspace = true }
@@ -33,12 +34,15 @@ testcontainers-modules = { workspace = true }
 tempfile = "3"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 bollard = { workspace = true, optional = true }
+aithericon-executor-docker = { workspace = true, optional = true }
+aithericon-executor-python = { workspace = true, optional = true }
+aithericon-executor-http = { workspace = true, optional = true }
 aithericon-executor-file-ops = { workspace = true, optional = true }
 opendal = { workspace = true, features = ["services-memory"], optional = true }
 
 [features]
 default = []
-docker = ["aithericon-executor-backend/docker", "dep:bollard"]
-python = ["aithericon-executor-backend/python"]
-http = ["aithericon-executor-backend/http"]
+docker = ["dep:aithericon-executor-docker", "dep:bollard"]
+python = ["dep:aithericon-executor-python"]
+http = ["dep:aithericon-executor-http"]
 file-ops = ["dep:aithericon-executor-file-ops", "dep:opendal"]

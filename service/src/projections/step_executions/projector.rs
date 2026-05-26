@@ -28,7 +28,11 @@
 //!   `Completed`. For Decision nodes (no `data_port`), `branch_taken` is
 //!   the `OutputKey::Edge(edge_id)` of the output that received the token.
 //! - **Failure**: `EffectFailed` on N's transition → `Failed` with the
-//!   error payload.
+//!   error payload. Also: a token deposit at a parking-style node's
+//!   named `"error"` output (AutomatedStep / SubWorkflow retry-exhausted
+//!   path) → `Failed` with the error token captured. The `data_port`
+//!   stays empty on that path, so without this the row would be stuck
+//!   at `Running` until net termination.
 //! - **Skipped**: on the terminal lifecycle event (`NetCompleted` /
 //!   `NetFailed` / `NetCancelled`), any node without a row gets one at
 //!   `Skipped`.
@@ -572,6 +576,28 @@ impl State {
                             row.status = StepStatus::Completed;
                             row.completed_at = Some(ts);
                         }
+                    }
+                }
+            }
+            // 5d. Named "error" output on a parking-style node
+            // (AutomatedStep / SubWorkflow). On the success path these
+            // nodes finalize via 5a (data_port deposit); on the failure
+            // path the retry-exhausted token routes out the named
+            // "error" port while the data_port stays empty — without
+            // this the row would be stuck at Running until net
+            // termination. Capture the error token as `error` and flip
+            // the row to Failed.
+            if iface.map(|i| i.data_port.is_some()).unwrap_or(false) {
+                if let Some((b_owner, key)) = lookups.output_to_node_branch.get(&place_id.0) {
+                    if b_owner == &owner
+                        && matches!(
+                            key,
+                            OutputKey::Edge(s) | OutputKey::Named(s) if s == "error"
+                        )
+                    {
+                        row.status = StepStatus::Failed;
+                        row.completed_at = Some(ts);
+                        row.error = Some(token_color_to_json(&token.color));
                     }
                 }
             }
@@ -1178,6 +1204,74 @@ mod tests {
         assert_eq!(d_row.status, StepStatus::Completed);
         assert_eq!(d_row.branch_taken.as_deref(), Some("edge:e_yes"));
         assert_eq!(d_row.outputs, None, "Decision nodes carry no data_port output");
+    }
+
+    /// AutomatedStep retry-exhaustion routes a token out the node's named
+    /// "error" output, *not* its data_port. The projector must treat that
+    /// arrival as the step's terminal failure event — otherwise the
+    /// success-side `data_port` deposit never fires and the row sticks at
+    /// `Running` until net termination (which on this workflow doesn't
+    /// happen, because the Failure node + downstream End complete the net
+    /// normally with `result.ok = false`).
+    #[test]
+    fn projector_error_port_deposit_marks_parking_node_failed() {
+        let mut reg = three_node_registry();
+        // Re-register `a` with both Default + an "error" named output (the
+        // same shape `lower_automated_step` publishes), and add the
+        // exhaustion transition to its owned set so the fire is
+        // attributed back to `a`.
+        let a = reg.get_mut("a").expect("a registered");
+        a.outputs = BTreeMap::from([
+            (OutputKey::Default, "p_a_main".to_string()),
+            (OutputKey::Edge("error".to_string()), "p_a_error".to_string()),
+        ]);
+        a.owned_places = vec![
+            "p_a_main".to_string(),
+            "p_a_data".to_string(),
+            "p_a_error".to_string(),
+        ];
+        a.owned_transitions = vec!["t_a_park".to_string(), "t_a_exhausted".to_string()];
+
+        let error_token = data_token(serde_json::json!({
+            "job_id": "a", "run": 1, "retries": 0, "max_retries": 0, "reason": "failed"
+        }));
+        let events = vec![
+            token_created(0, 100, place("p_s_ready"), unit_token()),
+            fired(
+                1,
+                101,
+                trans("t_s_park"),
+                vec![
+                    (place("p_s_data"), data_token(serde_json::json!({"name": "Alice"}))),
+                    (place("p_s_main"), unit_token()),
+                ],
+                vec![],
+            ),
+            // a's exhausted transition deposits the failure token on
+            // p_a_error; p_a_data (data_port) stays empty.
+            fired(
+                2,
+                102,
+                trans("t_a_exhausted"),
+                vec![(place("p_a_error"), error_token.clone())],
+                vec![],
+            ),
+        ];
+
+        let rows = project_step_executions(&events, &reg);
+        let a_row = rows
+            .iter()
+            .find(|r| r.node_id == "a")
+            .expect("a row exists");
+        assert_eq!(a_row.status, StepStatus::Failed);
+        assert_eq!(a_row.completed_at, Some(ts(102)));
+        assert_eq!(
+            a_row.error,
+            Some(serde_json::json!({
+                "job_id": "a", "run": 1, "retries": 0, "max_retries": 0, "reason": "failed"
+            }))
+        );
+        assert_eq!(a_row.outputs, None, "data_port stays empty on the failure path");
     }
 
     #[test]

@@ -669,7 +669,7 @@ mod tests {
 
     #[tokio::test]
     async fn hook_is_noop_without_nix_key() {
-        use aithericon_executor_backend::ProcessConfig;
+        use aithericon_executor_process::ProcessConfig;
         use aithericon_executor_domain::{JobPriority, RunDirectory};
         use std::collections::HashMap;
         use std::time::Duration;

@@ -6,9 +6,10 @@ use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
-use aithericon_executor_domain::{ExecutionJob, ExecutionResult, ExecutionSpec, ExecutorError, RunContext};
-
-use crate::traits::{ExecutionBackend, StatusCallback};
+use aithericon_executor_backend::traits::{ExecutionBackend, StatusCallback};
+use aithericon_executor_domain::{
+    ExecutionJob, ExecutionResult, ExecutionSpec, ExecutorError, RunContext,
+};
 
 /// Default max output capture: 64 KB per stream.
 const DEFAULT_MAX_OUTPUT_BYTES: usize = 64 * 1024;
@@ -78,7 +79,7 @@ impl ExecutionBackend for DockerBackend {
         &self,
         run_context: &RunContext,
         status_cb: StatusCallback,
-        _event_stream: Option<std::sync::Arc<dyn crate::traits::EventStream>>,
+        _event_stream: Option<std::sync::Arc<dyn aithericon_executor_backend::traits::EventStream>>,
         cancel: CancellationToken,
     ) -> Result<ExecutionResult, ExecutorError> {
         let config = DockerConfig::from_spec(&run_context.spec)?;

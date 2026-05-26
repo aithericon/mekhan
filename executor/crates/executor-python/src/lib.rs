@@ -8,13 +8,12 @@ use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
+use aithericon_executor_backend::traits::{ExecutionBackend, StatusCallback};
 use aithericon_executor_domain::{
     ExecutionJob, ExecutionResult, ExecutionSpec, ExecutorError, RunContext,
 };
-
-use crate::process::child::run_process;
-use crate::process::ProcessConfig;
-use crate::traits::{ExecutionBackend, StatusCallback};
+use aithericon_executor_process::child::run_process;
+use aithericon_executor_process::ProcessConfig;
 
 use cache::{BuildRequest, VenvCache};
 
@@ -210,7 +209,7 @@ impl ExecutionBackend for PythonBackend {
         &self,
         run_context: &RunContext,
         status_cb: StatusCallback,
-        _event_stream: Option<std::sync::Arc<dyn crate::traits::EventStream>>,
+        _event_stream: Option<std::sync::Arc<dyn aithericon_executor_backend::traits::EventStream>>,
         cancel: CancellationToken,
     ) -> Result<ExecutionResult, ExecutorError> {
         let config = PythonConfig::from_spec(&run_context.spec)?;

@@ -14,12 +14,11 @@ use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info};
 
+use aithericon_executor_backend::traits::{ExecutionBackend, StatusCallback};
 use aithericon_executor_domain::{
     ExecutionJob, ExecutionOutcome, ExecutionResult, ExecutionSpec, ExecutionStatus, ExecutorError,
     InputDeclaration, OutputDeclaration, RunContext,
 };
-
-use crate::traits::{ExecutionBackend, StatusCallback};
 
 /// HTTP method for the request.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -389,7 +388,7 @@ impl ExecutionBackend for HttpBackend {
         &self,
         run_context: &RunContext,
         status_cb: StatusCallback,
-        _event_stream: Option<std::sync::Arc<dyn crate::traits::EventStream>>,
+        _event_stream: Option<std::sync::Arc<dyn aithericon_executor_backend::traits::EventStream>>,
         cancel: CancellationToken,
     ) -> Result<ExecutionResult, ExecutorError> {
         let resolved: ResolvedHttpConfig =
