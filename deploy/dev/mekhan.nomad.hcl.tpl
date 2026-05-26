@@ -179,6 +179,13 @@ EOH
         # post_logout_redirect_uris we registered (see zitadel.tf), and
         # Zitadel only allows absolute URLs — so we override the default `/`.
         MEKHAN__AUTH__POST_LOGIN_REDIRECT = "${auth_post_login_redirect}"
+        # PAT feature credentials (provisioned by zitadel.tf). All three must
+        # be set together: without the introspection pair, Bearer PATs from
+        # `mekhan apply` 401; without broker_pat, /api/auth/tokens 503s and
+        # the SPA hides the Profile → Access tokens section.
+        MEKHAN__AUTH__INTROSPECTION_CLIENT_ID     = "${auth_introspection_client_id}"
+        MEKHAN__AUTH__INTROSPECTION_CLIENT_SECRET = "${auth_introspection_client_secret}"
+        MEKHAN__AUTH__BROKER_PAT                  = "${auth_broker_pat}"
         # Seed the built-in demo templates baked into the image at /app/demos
         # (Dockerfile.service.prebuilt COPYs the demos/ folder + ENV sets
         # MEKHAN__DEMOS__DIR=/app/demos). Seeder runs once on startup before
