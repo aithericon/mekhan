@@ -7,12 +7,12 @@ use apalis_nats::{NatsStorage, ProgressHeartbeatLayer};
 use tracing::{error, info, warn};
 
 #[cfg(feature = "docker")]
-use aithericon_executor_backend::DockerBackend;
+use aithericon_executor_docker::DockerBackend;
 #[cfg(feature = "http")]
-use aithericon_executor_backend::HttpBackend;
-use aithericon_executor_backend::ProcessBackend;
+use aithericon_executor_http::HttpBackend;
+use aithericon_executor_process::ProcessBackend;
 #[cfg(feature = "python")]
-use aithericon_executor_backend::PythonBackend;
+use aithericon_executor_python::PythonBackend;
 #[cfg(feature = "kreuzberg")]
 use aithericon_executor_kreuzberg::KreuzbergBackend;
 #[cfg(feature = "llm")]
@@ -31,7 +31,7 @@ use aithericon_executor_storage::OpenDalArtifactStore;
 use aithericon_executor_storage::StorageBackend;
 use aithericon_executor_storage::{ArtifactStore, LocalArtifactStore};
 #[cfg(feature = "python")]
-use aithericon_executor_backend::python::cache::{BuildRequest, VenvCache};
+use aithericon_executor_python::cache::{BuildRequest, VenvCache};
 use aithericon_executor_worker::{
     drain_signal, handle_execution, BackendRegistry, BatchRunner, CancellationRegistry,
     CompletionTracker, DrainConfig, ExecutorConfig, JobExecutor, JobSource, Lifetime,

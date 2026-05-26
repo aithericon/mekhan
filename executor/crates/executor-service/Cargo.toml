@@ -10,6 +10,7 @@ homepage.workspace = true
 [dependencies]
 aithericon-executor-domain = { workspace = true }
 aithericon-executor-backend = { workspace = true }
+aithericon-executor-process = { workspace = true }
 aithericon-executor-worker = { workspace = true }
 aithericon-executor-storage = { workspace = true }
 aithericon-executor-metrics = { workspace = true, features = ["nats", "loki"] }
@@ -26,6 +27,9 @@ shellexpand = "3"
 serde_json = { workspace = true }
 tower = { workspace = true }
 axum = { workspace = true, optional = true }
+aithericon-executor-docker = { workspace = true, optional = true }
+aithericon-executor-http = { workspace = true, optional = true }
+aithericon-executor-python = { workspace = true, optional = true }
 aithericon-executor-llm = { workspace = true, optional = true }
 aithericon-executor-file-ops = { workspace = true, optional = true }
 aithericon-executor-kreuzberg = { workspace = true, optional = true }
@@ -38,10 +42,10 @@ url-inputs = ["aithericon-executor-worker/url-inputs"]
 opendal-s3 = ["opendal", "aithericon-executor-storage/opendal-s3"]
 opendal-gcs = ["opendal", "aithericon-executor-storage/opendal-gcs"]
 opendal-azblob = ["opendal", "aithericon-executor-storage/opendal-azblob"]
-docker = ["aithericon-executor-backend/docker", "aithericon-executor-test-harness/docker"]
-python = ["aithericon-executor-backend/python", "aithericon-executor-test-harness/python"]
+docker = ["dep:aithericon-executor-docker", "aithericon-executor-test-harness/docker"]
+python = ["dep:aithericon-executor-python", "aithericon-executor-test-harness/python"]
 http-cancel = ["dep:axum"]
-http = ["aithericon-executor-backend/http"]
+http = ["dep:aithericon-executor-http"]
 llm = ["dep:aithericon-executor-llm"]
 vault = ["aithericon-secrets/vault", "aithericon-executor-worker/vault"]
 file-ops = ["dep:aithericon-executor-file-ops", "opendal", "aithericon-executor-test-harness/file-ops"]

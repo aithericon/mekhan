@@ -32,7 +32,7 @@ impl TailBuffer {
         Ok(())
     }
 
-    pub(crate) fn push(&mut self, data: &[u8]) {
+    pub fn push(&mut self, data: &[u8]) {
         if self.buf.len() + data.len() <= self.max_bytes {
             self.buf.extend_from_slice(data);
         } else if data.len() >= self.max_bytes {

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use aithericon_executor_backend::ProcessConfig;
+use aithericon_executor_process::ProcessConfig;
 use aithericon_executor_domain::{
     ExecutionJob, ExecutionStatus, InputDeclaration, JobPriority, OutputDeclaration, StatusUpdate,
 };

@@ -774,7 +774,7 @@ fn json_contains_secret_template(v: &serde_json::Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aithericon_executor_backend::ProcessConfig;
+    use aithericon_executor_process::ProcessConfig;
     use aithericon_executor_domain::RunDirectory;
     use std::collections::HashMap;
     use std::time::Duration;

@@ -14,9 +14,10 @@ use aithericon_executor_domain::{
     ExecutionOutcome, ExecutionResult, ExecutionStatus, ExecutorError, RunContext,
 };
 
-use super::{DockerConfig, PullPolicy, CONTAINER_RUN_DIR};
-use crate::process::stream::TailBuffer;
-use crate::traits::StatusCallback;
+use aithericon_executor_backend::tail::TailBuffer;
+use aithericon_executor_backend::traits::StatusCallback;
+
+use crate::{DockerConfig, PullPolicy, CONTAINER_RUN_DIR};
 
 /// Grace period after stop request before force-killing the container.
 const STOP_GRACE_SECS: i32 = 5;

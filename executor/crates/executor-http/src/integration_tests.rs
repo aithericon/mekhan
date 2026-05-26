@@ -14,8 +14,9 @@ use aithericon_executor_domain::{
     ExecutionJob, ExecutionOutcome, ExecutionSpec, ExecutionStatus, OutputDeclaration, RunContext,
 };
 
+use aithericon_executor_backend::traits::{ExecutionBackend, StatusCallback};
+
 use super::{AuthConfig, HttpBackend, HttpConfig, HttpMethod, ResponseMode};
-use crate::traits::{ExecutionBackend, StatusCallback};
 
 static TEST_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -1226,6 +1227,10 @@ async fn body_from_input_json_auto_content_type() {
         run_dir: aithericon_executor_domain::RunDirectory::new(&std::env::temp_dir(), "http-test"),
         timeout: Duration::from_secs(10),
         env: HashMap::new(),
+        resolved_env: HashMap::new(),
+        resolved_config: None,
+        resolved_input_storage: HashMap::new(),
+        resolved_output_storage: HashMap::new(),
         metadata: HashMap::new(),
         staged_inputs: HashMap::from([("payload".into(), input_path)]),
         expected_outputs: HashMap::new(),
@@ -1276,6 +1281,10 @@ async fn body_from_input_binary_auto_content_type() {
         run_dir: aithericon_executor_domain::RunDirectory::new(&std::env::temp_dir(), "http-test"),
         timeout: Duration::from_secs(10),
         env: HashMap::new(),
+        resolved_env: HashMap::new(),
+        resolved_config: None,
+        resolved_input_storage: HashMap::new(),
+        resolved_output_storage: HashMap::new(),
         metadata: HashMap::new(),
         staged_inputs: HashMap::from([("data".into(), input_path)]),
         expected_outputs: HashMap::new(),
@@ -1325,6 +1334,10 @@ async fn body_from_input_explicit_content_type_preserved() {
         run_dir: aithericon_executor_domain::RunDirectory::new(&std::env::temp_dir(), "http-test"),
         timeout: Duration::from_secs(10),
         env: HashMap::new(),
+        resolved_env: HashMap::new(),
+        resolved_config: None,
+        resolved_input_storage: HashMap::new(),
+        resolved_output_storage: HashMap::new(),
         metadata: HashMap::new(),
         staged_inputs: HashMap::from([("payload".into(), input_path)]),
         expected_outputs: HashMap::new(),

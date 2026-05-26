@@ -6,8 +6,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 
-use aithericon_executor_backend::docker::{DockerConfig, PullPolicy};
-use aithericon_executor_backend::{DockerBackend, ExecutionBackend};
+use aithericon_executor_backend::ExecutionBackend;
+use aithericon_executor_docker::{DockerBackend, DockerConfig, PullPolicy};
 use aithericon_executor_domain::{ExecutionSpec, RunContext, RunDirectory};
 
 use super::kit::BackendTestKit;
@@ -127,7 +127,7 @@ impl BackendTestKit for DockerTestKit {
         // Pre-pull the image so pipeline tests don't timeout during pull
         let client = bollard::Docker::connect_with_local_defaults()
             .map_err(|e| format!("Docker unavailable: {e}"))?;
-        aithericon_executor_backend::docker::container::ensure_image(
+        aithericon_executor_docker::container::ensure_image(
             &client,
             DEFAULT_IMAGE,
             PullPolicy::IfNotPresent,

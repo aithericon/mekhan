@@ -1,5 +1,5 @@
 [package]
-name = "aithericon-executor-backend"
+name = "aithericon-executor-process"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,14 +9,16 @@ homepage.workspace = true
 
 [dependencies]
 aithericon-executor-domain = { workspace = true }
+aithericon-executor-backend = { workspace = true }
 aithericon-executor-backend-configs = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 async-trait = { workspace = true }
-serde = { workspace = true }
 serde_json = { workspace = true }
-thiserror = { workspace = true }
 tracing = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3"

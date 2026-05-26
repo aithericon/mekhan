@@ -9,8 +9,9 @@ use aithericon_executor_domain::{
     ExecutionOutcome, ExecutionSpec, ExecutionStatus, RunContext, RunDirectory,
 };
 
+use aithericon_executor_backend::traits::{ExecutionBackend, StatusCallback};
+
 use super::*;
-use crate::traits::{ExecutionBackend, StatusCallback};
 
 // ─── Unit tests (no process execution required) ─────────────────────────────
 

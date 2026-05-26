@@ -10,9 +10,10 @@ use aithericon_executor_domain::{
     ExecutionOutcome, ExecutionResult, ExecutionStatus, ExecutorError, RunContext,
 };
 
-use super::ProcessConfig;
-use crate::process::stream::TailBuffer;
-use crate::traits::StatusCallback;
+use aithericon_executor_backend::tail::TailBuffer;
+use aithericon_executor_backend::traits::StatusCallback;
+
+use crate::ProcessConfig;
 
 /// Grace period after SIGTERM before sending SIGKILL.
 const TERM_GRACE_SECS: u64 = 5;

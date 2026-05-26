@@ -6,7 +6,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 
-use aithericon_executor_backend::{ExecutionBackend, PythonBackend, PythonConfig};
+use aithericon_executor_backend::ExecutionBackend;
+use aithericon_executor_python::{PythonBackend, PythonConfig};
 use aithericon_executor_domain::{ExecutionSpec, InputSource, RunContext, RunDirectory};
 
 use super::kit::BackendTestKit;
@@ -95,7 +96,7 @@ impl BackendTestKit for PythonTestKit {
         let user_code_path = run_dir.inputs_dir.join(&config.script);
 
         let runner_path = run_dir.root.join("__runner__.py");
-        aithericon_executor_backend::python::runner::write_runner(
+        aithericon_executor_python::runner::write_runner(
             &runner_path,
             &user_code_path,
             &[],

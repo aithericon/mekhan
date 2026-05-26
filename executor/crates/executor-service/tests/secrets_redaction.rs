@@ -20,7 +20,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 
-use aithericon_executor_backend::{ExecutionBackend, ProcessBackend, ProcessConfig};
+use aithericon_executor_backend::ExecutionBackend;
+use aithericon_executor_process::{ProcessBackend, ProcessConfig};
 use aithericon_executor_domain::{
     ExecutionJob, ExecutionStatus, JobPriority, RunContext, RunDirectory,
 };
