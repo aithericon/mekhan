@@ -1,5 +1,5 @@
 // Backend-defaulted output port shape for AutomatedStep, sourced from the
-// `GET /api/backends` registry cache. `+layout.svelte` warms the cache on
+// `GET /api/v1/backends` registry cache. `+layout.svelte` warms the cache on
 // app mount so synchronous callers (the "Reset to backend default" button)
 // see populated data on first paint.
 //

@@ -6,7 +6,7 @@ use axum::Json;
 
 use crate::backends::{descriptors, BackendDescriptor};
 
-/// GET /api/backends
+/// GET /api/v1/backends
 ///
 /// List every registered backend with its display metadata, default editor
 /// config, default output port shape, dispatch mode (executor job vs.
@@ -24,7 +24,7 @@ use crate::backends::{descriptors, BackendDescriptor};
 /// `template.rs`, etc. cover the other 8 backends until they're migrated.
 #[utoipa::path(
     get,
-    path = "/api/backends",
+    path = "/api/v1/backends",
     responses(
         (status = 200, description = "Registered backends", body = Vec<BackendDescriptor>),
     ),

@@ -4,39 +4,6 @@
  */
 
 export interface paths {
-    "/api/backends": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * GET /api/backends
-         * @description List every registered backend with its display metadata, default editor
-         *     config, default output port shape, dispatch mode (executor job vs.
-         *     engine effect), resource channel (staged file vs. config overlay), and
-         *     schedulability.
-         *
-         *     The frontend reads this once per session (cached in
-         *     `app/src/lib/editor/backend-registry.svelte.ts`) and drives the
-         *     AutomatedStep editor panel from it — backend picker label/icon,
-         *     default config seed, default output port. The Svelte config-panel
-         *     component map (`backend-panels.ts`) stays hand-written; everything
-         *     else flows from here.
-         *
-         *     Phase 1 ships SMTP only. The legacy match arms in `backend_configs.rs`,
-         *     `template.rs`, etc. cover the other 8 backends until they're migrated.
-         */
-        get: operations["list_backends"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/analyze": {
         parameters: {
             query?: never;
@@ -88,6 +55,39 @@ export interface paths {
         post?: never;
         /** DELETE /api/v1/auth/tokens/{id} — revoke a token (ownership-guarded). */
         delete: operations["revoke_token"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/backends": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/v1/backends
+         * @description List every registered backend with its display metadata, default editor
+         *     config, default output port shape, dispatch mode (executor job vs.
+         *     engine effect), resource channel (staged file vs. config overlay), and
+         *     schedulability.
+         *
+         *     The frontend reads this once per session (cached in
+         *     `app/src/lib/editor/backend-registry.svelte.ts`) and drives the
+         *     AutomatedStep editor panel from it — backend picker label/icon,
+         *     default config seed, default output port. The Svelte config-panel
+         *     component map (`backend-panels.ts`) stays hand-written; everything
+         *     else flows from here.
+         *
+         *     Phase 1 ships SMTP only. The legacy match arms in `backend_configs.rs`,
+         *     `template.rs`, etc. cover the other 8 backends until they're migrated.
+         */
+        get: operations["list_backends"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -1579,7 +1579,7 @@ export interface components {
             value?: unknown;
         };
         /**
-         * @description Frontend-visible metadata for one backend. Returned by `GET /api/backends`.
+         * @description Frontend-visible metadata for one backend. Returned by `GET /api/v1/backends`.
          *
          *     The Svelte component map (`backend-panels.ts`) stays hand-written — TS
          *     can't import components dynamically from a JSON tag at runtime without
@@ -3797,26 +3797,6 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
-    list_backends: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Registered backends */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BackendDescriptor"][];
-                };
-            };
-        };
-    };
     analyze_graph: {
         parameters: {
             query?: never;
@@ -3974,6 +3954,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_backends: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Registered backends */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackendDescriptor"][];
                 };
             };
         };

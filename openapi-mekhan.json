@@ -23,31 +23,6 @@
     }
   ],
   "paths": {
-    "/api/backends": {
-      "get": {
-        "tags": [
-          "backends"
-        ],
-        "summary": "GET /api/backends",
-        "description": "List every registered backend with its display metadata, default editor\nconfig, default output port shape, dispatch mode (executor job vs.\nengine effect), resource channel (staged file vs. config overlay), and\nschedulability.\n\nThe frontend reads this once per session (cached in\n`app/src/lib/editor/backend-registry.svelte.ts`) and drives the\nAutomatedStep editor panel from it — backend picker label/icon,\ndefault config seed, default output port. The Svelte config-panel\ncomponent map (`backend-panels.ts`) stays hand-written; everything\nelse flows from here.\n\nPhase 1 ships SMTP only. The legacy match arms in `backend_configs.rs`,\n`template.rs`, etc. cover the other 8 backends until they're migrated.",
-        "operationId": "list_backends",
-        "responses": {
-          "200": {
-            "description": "Registered backends",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/BackendDescriptor"
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/v1/analyze": {
       "post": {
         "tags": [
@@ -230,6 +205,31 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/backends": {
+      "get": {
+        "tags": [
+          "backends"
+        ],
+        "summary": "GET /api/v1/backends",
+        "description": "List every registered backend with its display metadata, default editor\nconfig, default output port shape, dispatch mode (executor job vs.\nengine effect), resource channel (staged file vs. config overlay), and\nschedulability.\n\nThe frontend reads this once per session (cached in\n`app/src/lib/editor/backend-registry.svelte.ts`) and drives the\nAutomatedStep editor panel from it — backend picker label/icon,\ndefault config seed, default output port. The Svelte config-panel\ncomponent map (`backend-panels.ts`) stays hand-written; everything\nelse flows from here.\n\nPhase 1 ships SMTP only. The legacy match arms in `backend_configs.rs`,\n`template.rs`, etc. cover the other 8 backends until they're migrated.",
+        "operationId": "list_backends",
+        "responses": {
+          "200": {
+            "description": "Registered backends",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/BackendDescriptor"
+                  }
                 }
               }
             }
@@ -4783,7 +4783,7 @@
       },
       "BackendDescriptor": {
         "type": "object",
-        "description": "Frontend-visible metadata for one backend. Returned by `GET /api/backends`.\n\nThe Svelte component map (`backend-panels.ts`) stays hand-written — TS\ncan't import components dynamically from a JSON tag at runtime without\ndefeating Vite chunking — but every other per-backend constant\n(display name, icon, default config, default output fields, dispatch\nmode, resource channel) flows from here. This is what kills the\n`automated-ports.ts` ↔ `default_output_port()` drift hazard.",
+        "description": "Frontend-visible metadata for one backend. Returned by `GET /api/v1/backends`.\n\nThe Svelte component map (`backend-panels.ts`) stays hand-written — TS\ncan't import components dynamically from a JSON tag at runtime without\ndefeating Vite chunking — but every other per-backend constant\n(display name, icon, default config, default output fields, dispatch\nmode, resource channel) flows from here. This is what kills the\n`automated-ports.ts` ↔ `default_output_port()` drift hazard.",
         "required": [
           "name",
           "displayName",

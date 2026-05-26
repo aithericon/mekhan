@@ -1,5 +1,5 @@
 /**
- * Frontend cache of `GET /api/backends`. Pairs with the Rust
+ * Frontend cache of `GET /api/v1/backends`. Pairs with the Rust
  * `crate::backends::BACKENDS` registry — the API returns per-backend
  * metadata the editor needs (display label, icon, default config,
  * default output port, dispatch mode, resource channel, schedulability).
@@ -28,9 +28,9 @@ type RegistryState =
 let state: RegistryState = $state({ kind: 'idle' });
 
 async function fetchBackends(): Promise<BackendDescriptor[]> {
-	const res = await fetch('/api/backends', { credentials: 'same-origin' });
+	const res = await fetch('/api/v1/backends', { credentials: 'same-origin' });
 	if (!res.ok) {
-		throw new Error(`GET /api/backends failed: ${res.status}`);
+		throw new Error(`GET /api/v1/backends failed: ${res.status}`);
 	}
 	return res.json() as Promise<BackendDescriptor[]>;
 }

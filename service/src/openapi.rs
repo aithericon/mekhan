@@ -31,7 +31,7 @@ use utoipa::OpenApi;
             crate::models::template::ReplyMode,
             crate::triggers::TerminalOutcome,
             // Backend registry DTOs — referenced via Vec<_> in the
-            // GET /api/backends handler so utoipa's auto-discovery
+            // GET /api/v1/backends handler so utoipa's auto-discovery
             // misses the nested types. Frontend codegen needs both.
             crate::backends::BackendDescriptor,
             crate::backends::DispatchMode,

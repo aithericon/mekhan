@@ -41,7 +41,7 @@ pub mod smtp;
 
 /// Per-backend declaration. Stored in a `&'static` slice so the registry has
 /// zero runtime cost and trivially serializes the metadata subset for
-/// `GET /api/backends`.
+/// `GET /api/v1/backends`.
 pub struct BackendDecl {
     /// Discriminator + lookup key. Must be unique across [`BACKENDS`].
     pub backend_type: ExecutionBackendType,
@@ -294,9 +294,9 @@ pub fn lookup(backend_type: ExecutionBackendType) -> Option<&'static BackendDecl
         .copied()
 }
 
-// ─── Wire descriptor (frontend metadata via `GET /api/backends`) ────────────
+// ─── Wire descriptor (frontend metadata via `GET /api/v1/backends`) ────────────
 
-/// Frontend-visible metadata for one backend. Returned by `GET /api/backends`.
+/// Frontend-visible metadata for one backend. Returned by `GET /api/v1/backends`.
 ///
 /// The Svelte component map (`backend-panels.ts`) stays hand-written — TS
 /// can't import components dynamically from a JSON tag at runtime without
@@ -353,7 +353,7 @@ impl BackendDecl {
     }
 }
 
-/// Serialize every registered backend for `GET /api/backends`.
+/// Serialize every registered backend for `GET /api/v1/backends`.
 pub fn descriptors() -> Vec<BackendDescriptor> {
     BACKENDS.iter().map(|d| d.to_descriptor()).collect()
 }
