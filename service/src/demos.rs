@@ -974,6 +974,7 @@ mod tests {
             ("05-parallel-fanout",  "00000000-0000-0000-0000-000000000015", "05 · Parallel Fanout"),
             ("06-subworkflow",      "00000000-0000-0000-0000-000000000016", "06 · SubWorkflow (Flow-in-Flow)"),
             ("07-ocr-classify-extract", "00000000-0000-0000-0000-000000000017", "07 · OCR Classify & Extract"),
+            ("08-failure-handling",     "00000000-0000-0000-0000-000000000018", "08 · Failure Handling"),
         ] {
             let demo = load_demo(&root.join(dir_name))
                 .unwrap_or_else(|e| panic!("{dir_name} must load: {e}"));
@@ -1000,6 +1001,7 @@ mod tests {
             "03-decision-routing",
             "04-loop-counter",
             "05-parallel-fanout",
+            "08-failure-handling",
         ] {
             let demo = load_demo(&root.join(dir_name))
                 .unwrap_or_else(|e| panic!("{dir_name} must load: {e}"));
@@ -1487,6 +1489,7 @@ mod tests {
             "04-loop-counter",
             "05-parallel-fanout",
             "07-ocr-classify-extract",
+            "08-failure-handling",
             "llm-smoke",
         ] {
             let demo = load_demo(&root.join(dir_name))
