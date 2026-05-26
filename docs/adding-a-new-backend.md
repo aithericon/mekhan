@@ -1,24 +1,26 @@
 # Adding a New Executor Backend
 
 This is the end-to-end recipe for adding a new executor backend to the
-Aithericon platform — Rust crate, service-side compiler arm, frontend
+Aithericon platform — Rust crate, declarative registry entry, frontend
 config panel, instance-view renderer, failure handling, demo, and tests.
 
-The **SMTP backend** (added at commit `5d595ee`) is the worked
-example throughout — every section cites real file paths from the merged
+The **SMTP backend** (added at commit `5d595ee`, then ported to the
+declarative registry in the Phase 2.a–2.h work) is the worked example
+throughout — every section cites real file paths from the merged
 implementation. If a step here looks abstract, open the SMTP file in the
 same section to see exactly what it became in practice.
 
 > **Read §13 (Gotchas) before §3.** The SMTP backend shipped with a
 > latent regression — resource envelopes silently dropped on nodes
 > that also had upstream-producer borrows. That fix landed alongside
-> the guide. The §13 footguns enumerate the failure modes that bit a
-> previous author so you can avoid them rather than re-discover them.
+> the original guide. The §13 footguns enumerate the failure modes that
+> bit a previous author so you can avoid them rather than re-discover them.
 
 This guide assumes you already know:
 
 - Rust workspaces (the executor lives in its own workspace under
-  `executor/`; mekhan-service is the umbrella's only direct member).
+  `executor/`; mekhan-service is the umbrella's only direct member;
+  `shared/backends` is a cross-workspace member both binaries depend on).
 - The control-data token model (`docs/10-control-data-token-model.md`).
 - The resource model (`shared/resources/` + `service/src/petri/resource_resolver.rs`).
   Optional — you can add a backend that doesn't consume a resource.
@@ -27,24 +29,44 @@ This guide assumes you already know:
 
 ## 1. What a backend is
 
-A backend is one implementation of the `ExecutionBackend` trait at
-`executor/crates/executor-backend/src/traits.rs`:
+A backend has **three distinct surfaces**, one per crate:
 
-```rust
-#[async_trait]
-pub trait ExecutionBackend: Send + Sync + 'static {
-    async fn prepare(&self, _job: &ExecutionJob, ctx: RunContext) -> Result<RunContext, ExecutorError> { Ok(ctx) }
-    async fn execute(&self, ctx: &RunContext, cb: StatusCallback,
-                     events: Option<Arc<dyn EventStream>>, cancel: CancellationToken)
-        -> Result<ExecutionResult, ExecutorError>;
-    fn name(&self) -> &'static str;
-    fn supports(&self, spec: &ExecutionSpec) -> bool;
-}
-```
+1. **Cross-crate metadata** in `shared/backends/src/registry.rs`. A
+   `BackendMeta` const with wire name, display name, icon, dispatch
+   mode, schedulable, resource channel. The mekhan compiler and the
+   executor both read this slice — it is the single source of truth
+   for "what backends exist."
 
-Backends are dispatched by `BackendRegistry::find` (one per executor process,
-populated at boot in `executor-service/src/main.rs::build_executor`). The
-match key is the `spec.backend` string — `"python"`, `"http"`, `"smtp"`, …
+2. **Compile-time decl** in `service/src/backends/<name>.rs`. A
+   `BackendDecl` static referencing the shared `BackendMeta`, plus
+   compile-only fields: `validate` (editor JSON → executor JSON +
+   staged inputs), `ref_scanner` (which placeholder surfaces carry
+   `<head>.<attr>` references), `default_editor_config` (seed JSON the
+   editor inserts when the user picks this backend), and a few
+   compile-pipeline flags (`consumes_declared_outputs`,
+   `pyi_introspection`, `borrow_shape`, `validate_ref_kind`).
+
+3. **Runtime impl** in `executor/crates/executor-<name>/`. An
+   `ExecutionBackend` trait impl with `prepare` + `execute` + `name` +
+   `supports`:
+
+   ```rust
+   #[async_trait]
+   pub trait ExecutionBackend: Send + Sync + 'static {
+       async fn prepare(&self, _job: &ExecutionJob, ctx: RunContext) -> Result<RunContext, ExecutorError> { Ok(ctx) }
+       async fn execute(&self, ctx: &RunContext, cb: StatusCallback,
+                        events: Option<Arc<dyn EventStream>>, cancel: CancellationToken)
+           -> Result<ExecutionResult, ExecutorError>;
+       fn name(&self) -> &'static str;
+       fn supports(&self, spec: &ExecutionSpec) -> bool;
+   }
+   ```
+
+`build_executor` in `executor-service/src/main.rs` walks
+`aithericon_backends::BACKENDS`, filters to `dispatch_mode ==
+ExecutorJob`, and dispatches each entry to a feature-gated match arm
+that constructs the backend. The match key is the `BackendMeta::wire_name`
+string — `"python"`, `"http"`, `"smtp"`, …
 
 Each backend lives in its own crate under `executor/crates/executor-<name>/`
 so its dependency graph is isolated and the user can opt in via a feature
@@ -61,27 +83,43 @@ Before writing code, settle:
    SMTP: `"smtp"`.
 2. **Display name** — what the editor's "Backend Type" dropdown shows.
    SMTP: `"SMTP (Email)"`.
-3. **Resource binding?** — does the backend need credentials from a
+3. **Icon** — lucide name; the frontend resolves to the component.
+   SMTP: `"mail"`.
+4. **Dispatch mode** — `DispatchMode::ExecutorJob` (normal — executor
+   dispatches a job) or `DispatchMode::EngineEffect { handler: "…" }`
+   (engine fires a builtin effect, no executor involvement —
+   CatalogueQuery's `catalogue_lookup` is the only one today).
+5. **Schedulable?** — does it make sense to let an author submit this
+   step to a scheduler-net (Nomad/Slurm GPU)? Engine effects MUST be
+   `schedulable: false`. Most ExecutorJob backends are `schedulable:
+   true`.
+6. **Resource channel** — `ResourceChannel::StagedFile` (SMTP-style —
+   compiler emits a `ResourceEnvelope` borrow, the publisher stages
+   `<alias>.json`, the backend reads the file), `ResourceChannel::ConfigOverlay`
+   (LLM-style — backend's `prepare()` merges `<alias>.json` fields
+   into the resolved config), or `ResourceChannel::None`.
+7. **Resource binding?** — does the backend need credentials from a
    workspace-scoped `Resource` (the typed credential surface in
-   `shared/resources/`)? If yes, the resource type must exist there before
-   you start; the launcher's `ResourceResolver` is what hands you the
-   resolved view at run time. SMTP consumes `shared/resources/src/types.rs::Smtp`.
-4. **Authoring surface** — does the workflow author write *code/templates*
+   `shared/resources/`)? If yes, the resource type must exist there
+   before you start; the launcher's `ResourceResolver` is what hands
+   you the resolved view at run time. SMTP consumes
+   `shared/resources/src/types.rs::Smtp`.
+8. **Authoring surface** — does the workflow author write *code/templates*
    (Python source, Tera templates, SQL) or just *config* (HTTP URL +
    method, Docker image)? If yes, decide whether the source lives in node
    files (Python-style: per-node Y.Map, IDE-editable, scanned at compile
    time for refs) or inline in the config (SMTP-style: embedded string
    plus a `label` for diagnostics).
-5. **Output shape** — what does `ExecutionResult.outputs` look like? Pick
+9. **Output shape** — what does `ExecutionResult.outputs` look like? Pick
    field names the editor's port picker will surface. SMTP emits
    `outcome` (structured) + `subject`, `body_text_preview?`,
    `body_html_preview?`. The shape pins the wire contract — once a
    workflow downstream of this step references one of these fields,
    renaming it breaks the workflow.
-6. **Failure model** — every error class that a workflow author or
-   operator will want to filter on. Define them up front as an enum and
-   commit to the names; the frontend instance-view renderer pattern-matches
-   on them.
+10. **Failure model** — every error class that a workflow author or
+    operator will want to filter on. Define them up front as an enum and
+    commit to the names; the frontend instance-view renderer pattern-matches
+    on them.
 
 SMTP's failure model:
 `Success | TemplateRender | InvalidAddress | InvalidConfig | ConnectFailed
@@ -90,10 +128,14 @@ AttachmentError`
 
 ---
 
-## 3. Register the backend type in mekhan
+## 3. Register the backend across the three crates
 
-mekhan models every backend through the `ExecutionBackendType` enum at
-`service/src/models/template.rs` (around line 1645). Add a variant:
+The platform's registry is split across three crates. Add entries in
+this order:
+
+### 3.1 `shared/backends` — `ExecutionBackendType` variant + `BackendMeta` const
+
+Add a variant to the enum in `shared/backends/src/types.rs`:
 
 ```rust
 pub enum ExecutionBackendType {
@@ -103,23 +145,121 @@ pub enum ExecutionBackendType {
 }
 ```
 
-Three pinned methods need the new arm:
+The `as_wire_str` method needs the new arm:
 
-- `as_wire_str` — snake_case wire string (`"smtp"`). The serde derive does
-  the JSON shape; this method is for backend-name comparisons in code.
-- `default_output_port` (same file, ~line 1345) — the canonical output
-  port the editor displays when the user resets to default. SMTP:
-  ```rust
-  ExecutionBackendType::Smtp => vec![
-      port_field("outcome", "Outcome", FieldKind::Json),
-      port_field("subject", "Subject", FieldKind::Text),
-      port_field("body_text_preview", "Body (text)", FieldKind::Textarea),
-      port_field("body_html_preview", "Body (html)", FieldKind::Textarea),
-  ],
-  ```
-- The DSL-format parser's "unknown backend" error string (search for
-  `"expected one of: python, process, …"`). Add your wire-name to the
-  list so the error message stays useful.
+```rust
+Self::Smtp => "smtp",
+```
+
+Add the `BackendMeta` const in `shared/backends/src/registry.rs`:
+
+```rust
+pub const SMTP_META: BackendMeta = BackendMeta {
+    backend_type: ExecutionBackendType::Smtp,
+    wire_name: "smtp",
+    display_name: "SMTP (Email)",
+    icon: "mail",
+    dispatch_mode: DispatchMode::ExecutorJob,
+    schedulable: true,
+    resource_channel: ResourceChannel::StagedFile,
+};
+```
+
+Add it to the `BACKENDS` slice:
+
+```rust
+pub static BACKENDS: &[&BackendMeta] = &[
+    &PYTHON_META,
+    …
+    &SMTP_META,        // ← new
+    &CATALOGUE_QUERY_META,
+];
+```
+
+Re-export the const from `shared/backends/src/lib.rs` so callers can
+write `aithericon_backends::SMTP_META`:
+
+```rust
+pub use registry::{
+    …, SMTP_META, …
+};
+```
+
+### 3.2 `service/src/backends/<name>.rs` — compile-time `BackendDecl`
+
+Create `service/src/backends/smtp.rs` (use any existing file as a
+template — SMTP is the canonical pilot). The decl is:
+
+```rust
+use super::{BackendDecl, DefaultPortField, RefSite, ScanCtx, ValidationCtx, SMTP_META};
+
+const DEFAULT_OUTPUT_FIELDS: &[DefaultPortField] = &[
+    DefaultPortField { name: "outcome", label: "Outcome", kind: FieldKind::Json },
+    DefaultPortField { name: "subject", label: "Subject", kind: FieldKind::Text },
+    DefaultPortField { name: "body_text_preview", label: "Body (text)", kind: FieldKind::Textarea },
+    DefaultPortField { name: "body_html_preview", label: "Body (html)", kind: FieldKind::Textarea },
+];
+
+const RESOURCE_ALIAS_PATHS: &[&[&str]] = &[&["resource_alias"]];
+
+pub static SMTP_DECL: BackendDecl = BackendDecl {
+    meta: &SMTP_META,
+    backend_type: ExecutionBackendType::Smtp,
+    default_output_fields: DEFAULT_OUTPUT_FIELDS,
+    default_editor_config: default_editor_config,
+    validate: validate,
+    ref_scanner: Some(ref_scanner),
+    resource_alias_paths: RESOURCE_ALIAS_PATHS,
+    consumes_declared_outputs: false,
+    pyi_introspection: false,
+    borrow_shape: super::BorrowShape::Envelope,
+    validate_ref_kind: super::accept_any_ref_kind,
+};
+
+fn default_editor_config() -> Value { json!({ … }) }
+fn validate(config: &Value, ctx: &ValidationCtx<'_>) -> Result<(Value, Vec<InputDeclaration>), CompileError> { … }
+fn ref_scanner(ctx: &ScanCtx<'_>) -> Vec<RefSite> { … }
+```
+
+Then register the module + decl in `service/src/backends/mod.rs`:
+
+```rust
+pub mod smtp;
+…
+pub static BACKENDS: &[&BackendDecl] = &[
+    …,
+    &smtp::SMTP_DECL,        // ← new
+    …,
+];
+```
+
+`BackendDecl` fields you must set per backend (the rest read through
+`meta` automatically):
+
+| Field | What it does |
+|---|---|
+| `meta` | `&'static BackendMeta` from `shared/backends` (§3.1) |
+| `backend_type` | Equals `meta.backend_type`; carried separately so dispatch sites can match without indirection |
+| `default_output_fields` | Canonical port — the "Reset to default" button uses this |
+| `default_editor_config` | Seed JSON for newly-created steps of this backend |
+| `validate` | Editor JSON → executor JSON + staged inputs (§6) |
+| `ref_scanner` | `Option<fn(&ScanCtx) -> Vec<RefSite>>` — surfaces `<head>.<attr>` refs (§6.1) |
+| `resource_alias_paths` | Static JSON paths where the config carries a resource alias string (e.g. `&["resource_alias"]`) |
+| `consumes_declared_outputs` | `true` if declared output fields drive a Rhai `outputs:` constant (Python, Kreuzberg, Llm today) |
+| `pyi_introspection` | Python-only flag (generates `.pyi` stubs on publish) |
+| `borrow_shape` | `Envelope` (Python/SMTP) — whole `<slug>.json` staged; `PerField` (Kreuzberg/LLM) — per-field staging with `{{input:NAME}}` rewrite |
+| `validate_ref_kind` | Per-site kind constraint — most backends use `accept_any_ref_kind`; LLM enforces `images[].path → File` |
+
+### 3.3 The conformance test catches bijection drift
+
+`service/tests/backend_registry_coverage.rs` walks both the shared and
+service-side registries on every test run, asserting every
+`ExecutionBackendType` variant has a `BackendMeta` AND a `BackendDecl`.
+If you forget a step in §3.1 or §3.2 it fails immediately.
+
+The DSL-format parser in `service/src/bin/cli/formats/dsl.rs` may also
+need a new arm. Search for `"expected one of: python, process, …"` and
+add your wire-name to the union if you want CLI DSL support.
 
 ---
 
@@ -162,7 +302,7 @@ Three rules:
 3. **`validate()`** — local invariants only (recipient count > 0, at
    least one body, attachment names non-empty, no duplicate input names).
    Anything that needs to look at the workflow graph belongs in the
-   service-side compiler arm (next step).
+   service-side `BackendDecl::validate` (§6).
 
 If the backend consumes a typed resource, also define a "resolved view"
 struct in this file mirroring the registered resource type's shape
@@ -235,8 +375,8 @@ mime = "0.3"
 tempfile = "3"
 ```
 
-Then wire the crate into the workspace by editing `executor/Cargo.toml`
-(add to `members` + `workspace.dependencies`).
+Then wire the crate into the executor workspace by editing
+`executor/Cargo.toml` (add to `members` + `workspace.dependencies`).
 
 ### 5.2 The trait impl
 
@@ -289,16 +429,14 @@ let mut config = match run_context.resolved_config.as_ref() {
 **(b) Staged input files (`<alias>.json`) — for resource ENVELOPES.**
 Use this when your backend binds a typed workspace resource (Postgres,
 SMTP, OpenAI, …). The mekhan compiler emits a `BorrowResolution::ResourceEnvelope`
-for each resource the workflow references; `apply_resource_borrows`
-splices a `job_inputs.push(#{ "name": "<alias>.json", "source": #{
-"type": "inline", "value": __resources["<alias>"] } });` snippet into
-the prepare transition. At publish time the resolver computes the
-envelope (public fields inline + `{{secret:...}}` templates for secret
-fields) and the launcher splices `let __resources = #{ ... };` at the
-top of the prepare logic. When the run fires, `PlanSecretsHook` walks
-inline-source JSON values (`InputSource::Inline { value }`), resolves
-embedded secret patterns, then `StageInputsHook` writes the resolved
-JSON to `inputs/<alias>.json`. The backend reads it back:
+for each resource the workflow references; the unified planner in
+`compiler/borrow.rs` reads `BackendDecl::resource_alias_paths` and
+`ref_scanner` to find the alias name and stage it. The launcher's
+resolver computes the envelope (public fields inline + `{{secret:...}}`
+templates for secret fields); when the run fires, `PlanSecretsHook`
+walks inline-source JSON values, resolves embedded secret patterns,
+then `StageInputsHook` writes the resolved JSON to
+`inputs/<alias>.json`. The backend reads it back:
 
 ```rust
 let path = run_context
@@ -344,9 +482,9 @@ impl SmtpBackend {
 Production wiring never sets the sink. Tests use a `CapturingSink` and
 assert against `msg.formatted()` byte-for-byte.
 
-### 5.5 Register the backend
+### 5.5 Register the backend on the executor
 
-Add to `executor/crates/executor-service/Cargo.toml`:
+Add the optional dep + feature in `executor/crates/executor-service/Cargo.toml`:
 
 ```toml
 [dependencies]
@@ -356,119 +494,133 @@ aithericon-executor-smtp = { workspace = true, optional = true }
 smtp = ["dep:aithericon-executor-smtp"]
 ```
 
-And to `executor-service/src/main.rs::build_executor`:
+Then add a match arm in `executor-service/src/main.rs::register_executor_backend`
+keyed on the wire name:
 
 ```rust
 #[cfg(feature = "smtp")]
-{
-    registry = registry.register(SmtpBackend::new());
+"smtp" => {
     info!("smtp backend registered");
+    registry.register(SmtpBackend::new())
 }
 ```
+
+`build_executor` iterates `aithericon_backends::BACKENDS`, filters to
+`dispatch_mode == ExecutorJob`, and dispatches each entry to this
+match. Unknown wire-names log a skip line; feature-disabled wire-names
+log a skip line. The conformance test catches drift before it ships.
 
 Finally, add the feature to the dev recipe so `just dev` builds with it
 on by default — see `just/dev.just::executor_features`.
 
 ---
 
-## 6. Service-side compiler arm
+## 6. Service-side `validate` body
 
-In `service/src/compiler/backend_configs.rs::validate_and_transform`, add
-a `Smtp` arm that:
+The hard work for compile-time validation lives inside
+`BackendDecl::validate` (the fn-pointer set in §3.2). It does:
 
-1. Deserializes the editor's config JSON into `SmtpConfig`.
-2. Calls `.validate()` for the local invariants.
-3. Walks every Tera template + recipient string + from-override through
-   `validate_placeholders(…)` so a typo like `{{ user.emial }}` fails at
-   publish time, with the precise field name in the error.
-4. Validates attachment input-name uniqueness.
-5. Re-serializes the validated config (canonical shape) and returns it.
+1. Deserialize the editor's config JSON into your `<Backend>Config` DTO.
+2. Call `.validate()` for the local invariants.
+3. Walk every Tera template + recipient string + from-override through
+   `placeholder_refs::validate_placeholders(…)` so a typo like `{{
+   user.emial }}` fails at publish time, with the precise field name in
+   the error.
+4. Validate attachment input-name uniqueness (or other backend-specific
+   structural rules).
+5. Re-serialize the validated config (canonical shape) and return it
+   alongside the staged `InputDeclaration` list.
 
-See `service/src/compiler/backend_configs.rs` (the `Smtp` arm at the
-bottom of `validate_and_transform`).
-
-### 6.1 Borrow scanner integration
-
-If your backend has author-written code or templates that reference
-upstream-step data (`{{ intake.email }}` in SMTP, `intake.email` in
-Python), three sites need to know about it:
-
-- `service/src/compiler/compile.rs::populate_borrowed_paths` — surfaces
-  upstream refs for the frontend's instance-view "borrowed reads" badges.
-  Add a `match` arm on `ExecutionBackendType::Smtp` that calls
-  `placeholder_refs::scan_placeholders` over the template / recipient /
-  from-override sources.
-- `service/src/compiler/token_shape.rs::automated_step_borrow_plan` —
-  synthesizes read-arcs into the producer's parked place so the
-  prepare transition gets the upstream data staged. Add an arm that
-  uses the same scanner.
-- `service/src/compiler/token_shape.rs::automated_step_resource_borrow_plan`
-  — same shape, but matches against workspace resources (e.g. `{{ mail.from_address }}`
-  where `mail` is the SMTP resource binding). Always include the
-  declared `resource_alias` in the scan results so the launcher's
-  `ResourceResolver` knows which resource to splice even when the
-  templates don't directly reference its public fields.
-
-The shared `placeholder_refs.rs` scanner already handles `{{ a.b }}`
-(Tera, HumanTask markdown, LLM prompts). For Python the scanner is
-`python_refs.rs`. For a new language with different lexical rules, add
-a sibling `<lang>_refs.rs` module that returns `Vec<PlaceholderRef>`
-(the canonical pair shape) and dispatch from the call sites by backend
-type. Don't write a parallel scanner for any backend that uses the
-`{{ }}` grammar — reuse the shared one.
-
-### 6.2 The `BORROW_MARKER` multi-arm contract
-
-A single prepare transition can collect borrows from multiple sources:
-upstream producers (`apply_python_borrows`), workspace resources
-(`apply_resource_borrows`), and backend-field stage rewrites
-(`apply_backend_borrows`). All three splice their `job_inputs.push(...)`
-snippets into the same `/*__BORROWED_INPUTS__*/` sentinel in the
-lowered Rhai.
-
-**Each arm must PREPEND its pushes before the marker, not REPLACE it.**
-The canonical pattern is:
+There is **no** central `validate_and_transform` match arm to edit —
+the function in `compiler/backend_configs.rs` is a 13-line trampoline
+that looks the decl up and calls `decl.validate`:
 
 ```rust
-let replacement = format!("{pushes}{BORROW_MARKER}");
-let new_source = source.replace(BORROW_MARKER, &replacement);
-```
-
-After all arms finish, `strip_borrow_markers` (called at the bottom of
-`apply_borrows`) removes the residual marker. A `replace(BORROW_MARKER,
-&pushes)` consumes the marker, and any subsequent arm silently no-ops.
-This is exactly the regression that hit the SMTP backend: an SMTP step
-with both a `{{ intake.email }}` upstream borrow and a `resource_alias:
-"mail"` resource borrow had its resource arm skipped because Python's
-arm ran first and ate the marker.
-
-**Test it**: any backend that mixes borrow types on the same node must
-have a compile-e2e (§10.3) that asserts BOTH `<slug>.json` (upstream)
-AND `<alias>.json` (resource) land in the prepare transition. The
-existing SMTP test
-`compile.rs::smtp_step_with_resource_alias_stages_resource_envelope`
-is the model.
-
-### 6.3 Publish-time resource discovery
-
-`service/src/process/publish.rs::discover_known_resources` walks the
-graph to find every resource name the workflow references, then queries
-the workspace's `resources` table. Extend the per-node `match` to scan
-your backend's template surfaces the same way it scans Python source:
-
-```rust
-ExecutionBackendType::Smtp => {
-    for (head, _) in crate::compiler::token_shape::smtp_template_placeholder_refs(&execution_spec.config) {
-        heads.insert(head);
-    }
-    if let Some(alias) = execution_spec.config.get("resource_alias").and_then(|v| v.as_str()) {
-        if !alias.is_empty() { heads.insert(alias.to_string()); }
-    }
+pub fn validate_and_transform(
+    backend_type: &ExecutionBackendType,
+    config: &Value,
+    node_files: &HashMap<String, InputSource>,
+    node_id: &str,
+) -> Result<(Value, Vec<InputDeclaration>), CompileError> {
+    let decl = crate::backends::lookup(*backend_type).ok_or_else(|| {
+        CompileError::Compilation(format!("backend {:?} has no registered decl", backend_type))
+    })?;
+    let ctx = crate::backends::ValidationCtx { node_id, node_files };
+    (decl.validate)(config, &ctx)
 }
 ```
 
-The launcher's resolver picks up from there — no changes needed in
-`service/src/petri/resource_resolver.rs`.
+If your `validate` errors with `CompileError::BackendPlaceholderSyntax {
+site, … }`, the editor surfaces it under the field whose `site` matches.
+
+See `service/src/backends/smtp.rs::validate` for a reference body.
+
+### 6.1 Ref scanner
+
+If your backend has author-written templates that reference
+upstream-step data (`{{ intake.email }}` in SMTP, `intake.email` in
+Python), set `ref_scanner: Some(...)` on the decl. The scanner
+function returns `Vec<RefSite>` — one entry per `<head>.<attr>` access
+discovered in the config.
+
+The unified compiler (`compiler/borrow.rs`) consumes those entries to:
+
+- synthesize read-arcs into the producer's parked place so the
+  prepare transition gets the upstream data staged,
+- surface upstream refs for the frontend's instance-view "borrowed
+  reads" badges,
+- and route resource-named heads to the workspace `resources` table for
+  envelope resolution.
+
+There is **no** per-backend match arm in `compile.rs`, `token_shape.rs`,
+or `compiler/resource_binding.rs` anymore — the registry drives them
+all.
+
+The shared `placeholder_refs::scan_placeholders` scanner handles `{{ a.b }}`
+(Tera, HumanTask markdown, LLM prompts) and is what most backends call
+from their `ref_scanner` body. For Python, see `python_refs::extract_python_refs`
+(bare `<slug>.<attr>` identifiers). For a new language with different
+lexical rules, add a sibling `<lang>_refs.rs` module that returns
+`Vec<RefSite>` and call it from your decl's `ref_scanner`. Don't write
+a parallel scanner for any backend that uses the `{{ }}` grammar —
+reuse the shared one.
+
+### 6.2 The unified borrow planner
+
+A single prepare transition can collect borrows from multiple sources:
+upstream producers (`<slug>.json`), workspace resources
+(`<alias>.json`), and backend-field stage rewrites (e.g. Kreuzberg's
+file paths). All three flow through `compiler/borrow.rs::collect_borrows`
+which dispatches by `BackendDecl::borrow_shape`:
+
+- `Envelope` (Python/SMTP) — whole producer envelope staged; backend
+  reads `<slug>.json`.
+- `PerField` (Kreuzberg/LLM) — per-field staging with `{{input:NAME}}`
+  rewrite; the config's field value is replaced with the staged path
+  before the executor sees it.
+
+The legacy `BORROW_MARKER` multi-arm dance is gone (Phase 3 cleanup).
+You don't need to think about it for a new backend — set `borrow_shape`
+correctly and the unified planner handles the rest. The earlier
+regression class ("resource arm silently no-ops because Python's arm
+ate the marker") is structurally impossible now: there's one planner,
+not multiple.
+
+### 6.3 Publish-time resource discovery
+
+`compiler/resource_binding.rs::collect_resource_heads` walks the graph
+to find every resource name the workflow references, then queries the
+workspace's `resources` table. It reads two fields off your decl:
+
+- `resource_alias_paths` — static JSON paths where your config stores
+  the alias name. SMTP: `&[&["resource_alias"]]`. FileOps:
+  `&[&["storage", "resource_alias"], &["source_storage", …], &["destination_storage", …]]`.
+- `ref_scanner` — any `<head>.<attr>` heads it returns are tried as
+  resource names too (so `{{ mail.from_address }}` discovers `mail`
+  even if the user didn't declare `resource_alias: "mail"` explicitly).
+
+There is no per-backend match arm in `discover_known_resources` —
+declaring `resource_alias_paths` correctly is the entire integration.
 
 ---
 
@@ -487,19 +639,37 @@ Rules:
   ```ts
   const page = await listResources({ resource_type: 'smtp', perPage: 200 });
   ```
-- **Min `text-sm`** for every label / input — the workspace convention
-  (`feedback_min_text_sm` memory). No smaller, ever.
+- **Min `text-sm`** for every label / input — the workspace convention.
+  No smaller, ever.
 - **Defaults survive partial drafts** — every field reads
   `(config.foo as T | undefined) ?? defaultValue` so a freshly created
   step renders cleanly.
 
-Wire the panel in two places in
-`app/src/lib/components/editor/panels/property-sections/AutomatedStepSection.svelte`:
+Wire the panel in **one** place: add the import and the entry to
+`app/src/lib/editor/backend-panels.ts`:
 
-1. Add to the `defaultConfigs` record (seeds a sensible initial config
-   when the user picks the new backend type).
-2. Add to the `backendLabels` record + the dropdown `<Select.Item>` list.
-3. Add the `{:else if data.executionSpec.backendType === 'smtp'}` arm.
+```ts
+import SmtpConfigPanel from '$lib/components/editor/panels/property-sections/automated/SmtpConfigPanel.svelte';
+
+export const BACKEND_PANELS: Record<ExecutionBackendType, Component<any>> = {
+    …
+    smtp: SmtpConfigPanel,
+    …
+};
+```
+
+Compile-time exhaustiveness via `Record<ExecutionBackendType, …>`
+makes "added a backend but forgot the panel" a build error. The
+editor's `AutomatedStepSection.svelte` reads everything else from
+`GET /api/v1/backends`:
+
+- Backend picker labels come from `BackendMeta::display_name`.
+- The default seed config comes from `BackendDecl::default_editor_config`.
+- The Scheduled-toggle visibility comes from `BackendMeta::schedulable`.
+
+You don't edit `AutomatedStepSection.svelte`, `defaultConfigs`,
+`backendLabels`, or any `<Select.Item>` list. Those were collapsed to
+registry consumption in the Phase 2.end refactor.
 
 ---
 
@@ -588,16 +758,21 @@ test seam so no network is needed:
   mapping. SMTP has ~10 unit tests covering these; reference them when
   scoping yours.
 
-### 10.2 Compiler unit tests (`service/src/compiler/backend_configs.rs`)
+### 10.2 Conformance / parity tests (`service/tests/registry_parity.rs`)
 
-Covers the service-side validation arm:
+Add a fixture under `service/tests/fixtures/backends/<name>/` and a
+test entry in `registry_parity.rs` that exercises your `BackendDecl::validate`
+through the canonical compile path. Existing tests (search for
+`smtp_minimal_config_compiles_through_registry`) are the model.
+
+This lane covers:
 
 - Minimal valid config compiles.
 - Missing required fields produce the right `CompileError::Validation`.
 - Malformed `{{ … }}` in any template surface raises
   `CompileError::BackendPlaceholderSyntax` with the right `site`.
 
-### 10.3 Compile e2e (`service/src/compiler/compile.rs`)
+### 10.3 Compile e2e (`service/src/compiler/compile.rs::tests` or `service/tests/compiler_e2e.rs`)
 
 A complete graph with the new step produces an AIR with the right
 shape. **Two tests are required if the backend binds a resource**:
@@ -617,9 +792,8 @@ shape. **Two tests are required if the backend binds a resource**:
 
 The two tests are not redundant. (1) goes through the simpler
 `compile_to_scenario` entry; (2) only fires when `KnownResources` is
-populated AND when the borrow-marker composition works correctly across
-multi-arm dispatch (see §6.2). If you skip (2), the regression class
-"resource arm silently no-ops" stays uncovered.
+populated. If you skip (2), you can't tell from CI whether the resource
+borrow path works.
 
 ### 10.4 Conformance tests (`executor-service/tests/conformance_<name>.rs`)
 
@@ -706,60 +880,69 @@ These all bit a previous backend author. They are not theoretical.
    "smtp backend: resolved_config is absent — the launcher's resource
    resolver did not run for this step" with no obvious fix. See §5.3.
 
-2. **`BORROW_MARKER` is shared across arms — don't consume it.** If
-   your backend introduces a new arm or your existing arm uses
-   `String::replace(BORROW_MARKER, &pushes)` without preserving the
-   marker, you break multi-arm composition silently. The correct
-   pattern is `format!("{pushes}{BORROW_MARKER}")` as replacement.
-   `strip_borrow_markers` cleans up. See §6.2.
-
-3. **A compile-e2e that doesn't pass `KnownResources` doesn't test
+2. **A compile-e2e that doesn't pass `KnownResources` doesn't test
    resource borrows.** Use `compile_to_air_with_subworkflows_and_interfaces`
    for the resource-borrow assertion, not `compile_to_scenario`. See §10.3.
 
-4. **A conformance test that hand-stages files bypasses the compiler.**
+3. **A conformance test that hand-stages files bypasses the compiler.**
    It proves the backend reads correctly but says nothing about
    whether the compiler emits the right borrows. Pair it with a
    compile-e2e against the publish entry. See §10.4.
 
-5. **A demo test that uses `compile_to_air` (no resources) on a
+4. **A demo test that uses `compile_to_air` (no resources) on a
    resource-binding demo compiles the demo through the wrong code
    path.** It will pass even when the production publish flow is
    broken for that demo. Use
    `compile_to_air_with_subworkflows_and_interfaces` with the
    right `KnownResources` populated. See §10.5.
 
-6. **Don't write a new `<lang>_refs.rs` scanner for `{{ }}` grammar
+5. **Don't write a new `<lang>_refs.rs` scanner for `{{ }}` grammar
    surfaces.** `placeholder_refs::scan_placeholders` already handles
    `{{ <head>.<attr> }}` for Tera, HumanTask markdown, LLM prompts,
    and Kreuzberg file refs. A new sibling scanner is only needed for a
    genuinely different lexer (Python's bare-identifier `<slug>.<attr>`
    is the canonical other case). See §6.1.
 
-7. **The Tera scanner only catches `{{ }}` placeholder bodies.** Tera
+6. **The Tera scanner only catches `{{ }}` placeholder bodies.** Tera
    also supports `{% if user.active %}` block syntax — refs inside
    `{%...%}` are NOT picked up by the compile-time scope checker. v1
    accepts this limitation; document it on your backend's panel if
    relevant. See `placeholder_refs.rs`.
 
-8. **Forgetting to add your feature to `just/dev.just::executor_features`**
+7. **Forgetting to add your feature to `just/dev.just::executor_features`**
    means `just dev` builds an executor without your backend. Symptom:
-   `supports()` returns false at runtime, the registry's first-match
+   `register_executor_backend` logs "backend '<name>' declared in
+   aithericon-backends but not built into this executor binary —
+   skipping," `supports()` returns false at runtime, the registry's
    dispatch picks no backend, the job sits in Accepted forever.
 
-9. **`from_spec` deserialization fails silently when a field rename
+8. **`from_spec` deserialization fails silently when a field rename
    doesn't match the JSON.** `serde_json::from_value` returns
    `Result<Self, Error>` but the error string is often unhelpful when
    the schema has many optional fields. If the editor's draft + your
    DTO disagree, lean on `#[serde(default)]` for every optional field
    so partial drafts round-trip cleanly. See §4.
 
-10. **Republish required after fixing a compile bug.** A workflow's
-    AIR is persisted at publish time. If a compiler change (new
-    borrow, scanner extension, marker fix) is needed, every affected
-    template must be re-published — the in-DB AIR is frozen until
-    then. Existing instances keep using the old AIR. Communicate this
-    in the PR description when shipping a fix.
+9. **Republish required after fixing a compile bug.** A workflow's
+   AIR is persisted at publish time. If a compiler change (new
+   borrow, scanner extension, validate fix) is needed, every affected
+   template must be re-published — the in-DB AIR is frozen until
+   then. Existing instances keep using the old AIR. Communicate this
+   in the PR description when shipping a fix.
+
+10. **The `BackendDecl::validate_ref_kind` validator runs per-site,
+    per-resolved-ref.** Most backends use `accept_any_ref_kind`. If
+    you set a custom validator, remember it fires once per
+    `<slug>.<field>` access at every site your `ref_scanner` returns
+    — failing one ref in one site fails the whole publish. LLM's
+    `validate_ref_kind` enforces `images[].path → File` and content
+    sites → not-File; cargo-cult that pattern only if your backend has
+    similar per-site kind constraints.
+
+11. **`BackendMeta` and `BackendDecl` must agree on `backend_type`.**
+    The conformance test catches drift; don't paper over it by
+    hand-syncing fields. Always reference the same `*_META` const
+    from both `shared/backends` and `service/src/backends/<name>.rs`.
 
 ---
 
@@ -767,39 +950,56 @@ These all bit a previous backend author. They are not theoretical.
 
 Use this when shipping. Each item maps to a section above.
 
-- [ ] Wire-name + display name + icon decided (§2)
-- [ ] Resource binding (if any) — type already exists in `shared/resources/src/types.rs` (§2)
-- [ ] `ExecutionBackendType` variant added in `service/src/models/template.rs` (§3)
-- [ ] `default_output_port` arm added (§3)
-- [ ] "Unknown backend" error string updated (§3)
-- [ ] DTO in `executor-backend-configs/src/<name>.rs` with `#[serde(default)]` everywhere (§4)
-- [ ] Module exported in `executor-backend-configs/src/lib.rs` (§4)
+**Cross-crate metadata (§3.1)**
+- [ ] `ExecutionBackendType` variant added in `shared/backends/src/types.rs`
+- [ ] `as_wire_str` arm for the new variant
+- [ ] `<NAME>_META` const in `shared/backends/src/registry.rs` (display name, icon, dispatch mode, schedulable, resource channel)
+- [ ] `<NAME>_META` added to the `BACKENDS` slice
+- [ ] `<NAME>_META` re-exported from `shared/backends/src/lib.rs`
+
+**Compile-time decl (§3.2)**
+- [ ] `service/src/backends/<name>.rs` with `BackendDecl` referencing `<NAME>_META`
+- [ ] Module + decl registered in `service/src/backends/mod.rs::BACKENDS`
+- [ ] `default_output_fields`, `default_editor_config`, `validate`, `ref_scanner`, `resource_alias_paths`, `consumes_declared_outputs`, `pyi_introspection`, `borrow_shape`, `validate_ref_kind` all set deliberately
+- [ ] DSL parser arm in `service/src/bin/cli/formats/dsl.rs` if CLI DSL support is wanted
+
+**Wire-format DTO (§4)**
+- [ ] DTO in `executor-backend-configs/src/<name>.rs` with `#[serde(default)]` everywhere
+- [ ] Module exported in `executor-backend-configs/src/lib.rs`
+- [ ] Resolved-resource view struct (if backend binds a resource), with `from_resolved_value` (canonical) + `from_resolved` (harness fallback)
+
+**Runtime impl (§5)**
 - [ ] Crate `executor-<name>/` added, in workspace `members` + `workspace.dependencies` (§5.1)
 - [ ] `ExecutionBackend` impl returns structured outcome variant, respects cancel + timeout (§5.2)
-- [ ] **Resource view** read from `staged_inputs["<alias>.json"]` (production)
-      with `resolved_config` fallback for harness tests — never logs either (§5.3)
+- [ ] **Resource view** read from `staged_inputs["<alias>.json"]` (production) with `resolved_config` fallback for harness tests — never logs either (§5.3)
 - [ ] `MessageSink`-style unit test seam in place (§5.4)
-- [ ] Feature flag + registry registration in `executor-service` (§5.5)
-- [ ] Feature added to `just/dev.just::executor_features` so `just dev` builds it (§5.5)
-- [ ] `validate_and_transform` arm with placeholder syntax validation (§6)
-- [ ] Borrow scanner arms in `populate_borrowed_paths`, `automated_step_borrow_plan`,
-      `automated_step_resource_borrow_plan` (§6.1)
-- [ ] **`BORROW_MARKER` splice prepends the marker, doesn't consume it** —
-      `strip_borrow_markers` does final cleanup (§6.2)
-- [ ] Resource discovery arm in `discover_known_resources` (§6.3)
-- [ ] `<Name>ConfigPanel.svelte` panel + wired into `AutomatedStepSection` (§7)
-- [ ] `<Name>Envelope.svelte` renderer + predicate in `value-renderers/index.ts` (§8)
+- [ ] Feature flag in `executor-service/Cargo.toml`
+- [ ] Match arm in `executor-service/src/main.rs::register_executor_backend` (§5.5)
+- [ ] Feature added to `just/dev.just::executor_features` so `just dev` builds it
+
+**Service-side compiler (§6)**
+- [ ] `validate` body uses `placeholder_refs::validate_placeholders` on every template surface
+- [ ] `ref_scanner` returns the full set of `<head>.<attr>` refs from all template/source surfaces (§6.1)
+- [ ] `resource_alias_paths` covers every JSON path your config carries an alias on (§6.3)
+- [ ] `borrow_shape` set correctly: `Envelope` for whole-`<slug>.json` consumers (Python/SMTP), `PerField` for per-field staging (Kreuzberg/LLM) (§6.2)
+
+**Frontend (§7, §8)**
+- [ ] `<Name>ConfigPanel.svelte` + entry in `app/src/lib/editor/backend-panels.ts::BACKEND_PANELS`
+- [ ] `<Name>Envelope.svelte` renderer + predicate in `output-renderers/index.ts`
 - [ ] Per-failure-mode detail block in the renderer (§9)
+
+**Tests (§10)**
 - [ ] Unit tests in backend crate (§10.1)
-- [ ] `backend_configs::Smtp` arm unit tests (§10.2)
-- [ ] **Two** compile-e2e tests if backend binds a resource: upstream-producer
-      AND resource-envelope (with `KnownResources` populated) (§10.3)
+- [ ] Fixture + entry in `service/tests/registry_parity.rs` (§10.2)
+- [ ] **Two** compile-e2e tests if backend binds a resource: upstream-producer AND resource-envelope (with `KnownResources` populated) (§10.3)
 - [ ] Conformance test against a real container, gated by env var (§10.4)
-- [ ] Demo at `demos/<name>/` + loader test using
-      `compile_to_air_with_subworkflows_and_interfaces` + `KnownResources`
-      if the demo binds a resource (§10.5, §11)
+- [ ] Demo at `demos/<name>/` + loader test using `compile_to_air_with_subworkflows_and_interfaces` + `KnownResources` if the demo binds a resource (§10.5, §11)
+
+**Release hygiene**
 - [ ] `just dev::openapi` run; `openapi-mekhan.json` + `schema.d.ts` committed (§12)
 - [ ] Re-read §13 — verify none of the listed footguns apply
 - [ ] `cargo check --workspace` + `cargo test --workspace` green (root level)
+- [ ] `(cd executor && cargo check)` green (separate workspace)
 - [ ] `(cd app && pnpm exec svelte-check)` clean
 - [ ] `just ci::openapi-drift` clean
+- [ ] `cargo test -p mekhan-service --test backend_registry_coverage` green (the conformance test that asserts bijection across `shared/backends` ↔ `service/src/backends`)
