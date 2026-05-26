@@ -29,6 +29,7 @@ use aithericon_executor_domain::{InputDeclaration, InputSource};
 use crate::compiler::CompileError;
 use crate::models::template::{ExecutionBackendType, FieldKind, Port, PortField};
 
+pub mod docker;
 pub mod process;
 pub mod smtp;
 
@@ -190,7 +191,11 @@ impl DefaultPortField {
 /// arms in `backend_configs.rs`, `token_shape.rs`, `compile.rs` and
 /// `template.rs` cover the other 8 backends and fall through when
 /// `lookup(bt)` returns `None`.
-pub static BACKENDS: &[&BackendDecl] = &[&process::PROCESS_DECL, &smtp::SMTP_DECL];
+pub static BACKENDS: &[&BackendDecl] = &[
+    &docker::DOCKER_DECL,
+    &process::PROCESS_DECL,
+    &smtp::SMTP_DECL,
+];
 
 /// Look up the decl for a backend type. Returns `None` for backends not yet
 /// migrated to the registry — callers then fall through to their legacy

@@ -144,3 +144,60 @@ fn process_rejects_garbage_config_via_registry() {
     use mekhan_service::compiler::CompileError;
     matches!(err, CompileError::Validation(_));
 }
+
+// ─── Docker (Phase 2.b) ─────────────────────────────────────────────────────
+
+#[test]
+fn docker_minimal_config_compiles_through_registry() {
+    let cfg = json!({ "image": "alpine:3.19" });
+    let (canonical, inputs) =
+        validate_and_transform(&ExecutionBackendType::Docker, &cfg, &HashMap::new(), "run")
+            .expect("docker minimal config must compile");
+    assert!(inputs.is_empty(), "no attached files → no staged inputs");
+    assert_eq!(canonical["image"], "alpine:3.19");
+}
+
+#[test]
+fn docker_empty_image_rejected_via_registry() {
+    let cfg = json!({ "image": "" });
+    let err = validate_and_transform(&ExecutionBackendType::Docker, &cfg, &HashMap::new(), "run")
+        .expect_err("empty image must be rejected")
+        .to_string();
+    assert!(err.contains("image is required"), "got: {err}");
+}
+
+#[test]
+fn docker_stages_attached_files_through_registry() {
+    use aithericon_executor_domain::InputSource;
+    let mut files = HashMap::new();
+    files.insert(
+        "Dockerfile".to_string(),
+        InputSource::Raw {
+            content: "FROM alpine:3.19\n".to_string(),
+        },
+    );
+    files.insert(
+        "entrypoint.sh".to_string(),
+        InputSource::Raw {
+            content: "#!/bin/sh\necho hi\n".to_string(),
+        },
+    );
+    let cfg = json!({ "image": "alpine:3.19", "command": ["/entrypoint.sh"] });
+    let (_, inputs) = validate_and_transform(&ExecutionBackendType::Docker, &cfg, &files, "run")
+        .expect("docker with files must compile");
+    // stage_all_files sorts by name for deterministic AIR
+    assert_eq!(inputs.len(), 2);
+    assert_eq!(inputs[0].name, "Dockerfile");
+    assert_eq!(inputs[1].name, "entrypoint.sh");
+    assert!(inputs.iter().all(|i| i.required));
+}
+
+#[test]
+fn docker_rejects_garbage_config_via_registry() {
+    // Missing `image` field — DockerConfig::image is required by serde.
+    let cfg = json!({ "not_an_image_field": 42 });
+    let err = validate_and_transform(&ExecutionBackendType::Docker, &cfg, &HashMap::new(), "run")
+        .expect_err("garbage config must fail deserialization")
+        .to_string();
+    assert!(err.contains("invalid docker config"), "got: {err}");
+}
