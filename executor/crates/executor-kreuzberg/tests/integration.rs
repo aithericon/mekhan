@@ -152,11 +152,12 @@ async fn single_txt_extraction() {
         "content should contain 'Hello', got: {content}"
     );
 
-    // Standard output keys should be present.
-    assert!(result.outputs.contains_key("word_count"));
-    assert!(result.outputs.contains_key("char_count"));
-    assert!(result.outputs.contains_key("tables"));
+    // Native kreuzberg ExtractionResult fields should be present.
+    // (`detected_languages`, `chunks`, etc. are skip_serializing_if=None.)
+    assert!(result.outputs.contains_key("content"));
     assert!(result.outputs.contains_key("mime_type"));
+    assert!(result.outputs.contains_key("tables"));
+    assert!(result.outputs.contains_key("metadata"));
 
     // Metrics should be populated.
     let metrics = result.metrics.as_ref().expect("missing metrics");
@@ -169,12 +170,6 @@ async fn single_txt_extraction() {
         metrics
             .latest_values
             .contains_key("kreuzberg/content_length")
-    );
-    assert!(metrics.latest_values.contains_key("kreuzberg/word_count"));
-    assert!(
-        metrics
-            .latest_values
-            .contains_key("kreuzberg/table_count")
     );
 
     // Status callback should have been called with Running.
@@ -267,10 +262,12 @@ async fn batch_extraction_all_inputs() {
     let results_arr = result.outputs["results"].as_array().unwrap();
     assert_eq!(results_arr.len(), 2);
 
-    // Each result should have content.
+    // Each entry is a native ExtractionResult + a `file` tag.
     for entry in results_arr {
+        assert!(entry["file"].is_string());
         assert!(entry["content"].is_string());
-        assert!(entry["word_count"].is_number());
+        assert!(entry["mime_type"].is_string());
+        assert!(entry["tables"].is_array());
     }
 
     // Progress should be complete.
