@@ -14,14 +14,10 @@
 
 # 20-test.yml is disabled — re-add `depends_on: [20-test]` when it's back.
 when:
-  # Auto on main — every commit to the canonical branch goes through the
-  # full build → deploy → verify chain (40-deploy.yml depends_on this).
+
   - branch: main
     event: push
-  # Manual run from any branch — for testing the build pipeline on a
-  # feature branch before merging. Produces images tagged with the
-  # commit SHA + branch slug, so feature-branch images can be deployed
-  # via a manual 40-deploy run.
+
   - event: manual
 
 labels:
@@ -57,23 +53,17 @@ steps:
       - just ci::build-frontend
     depends_on: []
 
-  # Builds the mekhan-service OCI image from the prebuilt binary + frontend
-  # bundle produced by build-backend-service / build-frontend, then pushes
-  # both SHA and branch tags to the Forgejo registry.
+
   - name: publish-backend-service
     image: forge.aithericon.eu/milanender/mekhan-ci-builder:latest
     pull: true
     environment:
       REGISTRY: forge.aithericon.eu/milanender
-      # Vault is the canonical source for the Forgejo image-push creds
-      # (secret/docker/registry). Same single VAULT_TOKEN as 40-deploy.yml.
+
       VAULT_ADDR: "http://10.20.0.20:8200"
       VAULT_TOKEN:
         from_secret: vault_token
-      # Must match build-backend-service's CARGO_TARGET_DIR so
-      # `just ci::publish-backend-service` finds the freshly-built
-      # mekhan-service binary the upstream step wrote outside the per-run
-      # workspace.
+
       CARGO_TARGET_DIR: /var/lib/ci-jobs/cache/target/mekhan
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock

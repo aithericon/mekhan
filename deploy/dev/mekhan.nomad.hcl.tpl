@@ -42,6 +42,11 @@ job "mekhan-service" {
       port "http" {
         to = ${service_port}
       }
+
+      port "engine" {
+        static = ${engine_service_port}
+        to     = ${engine_service_port}
+      }
     }
 
     service {
@@ -67,6 +72,36 @@ job "mekhan-service" {
       check {
         type     = "http"
         path     = "/api/health"
+        interval = "10s"
+        timeout  = "2s"
+      }
+    }
+
+
+    service {
+      name     = "engine"
+      port     = "engine"
+      provider = "consul"
+
+      tags = [
+        "engine",
+        "mekhan",
+        "traefik.enable=true",
+        "traefik.http.routers.engine.rule=Host(`${hostname}`) && PathPrefix(`/petri`)",
+        "traefik.http.routers.engine.priority=200",
+        "traefik.http.routers.engine.entrypoints=websecure",
+        "traefik.http.routers.engine.tls=true",
+        "traefik.http.routers.engine.tls.certresolver=letsencrypt",
+        "traefik.http.routers.engine.middlewares=engine-stripprefix",
+        "traefik.http.middlewares.engine-stripprefix.stripprefix.prefixes=/petri",
+        "traefik.http.routers.engine.service=engine",
+      ]
+
+      # TCP check rather than HTTP — the engine doesn't expose /health
+      # (all routes are /api/*, per engine/core-engine/crates/api/src/router.rs).
+      check {
+        type     = "tcp"
+        port     = "engine"
         interval = "10s"
         timeout  = "2s"
       }
@@ -144,6 +179,13 @@ EOH
         # post_logout_redirect_uris we registered (see zitadel.tf), and
         # Zitadel only allows absolute URLs — so we override the default `/`.
         MEKHAN__AUTH__POST_LOGIN_REDIRECT = "${auth_post_login_redirect}"
+        # PAT feature credentials (provisioned by zitadel.tf). All three must
+        # be set together: without the introspection pair, Bearer PATs from
+        # `mekhan apply` 401; without broker_pat, /api/auth/tokens 503s and
+        # the SPA hides the Profile → Access tokens section.
+        MEKHAN__AUTH__INTROSPECTION_CLIENT_ID     = "${auth_introspection_client_id}"
+        MEKHAN__AUTH__INTROSPECTION_CLIENT_SECRET = "${auth_introspection_client_secret}"
+        MEKHAN__AUTH__BROKER_PAT                  = "${auth_broker_pat}"
         # Seed the built-in demo templates baked into the image at /app/demos
         # (Dockerfile.service.prebuilt COPYs the demos/ folder + ENV sets
         # MEKHAN__DEMOS__DIR=/app/demos). Seeder runs once on startup before
@@ -159,29 +201,19 @@ EOH
       }
     }
 
-    # ── Executor — sibling task in the same group ─────────────────────────
-    # Co-resident with `service` (always same Nomad client, shared network
-    # namespace, lifecycle-bound). Communicates with the cluster via NATS
-    # (work-pickup over JetStream subjects), not directly with `service`, so
-    # the only thing co-location buys us here is shared lifecycle + the same
-    # NATS creds file path layout. If executor concurrency ever needs to
-    # diverge from service count, split this into its own Nomad job.
-    task "executor" {
+    task "engine" {
       driver = "docker"
 
       config {
-        image = "${executor_image}"
-        # No port mapping — executor is NATS-driven, cancel HTTP is opt-in
-        # via EXECUTOR_CANCEL__HTTP=true and not enabled here.
+        image = "${engine_image}"
+        ports = ["engine"]
+
         auth {
           username = "${registry_user}"
           password = "${registry_password}"
         }
       }
 
-      # NATS user credentials — same Vault path as the service task. Each
-      # task gets its own /secrets dir, so we render the bundle twice rather
-      # than try to share a single file across tasks.
       template {
         destination = "secrets/nats.creds"
         change_mode = "restart"
@@ -194,44 +226,20 @@ EOH
       }
 
       env {
-        # Executor reads EXECUTOR_* (not MEKHAN__*) — see Dockerfile.executor
-        # lines 175-185. The NATS URL is the cluster's well-known Consul DNS
-        # name; same value the service task uses.
-        EXECUTOR_NATS_URL       = "${nats_url}"
-        EXECUTOR_NATS_CREDS     = "$${NOMAD_SECRETS_DIR}/nats.creds"
-        # Must match the engine's EXECUTOR_NAMESPACE (set to "executor" in
-        # engine.nomad.hcl.tpl). Default in the executor service is
-        # "executor_jobs" — leaving it as default makes the executor listen on
-        # subjects engine never publishes to. Symptom: automated steps stay
-        # "pending" forever because dispatch messages sit in NATS unconsumed.
-        EXECUTOR_NAMESPACE      = "executor"
-        EXECUTOR_BASE_DIR       = "/var/lib/aithericon/executor"
-        EXECUTOR_CONCURRENCY    = "${executor_concurrency}"
-        EXECUTOR_PYTHON__ENABLED   = "true"
-        EXECUTOR_PYTHON__PREFER_UV = "true"
-        # Cancel HTTP off by default — turn on + add a port stanza above
-        # if the service ever needs to cancel executor jobs synchronously.
-        EXECUTOR_CANCEL__HTTP = "false"
-        # S3 / object-storage backend for staging inputs (template scripts,
-        # generated .pyi stubs) and outputs. MUST match what mekhan-service
-        # uploads to — see MEKHAN__S3__* above. Symptom of mismatch: executor
-        # logs "staging failed: artifact not found" because it's looking in a
-        # different bucket (or with no S3 backend configured, just the local
-        # FS where nothing was uploaded). The double-underscore between
-        # STORAGE and its sub-fields is config-rs's nesting separator —
-        # storage.backend, storage.endpoint, storage.credentials.access_key.
-        EXECUTOR_STORAGE__BACKEND                  = "s3"
-        EXECUTOR_STORAGE__ENDPOINT                 = "${s3_endpoint}"
-        EXECUTOR_STORAGE__BUCKET                   = "${s3_bucket}"
-        EXECUTOR_STORAGE__REGION                   = "fsn1"
-        EXECUTOR_STORAGE__CREDENTIALS__ACCESS_KEY  = "${s3_access_key}"
-        EXECUTOR_STORAGE__CREDENTIALS__SECRET_KEY  = "${s3_secret_key}"
-        RUST_LOG              = "${rust_log}"
+
+        PORT                = "${engine_service_port}"
+        NATS_URL            = "${nats_url}"
+        NATS_CREDS          = "$${NOMAD_SECRETS_DIR}/nats.creds"
+        EXECUTOR_NATS_URL   = "${nats_url}"
+        EXECUTOR_NATS_CREDS = "$${NOMAD_SECRETS_DIR}/nats.creds"
+        EXECUTOR_ENABLED    = "true"
+        EXECUTOR_NAMESPACE  = "executor"
+        RUST_LOG            = "${rust_log}"
       }
 
       resources {
-        cpu    = ${executor_cpu_mhz}
-        memory = ${executor_memory_mb}
+        cpu    = ${engine_cpu_mhz}
+        memory = ${engine_memory_mb}
       }
     }
   }
