@@ -131,9 +131,9 @@ test-frontend-e2e:
 
 # ── Build (cross-compile + frontend bundle) ─────────────────────────────────
 
-# Cross-compile the service binary for aarch64 musl
+# Cross-compile the mekhan-service binary for aarch64 musl
 # Output: target/${target_triple}/release/mekhan-service
-build-backend:
+build-backend-service:
     #!/usr/bin/env bash
     cd ..
     echo "▶ Cross-compiling mekhan-service for {{target_triple}}"
@@ -199,12 +199,13 @@ apply-workflows dir="workflows":
 
 # ── Package + push (Docker image) ───────────────────────────────────────────
 
-# Stage prebuilt binary + frontend, build OCI image, tag with SHA + branch
+# Stage prebuilt binary + frontend, build the mekhan-service OCI image, and
+# push both SHA and branch tags to the registry.
 # Args:
 #   registry_image — full registry/namespace prefix, e.g. registry.aithericon.eu/mekhan
 #   commit_sha     — git SHA (full or short)
 #   ref_slug       — URL-safe branch name (CI_COMMIT_BRANCH)
-package registry_image commit_sha ref_slug:
+publish-backend-service registry_image commit_sha ref_slug:
     #!/usr/bin/env bash
     cd ..
     sha_tag="{{commit_sha}}"
@@ -237,23 +238,21 @@ package registry_image commit_sha ref_slug:
 
     rm -rf "$ctx"
 
-# Push both tags of an already-packaged image
-push registry_image commit_sha ref_slug:
-    #!/usr/bin/env bash
-    cd ..
-    docker push "{{registry_image}}/mekhan-service:{{commit_sha}}"
-    docker push "{{registry_image}}/mekhan-service:{{ref_slug}}"
+    echo "▶ docker push → {{registry_image}}/mekhan-service:$sha_tag, $ref_tag"
+    docker push "{{registry_image}}/mekhan-service:$sha_tag"
+    docker push "{{registry_image}}/mekhan-service:$ref_tag"
 
 # Build + push the aithericon-executor image.
 #
-# Unlike `ci::package`, this builds Rust INSIDE the Docker image (multi-stage
-# Dockerfile.executor) rather than from a prebuilt artifact — kreuzberg's
-# native deps (tesseract, hdf5, …) make the cross-musl path painful, and the
-# executor runs glibc-Debian in production anyway. Heavier build, ~5-8 min.
+# Unlike `ci::publish-backend-service`, this builds Rust INSIDE the Docker
+# image (multi-stage Dockerfile.executor) rather than from a prebuilt
+# artifact — kreuzberg's native deps (tesseract, hdf5, …) make the cross-musl
+# path painful, and the executor runs glibc-Debian in production anyway.
+# Heavier build, ~5-8 min.
 #
-# Uses `docker buildx --push` so the push happens inline (no separate
-# `push-executor` recipe needed). Caller still has to `docker login` first.
-package-and-push-executor registry_image commit_sha ref_slug:
+# Uses `docker buildx --push` so the push happens inline. Caller still has
+# to `docker login` first.
+publish-backend-executor registry_image commit_sha ref_slug:
     #!/usr/bin/env bash
     set -euo pipefail
     cd ..
@@ -275,7 +274,7 @@ package-and-push-executor registry_image commit_sha ref_slug:
 # no ONNX. Build is still inside Docker (~3-5 min cold) for the same reason
 # the executor is — the engine workspace has path deps on ../executor and
 # ../shared, so the build context must be the monorepo root.
-package-and-push-engine registry_image commit_sha ref_slug:
+publish-backend-engine registry_image commit_sha ref_slug:
     #!/usr/bin/env bash
     set -euo pipefail
     cd ..
@@ -409,15 +408,15 @@ verify-deploy env="dev":
 
 # ── Convenience ─────────────────────────────────────────────────────────────
 
-# Run the whole local pipeline: quality → test → build → package
+# Run the whole local pipeline: quality → test → build → publish
 build-all registry_image="registry.aithericon.eu/mekhan" commit_sha="local" ref_slug="local":
     just ci::quality-rust
     just ci::quality-frontend
     just ci::test-rust
     just ci::test-frontend-unit
-    just ci::build-backend
+    just ci::build-backend-service
     just ci::build-frontend
-    just ci::package "{{registry_image}}" "{{commit_sha}}" "{{ref_slug}}"
+    just ci::publish-backend-service "{{registry_image}}" "{{commit_sha}}" "{{ref_slug}}"
 
 # Clean build artefacts
 clean:

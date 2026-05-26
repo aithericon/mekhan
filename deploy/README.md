@@ -18,11 +18,12 @@ Terraform/OpenTofu layers + Docker context that deploy mekhan-service to the [He
 ```
                 Woodpecker CI                            HetznerCluster (Nomad)
                 ─────────────                            ──────────────────────
-build-frontend ┐                                          ┌─ Postgres (06b, Patroni HA)
-build-backend  ┼─► docker buildx ─► forge.aithericon.eu/  │  postgres.service.consul:5432
-               │                    MilanEnder/           │
-               │                    mekhan-service:$SHA   ├─ NATS (04c)
-package-push   ┘                              │           │  nats.service.consul:4222
+build-frontend         ┐                                  ┌─ Postgres (06b, Patroni HA)
+build-backend-service  ┼─► docker buildx ─► forge.        │  postgres.service.consul:5432
+                       │                    aithericon.eu/│
+                       │                    MilanEnder/   ├─ NATS (04c)
+publish-backend-service┘                    mekhan-       │  nats.service.consul:4222
+                                            service:$SHA  │
                                               │           │
                   ┌───────────────────────────┘           ├─ Traefik (05_ingress)
 deploy-dev ───►   │                                       │  *.aithericon.eu / *.dev.aithericon.eu
