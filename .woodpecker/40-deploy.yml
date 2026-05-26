@@ -17,22 +17,13 @@
 #   - VAULT_ADDR is non-secret, hardcoded.
 #   - Everything else: `export X=$(vault kv get -field=X path)` inline.
 #
-# Vault paths read below:
-#   secret/nomad/bootstrap           — Nomad mgmt token (cluster-managed)
-#   secret/postgres/patroni          — Patroni superuser password
-#   secret/docker/registry           — Forgejo image pull creds
-#   secret/services/mekhan/dev       — Hetzner S3 keys + state passphrase
-#                                      (seed once with `vault kv put`, see
-#                                      deploy/README.md § B)
+
 #
 # NETWORK NOTE: 10.20.0.* is reachable only over NetBird. The Woodpecker
 # runner picking up `role: deploy` MUST be on the mesh. YAML can't enforce.
 # =============================================================================
 
 when:
-  # Auto on main after 30-build finishes. Manual runs re-deploy whatever
-  # image tag `just ci::deploy-dev` is invoked with — useful for replaying
-  # a previously-built SHA without re-running the build pipeline.
   - branch: main
     event: push
   - event: manual
@@ -56,28 +47,18 @@ steps:
     commands:
       # dev.auto.tfvars is gitignored — CI uses the committed .example.
       - cp deploy/dev/dev.auto.tfvars.example deploy/dev/dev.auto.tfvars
-
-      # ── Fetch secrets from Vault ──
-      # Vault is the canonical CI source. Everything below comes from there
-      # via the single VAULT_TOKEN above. To rotate any of these you only
-      # touch Vault; CI re-reads on the next run.
       - export NOMAD_TOKEN=$(vault kv get -field=token secret/nomad/bootstrap)
       - export TF_VAR_nomad_token=$NOMAD_TOKEN
       - export TF_VAR_postgres_admin_password=$(vault kv get -field=superuser_password secret/postgres/patroni)
       - export TF_VAR_registry_user=$(vault kv get -field=username secret/docker/registry)
       - export TF_VAR_registry_password=$(vault kv get -field=token secret/docker/registry)
-      # Mekhan-specific path holds the Hetzner S3 keypair + state encryption
-      # passphrase (everything else is shared cluster infra).
+
       - export AWS_ACCESS_KEY_ID=$(vault kv get -field=hetzner_s3_access_key secret/services/mekhan/dev)
       - export AWS_SECRET_ACCESS_KEY=$(vault kv get -field=hetzner_s3_secret_key secret/services/mekhan/dev)
       - export TF_VAR_s3_access_key=$AWS_ACCESS_KEY_ID
       - export TF_VAR_s3_secret_key=$AWS_SECRET_ACCESS_KEY
       - export TF_VAR_state_encryption_passphrase=$(vault kv get -field=state_encryption_passphrase secret/services/mekhan/dev)
-      # Zitadel JWT machine key — written to /tmp because the zitadel TF
-      # provider's `jwt_profile_file` argument is a FILE PATH, not the key
-      # contents. Same trick HetznerCluster's root.hcl uses (write_zitadel
-      # _jwt_key terragrunt before_hook). The CI container is per-job and
-      # ephemeral so /tmp evaporates between runs.
+
       - vault kv get -field=key secret/zitadel/iac-jwt > /tmp/zitadel-iac-jwt.json
       - export TF_VAR_zitadel_jwt_file=/tmp/zitadel-iac-jwt.json
 

@@ -27,26 +27,16 @@ terraform {
       source  = "hashicorp/random"
       version = "~> 3.6"
     }
-    # Hetzner Object Storage is S3-compatible — we use the AWS provider with
-    # the endpoint overridden. Same pattern the tfstate backend already uses.
+
     aws = {
       source  = "hashicorp/aws"
       version = "~> 5.0"
     }
-    # Talks directly to the cluster's Zitadel at id.aithericon.eu via its
-    # admin API. Same shape mekhan already uses for cyrilgdn/postgresql —
-    # the service repo owns its OIDC application registration the same way
-    # it owns its Postgres role.
+
     zitadel = {
       source  = "zitadel/zitadel"
       version = "~> 1.2"
     }
-    # Used by deploy/dev/nats.tf to declare the Vault policy + JWT-Nomad
-    # auth role that grant mekhan-service's Nomad workload identity read
-    # access to its NATS user creds at secret/nats/apps/mekhan/dev/worker.
-    # The .creds bundle itself is published by deploy/dev/scripts/
-    # generate-nats-user.sh, which runs out-of-band (CI step + manual
-    # rotation) — same split web-platform uses.
     vault = {
       source  = "hashicorp/vault"
       version = "~> 4.4"
@@ -60,10 +50,7 @@ provider "nomad" {
   secret_id = var.nomad_token
 }
 
-# Connects to the cluster's Patroni primary. Host uses the Consul alt-domain
-# (consul.aithericon) so DNS resolution works from the operator's machine
-# without colliding with any other cluster's .service.consul namespace —
-# same trick HetznerCluster's root.hcl uses for cluster-side TF applies.
+
 provider "postgresql" {
   host            = var.postgres_admin_host
   port            = 5432
@@ -74,10 +61,6 @@ provider "postgresql" {
   connect_timeout = 15
 }
 
-# Hetzner Object Storage — S3-compatible. Region is the Hetzner location code
-# (fsn1 = Falkenstein). The path-style + checksum settings are required: the
-# Hetzner endpoint doesn't support virtual-hosted bucket URLs and rejects the
-# v4 trailing-checksum probes that AWS SDKs added by default.
 provider "aws" {
   region                      = "fsn1"
   access_key                  = var.s3_access_key
