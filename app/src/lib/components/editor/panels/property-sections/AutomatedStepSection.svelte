@@ -182,7 +182,15 @@
 {:else if data.executionSpec.backendType === 'process'}
 	<ProcessConfigPanel config={data.executionSpec.config as Record<string, unknown>} {readonly} onchange={handleConfigChange} />
 {:else if data.executionSpec.backendType === 'http'}
-	<HttpConfigPanel config={data.executionSpec.config as Record<string, unknown>} {readonly} onchange={handleConfigChange} />
+	<HttpConfigPanel
+		config={data.executionSpec.config as Record<string, unknown>}
+		{readonly}
+		onchange={handleConfigChange}
+		{binding}
+		{nodeId}
+		{templateId}
+		{scope}
+	/>
 {:else if data.executionSpec.backendType === 'llm'}
 	<LlmConfigPanel config={data.executionSpec.config as Record<string, unknown>} {readonly} onchange={handleConfigChange} {scope} />
 {:else if data.executionSpec.backendType === 'file_ops'}
