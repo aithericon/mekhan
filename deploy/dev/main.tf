@@ -49,6 +49,12 @@ resource "nomad_job" "mekhan_service" {
     auth_redirect_uri = "https://${var.hostname}/api/auth/callback"
 
     auth_post_login_redirect = "https://${var.hostname}/"
+
+
+    engine_image        = "${var.engine_image_repository}:${var.image_tag}"
+    engine_service_port = var.engine_service_port
+    engine_cpu_mhz      = var.engine_cpu_mhz
+    engine_memory_mb    = var.engine_memory_mb
   })
 
   purge_on_destroy = true

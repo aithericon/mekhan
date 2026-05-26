@@ -42,6 +42,11 @@ job "mekhan-service" {
       port "http" {
         to = ${service_port}
       }
+
+      port "engine" {
+        static = ${engine_service_port}
+        to     = ${engine_service_port}
+      }
     }
 
     service {
@@ -67,6 +72,36 @@ job "mekhan-service" {
       check {
         type     = "http"
         path     = "/api/health"
+        interval = "10s"
+        timeout  = "2s"
+      }
+    }
+
+
+    service {
+      name     = "engine"
+      port     = "engine"
+      provider = "consul"
+
+      tags = [
+        "engine",
+        "mekhan",
+        "traefik.enable=true",
+        "traefik.http.routers.engine.rule=Host(`${hostname}`) && PathPrefix(`/petri`)",
+        "traefik.http.routers.engine.priority=200",
+        "traefik.http.routers.engine.entrypoints=websecure",
+        "traefik.http.routers.engine.tls=true",
+        "traefik.http.routers.engine.tls.certresolver=letsencrypt",
+        "traefik.http.routers.engine.middlewares=engine-stripprefix",
+        "traefik.http.middlewares.engine-stripprefix.stripprefix.prefixes=/petri",
+        "traefik.http.routers.engine.service=engine",
+      ]
+
+      # TCP check rather than HTTP — the engine doesn't expose /health
+      # (all routes are /api/*, per engine/core-engine/crates/api/src/router.rs).
+      check {
+        type     = "tcp"
+        port     = "engine"
         interval = "10s"
         timeout  = "2s"
       }
@@ -156,6 +191,48 @@ EOH
       resources {
         cpu    = ${cpu_mhz}
         memory = ${memory_mb}
+      }
+    }
+
+    task "engine" {
+      driver = "docker"
+
+      config {
+        image = "${engine_image}"
+        ports = ["engine"]
+
+        auth {
+          username = "${registry_user}"
+          password = "${registry_password}"
+        }
+      }
+
+      template {
+        destination = "secrets/nats.creds"
+        change_mode = "restart"
+        perms       = "0644"
+        data        = <<-EOH
+{{- with secret "secret/data/nats/apps/mekhan/dev/worker" -}}
+{{ .Data.data.creds }}
+{{- end -}}
+EOH
+      }
+
+      env {
+
+        PORT                = "${engine_service_port}"
+        NATS_URL            = "${nats_url}"
+        NATS_CREDS          = "$${NOMAD_SECRETS_DIR}/nats.creds"
+        EXECUTOR_NATS_URL   = "${nats_url}"
+        EXECUTOR_NATS_CREDS = "$${NOMAD_SECRETS_DIR}/nats.creds"
+        EXECUTOR_ENABLED    = "true"
+        EXECUTOR_NAMESPACE  = "executor"
+        RUST_LOG            = "${rust_log}"
+      }
+
+      resources {
+        cpu    = ${engine_cpu_mhz}
+        memory = ${engine_memory_mb}
       }
     }
   }
