@@ -912,7 +912,10 @@ async fn enrich_processes_from_start_event(
 /// Mark processes as completed when the process_complete effect fires.
 ///
 /// Resolves process IDs from the consumed/read tokens and sets their status
-/// to "completed" with the completion timestamp.
+/// to "completed" with the completion timestamp. Any phase still in
+/// `Running` is closed to `Completed` and stamped with `ended_at` — leaving
+/// a phase pulsing "running" on a finished process is a visual lie, since
+/// the workflow has reached its End and no further PhaseUpdate will fire.
 async fn complete_processes(
     db: &PgPool,
     consumed_ids: &[String],
@@ -929,10 +932,39 @@ async fn complete_processes(
         .execute(db)
         .await?;
 
+        close_running_phases(db, pid, PhaseStatus::Completed, ts).await?;
+
         tracing::info!(
             process_id = %pid,
             "marked process as completed",
         );
+    }
+    Ok(())
+}
+
+/// Close any `Running` phases on a process by promoting them to `final_status`
+/// (Completed/Failed) and stamping `ended_at = ts`. Phases already in a
+/// terminal status (Completed/Failed/Skipped) and still-`Pending` phases are
+/// left untouched: a Pending phase was declared but never reached, which is
+/// honest to keep visible.
+async fn close_running_phases(
+    db: &PgPool,
+    process_id: &str,
+    final_status: PhaseStatus,
+    ts: chrono::DateTime<chrono::Utc>,
+) -> Result<(), sqlx::Error> {
+    let mut progress = load_progress(db, process_id, ts).await?;
+    let mut changed = false;
+    for ph in progress.phases.iter_mut() {
+        if ph.status == PhaseStatus::Running {
+            ph.status = final_status;
+            ph.ended_at = Some(ts);
+            changed = true;
+        }
+    }
+    if changed {
+        progress.updated_at = ts;
+        write_progress(db, process_id, &progress, ts).await?;
     }
     Ok(())
 }
