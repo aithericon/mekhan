@@ -94,11 +94,27 @@ These have to happen **once, by hand**, before CI can deploy. They split between
    ./deploy/dev/scripts/generate-nats-user.sh
    ```
 
-   Re-run any time you want to rotate the user's creds — the helper deletes and recreates the user idempotently. The matching Vault policy + JWT-Nomad role are created by `tofu apply` from `deploy/dev/nats.tf`; the script and the TF are split this way (same as web-platform) so credential rotation never requires touching state.
+   Re-run any time you want to rotate the user's creds — the helper deletes and recreates the user idempotently. The matching read policy (`mekhan-nats-read`) + two JWT-Nomad roles (`mekhan-service`, `mekhan-executor`) are created by `tofu apply` from `deploy/dev/vault.tf`; the script and the TF are split this way (same as web-platform) so credential rotation never requires touching state.
 
    Requires `nsc`, `vault`, and `jq` on PATH.
 
-4. **Local TF init files** — these are gitignored, copy them once per workstation:
+4. **Vault as Resource secret store** — no bootstrap step required. As of `service/src/main.rs:207`, mekhan-service auto-detects Vault via `VAULT_ADDR` + `VAULT_TOKEN` (both injected by Nomad — `VAULT_TOKEN` via the workload-identity exchange, `VAULT_ADDR` from `var.vault_addr` in the jobspec env). On every resource create or new-version, `VaultResourceStore::put_kv` writes the version payload to:
+
+   ```
+   secret/data/aithericon/resources/{workspace_id}/{resource_id}/v{n}
+   ```
+
+   The engine reads that same path when wrapping `{{secret:...}}` refs into a single-use cubbyhole token before NATS dispatch; the executor calls `vault_unwrap_secrets()` with that token as its own auth (no Vault token on the executor side). All three capabilities are wired by `deploy/dev/vault.tf`:
+
+   | Policy | Granted to | Capability |
+   |---|---|---|
+   | `mekhan-nats-read` | `mekhan-service` + `mekhan-executor` roles | `read` on `secret/data/nats/apps/mekhan/dev/worker` |
+   | `mekhan-resources-rw` | `mekhan-service` role only | `create, read, update, delete` on `secret/data/aithericon/resources/*` |
+   | `mekhan-wrap` | `mekhan-service` role only | `update` on `sys/wrapping/wrap` |
+
+   If `VAULT_ADDR` is unset (or `VAULT_TOKEN` injection fails), mekhan falls back to `InMemoryResourceStore` and logs a WARN on boot — see the `resource_store:` line. **Resource secrets WILL NOT SURVIVE A RESTART in that mode**, so the warn is load-bearing for prod.
+
+5. **Local TF init files** — these are gitignored, copy them once per workstation:
 
    ```bash
    # dev — backend config is inlined in backend.tf, only tfvars needed
@@ -111,14 +127,14 @@ These have to happen **once, by hand**, before CI can deploy. They split between
 
    The `.example` files are pre-filled with the right Hetzner endpoints — usually only `image_repository` and the resource sizes need tweaking.
 
-5. **CI builder image** — must exist in the registry before `10-lint.yml` / `30-build.yml` / `40-deploy.yml` can pull it:
+6. **CI builder image** — must exist in the registry before `10-lint.yml` / `30-build.yml` / `40-deploy.yml` can pull it:
 
    ```bash
    docker login forge.aithericon.eu
    just ci::build-ci-builder forge.aithericon.eu/milanender
    ```
 
-6. **Bootstrap TF state** — run once from each layer to create the encrypted state object:
+7. **Bootstrap TF state** — run once from each layer to create the encrypted state object:
 
    ```bash
    # On a machine that can reach Hetzner S3 (no VPN needed for this part).
@@ -171,6 +187,6 @@ just ci::verify-deploy prod
 
 ## What's deliberately NOT in this scaffold
 
-- **Full Vault integration for runtime config**. The NATS creds bundle now flows through Vault — see `deploy/dev/nats.tf` for the policy + JWT-Nomad role and `deploy/dev/scripts/generate-nats-user.sh` for the bootstrap. Everything else (`MEKHAN__DATABASE_URL`, `MEKHAN__S3__*`, registry creds, etc.) still passes through TF variables sourced from Woodpecker secrets. To finish the migration: extend `nats.tf`'s `vault_policy.mekhan_dev_nats` (or add a sibling) to grant read on a `secret/services/mekhan/runtime` KV, seed that path, add `template {}` stanzas to the jobspec, and drop the corresponding `env {}` lines. The CI builder image already has the `vault` CLI baked in.
+- **Full Vault integration for runtime config**. Vault now backs two things: (a) the NATS creds bundle (`secret/data/nats/apps/mekhan/dev/worker`, bootstrap script-driven) and (b) the Resource secret store (`secret/data/aithericon/resources/*`, mekhan-service writes inline on resource CRUD). Policies + JWT roles live in `deploy/dev/vault.tf`. The runtime-config bits that *still* pass through TF variables sourced from Woodpecker secrets — `MEKHAN__DATABASE_URL`, `MEKHAN__S3__*`, registry creds, the introspection client secret — are next. To finish the migration: add a `secret/services/mekhan/runtime` KV + sibling policy in `vault.tf`, seed that path, add `template {}` stanzas to the jobspec, and drop the corresponding `env {}` lines. The CI builder image already has the `vault` CLI baked in.
 - **engine + executor Nomad jobs**. The `Dockerfile.executor` is built and ready, but no TF layer deploys it. When you're ready, mirror the `dev/` / `prod/` structure with new layers next to it.
 - **Smoke tests post-deploy**. web-platform runs a `ci-smoke-test.yaml` after dev deploys; we don't have one yet.

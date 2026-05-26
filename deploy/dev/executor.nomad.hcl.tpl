@@ -31,12 +31,16 @@ job "executor" {
       mode     = "delay"
     }
 
-    # Same NATS account as mekhan-service / engine — the `mekhan-dev` Vault
-    # role's bound_claims accept "executor" as a nomad_job_id (see
-    # deploy/dev/nats.tf), so this job can render the worker creds.
+    # Vault auth for THIS alloc covers one thing only: rendering the NATS
+    # worker .creds bundle below. The `mekhan-executor` JWT role + the
+    # `mekhan-nats-read` policy (both in deploy/dev/vault.tf) are deliberately
+    # narrower than the mekhan-service role — the executor never reads or
+    # writes secret/data/aithericon/resources/* by path, and never wraps. Its
+    # secret-unwrap path uses the single-use wrapping token issued by the
+    # engine as auth (vault_unwrap_secrets() does not consume VAULT_TOKEN).
     vault {
-      policies = ["nomad-workloads", "mekhan-dev"]
-      role     = "mekhan-dev"
+      policies = ["nomad-workloads", "mekhan-nats-read"]
+      role     = "mekhan-executor"
     }
 
     task "executor" {
@@ -90,6 +94,13 @@ EOH
         EXECUTOR_STORAGE__REGION                   = "fsn1"
         EXECUTOR_STORAGE__CREDENTIALS__ACCESS_KEY  = "${s3_access_key}"
         EXECUTOR_STORAGE__CREDENTIALS__SECRET_KEY  = "${s3_secret_key}"
+        # Vault — executor calls vault_unwrap_secrets() with the per-job
+        # wrapping token as auth (X-Vault-Token: <wrapping>), so VAULT_TOKEN
+        # is intentionally NOT used by the unwrap path. Only VAULT_ADDR is
+        # needed; staging.rs:645 reads it directly. Symptom if unset: jobs
+        # with wrapped secrets stage with `{{secret:...}}` refs unresolved
+        # and the underlying script sees the literal placeholder.
+        VAULT_ADDR            = "${vault_addr}"
         RUST_LOG              = "${rust_log}"
       }
 

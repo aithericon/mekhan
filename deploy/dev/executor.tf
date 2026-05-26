@@ -13,6 +13,7 @@ resource "nomad_job" "executor" {
     registry_user        = var.registry_user
     registry_password    = var.registry_password
     nats_url             = var.nats_url
+    vault_addr           = var.vault_addr
     s3_endpoint          = var.s3_endpoint
     s3_bucket            = var.s3_bucket
     s3_access_key        = var.s3_access_key

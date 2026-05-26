@@ -30,6 +30,7 @@ resource "nomad_job" "mekhan_service" {
     traefik_enabled   = var.traefik_enabled
     database_url      = local.database_url
     nats_url          = var.nats_url
+    vault_addr        = var.vault_addr
     petri_lab_url     = var.petri_lab_url
     s3_endpoint       = var.s3_endpoint
     s3_bucket         = var.s3_bucket

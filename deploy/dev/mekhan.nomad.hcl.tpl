@@ -114,13 +114,16 @@ job "mekhan-service" {
       mode     = "delay"
     }
 
-    # Authenticate to Vault using Nomad workload identity. The `mekhan-dev`
-    # JWT role + matching policy live in deploy/dev/nats.tf (this repo) and
-    # are bound to nomad_job_id="mekhan-service" + namespace="default";
-    # together they grant read on the NATS user creds path below.
+    # Authenticate to Vault using Nomad workload identity. The `mekhan-service`
+    # JWT role + matching policies live in deploy/dev/vault.tf and are bound to
+    # nomad_job_id="mekhan-service" + namespace="${namespace}". The policies
+    # grant: (a) read on the NATS user creds path used below, (b) CRUD on
+    # secret/data/aithericon/resources/* for VaultResourceStore (write side)
+    # and the engine's secret-wrapping read side, (c) update on
+    # sys/wrapping/wrap for cubbyhole response wrapping at job dispatch.
     vault {
-      policies = ["nomad-workloads", "mekhan-dev"]
-      role     = "mekhan-dev"
+      policies = ["nomad-workloads", "mekhan-nats-read", "mekhan-resources-rw", "mekhan-wrap"]
+      role     = "mekhan-service"
     }
 
     task "service" {
@@ -192,6 +195,15 @@ EOH
         # the HTTP listener accepts requests; idempotent by templateId, so
         # leaving this true across redeploys is safe.
         MEKHAN__DEMOS__SEED        = "true"
+        # Vault — VaultResourceStore writes resource version secrets to
+        # secret/data/aithericon/resources/{ws}/{rid}/v{n}. Nomad's `vault {}`
+        # stanza above already injects VAULT_TOKEN into the task env (workload-
+        # identity exchange via the `mekhan-service` JWT role); VAULT_ADDR is
+        # rendered here because Nomad doesn't propagate the client's vault.addr
+        # to task env automatically. Without VAULT_ADDR set, service/src/main.rs
+        # falls back to InMemoryResourceStore and logs a WARN — see the
+        # `resource_store:` log line at boot.
+        VAULT_ADDR                 = "${vault_addr}"
         RUST_LOG                   = "${rust_log}"
       }
 
@@ -234,6 +246,14 @@ EOH
         EXECUTOR_NATS_CREDS = "$${NOMAD_SECRETS_DIR}/nats.creds"
         EXECUTOR_ENABLED    = "true"
         EXECUTOR_NAMESPACE  = "executor"
+        # Vault — engine resolves `{{secret:...}}` refs against VaultSecretStore
+        # and wraps resolved values into a single-use token before publishing
+        # on NATS. Needs VAULT_TOKEN (Nomad-injected via the workload-identity
+        # exchange) + VAULT_ADDR (templated here). The `mekhan-wrap` policy on
+        # the mekhan-service role grants the `sys/wrapping/wrap` update cap;
+        # `mekhan-resources-rw` grants the read on secret/data/aithericon/
+        # resources/* that the engine needs to fetch values before wrapping.
+        VAULT_ADDR          = "${vault_addr}"
         RUST_LOG            = "${rust_log}"
       }
 

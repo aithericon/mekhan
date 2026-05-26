@@ -121,6 +121,12 @@ variable "nats_url" {
   type        = string
 }
 
+variable "vault_addr" {
+  description = "Vault server address as resolvable from inside a Nomad alloc. Nomad's `vault {}` stanza already injects VAULT_TOKEN via workload-identity exchange; VAULT_ADDR is rendered here so mekhan-service's VaultResourceStore, the engine's secret-wrapping path, and the executor's unwrap call all reach the same server. HetznerCluster Vault: http://10.20.0.20:8200."
+  type        = string
+  default     = "http://10.20.0.20:8200"
+}
+
 variable "petri_lab_url" {
   description = "URL of the engine (core-engine) the dev mekhan-service talks to"
   type        = string
