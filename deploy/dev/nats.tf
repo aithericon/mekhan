@@ -32,7 +32,7 @@ locals {
   nats_vault_policy = "mekhan-dev"
   nats_vault_role   = "mekhan-dev"
 
-  nats_nomad_job_ids = ["mekhan-service", "engine"]
+  nats_nomad_job_ids = ["mekhan-service", "executor"]
 }
 
 
@@ -51,8 +51,9 @@ resource "vault_policy" "mekhan_dev_nats" {
 }
 
 # Nomad workload-identity → Vault token exchange. When a Nomad alloc for
-# either the `mekhan-service` or `engine` job presents its JWT to Vault's
-# `jwt-nomad` backend, Vault checks the bound_claims; if they match, it
+# either the `mekhan-service` (BFF + co-located engine task) or `executor`
+# job presents its JWT to Vault's `jwt-nomad` backend, Vault checks the
+# bound_claims; if they match, it
 # issues a service token carrying the listed policies. `nomad-workloads`
 # is the cluster's default (granted by 03d_nomad_acl); `mekhan_dev_nats`
 # is our least-privilege add-on. Token TTL of 30 min with auto-renew is

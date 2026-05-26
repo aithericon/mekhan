@@ -214,9 +214,15 @@ variable "executor_memory_mb" {
 }
 
 variable "executor_concurrency" {
-  description = "EXECUTOR_CONCURRENCY env var — number of parallel work items the executor processes."
+  description = "EXECUTOR_CONCURRENCY env var — number of parallel work items a single executor alloc processes."
   type        = number
   default     = 4
+}
+
+variable "executor_count" {
+  description = "How many executor allocs to run. The executor is its own Nomad job (split out of mekhan-service so it scales independently); bump this to fan work-pickup out across more nodes."
+  type        = number
+  default     = 1
 }
 
 # ── Engine (separate Nomad job; reached via engine.service.consul:3030) ─────

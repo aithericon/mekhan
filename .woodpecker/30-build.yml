@@ -14,14 +14,10 @@
 
 # 20-test.yml is disabled — re-add `depends_on: [20-test]` when it's back.
 when:
-  # Auto on main — every commit to the canonical branch goes through the
-  # full build → deploy → verify chain (40-deploy.yml depends_on this).
+
   - branch: main
     event: push
-  # Manual run from any branch — for testing the build pipeline on a
-  # feature branch before merging. Produces images tagged with the
-  # commit SHA + branch slug, so feature-branch images can be deployed
-  # via a manual 40-deploy run.
+
   - event: manual
 
 labels:
@@ -29,21 +25,21 @@ labels:
   host: worker-hetzner
 
 steps:
-  - name: build-backend
+  - name: build-backend-service
     image: forge.aithericon.eu/milanender/mekhan-ci-builder:latest
     pull: true
     environment:
       CARGO_HOME: /var/lib/ci-jobs/cache/cargo
       # Persist target/ outside the (per-run) workspace so dependency
       # compilation is reused. Same path is reused by test-rust + the
-      # package step's cp, so they all see incremental builds.
+      # publish step's cp, so they all see incremental builds.
       CARGO_TARGET_DIR: /var/lib/ci-jobs/cache/target/mekhan
     volumes:
       # Host bind on cax21 — survives across CI runs, gives real cargo
       # caching. First run creates the dir; subsequent runs reuse it.
       - /var/lib/ci-jobs/cache:/var/lib/ci-jobs/cache
     commands:
-      - just ci::build-backend
+      - just ci::build-backend-service
     depends_on: []
 
   - name: build-frontend
@@ -57,22 +53,17 @@ steps:
       - just ci::build-frontend
     depends_on: []
 
-  # Builds the mekhan-service OCI image from the prebuilt binary + frontend
-  # bundle produced by build-backend / build-frontend, then pushes both
-  # SHA and branch tags to the Forgejo registry.
-  - name: package-and-push-service
+
+  - name: publish-backend-service
     image: forge.aithericon.eu/milanender/mekhan-ci-builder:latest
     pull: true
     environment:
       REGISTRY: forge.aithericon.eu/milanender
-      # Vault is the canonical source for the Forgejo image-push creds
-      # (secret/docker/registry). Same single VAULT_TOKEN as 40-deploy.yml.
+
       VAULT_ADDR: "http://10.20.0.20:8200"
       VAULT_TOKEN:
         from_secret: vault_token
-      # Must match build-backend's CARGO_TARGET_DIR so `just ci::package`
-      # finds the freshly-built mekhan-service binary the upstream step
-      # wrote outside the per-run workspace.
+
       CARGO_TARGET_DIR: /var/lib/ci-jobs/cache/target/mekhan
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
@@ -81,17 +72,16 @@ steps:
       - FORGEJO_REGISTRY_USER=$(vault kv get -field=username secret/docker/registry)
       - FORGEJO_REGISTRY_PASSWORD=$(vault kv get -field=token   secret/docker/registry)
       - echo "$FORGEJO_REGISTRY_PASSWORD" | docker login forge.aithericon.eu -u "$FORGEJO_REGISTRY_USER" --password-stdin
-      - just ci::package "$REGISTRY" "$CI_COMMIT_SHA" "$CI_COMMIT_BRANCH"
-      - just ci::push    "$REGISTRY" "$CI_COMMIT_SHA" "$CI_COMMIT_BRANCH"
-    depends_on: [build-backend, build-frontend]
+      - just ci::publish-backend-service "$REGISTRY" "$CI_COMMIT_SHA" "$CI_COMMIT_BRANCH"
+    depends_on: [build-backend-service, build-frontend]
 
   # Builds the aithericon-executor OCI image. The executor's Dockerfile is
   # multi-stage (Rust compile happens INSIDE Docker via BuildKit cache
-  # mounts), so this step doesn't need build-backend / build-frontend
-  # outputs. Runs in parallel with package-and-push-service to keep wall
-  # time down. Slower (~5-8 min) because kreuzberg + tesseract drag in
-  # heavy native deps.
-  - name: package-and-push-executor
+  # mounts), so this step doesn't technically need build-backend-service /
+  # build-frontend outputs — but `depends_on: [build-backend-service]` is
+  # set deliberately to enforce a strict service-first pipeline order.
+  # Slower (~5-8 min) because kreuzberg + tesseract drag in heavy native deps.
+  - name: publish-backend-executor
     image: forge.aithericon.eu/milanender/mekhan-ci-builder:latest
     pull: true
     environment:
@@ -105,13 +95,15 @@ steps:
       - FORGEJO_REGISTRY_USER=$(vault kv get -field=username secret/docker/registry)
       - FORGEJO_REGISTRY_PASSWORD=$(vault kv get -field=token   secret/docker/registry)
       - echo "$FORGEJO_REGISTRY_PASSWORD" | docker login forge.aithericon.eu -u "$FORGEJO_REGISTRY_USER" --password-stdin
-      - just ci::package-and-push-executor "$REGISTRY" "$CI_COMMIT_SHA" "$CI_COMMIT_BRANCH"
-    depends_on: []
+      - just ci::publish-backend-executor "$REGISTRY" "$CI_COMMIT_SHA" "$CI_COMMIT_BRANCH"
+    depends_on: [build-backend-service]
 
   # Builds the aithericon-engine OCI image. Same shape as the executor step
   # (in-Docker Rust compile, monorepo as context for ../executor/../shared
   # path deps), but faster (~3-5 min) because engine has no native FFI deps.
-  - name: package-and-push-engine
+  # Like executor, gated on build-backend-service for strict pipeline order
+  # even though no artifact is consumed.
+  - name: publish-backend-engine
     image: forge.aithericon.eu/milanender/mekhan-ci-builder:latest
     pull: true
     environment:
@@ -125,5 +117,5 @@ steps:
       - FORGEJO_REGISTRY_USER=$(vault kv get -field=username secret/docker/registry)
       - FORGEJO_REGISTRY_PASSWORD=$(vault kv get -field=token   secret/docker/registry)
       - echo "$FORGEJO_REGISTRY_PASSWORD" | docker login forge.aithericon.eu -u "$FORGEJO_REGISTRY_USER" --password-stdin
-      - just ci::package-and-push-engine "$REGISTRY" "$CI_COMMIT_SHA" "$CI_COMMIT_BRANCH"
-    depends_on: []
+      - just ci::publish-backend-engine "$REGISTRY" "$CI_COMMIT_SHA" "$CI_COMMIT_BRANCH"
+    depends_on: [build-backend-service]
