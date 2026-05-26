@@ -33,7 +33,10 @@ pub mod catalogue_query;
 pub mod docker;
 pub mod file_ops;
 pub mod http;
+pub mod kreuzberg;
+pub mod llm;
 pub mod process;
+pub mod python;
 pub mod smtp;
 
 /// Per-backend declaration. Stored in a `&'static` slice so the registry has
@@ -91,6 +94,14 @@ pub struct BackendDecl {
     /// MUST equal `backend_type.as_wire_str()` — enforced by the
     /// conformance test.
     pub executor_wire_name: &'static str,
+    /// How `ref_scanner` emissions are staged. Inert when
+    /// `ref_scanner` is `None` (set to `Envelope` by convention).
+    pub borrow_shape: BorrowShape,
+    /// Per-site / per-kind validator called by the unified planner once
+    /// per resolved ref. Default `accept_any_ref_kind` for backends
+    /// without per-site constraints; LLM uses a custom validator to
+    /// enforce `images[].path → File` and content-sites → not-File.
+    pub validate_ref_kind: RefKindValidator,
 }
 
 /// Validation context passed to a backend's `validate` fn. Bundles the small
@@ -124,10 +135,77 @@ pub type RefScanner = fn(&ScanCtx<'_>) -> Vec<RefSite>;
 /// borrows), workspace resources (resource borrows), and `input.*` (control
 /// token leaves). A single scanner is allowed to emit references that resolve
 /// in any namespace; the caller filters by context.
+///
+/// `is_path_site` + `site_label` are only consulted for `BorrowShape::PerField`
+/// backends (LLM, Kreuzberg) where the planner emits per-field staging and
+/// the apply step rewrites `{{<head>.<attr>}}` placeholders to
+/// `{{input:NAME}}` or `{{input_path:NAME}}` based on `is_path_site`. For
+/// `BorrowShape::Envelope` backends (Python, SMTP) both fields are inert —
+/// the apply step stages the whole envelope and the consumer reads fields
+/// via its own template/runtime resolver.
 #[derive(Debug, Clone)]
 pub struct RefSite {
     pub head: String,
     pub attr: String,
+    /// True when this ref site needs the producer's value as a filesystem
+    /// path (Kreuzberg `file` / `files[i]`, LLM `images[].path`). False =
+    /// content site (LLM `prompt` / `system_prompt` / `history[].content`,
+    /// SMTP body/subject). Drives Raw-vs-StoragePath staging dispatch and
+    /// the `{{input:NAME}}` vs `{{input_path:NAME}}` placeholder rewrite.
+    pub is_path_site: bool,
+    /// Author-facing site label for error attribution + per-field staging
+    /// naming. Examples: `"prompt"`, `"images[2].path"`, `"subject"`,
+    /// `"file"`, `"files[0]"`. For Envelope-shape backends carries the
+    /// surface where the placeholder was found (informational only).
+    pub site_label: String,
+}
+
+/// How the registry-driven borrow planner stages refs emitted by a
+/// backend's [`RefScanner`]. Decided by the decl, intrinsic to the
+/// backend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum BorrowShape {
+    /// Whole-envelope stage. Dedup per `(consumer, producer)`; apply step
+    /// stages `<slug>.json` (with business fields hoisted to top-level)
+    /// and the consumer's runtime — Python's `AccessibleDict`, SMTP's
+    /// Tera context — surfaces fields without any source rewrite.
+    /// Python, SMTP.
+    Envelope,
+    /// Per-field stage. Keep one borrow per `(consumer, slug, attr, site)`;
+    /// apply step stages one input file per unique `(slug, attr)`,
+    /// rewrites the `{{<slug>.<attr>}}` placeholder in the embedded
+    /// config to `{{input:NAME}}` (content sites) or
+    /// `{{input_path:NAME}}` (path sites). LLM, Kreuzberg.
+    PerField,
+}
+
+/// Context for [`RefKindValidator`] — bundles everything a per-backend
+/// validator needs to either accept the resolved ref or construct a
+/// targeted [`CompileError`] with full attribution.
+pub struct RefKindCtx<'a> {
+    pub node_id: &'a str,
+    pub site_label: &'a str,
+    pub is_path_site: bool,
+    pub slug: &'a str,
+    pub attr: &'a str,
+    pub kind: FieldKind,
+}
+
+/// Per-backend kind validator. Called by the unified planner once per
+/// resolved ref with the producer's field kind and the ref site's
+/// `is_path_site` flag. Returns `Ok(())` if the kind is acceptable at
+/// the site, or a targeted [`CompileError`] (e.g.
+/// [`CompileError::LlmImageRefNotFileKind`]).
+pub type RefKindValidator = fn(&RefKindCtx<'_>) -> Result<(), CompileError>;
+
+/// Default ref-kind validator — accepts every `FieldKind` at every site.
+/// Used by backends without per-site kind constraints (Kreuzberg accepts
+/// any kind at any path site because non-File kinds stage as Raw temp
+/// files; SMTP has no per-site constraints because the whole envelope is
+/// in scope).
+pub fn accept_any_ref_kind(_: &RefKindCtx<'_>) -> Result<(), CompileError> {
+    Ok(())
 }
 
 /// How a resolved resource envelope reaches the running backend.
@@ -199,7 +277,10 @@ pub static BACKENDS: &[&BackendDecl] = &[
     &docker::DOCKER_DECL,
     &file_ops::FILE_OPS_DECL,
     &http::HTTP_DECL,
+    &kreuzberg::KREUZBERG_DECL,
+    &llm::LLM_DECL,
     &process::PROCESS_DECL,
+    &python::PYTHON_DECL,
     &smtp::SMTP_DECL,
 ];
 
@@ -289,11 +370,26 @@ mod tests {
     }
 
     #[test]
-    fn lookup_returns_none_for_unmigrated() {
-        // Phase 1 only ships SMTP. Other backends still go through the
-        // legacy match arms.
-        assert!(lookup(ExecutionBackendType::Python).is_none());
-        assert!(lookup(ExecutionBackendType::Llm).is_none());
+    fn lookup_covers_every_backend() {
+        // Every ExecutionBackendType variant must have a registered decl —
+        // the unified compiler/borrow-planner paths are pure registry-driven
+        // (no legacy fallbacks).
+        for bt in [
+            ExecutionBackendType::Python,
+            ExecutionBackendType::Process,
+            ExecutionBackendType::Docker,
+            ExecutionBackendType::Http,
+            ExecutionBackendType::Llm,
+            ExecutionBackendType::FileOps,
+            ExecutionBackendType::Kreuzberg,
+            ExecutionBackendType::Smtp,
+            ExecutionBackendType::CatalogueQuery,
+        ] {
+            assert!(
+                lookup(bt).is_some(),
+                "registry must cover every backend; missing: {bt:?}"
+            );
+        }
     }
 
     #[test]

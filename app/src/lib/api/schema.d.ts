@@ -6966,7 +6966,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Trigger fired (FireAndForget, or WaitForResult resolved) */
+            /** @description Trigger fired (FireAndForget / WaitForResult JSON, or SSE event stream when reply mode is `sse`). */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -6999,13 +6999,6 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
-            };
-            /** @description SSE requested on the fire endpoint — use GET /api/instances/{id}/stream */
-            406: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
             };
         };
     };

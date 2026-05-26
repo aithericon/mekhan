@@ -2077,114 +2077,184 @@ pub(crate) fn guard_readarc_plan(
 /// stages the producer's full parked envelope as `<slug>.json` and the
 /// Python runner exposes `<slug>` as a module global namespace.
 ///
-/// One borrow per `(consumer, producer)` pair — the runtime stages the
-/// whole producer envelope as one staged file regardless of how many
-/// fields the user reads off it (attr lookups happen client-side via
-/// the runner's AccessibleDict wrapper).
+/// One borrow record emitted by the unified [`automated_step_borrow_plan`].
+/// Two variants — `Envelope` (whole-`<slug>.json` stage, Python + SMTP)
+/// and `PerField` (per-field stage, LLM + Kreuzberg). The variant is
+/// chosen by the backend decl's `borrow_shape` and decides the
+/// downstream `BorrowResolution` the apply step dispatches on.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct AutomatedStepDataBorrow {
-    /// Python AutomatedStep that authors the borrow in its source.
-    pub consumer_node_id: String,
-    /// Slug the author wrote (`review` in `review.invoice_amount`). Also
-    /// the staged filename stem (`review.json`) and the Python global.
-    pub slug: String,
-    /// Resolved upstream node id whose parked data the borrow reaches.
-    pub producer_node: String,
+pub(crate) enum AutomatedStepDataBorrow {
+    /// Whole-envelope stage. One per `(consumer, producer)` regardless
+    /// of how many fields the consumer's source reads off the slug —
+    /// the runtime stages the producer's parked envelope once and the
+    /// consumer's runtime (Python AccessibleDict, SMTP Tera context)
+    /// surfaces fields client-side.
+    Envelope {
+        consumer_node_id: String,
+        slug: String,
+        producer_node: String,
+    },
+    /// Per-field stage. One per `(consumer, slug, attr, site)`. The
+    /// apply step (`apply_backend_borrows`) dedupes by `(slug, attr)`
+    /// before staging.
+    PerField {
+        consumer_node_id: String,
+        slug: String,
+        producer_node: String,
+        attr: String,
+        /// True when the ref site needs a filesystem path
+        /// (Kreuzberg `file`/`files[i]`, LLM `images[].path`). Drives
+        /// `{{input_path:NAME}}` vs `{{input:NAME}}` rewrite + Raw vs
+        /// StoragePath staging dispatch.
+        is_path_site: bool,
+        /// Resolved kind of `<attr>` on the producer's data port. Used
+        /// by `apply_backend_borrows` to pick Raw vs StoragePath
+        /// staging when `is_path_site` is true.
+        producer_field_kind: crate::models::template::FieldKind,
+    },
 }
 
-/// For every Python AutomatedStep, scan its entrypoint source and resolve
-/// every `<slug>.<attr>` access into an upstream parked place. Returns one
-/// [`AutomatedStepDataBorrow`] per `(consumer, producer)` pair.
+impl AutomatedStepDataBorrow {
+    pub fn consumer_node_id(&self) -> &str {
+        match self {
+            Self::Envelope {
+                consumer_node_id, ..
+            } => consumer_node_id,
+            Self::PerField {
+                consumer_node_id, ..
+            } => consumer_node_id,
+        }
+    }
+    pub fn slug(&self) -> &str {
+        match self {
+            Self::Envelope { slug, .. } => slug,
+            Self::PerField { slug, .. } => slug,
+        }
+    }
+    pub fn producer_node(&self) -> &str {
+        match self {
+            Self::Envelope { producer_node, .. } => producer_node,
+            Self::PerField { producer_node, .. } => producer_node,
+        }
+    }
+}
+
+/// Unified borrow planner across every AutomatedStep backend. Replaces
+/// the per-backend `llm_borrow_plan` / `kreuzberg_borrow_plan` that used
+/// to be sibling functions in this module. **Pure registry-driven** —
+/// every AutomatedStep backend ships a decl in `crate::backends`; nodes
+/// whose backend has no decl simply produce no borrows.
 ///
-/// Best-effort: a head identifier that isn't a known graph slug is
-/// silently ignored (could be `os.path`, a local var, an imported module).
-/// A slug whose producer isn't strictly upstream or isn't a parked
-/// producer is likewise ignored — the runtime would just NameError, but
-/// the picker already steers authors away. Files whose source is not
-/// inline (`Raw` or string `Inline`) are skipped — publish-time callers
-/// must materialize storage paths before reaching this point or the
-/// borrow will silently miss.
+/// Per node:
+/// 1. Look up the backend's decl in `crate::backends`. Skip if absent or
+///    `ref_scanner` is `None`.
+/// 2. Run `decl.ref_scanner(ctx)` to discover `<head>.<attr>` accesses
+///    with site context.
+/// 3. For each emitted [`crate::backends::RefSite`]:
+///    - `BorrowShape::Envelope`: silent-skip on unresolved heads,
+///      non-upstream slugs, non-parked producers. Matches the historical
+///      Python/SMTP behavior — Python source legitimately references
+///      non-slug names (`os.path`, locals), Tera templates can use
+///      built-ins.
+///    - `BorrowShape::PerField`: call [`resolve_backend_ref`] which
+///      hard-errors on every unresolved head — LLM/Kreuzberg grammar is
+///      unambiguous, so unknown heads are typos.
+///    - For PerField, call `decl.validate_ref_kind(&ctx)` once per
+///      resolved ref. LLM enforces `images[].path → File` and
+///      content-sites → not-File. Errors propagate.
+/// 4. Emit:
+///    - `Envelope` borrows: dedup by `(consumer, producer)` so only one
+///      `<slug>.json` is staged per pair.
+///    - `PerField` borrows: keep every `(consumer, slug, attr, site)`;
+///      the apply step dedupes by `(slug, attr)`.
 pub(crate) fn automated_step_borrow_plan(
     graph: &WorkflowGraph,
     inline_sources: &std::collections::HashMap<String, std::collections::HashMap<String, String>>,
 ) -> Result<Vec<AutomatedStepDataBorrow>, CompileError> {
-    use crate::models::template::ExecutionBackendType;
+    use crate::backends::BorrowShape;
 
     let BorrowContext { pos, slugs, .. } = BorrowContext::build(graph)?;
 
     let mut out: Vec<AutomatedStepDataBorrow> = Vec::new();
-    let mut seen: std::collections::BTreeSet<(String, String)> = std::collections::BTreeSet::new();
+    let mut envelope_seen: std::collections::BTreeSet<(String, String)> =
+        std::collections::BTreeSet::new();
 
     for node in &graph.nodes {
         let WorkflowNodeData::AutomatedStep { execution_spec, .. } = &node.data else {
             continue;
         };
 
-        // Per-backend ref discovery. Registry-first: backends migrated to
-        // `crate::backends` plug a `ref_scanner` fn in their decl and we
-        // call it here. The legacy match below covers backends not yet in
-        // the registry (Python today).
-        let refs: Vec<(String, String)> =
-            if let Some(decl) = crate::backends::lookup(execution_spec.backend_type) {
-                let Some(scanner) = decl.ref_scanner else {
-                    continue;
-                };
-                let ctx = crate::backends::ScanCtx {
-                    config: &execution_spec.config,
-                    node_id: &node.id,
-                    inline_sources,
-                    entrypoint: execution_spec.entrypoint.as_deref(),
-                };
-                scanner(&ctx)
-                    .into_iter()
-                    .map(|r| (r.head, r.attr))
-                    .collect()
-            } else {
-                match execution_spec.backend_type {
-                    ExecutionBackendType::Python => {
-                        let entrypoint = execution_spec
-                            .entrypoint
-                            .clone()
-                            .unwrap_or_else(|| "main.py".to_string());
-                        let Some(node_files) = inline_sources.get(&node.id) else {
-                            continue;
-                        };
-                        let Some(source) = node_files.get(&entrypoint) else {
-                            continue;
-                        };
-                        crate::compiler::python_refs::extract_python_refs(source)
-                            .into_iter()
-                            .map(|r| (r.head, r.attr))
-                            .collect()
-                    }
-                    _ => continue,
-                }
-            };
+        let Some(decl) = crate::backends::lookup(execution_spec.backend_type) else {
+            continue;
+        };
+        let Some(scanner) = decl.ref_scanner else {
+            continue;
+        };
+        let ctx = crate::backends::ScanCtx {
+            config: &execution_spec.config,
+            node_id: &node.id,
+            inline_sources,
+            entrypoint: execution_spec.entrypoint.as_deref(),
+        };
+        let refs = scanner(&ctx);
 
-        for (head, _attr) in refs {
-            let Some(prod_id) = slugs.node_for(&head).map(str::to_string) else {
-                continue;
-            };
-            if prod_id == node.id {
-                continue;
+        for r in refs {
+            match decl.borrow_shape {
+                BorrowShape::Envelope => {
+                    let Some(prod_id) = slugs.node_for(&r.head).map(str::to_string) else {
+                        continue;
+                    };
+                    if prod_id == node.id {
+                        continue;
+                    }
+                    let up = pos.get(&prod_id).copied().unwrap_or(usize::MAX);
+                    let me = pos.get(&node.id).copied().unwrap_or(0);
+                    if up >= me {
+                        continue;
+                    }
+                    if !is_parked_producer(graph, &prod_id) {
+                        continue;
+                    }
+                    let key = (node.id.clone(), prod_id.clone());
+                    if !envelope_seen.insert(key) {
+                        continue;
+                    }
+                    out.push(AutomatedStepDataBorrow::Envelope {
+                        consumer_node_id: node.id.clone(),
+                        slug: r.head,
+                        producer_node: prod_id,
+                    });
+                }
+                BorrowShape::PerField => {
+                    let (prod_id, kind) = resolve_backend_ref(
+                        graph,
+                        &slugs,
+                        &pos,
+                        &node.id,
+                        decl.executor_wire_name,
+                        &r.site_label,
+                        &r.head,
+                        &r.attr,
+                    )?;
+                    let kind_ctx = crate::backends::RefKindCtx {
+                        node_id: &node.id,
+                        site_label: &r.site_label,
+                        is_path_site: r.is_path_site,
+                        slug: &r.head,
+                        attr: &r.attr,
+                        kind,
+                    };
+                    (decl.validate_ref_kind)(&kind_ctx)?;
+                    out.push(AutomatedStepDataBorrow::PerField {
+                        consumer_node_id: node.id.clone(),
+                        slug: r.head,
+                        producer_node: prod_id,
+                        attr: r.attr,
+                        is_path_site: r.is_path_site,
+                        producer_field_kind: kind,
+                    });
+                }
             }
-            let up = pos.get(&prod_id).copied().unwrap_or(usize::MAX);
-            let me = pos.get(&node.id).copied().unwrap_or(0);
-            if up >= me {
-                continue;
-            }
-            if !is_parked_producer(graph, &prod_id) {
-                continue;
-            }
-            let key = (node.id.clone(), prod_id.clone());
-            if !seen.insert(key) {
-                continue;
-            }
-            out.push(AutomatedStepDataBorrow {
-                consumer_node_id: node.id.clone(),
-                slug: head,
-                producer_node: prod_id,
-            });
         }
     }
     Ok(out)
@@ -2391,106 +2461,17 @@ pub(crate) fn human_task_borrow_plan(
 }
 
 // ──────────────────────────────────────────────────────────────────────
-// LLM / Kreuzberg borrow planners
+// Backend ref resolution
 //
-// Symmetric extension of [`human_task_borrow_plan`] / [`automated_step_borrow_plan`]
-// to LLM and Kreuzberg AutomatedSteps. The same `{{ <slug>.<field> }}`
-// syntax HumanTask uses for placeholders is supported in:
-//
-//   - LLM `prompt`, `system_prompt`, `history[].content` (content sites)
-//   - LLM `images[].path` (path site — producer field must be FieldKind::File)
-//   - Kreuzberg `file`, `files[]` (path sites — any field kind allowed;
-//     non-file kinds stage as Raw temp file so the path resolves to text)
-//
-// Critical difference from the Python planner: where Python silently
-// ignores unknown heads (`os.path`, locals, etc.), LLM/Kreuzberg HARD-
-// REJECT unknown slugs and unknown fields. The `{{...}}` syntax is
-// unambiguous; an unknown slug is a typo, an unknown field a contract
-// violation. Matches Decision-guard semantics (`GuardUnresolved`).
+// Shared `{{<slug>.<attr>}}` resolver. Used by the unified
+// `automated_step_borrow_plan` (registry-driven) for any backend whose
+// decl declares `BorrowShape::PerField` (LLM, Kreuzberg). Hard-errors on
+// unresolved slugs / non-upstream / non-parked / unknown attrs — the
+// `{{...}}` syntax is unambiguous, so any miss is a typo or contract
+// violation. Symmetric with Decision-guard semantics (`GuardUnresolved`).
 // ──────────────────────────────────────────────────────────────────────
 
-/// Where on an LLM AutomatedStep's config a `{{<slug>.<field>}}` placeholder
-/// was found. Drives error messages and the staging-strategy dispatch.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum LlmRefSite {
-    Prompt,
-    SystemPrompt,
-    HistoryContent(usize),
-    ImagePath(usize),
-}
-
-impl LlmRefSite {
-    /// Author-facing field name for error messages.
-    fn label(&self) -> String {
-        match self {
-            Self::Prompt => "prompt".into(),
-            Self::SystemPrompt => "system_prompt".into(),
-            Self::HistoryContent(i) => format!("history[{i}].content"),
-            Self::ImagePath(i) => format!("images[{i}].path"),
-        }
-    }
-
-    /// Path-sites need a filesystem path; content-sites need stringified
-    /// content. Drives the `{{input:...}}` vs `{{input_path:...}}` rewrite
-    /// in the foundation pass.
-    pub(crate) fn is_path_site(&self) -> bool {
-        matches!(self, Self::ImagePath(_))
-    }
-}
-
-/// One scanned `{{<slug>.<attr>}}` borrow on an LLM AutomatedStep.
-///
-/// One record per occurrence — the foundation pass groups them by
-/// `(consumer, slug, attr)` for staging and by `(consumer, producer)`
-/// for read-arc wiring. Distinct attr's on the same producer are stage
-/// per attr (the staged file is a *field value*, not the whole envelope —
-/// LLM consumers want strings, not blobs).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct LlmDataBorrow {
-    pub consumer_node_id: String,
-    pub slug: String,
-    pub producer_node: String,
-    pub attr: String,
-    pub site: LlmRefSite,
-    /// FieldKind of `<attr>` on the producer's data output port. Used by
-    /// the foundation pass to pick Raw vs StoragePath staging.
-    pub producer_field_kind: crate::models::template::FieldKind,
-}
-
-/// Where on a Kreuzberg AutomatedStep's config a placeholder was found.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum KreuzbergRefSite {
-    File,
-    Files(usize),
-}
-
-impl KreuzbergRefSite {
-    fn label(&self) -> String {
-        match self {
-            Self::File => "file".into(),
-            Self::Files(i) => format!("files[{i}]"),
-        }
-    }
-}
-
-/// One scanned `{{<slug>.<attr>}}` borrow on a Kreuzberg AutomatedStep.
-/// Kreuzberg always needs a path — the foundation pass uses
-/// `producer_field_kind` to decide between StoragePath (File kind →
-/// download binary from S3) and Raw (other kinds → write stringified
-/// value to a temp file). Either way the in-config placeholder rewrites
-/// to `{{input_path:...}}`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct KreuzbergDataBorrow {
-    pub consumer_node_id: String,
-    pub slug: String,
-    pub producer_node: String,
-    pub attr: String,
-    pub site: KreuzbergRefSite,
-    pub producer_field_kind: crate::models::template::FieldKind,
-}
-
-/// Resolve a `{{<slug>.<attr>}}` placeholder against the graph. Common
-/// validation used by both the LLM and Kreuzberg planners.
+/// Resolve a `{{<slug>.<attr>}}` placeholder against the graph.
 ///
 /// Returns the producer node id and the resolved field kind on its data
 /// port. Hard-errors on: unknown slug, slug not strictly upstream, slug
@@ -2609,170 +2590,6 @@ fn resolve_backend_ref(
     let _ = matches!(producer_node.data, WorkflowNodeData::Trigger { .. });
 
     Ok((prod_id, field.kind))
-}
-
-/// For every LLM AutomatedStep, scan its `prompt` / `system_prompt` /
-/// `history[].content` / `images[].path` strings for
-/// `{{<slug>.<field>}}` placeholders and resolve each to an upstream
-/// parked producer.
-///
-/// One record per `(consumer, slug, attr, site)` quad — duplicates within
-/// the same site are NOT deduped (the foundation pass groups for staging).
-/// Returns `Err` on the first unresolved reference.
-pub(crate) fn llm_borrow_plan(
-    graph: &WorkflowGraph,
-) -> Result<Vec<LlmDataBorrow>, CompileError> {
-    use crate::compiler::placeholder_refs::scan_placeholders;
-    use crate::models::template::{ExecutionBackendType, FieldKind, WorkflowNodeData};
-
-    let BorrowContext { pos, slugs, .. } = BorrowContext::build(graph)?;
-
-    let mut out: Vec<LlmDataBorrow> = Vec::new();
-
-    for node in &graph.nodes {
-        let WorkflowNodeData::AutomatedStep { execution_spec, .. } = &node.data else {
-            continue;
-        };
-        if execution_spec.backend_type != ExecutionBackendType::Llm {
-            continue;
-        }
-        // Deserialize the LLM config to walk the string fields.
-        let Ok(cfg) = serde_json::from_value::<aithericon_executor_backend_configs::llm::LlmConfig>(
-            execution_spec.config.clone(),
-        ) else {
-            // Malformed config — `validate_and_transform` will surface a
-            // structured error before this planner is called in practice,
-            // but be defensive and skip cleanly.
-            continue;
-        };
-
-        // (site, string-to-scan)
-        let mut sites: Vec<(LlmRefSite, String)> = Vec::new();
-        sites.push((LlmRefSite::Prompt, cfg.prompt.clone()));
-        if let Some(sys) = cfg.system_prompt.clone() {
-            sites.push((LlmRefSite::SystemPrompt, sys));
-        }
-        for (i, m) in cfg.history.iter().enumerate() {
-            sites.push((LlmRefSite::HistoryContent(i), m.content.clone()));
-        }
-        for (i, img) in cfg.images.iter().enumerate() {
-            sites.push((LlmRefSite::ImagePath(i), img.path.clone()));
-        }
-
-        for (site, raw) in sites {
-            for r in scan_placeholders(&raw) {
-                let site_label = site.label();
-                let (prod_id, kind) = resolve_backend_ref(
-                    graph,
-                    &slugs,
-                    &pos,
-                    &node.id,
-                    "llm",
-                    &site_label,
-                    &r.head,
-                    &r.attr,
-                )?;
-
-                // ImagePath site requires File kind — LLM vision needs real bytes.
-                if site.is_path_site() && kind != FieldKind::File {
-                    return Err(CompileError::LlmImageRefNotFileKind {
-                        node_id: node.id.clone(),
-                        site: site_label,
-                        slug: r.head.clone(),
-                        field: r.attr.clone(),
-                        actual_kind: format!("{kind:?}").to_lowercase(),
-                    });
-                }
-                // Content-site + File-kind producer — interpolating a File
-                // envelope (URL + filename JSON) into a prompt would emit
-                // structural garbage, not the content the author wants.
-                // Hard-reject; the user should add a Kreuzberg step to OCR
-                // the file first.
-                if !site.is_path_site() && kind == FieldKind::File {
-                    return Err(CompileError::LlmImageRefNotFileKind {
-                        node_id: node.id.clone(),
-                        site: site_label,
-                        slug: r.head.clone(),
-                        field: r.attr.clone(),
-                        actual_kind: "file (only valid in images[].path; add a Kreuzberg step to OCR)".to_string(),
-                    });
-                }
-
-                out.push(LlmDataBorrow {
-                    consumer_node_id: node.id.clone(),
-                    slug: r.head,
-                    producer_node: prod_id,
-                    attr: r.attr,
-                    site: site.clone(),
-                    producer_field_kind: kind,
-                });
-            }
-        }
-    }
-    Ok(out)
-}
-
-/// For every Kreuzberg AutomatedStep, scan its `file` / `files[]`
-/// strings for `{{<slug>.<field>}}` placeholders. Kreuzberg accepts any
-/// field kind — text fields stage as Raw temp file, File fields stage as
-/// StoragePath (S3 download); either way the in-config placeholder
-/// resolves to a filesystem path the backend can OCR.
-pub(crate) fn kreuzberg_borrow_plan(
-    graph: &WorkflowGraph,
-) -> Result<Vec<KreuzbergDataBorrow>, CompileError> {
-    use crate::compiler::placeholder_refs::scan_placeholders;
-    use crate::models::template::{ExecutionBackendType, WorkflowNodeData};
-
-    let BorrowContext { pos, slugs, .. } = BorrowContext::build(graph)?;
-
-    let mut out: Vec<KreuzbergDataBorrow> = Vec::new();
-
-    for node in &graph.nodes {
-        let WorkflowNodeData::AutomatedStep { execution_spec, .. } = &node.data else {
-            continue;
-        };
-        if execution_spec.backend_type != ExecutionBackendType::Kreuzberg {
-            continue;
-        }
-        let Ok(cfg) = serde_json::from_value::<
-            aithericon_executor_backend_configs::kreuzberg::KreuzbergConfig,
-        >(execution_spec.config.clone()) else {
-            continue;
-        };
-
-        let mut sites: Vec<(KreuzbergRefSite, String)> = Vec::new();
-        if let Some(f) = cfg.file.clone() {
-            sites.push((KreuzbergRefSite::File, f));
-        }
-        for (i, f) in cfg.files.iter().enumerate() {
-            sites.push((KreuzbergRefSite::Files(i), f.clone()));
-        }
-
-        for (site, raw) in sites {
-            for r in scan_placeholders(&raw) {
-                let site_label = site.label();
-                let (prod_id, kind) = resolve_backend_ref(
-                    graph,
-                    &slugs,
-                    &pos,
-                    &node.id,
-                    "kreuzberg",
-                    &site_label,
-                    &r.head,
-                    &r.attr,
-                )?;
-                out.push(KreuzbergDataBorrow {
-                    consumer_node_id: node.id.clone(),
-                    slug: r.head,
-                    producer_node: prod_id,
-                    attr: r.attr,
-                    site: site.clone(),
-                    producer_field_kind: kind,
-                });
-            }
-        }
-    }
-    Ok(out)
 }
 
 /// Per-node, per-slug field map — the picker model pivoted from a flat
@@ -3331,9 +3148,9 @@ mod scope_reachability_tests {
             1,
             "exactly one borrow expected; got: {borrows:?}"
         );
-        assert_eq!(borrows[0].consumer_node_id, "extract");
-        assert_eq!(borrows[0].slug, "review");
-        assert_eq!(borrows[0].producer_node, "review");
+        assert_eq!(borrows[0].consumer_node_id(), "extract");
+        assert_eq!(borrows[0].slug(), "review");
+        assert_eq!(borrows[0].producer_node(), "review");
     }
 
     /// Multiple accesses to the SAME producer collapse to one borrow per
@@ -3589,25 +3406,46 @@ mod scope_reachability_tests {
 
     #[test]
     fn llm_prompt_simple_borrow() {
+        use std::collections::HashMap;
         let g = ocr_classify_graph(r#""Classify: {{ ocr_step.content }} for {{ review.vendor_name }}""#);
-        let borrows = llm_borrow_plan(&g).expect("llm borrow plan");
+        let borrows = automated_step_borrow_plan(&g, &HashMap::new()).expect("borrow plan");
 
-        let by_attr: Vec<(String, String)> = borrows
+        let pairs: Vec<(String, String)> = borrows
             .iter()
-            .map(|b| (b.slug.clone(), b.attr.clone()))
+            .filter_map(|b| match b {
+                AutomatedStepDataBorrow::PerField {
+                    consumer_node_id,
+                    slug,
+                    attr,
+                    ..
+                } if consumer_node_id == "classify" => Some((slug.clone(), attr.clone())),
+                _ => None,
+            })
             .collect();
-        assert!(by_attr.contains(&("ocr_step".into(), "content".into())));
-        assert!(by_attr.contains(&("review".into(), "vendor_name".into())));
+        assert!(pairs.contains(&("ocr_step".into(), "content".into())));
+        assert!(pairs.contains(&("review".into(), "vendor_name".into())));
+        // All classify borrows must be content sites (is_path_site=false) —
+        // the prompt is a content surface.
         for b in &borrows {
-            assert_eq!(b.consumer_node_id, "classify");
-            assert_eq!(b.site, LlmRefSite::Prompt);
+            if let AutomatedStepDataBorrow::PerField {
+                consumer_node_id,
+                is_path_site,
+                ..
+            } = b
+            {
+                if consumer_node_id == "classify" {
+                    assert!(!*is_path_site, "prompt site must be content (is_path_site=false)");
+                }
+            }
         }
     }
 
     #[test]
     fn llm_unknown_slug_is_hard_error() {
+        use std::collections::HashMap;
         let g = ocr_classify_graph(r#""Classify: {{ typo_slug.content }}""#);
-        let err = llm_borrow_plan(&g).expect_err("unknown slug must error");
+        let err = automated_step_borrow_plan(&g, &HashMap::new())
+            .expect_err("unknown slug must error");
         match err {
             CompileError::BackendRefUnresolved {
                 backend,
@@ -3627,8 +3465,10 @@ mod scope_reachability_tests {
 
     #[test]
     fn llm_unknown_field_on_known_slug_is_hard_error() {
+        use std::collections::HashMap;
         let g = ocr_classify_graph(r#""Classify: {{ ocr_step.no_such_field }}""#);
-        let err = llm_borrow_plan(&g).expect_err("unknown field must error");
+        let err = automated_step_borrow_plan(&g, &HashMap::new())
+            .expect_err("unknown field must error");
         match err {
             CompileError::BackendRefUnresolved {
                 kind,
@@ -3653,17 +3493,25 @@ mod scope_reachability_tests {
 
     #[test]
     fn llm_content_site_rejects_file_kind_producer() {
+        use std::collections::HashMap;
         // Interpolating a File-kind upstream into a text prompt is nonsense.
         let g = ocr_classify_graph(r#""Inline PDF? {{ review.invoice_pdf }}""#);
-        let err = llm_borrow_plan(&g).expect_err("file-kind in prompt must error");
+        let err = automated_step_borrow_plan(&g, &HashMap::new())
+            .expect_err("file-kind in prompt must error");
         assert!(matches!(err, CompileError::LlmImageRefNotFileKind { .. }));
     }
 
     #[test]
     fn llm_no_placeholders_yields_no_borrows() {
+        use std::collections::HashMap;
         let g = ocr_classify_graph(r#""Just a static prompt, no placeholders""#);
-        let borrows = llm_borrow_plan(&g).expect("llm borrow plan");
-        assert!(borrows.is_empty());
+        let borrows = automated_step_borrow_plan(&g, &HashMap::new()).expect("borrow plan");
+        // No borrows for the classify LLM consumer specifically.
+        let classify_borrows: Vec<_> = borrows
+            .iter()
+            .filter(|b| b.consumer_node_id() == "classify")
+            .collect();
+        assert!(classify_borrows.is_empty(), "got: {classify_borrows:?}");
     }
 
     #[test]
@@ -3694,19 +3542,28 @@ mod scope_reachability_tests {
             {"id":"e3","source":"ocr","target":"end","type":"sequence"}
           ]
         }"#;
+        use std::collections::HashMap;
         let g: WorkflowGraph = serde_json::from_str(json).expect("deser graph");
-        let borrows = kreuzberg_borrow_plan(&g).expect("kreuzberg borrow plan");
+        let borrows = automated_step_borrow_plan(&g, &HashMap::new()).expect("borrow plan");
         assert_eq!(borrows.len(), 1, "got: {borrows:?}");
-        let b = &borrows[0];
-        assert_eq!(b.consumer_node_id, "ocr");
-        assert_eq!(b.slug, "uploader");
-        assert_eq!(b.producer_node, "uploader");
-        assert_eq!(b.attr, "pdf");
-        assert_eq!(b.site, KreuzbergRefSite::File);
-        assert_eq!(
-            b.producer_field_kind,
-            crate::models::template::FieldKind::File
-        );
+        match &borrows[0] {
+            AutomatedStepDataBorrow::PerField {
+                consumer_node_id,
+                slug,
+                producer_node,
+                attr,
+                is_path_site,
+                producer_field_kind,
+            } => {
+                assert_eq!(consumer_node_id, "ocr");
+                assert_eq!(slug, "uploader");
+                assert_eq!(producer_node, "uploader");
+                assert_eq!(attr, "pdf");
+                assert!(*is_path_site);
+                assert_eq!(*producer_field_kind, crate::models::template::FieldKind::File);
+            }
+            other => panic!("Kreuzberg borrow must be PerField, got {other:?}"),
+        }
     }
 
     #[test]
@@ -3740,13 +3597,17 @@ mod scope_reachability_tests {
             {"id":"e3","source":"reocr","target":"end","type":"sequence"}
           ]
         }"#;
+        use std::collections::HashMap;
         let g: WorkflowGraph = serde_json::from_str(json).expect("deser graph");
-        let borrows = kreuzberg_borrow_plan(&g).expect("kreuzberg borrow plan");
+        let borrows = automated_step_borrow_plan(&g, &HashMap::new()).expect("borrow plan");
         assert_eq!(borrows.len(), 1);
-        assert_eq!(
-            borrows[0].producer_field_kind,
-            crate::models::template::FieldKind::Text
-        );
+        match &borrows[0] {
+            AutomatedStepDataBorrow::PerField {
+                producer_field_kind,
+                ..
+            } => assert_eq!(*producer_field_kind, crate::models::template::FieldKind::Text),
+            other => panic!("Kreuzberg borrow must be PerField, got {other:?}"),
+        }
     }
 
     /// File envelope nesting: a Start field `document: File` must surface

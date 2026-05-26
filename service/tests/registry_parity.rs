@@ -416,3 +416,157 @@ fn catalogue_query_rejects_garbage_via_registry() {
         "expected CompileError::Validation, got {err:?}"
     );
 }
+
+// ─── Kreuzberg (Phase 2.g) ───────────────────────────────────────────────────
+
+#[test]
+fn kreuzberg_minimal_config_with_attached_file_compiles() {
+    use aithericon_executor_domain::InputSource;
+    let mut files = HashMap::new();
+    files.insert(
+        "doc.pdf".to_string(),
+        InputSource::Raw {
+            content: String::new(),
+        },
+    );
+    let cfg = json!({ "mode": "single", "file": "doc.pdf" });
+    let (canonical, inputs) =
+        validate_and_transform(&ExecutionBackendType::Kreuzberg, &cfg, &files, "extract")
+            .expect("kreuzberg with attached file must compile");
+    assert_eq!(inputs.len(), 1);
+    assert_eq!(inputs[0].name, "doc.pdf");
+    assert_eq!(canonical["file"], "doc.pdf");
+}
+
+#[test]
+fn kreuzberg_with_upstream_placeholder_compiles_without_attached_file() {
+    let cfg = json!({ "mode": "single", "file": "{{ ingest.path }}" });
+    validate_and_transform(
+        &ExecutionBackendType::Kreuzberg,
+        &cfg,
+        &HashMap::new(),
+        "extract",
+    )
+    .expect("placeholder paths must compile without node-attached files");
+}
+
+#[test]
+fn kreuzberg_rejects_missing_node_file_via_registry() {
+    let cfg = json!({ "mode": "single", "file": "doc.pdf" });
+    let err = validate_and_transform(
+        &ExecutionBackendType::Kreuzberg,
+        &cfg,
+        &HashMap::new(),
+        "extract",
+    )
+    .expect_err("literal file ref without node attachment must reject")
+    .to_string();
+    assert!(err.contains("doc.pdf"), "got: {err}");
+}
+
+#[test]
+fn kreuzberg_rejects_empty_node_files_with_no_placeholders() {
+    let cfg = json!({ "mode": "single" });
+    let err = validate_and_transform(
+        &ExecutionBackendType::Kreuzberg,
+        &cfg,
+        &HashMap::new(),
+        "extract",
+    )
+    .expect_err("no files + no placeholders must reject")
+    .to_string();
+    assert!(err.contains("no files"), "got: {err}");
+}
+
+// ─── LLM (Phase 2.f) ─────────────────────────────────────────────────────────
+
+#[test]
+fn llm_minimal_config_compiles_through_registry() {
+    let cfg = json!({
+        "provider": "openai",
+        "model": "gpt-4o-mini",
+        "prompt": "Hello world",
+    });
+    let (canonical, inputs) =
+        validate_and_transform(&ExecutionBackendType::Llm, &cfg, &HashMap::new(), "ask")
+            .expect("llm minimal config must compile");
+    assert!(inputs.is_empty());
+    assert_eq!(canonical["model"], "gpt-4o-mini");
+    assert_eq!(canonical["prompt"], "Hello world");
+}
+
+#[test]
+fn llm_empty_model_rejected_via_registry() {
+    let cfg = json!({ "provider": "openai", "model": "", "prompt": "x" });
+    let err = validate_and_transform(&ExecutionBackendType::Llm, &cfg, &HashMap::new(), "ask")
+        .expect_err("empty model must be rejected")
+        .to_string();
+    assert!(err.contains("model is required"), "got: {err}");
+}
+
+#[test]
+fn llm_rejects_malformed_placeholder_via_registry() {
+    let cfg = json!({
+        "provider": "openai",
+        "model": "gpt-4o",
+        "prompt": "Classify {{ user.name + 1 }}",
+    });
+    let err = validate_and_transform(&ExecutionBackendType::Llm, &cfg, &HashMap::new(), "ask")
+        .expect_err("malformed placeholder must reject");
+    use mekhan_service::compiler::CompileError;
+    match err {
+        CompileError::BackendPlaceholderSyntax { backend, site, .. } => {
+            assert_eq!(backend, "llm");
+            assert_eq!(site, "prompt");
+        }
+        other => panic!("expected BackendPlaceholderSyntax, got {other:?}"),
+    }
+}
+
+// ─── Python (Phase 2.h) ──────────────────────────────────────────────────────
+
+#[test]
+fn python_minimal_config_compiles_through_registry() {
+    use aithericon_executor_domain::InputSource;
+    let mut files = HashMap::new();
+    files.insert(
+        "main.py".to_string(),
+        InputSource::Raw {
+            content: "print('hi')\n".to_string(),
+        },
+    );
+    let cfg = json!({ "entrypoint": "main.py", "python": "python3", "sdk": true });
+    let (canonical, inputs) =
+        validate_and_transform(&ExecutionBackendType::Python, &cfg, &files, "step")
+            .expect("python minimal config must compile");
+    assert_eq!(inputs.len(), 1);
+    assert_eq!(inputs[0].name, "main.py");
+    assert_eq!(canonical["script"], "main.py");
+}
+
+#[test]
+fn python_missing_entrypoint_file_rejected_via_registry() {
+    use aithericon_executor_domain::InputSource;
+    let mut files = HashMap::new();
+    files.insert(
+        "other.py".to_string(),
+        InputSource::Raw {
+            content: String::new(),
+        },
+    );
+    let cfg = json!({ "entrypoint": "main.py", "python": "python3" });
+    let err = validate_and_transform(&ExecutionBackendType::Python, &cfg, &files, "step")
+        .expect_err("missing entrypoint file must reject")
+        .to_string();
+    assert!(err.contains("main.py"), "got: {err}");
+}
+
+#[test]
+fn python_empty_node_files_rejected_via_registry() {
+    let cfg = json!({ "entrypoint": "main.py", "python": "python3" });
+    let err =
+        validate_and_transform(&ExecutionBackendType::Python, &cfg, &HashMap::new(), "step")
+            .expect_err("empty node files must reject")
+            .to_string();
+    assert!(err.contains("no files"), "got: {err}");
+}

@@ -70,6 +70,8 @@ pub static CATALOGUE_QUERY_DECL: BackendDecl = BackendDecl {
     // collapse lands as a separate end-of-Phase-2 PR; this is metadata).
     schedulable: false,
     executor_wire_name: "catalogue_query",
+    borrow_shape: super::BorrowShape::Envelope,
+    validate_ref_kind: super::accept_any_ref_kind,
 };
 
 /// Seed config the editor inserts when a step's backend is first set to

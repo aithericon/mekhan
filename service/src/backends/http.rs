@@ -52,6 +52,8 @@ pub static HTTP_DECL: BackendDecl = BackendDecl {
     pyi_introspection: false,
     schedulable: true,
     executor_wire_name: "http",
+    borrow_shape: super::BorrowShape::Envelope,
+    validate_ref_kind: super::accept_any_ref_kind,
 };
 
 /// Seed config the editor inserts when a step's backend is first set to

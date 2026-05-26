@@ -4529,7 +4529,7 @@
         },
         "responses": {
           "200": {
-            "description": "Trigger fired (FireAndForget, or WaitForResult resolved)",
+            "description": "Trigger fired (FireAndForget / WaitForResult JSON, or SSE event stream when reply mode is `sse`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -4560,9 +4560,6 @@
                 }
               }
             }
-          },
-          "406": {
-            "description": "SSE requested on the fire endpoint — use GET /api/instances/{id}/stream"
           }
         }
       }

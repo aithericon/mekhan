@@ -33,7 +33,7 @@ use super::CompileError;
 /// skip `require_node_file`).
 ///
 /// Caller passes `node_id`, `backend` and `site` for error attribution.
-fn validate_placeholders(
+pub(crate) fn validate_placeholders(
     s: &str,
     node_id: &str,
     backend: &str,

@@ -35,7 +35,7 @@ use crate::compiler::interface::InterfaceRegistry;
 use crate::compiler::resource_refs::KnownResources;
 use crate::compiler::token_shape::{
     automated_step_borrow_plan, automated_step_resource_borrow_plan, guard_readarc_plan,
-    human_task_borrow_plan, kreuzberg_borrow_plan, llm_borrow_plan,
+    human_task_borrow_plan, AutomatedStepDataBorrow,
 };
 use crate::compiler::CompileError;
 use crate::models::template::{FieldKind, WorkflowGraph};
@@ -180,13 +180,39 @@ pub(crate) fn collect_borrows(
         });
     }
 
+    // Unified AutomatedStep borrow planner — registry-driven; emits
+    // both Envelope (Python, SMTP) and PerField (LLM, Kreuzberg) borrows
+    // based on each backend decl's `borrow_shape`.
     for b in automated_step_borrow_plan(graph, inline_sources)? {
-        out.push(Borrow {
-            consumer_node_id: b.consumer_node_id,
-            producer_node: b.producer_node,
-            slug: b.slug,
-            resolution: BorrowResolution::PythonEnvelope,
-        });
+        match b {
+            AutomatedStepDataBorrow::Envelope {
+                consumer_node_id,
+                slug,
+                producer_node,
+            } => out.push(Borrow {
+                consumer_node_id,
+                producer_node,
+                slug,
+                resolution: BorrowResolution::PythonEnvelope,
+            }),
+            AutomatedStepDataBorrow::PerField {
+                consumer_node_id,
+                slug,
+                producer_node,
+                attr,
+                is_path_site,
+                producer_field_kind,
+            } => out.push(Borrow {
+                consumer_node_id,
+                producer_node,
+                slug,
+                resolution: BorrowResolution::BackendFieldStage {
+                    attr,
+                    is_path_site,
+                    field_kind: producer_field_kind,
+                },
+            }),
+        }
     }
 
     // Python `<name>.<attr>` references against workspace-level resources.
@@ -213,32 +239,6 @@ pub(crate) fn collect_borrows(
             producer_node: b.producer_node,
             slug: b.slug,
             resolution: BorrowResolution::HumanTaskInputRewrite,
-        });
-    }
-
-    for b in llm_borrow_plan(graph)? {
-        out.push(Borrow {
-            consumer_node_id: b.consumer_node_id,
-            producer_node: b.producer_node,
-            slug: b.slug,
-            resolution: BorrowResolution::BackendFieldStage {
-                attr: b.attr,
-                is_path_site: b.site.is_path_site(),
-                field_kind: b.producer_field_kind,
-            },
-        });
-    }
-
-    for b in kreuzberg_borrow_plan(graph)? {
-        out.push(Borrow {
-            consumer_node_id: b.consumer_node_id,
-            producer_node: b.producer_node,
-            slug: b.slug,
-            resolution: BorrowResolution::BackendFieldStage {
-                attr: b.attr,
-                is_path_site: true, // Kreuzberg always needs a path
-                field_kind: b.producer_field_kind,
-            },
         });
     }
 
@@ -1173,17 +1173,20 @@ mod tests {
             let demo = load_demo(&root).unwrap_or_else(|e| panic!("{dir} loads: {e}"));
 
             let guard_n = guard_readarc_plan(&demo.graph).unwrap().len();
-            let py_n = automated_step_borrow_plan(&demo.graph, &demo.files).unwrap().len();
+            let auto_n = automated_step_borrow_plan(&demo.graph, &demo.files)
+                .unwrap()
+                .len();
             let ht_n = human_task_borrow_plan(&demo.graph).unwrap().len();
-            let llm_n = llm_borrow_plan(&demo.graph).unwrap().len();
-            let kz_n = kreuzberg_borrow_plan(&demo.graph).unwrap().len();
-            let expected = guard_n + py_n + ht_n + llm_n + kz_n;
+            let res_n = automated_step_resource_borrow_plan(&demo.graph, &demo.files, &known)
+                .unwrap()
+                .len();
+            let expected = guard_n + auto_n + ht_n + res_n;
 
             let unified = collect_borrows(&demo.graph, &demo.files, &known).unwrap();
             assert_eq!(
                 unified.len(),
                 expected,
-                "{dir}: unified count {} != per-planner sum {} (g={guard_n}, py={py_n}, ht={ht_n}, llm={llm_n}, kz={kz_n})",
+                "{dir}: unified count {} != per-planner sum {} (g={guard_n}, auto={auto_n}, ht={ht_n}, res={res_n})",
                 unified.len(),
                 expected,
             );

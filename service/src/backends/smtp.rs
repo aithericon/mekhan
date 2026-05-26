@@ -51,6 +51,8 @@ pub static SMTP_DECL: BackendDecl = BackendDecl {
     pyi_introspection: false,
     schedulable: true,
     executor_wire_name: "smtp",
+    borrow_shape: super::BorrowShape::Envelope,
+    validate_ref_kind: super::accept_any_ref_kind,
 };
 
 /// Seed config the editor inserts when a step's backend is first set to
@@ -152,33 +154,38 @@ fn ref_scanner(ctx: &ScanCtx<'_>) -> Vec<RefSite> {
     let Some(obj) = ctx.config.as_object() else {
         return out;
     };
-    let mut texts: Vec<&str> = Vec::new();
+    // (site_label, text). All SMTP sites are content sites — Tera renders
+    // the whole envelope into the template at SMTP-execute time, so the
+    // borrow shape is Envelope (not PerField); `is_path_site` is inert.
+    let mut sites: Vec<(String, &str)> = Vec::new();
     for key in ["subject", "body_text", "body_html"] {
         if let Some(s) = obj
             .get(key)
             .and_then(|v| v.get("source"))
             .and_then(|v| v.as_str())
         {
-            texts.push(s);
+            sites.push((key.to_string(), s));
         }
     }
     for field in ["to", "cc", "bcc"] {
         if let Some(arr) = obj.get(field).and_then(|v| v.as_array()) {
-            for el in arr {
+            for (i, el) in arr.iter().enumerate() {
                 if let Some(s) = el.as_str() {
-                    texts.push(s);
+                    sites.push((format!("{field}[{i}]"), s));
                 }
             }
         }
     }
     if let Some(from) = obj.get("from").and_then(|v| v.as_str()) {
-        texts.push(from);
+        sites.push(("from".to_string(), from));
     }
-    for text in texts {
+    for (site_label, text) in sites {
         for r in scan_placeholders(text) {
             out.push(RefSite {
                 head: r.head,
                 attr: r.attr,
+                is_path_site: false,
+                site_label: site_label.clone(),
             });
         }
     }
