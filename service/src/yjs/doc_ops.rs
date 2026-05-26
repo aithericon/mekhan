@@ -105,6 +105,27 @@ pub fn doc_to_graph(doc: &Doc) -> Result<WorkflowGraph, String> {
             Some(yrs::Out::Any(Any::Number(n))) => Some(n),
             _ => None,
         };
+        // toolMeta lives on a child YMap with toolName + toolDescription.
+        // Absent for non-tool children and for any node outside an Agent
+        // parent.
+        let tool_meta = match node_map.get(&txn, "toolMeta") {
+            Some(yrs::Out::YMap(tm)) => {
+                let get_str = |key: &str| -> Option<String> {
+                    match tm.get(&txn, key) {
+                        Some(yrs::Out::Any(Any::String(s))) => Some(s.to_string()),
+                        _ => None,
+                    }
+                };
+                match (get_str("toolName"), get_str("toolDescription")) {
+                    (Some(name), Some(desc)) => Some(crate::models::template::ToolMeta {
+                        tool_name: name,
+                        tool_description: desc,
+                    }),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
 
         nodes.push(WorkflowNode {
             id: node_id.to_string(),
@@ -115,6 +136,7 @@ pub fn doc_to_graph(doc: &Doc) -> Result<WorkflowGraph, String> {
             parent_id,
             width,
             height,
+            tool_meta,
         });
     }
 
@@ -280,6 +302,14 @@ pub fn graph_to_doc_with_files(
             }
             if let Some(h) = node.height {
                 node_map.insert(&mut txn, "height", h);
+            }
+            // toolMeta as a nested Y.Map: toolName + toolDescription. Doc-side
+            // shape matches the camelCase wire format used by the frontend.
+            if let Some(ref tm) = node.tool_meta {
+                let tm_empty: MapPrelim = std::iter::empty::<(&str, Any)>().collect();
+                let tm_map = node_map.insert(&mut txn, "toolMeta", tm_empty);
+                tm_map.insert(&mut txn, "toolName", tm.tool_name.clone());
+                tm_map.insert(&mut txn, "toolDescription", tm.tool_description.clone());
             }
 
             // config as nested Y.Map
@@ -614,6 +644,7 @@ mod tests {
                     parent_id: None,
                     width: Some(500.0),
                     height: Some(300.0),
+                    tool_meta: None,
                 },
                 WorkflowNode {
                     id: "child1".to_string(),
@@ -633,6 +664,7 @@ mod tests {
                     parent_id: Some("scope1".to_string()),
                     width: None,
                     height: None,
+                    tool_meta: None,
                 },
             ],
             edges: vec![],
@@ -694,6 +726,7 @@ mod tests {
                     parent_id: None,
                     width: None,
                     height: None,
+                    tool_meta: None,
                 }],
                 edges: vec![],
                 viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
@@ -782,6 +815,7 @@ mod tests {
                 parent_id: None,
                 width: None,
                 height: None,
+                tool_meta: None,
             }],
             edges: Vec::<WorkflowEdge>::new(),
             viewport: None,

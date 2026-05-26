@@ -8,8 +8,8 @@ use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
 use aithericon_executor_domain::{
-    ExecutionJob, ExecutionResult, ExecutionSpec, ExecutionStatus, ExecutorError, LogLevel,
-    RunContext,
+    ExecutionJob, ExecutionResult, ExecutionSpec, ExecutionStatus, ExecutorError, LlmStopReason,
+    LlmToolCall, LlmUsage, LogLevel, RunContext,
 };
 
 /// Callback invoked by backends to report mid-execution status updates.
@@ -38,6 +38,21 @@ pub trait EventStream: Send + Sync {
     /// pairs (matching the shape Python SDK calls produce). No-op if the
     /// job didn't include `"log"` in its `stream_events` set.
     async fn log(&self, level: LogLevel, message: String, fields: HashMap<String, String>);
+
+    /// Emit one `AgentTurn` event — per-turn observability for agent
+    /// loops. Default no-op so non-agent in-process backends (HTTP, etc.)
+    /// don't need to implement it. The LLM backend calls this on every
+    /// completion that had `tools` declared; consumers gate on the
+    /// `AgentTurn` category in their `stream_events` set.
+    async fn agent_turn(
+        &self,
+        _turn: u32,
+        _stop_reason: LlmStopReason,
+        _content: Option<String>,
+        _tool_calls: Vec<LlmToolCall>,
+        _usage: LlmUsage,
+    ) {
+    }
 }
 
 /// Trait for execution backends. Each backend knows how to execute

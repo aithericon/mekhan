@@ -54,6 +54,7 @@ fn start(id: &str) -> WorkflowNode {
         parent_id: None,
         width: None,
         height: None,
+        tool_meta: None,
     }
 }
 
@@ -72,6 +73,7 @@ fn end(id: &str) -> WorkflowNode {
         parent_id: None,
         width: None,
         height: None,
+        tool_meta: None,
     }
 }
 
@@ -101,6 +103,7 @@ fn catalogue_graph(step_id: &str) -> WorkflowGraph {
                 parent_id: None,
                 width: None,
                 height: None,
+                tool_meta: None,
             },
             end("e"),
         ],

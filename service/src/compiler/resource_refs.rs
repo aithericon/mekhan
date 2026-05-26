@@ -162,6 +162,7 @@ mod tests {
                     parent_id: None,
                     width: None,
                     height: None,
+                    tool_meta: None,
                 },
                 WorkflowNode {
                     id: "n_end".to_string(),
@@ -177,6 +178,7 @@ mod tests {
                     parent_id: None,
                     width: None,
                     height: None,
+                    tool_meta: None,
                 },
             ],
             edges: vec![WorkflowEdge {
@@ -258,6 +260,7 @@ mod tests {
             parent_id: None,
             width: None,
             height: None,
+            tool_meta: None,
         });
 
         let k = known(&[("local_pg", "postgres")]);

@@ -35,6 +35,7 @@ fn start_node(id: &str) -> WorkflowNode {
         parent_id: None,
         width: None,
         height: None,
+        tool_meta: None,
     }
 }
 
@@ -53,6 +54,7 @@ fn end_node(id: &str) -> WorkflowNode {
         parent_id: None,
         width: None,
         height: None,
+        tool_meta: None,
     }
 }
 
@@ -114,6 +116,7 @@ fn agent_node(id: &str) -> WorkflowNode {
         parent_id: None,
         width: None,
         height: None,
+        tool_meta: None,
     }
 }
 
@@ -141,6 +144,7 @@ fn llm_step_node(id: &str) -> WorkflowNode {
         parent_id: None,
         width: None,
         height: None,
+        tool_meta: None,
     }
 }
 
@@ -243,39 +247,88 @@ fn agent_degenerate_lowers_byte_identical_to_llm_automated_step() {
     );
 }
 
-/// Non-degenerate agents (`max_turns > 1` or `stop_when.is_some()`) must
-/// reject at compile until the agent-loop lowering lands. This pins down
-/// the "Agent path" stub return from `lower_agent` so a future PR can't
-/// accidentally drop the guard.
+/// Non-degenerate agents (`max_turns > 1`, `stop_when.is_some()`, or any
+/// tool-tagged child) lower to the full agent-loop subnet (docs/12 § 3).
+/// Asserted structurally — the per-turn IR has a parked state place, a
+/// route transition, and a final exit transition. This is the inverse of
+/// the byte-identical pin: when the IR diverges from `AutomatedStep(Llm)`,
+/// it must be specifically the agent-path shape.
 #[test]
-fn agent_multi_turn_rejects_until_loop_lowering_lands() {
+fn agent_multi_turn_lowers_to_agent_loop() {
     let mut node = agent_node("x");
     if let WorkflowNodeData::Agent { max_turns, .. } = &mut node.data {
         *max_turns = 5;
     } else {
         unreachable!()
     }
-    let graph = WorkflowGraph {
-        nodes: vec![start_node("s"), node, end_node("e")],
-        edges: vec![edge("e1", "s", "x"), edge("e2", "x", "e")],
-        viewport: None,
-        instance_concurrency: Default::default(),
-        definitions: Default::default(),
-    };
-    let err = compile_to_air(&graph, "t", "", &std::collections::HashMap::new())
-        .expect_err("multi-turn agent must reject");
-    let msg = err.to_string();
-    assert!(
-        msg.contains("multi-turn") || msg.contains("not yet implemented"),
-        "expected NotYetImplemented-style error, got: {msg}"
-    );
+    let air = compile_with_one(node);
+
+    let place_ids: Vec<&str> = air
+        .get("places")
+        .and_then(Value::as_array)
+        .expect("places array")
+        .iter()
+        .filter_map(|p| p.get("id").and_then(Value::as_str))
+        .collect();
+    let transition_ids: Vec<&str> = air
+        .get("transitions")
+        .and_then(Value::as_array)
+        .expect("transitions array")
+        .iter()
+        .filter_map(|t| t.get("id").and_then(Value::as_str))
+        .collect();
+
+    for expected in &["p_x_state", "p_x_response", "p_x_final", "p_x_output"] {
+        assert!(
+            place_ids.contains(expected),
+            "missing expected place {expected}: have {place_ids:?}"
+        );
+    }
+    for expected in &["t_x_enter", "t_x_route", "t_x_exit", "t_x_to_response"] {
+        assert!(
+            transition_ids.contains(expected),
+            "missing expected transition {expected}: have {transition_ids:?}"
+        );
+    }
 }
 
 #[test]
-fn agent_stop_when_rejects_until_loop_lowering_lands() {
+fn agent_stop_when_lowers_to_agent_loop() {
     let mut node = agent_node("x");
     if let WorkflowNodeData::Agent { stop_when, .. } = &mut node.data {
         *stop_when = Some("state.turn > 3".to_string());
+    } else {
+        unreachable!()
+    }
+    let air = compile_with_one(node);
+    let place_ids: Vec<&str> = air
+        .get("places")
+        .and_then(Value::as_array)
+        .unwrap()
+        .iter()
+        .filter_map(|p| p.get("id").and_then(Value::as_str))
+        .collect();
+    assert!(
+        place_ids.contains(&"p_x_state"),
+        "stop_when agent must use agent-loop lowering; got: {place_ids:?}"
+    );
+}
+
+/// `ContextStrategy::DropOldest` and `SummarizeOldest` are reserved in
+/// the data model but require additional runtime support (token-budget
+/// bookkeeping; summarisation sub-LLM call). v1 rejects at compile so
+/// authors discover the gap at publish, not at run.
+#[test]
+fn agent_drop_oldest_context_strategy_rejects_in_v1() {
+    let mut node = agent_node("x");
+    if let WorkflowNodeData::Agent {
+        max_turns,
+        context_strategy,
+        ..
+    } = &mut node.data
+    {
+        *max_turns = 3;
+        *context_strategy = ContextStrategy::DropOldest;
     } else {
         unreachable!()
     }
@@ -287,10 +340,10 @@ fn agent_stop_when_rejects_until_loop_lowering_lands() {
         definitions: Default::default(),
     };
     let err = compile_to_air(&graph, "t", "", &std::collections::HashMap::new())
-        .expect_err("stop_when agent must reject");
+        .expect_err("DropOldest context_strategy must reject in v1");
     let msg = err.to_string();
     assert!(
-        msg.contains("multi-turn") || msg.contains("not yet implemented"),
-        "expected NotYetImplemented-style error, got: {msg}"
+        msg.contains("context_strategy") && msg.contains("not yet implemented"),
+        "expected v1-not-implemented error for DropOldest, got: {msg}"
     );
 }

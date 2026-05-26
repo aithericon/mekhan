@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
+use aithericon_executor_domain::{LlmStopReason, LlmToolCall, LlmUsage, ToolSchema};
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
 
 use crate::config::LlmConfig;
 pub use crate::config::{ResponseFormat, Role};
@@ -28,6 +28,9 @@ pub struct CompletionRequest {
     pub temperature: Option<f64>,
     pub max_tokens: Option<u64>,
     pub response_format: ResponseFormat,
+    /// Tools the LLM may call. Empty for non-agent single-shot calls.
+    /// Adapters serialize these into provider-specific tool blocks.
+    pub tools: Vec<ToolSchema>,
 }
 
 /// A single message in the conversation.
@@ -51,39 +54,15 @@ pub struct ImageData {
 /// Provider-agnostic completion response — full observability.
 pub struct CompletionResponse {
     pub content: String,
-    pub usage: TokenUsage,
+    pub usage: LlmUsage,
     pub model: String,
-    pub finish_reason: FinishReason,
+    pub stop_reason: LlmStopReason,
     /// Parsed JSON when response_format was JsonSchema.
     pub structured_output: Option<serde_json::Value>,
-}
-
-/// Token usage metrics from the LLM provider.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TokenUsage {
-    pub input_tokens: u64,
-    pub output_tokens: u64,
-    pub total_tokens: u64,
-}
-
-/// Why the LLM stopped generating.
-#[derive(Debug, Clone)]
-pub enum FinishReason {
-    Stop,
-    Length,
-    ContentFilter,
-    Other(String),
-}
-
-impl std::fmt::Display for FinishReason {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            FinishReason::Stop => write!(f, "stop"),
-            FinishReason::Length => write!(f, "length"),
-            FinishReason::ContentFilter => write!(f, "content_filter"),
-            FinishReason::Other(s) => write!(f, "{s}"),
-        }
-    }
+    /// Tool invocations the LLM emitted this turn. Empty for plain
+    /// text/structured-output responses or providers that don't surface
+    /// tool calls.
+    pub tool_calls: Vec<LlmToolCall>,
 }
 
 /// Errors from LLM provider operations.
@@ -138,12 +117,7 @@ impl CompletionRequest {
             temperature: config.temperature,
             max_tokens: config.max_tokens,
             response_format,
+            tools: config.tools.clone(),
         }
-    }
-}
-
-impl serde::Serialize for FinishReason {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(&self.to_string())
     }
 }

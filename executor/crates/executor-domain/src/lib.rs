@@ -3,6 +3,7 @@ pub mod batch;
 pub mod error;
 pub mod event;
 pub mod job;
+pub mod llm;
 pub mod logs;
 pub mod metrics;
 pub mod progress;
@@ -19,6 +20,7 @@ pub use job::{
     ExecutionJob, ExecutionSpec, InputDeclaration, InputSource, JobPriority, OutputDeclaration,
     OutputUploadConfig,
 };
+pub use llm::{LlmStopReason, LlmToolCall, LlmTurnResult, LlmUsage, ToolSchema};
 pub use logs::{LogBatch, LogEntry, LogLevel, LogSummary};
 pub use metrics::{MetricBatch, MetricPoint, MetricSummary, MetricType};
 pub use progress::{Phase, PhaseStatus, Progress};

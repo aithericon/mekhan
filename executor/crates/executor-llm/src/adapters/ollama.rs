@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 
+use aithericon_executor_domain::{LlmStopReason, LlmUsage};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use crate::ollama_subprocess::OllamaSubprocess;
 use crate::port::{
-    CompletionPort, CompletionRequest, CompletionResponse, FinishReason, LlmError, ResponseFormat,
-    Role, TokenUsage,
+    CompletionPort, CompletionRequest, CompletionResponse, LlmError, ResponseFormat, Role,
 };
 
 /// HTTP-only adapter against an Ollama HTTP endpoint.
@@ -116,11 +116,13 @@ fn role_str(role: &Role) -> &'static str {
     }
 }
 
-fn parse_done_reason(reason: Option<&str>) -> FinishReason {
+fn parse_done_reason(reason: Option<&str>) -> LlmStopReason {
     match reason {
-        Some("stop") | None => FinishReason::Stop,
-        Some("length") => FinishReason::Length,
-        Some(other) => FinishReason::Other(other.to_string()),
+        Some("stop") | None => LlmStopReason::EndTurn,
+        Some("length") => LlmStopReason::MaxTokens,
+        Some(other) => LlmStopReason::Other {
+            reason: other.to_string(),
+        },
     }
 }
 
@@ -193,13 +195,21 @@ async fn ollama_complete(
         .await
         .map_err(|e| LlmError::Api(format!("failed to parse Ollama response: {e}")))?;
 
-    let finish_reason = parse_done_reason(resp.done_reason.as_deref());
+    let stop_reason = parse_done_reason(resp.done_reason.as_deref());
 
-    let usage = TokenUsage {
+    let usage = LlmUsage {
         input_tokens: resp.prompt_eval_count,
         output_tokens: resp.eval_count,
         total_tokens: resp.prompt_eval_count + resp.eval_count,
     };
+
+    // Ollama's `/api/chat` does not surface tool calls in a normalized
+    // form — model-specific JSON-in-content patterns vary too widely to
+    // bake an extractor in here. Agent paths using Ollama models compile
+    // but always route through the text/final branch (empty tool_calls).
+    // Adding tool support later is a per-model concern, not a port-level
+    // contract change.
+    let tool_calls = Vec::new();
 
     // Parse structured output when using json_schema format.
     // Reasoning is hoisted to `message.thinking` by Ollama in this mode
@@ -235,7 +245,8 @@ async fn ollama_complete(
         content,
         usage,
         model: resp.model,
-        finish_reason,
+        stop_reason,
         structured_output,
+        tool_calls,
     })
 }

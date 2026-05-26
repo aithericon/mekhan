@@ -33,6 +33,7 @@ fn start_node(id: &str) -> WorkflowNode {
         parent_id: None,
         width: None,
         height: None,
+        tool_meta: None,
     }
 }
 
@@ -51,6 +52,7 @@ fn end_node(id: &str) -> WorkflowNode {
         parent_id: None,
         width: None,
         height: None,
+        tool_meta: None,
     }
 }
 
@@ -242,6 +244,7 @@ fn human_task_produces_group_signal_and_transitions() {
                 parent_id: None,
                 width: None,
                 height: None,
+                tool_meta: None,
             },
             end_node("e"),
         ],
@@ -312,6 +315,7 @@ fn automated_step_produces_executor_lifecycle() {
                 parent_id: None,
                 width: None,
                 height: None,
+                tool_meta: None,
             },
             end_node("e"),
         ],
@@ -407,6 +411,7 @@ fn decision_produces_guard_transitions() {
                 parent_id: None,
                 width: None,
                 height: None,
+                tool_meta: None,
             },
             end_node("ea"),
             end_node("eb"),
@@ -487,6 +492,7 @@ fn parallel_split_join_produces_fork_and_join() {
                 parent_id: None,
                 width: None,
                 height: None,
+                tool_meta: None,
             },
             WorkflowNode {
                 id: "task_a".to_string(),
@@ -503,6 +509,7 @@ fn parallel_split_join_produces_fork_and_join() {
                 parent_id: None,
                 width: None,
                 height: None,
+                tool_meta: None,
             },
             WorkflowNode {
                 id: "task_b".to_string(),
@@ -519,6 +526,7 @@ fn parallel_split_join_produces_fork_and_join() {
                 parent_id: None,
                 width: None,
                 height: None,
+                tool_meta: None,
             },
             WorkflowNode {
                 id: "join".to_string(),
@@ -533,6 +541,7 @@ fn parallel_split_join_produces_fork_and_join() {
                 parent_id: None,
                 width: None,
                 height: None,
+                tool_meta: None,
             },
             end_node("e"),
         ],
@@ -623,6 +632,7 @@ fn loop_produces_enter_continue_exit() {
                 parent_id: None,
                 width: None,
                 height: None,
+                tool_meta: None,
             },
             WorkflowNode {
                 id: "body".to_string(),
@@ -639,6 +649,7 @@ fn loop_produces_enter_continue_exit() {
                 parent_id: Some("lp".to_string()),
                 width: None,
                 height: None,
+                tool_meta: None,
             },
             end_node("e"),
         ],
@@ -736,6 +747,7 @@ fn unreachable_node_fails() {
                 parent_id: None,
                 width: None,
                 height: None,
+                tool_meta: None,
             },
         ],
         edges: vec![edge("e1", "s", "e")],
@@ -769,6 +781,7 @@ fn loop_with_zero_iterations_fails() {
                 parent_id: None,
                 width: None,
                 height: None,
+                tool_meta: None,
             },
             end_node("e"),
         ],
@@ -803,6 +816,7 @@ fn loop_with_empty_condition_fails() {
                 parent_id: None,
                 width: None,
                 height: None,
+                tool_meta: None,
             },
             end_node("e"),
         ],
@@ -846,6 +860,7 @@ fn decision_with_default_branch() {
                 parent_id: None,
                 width: None,
                 height: None,
+                tool_meta: None,
             },
             end_node("e_yes"),
             end_node("e_no"),
@@ -930,6 +945,7 @@ fn decision_lowers_as_switch_cascade() {
                 parent_id: None,
                 width: None,
                 height: None,
+                tool_meta: None,
             },
             end_node("ea"),
             end_node("eb"),
@@ -1004,6 +1020,7 @@ fn cycle_in_non_loop_edges_fails() {
                 parent_id: None,
                 width: None,
                 height: None,
+                tool_meta: None,
             },
             WorkflowNode {
                 id: "b".to_string(),
@@ -1020,6 +1037,7 @@ fn cycle_in_non_loop_edges_fails() {
                 parent_id: None,
                 width: None,
                 height: None,
+                tool_meta: None,
             },
             end_node("e"),
         ],
@@ -1061,6 +1079,7 @@ fn parallel_split_with_one_branch_fails() {
                 parent_id: None,
                 width: None,
                 height: None,
+                tool_meta: None,
             },
             end_node("e"),
         ],
@@ -1111,6 +1130,7 @@ fn automated_step_has_scoped_effect_errors() {
                 parent_id: None,
                 width: None,
                 height: None,
+                tool_meta: None,
             },
             end_node("e"),
         ],
@@ -1155,6 +1175,7 @@ fn auto_node(id: &str, label: &str) -> WorkflowNode {
         parent_id: None,
         width: None,
         height: None,
+        tool_meta: None,
     }
 }
 
@@ -1350,6 +1371,7 @@ fn parallel_join_merges_per_edge_input_places() {
                 parent_id: None,
                 width: None,
                 height: None,
+                tool_meta: None,
             },
             auto_node("aa", "Auto A"),
             auto_node("ab", "Auto B"),
@@ -1366,6 +1388,7 @@ fn parallel_join_merges_per_edge_input_places() {
                 parent_id: None,
                 width: None,
                 height: None,
+                tool_meta: None,
             },
             end_node("e"),
         ],
@@ -1459,6 +1482,7 @@ fn multi_input_non_join_retains_pass_through_transitions() {
                 parent_id: None,
                 width: None,
                 height: None,
+                tool_meta: None,
             },
             auto_node("a", "Step A"),
             auto_node("b", "Step B"),
@@ -1480,6 +1504,7 @@ fn multi_input_non_join_retains_pass_through_transitions() {
                 parent_id: None,
                 width: None,
                 height: None,
+                tool_meta: None,
             },
             end_node("ey"),
             end_node("en"),
@@ -1541,6 +1566,7 @@ fn scope_creates_group_in_air() {
                 parent_id: None,
                 width: Some(500.0),
                 height: Some(400.0),
+                tool_meta: None,
             },
             WorkflowNode {
                 id: "ht".to_string(),
@@ -1557,6 +1583,7 @@ fn scope_creates_group_in_air() {
                 parent_id: Some("my_scope".to_string()),
                 width: None,
                 height: None,
+                tool_meta: None,
             },
             end_node("e"),
         ],
@@ -1617,6 +1644,7 @@ fn scope_without_children_compiles() {
                 parent_id: None,
                 width: Some(300.0),
                 height: Some(200.0),
+                tool_meta: None,
             },
             end_node("e"),
         ],
@@ -1697,6 +1725,7 @@ fn edge_type_mismatch_fails_when_target_port_has_required_fields() {
         parent_id: None,
         width: None,
         height: None,
+        tool_meta: None,
     };
 
     let graph = WorkflowGraph {
@@ -1746,6 +1775,7 @@ fn edge_empty_target_port_accepts_anything() {
         parent_id: None,
         width: None,
         height: None,
+        tool_meta: None,
     };
 
     let graph = WorkflowGraph {
@@ -1807,6 +1837,7 @@ fn start_node_with_bool_field(id: &str, field: &str) -> WorkflowNode {
         parent_id: None,
         width: None,
         height: None,
+        tool_meta: None,
     }
 }
 
@@ -1829,6 +1860,7 @@ fn decision_with_guard(id: &str, guard: &str) -> WorkflowNode {
         parent_id: None,
         width: None,
         height: None,
+        tool_meta: None,
     }
 }
 
@@ -2016,6 +2048,7 @@ fn guard_multi_hop_scope_walk() {
         parent_id: None,
         width: None,
         height: None,
+        tool_meta: None,
     };
 
     // Decision guard references the upstream automated step's parked output
@@ -2067,6 +2100,7 @@ fn loop_condition_can_reference_iteration_local() {
         parent_id: None,
         width: None,
         height: None,
+        tool_meta: None,
     };
 
     // Need a Start that flows into the loop and an End out the other side.
@@ -2084,6 +2118,7 @@ fn loop_condition_can_reference_iteration_local() {
         parent_id: None,
         width: None,
         height: None,
+        tool_meta: None,
     };
 
     let _ = (FieldKind::Number, PortField {
@@ -2114,6 +2149,7 @@ fn loop_condition_can_reference_iteration_local() {
         parent_id: Some("lp".to_string()),
         width: None,
         height: None,
+        tool_meta: None,
     };
     let body_in_edge = WorkflowEdge {
         id: "e_body_in".to_string(),
@@ -2224,6 +2260,7 @@ fn human_task_node_with_field(id: &str, field_name: &str, kind: TaskFieldKind) -
         parent_id: None,
         width: None,
         height: None,
+        tool_meta: None,
     }
 }
 
@@ -2311,6 +2348,7 @@ fn decision_output_ports_one_per_branch_plus_default() {
         parent_id: None,
         width: None,
         height: None,
+        tool_meta: None,
     };
 
     let ports = node.data.output_ports();
@@ -2387,6 +2425,7 @@ fn empty_loop_fails_with_loop_empty_error() {
                 parent_id: None,
                 width: None,
                 height: None,
+                tool_meta: None,
             },
             end_node("e"),
         ],
@@ -2454,6 +2493,7 @@ fn trigger_node(id: &str, source: mekhan_service::models::template::TriggerSourc
         parent_id: None,
         width: None,
         height: None,
+        tool_meta: None,
     }
 }
 
@@ -2894,6 +2934,7 @@ fn start_node_with_fields(
         parent_id: None,
         width: None,
         height: None,
+        tool_meta: None,
     }
 }
 
@@ -3088,6 +3129,7 @@ fn phase_update_node(
         parent_id: None,
         width: None,
         height: None,
+        tool_meta: None,
     }
 }
 
@@ -3114,6 +3156,7 @@ fn progress_update_node(
         parent_id: None,
         width: None,
         height: None,
+        tool_meta: None,
     }
 }
 
@@ -3391,6 +3434,7 @@ fn failure_node(id: &str, message: Option<&str>) -> WorkflowNode {
         parent_id: None,
         width: None,
         height: None,
+        tool_meta: None,
     }
 }
 
@@ -3617,6 +3661,7 @@ fn automated_node_with_deployment(id: &str, dm: DeploymentModel) -> WorkflowNode
         parent_id: None,
         width: None,
         height: None,
+        tool_meta: None,
     }
 }
 
@@ -3732,6 +3777,7 @@ fn catalogue_query_emits_lookup_effect_no_executor() {
                 parent_id: None,
                 width: None,
                 height: None,
+                tool_meta: None,
             },
             end_node("e"),
         ],

@@ -296,6 +296,7 @@ async fn seed_template_with_human_task(
         parent_id: None,
         width: None,
         height: None,
+        tool_meta: None,
     };
 
     let human_node = WorkflowNode {
@@ -313,6 +314,7 @@ async fn seed_template_with_human_task(
         parent_id: None,
         width: None,
         height: None,
+        tool_meta: None,
     };
 
     let graph = WorkflowGraph {

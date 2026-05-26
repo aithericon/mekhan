@@ -4,6 +4,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::artifact::ArtifactCategory;
+use crate::llm::{LlmStopReason, LlmToolCall, LlmUsage};
 use crate::metrics::MetricType;
 use crate::progress::PhaseStatus;
 use crate::result::ExecutionOutcome;
@@ -19,6 +20,7 @@ pub enum EventCategory {
     Log,
     Output,
     Metric,
+    AgentTurn,
 }
 
 impl EventCategory {
@@ -30,6 +32,7 @@ impl EventCategory {
             Self::Log => "log",
             Self::Output => "output",
             Self::Metric => "metric",
+            Self::AgentTurn => "agent_turn",
         }
     }
 }
@@ -160,6 +163,20 @@ pub enum StatusDetail {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
         duration_ms: u64,
+    },
+
+    /// One turn of an agent loop completed. The executor emits this on
+    /// `executor.events.{exec_id}.agent_turn` for every LLM call that
+    /// is part of an agent context (signalled by `metadata.agent_node_id`).
+    /// Single-shot LLM AutomatedSteps do NOT emit this.
+    AgentTurn {
+        turn: u32,
+        stop_reason: LlmStopReason,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        content: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        tool_calls: Vec<LlmToolCall>,
+        usage: LlmUsage,
     },
 }
 

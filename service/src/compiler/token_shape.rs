@@ -486,14 +486,88 @@ pub fn validate_token_against_port(
 
 // ─── Per-node shape derivation ──────────────────────────────────────────────
 
+/// Wire-shaped recursive descriptor of a producer field's type — the picker
+/// walks this to render nested fields and array element shapes. Mirrors
+/// [`TokenShape`] but flattened to a serializable form. Plain (non-anchored)
+/// Object containers carry `selectable: false`: the picker may expand them
+/// but the row body acts as a toggle, not an emit (the user must drill into
+/// scalar / file / array leaves). File-anchored containers carry
+/// `selectable: true`, preserving the existing precedent that `document` is
+/// pickable as a whole **and** `document.url` etc. are individually pickable.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+#[schema(no_recursion)]
+pub enum TyDescriptor {
+    Scalar {
+        name: String,
+    },
+    Object {
+        fields: BTreeMap<String, TyDescriptor>,
+        selectable: bool,
+    },
+    Array {
+        element: Box<TyDescriptor>,
+    },
+    Any,
+    Opaque {
+        name: String,
+    },
+}
+
+impl TyDescriptor {
+    /// Legacy `kind_label`-compatible string for callers that still want a
+    /// single label (Python `.pyi` overlay, diagnostics rendering). Matches
+    /// [`TokenShape::kind_label`] verbatim so `ty_label_to_field_kind` keeps
+    /// working unchanged.
+    pub fn kind_label(&self) -> String {
+        match self {
+            TyDescriptor::Object { .. } => "Object".to_string(),
+            TyDescriptor::Array { .. } => "Array".to_string(),
+            TyDescriptor::Scalar { name } => name.clone(),
+            TyDescriptor::Any => "Any".to_string(),
+            TyDescriptor::Opaque { name } => format!("Opaque({name})"),
+        }
+    }
+}
+
+/// Walk a [`TokenShape`] (the producer's parked output) into the picker's
+/// wire descriptor. `prov_anchor` carries the parent field's
+/// [`Provenance::anchor`] — set only for File envelopes — so plain Objects
+/// get `selectable: false` and File envelopes get `selectable: true`. Array
+/// elements have no parent provenance and therefore are never anchored.
+pub fn collect_scope_tree(shape: &TokenShape, prov_anchor: Option<&ScalarTy>) -> TyDescriptor {
+    match shape {
+        TokenShape::Object(map) => {
+            let mut fields = BTreeMap::new();
+            for (k, f) in map {
+                fields.insert(k.clone(), collect_scope_tree(&f.shape, f.prov.anchor.as_ref()));
+            }
+            TyDescriptor::Object {
+                fields,
+                selectable: prov_anchor.is_some(),
+            }
+        }
+        TokenShape::Array(inner) => TyDescriptor::Array {
+            element: Box::new(collect_scope_tree(inner, None)),
+        },
+        TokenShape::Scalar(s) => TyDescriptor::Scalar {
+            name: s.label().to_string(),
+        },
+        TokenShape::Any => TyDescriptor::Any,
+        TokenShape::Opaque(n) => TyDescriptor::Opaque { name: n.clone() },
+    }
+}
+
 /// One reachable, still-live reference the editor variable picker should
 /// offer at a node — the producer-namespaced replacement for the flat TS
 /// `computeScopes`. The `path` is what you'd actually type in a guard; the
-/// producer attribution is the thing the flat model throws away.
+/// producer attribution is the thing the flat model throws away. `ty`
+/// carries the full recursive shape so the picker can drill into nested
+/// objects and array element fields without making additional calls.
 #[derive(Debug, Clone)]
 pub struct ScopeEntry {
     pub path: String,
-    pub ty: String,
+    pub ty: TyDescriptor,
     pub producer_node: String,
     pub producer_label: String,
     pub note: String,
@@ -1003,6 +1077,69 @@ pub fn analyze(graph: &WorkflowGraph) -> Result<ShapeReport, CompileError> {
     })
 }
 
+/// Every `(dotted_path, TyDescriptor, provenance)` *root* of a shape — the
+/// tree-DTO sibling of [`collect_leaves`]. Mirrors the same "flatten plain
+/// Object containers" rule (HumanTask/AutomatedStep runtime envelopes like
+/// `data`, `detail` are not part of the addressable surface), but instead
+/// of fanning anchored containers and arrays into per-leaf entries it emits
+/// **one entry per top-level user-meaningful field**, carrying the entire
+/// nested subtree in [`TyDescriptor`]. The picker walks that subtree to
+/// offer drill-down without needing additional calls.
+///
+/// Concretely: a File envelope `document: { url, filename, content_type }`
+/// emits **one** root entry `document` whose `ty` is the nested object
+/// (with `selectable: true`); an array of objects `tasks: Array<Object>`
+/// emits one root entry `tasks` whose `ty` is `Array{ element: Object }`.
+fn collect_scope_roots(
+    shape: &TokenShape,
+    prefix: &str,
+    prov: Option<&Provenance>,
+    out: &mut Vec<(String, TyDescriptor, Provenance)>,
+) {
+    match shape {
+        TokenShape::Object(map) if !map.is_empty() => {
+            // Anchored container (currently: File envelopes) — emit one rich
+            // root carrying the full nested tree; do NOT recurse into
+            // children at root level. Per-leaf addressability is preserved by
+            // the picker walking `ty.fields` instead of by fan-out.
+            if prov.and_then(|p| p.anchor.as_ref()).is_some() {
+                if let Some(p) = prov {
+                    out.push((
+                        prefix.to_string(),
+                        collect_scope_tree(shape, p.anchor.as_ref()),
+                        p.clone(),
+                    ));
+                }
+            } else {
+                // Plain Object — runtime envelope. Descend, RESETTING the
+                // prefix to the bare child key (matches `collect_leaves`'s
+                // long-standing rule: `data.amount` → `amount`).
+                for (k, f) in map {
+                    let path = if prov.is_none() && prefix.is_empty() {
+                        k.clone()
+                    } else {
+                        // Inside a plain Object, the child becomes the new root
+                        // — same behaviour as `collect_leaves` for non-anchored.
+                        k.clone()
+                    };
+                    collect_scope_roots(&f.shape, &path, Some(&f.prov), out);
+                }
+            }
+        }
+        // Scalar / Array / Any / Opaque / empty Object — each is a single
+        // pickable root entry.
+        _ => {
+            if let Some(p) = prov {
+                out.push((
+                    prefix.to_string(),
+                    collect_scope_tree(shape, p.anchor.as_ref()),
+                    p.clone(),
+                ));
+            }
+        }
+    }
+}
+
 /// Every `(dotted_path, type_label, provenance)` leaf of a shape.
 fn collect_leaves(
     shape: &TokenShape,
@@ -1477,9 +1614,9 @@ fn reachable_scope(
     //     phase (2), per spec §2 ("the picker emits the qualified form for
     //     everything borrowed").
     if let Some(in_shape) = node_in.get(&node.id) {
-        let mut leaves = Vec::new();
-        collect_leaves(in_shape, "", None, &mut leaves);
-        for (dotted, ty, prov) in leaves {
+        let mut roots = Vec::new();
+        collect_scope_roots(in_shape, "", None, &mut roots);
+        for (dotted, ty, prov) in roots {
             // Classify by the *top-level* key — what `is_control_leaf` and
             // `is_parked_producer` reason about — not the deepest segment.
             let head = dotted.split('.').next().unwrap_or(&dotted);
@@ -1524,20 +1661,18 @@ fn reachable_scope(
             let Some(shape) = node_out.get(&up.id) else {
                 continue;
             };
-            let mut leaves = Vec::new();
-            collect_leaves(shape, "", None, &mut leaves);
-            for (dotted, ty, prov) in leaves {
+            let mut roots = Vec::new();
+            collect_scope_roots(shape, "", None, &mut roots);
+            for (dotted, ty, prov) in roots {
                 let owner = prov.node_id.clone();
                 if owner == node.id || !is_parked_producer(graph, &owner) {
                     continue;
                 }
-                // Preserve the *full* dotted path — anchored containers (File
-                // envelopes) emit both the container leaf (`document`) and
-                // nested subkey leaves (`document.url`, `.filename`, …), and
-                // truncating to the last segment would (a) drop the container
-                // leaf entirely and (b) misattribute `document.url` to a
-                // nonexistent `start.url`. `is_control_leaf` is already
-                // head-aware, so it does the right thing on multi-segment input.
+                // `collect_scope_roots` emits one entry per top-level
+                // user-meaningful field (anchored containers and arrays
+                // collapse to a single root carrying the nested tree in
+                // `ty`). `is_control_leaf` is head-aware so identity keys
+                // are still filtered correctly.
                 if is_control_leaf(&format!("input.{dotted}")) {
                     continue; // identity/routing — slim control token
                 }
@@ -1790,7 +1925,10 @@ impl ShapeReport {
             for e in entries {
                 s.push_str(&format!(
                     "    {} : {}   (from {} — {})\n",
-                    e.path, e.ty, e.producer_label, e.note
+                    e.path,
+                    e.ty.kind_label(),
+                    e.producer_label,
+                    e.note
                 ));
             }
             s.push('\n');
@@ -2612,7 +2750,7 @@ pub fn node_namespace_scopes(
             if leaf.is_empty() {
                 continue;
             }
-            let kind = ty_label_to_field_kind(&e.ty);
+            let kind = ty_label_to_field_kind(&e.ty.kind_label());
             by_slug.entry(slug).or_default().insert(leaf, kind);
         }
         out.insert(node_id.clone(), by_slug);
@@ -2658,6 +2796,7 @@ mod port_contract_tests {
             parent_id: None,
             width: None,
             height: None,
+            tool_meta: None,
         }
     }
 
@@ -2810,7 +2949,7 @@ mod scope_reachability_tests {
                 )
             });
         assert_eq!(amt.producer_node, "review");
-        assert_eq!(amt.ty, "Number");
+        assert_eq!(amt.ty.kind_label(), "Number");
         // The flat, provenance-erasing form is gone.
         assert!(
             !scope.iter().any(|e| e.path == "input.invoice_amount"),
@@ -3009,7 +3148,7 @@ mod scope_reachability_tests {
             )
         });
         assert_eq!(note.producer_node, "start");
-        assert_eq!(note.ty, "String");
+        assert_eq!(note.ty.kind_label(), "String");
         assert!(
             !scope.iter().any(|e| e.path == "input.note"),
             "Start data must be slug-qualified, not flat input.*"
@@ -3610,32 +3749,52 @@ mod scope_reachability_tests {
         let g: WorkflowGraph = serde_json::from_str(json).expect("deser file-envelope graph");
         let report = analyze(&g).expect("analyze");
         let scope = report.scopes.get("ocr").expect("ocr scope");
-        let by_path: std::collections::BTreeMap<&str, &str> =
-            scope.iter().map(|e| (e.path.as_str(), e.ty.as_str())).collect();
+        let by_path: std::collections::BTreeMap<&str, &ScopeEntry> =
+            scope.iter().map(|e| (e.path.as_str(), e)).collect();
 
-        assert_eq!(
-            by_path.get("start.document").copied(),
-            Some("FileRef"),
-            "container leaf must be a pickable FileRef; offered: {:?}",
-            by_path
-        );
-        assert_eq!(
-            by_path.get("start.document.url").copied(),
-            Some("String"),
-            "metadata subkey `url` must be nested under the file field, not flat at `start.url`; offered: {:?}",
-            by_path
-        );
-        assert_eq!(by_path.get("start.document.filename").copied(), Some("String"));
-        assert_eq!(by_path.get("start.document.content_type").copied(), Some("String"));
-
-        // The pre-fix flat form (the bug from the screenshot) must be gone:
-        // `start.url` would imply Start declared a top-level `url` field.
+        // File envelopes emit ONE root entry (`start.document`) whose `ty`
+        // is an anchored Object carrying the nested fields. The container
+        // itself is `selectable: true` so the picker still offers it as a
+        // pickable FileRef alongside the drill-down into `url`/`filename`/
+        // `content_type` via the recursive tree.
+        let doc = by_path.get("start.document").unwrap_or_else(|| {
+            panic!(
+                "file envelope must be pickable as a root; offered: {:?}",
+                by_path.keys().collect::<Vec<_>>()
+            )
+        });
+        let TyDescriptor::Object {
+            ref fields,
+            selectable,
+        } = doc.ty
+        else {
+            panic!("start.document must be an anchored Object, got {:?}", doc.ty);
+        };
         assert!(
-            !by_path.contains_key("start.url"),
-            "flat `start.url` must not be offered — that path lives under `document`: {:?}",
-            by_path
+            selectable,
+            "File-anchored container must be selectable as a whole; ty={:?}",
+            doc.ty
         );
+        assert!(matches!(
+            fields.get("url"),
+            Some(TyDescriptor::Scalar { name }) if name == "String"
+        ));
+        assert!(matches!(
+            fields.get("filename"),
+            Some(TyDescriptor::Scalar { name }) if name == "String"
+        ));
+        assert!(matches!(
+            fields.get("content_type"),
+            Some(TyDescriptor::Scalar { name }) if name == "String"
+        ));
+
+        // The flat collapse must still be absent: `start.url` would imply
+        // Start declared a top-level `url` field. With the tree DTO, deeper
+        // paths live inside `ty.fields` and are never emitted as their own
+        // root entries.
+        assert!(!by_path.contains_key("start.url"));
         assert!(!by_path.contains_key("start.filename"));
         assert!(!by_path.contains_key("start.content_type"));
+        assert!(!by_path.contains_key("start.document.url"));
     }
 }

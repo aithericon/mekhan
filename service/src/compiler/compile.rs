@@ -764,9 +764,8 @@ fn populate_borrowed_paths(
     interfaces: &mut InterfaceRegistry,
 ) {
     use crate::compiler::human_task_refs::extract_human_task_refs;
-    use crate::compiler::python_refs::extract_python_refs;
     use crate::compiler::token_shape::slug_index;
-    use crate::models::template::{ExecutionBackendType, WorkflowNodeData};
+    use crate::models::template::WorkflowNodeData;
     use std::collections::{BTreeMap, BTreeSet};
 
     let Ok(slugs) = slug_index(graph) else {
@@ -793,60 +792,35 @@ fn populate_borrowed_paths(
                 }
             }
             WorkflowNodeData::AutomatedStep { execution_spec, .. } => {
-                // Registry-first ref discovery for AutomatedStep borrowed
-                // paths. Backends migrated to `crate::backends` supply a
-                // `ref_scanner`; the legacy match below covers backends
-                // (Python today) not yet ported.
-                if let Some(decl) = crate::backends::lookup(execution_spec.backend_type) {
-                    let Some(scanner) = decl.ref_scanner else {
+                // Borrowed-path discovery runs through the backend's
+                // registered `ref_scanner`. Every backend in `BACKENDS`
+                // either provides a scanner (Python/SMTP/LLM/Kreuzberg/
+                // FileOps) or doesn't need one (Process/Docker/HTTP/
+                // CatalogueQuery — no `<slug>.<field>` surfaces, so
+                // `ref_scanner: None`).
+                let Some(decl) = crate::backends::lookup(execution_spec.backend_type) else {
+                    continue;
+                };
+                let Some(scanner) = decl.ref_scanner else {
+                    continue;
+                };
+                let ctx = crate::backends::ScanCtx {
+                    config: &execution_spec.config,
+                    node_id: &node.id,
+                    inline_sources,
+                    entrypoint: execution_spec.entrypoint.as_deref(),
+                };
+                for r in scanner(&ctx) {
+                    let Some(prod_id) = slugs.node_for(&r.head) else {
                         continue;
                     };
-                    let ctx = crate::backends::ScanCtx {
-                        config: &execution_spec.config,
-                        node_id: &node.id,
-                        inline_sources,
-                        entrypoint: execution_spec.entrypoint.as_deref(),
-                    };
-                    for r in scanner(&ctx) {
-                        let Some(prod_id) = slugs.node_for(&r.head) else {
-                            continue;
-                        };
-                        if prod_id == node.id {
-                            continue;
-                        }
-                        paths
-                            .entry(prod_id.to_string())
-                            .or_default()
-                            .insert(r.attr);
+                    if prod_id == node.id {
+                        continue;
                     }
-                } else {
-                    match execution_spec.backend_type {
-                        ExecutionBackendType::Python => {
-                            let entrypoint = execution_spec
-                                .entrypoint
-                                .clone()
-                                .unwrap_or_else(|| "main.py".to_string());
-                            let Some(node_files) = inline_sources.get(&node.id) else {
-                                continue;
-                            };
-                            let Some(source) = node_files.get(&entrypoint) else {
-                                continue;
-                            };
-                            for r in extract_python_refs(source) {
-                                let Some(prod_id) = slugs.node_for(&r.head) else {
-                                    continue;
-                                };
-                                if prod_id == node.id {
-                                    continue;
-                                }
-                                paths
-                                    .entry(prod_id.to_string())
-                                    .or_default()
-                                    .insert(r.attr);
-                            }
-                        }
-                        _ => continue,
-                    }
+                    paths
+                        .entry(prod_id.to_string())
+                        .or_default()
+                        .insert(r.attr);
                 }
             }
             _ => continue,
@@ -1377,6 +1351,7 @@ mod tests {
             parent_id: None,
             width: None,
             height: None,
+            tool_meta: None,
         };
 
         let logic = build_human_task_injection_logic(&node);
@@ -1413,6 +1388,7 @@ mod tests {
             parent_id: None,
             width: None,
             height: None,
+            tool_meta: None,
         }
     }
 
@@ -1431,6 +1407,7 @@ mod tests {
             parent_id: None,
             width: None,
             height: None,
+            tool_meta: None,
         }
     }
 
@@ -1696,6 +1673,7 @@ mod tests {
                     parent_id: None,
                     width: None,
                     height: None,
+                    tool_meta: None,
                 },
                 end_node("e"),
             ],
@@ -1748,6 +1726,7 @@ mod tests {
                     parent_id: None,
                     width: None,
                     height: None,
+                    tool_meta: None,
                 },
                 end_node("e1"),
                 end_node_with_id("e2"),
@@ -1827,6 +1806,7 @@ mod tests {
                     parent_id: None,
                     width: None,
                     height: None,
+                    tool_meta: None,
                 },
                 end_node("e1"),
                 end_node_with_id("e2"),
@@ -1892,6 +1872,7 @@ mod tests {
             parent_id: None,
             width: None,
             height: None,
+            tool_meta: None,
         }
     }
 
@@ -1997,6 +1978,7 @@ mod tests {
             parent_id: None,
             width: None,
             height: None,
+            tool_meta: None,
         };
 
         let join_node = WorkflowNode {
@@ -2018,6 +2000,7 @@ mod tests {
             parent_id: None,
             width: None,
             height: None,
+            tool_meta: None,
         };
 
         let graph = WorkflowGraph {
@@ -2095,6 +2078,7 @@ mod tests {
             parent_id: None,
             width: None,
             height: None,
+            tool_meta: None,
         };
         let mk_step = |id: &str| WorkflowNode {
             id: id.to_string(),
@@ -2121,6 +2105,7 @@ mod tests {
             parent_id: None,
             width: None,
             height: None,
+            tool_meta: None,
         };
         let graph = WorkflowGraph {
             nodes: vec![
@@ -2177,6 +2162,7 @@ mod tests {
             parent_id: None,
             width: None,
             height: None,
+            tool_meta: None,
         }
     }
 
@@ -3086,6 +3072,7 @@ mod tests {
             parent_id: None,
             width: None,
             height: None,
+            tool_meta: None,
         };
         let graph = WorkflowGraph {
             nodes: vec![start_node("s"), cq_node, end_node("e")],
@@ -3190,6 +3177,7 @@ mod tests {
             parent_id: None,
             width: None,
             height: None,
+            tool_meta: None,
         }
     }
 
@@ -3209,6 +3197,7 @@ mod tests {
             parent_id: None,
             width: None,
             height: None,
+            tool_meta: None,
         }
     }
 
@@ -3852,6 +3841,7 @@ mod tests {
             parent_id: None,
             width: None,
             height: None,
+            tool_meta: None,
         }
     }
 
@@ -3877,6 +3867,7 @@ mod tests {
             parent_id: None,
             width: None,
             height: None,
+            tool_meta: None,
         }
     }
 
@@ -4211,6 +4202,7 @@ mod tests {
                     parent_id: None,
                     width: None,
                     height: None,
+                    tool_meta: None,
                 },
                 end_node_with_id("e_hi"),
                 end_node_with_id("e_lo"),
@@ -4328,6 +4320,7 @@ mod tests {
                     parent_id: None,
                     width: None,
                     height: None,
+                    tool_meta: None,
                 },
                 end_node("e"),
             ],
@@ -4392,6 +4385,7 @@ mod tests {
                     parent_id: None,
                     width: None,
                     height: None,
+                    tool_meta: None,
                 },
                 end_node("e"),
             ],
@@ -4506,6 +4500,7 @@ mod tests {
                     parent_id: None,
                     width: None,
                     height: None,
+                    tool_meta: None,
                 },
                 end_node("e"),
             ],

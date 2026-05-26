@@ -45,13 +45,19 @@ pub(crate) fn validate(graph: &WorkflowGraph, wg: &WorkflowDiGraph) -> Result<()
         .iter()
         .filter(|(_, &ni)| !visited.contains(&ni))
         .filter(|(_, &ni)| {
+            let node = wg.full.node_weight(ni).unwrap();
             // Scope nodes are containers — they have no edges and are not reachable via BFS.
             // Trigger nodes are inputs to the workflow, not part of it — they're never
             // reachable from Start either.
+            // Agent tool children (parent_id is an Agent, tool_meta.is_some()) are
+            // structurally referenced from their parent via tool_meta, not via
+            // edges — the agent compiler dispatches to them by name. Treating
+            // them as unreachable would force authors to draw a no-op edge into
+            // every tool just to satisfy the validator. (docs/12 § 2.2.)
             !matches!(
-                wg.full.node_weight(ni).unwrap().data,
+                node.data,
                 WorkflowNodeData::Scope { .. } | WorkflowNodeData::Trigger { .. }
-            )
+            ) && node.tool_meta.is_none()
         })
         .map(|(&id, _)| id)
         .collect();
@@ -510,6 +516,7 @@ mod tests {
             parent_id: None,
             width: None,
             height: None,
+            tool_meta: None,
         }
     }
 

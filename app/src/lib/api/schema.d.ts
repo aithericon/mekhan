@@ -80,9 +80,6 @@ export interface paths {
          *     default config seed, default output port. The Svelte config-panel
          *     component map (`backend-panels.ts`) stays hand-written; everything
          *     else flows from here.
-         *
-         *     Phase 1 ships SMTP only. The legacy match arms in `backend_configs.rs`,
-         *     `template.rs`, etc. cover the other 8 backends until they're migrated.
          */
         get: operations["list_backends"];
         put?: never;
@@ -2948,6 +2945,12 @@ export interface components {
          * @description One reachable, producer-attributed reference the guard picker should
          *     offer at a node. The single source of truth for editor scope —
          *     replaces the deleted client-side `computeScopes` reimplementation.
+         *
+         *     `ty` is the recursive [`TyDescriptor`] tree so the picker can drill into
+         *     nested objects and array element shapes without additional calls; for
+         *     File-anchored containers the tree's root carries `selectable: true` so
+         *     the row is pickable as a whole while its children are individually
+         *     pickable too.
          */
         ScopeEntryDto: {
             note: string;
@@ -2955,8 +2958,11 @@ export interface components {
             path: string;
             producer_label: string;
             producer_node: string;
-            /** @description Type label (`String`, `Number`, `Bool`, `Opaque(..)`, …). */
-            ty: string;
+            /**
+             * @description Recursive type descriptor. Single source of truth for the picker's
+             *     nested drill-down and (later) array `[*]` iteration affordance.
+             */
+            ty: components["schemas"]["TyDescriptor"];
         };
         /** @description One identifier available to a trigger's payload-mapping expressions. */
         ScopeVar: {
@@ -3319,6 +3325,16 @@ export interface components {
          * @enum {string}
          */
         ToolErrorPolicy: "feedback" | "bubble";
+        /** @description Marks a child of an Agent as a callable tool. */
+        ToolMeta: {
+            /** @description Shown to the LLM in the tool listing. */
+            toolDescription: string;
+            /**
+             * @description Rhai-identifier-safe; unique within the parent agent. The agent
+             *     compiler emits a hard `CompileError` on collision.
+             */
+            toolName: string;
+        };
         TriggerHistoryResponse: {
             history: components["schemas"]["FireResult"][];
         };
@@ -3377,6 +3393,39 @@ export interface components {
             template_id: string;
             /** Format: int32 */
             template_version: number;
+        };
+        /**
+         * @description Wire-shaped recursive descriptor of a producer field's type — the picker
+         *     walks this to render nested fields and array element shapes. Mirrors
+         *     [`TokenShape`] but flattened to a serializable form. Plain (non-anchored)
+         *     Object containers carry `selectable: false`: the picker may expand them
+         *     but the row body acts as a toggle, not an emit (the user must drill into
+         *     scalar / file / array leaves). File-anchored containers carry
+         *     `selectable: true`, preserving the existing precedent that `document` is
+         *     pickable as a whole **and** `document.url` etc. are individually pickable.
+         */
+        TyDescriptor: {
+            /** @enum {string} */
+            kind: "scalar";
+            name: string;
+        } | {
+            fields: {
+                [key: string]: components["schemas"]["TyDescriptor"];
+            };
+            /** @enum {string} */
+            kind: "object";
+            selectable: boolean;
+        } | {
+            element: components["schemas"]["TyDescriptor"];
+            /** @enum {string} */
+            kind: "array";
+        } | {
+            /** @enum {string} */
+            kind: "any";
+        } | {
+            /** @enum {string} */
+            kind: "opaque";
+            name: string;
         };
         /**
          * @description Shape-aware analysis surface — per-node scope + diagnostics. Pure and
@@ -3566,6 +3615,7 @@ export interface components {
              *     templates to migrate). See [`WorkflowNode::slug`].
              */
             slug?: string | null;
+            toolMeta?: null | components["schemas"]["ToolMeta"];
             type: string;
             /**
              * Format: double

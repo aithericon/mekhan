@@ -6,6 +6,7 @@
 //! the JSON shape — drift between authoring and execution is a build error,
 //! not a runtime surprise.
 
+use aithericon_executor_domain::ToolSchema;
 use serde::{Deserialize, Serialize};
 
 /// LLM provider selection. Wire format is lowercase (`"openai"`, `"anthropic"`,
@@ -165,6 +166,13 @@ pub struct LlmConfig {
     /// Each entry references a staged input file path (after `{{input:NAME}}` resolution).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<ImageInput>,
+
+    /// Tools the LLM may call. Populated by the agent compiler from
+    /// child node `tool_meta` + input ports; empty for single-shot LLM
+    /// `AutomatedStep`s. Adapters that don't support tool calls (Ollama
+    /// today) ignore this field gracefully.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<ToolSchema>,
 }
 
 /// Resolved OpenAI-compatible resource binding read from the staged
@@ -203,6 +211,7 @@ mod tests {
             max_tokens: Some(1024),
             response_format: None,
             images: vec![],
+            tools: vec![],
         };
 
         let json = serde_json::to_string_pretty(&config).unwrap();
@@ -268,6 +277,7 @@ mod tests {
             max_tokens: None,
             response_format: Some(ResponseFormat::Text),
             images: vec![],
+            tools: vec![],
         };
 
         let json = serde_json::to_string(&config).unwrap();

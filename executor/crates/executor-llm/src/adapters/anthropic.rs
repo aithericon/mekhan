@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 
+use aithericon_executor_domain::{LlmStopReason, LlmToolCall, LlmUsage};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use crate::port::{
-    CompletionPort, CompletionRequest, CompletionResponse, FinishReason, LlmError, ResponseFormat,
-    Role, TokenUsage,
+    CompletionPort, CompletionRequest, CompletionResponse, LlmError, ResponseFormat, Role,
 };
 
 pub struct AnthropicAdapter;
@@ -114,7 +114,7 @@ enum AnthropicContent {
     Text { text: String },
     #[serde(rename = "tool_use")]
     ToolUse {
-        #[allow(dead_code)]
+        id: String,
         name: String,
         input: serde_json::Value,
     },
@@ -135,12 +135,16 @@ fn role_str(role: &Role) -> &'static str {
     }
 }
 
-fn parse_stop_reason(reason: Option<&str>) -> FinishReason {
+fn parse_stop_reason(reason: Option<&str>) -> LlmStopReason {
     match reason {
-        Some("end_turn") | Some("stop_sequence") | None => FinishReason::Stop,
-        Some("max_tokens") => FinishReason::Length,
-        Some("tool_use") => FinishReason::Stop,
-        Some(other) => FinishReason::Other(other.to_string()),
+        Some("end_turn") | None => LlmStopReason::EndTurn,
+        Some("stop_sequence") => LlmStopReason::StopSequence,
+        Some("max_tokens") => LlmStopReason::MaxTokens,
+        Some("tool_use") => LlmStopReason::ToolUse,
+        Some("refusal") => LlmStopReason::Refusal,
+        Some(other) => LlmStopReason::Other {
+            reason: other.to_string(),
+        },
     }
 }
 
@@ -183,7 +187,11 @@ async fn anthropic_complete(
         }
     }
 
-    // For structured output, use tool_use with a single "extract" tool
+    // Tool-use serialization: the response_format JsonSchema mode uses a
+    // single synthesized "extract" tool with `tool_choice: any`. The agent
+    // path supplies its own tool array via `request.tools` and leaves
+    // `tool_choice` unset so the model decides whether to call any. The two
+    // modes are mutually exclusive at the authoring layer.
     let (tools, tool_choice) = match &request.response_format {
         ResponseFormat::JsonSchema { schema } => {
             let tool = AnthropicTool {
@@ -198,7 +206,22 @@ async fn anthropic_complete(
                 }),
             )
         }
-        ResponseFormat::Text => (None, None),
+        ResponseFormat::Text => {
+            if request.tools.is_empty() {
+                (None, None)
+            } else {
+                let agent_tools = request
+                    .tools
+                    .iter()
+                    .map(|t| AnthropicTool {
+                        name: &t.name,
+                        description: &t.description,
+                        input_schema: &t.input_schema,
+                    })
+                    .collect();
+                (Some(agent_tools), None)
+            }
+        }
     };
 
     let max_tokens = request.max_tokens.unwrap_or(4096);
@@ -245,25 +268,38 @@ async fn anthropic_complete(
         .await
         .map_err(|e| LlmError::Api(format!("failed to parse Anthropic response: {e}")))?;
 
-    let finish_reason = parse_stop_reason(resp.stop_reason.as_deref());
+    let stop_reason = parse_stop_reason(resp.stop_reason.as_deref());
 
-    let usage = TokenUsage {
+    let usage = LlmUsage {
         input_tokens: resp.usage.input_tokens,
         output_tokens: resp.usage.output_tokens,
         total_tokens: resp.usage.input_tokens + resp.usage.output_tokens,
     };
 
-    // Extract content: text blocks and/or tool_use blocks
+    // Extract content: text blocks become `content` / `structured_output`
+    // (`extract` tool input wins in JsonSchema mode); agent-mode tool_use
+    // blocks become `tool_calls`. The two paths are disjoint because the
+    // request-side `tool_choice` differs (`any` vs unset).
     let mut text_parts = Vec::new();
     let mut structured_output: Option<serde_json::Value> = None;
+    let mut tool_calls: Vec<LlmToolCall> = Vec::new();
+    let in_json_mode = matches!(request.response_format, ResponseFormat::JsonSchema { .. });
 
     for block in &resp.content {
         match block {
             AnthropicContent::Text { text } => {
                 text_parts.push(text.clone());
             }
-            AnthropicContent::ToolUse { input, .. } => {
-                structured_output = Some(input.clone());
+            AnthropicContent::ToolUse { id, name, input } => {
+                if in_json_mode {
+                    structured_output = Some(input.clone());
+                } else {
+                    tool_calls.push(LlmToolCall {
+                        id: id.clone(),
+                        name: name.clone(),
+                        arguments: input.clone(),
+                    });
+                }
             }
         }
     }
@@ -278,7 +314,8 @@ async fn anthropic_complete(
         content,
         usage,
         model: resp.model,
-        finish_reason,
+        stop_reason,
         structured_output,
+        tool_calls,
     })
 }

@@ -242,9 +242,55 @@ impl ExecutionBackend for LlmBackend {
                                 "output_tokens": resp.usage.output_tokens,
                                 "total_tokens": resp.usage.total_tokens,
                             })),
-                            ("finish_reason".into(), serde_json::json!(resp.finish_reason.to_string())),
+                            ("finish_reason".into(), serde_json::json!(resp.stop_reason.to_string())),
                             ("model".into(), serde_json::json!(resp.model)),
                         ]);
+
+                        // Agent path: when the LLM may have called a tool,
+                        // surface a normalized turn_result envelope and
+                        // (in tool_use stop branches) the raw tool_calls
+                        // array. The agent compiler's `t_route` transition
+                        // reads `response.tool_calls[0].name` to decide
+                        // which dispatch place to deposit to; in the final
+                        // branch it reads `response.content`. Single-shot
+                        // LLM AutomatedSteps never hit this — the compiler
+                        // never declares tools for them, so `request.tools`
+                        // is empty and the adapter returns empty tool_calls.
+                        if !request.tools.is_empty() {
+                            let turn_result = aithericon_executor_domain::LlmTurnResult {
+                                content: if resp.content.is_empty() {
+                                    None
+                                } else {
+                                    Some(resp.content.clone())
+                                },
+                                tool_calls: resp.tool_calls.clone(),
+                                stop_reason: resp.stop_reason.clone(),
+                                usage: resp.usage.clone(),
+                            };
+                            outputs.insert(
+                                "turn_result".into(),
+                                serde_json::to_value(&turn_result).unwrap_or_default(),
+                            );
+
+                            // Emit a per-turn event so the UI can render
+                            // each tool call as it happens. Gated by the
+                            // job's `stream_events` set: non-agent LLM
+                            // jobs don't include `AgentTurn` in stream_events
+                            // and the event drops silently. v1 reports
+                            // `turn: 0` — runtime turn-threading lands when
+                            // the engine wires p_state into config_ref
+                            // (docs/12 § 3.4 follow-up).
+                            if let Some(ref es) = event_stream {
+                                es.agent_turn(
+                                    0,
+                                    resp.stop_reason.clone(),
+                                    turn_result.content.clone(),
+                                    resp.tool_calls.clone(),
+                                    resp.usage.clone(),
+                                )
+                                .await;
+                            }
+                        }
 
                         // Per-key unpack: when the LLM returned a structured-JSON
                         // object and the spec declares multiple output fields,
@@ -307,7 +353,7 @@ impl ExecutionBackend for LlmBackend {
                                     ("input_tokens".into(), resp.usage.input_tokens.to_string()),
                                     ("output_tokens".into(), resp.usage.output_tokens.to_string()),
                                     ("total_tokens".into(), resp.usage.total_tokens.to_string()),
-                                    ("finish_reason".into(), resp.finish_reason.to_string()),
+                                    ("finish_reason".into(), resp.stop_reason.to_string()),
                                 ]),
                             )
                             .await;

@@ -218,7 +218,7 @@
           "backends"
         ],
         "summary": "GET /api/v1/backends",
-        "description": "List every registered backend with its display metadata, default editor\nconfig, default output port shape, dispatch mode (executor job vs.\nengine effect), resource channel (staged file vs. config overlay), and\nschedulability.\n\nThe frontend reads this once per session (cached in\n`app/src/lib/editor/backend-registry.svelte.ts`) and drives the\nAutomatedStep editor panel from it — backend picker label/icon,\ndefault config seed, default output port. The Svelte config-panel\ncomponent map (`backend-panels.ts`) stays hand-written; everything\nelse flows from here.\n\nPhase 1 ships SMTP only. The legacy match arms in `backend_configs.rs`,\n`template.rs`, etc. cover the other 8 backends until they're migrated.",
+        "description": "List every registered backend with its display metadata, default editor\nconfig, default output port shape, dispatch mode (executor job vs.\nengine effect), resource channel (staged file vs. config overlay), and\nschedulability.\n\nThe frontend reads this once per session (cached in\n`app/src/lib/editor/backend-registry.svelte.ts`) and drives the\nAutomatedStep editor panel from it — backend picker label/icon,\ndefault config seed, default output port. The Svelte config-panel\ncomponent map (`backend-panels.ts`) stays hand-written; everything\nelse flows from here.",
         "operationId": "list_backends",
         "responses": {
           "200": {
@@ -8327,7 +8327,7 @@
       },
       "ScopeEntryDto": {
         "type": "object",
-        "description": "One reachable, producer-attributed reference the guard picker should\noffer at a node. The single source of truth for editor scope —\nreplaces the deleted client-side `computeScopes` reimplementation.",
+        "description": "One reachable, producer-attributed reference the guard picker should\noffer at a node. The single source of truth for editor scope —\nreplaces the deleted client-side `computeScopes` reimplementation.\n\n`ty` is the recursive [`TyDescriptor`] tree so the picker can drill into\nnested objects and array element shapes without additional calls; for\nFile-anchored containers the tree's root carries `selectable: true` so\nthe row is pickable as a whole while its children are individually\npickable too.",
         "required": [
           "path",
           "ty",
@@ -8350,8 +8350,8 @@
             "type": "string"
           },
           "ty": {
-            "type": "string",
-            "description": "Type label (`String`, `Number`, `Bool`, `Opaque(..)`, …)."
+            "$ref": "#/components/schemas/TyDescriptor",
+            "description": "Recursive type descriptor. Single source of truth for the picker's\nnested drill-down and (later) array `[*]` iteration affordance."
           }
         }
       },
@@ -9166,6 +9166,24 @@
           "bubble"
         ]
       },
+      "ToolMeta": {
+        "type": "object",
+        "description": "Marks a child of an Agent as a callable tool.",
+        "required": [
+          "toolName",
+          "toolDescription"
+        ],
+        "properties": {
+          "toolDescription": {
+            "type": "string",
+            "description": "Shown to the LLM in the tool listing."
+          },
+          "toolName": {
+            "type": "string",
+            "description": "Rhai-identifier-safe; unique within the parent agent. The agent\ncompiler emits a hard `CompileError` on collision."
+          }
+        }
+      },
       "TriggerHistoryResponse": {
         "type": "object",
         "required": [
@@ -9393,6 +9411,107 @@
             "format": "int32"
           }
         }
+      },
+      "TyDescriptor": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "name",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "scalar"
+                ]
+              },
+              "name": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "fields",
+              "selectable",
+              "kind"
+            ],
+            "properties": {
+              "fields": {
+                "type": "object",
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/TyDescriptor"
+                },
+                "propertyNames": {
+                  "type": "string"
+                }
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "object"
+                ]
+              },
+              "selectable": {
+                "type": "boolean"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "element",
+              "kind"
+            ],
+            "properties": {
+              "element": {
+                "$ref": "#/components/schemas/TyDescriptor"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "array"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "any"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "name",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "opaque"
+                ]
+              },
+              "name": {
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "description": "Wire-shaped recursive descriptor of a producer field's type — the picker\nwalks this to render nested fields and array element shapes. Mirrors\n[`TokenShape`] but flattened to a serializable form. Plain (non-anchored)\nObject containers carry `selectable: false`: the picker may expand them\nbut the row body acts as a toggle, not an emit (the user must drill into\nscalar / file / array leaves). File-anchored containers carry\n`selectable: true`, preserving the existing precedent that `document` is\npickable as a whole **and** `document.url` etc. are individually pickable."
       },
       "TypeSurfaceResponse": {
         "type": "object",
@@ -9865,6 +9984,17 @@
               "null"
             ],
             "description": "Stable, author-facing namespace for guard references to this node's\nproduced fields: a guard writes `<slug>.<field>` and the compiler\nrebinds it to this node's parked data place. Rhai-identifier-safe and\nunique within a graph. Optional on the wire — when absent the compiler\nderives a deterministic fallback from `id` (clean-cut: no stored\ntemplates to migrate). See [`WorkflowNode::slug`]."
+          },
+          "toolMeta": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ToolMeta",
+                "description": "When this node is a child of an Agent container and should be\nexposed to the LLM as a callable tool, this carries the tool's\n`name` (Rhai-identifier-safe, unique within the parent agent) and\n`description` (shown to the LLM). Any node kind can be a tool;\nits input port becomes the tool's argument schema. Absent on\nnon-tool children and on top-level nodes."
+              }
+            ]
           },
           "type": {
             "type": "string"

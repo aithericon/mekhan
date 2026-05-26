@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 
+use aithericon_executor_domain::{LlmStopReason, LlmToolCall, LlmUsage};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use crate::port::{
-    CompletionPort, CompletionRequest, CompletionResponse, FinishReason, LlmError,
-    ResponseFormat, Role, TokenUsage,
+    CompletionPort, CompletionRequest, CompletionResponse, LlmError, ResponseFormat, Role,
 };
 
 pub struct OpenAiAdapter;
@@ -48,6 +48,24 @@ struct OpenAiChatRequest<'a> {
     temperature: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<Vec<OpenAiToolDecl<'a>>>,
+    /// Disable parallel tool calls per docs/12 § 6.1 (v1 is serial only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parallel_tool_calls: Option<bool>,
+}
+
+#[derive(Serialize)]
+struct OpenAiToolDecl<'a> {
+    r#type: &'a str,
+    function: OpenAiFunctionDecl<'a>,
+}
+
+#[derive(Serialize)]
+struct OpenAiFunctionDecl<'a> {
+    name: &'a str,
+    description: &'a str,
+    parameters: &'a serde_json::Value,
 }
 
 #[derive(Serialize)]
@@ -112,6 +130,25 @@ struct OpenAiChoice {
 #[derive(Deserialize)]
 struct OpenAiResponseMessage {
     content: Option<String>,
+    #[serde(default)]
+    tool_calls: Option<Vec<OpenAiToolCallResp>>,
+}
+
+#[derive(Deserialize)]
+struct OpenAiToolCallResp {
+    id: String,
+    #[serde(default)]
+    r#type: Option<String>,
+    function: OpenAiToolCallFn,
+}
+
+#[derive(Deserialize)]
+struct OpenAiToolCallFn {
+    name: String,
+    /// OpenAI sends `arguments` as a JSON-encoded string, not a JSON value.
+    /// Parsed lazily at the adapter boundary so downstream code sees a real
+    /// `serde_json::Value`.
+    arguments: String,
 }
 
 #[derive(Deserialize, Default)]
@@ -132,12 +169,15 @@ fn role_str(role: &Role) -> &'static str {
     }
 }
 
-fn parse_finish_reason(reason: Option<&str>) -> FinishReason {
+fn parse_finish_reason(reason: Option<&str>) -> LlmStopReason {
     match reason {
-        Some("stop") | None => FinishReason::Stop,
-        Some("length") => FinishReason::Length,
-        Some("content_filter") => FinishReason::ContentFilter,
-        Some(other) => FinishReason::Other(other.to_string()),
+        Some("stop") | None => LlmStopReason::EndTurn,
+        Some("length") => LlmStopReason::MaxTokens,
+        Some("content_filter") => LlmStopReason::Refusal,
+        Some("tool_calls") => LlmStopReason::ToolUse,
+        Some(other) => LlmStopReason::Other {
+            reason: other.to_string(),
+        },
     }
 }
 
@@ -187,12 +227,33 @@ async fn openai_complete(
         }),
     };
 
+    let tools_decl: Option<Vec<OpenAiToolDecl>> = if request.tools.is_empty() {
+        None
+    } else {
+        Some(
+            request
+                .tools
+                .iter()
+                .map(|t| OpenAiToolDecl {
+                    r#type: "function",
+                    function: OpenAiFunctionDecl {
+                        name: &t.name,
+                        description: &t.description,
+                        parameters: &t.input_schema,
+                    },
+                })
+                .collect(),
+        )
+    };
+
     let body = OpenAiChatRequest {
         model: &request.model,
         messages,
         response_format,
         temperature: request.temperature,
         max_tokens: request.max_tokens,
+        parallel_tool_calls: if tools_decl.is_some() { Some(false) } else { None },
+        tools: tools_decl,
     };
 
     let url = format!(
@@ -234,9 +295,9 @@ async fn openai_complete(
         .clone()
         .unwrap_or_default();
 
-    let finish_reason = parse_finish_reason(choice.finish_reason.as_deref());
+    let stop_reason = parse_finish_reason(choice.finish_reason.as_deref());
 
-    let usage = TokenUsage {
+    let usage = LlmUsage {
         input_tokens: resp.usage.prompt_tokens,
         output_tokens: resp.usage.completion_tokens,
         total_tokens: resp.usage.total_tokens,
@@ -255,11 +316,38 @@ async fn openai_complete(
         ResponseFormat::Text => None,
     };
 
+    let mut tool_calls: Vec<LlmToolCall> = Vec::new();
+    if let Some(raw_calls) = &choice.message.tool_calls {
+        for c in raw_calls {
+            // OpenAI documents `type: "function"`; defensively accept unset
+            // (older proxies sometimes elide it) but skip anything else.
+            if let Some(t) = &c.r#type {
+                if t != "function" {
+                    continue;
+                }
+            }
+            let arguments: serde_json::Value = serde_json::from_str(&c.function.arguments)
+                .map_err(|e| {
+                    LlmError::Parse(format!(
+                        "OpenAI tool_call arguments are not valid JSON: {e}\n\
+                         arguments: {}",
+                        c.function.arguments
+                    ))
+                })?;
+            tool_calls.push(LlmToolCall {
+                id: c.id.clone(),
+                name: c.function.name.clone(),
+                arguments,
+            });
+        }
+    }
+
     Ok(CompletionResponse {
         content,
         usage,
         model: resp.model,
-        finish_reason,
+        stop_reason,
         structured_output,
+        tool_calls,
     })
 }

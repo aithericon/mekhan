@@ -133,6 +133,25 @@ pub struct WorkflowNode {
     /// Explicit height (used by scope nodes).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub height: Option<f64>,
+    /// When this node is a child of an Agent container and should be
+    /// exposed to the LLM as a callable tool, this carries the tool's
+    /// `name` (Rhai-identifier-safe, unique within the parent agent) and
+    /// `description` (shown to the LLM). Any node kind can be a tool;
+    /// its input port becomes the tool's argument schema. Absent on
+    /// non-tool children and on top-level nodes.
+    #[serde(rename = "toolMeta", skip_serializing_if = "Option::is_none")]
+    pub tool_meta: Option<ToolMeta>,
+}
+
+/// Marks a child of an Agent as a callable tool.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolMeta {
+    /// Rhai-identifier-safe; unique within the parent agent. The agent
+    /// compiler emits a hard `CompileError` on collision.
+    pub tool_name: String,
+    /// Shown to the LLM in the tool listing.
+    pub tool_description: String,
 }
 
 impl WorkflowNode {
@@ -1488,83 +1507,23 @@ pub fn default_automated_input_port() -> Port {
 
 /// Canonical output-port shape for an `AutomatedStep` whose `output` field
 /// hasn't been customized. Each backend declares the fields its executor
-/// reliably surfaces. Editor exposes "Reset to default" by re-deriving against
-/// the current `backendType`.
+/// reliably surfaces via [`crate::backends::BackendDecl::default_output_fields`].
+/// Editor exposes "Reset to default" by re-deriving against the current
+/// `backendType`.
+///
+/// `BACKENDS` covers every `ExecutionBackendType` variant — the registry test
+/// (`backend_registry_coverage.rs`) enforces it. No fallback needed.
 pub fn default_output_port(backend: ExecutionBackendType) -> Port {
-    // Registry-first: backends migrated to `crate::backends` carry their
-    // default port shape in the decl. The legacy match below covers
-    // backends not yet in the registry.
-    if let Some(decl) = crate::backends::lookup(backend) {
-        return Port {
-            id: "out".to_string(),
-            label: "Output".to_string(),
-            fields: decl
-                .default_output_fields
-                .iter()
-                .map(|f| f.into_port_field())
-                .collect(),
-        };
-    }
-    let fields = match backend {
-        ExecutionBackendType::Python => vec![port_field("result", "Result", FieldKind::Json)],
-        ExecutionBackendType::Process => vec![
-            port_field("stdout", "Stdout", FieldKind::Textarea),
-            port_field("stderr", "Stderr", FieldKind::Textarea),
-            port_field("exit_code", "Exit Code", FieldKind::Number),
-        ],
-        ExecutionBackendType::Docker => vec![
-            port_field("stdout", "Stdout", FieldKind::Textarea),
-            port_field("stderr", "Stderr", FieldKind::Textarea),
-            port_field("exit_code", "Exit Code", FieldKind::Number),
-            port_field("image", "Image", FieldKind::Text),
-        ],
-        ExecutionBackendType::Http => vec![
-            port_field("status_code", "Status Code", FieldKind::Number),
-            port_field("body", "Body", FieldKind::Json),
-            port_field("headers", "Headers", FieldKind::Json),
-        ],
-        ExecutionBackendType::Llm => vec![
-            port_field("text", "Text", FieldKind::Textarea),
-            port_field("usage", "Usage", FieldKind::Json),
-        ],
-        ExecutionBackendType::FileOps => vec![port_field("files", "Files", FieldKind::Json)],
-        ExecutionBackendType::Kreuzberg => vec![
-            port_field("text", "Text", FieldKind::Textarea),
-            port_field("metadata", "Metadata", FieldKind::Json),
-        ],
-        // SMTP renders to a structured `outcome` envelope plus rendered
-        // subject + body previews. The instance-view renderer dispatches on
-        // `outcome.type`; the other fields are surfaced for downstream
-        // workflow logic (e.g. "did the welcome email actually go out?").
-        ExecutionBackendType::Smtp => vec![
-            port_field("outcome", "Outcome", FieldKind::Json),
-            port_field("subject", "Subject", FieldKind::Text),
-            port_field("body_text_preview", "Body (text)", FieldKind::Textarea),
-            port_field("body_html_preview", "Body (html)", FieldKind::Textarea),
-        ],
-        // Matches the engine `catalogue_lookup` handler's result token.
-        ExecutionBackendType::CatalogueQuery => vec![
-            port_field("artifacts", "Artifacts", FieldKind::Json),
-            port_field("total_count", "Total", FieldKind::Number),
-            port_field("source_process_ids", "Source Process IDs", FieldKind::Json),
-        ],
-    };
+    let decl = crate::backends::lookup(backend)
+        .expect("BACKENDS must cover every ExecutionBackendType; enforced by registry test");
     Port {
         id: "out".to_string(),
         label: "Output".to_string(),
-        fields,
-    }
-}
-
-fn port_field(name: &str, label: &str, kind: FieldKind) -> PortField {
-    PortField {
-        name: name.to_string(),
-        label: label.to_string(),
-        kind,
-        required: false,
-        options: None,
-        description: None,
-        accept: None,
+        fields: decl
+            .default_output_fields
+            .iter()
+            .map(|f| f.into_port_field())
+            .collect(),
     }
 }
 
@@ -1947,6 +1906,7 @@ impl WorkflowGraph {
                     parent_id: None,
                     width: None,
                     height: None,
+                    tool_meta: None,
                 },
                 WorkflowNode {
                     id: "end".to_string(),
@@ -1962,6 +1922,7 @@ impl WorkflowGraph {
                     parent_id: None,
                     width: None,
                     height: None,
+                    tool_meta: None,
                 },
             ],
             edges: vec![WorkflowEdge {
@@ -2065,6 +2026,18 @@ pub mod dsl {
 
         #[serde(skip_serializing_if = "Option::is_none")]
         pub height: Option<f64>,
+
+        /// When this step is a child of an Agent and should be exposed
+        /// to the LLM as a callable tool. Maps 1:1 to
+        /// [`super::ToolMeta`] on the node. Absent on non-tool children.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub tool_meta: Option<DslToolMeta>,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct DslToolMeta {
+        pub tool_name: String,
+        pub tool_description: String,
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2402,6 +2375,10 @@ pub mod dsl {
                 children: Vec::new(),
                 width: node.width,
                 height: node.height,
+                tool_meta: node.tool_meta.as_ref().map(|tm| DslToolMeta {
+                    tool_name: tm.tool_name.clone(),
+                    tool_description: tm.tool_description.clone(),
+                }),
             };
 
             match self {
@@ -2711,6 +2688,7 @@ mod tests {
             parent_id: Some("scope1".to_string()),
             width: None,
             height: None,
+            tool_meta: None,
         };
         let json = serde_json::to_value(&node).unwrap();
         assert_eq!(json["parentId"], "scope1");
@@ -2733,6 +2711,7 @@ mod tests {
             parent_id: None,
             width: Some(500.0),
             height: Some(300.0),
+            tool_meta: None,
         };
         let json = serde_json::to_value(&node).unwrap();
         assert_eq!(json["width"], 500.0);
@@ -2761,6 +2740,7 @@ mod tests {
             parent_id: None,
             width: None,
             height: None,
+            tool_meta: None,
         };
         let json = serde_json::to_string(&node).unwrap();
         assert!(!json.contains("parentId"), "parentId should be omitted when None");

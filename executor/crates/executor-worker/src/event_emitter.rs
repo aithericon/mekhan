@@ -179,6 +179,27 @@ impl EventStream for StreamContext {
         )
         .await;
     }
+
+    async fn agent_turn(
+        &self,
+        turn: u32,
+        stop_reason: aithericon_executor_domain::LlmStopReason,
+        content: Option<String>,
+        tool_calls: Vec<aithericon_executor_domain::LlmToolCall>,
+        usage: aithericon_executor_domain::LlmUsage,
+    ) {
+        self.maybe_emit(
+            EventCategory::AgentTurn,
+            StatusDetail::AgentTurn {
+                turn,
+                stop_reason,
+                content,
+                tool_calls,
+                usage,
+            },
+        )
+        .await;
+    }
 }
 
 #[cfg(test)]

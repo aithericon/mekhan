@@ -95,6 +95,14 @@ pub(crate) enum PathSegment {
     Field(String),
     /// `[<n>]` — non-negative integer.
     Index(usize),
+    /// `[*]` — the iteration boundary marker introduced by Feature B. In
+    /// ref grammars (`<slug>.tasks[*].title`) this says "the consumer
+    /// iterates the parked array here; the segments that follow address
+    /// each element". `IndexAll` is **deliberately not lowerable** by
+    /// `__pluck` — it is a structural annotation for borrow planning, not a
+    /// runtime accessor — so `placeholder_to_accessor` rejects any path
+    /// containing it.
+    IndexAll,
 }
 
 /// Validate a `{{ … }}` placeholder body and return its parsed path
@@ -143,6 +151,19 @@ pub(crate) fn parse_placeholder_segments(inner: &str) -> Option<Vec<PathSegment>
             }
             b'[' => {
                 i += 1;
+                // Feature B: `[*]` — iteration boundary. Distinct from a
+                // numeric `[<n>]` index; structurally annotates the path
+                // and is rejected by `placeholder_to_accessor` (text
+                // interpolation can't iterate).
+                if i < bytes.len() && bytes[i] == b'*' {
+                    i += 1;
+                    if i >= bytes.len() || bytes[i] != b']' {
+                        return None;
+                    }
+                    segs.push(PathSegment::IndexAll);
+                    i += 1; // consume ']'
+                    continue;
+                }
                 let num_start = i;
                 while i < bytes.len() && bytes[i].is_ascii_digit() {
                     i += 1;
@@ -169,11 +190,18 @@ pub(crate) fn parse_placeholder_segments(inner: &str) -> Option<Vec<PathSegment>
 /// than hard-erroring. See [`parse_placeholder_segments`] for the parser.
 pub(crate) fn placeholder_to_accessor(inner: &str) -> Option<String> {
     let segs = parse_placeholder_segments(inner)?;
+    // `[*]` is a structural iteration boundary for ref grammars, not a
+    // runtime accessor — text interpolation can't iterate. Reject the
+    // whole placeholder so the source string is left literal.
+    if segs.iter().any(|s| matches!(s, PathSegment::IndexAll)) {
+        return None;
+    }
     let rendered: Vec<String> = segs
         .iter()
         .map(|s| match s {
             PathSegment::Field(f) => format!("\"{f}\""),
             PathSegment::Index(n) => n.to_string(),
+            PathSegment::IndexAll => unreachable!("rejected above"),
         })
         .collect();
     Some(format!("__pluck(input, [{}])", rendered.join(", ")))
@@ -562,6 +590,7 @@ mod tests {
             parent_id: None,
             width: None,
             height: None,
+            tool_meta: None,
         }
     }
 
@@ -593,6 +622,40 @@ mod tests {
             placeholder_to_accessor("items[0].amount"),
             Some(r#"__pluck(input, ["items", 0, "amount"])"#.to_string())
         );
+    }
+
+    #[test]
+    fn placeholder_segments_parses_wildcard_index() {
+        // Feature B: `[*]` is the iteration boundary marker — accepted by
+        // the parser so ref grammars can carry it through, but rejected by
+        // `placeholder_to_accessor` (the text interpolator can't iterate).
+        let segs = parse_placeholder_segments("tasks[*].title").expect("parse");
+        assert_eq!(
+            segs,
+            vec![
+                PathSegment::Field("tasks".to_string()),
+                PathSegment::IndexAll,
+                PathSegment::Field("title".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn placeholder_to_accessor_rejects_wildcard() {
+        // `[*]` is structural; emitting a runtime accessor would silently
+        // pick a single element. The whole placeholder is rejected so the
+        // literal text survives — same fail-soft contract as a malformed
+        // body.
+        assert_eq!(placeholder_to_accessor("tasks[*].title"), None);
+        assert_eq!(placeholder_to_accessor("tasks[*]"), None);
+    }
+
+    #[test]
+    fn placeholder_segments_unterminated_wildcard_fails() {
+        // `[*` without `]` is malformed; parser returns None per the
+        // existing contract for unterminated bracket forms.
+        assert_eq!(parse_placeholder_segments("tasks[*"), None);
+        assert_eq!(parse_placeholder_segments("tasks[*x]"), None);
     }
 
     #[test]
@@ -784,6 +847,7 @@ mod tests {
             parent_id: None,
             width: None,
             height: None,
+            tool_meta: None,
         };
         assert_eq!(
             build_human_task_injection_logic(&node),
