@@ -7,6 +7,21 @@ export default defineConfig({
 	resolve: {
 		dedupe: ['svelte', 'bits-ui']
 	},
+	// Pre-bundle the editor's heavy runtime deps so the first navigation to
+	// /templates/[id] doesn't trigger lazy optimization mid-page-load. Without
+	// these, Vite discovers `yjs`/`y-protocols`/`@xyflow/svelte` while serving
+	// the editor route, optimizes them on the fly, and (depending on cache
+	// state) can force a full reload — which is what the "Reconnecting..."
+	// flash on first open was about.
+	optimizeDeps: {
+		include: [
+			'@xyflow/svelte',
+			'yjs',
+			'y-protocols/awareness',
+			'bits-ui',
+			'@dagrejs/dagre'
+		]
+	},
 	server: {
 		proxy: {
 			// Petri-lab engine API (port 3030)
