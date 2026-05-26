@@ -9,6 +9,7 @@
 	import GuardEditor from './GuardEditor.svelte';
 	import { Input } from '$lib/components/ui/input';
 	import { Button } from '$lib/components/ui/button';
+	import { Checkbox } from '$lib/components/ui/checkbox';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 
 	type Props = {
@@ -179,12 +180,11 @@
 	<label
 		class="flex items-center gap-2 rounded-lg border border-dashed border-border p-2 text-sm text-muted-foreground"
 	>
-		<input
-			type="checkbox"
+		<Checkbox
 			checked={!!data.defaultBranch}
 			disabled={readonly}
 			data-testid="checkbox-default-branch"
-			onchange={(e) => toggleDefault((e.currentTarget as HTMLInputElement).checked)}
+			onCheckedChange={(checked) => toggleDefault(checked === true)}
 		/>
 		<span>
 			Add default (else) branch — taken when no guard matches. Wire its

@@ -3,6 +3,8 @@
 	import { onMount } from 'svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { TooltipProvider } from '$lib/components/ui/tooltip';
+	import { ModeWatcher } from 'mode-watcher';
+	import ThemeToggle from '$lib/components/ThemeToggle.svelte';
 	import User from '@lucide/svelte/icons/user';
 	import { auth } from '$lib/auth/store.svelte';
 	import { ensureAuthInitialized, requireSession } from '$lib/auth/guard';
@@ -27,6 +29,7 @@
 	}
 </script>
 
+<ModeWatcher />
 <TooltipProvider>
 <div class="flex h-screen flex-col">
 	<header class="flex h-12 shrink-0 items-center border-b border-border bg-card px-4" data-testid="app-header">
@@ -58,29 +61,32 @@
 			>
 				Processes
 			</Button>
-			{#if auth.isAuthenticated}
-				<span class="ml-auto h-4 w-px bg-border" aria-hidden="true"></span>
-				<Button
-					variant="ghost"
-					size="sm"
-					href="/profile"
-					data-testid="nav-user"
-					class="gap-1.5 text-muted-foreground"
-					title="View profile"
-				>
-					<User class="size-3.5" />
-					{auth.session?.user.displayName ?? auth.session?.user.email ?? 'Profile'}
-				</Button>
-				<Button
-					variant="ghost"
-					size="sm"
-					data-testid="nav-logout"
-					class="text-muted-foreground"
-					onclick={signOut}
-				>
-					Sign out
-				</Button>
-			{/if}
+			<div class="ml-auto flex items-center gap-1">
+				<ThemeToggle />
+				{#if auth.isAuthenticated}
+					<span class="h-4 w-px bg-border" aria-hidden="true"></span>
+					<Button
+						variant="ghost"
+						size="sm"
+						href="/profile"
+						data-testid="nav-user"
+						class="gap-1.5 text-muted-foreground"
+						title="View profile"
+					>
+						<User class="size-3.5" />
+						{auth.session?.user.displayName ?? auth.session?.user.email ?? 'Profile'}
+					</Button>
+					<Button
+						variant="ghost"
+						size="sm"
+						data-testid="nav-logout"
+						class="text-muted-foreground"
+						onclick={signOut}
+					>
+						Sign out
+					</Button>
+				{/if}
+			</div>
 		</nav>
 	</header>
 	<main class="flex-1 overflow-hidden">

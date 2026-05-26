@@ -14,6 +14,8 @@
 		type ScopeEntry
 	} from '$lib/editor/guard-scope';
 	import type { ResourceTypeInfo, ResourceSummary } from '$lib/api/resources';
+	import { Input } from '$lib/components/ui/input';
+	import { Textarea } from '$lib/components/ui/textarea';
 
 	type Props = {
 		binding: YjsGraphBinding;
@@ -111,26 +113,24 @@
 		<div class="flex-1 space-y-4 overflow-y-auto p-3">
 			<div class="space-y-1.5">
 				<label for="ide-node-label" class="text-sm font-medium text-muted-foreground">Label</label>
-				<input
+				<Input
 					id="ide-node-label"
 					type="text"
 					value={nodeData.label}
 					disabled={readonly}
 					oninput={(e) => updateField('label', (e.currentTarget as HTMLInputElement).value)}
-					class="w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-sm text-foreground focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70"
 				/>
 			</div>
 
 			<div class="space-y-1.5">
 				<label for="ide-node-desc" class="text-sm font-medium text-muted-foreground">Description</label>
-				<textarea
+				<Textarea
 					id="ide-node-desc"
 					value={nodeData.description ?? ''}
 					disabled={readonly}
 					oninput={(e) => updateField('description', (e.currentTarget as HTMLTextAreaElement).value)}
 					rows={2}
-					class="w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-sm text-foreground focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70"
-				></textarea>
+				/>
 			</div>
 
 			{#if showScopePicker}

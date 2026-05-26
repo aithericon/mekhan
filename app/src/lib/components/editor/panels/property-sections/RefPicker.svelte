@@ -147,7 +147,7 @@
 	<Popover.Trigger
 		{disabled}
 		class={cn(
-			'flex h-9 w-full items-center justify-between gap-1.5 rounded-md border border-input bg-transparent px-3 text-sm outline-none transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50',
+			'flex h-9 w-full items-center justify-between gap-1.5 rounded-md border border-input bg-input px-3 text-sm shadow-xs outline-none transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50',
 			triggerClass
 		)}
 	>

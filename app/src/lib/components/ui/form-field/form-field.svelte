@@ -40,8 +40,8 @@
 	{@render children()}
 
 	{#if error}
-		<p data-slot="form-field-error" class="text-xs text-destructive">{error}</p>
+		<p data-slot="form-field-error" class="text-sm text-destructive">{error}</p>
 	{:else if description}
-		<p data-slot="form-field-description" class="text-xs text-muted-foreground">{description}</p>
+		<p data-slot="form-field-description" class="text-sm text-muted-foreground">{description}</p>
 	{/if}
 </div>

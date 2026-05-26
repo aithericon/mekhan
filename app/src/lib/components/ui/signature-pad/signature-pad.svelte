@@ -162,7 +162,7 @@
 				variant="ghost"
 				size="sm"
 				type="button"
-				class="h-auto px-0 py-0 text-xs text-muted-foreground hover:text-destructive"
+				class="h-auto px-0 py-0 text-sm text-muted-foreground hover:text-destructive"
 				onclick={handleClear}
 				data-testid={dataTestId ? `${dataTestId}-clear` : undefined}
 			>

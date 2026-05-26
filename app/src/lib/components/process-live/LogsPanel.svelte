@@ -3,6 +3,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Badge } from '$lib/components/ui/badge';
+	import { Checkbox } from '$lib/components/ui/checkbox';
 	import ScrollText from '@lucide/svelte/icons/scroll-text';
 	import ChevronRight from '@lucide/svelte/icons/chevron-right';
 	import type { LogTailRow } from '$lib/api/client';
@@ -182,8 +183,8 @@
 			{/each}
 		</div>
 
-		<label class="flex cursor-pointer items-center gap-1 text-sm text-muted-foreground">
-			<input type="checkbox" bind:checked={followTail} class="size-3.5 accent-primary" />
+		<label class="flex cursor-pointer items-center gap-2 text-sm text-muted-foreground">
+			<Checkbox bind:checked={followTail} />
 			Follow tail
 		</label>
 	</div>

@@ -2,6 +2,7 @@
 	import { useSvelteFlow } from '@xyflow/svelte';
 	import { Search, X } from '@lucide/svelte';
 	import type { PetriNet } from '$lib/types/petri';
+	import { Input } from '$lib/components/ui/input';
 
 	interface Props {
 		topology: PetriNet | null;
@@ -94,11 +95,11 @@
 	>
 		<div class="relative">
 			<Search class="absolute left-2 top-2 w-4 h-4 text-muted-foreground pointer-events-none" />
-			<input
-				bind:this={inputEl}
+			<Input
+				bind:ref={inputEl}
 				bind:value={query}
 				placeholder="Search places & transitions..."
-				class="w-full pl-8 pr-8 py-1.5 text-sm rounded-md border bg-card text-foreground shadow-lg focus:outline-none focus:ring-2 focus:ring-primary"
+				class="pl-8 pr-8 shadow-lg"
 			/>
 			<button
 				class="absolute right-2 top-2 text-muted-foreground hover:text-foreground"

@@ -6,6 +6,7 @@
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { Button } from '$lib/components/ui/button';
 	import * as Select from '$lib/components/ui/select';
+	import { Checkbox } from '$lib/components/ui/checkbox';
 	import Plus from '@lucide/svelte/icons/plus';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import CronPreview from './CronPreview.svelte';
@@ -218,10 +219,15 @@
 	const fireUrl = $derived(`${origin}/api/triggers/${nodeId ?? '{node_id}'}/fire`);
 
 	// With file fields, fire as multipart/form-data: one `-F` per file part +
-	// a `payload` part for the rest. Otherwise a plain JSON body.
+	// a `payload` part for the rest. Otherwise a plain JSON body. SSE default
+	// adds `-N` + `Accept: text/event-stream` so curl prints events as they
+	// arrive on the same response — no second request needed.
 	const curlCommand = $derived.by(() => {
+		const sse = replyDefault === 'sse';
+		const flags = sse ? ' -N' : '';
+		const acceptHeader = sse ? [`  -H 'Accept: text/event-stream'`] : [];
 		if (fileFields.length > 0) {
-			const lines = [`curl -X POST '${fireUrl}'`];
+			const lines = [`curl${flags} -X POST '${fireUrl}'`, ...acceptHeader];
 			for (const f of fileFields) {
 				lines.push(`  -F '${f.name}=@/path/to/${f.name};type=${fileMime(f)}'`);
 			}
@@ -229,8 +235,9 @@
 			return lines.join(' \\\n');
 		}
 		return [
-			`curl -X POST '${fireUrl}'`,
+			`curl${flags} -X POST '${fireUrl}'`,
 			`  -H 'Content-Type: application/json'`,
+			...acceptHeader,
 			`  -d '${JSON.stringify({ payload: samplePayload })}'`
 		].join(' \\\n');
 	});
@@ -447,14 +454,13 @@
 				</div>
 			{/each}
 			<label class="flex items-center gap-2 pt-1">
-				<input
-					type="checkbox"
+				<Checkbox
 					checked={source.backfill ?? false}
 					disabled={readonly}
-					onchange={(e) =>
+					onCheckedChange={(checked) =>
 						update('source', {
 							...source,
-							backfill: (e.currentTarget as HTMLInputElement).checked
+							backfill: checked === true
 						})}
 				/>
 				<span class="text-sm">Backfill on publish</span>
@@ -575,9 +581,10 @@
 			</Select.Content>
 		</Select.Root>
 		<p class="mt-1 text-sm text-muted-foreground">
-			Used only when a caller doesn't request a mode. <code>SSE</code> is
-			advisory — streaming is the dedicated
-			<code>GET /api/instances/&lt;id&gt;/stream</code> endpoint.
+			Used only when a caller doesn't request a mode. <code>SSE</code> streams
+			the instance's events on the fire response itself — a leading
+			<code>fire</code> event carries the instance id and outcome, followed by
+			domain events through to a final <code>result</code>.
 		</p>
 	</FormField>
 
@@ -671,11 +678,10 @@
 	     state of the *published* template, not a draft setting. Read-only in
 	     draft (ships armed); the one live control once published. -->
 	<label class="flex items-center gap-2">
-		<input
-			type="checkbox"
+		<Checkbox
 			checked={displayEnabled}
 			disabled={!readonly || toggling}
-			onchange={(e) => toggleEnabled((e.currentTarget as HTMLInputElement).checked)}
+			onCheckedChange={(checked) => toggleEnabled(checked === true)}
 		/>
 		<span class="text-sm">Enabled</span>
 		{#if toggling}<span class="text-sm text-muted-foreground">…</span>{/if}

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import Plus from '@lucide/svelte/icons/plus';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
+	import { Input } from '$lib/components/ui/input';
 
 	type Props = {
 		entries: Record<string, unknown>;
@@ -64,21 +65,21 @@
 <div class="space-y-1.5">
 	{#each rows as row, i (i)}
 		<div class="flex items-center gap-1">
-			<input
+			<Input
 				type="text"
 				value={row.key}
 				placeholder={keyPlaceholder}
 				disabled={readonly}
 				oninput={(e) => updateKey(i, (e.currentTarget as HTMLInputElement).value)}
-				class="flex-1 rounded border border-input bg-background px-1.5 py-0.5 text-sm text-foreground focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70"
+				class="h-8 flex-1"
 			/>
-			<input
+			<Input
 				type="text"
 				value={row.value}
 				placeholder={valuePlaceholder}
 				disabled={readonly}
 				oninput={(e) => updateValue(i, (e.currentTarget as HTMLInputElement).value)}
-				class="flex-1 rounded border border-input bg-background px-1.5 py-0.5 text-sm text-foreground focus:border-ring focus:outline-none disabled:cursor-default disabled:opacity-70"
+				class="h-8 flex-1"
 			/>
 			{#if !readonly}
 				<button
