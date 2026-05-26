@@ -37,9 +37,26 @@ job "engine" {
       port     = "http"
       provider = "consul"
 
+      # Traefik routes mekhan.aithericon.eu/petri/* to the engine and strips
+      # the /petri prefix before forwarding — engine's own routes are /api/*.
+      #
+      # priority=200 explicitly beats mekhan-service's catch-all Host rule.
+      # Traefik's *default* priority is the rule length, so engine's longer
+      # rule (Host && PathPrefix) would naturally win — but setting a low
+      # explicit priority demotes the rule. Set it explicitly HIGH so the
+      # ordering is stable regardless of how mekhan-service evolves.
       tags = [
         "engine",
         "mekhan",
+        "traefik.enable=true",
+        "traefik.http.routers.engine.rule=Host(`${hostname}`) && PathPrefix(`/petri`)",
+        "traefik.http.routers.engine.priority=200",
+        "traefik.http.routers.engine.entrypoints=websecure",
+        "traefik.http.routers.engine.tls=true",
+        "traefik.http.routers.engine.tls.certresolver=letsencrypt",
+        "traefik.http.routers.engine.middlewares=engine-stripprefix",
+        "traefik.http.middlewares.engine-stripprefix.stripprefix.prefixes=/petri",
+        "traefik.http.routers.engine.service=engine",
       ]
 
       # TCP check rather than HTTP because the engine doesn't expose a

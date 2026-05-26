@@ -15,6 +15,7 @@ resource "nomad_job" "engine" {
     registry_user     = var.registry_user
     registry_password = var.registry_password
     service_port      = var.engine_service_port
+    hostname          = var.hostname
     nats_url          = var.nats_url
     cpu_mhz           = var.engine_cpu_mhz
     memory_mb         = var.engine_memory_mb

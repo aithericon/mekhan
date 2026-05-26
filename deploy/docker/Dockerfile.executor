@@ -182,6 +182,17 @@ RUN mkdir -p /var/lib/aithericon/executor \
 COPY --from=builder /out/aithericon-executor-service /usr/local/bin/aithericon-executor-service
 RUN chmod +x /usr/local/bin/aithericon-executor-service
 
+# Aithericon Python SDK — needed when ExecutionSpec config has `sdk: true`
+# (the common case). The executor's find_sdk_path() reads AITHERICON_SDK_PATH
+# below; if absent or invalid the venv-build step skips SDK injection, the
+# runner's `import aithericon` fails, and the user script's globals like
+# `input`, `log_info`, `output` are undefined — script dies with NameError.
+# Source lives in the executor workspace at packages/aithericon-sdk/ and is
+# COPYed in from the builder context (NOT from the builder stage — we need
+# the original sources, not the build target). pyproject.toml presence is
+# how find_sdk_path() validates the directory.
+COPY executor/packages/aithericon-sdk/  /opt/aithericon-sdk/
+
 # Default config — env vars only; no executor.toml baked in. Everything below
 # can be overridden at run time.
 ENV HOME=/var/lib/aithericon/executor \
@@ -192,6 +203,7 @@ ENV HOME=/var/lib/aithericon/executor \
     EXECUTOR_PYTHON__PREFER_UV=true \
     EXECUTOR_CANCEL__HTTP=false \
     EXECUTOR_CANCEL__HTTP_PORT=9090 \
+    AITHERICON_SDK_PATH=/opt/aithericon-sdk \
     TESSDATA_PREFIX=/opt/tessdata \
     RUST_LOG=info
 

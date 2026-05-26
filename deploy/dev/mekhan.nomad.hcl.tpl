@@ -144,6 +144,12 @@ EOH
         # post_logout_redirect_uris we registered (see zitadel.tf), and
         # Zitadel only allows absolute URLs — so we override the default `/`.
         MEKHAN__AUTH__POST_LOGIN_REDIRECT = "${auth_post_login_redirect}"
+        # Seed the built-in demo templates baked into the image at /app/demos
+        # (Dockerfile.service.prebuilt COPYs the demos/ folder + ENV sets
+        # MEKHAN__DEMOS__DIR=/app/demos). Seeder runs once on startup before
+        # the HTTP listener accepts requests; idempotent by templateId, so
+        # leaving this true across redeploys is safe.
+        MEKHAN__DEMOS__SEED        = "true"
         RUST_LOG                   = "${rust_log}"
       }
 
@@ -193,6 +199,12 @@ EOH
         # name; same value the service task uses.
         EXECUTOR_NATS_URL       = "${nats_url}"
         EXECUTOR_NATS_CREDS     = "$${NOMAD_SECRETS_DIR}/nats.creds"
+        # Must match the engine's EXECUTOR_NAMESPACE (set to "executor" in
+        # engine.nomad.hcl.tpl). Default in the executor service is
+        # "executor_jobs" — leaving it as default makes the executor listen on
+        # subjects engine never publishes to. Symptom: automated steps stay
+        # "pending" forever because dispatch messages sit in NATS unconsumed.
+        EXECUTOR_NAMESPACE      = "executor"
         EXECUTOR_BASE_DIR       = "/var/lib/aithericon/executor"
         EXECUTOR_CONCURRENCY    = "${executor_concurrency}"
         EXECUTOR_PYTHON__ENABLED   = "true"
@@ -200,6 +212,20 @@ EOH
         # Cancel HTTP off by default — turn on + add a port stanza above
         # if the service ever needs to cancel executor jobs synchronously.
         EXECUTOR_CANCEL__HTTP = "false"
+        # S3 / object-storage backend for staging inputs (template scripts,
+        # generated .pyi stubs) and outputs. MUST match what mekhan-service
+        # uploads to — see MEKHAN__S3__* above. Symptom of mismatch: executor
+        # logs "staging failed: artifact not found" because it's looking in a
+        # different bucket (or with no S3 backend configured, just the local
+        # FS where nothing was uploaded). The double-underscore between
+        # STORAGE and its sub-fields is config-rs's nesting separator —
+        # storage.backend, storage.endpoint, storage.credentials.access_key.
+        EXECUTOR_STORAGE__BACKEND                  = "s3"
+        EXECUTOR_STORAGE__ENDPOINT                 = "${s3_endpoint}"
+        EXECUTOR_STORAGE__BUCKET                   = "${s3_bucket}"
+        EXECUTOR_STORAGE__REGION                   = "fsn1"
+        EXECUTOR_STORAGE__CREDENTIALS__ACCESS_KEY  = "${s3_access_key}"
+        EXECUTOR_STORAGE__CREDENTIALS__SECRET_KEY  = "${s3_secret_key}"
         RUST_LOG              = "${rust_log}"
       }
 
