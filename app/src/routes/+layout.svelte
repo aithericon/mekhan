@@ -31,6 +31,7 @@
 			<Button variant="ghost" size="sm" href="/instances" data-testid="nav-instances">Instances</Button>
 			<Button variant="ghost" size="sm" href="/tasks" data-testid="nav-tasks">Tasks</Button>
 			<Button variant="ghost" size="sm" href="/catalogue" data-testid="nav-catalogue">Catalogue</Button>
+			<Button variant="ghost" size="sm" href="/resources" data-testid="nav-resources">Resources</Button>
 			<span class="mx-1 h-4 w-px bg-border" aria-hidden="true"></span>
 			<Button
 				variant="ghost"
