@@ -34,6 +34,10 @@ fn all_builtin_types_registered() {
         "missing `s3` in registry, got: {names:?}"
     );
     assert!(
+        names.contains(&"smtp"),
+        "missing `smtp` in registry, got: {names:?}"
+    );
+    assert!(
         names.contains(&"google_oauth"),
         "missing `google_oauth` in registry, got: {names:?}"
     );

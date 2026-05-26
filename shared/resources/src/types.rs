@@ -74,6 +74,28 @@ pub struct Slack {
     pub webhook_url: String,
 }
 
+/// SMTP relay credentials. Covers the common transactional-mail surface:
+/// host/port + auth + an optional default `from` address. TLS mode is
+/// communicated by `port` convention (`587` = STARTTLS, `465` = implicit
+/// TLS, `25` = plain) rather than a flag — keeps the credential surface
+/// minimal and aligns with how most SMTP libraries pick a mode.
+#[derive(ResourceType, Serialize, Deserialize, schemars::JsonSchema)]
+#[resource(name = "smtp", display_name = "SMTP", icon = "lucide-mail")]
+pub struct Smtp {
+    /// Relay hostname, e.g. `smtp.gmail.com` or `smtp.sendgrid.net`.
+    pub host: String,
+    /// `587` STARTTLS, `465` implicit TLS, `25` plain. No default — picking
+    /// a port is a security decision the workflow author should make.
+    pub port: u16,
+    pub username: String,
+    #[resource(secret)]
+    pub password: String,
+    /// Optional default `From:` address. Workflows that send from multiple
+    /// senders set this per-message instead.
+    #[serde(default)]
+    pub from_address: Option<String>,
+}
+
 /// S3-compatible object storage credentials. Named `S3Resource` to avoid
 /// colliding with the SDK's `aws_sdk_s3` types; `name = "s3"` keeps the wire
 /// identifier short.

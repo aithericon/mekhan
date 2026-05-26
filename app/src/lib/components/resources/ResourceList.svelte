@@ -93,6 +93,7 @@
 		openai: '✨',
 		slack: '💬',
 		s3: '📦',
+		smtp: '✉️',
 		google_oauth: '🔑'
 	};
 
