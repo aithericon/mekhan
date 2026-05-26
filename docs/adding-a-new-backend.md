@@ -4,10 +4,16 @@ This is the end-to-end recipe for adding a new executor backend to the
 Aithericon platform — Rust crate, service-side compiler arm, frontend
 config panel, instance-view renderer, failure handling, demo, and tests.
 
-The **SMTP backend** (added at commit `<smtp-merge-sha>`) is the worked
+The **SMTP backend** (added at commit `5d595ee`) is the worked
 example throughout — every section cites real file paths from the merged
 implementation. If a step here looks abstract, open the SMTP file in the
 same section to see exactly what it became in practice.
+
+> **Read §13 (Gotchas) before §3.** The SMTP backend shipped with a
+> latent regression — resource envelopes silently dropped on nodes
+> that also had upstream-producer borrows. That fix landed alongside
+> the guide. The §13 footguns enumerate the failure modes that bit a
+> previous author so you can avoid them rather than re-discover them.
 
 This guide assumes you already know:
 
@@ -159,9 +165,20 @@ Three rules:
    service-side compiler arm (next step).
 
 If the backend consumes a typed resource, also define a "resolved view"
-struct in this file. SMTP's is `ResolvedSmtpResource` plus a constant
-key `"smtp_resource"` the launcher's resolver writes under. The backend
-reads it back from `RunContext.resolved_config`.
+struct in this file mirroring the registered resource type's shape
+(`shared/resources/src/types.rs::<YourResource>`). SMTP's is
+`ResolvedSmtpResource`. The struct deserializes the envelope the
+launcher's `ResourceResolver` produces — public fields inline +
+`{{secret:...}}` templates for secret fields, which the staging
+pipeline substitutes with real Vault values before the backend reads
+them. **Where the envelope lives at runtime** is documented in §5.3 —
+it is NOT the `resolved_config` side-channel for production traffic.
+
+Provide two parsers: `from_resolved_value(&Value)` reads the envelope
+from any JSON object (the canonical path, used when reading a staged
+`<alias>.json`), and `from_resolved(&resolved_config_value)` is the
+test-harness fallback that looks up a constant key (SMTP's is
+`smtp_resource`) inside `RunContext.resolved_config`.
 
 Finally, add the new module to `executor-backend-configs/src/lib.rs`:
 
@@ -226,8 +243,14 @@ Then wire the crate into the workspace by editing `executor/Cargo.toml`
 The minimal `lib.rs` does six things:
 
 1. Deserialize `SmtpConfig::from_spec(&ctx.spec)` and call `.validate()`.
-2. Pull the resolved resource view from `ctx.resolved_config`. If it's
-   `None` and your backend needs one, fail with `SmtpOutcome::InvalidConfig`.
+2. Pull the resolved resource view. **For resource ENVELOPES** (multiple
+   fields → one `<alias>.json` file) read from
+   `ctx.staged_inputs["<resource_alias>.json"]`. **For inline secret
+   templates in `spec.config`** (one-field substitutions like an HTTP
+   URL containing `{{secret:API_KEY}}`) read `ctx.resolved_config`.
+   Two channels, two purposes — see §5.3. If neither yields a usable
+   resource and your backend needs one, fail with
+   `<Backend>Outcome::InvalidConfig`.
 3. Build the runtime context (Tera context, HTTP client, DB connection).
 4. Render / dispatch / send.
 5. Map results to `ExecutionResult` — `outcome` field +
@@ -237,15 +260,24 @@ The minimal `lib.rs` does six things:
    structured per-backend reason lives in the outputs map.
 6. Respect the cancellation token (`tokio::select! { _ = cancel.cancelled() => …, … }`).
 
-See `executor/crates/executor-smtp/src/lib.rs` for the full implementation.
+See `executor/crates/executor-smtp/src/lib.rs::resolve_resource` for the
+canonical staged-input read pattern, with a `resolved_config` fallback
+for unit-test harnesses.
 
-### 5.3 The `resolved_config` side-channel
+### 5.3 Two secret-delivery channels — pick the right one
 
-`RunContext.resolved_config` is `#[serde(skip)]` — populated by the
-worker's `PlanSecretsHook` at staging time, never serialized to disk
-or logged. The HTTP backend at
-`executor/crates/executor-http/src/lib.rs::prepare` is the reference
-pattern:
+Secrets reach a backend through **two** distinct mechanisms. Picking
+the wrong one is the most common backend-author mistake (it cost us a
+post-merge regression; see §13).
+
+**(a) `RunContext.resolved_config` — for inline `{{secret:KEY}}` in
+`spec.config`.** Use this when your backend's config has *individual*
+fields that take a secret directly — e.g. the HTTP backend's
+`Authorization: Bearer {{secret:API_KEY}}` header value, or a URL with
+`https://{{secret:HOST}}/path`. The `PlanSecretsHook` walks
+`spec.config` at staging time, substitutes the patterns, and parks the
+resolved JSON in `RunContext.resolved_config` (`#[serde(skip)]`).
+HTTP backend reference: `executor/crates/executor-http/src/lib.rs::prepare`:
 
 ```rust
 let mut config = match run_context.resolved_config.as_ref() {
@@ -254,11 +286,41 @@ let mut config = match run_context.resolved_config.as_ref() {
 };
 ```
 
-The fallback to `spec.config` keeps the no-secrets test path simple.
+**(b) Staged input files (`<alias>.json`) — for resource ENVELOPES.**
+Use this when your backend binds a typed workspace resource (Postgres,
+SMTP, OpenAI, …). The mekhan compiler emits a `BorrowResolution::ResourceEnvelope`
+for each resource the workflow references; `apply_resource_borrows`
+splices a `job_inputs.push(#{ "name": "<alias>.json", "source": #{
+"type": "inline", "value": __resources["<alias>"] } });` snippet into
+the prepare transition. At publish time the resolver computes the
+envelope (public fields inline + `{{secret:...}}` templates for secret
+fields) and the launcher splices `let __resources = #{ ... };` at the
+top of the prepare logic. When the run fires, `PlanSecretsHook` walks
+inline-source JSON values (`InputSource::Inline { value }`), resolves
+embedded secret patterns, then `StageInputsHook` writes the resolved
+JSON to `inputs/<alias>.json`. The backend reads it back:
+
+```rust
+let path = run_context
+    .staged_inputs
+    .get(&format!("{alias}.json"))
+    .cloned()
+    .unwrap_or_else(|| run_context.run_dir.inputs_dir.join(format!("{alias}.json")));
+let bytes = std::fs::read(&path)?;
+let resource: ResolvedResource = serde_json::from_slice(&bytes)?;
+```
+
+The SMTP backend's `resolve_resource` in `executor-smtp/src/lib.rs` is
+the reference. **It is NOT correct to expect the launcher to populate
+`resolved_config` with the resource envelope** — that channel is for
+the inline-substitution case in (a).
 
 **Never log a `resolved_*` field** (env, config, input_storage,
 output_storage). `RunContext`'s `Debug` impl is hand-written to elide
 them precisely so a stray `tracing::debug!(?ctx, …)` can't leak.
+Resource envelopes read from staged files have the same hazard — by
+the time you read `inputs/<alias>.json` it holds plaintext secrets.
+Do not log its contents either.
 
 ### 5.4 A test seam for the network
 
@@ -352,9 +414,42 @@ The shared `placeholder_refs.rs` scanner already handles `{{ a.b }}`
 `python_refs.rs`. For a new language with different lexical rules, add
 a sibling `<lang>_refs.rs` module that returns `Vec<PlaceholderRef>`
 (the canonical pair shape) and dispatch from the call sites by backend
-type.
+type. Don't write a parallel scanner for any backend that uses the
+`{{ }}` grammar — reuse the shared one.
 
-### 6.2 Publish-time resource discovery
+### 6.2 The `BORROW_MARKER` multi-arm contract
+
+A single prepare transition can collect borrows from multiple sources:
+upstream producers (`apply_python_borrows`), workspace resources
+(`apply_resource_borrows`), and backend-field stage rewrites
+(`apply_backend_borrows`). All three splice their `job_inputs.push(...)`
+snippets into the same `/*__BORROWED_INPUTS__*/` sentinel in the
+lowered Rhai.
+
+**Each arm must PREPEND its pushes before the marker, not REPLACE it.**
+The canonical pattern is:
+
+```rust
+let replacement = format!("{pushes}{BORROW_MARKER}");
+let new_source = source.replace(BORROW_MARKER, &replacement);
+```
+
+After all arms finish, `strip_borrow_markers` (called at the bottom of
+`apply_borrows`) removes the residual marker. A `replace(BORROW_MARKER,
+&pushes)` consumes the marker, and any subsequent arm silently no-ops.
+This is exactly the regression that hit the SMTP backend: an SMTP step
+with both a `{{ intake.email }}` upstream borrow and a `resource_alias:
+"mail"` resource borrow had its resource arm skipped because Python's
+arm ran first and ate the marker.
+
+**Test it**: any backend that mixes borrow types on the same node must
+have a compile-e2e (§10.3) that asserts BOTH `<slug>.json` (upstream)
+AND `<alias>.json` (resource) land in the prepare transition. The
+existing SMTP test
+`compile.rs::smtp_step_with_resource_alias_stages_resource_envelope`
+is the model.
+
+### 6.3 Publish-time resource discovery
 
 `service/src/process/publish.rs::discover_known_resources` walks the
 graph to find every resource name the workflow references, then queries
@@ -504,14 +599,27 @@ Covers the service-side validation arm:
 
 ### 10.3 Compile e2e (`service/src/compiler/compile.rs`)
 
-A complete graph with the new step produces an AIR with:
+A complete graph with the new step produces an AIR with the right
+shape. **Two tests are required if the backend binds a resource**:
 
-- The right backend discriminator (`"smtp"`).
-- Read-arcs into the upstream producers your templates reference.
-- Staged-input filenames (`"intake.json"`) for the runtime's context
-  builder.
+1. **Upstream-producer borrow** — uses `compile_to_scenario` (no
+   `KnownResources` needed). Asserts producer `<slug>.json` is staged
+   and the backend discriminator is correct. Reference:
+   `compile.rs::smtp_step_with_template_refs_wires_into_scenario`.
+2. **Resource-envelope borrow** — uses
+   `compile_to_air_with_subworkflows_and_interfaces` with a populated
+   `KnownResources` map. Asserts the resource `<alias>.json` IS staged
+   AND `__resources["<alias>"]` is referenced in the prepare logic.
+   This is the path the live publish handler takes; without this test
+   the compile-e2e in (1) passes while production silently breaks.
+   Reference:
+   `compile.rs::smtp_step_with_resource_alias_stages_resource_envelope`.
 
-See `compile.rs::smtp_step_with_template_refs_wires_into_scenario`.
+The two tests are not redundant. (1) goes through the simpler
+`compile_to_scenario` entry; (2) only fires when `KnownResources` is
+populated AND when the borrow-marker composition works correctly across
+multi-arm dispatch (see §6.2). If you skip (2), the regression class
+"resource arm silently no-ops" stays uncovered.
 
 ### 10.4 Conformance tests (`executor-service/tests/conformance_<name>.rs`)
 
@@ -524,11 +632,25 @@ SMTP_E2E=1 cargo test -p aithericon-executor-service --test conformance_smtp
 
 Gate via env var so default CI stays Docker-light.
 
+**Honest scope warning.** A conformance test that hand-stages
+`<alias>.json` (writing the resolved-resource JSON directly into the
+test's `inputs_dir`) only exercises the backend's READ path. It does
+NOT prove the compiler emits the borrow. The SMTP conformance suite
+includes a test (`smtp_e2e_send_via_mailhog_lands_in_inbox`) that
+takes this shortcut so the wire send can be verified without a full
+mekhan-service running — but it's paired with the §10.3 (2) compile-e2e
+that exercises the production publish path. **Don't skip the compile-e2e
+just because conformance is green.** They cover different layers.
+
 ### 10.5 Demo loads + compiles
 
 Add a `<name>_demo_loads_and_compiles` test to `service/src/demos.rs::tests`
-that mirrors the existing `llm_smoke_demo_loads_and_compiles` — proves
-the demo doesn't drift away from the wire format.
+that mirrors `email_welcome_demo_loads_and_compiles`. If the demo
+binds a resource, the test must construct a `KnownResources` map with
+that resource and call `compile_to_air_with_subworkflows_and_interfaces`
+(NOT the no-resources `compile_to_air`) — otherwise the test compiles
+the demo through the wrong code path and misses the resource-borrow
+arm entirely.
 
 ---
 
@@ -573,7 +695,75 @@ committing.
 
 ---
 
-## 13. The Checklist
+## 13. Gotchas / known footguns
+
+These all bit a previous backend author. They are not theoretical.
+
+1. **Resource envelopes do NOT come through `resolved_config`.** They
+   come through staged input files at `inputs/<alias>.json`. The
+   `resolved_config` channel is for `{{secret:KEY}}` patterns inline in
+   `spec.config`. Mixing them up gives the runtime error
+   "smtp backend: resolved_config is absent — the launcher's resource
+   resolver did not run for this step" with no obvious fix. See §5.3.
+
+2. **`BORROW_MARKER` is shared across arms — don't consume it.** If
+   your backend introduces a new arm or your existing arm uses
+   `String::replace(BORROW_MARKER, &pushes)` without preserving the
+   marker, you break multi-arm composition silently. The correct
+   pattern is `format!("{pushes}{BORROW_MARKER}")` as replacement.
+   `strip_borrow_markers` cleans up. See §6.2.
+
+3. **A compile-e2e that doesn't pass `KnownResources` doesn't test
+   resource borrows.** Use `compile_to_air_with_subworkflows_and_interfaces`
+   for the resource-borrow assertion, not `compile_to_scenario`. See §10.3.
+
+4. **A conformance test that hand-stages files bypasses the compiler.**
+   It proves the backend reads correctly but says nothing about
+   whether the compiler emits the right borrows. Pair it with a
+   compile-e2e against the publish entry. See §10.4.
+
+5. **A demo test that uses `compile_to_air` (no resources) on a
+   resource-binding demo compiles the demo through the wrong code
+   path.** It will pass even when the production publish flow is
+   broken for that demo. Use
+   `compile_to_air_with_subworkflows_and_interfaces` with the
+   right `KnownResources` populated. See §10.5.
+
+6. **Don't write a new `<lang>_refs.rs` scanner for `{{ }}` grammar
+   surfaces.** `placeholder_refs::scan_placeholders` already handles
+   `{{ <head>.<attr> }}` for Tera, HumanTask markdown, LLM prompts,
+   and Kreuzberg file refs. A new sibling scanner is only needed for a
+   genuinely different lexer (Python's bare-identifier `<slug>.<attr>`
+   is the canonical other case). See §6.1.
+
+7. **The Tera scanner only catches `{{ }}` placeholder bodies.** Tera
+   also supports `{% if user.active %}` block syntax — refs inside
+   `{%...%}` are NOT picked up by the compile-time scope checker. v1
+   accepts this limitation; document it on your backend's panel if
+   relevant. See `placeholder_refs.rs`.
+
+8. **Forgetting to add your feature to `just/dev.just::executor_features`**
+   means `just dev` builds an executor without your backend. Symptom:
+   `supports()` returns false at runtime, the registry's first-match
+   dispatch picks no backend, the job sits in Accepted forever.
+
+9. **`from_spec` deserialization fails silently when a field rename
+   doesn't match the JSON.** `serde_json::from_value` returns
+   `Result<Self, Error>` but the error string is often unhelpful when
+   the schema has many optional fields. If the editor's draft + your
+   DTO disagree, lean on `#[serde(default)]` for every optional field
+   so partial drafts round-trip cleanly. See §4.
+
+10. **Republish required after fixing a compile bug.** A workflow's
+    AIR is persisted at publish time. If a compiler change (new
+    borrow, scanner extension, marker fix) is needed, every affected
+    template must be re-published — the in-DB AIR is frozen until
+    then. Existing instances keep using the old AIR. Communicate this
+    in the PR description when shipping a fix.
+
+---
+
+## 14. The Checklist
 
 Use this when shipping. Each item maps to a section above.
 
@@ -586,23 +776,30 @@ Use this when shipping. Each item maps to a section above.
 - [ ] Module exported in `executor-backend-configs/src/lib.rs` (§4)
 - [ ] Crate `executor-<name>/` added, in workspace `members` + `workspace.dependencies` (§5.1)
 - [ ] `ExecutionBackend` impl returns structured outcome variant, respects cancel + timeout (§5.2)
-- [ ] Consumes `resolved_config` side-channel — never logs it (§5.3)
+- [ ] **Resource view** read from `staged_inputs["<alias>.json"]` (production)
+      with `resolved_config` fallback for harness tests — never logs either (§5.3)
 - [ ] `MessageSink`-style unit test seam in place (§5.4)
 - [ ] Feature flag + registry registration in `executor-service` (§5.5)
 - [ ] Feature added to `just/dev.just::executor_features` so `just dev` builds it (§5.5)
 - [ ] `validate_and_transform` arm with placeholder syntax validation (§6)
 - [ ] Borrow scanner arms in `populate_borrowed_paths`, `automated_step_borrow_plan`,
       `automated_step_resource_borrow_plan` (§6.1)
-- [ ] Resource discovery arm in `discover_known_resources` (§6.2)
+- [ ] **`BORROW_MARKER` splice prepends the marker, doesn't consume it** —
+      `strip_borrow_markers` does final cleanup (§6.2)
+- [ ] Resource discovery arm in `discover_known_resources` (§6.3)
 - [ ] `<Name>ConfigPanel.svelte` panel + wired into `AutomatedStepSection` (§7)
 - [ ] `<Name>Envelope.svelte` renderer + predicate in `value-renderers/index.ts` (§8)
 - [ ] Per-failure-mode detail block in the renderer (§9)
 - [ ] Unit tests in backend crate (§10.1)
 - [ ] `backend_configs::Smtp` arm unit tests (§10.2)
-- [ ] Compile e2e test (§10.3)
+- [ ] **Two** compile-e2e tests if backend binds a resource: upstream-producer
+      AND resource-envelope (with `KnownResources` populated) (§10.3)
 - [ ] Conformance test against a real container, gated by env var (§10.4)
-- [ ] Demo at `demos/<name>/` + loader test (§10.5, §11)
+- [ ] Demo at `demos/<name>/` + loader test using
+      `compile_to_air_with_subworkflows_and_interfaces` + `KnownResources`
+      if the demo binds a resource (§10.5, §11)
 - [ ] `just dev::openapi` run; `openapi-mekhan.json` + `schema.d.ts` committed (§12)
+- [ ] Re-read §13 — verify none of the listed footguns apply
 - [ ] `cargo check --workspace` + `cargo test --workspace` green (root level)
 - [ ] `(cd app && pnpm exec svelte-check)` clean
 - [ ] `just ci::openapi-drift` clean
