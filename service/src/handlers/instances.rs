@@ -299,6 +299,27 @@ pub async fn stream_instance(
             return;
         }
 
+        let mut inner = Box::pin(instance_jetstream_events(nats, net_id));
+        while let Some(ev) = inner.next().await {
+            yield ev;
+        }
+    };
+
+    Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(10))))
+}
+
+/// Bare JetStream-backed event stream for a single instance — no `connected`
+/// preamble, no DB existence check, no terminal short-circuit. Replays from
+/// the beginning (`DeliverPolicy::All`) then follows live, emits one SSE
+/// event per `PersistedEvent` (event name = domain event `type`), and closes
+/// after emitting a final `result` envelope when it sees `NetCompleted` /
+/// `NetCancelled`. Shared by `stream_instance` (GET) and the `Sse` arm of
+/// `fire_trigger` (POST) — both want identical event semantics.
+pub(crate) fn instance_jetstream_events(
+    nats: crate::nats::MekhanNats,
+    net_id: String,
+) -> impl Stream<Item = Result<Event, Infallible>> + Send + 'static {
+    async_stream::stream! {
         let stream_h = match nats.jetstream().get_stream("PETRI_GLOBAL").await {
             Ok(s) => s,
             Err(e) => {
@@ -382,9 +403,7 @@ pub async fn stream_instance(
                 }
             }
         }
-    };
-
-    Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(10))))
+    }
 }
 
 /// GET /api/instances/:id/state

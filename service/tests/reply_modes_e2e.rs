@@ -60,6 +60,41 @@ async fn body_string(body: Body) -> String {
     String::from_utf8_lossy(&bytes).to_string()
 }
 
+/// Minimal SSE parser for tests: collects (event-name, data) pairs from an
+/// `text/event-stream` payload. Joins multi-line `data:` into a single string
+/// per the SSE spec; drops comment lines and unrecognized fields. Defaults
+/// `event` to `"message"` when omitted, matching browsers.
+fn parse_sse(body: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut name = String::from("message");
+    let mut data = String::new();
+    for line in body.split('\n') {
+        let line = line.trim_end_matches('\r');
+        if line.is_empty() {
+            if !data.is_empty() {
+                out.push((std::mem::take(&mut name), std::mem::take(&mut data)));
+                name = String::from("message");
+            }
+            continue;
+        }
+        if line.starts_with(':') {
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("event:") {
+            name = rest.trim().to_string();
+        } else if let Some(rest) = line.strip_prefix("data:") {
+            if !data.is_empty() {
+                data.push('\n');
+            }
+            data.push_str(rest.strip_prefix(' ').unwrap_or(rest));
+        }
+    }
+    if !data.is_empty() {
+        out.push((name, data));
+    }
+    out
+}
+
 /// Abort-on-drop handle — the caller MUST keep these alive for the test's
 /// duration or the spawned consumers die mid-test.
 struct TaskHandle(tokio::task::AbortHandle);
@@ -346,7 +381,9 @@ async fn faf_default_has_no_outcome_and_polls() {
 /// `?reply=wait` blocks until terminal, returns `200` with the
 /// `outcome:{status,result}` superset; the envelope equals the persisted row;
 /// the registry is empty afterward (resolve removed the entry — no leak).
-/// Also asserts SSE-on-fire is rejected 406 (same publish, cheap).
+/// Also asserts SSE-on-fire returns `text/event-stream` inline (same publish,
+/// cheap): leading `fire` event carries the FireResult, then the instance's
+/// domain events flow through to a terminal `result` envelope.
 #[tokio::test]
 #[serial_test::serial]
 async fn wait_for_result_returns_envelope_no_leak() {
@@ -356,27 +393,61 @@ async fn wait_for_result_returns_envelope_no_leak() {
     }
     let (app, db, waiters, _c, _l) = setup(success_graph(), 30).await;
 
-    // SSE is the dedicated stream endpoint, never negotiated on fire → 406.
-    let resp = app
-        .clone()
-        .oneshot(fire_req("", Some("text/event-stream")))
-        .await
-        .unwrap();
-    assert_eq!(
-        resp.status(),
-        StatusCode::NOT_ACCEPTABLE,
-        "Accept: text/event-stream on fire ⇒ 406"
-    );
-    let resp = app
-        .clone()
-        .oneshot(fire_req("?reply=stream", None))
-        .await
-        .unwrap();
-    assert_eq!(
-        resp.status(),
-        StatusCode::NOT_ACCEPTABLE,
-        "?reply=stream on fire ⇒ 406"
-    );
+    // SSE on /fire is delivered inline: response is text/event-stream, the
+    // first event (`fire`) carries the FireResult, then the JetStream-backed
+    // instance events flow through to a terminal `result`. Same semantics
+    // regardless of whether SSE was selected via Accept or ?reply=stream.
+    for (q, accept, label) in [
+        ("", Some("text/event-stream"), "Accept: text/event-stream"),
+        ("?reply=stream", None, "?reply=stream"),
+    ] {
+        let resp = app.clone().oneshot(fire_req(q, accept)).await.unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::OK,
+            "{label}: SSE on /fire is 200"
+        );
+        let ct = resp
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+        assert!(
+            ct.starts_with("text/event-stream"),
+            "{label}: content-type is SSE, got {ct:?}"
+        );
+        let body = body_string(resp.into_body()).await;
+        let events = parse_sse(&body);
+        // 1) Leading `fire` event with the FireResult (locator + outcome).
+        let (kind, data) = events
+            .first()
+            .unwrap_or_else(|| panic!("{label}: empty SSE body: {body:?}"));
+        assert_eq!(kind, "fire", "{label}: first SSE event is `fire`: {events:?}");
+        let fire_v: Value = serde_json::from_str(data)
+            .unwrap_or_else(|e| panic!("{label}: fire data not JSON: {e}: {data:?}"));
+        let iid = fire_v["outcome"]["instance_id"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{label}: fire event missing instance_id: {fire_v}"));
+        Uuid::parse_str(iid).expect("instance_id is a uuid");
+        // 2) Domain events appear (NetInitialized at minimum).
+        assert!(
+            events.iter().any(|(k, _)| k == "NetInitialized"),
+            "{label}: stream replayed NetInitialized: {events:?}"
+        );
+        // 3) Stream closed on a terminal `result` carrying the success envelope.
+        let (rkind, rdata) = events
+            .last()
+            .unwrap_or_else(|| panic!("{label}: no terminal event: {events:?}"));
+        assert_eq!(rkind, "result", "{label}: stream ends with `result`: {events:?}");
+        let envelope: Value = serde_json::from_str(rdata)
+            .unwrap_or_else(|e| panic!("{label}: result data not JSON: {e}: {rdata:?}"));
+        assert_eq!(
+            envelope,
+            SUCCESS_ENVELOPE(),
+            "{label}: terminal envelope matches the persisted row"
+        );
+    }
 
     // WaitForResult.
     let resp = app

@@ -187,13 +187,18 @@ pub async fn list_template_triggers(
 /// `{ key, url, filename, content_type, size }` reference object — the same
 /// shape the create-instance dialog produces, which `FieldKind::File` accepts.
 /// Resolve the effective reply mode. Precedence (first match wins):
-/// 1. `Accept: text/event-stream` ⇒ `Sse` (rejected with 406 — SSE is the
-///    dedicated stream endpoint, not negotiated on fire)
+/// 1. `Accept: text/event-stream` ⇒ `Sse`
 /// 2. `?reply=wait|nowait|stream`
 /// 3. `Prefer: respond-async` ⇒ FireAndForget
 /// 4. JSON body `reply_mode`
 /// 5. the Trigger node's `replyDefault`
 /// 6. FireAndForget (back-compat default)
+///
+/// `Sse` is delivered inline on this same POST: the response is
+/// `text/event-stream`, with a leading `fire` event carrying the FireResult
+/// (locator + instance_id + spawned/dropped outcome) followed by the
+/// instance's domain events through to the terminal `result` envelope. Same
+/// event semantics as `GET /api/instances/{id}/stream`.
 fn resolve_reply_mode(
     accept: &str,
     prefer: &str,
@@ -222,10 +227,9 @@ fn resolve_reply_mode(
     params(("node_id" = String, Path, description = "Trigger node id")),
     request_body = FireTriggerRequest,
     responses(
-        (status = 200, description = "Trigger fired (FireAndForget, or WaitForResult resolved)", body = FireTriggerResponse),
+        (status = 200, description = "Trigger fired (FireAndForget / WaitForResult JSON, or SSE event stream when reply mode is `sse`).", body = FireTriggerResponse),
         (status = 202, description = "WaitForResult timed out — instance still running; poll/stream it"),
         (status = 404, description = "Trigger not found", body = ErrorResponse),
-        (status = 406, description = "SSE requested on the fire endpoint — use GET /api/instances/{id}/stream"),
         (status = 400, description = "Fire failed (e.g. mapping or instance error)", body = ErrorResponse),
     ),
     tag = "triggers",
@@ -282,11 +286,49 @@ pub async fn fire_trigger(
     );
 
     match mode {
-        ReplyMode::Sse => Err(ApiError::new(
-            StatusCode::NOT_ACCEPTABLE,
-            "SSE is served by GET /api/instances/{id}/stream — fire FireAndForget, \
-             then open the stream with the returned instance id",
-        )),
+        // SSE: fire synchronously, then stream the instance's events on the
+        // same response. The first SSE event (`fire`) carries the FireResult
+        // so callers see the locator + spawned/dropped outcome + instance_id
+        // before any net event lands. If the fire didn't spawn (signal-kind
+        // or dropped) the stream closes immediately after that event.
+        ReplyMode::Sse => {
+            use axum::response::sse::{KeepAlive, Sse};
+            use futures::StreamExt;
+            let result =
+                crate::triggers::sources::manual::fire(&state.triggers, &node_id, payload)
+                    .await
+                    .map_err(map_trigger_error)?;
+            let instance_id = match &result.outcome {
+                FireOutcome::Spawned { instance_id } => Some(*instance_id),
+                _ => None,
+            };
+            let fire_payload =
+                serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_string());
+            let nats = state.nats.clone();
+
+            let stream = async_stream::stream! {
+                yield Ok::<_, std::convert::Infallible>(
+                    axum::response::sse::Event::default()
+                        .event("fire")
+                        .data(fire_payload),
+                );
+                if let Some(iid) = instance_id {
+                    let mut inner = Box::pin(
+                        crate::handlers::instances::instance_jetstream_events(
+                            nats,
+                            iid.to_string(),
+                        ),
+                    );
+                    while let Some(ev) = inner.next().await {
+                        yield ev;
+                    }
+                }
+            };
+
+            Ok(Sse::new(stream)
+                .keep_alive(KeepAlive::new().interval(Duration::from_secs(10)))
+                .into_response())
+        }
         ReplyMode::FireAndForget => {
             let result =
                 crate::triggers::sources::manual::fire(&state.triggers, &node_id, payload)
