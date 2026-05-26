@@ -562,6 +562,35 @@ pub fn write_node_config(
             let out_val = serde_json::to_value(output).unwrap_or_default();
             config.insert(txn, "output", json_value_to_any(&out_val));
         }
+        WorkflowNodeData::Agent {
+            model,
+            system_prompt,
+            user_prompt,
+            response_format,
+            max_turns,
+            stop_when,
+            context_strategy,
+            on_tool_error,
+            ..
+        } => {
+            let model_val = serde_json::to_value(model).unwrap_or_default();
+            config.insert(txn, "model", json_value_to_any(&model_val));
+            if let Some(sp) = system_prompt {
+                config.insert(txn, "systemPrompt", sp.clone());
+            }
+            config.insert(txn, "userPrompt", user_prompt.clone());
+            if let Some(rf) = response_format {
+                config.insert(txn, "responseFormat", json_value_to_any(rf));
+            }
+            config.insert(txn, "maxTurns", *max_turns as f64);
+            if let Some(sw) = stop_when {
+                config.insert(txn, "stopWhen", sw.clone());
+            }
+            let cs_val = serde_json::to_value(context_strategy).unwrap_or_default();
+            config.insert(txn, "contextStrategy", json_value_to_any(&cs_val));
+            let te_val = serde_json::to_value(on_tool_error).unwrap_or_default();
+            config.insert(txn, "onToolError", json_value_to_any(&te_val));
+        }
     }
 }
 

@@ -1739,6 +1739,13 @@ export interface components {
                 window_secs: number;
             };
         };
+        /**
+         * @description Context-window management strategy for an [`WorkflowNodeData::Agent`].
+         *     Inert in PR 1's degenerate path; declared upfront so the type stays
+         *     stable across the follow-up loop-lowering PR (`docs/12` § 3).
+         * @enum {string}
+         */
+        ContextStrategy: "none" | "drop_oldest" | "summarize_oldest";
         CreateInstanceRequest: {
             /**
              * @description Free-form audit metadata stored on the instance row. Unlike pre-typed-ports
@@ -2388,6 +2395,39 @@ export interface components {
             series: {
                 [key: string]: components["schemas"]["MetricPoint"][];
             };
+        };
+        /**
+         * @description LLM model + provider selection for an [`WorkflowNodeData::Agent`]. Mirrors
+         *     the subset of `aithericon_executor_backend_configs::llm::LlmConfig` the
+         *     editor authors directly (provider, model, optional creds / sampling
+         *     knobs); the degenerate single-turn lowering reconstructs the full
+         *     `LlmConfig` from these fields plus the Agent's prompts. Wire shape
+         *     matches the existing `LlmConfig` JSON one-for-one so the equivalence
+         *     test (PR 1) produces byte-identical `config_ref` blobs.
+         */
+        ModelRef: {
+            apiKey?: string | null;
+            baseUrl?: string | null;
+            /** Format: int64 */
+            maxTokens?: number | null;
+            /**
+             * @description Provider-specific model identifier (e.g. `"gpt-4o"`,
+             *     `"claude-sonnet-4-20250514"`).
+             */
+            model: string;
+            /**
+             * @description `"openai"` | `"anthropic"` | `"ollama"`. Wire format is lowercase to
+             *     line up with `LlmConfig::Provider`'s `rename_all = "lowercase"`.
+             */
+            provider: string;
+            /**
+             * @description Workspace resource alias the LLM call binds to (e.g. `"openai_prod"`).
+             *     Same channel as `LlmConfig::resource_alias` — the compiler emits a
+             *     `ResourceEnvelope` borrow when present.
+             */
+            resourceAlias?: string | null;
+            /** Format: double */
+            temperature?: number | null;
         };
         /**
          * @description Multipart body wrapper for spec documentation. The runtime extractor is
@@ -3270,6 +3310,15 @@ export interface components {
             id: string;
             name: string;
         };
+        /**
+         * @description What happens when a tool call inside an [`WorkflowNodeData::Agent`]
+         *     fails after the tool's own retry budget is exhausted. Default `Feedback`
+         *     — append a synthetic `role: tool, content: "Tool '<name>' failed: …"`
+         *     message to the conversation and re-enter the LLM call. `Bubble` routes
+         *     the failure straight to the agent's `error` output. Inert in PR 1.
+         * @enum {string}
+         */
+        ToolErrorPolicy: "feedback" | "bubble";
         TriggerHistoryResponse: {
             history: components["schemas"]["FireResult"][];
         };
@@ -3736,6 +3785,57 @@ export interface components {
             source: components["schemas"]["TriggerSource"];
             /** @enum {string} */
             type: "trigger";
+        } | {
+            /**
+             * @description Context-window management strategy. Defaults to `None` (no
+             *     compaction). Inert in the degenerate path.
+             */
+            contextStrategy?: components["schemas"]["ContextStrategy"];
+            description?: string | null;
+            label: string;
+            /**
+             * Format: int32
+             * @description Hard cap on agent turns. `1` (default) is the single-shot LLM
+             *     call indistinguishable from `AutomatedStep(Llm)` — the degenerate
+             *     path the equivalence test pins down.
+             */
+            maxTurns?: number;
+            /**
+             * @description LLM model + provider selection. Same shape the existing
+             *     `LlmConfig` carries in `executionSpec.config`; the degenerate
+             *     path uses these fields verbatim when constructing the equivalent
+             *     `LlmConfig` payload.
+             */
+            model: components["schemas"]["ModelRef"];
+            /**
+             * @description What happens when a tool call fails. Defaults to `Feedback`.
+             *     Inert in PR 1 (no tools).
+             */
+            onToolError?: components["schemas"]["ToolErrorPolicy"];
+            /**
+             * @description Optional response-format constraint (`{"type": "text"}` or
+             *     `{"type": "json_schema", "schema": {...}}`). Opaque JSON in the
+             *     model layer — the executor LLM backend validates it.
+             */
+            responseFormat?: unknown;
+            /**
+             * @description Optional terminal Rhai guard. When `Some`, the agent loop exits
+             *     once this expression evaluates true on the parked agent state.
+             *     Inert in the degenerate (single-turn) path.
+             */
+            stopWhen?: string | null;
+            /**
+             * @description Optional system prompt template (supports `{{<slug>.<field>}}`
+             *     placeholders, same as the LLM `system_prompt` config field).
+             */
+            systemPrompt?: string | null;
+            /** @enum {string} */
+            type: "agent";
+            /**
+             * @description Initial user prompt template (supports `{{<slug>.<field>}}`
+             *     placeholders, corresponds to `LlmConfig::prompt`).
+             */
+            userPrompt: string;
         } | {
             description?: string | null;
             /**

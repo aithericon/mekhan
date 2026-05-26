@@ -63,6 +63,7 @@ fn parse_step_block(block: &hcl::Block) -> Result<DslStep> {
         instructions: get_attr_str(body, "instructions"),
         steps: None,
         execution: None,
+        agent: None,
         conditions: None,
         default_branch: get_attr_str(body, "default_branch"),
         max_iterations: get_attr_i64(body, "max_iterations").map(|v| v as i32),

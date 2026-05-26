@@ -291,6 +291,7 @@ impl NodeLowering for WorkflowNode {
             WorkflowNodeData::End { .. } => lower_end(cx),
             WorkflowNodeData::HumanTask { .. } => lower_human_task(cx),
             WorkflowNodeData::AutomatedStep { .. } => lower_automated_step(cx),
+            WorkflowNodeData::Agent { .. } => lower_agent(cx),
             WorkflowNodeData::Decision { .. } => lower_decision(cx),
             WorkflowNodeData::ParallelSplit { .. } => lower_parallel_split(cx),
             WorkflowNodeData::ParallelJoin { .. } => lower_parallel_join(cx),
@@ -367,6 +368,11 @@ fn node_kind_of(node: &WorkflowNode) -> NodeKind {
         WorkflowNodeData::End { .. } => NodeKind::End,
         WorkflowNodeData::HumanTask { .. } => NodeKind::HumanTask,
         WorkflowNodeData::AutomatedStep { .. } => NodeKind::AutomatedStep,
+        // PR 1: Agent's degenerate path lowers byte-identically to
+        // AutomatedStep(Llm); publish the same interface kind so downstream
+        // consumers don't have to special-case it. The follow-up loop
+        // lowering will switch to a dedicated `NodeKind::Agent`.
+        WorkflowNodeData::Agent { .. } => NodeKind::AutomatedStep,
         WorkflowNodeData::Decision { .. } => NodeKind::Decision,
         WorkflowNodeData::Loop { .. } => NodeKind::Loop,
         WorkflowNodeData::ParallelSplit { .. } => NodeKind::ParallelSplit,
@@ -1390,6 +1396,137 @@ fn lower_automated_step_scheduled(cx: &mut LoweringCtx) -> Result<(), CompileErr
     );
     cx.publish_interface().data_port = Some(data_place_id);
     Ok(())
+}
+
+/// Agent lowering — PR 1 scope (`docs/12-agent-node-design.md` § 2.1).
+///
+/// One node kind unifies "single-shot LLM" and "LLM with tools / multi-turn
+/// loop". The compiler picks the lowering by structure:
+///
+/// - **Degenerate path** (`max_turns == 1` && `stop_when.is_none()` && no
+///   tool-tagged children) — synthesize the equivalent `AutomatedStep(Llm)`
+///   node and delegate to [`lower_automated_step`]. The equivalence test
+///   (`service/tests/agent_lowering.rs::agent_degenerate_lowers_byte_identical_to_llm_automated_step`)
+///   pins this byte-identical lowering down so callers never have to
+///   migrate between "Llm AutomatedStep" and "Agent" — they're the same
+///   compiled net at the IR level.
+/// - **Agent path** — `CompileError::Compilation` for PR 1. The full
+///   parked-state + dispatch/collect lowering (`docs/12` § 3) lands in a
+///   follow-up PR; the type variant exists in this PR so the editor and
+///   the wire format are addressable without forcing the loop in one go.
+///
+/// "Tool-tagged children" is structurally `false` in PR 1 — `tool_meta` on
+/// child nodes ships in the same follow-up PR as the loop lowering.
+fn lower_agent(cx: &mut LoweringCtx) -> Result<(), CompileError> {
+    let WorkflowNodeData::Agent {
+        label,
+        description,
+        model,
+        system_prompt,
+        user_prompt,
+        response_format,
+        max_turns,
+        stop_when,
+        context_strategy: _,
+        on_tool_error: _,
+    } = &cx.node.data
+    else {
+        unreachable!("lower_agent on non-Agent node")
+    };
+
+    // PR 1: only the degenerate single-turn shape lowers. Multi-turn loops
+    // and tool children are reserved for the follow-up agent-loop PR.
+    // `tool_meta` on child nodes lands in that PR too, so "has tool children"
+    // is structurally `false` for now.
+    let has_tool_children = false;
+    if *max_turns != 1 || stop_when.is_some() || has_tool_children {
+        return Err(CompileError::Compilation(format!(
+            "agent node '{}': multi-turn / tool-child lowering is not yet \
+             implemented (PR 1 only supports max_turns == 1, stop_when == None, \
+             no tool-tagged children)",
+            cx.node.id
+        )));
+    }
+
+    // Reconstruct the equivalent `LlmConfig` JSON the executor LLM backend
+    // expects. Field names match `aithericon_executor_backend_configs::
+    // llm::LlmConfig` one-for-one so `validate_and_transform`'s LLM arm
+    // round-trips this without coercion — the byte-identical IR contract
+    // (§ 7 in docs/12) hinges on this map matching what a real Llm
+    // `AutomatedStep` author would have written by hand.
+    let mut config = serde_json::Map::new();
+    config.insert("provider".to_string(), json!(model.provider));
+    config.insert("model".to_string(), json!(model.model));
+    if let Some(k) = &model.api_key {
+        config.insert("api_key".to_string(), json!(k));
+    }
+    if let Some(b) = &model.base_url {
+        config.insert("base_url".to_string(), json!(b));
+    }
+    if let Some(a) = &model.resource_alias {
+        config.insert("resource_alias".to_string(), json!(a));
+    }
+    config.insert("prompt".to_string(), json!(user_prompt));
+    if let Some(sp) = system_prompt {
+        config.insert("system_prompt".to_string(), json!(sp));
+    }
+    if let Some(t) = model.temperature {
+        config.insert("temperature".to_string(), json!(t));
+    }
+    if let Some(m) = model.max_tokens {
+        config.insert("max_tokens".to_string(), json!(m));
+    }
+    if let Some(rf) = response_format {
+        config.insert("response_format".to_string(), rf.clone());
+    }
+    let llm_config = serde_json::Value::Object(config);
+
+    // Synthesize the equivalent AutomatedStep node and delegate. Keeping
+    // the same `id` / `slug` / `parent_id` ensures every place / transition
+    // id the lowering emits is identical to what a real Llm `AutomatedStep`
+    // with the same config would produce.
+    let virtual_node = WorkflowNode {
+        id: cx.node.id.clone(),
+        node_type: "automated_step".to_string(),
+        slug: cx.node.slug.clone(),
+        position: cx.node.position.clone(),
+        data: WorkflowNodeData::AutomatedStep {
+            label: label.clone(),
+            description: description.clone(),
+            execution_spec: crate::models::template::ExecutionSpecConfig {
+                backend_type: ExecutionBackendType::Llm,
+                entrypoint: None,
+                config: llm_config,
+            },
+            input: crate::models::template::Port::empty_input(),
+            output: crate::models::template::default_output_port(
+                ExecutionBackendType::Llm,
+            ),
+            retry_policy: Default::default(),
+            deployment_model: Default::default(),
+        },
+        parent_id: cx.node.parent_id.clone(),
+        width: cx.node.width,
+        height: cx.node.height,
+    };
+
+    let mut virtual_cx = LoweringCtx {
+        node: &virtual_node,
+        outgoing_edges: cx.outgoing_edges,
+        incoming_edges: cx.incoming_edges,
+        children: cx.children,
+        ctx: &mut *cx.ctx,
+        ports: &mut *cx.ports,
+        fixups: &mut *cx.fixups,
+        node_files: cx.node_files,
+        sub_air: cx.sub_air,
+        interfaces: &mut *cx.interfaces,
+        definitions: cx.definitions,
+        node_configs: &mut *cx.node_configs,
+        config_storage: cx.config_storage,
+    };
+
+    lower_automated_step(&mut virtual_cx)
 }
 
 /// Engine-effect backend lowering. Used by AutomatedSteps whose

@@ -459,6 +459,71 @@ pub enum WorkflowNodeData {
         #[serde(default)]
         enabled: bool,
     },
+    /// Agent block — one LLM call, optionally extended with tool children
+    /// and a multi-turn loop. PR 1 only models the type; the degenerate
+    /// single-turn path lowers byte-identically to `AutomatedStep(Llm)`. The
+    /// full agent-loop lowering (parked state place + dispatch/collect per
+    /// tool + turn counter) lands in a follow-up PR (see
+    /// `docs/12-agent-node-design.md` § 3).
+    ///
+    /// Tools are child nodes of this container in a future PR (tagged via a
+    /// `tool_meta` field on `WorkflowNodeData`); PR 1 ignores children
+    /// structurally and rejects non-degenerate shapes with
+    /// `CompileError::Compilation`.
+    #[serde(rename = "agent")]
+    Agent {
+        label: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+        /// LLM model + provider selection. Same shape the existing
+        /// `LlmConfig` carries in `executionSpec.config`; the degenerate
+        /// path uses these fields verbatim when constructing the equivalent
+        /// `LlmConfig` payload.
+        model: ModelRef,
+        /// Optional system prompt template (supports `{{<slug>.<field>}}`
+        /// placeholders, same as the LLM `system_prompt` config field).
+        #[serde(
+            rename = "systemPrompt",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
+        system_prompt: Option<String>,
+        /// Initial user prompt template (supports `{{<slug>.<field>}}`
+        /// placeholders, corresponds to `LlmConfig::prompt`).
+        #[serde(rename = "userPrompt")]
+        user_prompt: String,
+        /// Optional response-format constraint (`{"type": "text"}` or
+        /// `{"type": "json_schema", "schema": {...}}`). Opaque JSON in the
+        /// model layer — the executor LLM backend validates it.
+        #[serde(
+            rename = "responseFormat",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
+        response_format: Option<serde_json::Value>,
+        /// Hard cap on agent turns. `1` (default) is the single-shot LLM
+        /// call indistinguishable from `AutomatedStep(Llm)` — the degenerate
+        /// path the equivalence test pins down.
+        #[serde(rename = "maxTurns", default = "default_max_turns")]
+        max_turns: u32,
+        /// Optional terminal Rhai guard. When `Some`, the agent loop exits
+        /// once this expression evaluates true on the parked agent state.
+        /// Inert in the degenerate (single-turn) path.
+        #[serde(
+            rename = "stopWhen",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
+        stop_when: Option<String>,
+        /// Context-window management strategy. Defaults to `None` (no
+        /// compaction). Inert in the degenerate path.
+        #[serde(rename = "contextStrategy", default)]
+        context_strategy: ContextStrategy,
+        /// What happens when a tool call fails. Defaults to `Feedback`.
+        /// Inert in PR 1 (no tools).
+        #[serde(rename = "onToolError", default)]
+        on_tool_error: ToolErrorPolicy,
+    },
     /// Calls another published template as a child net and returns its
     /// terminal result, correlated per invocation. Compiles (via
     /// `Context::spawn`) to: a parent-side request/spawn effect, a
@@ -510,6 +575,7 @@ impl WorkflowNodeData {
             | Self::End { label, .. }
             | Self::HumanTask { label, .. }
             | Self::AutomatedStep { label, .. }
+            | Self::Agent { label, .. }
             | Self::Decision { label, .. }
             | Self::ParallelSplit { label, .. }
             | Self::ParallelJoin { label, .. }
@@ -530,6 +596,7 @@ impl WorkflowNodeData {
             Self::End { .. } => "end",
             Self::HumanTask { .. } => "human_task",
             Self::AutomatedStep { .. } => "automated_step",
+            Self::Agent { .. } => "agent",
             Self::Decision { .. } => "decision",
             Self::ParallelSplit { .. } => "parallel_split",
             Self::ParallelJoin { .. } => "parallel_join",
@@ -550,6 +617,7 @@ impl WorkflowNodeData {
             | Self::End { description, .. }
             | Self::HumanTask { description, .. }
             | Self::AutomatedStep { description, .. }
+            | Self::Agent { description, .. }
             | Self::Decision { description, .. }
             | Self::ParallelSplit { description, .. }
             | Self::ParallelJoin { description, .. }
@@ -592,6 +660,11 @@ impl WorkflowNodeData {
             | Self::PhaseUpdate { .. }
             | Self::ProgressUpdate { .. }
             | Self::Failure { .. }
+            // Agent accepts the single anonymous upstream token. The
+            // user/system prompt templates `{{<slug>.<field>}}`-interpolate
+            // against the parked-data envelopes of upstream producers, not
+            // the inbound port; the input port is a Json pass-through.
+            | Self::Agent { .. }
             // SubWorkflow accepts the single anonymous upstream token; its
             // `input_mapping` shapes it into the child Start input at compile
             // time, so the parent-side input port is a Json pass-through.
@@ -639,6 +712,19 @@ impl WorkflowNodeData {
             // this to the node's `p_{id}_error` place.
             Self::AutomatedStep { output, .. } => vec![
                 output.clone(),
+                Port {
+                    id: "error".to_string(),
+                    label: "On error".to_string(),
+                    fields: vec![],
+                },
+            ],
+
+            // Agent's success output mirrors the LLM AutomatedStep
+            // (`text` + `usage`); the equivalence test relies on this so the
+            // degenerate path's editor wiring matches an Llm step's.
+            // `error` mirrors AutomatedStep's error port.
+            Self::Agent { .. } => vec![
+                default_output_port(ExecutionBackendType::Llm),
                 Port {
                     id: "error".to_string(),
                     label: "On error".to_string(),
@@ -1053,6 +1139,68 @@ pub struct ResourceConfig {
     pub memory_mb: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gpu: Option<u32>,
+}
+
+/// LLM model + provider selection for an [`WorkflowNodeData::Agent`]. Mirrors
+/// the subset of `aithericon_executor_backend_configs::llm::LlmConfig` the
+/// editor authors directly (provider, model, optional creds / sampling
+/// knobs); the degenerate single-turn lowering reconstructs the full
+/// `LlmConfig` from these fields plus the Agent's prompts. Wire shape
+/// matches the existing `LlmConfig` JSON one-for-one so the equivalence
+/// test (PR 1) produces byte-identical `config_ref` blobs.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelRef {
+    /// `"openai"` | `"anthropic"` | `"ollama"`. Wire format is lowercase to
+    /// line up with `LlmConfig::Provider`'s `rename_all = "lowercase"`.
+    pub provider: String,
+    /// Provider-specific model identifier (e.g. `"gpt-4o"`,
+    /// `"claude-sonnet-4-20250514"`).
+    pub model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+    /// Workspace resource alias the LLM call binds to (e.g. `"openai_prod"`).
+    /// Same channel as `LlmConfig::resource_alias` — the compiler emits a
+    /// `ResourceEnvelope` borrow when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_alias: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u64>,
+}
+
+/// Context-window management strategy for an [`WorkflowNodeData::Agent`].
+/// Inert in PR 1's degenerate path; declared upfront so the type stays
+/// stable across the follow-up loop-lowering PR (`docs/12` § 3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextStrategy {
+    #[default]
+    None,
+    /// Drop oldest non-system messages once the budget is exceeded.
+    DropOldest,
+    /// Summarize oldest messages into a single rolling summary turn.
+    SummarizeOldest,
+}
+
+/// What happens when a tool call inside an [`WorkflowNodeData::Agent`]
+/// fails after the tool's own retry budget is exhausted. Default `Feedback`
+/// — append a synthetic `role: tool, content: "Tool '<name>' failed: …"`
+/// message to the conversation and re-enter the LLM call. `Bubble` routes
+/// the failure straight to the agent's `error` output. Inert in PR 1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolErrorPolicy {
+    #[default]
+    Feedback,
+    Bubble,
+}
+
+fn default_max_turns() -> u32 {
+    1
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -1841,9 +1989,10 @@ impl WorkflowGraph {
 /// DSL→model direction can't silently swallow a known type.
 pub mod dsl {
     use super::{
-        default_join_output_port, default_output_port, default_terminal_port, BranchCondition,
-        DeploymentModel, ExecutionBackendType, ExecutionSpecConfig, JoinMode, MergeStrategy, Port,
-        RetryPolicy, TaskBlockConfig, TaskStepConfig, WorkflowNode, WorkflowNodeData,
+        default_join_output_port, default_max_turns, default_output_port, default_terminal_port,
+        BranchCondition, ContextStrategy, DeploymentModel, ExecutionBackendType,
+        ExecutionSpecConfig, JoinMode, MergeStrategy, ModelRef, Port, RetryPolicy, TaskBlockConfig,
+        TaskStepConfig, ToolErrorPolicy, WorkflowNode, WorkflowNodeData,
     };
     use serde::{Deserialize, Serialize};
 
@@ -1888,6 +2037,10 @@ pub mod dsl {
         // automated_step
         #[serde(skip_serializing_if = "Option::is_none")]
         pub execution: Option<DslExecution>,
+
+        // agent
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub agent: Option<DslAgent>,
 
         // decision
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -1936,6 +2089,29 @@ pub mod dsl {
         /// so legacy DSL files keep their prior semantics.
         #[serde(skip_serializing_if = "Option::is_none")]
         pub retry_policy: Option<RetryPolicy>,
+    }
+
+    /// DSL payload for an Agent step. Mirrors [`WorkflowNodeData::Agent`]
+    /// 1:1 — same fields, same defaults — so a graph→DSL→graph round-trip
+    /// is the identity. PR 1 only models the degenerate (single-turn) path
+    /// at the compiler; the DSL surface stays full-fidelity so authoring
+    /// future multi-turn agents needs no DSL schema change.
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct DslAgent {
+        pub model: ModelRef,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub system_prompt: Option<String>,
+        pub user_prompt: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub response_format: Option<serde_json::Value>,
+        #[serde(default = "default_max_turns")]
+        pub max_turns: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub stop_when: Option<String>,
+        #[serde(default)]
+        pub context_strategy: ContextStrategy,
+        #[serde(default)]
+        pub on_tool_error: ToolErrorPolicy,
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2050,6 +2226,23 @@ pub mod dsl {
                             .unwrap_or_else(|| label.to_string()),
                         instructions_mdsvex: step.instructions.clone(),
                         steps: task_steps,
+                    })
+                }
+                "agent" => {
+                    let a = step.agent.as_ref().ok_or_else(|| {
+                        format!("agent '{}' requires an 'agent' field", key)
+                    })?;
+                    Ok(WorkflowNodeData::Agent {
+                        label: label.to_string(),
+                        description: step.description.clone(),
+                        model: a.model.clone(),
+                        system_prompt: a.system_prompt.clone(),
+                        user_prompt: a.user_prompt.clone(),
+                        response_format: a.response_format.clone(),
+                        max_turns: a.max_turns,
+                        stop_when: a.stop_when.clone(),
+                        context_strategy: a.context_strategy,
+                        on_tool_error: a.on_tool_error,
                     })
                 }
                 "automated_step" => {
@@ -2201,6 +2394,7 @@ pub mod dsl {
                 instructions: None,
                 steps: None,
                 execution: None,
+                agent: None,
                 conditions: None,
                 default_branch: None,
                 max_iterations: None,
@@ -2340,6 +2534,28 @@ pub mod dsl {
                 | WorkflowNodeData::Failure { .. } => {
                     // DSL doesn't model the process-control nodes — GUI-authored
                     // for now. Same lossy-drop behaviour as triggers.
+                }
+                WorkflowNodeData::Agent {
+                    model,
+                    system_prompt,
+                    user_prompt,
+                    response_format,
+                    max_turns,
+                    stop_when,
+                    context_strategy,
+                    on_tool_error,
+                    ..
+                } => {
+                    step.agent = Some(DslAgent {
+                        model: model.clone(),
+                        system_prompt: system_prompt.clone(),
+                        user_prompt: user_prompt.clone(),
+                        response_format: response_format.clone(),
+                        max_turns: *max_turns,
+                        stop_when: stop_when.clone(),
+                        context_strategy: *context_strategy,
+                        on_tool_error: *on_tool_error,
+                    });
                 }
                 WorkflowNodeData::Trigger { .. }
                 | WorkflowNodeData::SubWorkflow { .. } => {

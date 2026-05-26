@@ -634,6 +634,7 @@ fn output_place_ids(node: &WorkflowNode) -> Vec<String> {
         WorkflowNodeData::Start { .. } => vec![format!("p_{id}_main")],
         WorkflowNodeData::HumanTask { .. } => vec![format!("p_{id}_output")],
         WorkflowNodeData::AutomatedStep { .. }
+        | WorkflowNodeData::Agent { .. }
         | WorkflowNodeData::SubWorkflow { .. } => {
             vec![format!("p_{id}_output"), format!("p_{id}_error")]
         }
@@ -758,7 +759,14 @@ fn out_shape(node: &WorkflowNode, in_shape: &TokenShape) -> TokenShape {
         // downstream sees `{ execution_id, job_id, run, status, source,
         // detail{ outputs, .. } }`. Business output (if the step declares an
         // output port) is under `detail.outputs`, never flattened back.
-        WorkflowNodeData::AutomatedStep { .. } => {
+        //
+        // Agent's degenerate (single-turn) path lowers byte-identically to
+        // AutomatedStep(Llm), so it shares this arm. `output_ports()` for
+        // Agent returns the same `default_output_port(Llm)` (text+usage)
+        // that a real Llm step would declare, so `detail.outputs` is
+        // shaped consistently across both variants. The follow-up agent
+        // loop PR will branch here once the parked state place lands.
+        WorkflowNodeData::AutomatedStep { .. } | WorkflowNodeData::Agent { .. } => {
             let mut o = TokenShape::object();
             let p = |n: &str| Provenance::new(node, n);
             o.insert(

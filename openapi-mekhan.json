@@ -5190,6 +5190,15 @@
           }
         ]
       },
+      "ContextStrategy": {
+        "type": "string",
+        "description": "Context-window management strategy for an [`WorkflowNodeData::Agent`].\nInert in PR 1's degenerate path; declared upfront so the type stays\nstable across the follow-up loop-lowering PR (`docs/12` § 3).",
+        "enum": [
+          "none",
+          "drop_oldest",
+          "summarize_oldest"
+        ]
+      },
       "CreateInstanceRequest": {
         "type": "object",
         "required": [
@@ -6932,6 +6941,58 @@
             "propertyNames": {
               "type": "string"
             }
+          }
+        }
+      },
+      "ModelRef": {
+        "type": "object",
+        "description": "LLM model + provider selection for an [`WorkflowNodeData::Agent`]. Mirrors\nthe subset of `aithericon_executor_backend_configs::llm::LlmConfig` the\neditor authors directly (provider, model, optional creds / sampling\nknobs); the degenerate single-turn lowering reconstructs the full\n`LlmConfig` from these fields plus the Agent's prompts. Wire shape\nmatches the existing `LlmConfig` JSON one-for-one so the equivalence\ntest (PR 1) produces byte-identical `config_ref` blobs.",
+        "required": [
+          "provider",
+          "model"
+        ],
+        "properties": {
+          "apiKey": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "baseUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "maxTokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "model": {
+            "type": "string",
+            "description": "Provider-specific model identifier (e.g. `\"gpt-4o\"`,\n`\"claude-sonnet-4-20250514\"`)."
+          },
+          "provider": {
+            "type": "string",
+            "description": "`\"openai\"` | `\"anthropic\"` | `\"ollama\"`. Wire format is lowercase to\nline up with `LlmConfig::Provider`'s `rename_all = \"lowercase\"`."
+          },
+          "resourceAlias": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Workspace resource alias the LLM call binds to (e.g. `\"openai_prod\"`).\nSame channel as `LlmConfig::resource_alias` — the compiler emits a\n`ResourceEnvelope` borrow when present."
+          },
+          "temperature": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
           }
         }
       },
@@ -9097,6 +9158,14 @@
           }
         }
       },
+      "ToolErrorPolicy": {
+        "type": "string",
+        "description": "What happens when a tool call inside an [`WorkflowNodeData::Agent`]\nfails after the tool's own retry budget is exhausted. Default `Feedback`\n— append a synthetic `role: tool, content: \"Tool '<name>' failed: …\"`\nmessage to the conversation and re-enter the LLM call. `Bubble` routes\nthe failure straight to the agent's `error` output. Inert in PR 1.",
+        "enum": [
+          "feedback",
+          "bubble"
+        ]
+      },
       "TriggerHistoryResponse": {
         "type": "object",
         "required": [
@@ -10343,6 +10412,72 @@
                 "enum": [
                   "trigger"
                 ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Agent block — one LLM call, optionally extended with tool children\nand a multi-turn loop. PR 1 only models the type; the degenerate\nsingle-turn path lowers byte-identically to `AutomatedStep(Llm)`. The\nfull agent-loop lowering (parked state place + dispatch/collect per\ntool + turn counter) lands in a follow-up PR (see\n`docs/12-agent-node-design.md` § 3).\n\nTools are child nodes of this container in a future PR (tagged via a\n`tool_meta` field on `WorkflowNodeData`); PR 1 ignores children\nstructurally and rejects non-degenerate shapes with\n`CompileError::Compilation`.",
+            "required": [
+              "label",
+              "model",
+              "userPrompt",
+              "type"
+            ],
+            "properties": {
+              "contextStrategy": {
+                "$ref": "#/components/schemas/ContextStrategy",
+                "description": "Context-window management strategy. Defaults to `None` (no\ncompaction). Inert in the degenerate path."
+              },
+              "description": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "label": {
+                "type": "string"
+              },
+              "maxTurns": {
+                "type": "integer",
+                "format": "int32",
+                "description": "Hard cap on agent turns. `1` (default) is the single-shot LLM\ncall indistinguishable from `AutomatedStep(Llm)` — the degenerate\npath the equivalence test pins down.",
+                "minimum": 0
+              },
+              "model": {
+                "$ref": "#/components/schemas/ModelRef",
+                "description": "LLM model + provider selection. Same shape the existing\n`LlmConfig` carries in `executionSpec.config`; the degenerate\npath uses these fields verbatim when constructing the equivalent\n`LlmConfig` payload."
+              },
+              "onToolError": {
+                "$ref": "#/components/schemas/ToolErrorPolicy",
+                "description": "What happens when a tool call fails. Defaults to `Feedback`.\nInert in PR 1 (no tools)."
+              },
+              "responseFormat": {
+                "description": "Optional response-format constraint (`{\"type\": \"text\"}` or\n`{\"type\": \"json_schema\", \"schema\": {...}}`). Opaque JSON in the\nmodel layer — the executor LLM backend validates it."
+              },
+              "stopWhen": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Optional terminal Rhai guard. When `Some`, the agent loop exits\nonce this expression evaluates true on the parked agent state.\nInert in the degenerate (single-turn) path."
+              },
+              "systemPrompt": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Optional system prompt template (supports `{{<slug>.<field>}}`\nplaceholders, same as the LLM `system_prompt` config field)."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "agent"
+                ]
+              },
+              "userPrompt": {
+                "type": "string",
+                "description": "Initial user prompt template (supports `{{<slug>.<field>}}`\nplaceholders, corresponds to `LlmConfig::prompt`)."
               }
             }
           },
