@@ -270,10 +270,13 @@ async fn resolve_writes_one_audit_row_per_alias() {
     }
 }
 
-/// ACL denial aborts the resolve and writes no audit rows. Verifies the
-/// all-or-nothing audit contract.
+/// Workspace-scoped access (v1 stopgap until `workspace_members` lands):
+/// a principal who didn't create the resource and has no `resource_acl`
+/// row may still resolve it, as long as the resource lives in the
+/// workspace the caller is acting in. The audit row records the *actual*
+/// caller, not the creator.
 #[tokio::test]
-async fn resolve_acl_denied_returns_error_and_writes_no_audit() {
+async fn resolve_grants_workspace_scoped_read_without_acl_row() {
     let db = common::create_test_db().await;
     let workspace_id = Uuid::new_v4();
     let owner_id = Uuid::new_v4();
@@ -284,11 +287,67 @@ async fn resolve_acl_denied_returns_error_and_writes_no_audit() {
         workspace_id,
         owner_id,
         "postgres",
-        "forbidden",
+        "shared",
         json!({ "host": "h", "port": 1, "database": "d", "username": "u" }),
     )
     .await;
-    // Deliberately no grant_acl for `other_principal`.
+    // No `grant_acl` for `other_principal`: the workspace filter is the
+    // gate in v1.
+
+    let resolver = ResourceResolver::new(db.clone());
+    let mut bindings = HashMap::new();
+    bindings.insert(
+        "db".to_string(),
+        ResourcePin {
+            resource_id,
+            version: 1,
+        },
+    );
+
+    let envelope = resolver
+        .resolve(
+            workspace_id,
+            other_principal,
+            &bindings,
+            audit_ctx_for(other_principal),
+        )
+        .await
+        .expect("workspace-scoped read must succeed");
+    assert!(envelope.get("db").is_some());
+
+    let audit_principal: Uuid =
+        sqlx::query_scalar("SELECT principal_id FROM resource_audit WHERE resource_id = $1")
+            .bind(resource_id)
+            .fetch_one(&db)
+            .await
+            .expect("audit row written");
+    assert_eq!(
+        audit_principal, other_principal,
+        "audit must record the actual caller, not the creator"
+    );
+}
+
+/// Workspace mismatch is still a hard denial — the workspace filter is
+/// the v1 access gate, so resolving a resource that lives in a *different*
+/// workspace from the one the caller is acting in must fail with
+/// `ResourceNotFound` (workspace mismatch is intentionally
+/// indistinguishable from soft-delete at the API surface).
+#[tokio::test]
+async fn resolve_wrong_workspace_returns_not_found() {
+    let db = common::create_test_db().await;
+    let owner_workspace = Uuid::new_v4();
+    let other_workspace = Uuid::new_v4();
+    let principal = Uuid::new_v4();
+
+    let resource_id = seed_resource(
+        &db,
+        owner_workspace,
+        principal,
+        "postgres",
+        "elsewhere",
+        json!({ "host": "h", "port": 1, "database": "d", "username": "u" }),
+    )
+    .await;
 
     let resolver = ResourceResolver::new(db.clone());
     let mut bindings = HashMap::new();
@@ -301,19 +360,12 @@ async fn resolve_acl_denied_returns_error_and_writes_no_audit() {
     );
 
     let err = resolver
-        .resolve(workspace_id, other_principal, &bindings, audit_ctx_for(other_principal))
+        .resolve(other_workspace, principal, &bindings, audit_ctx_for(principal))
         .await
-        .expect_err("ACL must deny");
-
+        .expect_err("cross-workspace read must fail");
     match err {
-        ResolverError::AclDenied {
-            resource_id: rid,
-            principal_id: pid,
-        } => {
-            assert_eq!(rid, resource_id);
-            assert_eq!(pid, other_principal);
-        }
-        other => panic!("expected AclDenied, got {other:?}"),
+        ResolverError::ResourceNotFound { resource_id: rid } => assert_eq!(rid, resource_id),
+        other => panic!("expected ResourceNotFound, got {other:?}"),
     }
 
     let count: i64 = sqlx::query("SELECT COUNT(*) FROM resource_audit")

@@ -20,17 +20,24 @@
 //!
 //! ## ACL model (v1)
 //!
-//! A single SQL query joins `resources`, `resource_versions`, and
-//! `resource_acl` and projects them in one shot. The ACL check is satisfied
-//! when **any** `resource_acl` row exists with
-//! `(resource_id = $r, principal_id = $p, permission = 'read')`. Workspace
-//! membership-based access is **not** implemented in v1 — no `workspaces` /
-//! `workspace_members` tables exist yet. When those land, this query gets a
-//! `UNION` clause; the resolver signature does not change.
+//! Until `workspaces` / `workspace_members` tables exist, access is
+//! **workspace-scoped**: any authenticated principal whose request reaches
+//! this resolver may read any resource in the workspace they're acting in.
+//! The workspace filter on the `resources` lookup is the effective gate;
+//! the `resource_acl` table is *populated* on create (so v2 has historical
+//! grants to start from) but is **not consulted on the read path**.
 //!
-//! Audit rows are written **after** the join succeeds for every alias and
-//! **before** the envelope is returned. A single failing alias aborts the
-//! whole resolve and writes no audit rows — there is no half-resolved state.
+//! This is the pragmatic stopgap. The per-principal grant model behaved as
+//! "only the creator can use a resource" in the absence of a sharing UI,
+//! which broke real collaboration the moment a colleague published a
+//! template referencing your resource. v2 will reintroduce a real check
+//! here as a `UNION` of workspace membership and per-principal ACL — the
+//! resolver signature does not change.
+//!
+//! Audit rows are still written **after** all aliases resolve and
+//! **before** the envelope is returned. A single failing alias (missing
+//! version, unknown type, …) aborts the whole resolve and writes no audit
+//! rows — there is no half-resolved state.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -238,37 +245,24 @@ impl ResourceResolver {
             resource_id: pin.resource_id,
         })?;
 
-        // (2) Look the descriptor up *before* ACL — if the type is unknown
-        // there's no point in spending an ACL round-trip; the launch is
-        // going to fail anyway. This also makes test seeding for
-        // UnknownResourceType clean (no ACL needed).
+        // (2) Look the descriptor up — unknown types fail fast.
         let descriptor = lookup(&resource.resource_type).ok_or_else(|| {
             ResolverError::UnknownResourceType {
                 type_name: resource.resource_type.clone(),
             }
         })?;
 
-        // (3) ACL check. Single existence query; the v2 workspace-membership
-        // fallback joins here as a `UNION`.
-        let acl_ok: bool = sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS ( \
-                SELECT 1 FROM resource_acl \
-                WHERE resource_id = $1 \
-                  AND principal_id = $2 \
-                  AND permission = 'read' \
-             )",
-        )
-        .bind(pin.resource_id)
-        .bind(principal_id)
-        .fetch_one(&self.db)
-        .await?;
-
-        if !acl_ok {
-            return Err(ResolverError::AclDenied {
-                resource_id: pin.resource_id,
-                principal_id,
-            });
-        }
+        // (3) ACL check: workspace-scoped trust until `workspaces` /
+        // `workspace_members` land. The resource row was already filtered
+        // by `workspace_id` in step (1), and the caller is by definition an
+        // authenticated principal in that workspace, so we grant read here
+        // without consulting `resource_acl`. The table is still populated
+        // on create (see `handlers::resources::create_resource`) so v2 can
+        // promote it from "auto-grant" to "additional grants on top of
+        // workspace membership" without a backfill. `principal_id` is
+        // unused on this path but kept in the signature so the v2
+        // `UNION`-based check is a body change, not a signature change.
+        let _ = principal_id;
 
         // (4) Load the pinned version row.
         let version: Option<ResourceVersionRow> = sqlx::query_as::<_, ResourceVersionRow>(
