@@ -3,12 +3,20 @@
 	import { goto } from '$app/navigation';
 	import { onDestroy } from 'svelte';
 	import WorkflowCanvas from '$lib/components/editor/WorkflowCanvas.svelte';
-	import NodePropertyPanel from '$lib/components/editor/panels/NodePropertyPanel.svelte';
 	import EditorToolbar from '$lib/components/editor/toolbar/EditorToolbar.svelte';
 	import CreateInstanceDialog from '$lib/components/instances/CreateInstanceDialog.svelte';
 	import TestsPanel from '$lib/components/templates/TestsPanel.svelte';
 	import PublishGateModal from '$lib/components/templates/PublishGateModal.svelte';
 	import { Sheet, SheetContent, SheetTitle } from '$lib/components/ui/sheet';
+	// NodePropertyPanel is lazy-loaded — its static import drags in 17
+	// property-section files (every AutomatedStep config panel, HumanTask
+	// StepEditor, SubWorkflow, Trigger, etc.) at page-init time. On a cold
+	// Vite-dev open that's enough module-eval to keep the main thread busy for
+	// ~10s, during which the toolbar shows "Reconnecting" because the Yjs
+	// onopen callback can't run. Defer until the user actually selects a node.
+	type NodePropertyPanelModule = typeof import(
+		'$lib/components/editor/panels/NodePropertyPanel.svelte'
+	);
 	import {
 		getTemplate,
 		publishTemplate,
@@ -41,6 +49,7 @@
 	let runDialogOpen = $state(false);
 	let testsPanelOpen = $state(false);
 	let publishGate = $state<FailingTestInfo[] | null>(null);
+	let nodePropertyPanelModule = $state<NodePropertyPanelModule | null>(null);
 
 	// Yjs session + binding
 	const session = getSession(templateId);
@@ -260,6 +269,14 @@
 		load();
 	});
 
+	$effect(() => {
+		if (selectedNodeId && !nodePropertyPanelModule) {
+			import('$lib/components/editor/panels/NodePropertyPanel.svelte').then((m) => {
+				nodePropertyPanelModule = m as NodePropertyPanelModule;
+			});
+		}
+	});
+
 	onDestroy(() => {
 		binding.destroy();
 		releaseSession(templateId);
@@ -315,7 +332,8 @@
 				onRemoveEdges={handleRemoveEdges}
 			/>
 
-			{#if selectedNodeData}
+			{#if selectedNodeData && nodePropertyPanelModule}
+				{@const NodePropertyPanel = nodePropertyPanelModule.default}
 				<NodePropertyPanel
 					data={selectedNodeData}
 					readonly={template?.published ?? false}

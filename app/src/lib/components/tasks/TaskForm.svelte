@@ -174,7 +174,6 @@
 			errors = rest;
 		}
 	}
-
 	const currentStep = $derived(steps[activeStep - 1]);
 	const isLastStep = $derived(activeStep === steps.length);
 	const allFields = $derived(steps.flatMap((s) => fieldsForStep(s)));

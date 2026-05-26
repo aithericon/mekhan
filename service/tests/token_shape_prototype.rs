@@ -27,14 +27,15 @@ fn load(fixture: &str) -> WorkflowGraph {
 
 fn invoice_files() -> HashMap<String, HashMap<String, InputSource>> {
     let mut files = HashMap::new();
-    let mut extract = HashMap::new();
-    extract.insert(
+    let mut stub_py = HashMap::new();
+    stub_py.insert(
         "main.py".to_string(),
         InputSource::Raw {
             content: "# stub\n".to_string(),
         },
     );
-    files.insert("extract".to_string(), extract);
+    files.insert("extract".to_string(), stub_py.clone());
+    files.insert("validate-check".to_string(), stub_py);
     files
 }
 
@@ -73,12 +74,23 @@ fn native_split_is_emitted_with_enforced_schemas() {
         );
     }
 
-    // 2. Monotone invariant: no consuming arc into ANY parked data place.
+    // 2. Monotone invariant: no consuming arc into ANY parked data place,
+    //    EXCEPT a Loop's own `_enter`/`_continue` transitions, which rewrite
+    //    the parked iteration counter (consume + re-emit with bumped value)
+    //    on each iteration. All cross-node references must still be read-arcs.
     for t in air["transitions"].as_array().unwrap() {
         let tid = t["id"].as_str().unwrap_or("");
         for a in t["inputs"].as_array().cloned().unwrap_or_default() {
             let p = a["place"].as_str().unwrap_or("");
             if p.starts_with("p_") && p.ends_with("_data") {
+                let owner = p
+                    .trim_start_matches("p_")
+                    .trim_end_matches("_data");
+                let is_owner_loop_rewrite = tid == format!("t_{owner}_enter")
+                    || tid == format!("t_{owner}_continue");
+                if is_owner_loop_rewrite {
+                    continue;
+                }
                 assert_eq!(
                     a["read"],
                     serde_json::json!(true),
