@@ -13,10 +13,8 @@ use serde_json::Value;
 use std::collections::HashMap;
 
 use aithericon_executor_backend_configs::{
-    file_ops::FileOpsConfig, http::HttpConfig, kreuzberg::KreuzbergConfig, llm::LlmConfig,
-    process::ProcessConfig,
     python::{default_python, PythonConfig},
-    smtp::{AttachmentSpec as SmtpAttachmentSpec, SmtpConfig, TemplateSource},
+    smtp::{AttachmentSpec as SmtpAttachmentSpec, TemplateSource},
 };
 use aithericon_executor_domain::{InputDeclaration, InputSource};
 
@@ -208,272 +206,32 @@ pub(crate) fn require_node_file(
     )))
 }
 
-/// Validate and transform an editor backend config into the executor's expected format.
+/// Validate and transform an editor backend config into the executor's
+/// expected format. Pure registry dispatch — every backend has a decl in
+/// `crate::backends`, so this is a single trampoline call.
 ///
-/// Returns (validated config as Value, inputs to stage in the ExecutionSpec).
-/// `node_files` is the per-node map of filename → source. Backends that take
-/// files emit one `InputDeclaration` per entry; backends that don't (`file_ops`)
-/// ignore it.
+/// `node_files` is the per-node map of filename → source. Backends that
+/// take files emit one `InputDeclaration` per entry; backends that don't
+/// (`file_ops`, `catalogue_query`) ignore it.
 ///
-/// `node_id` is used for attribution in placeholder-syntax errors raised by
-/// the LLM / Kreuzberg arms (where author-supplied strings can carry
-/// `{{<slug>.<field>}}` placeholders). Callers without a meaningful id (test
-/// harnesses) can pass `""` — the error message just shows blank.
+/// `node_id` is used for attribution in placeholder-syntax errors raised
+/// by backends whose author-supplied strings carry `{{<slug>.<field>}}`
+/// placeholders (LLM, Kreuzberg, SMTP). Callers without a meaningful id
+/// (test harnesses) can pass `""` — the error message just shows blank.
 pub fn validate_and_transform(
     backend_type: &ExecutionBackendType,
     config: &Value,
     node_files: &HashMap<String, InputSource>,
     node_id: &str,
 ) -> Result<(Value, Vec<InputDeclaration>), CompileError> {
-    // Registry-first dispatch. Backends migrated to `crate::backends` are
-    // looked up here and skip the legacy match arm below. Backends not yet
-    // in the registry fall through.
-    if let Some(decl) = crate::backends::lookup(*backend_type) {
-        let ctx = crate::backends::ValidationCtx { node_id, node_files };
-        return (decl.validate)(config, &ctx);
-    }
-
-    match backend_type {
-        ExecutionBackendType::Python => {
-            let editor_config: EditorPythonConfig = serde_json::from_value(config.clone())
-                .map_err(|e| CompileError::Validation(format!("invalid python config: {e}")))?;
-            editor_config.to_executor_config(node_files)
-        }
-
-        ExecutionBackendType::Process => {
-            let parsed: ProcessConfig = serde_json::from_value(config.clone())
-                .map_err(|e| CompileError::Validation(format!("invalid process config: {e}")))?;
-            if parsed.command.trim().is_empty() {
-                return Err(CompileError::Validation(
-                    "process config: command is required".into(),
-                ));
-            }
-            Ok((config.clone(), stage_all_files(node_files)))
-        }
-
-        ExecutionBackendType::Docker => {
-            let parsed: aithericon_executor_backend_configs::docker::DockerConfig =
-                serde_json::from_value(config.clone())
-                    .map_err(|e| CompileError::Validation(format!("invalid docker config: {e}")))?;
-            if parsed.image.trim().is_empty() {
-                return Err(CompileError::Validation(
-                    "docker config: image is required".into(),
-                ));
-            }
-            Ok((config.clone(), stage_all_files(node_files)))
-        }
-
-        ExecutionBackendType::Http => {
-            let parsed: HttpConfig = serde_json::from_value(config.clone())
-                .map_err(|e| CompileError::Validation(format!("invalid http config: {e}")))?;
-            if parsed.url.trim().is_empty() {
-                return Err(CompileError::Validation(
-                    "http config: url is required".into(),
-                ));
-            }
-            if parsed.body.is_some() && parsed.body_from_input.is_some() {
-                return Err(CompileError::Validation(
-                    "http config: body and body_from_input are mutually exclusive".into(),
-                ));
-            }
-            if let Some(ref name) = parsed.body_from_input {
-                require_node_file(name, "http config: body_from_input", node_files)?;
-            }
-            Ok((config.clone(), stage_all_files(node_files)))
-        }
-
-        ExecutionBackendType::Llm => {
-            let parsed: LlmConfig = serde_json::from_value(config.clone())
-                .map_err(|e| CompileError::Validation(format!("invalid llm config: {e}")))?;
-            if parsed.model.trim().is_empty() {
-                return Err(CompileError::Validation(
-                    "llm config: model is required".into(),
-                ));
-            }
-            if parsed.prompt.trim().is_empty() {
-                return Err(CompileError::Validation(
-                    "llm config: prompt is required".into(),
-                ));
-            }
-            // Validate placeholders in author-supplied strings — surfaces
-            // malformed `{{...}}` syntax with a precise field reference. The
-            // graph-aware slug-resolution happens later in
-            // `apply_control_data_foundation`.
-            validate_placeholders(&parsed.prompt, node_id, "llm", "prompt")?;
-            if let Some(ref sys) = parsed.system_prompt {
-                validate_placeholders(sys, node_id, "llm", "system_prompt")?;
-            }
-            for (i, m) in parsed.history.iter().enumerate() {
-                validate_placeholders(
-                    &m.content,
-                    node_id,
-                    "llm",
-                    &format!("history[{i}].content"),
-                )?;
-            }
-            for (i, img) in parsed.images.iter().enumerate() {
-                let site = format!("images[{i}].path");
-                let has_placeholder = validate_placeholders(&img.path, node_id, "llm", &site)?;
-                // Only attached-file paths get `require_node_file`'d; upstream
-                // refs (`{{...}}`) are resolved by the foundation pass.
-                if !has_placeholder {
-                    require_node_file(&img.path, &format!("llm config: {site}"), node_files)?;
-                }
-            }
-            Ok((config.clone(), stage_all_files(node_files)))
-        }
-
-        ExecutionBackendType::Kreuzberg => {
-            let parsed: KreuzbergConfig = serde_json::from_value(config.clone())
-                .map_err(|e| CompileError::Validation(format!("invalid kreuzberg config: {e}")))?;
-            // Per-site placeholder validation + node-file gate. A node with
-            // ONLY upstream `{{...}}` refs and no attached files is OK
-            // (kreuzberg's runtime fetches via the foundation pass); we keep
-            // the "node has no files" gate but skip it when at least one
-            // placeholder is present.
-            let mut any_placeholder = false;
-            if let Some(ref name) = parsed.file {
-                let had = validate_placeholders(name, node_id, "kreuzberg", "file")?;
-                if had {
-                    any_placeholder = true;
-                } else {
-                    require_node_file(name, "kreuzberg config: file", node_files)?;
-                }
-            }
-            for (i, name) in parsed.files.iter().enumerate() {
-                let site = format!("files[{i}]");
-                let had = validate_placeholders(name, node_id, "kreuzberg", &site)?;
-                if had {
-                    any_placeholder = true;
-                } else {
-                    require_node_file(name, &format!("kreuzberg config: {site}"), node_files)?;
-                }
-            }
-            if node_files.is_empty() && !any_placeholder {
-                return Err(CompileError::Validation(
-                    "kreuzberg config: node has no files; attach a document or reference an upstream `{{<slug>.<field>}}`".into(),
-                ));
-            }
-            Ok((config.clone(), stage_all_files(node_files)))
-        }
-
-        ExecutionBackendType::FileOps => {
-            // Validates structure (operation tag + per-op required fields).
-            // file_ops works on storage paths, not staged inputs — emits no
-            // InputDeclarations.
-            let _: FileOpsConfig = serde_json::from_value(config.clone())
-                .map_err(|e| CompileError::Validation(format!("invalid file_ops config: {e}")))?;
-            Ok((config.clone(), vec![]))
-        }
-
-        ExecutionBackendType::CatalogueQuery => {
-            // Read-only catalogue lookup: no executor job, no staged inputs.
-            // Validate the shape and emit the normalized `query` token the
-            // `catalogue_lookup` effect handler consumes.
-            let parsed: CatalogueQueryConfig = serde_json::from_value(config.clone())
-                .map_err(|e| {
-                    CompileError::Validation(format!("invalid catalogue_query config: {e}"))
-                })?;
-            let token = serde_json::to_value(&parsed).map_err(|e| {
-                CompileError::Validation(format!("catalogue_query serialize: {e}"))
-            })?;
-            Ok((token, vec![]))
-        }
-
-        ExecutionBackendType::Smtp => {
-            // SMTP carries Tera template sources inline in the config. The
-            // editor stores them as IDE node files for authoring + ref-picker
-            // ergonomics, but at save/publish time those file contents are
-            // embedded into the config as `TemplateSource { label, source }`
-            // so the executor never has to coordinate with node-file storage.
-            // Attachments DO flow through the staged-inputs pipeline because
-            // they typically reference upstream-step output artifacts.
-            let parsed: SmtpConfig = serde_json::from_value(config.clone())
-                .map_err(|e| CompileError::Validation(format!("invalid smtp config: {e}")))?;
-            parsed.validate().map_err(|e| {
-                // ExecutorError flattens to a Display string with the per-field
-                // detail; surface that as a Validation error.
-                CompileError::Validation(format!("smtp config: {e}"))
-            })?;
-
-            // Placeholder syntax check across every Tera template surface so
-            // a typo in `{{ user.emial }}` is flagged at publish time, not
-            // when an instance tries to send. We only validate `{{...}}`
-            // here — Tera also supports `{%...%}` blocks but compile-time
-            // scope-checking of those is out of scope for v1 (documented).
-            validate_placeholders(
-                &parsed.subject.source,
-                node_id,
-                "smtp",
-                &format!("subject({})", parsed.subject.label),
-            )?;
-            if let Some(ref t) = parsed.body_text {
-                validate_placeholders(
-                    &t.source,
-                    node_id,
-                    "smtp",
-                    &format!("body_text({})", t.label),
-                )?;
-            }
-            if let Some(ref h) = parsed.body_html {
-                validate_placeholders(
-                    &h.source,
-                    node_id,
-                    "smtp",
-                    &format!("body_html({})", h.label),
-                )?;
-            }
-            // Recipient and from templates are short single-line strings —
-            // still scan them so a misspelled `{{ user.emial }}` in the
-            // To: row is flagged with the right field name.
-            for (i, addr) in parsed.to.iter().enumerate() {
-                validate_placeholders(addr, node_id, "smtp", &format!("to[{i}]"))?;
-            }
-            for (i, addr) in parsed.cc.iter().enumerate() {
-                validate_placeholders(addr, node_id, "smtp", &format!("cc[{i}]"))?;
-            }
-            for (i, addr) in parsed.bcc.iter().enumerate() {
-                validate_placeholders(addr, node_id, "smtp", &format!("bcc[{i}]"))?;
-            }
-            if let Some(ref f) = parsed.from {
-                validate_placeholders(f, node_id, "smtp", "from")?;
-            }
-
-            // Attachments: each carries an `input_name` chosen by the
-            // frontend. Today the wire shape is opaque — the SmtpConfigPanel
-            // emits stable `_att_<idx>` names paired with InputDeclarations
-            // that the publisher resolves to StoragePath refs at publish
-            // time. v1 doesn't synthesize them here because that requires
-            // up/downstream context the editor already has. The validation
-            // we DO perform: every entry's `input_name` must round-trip to
-            // a unique field name to avoid collisions in the run dir.
-            let mut seen_input_names: std::collections::BTreeSet<&str> =
-                std::collections::BTreeSet::new();
-            for a in &parsed.attachments {
-                if !seen_input_names.insert(a.input_name.as_str()) {
-                    return Err(CompileError::Validation(format!(
-                        "smtp config: duplicate attachment input_name '{}'",
-                        a.input_name
-                    )));
-                }
-            }
-
-            // Re-serialize the validated SmtpConfig so the executor sees a
-            // canonical shape (any unknown fields the frontend sent would
-            // have been dropped at deserialize time).
-            let canonical_config = serde_json::to_value(&parsed).map_err(|e| {
-                CompileError::Compilation(format!("failed to serialize smtp config: {e}"))
-            })?;
-
-            // SMTP doesn't ingest node files itself — the templates ride the
-            // config inline. Attachments are pure-pipeline inputs (the
-            // publish path / mekhan resolves their source separately from
-            // graph node files). Emit an empty inputs list and let the
-            // caller layer attachment InputDeclarations on top once the
-            // upstream-ref resolution lands.
-            Ok((canonical_config, vec![]))
-        }
-    }
+    let decl = crate::backends::lookup(*backend_type).ok_or_else(|| {
+        CompileError::Compilation(format!(
+            "backend {:?} has no registered decl",
+            backend_type
+        ))
+    })?;
+    let ctx = crate::backends::ValidationCtx { node_id, node_files };
+    (decl.validate)(config, &ctx)
 }
 
 // Aliases used by handlers/tests that want to construct an SMTP config

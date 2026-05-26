@@ -2260,45 +2260,6 @@ pub(crate) fn automated_step_borrow_plan(
     Ok(out)
 }
 
-/// Pull every `{{ <head>.<attr> }}` placeholder out of an SMTP step's config.
-/// The template surfaces (`subject.source`, `body_text.source`,
-/// `body_html.source`, each entry of `to`/`cc`/`bcc`, optional `from`) are
-/// uniformly Tera; we hit them all so the borrow planner sees the union of
-/// references across the whole step.
-pub(crate) fn smtp_template_placeholder_refs(
-    config: &serde_json::Value,
-) -> Vec<(String, String)> {
-    use crate::compiler::placeholder_refs::scan_placeholders;
-    let mut out: Vec<(String, String)> = Vec::new();
-    let Some(obj) = config.as_object() else {
-        return out;
-    };
-    let mut texts: Vec<&str> = Vec::new();
-    for key in ["subject", "body_text", "body_html"] {
-        if let Some(s) = obj.get(key).and_then(|v| v.get("source")).and_then(|v| v.as_str()) {
-            texts.push(s);
-        }
-    }
-    for field in ["to", "cc", "bcc"] {
-        if let Some(arr) = obj.get(field).and_then(|v| v.as_array()) {
-            for el in arr {
-                if let Some(s) = el.as_str() {
-                    texts.push(s);
-                }
-            }
-        }
-    }
-    if let Some(from) = obj.get("from").and_then(|v| v.as_str()) {
-        texts.push(from);
-    }
-    for text in texts {
-        for r in scan_placeholders(text) {
-            out.push((r.head, r.attr));
-        }
-    }
-    out
-}
-
 /// One resolved Python `<name>.<attr>` access where `<name>` is a known
 /// workspace resource. Direct sibling of [`AutomatedStepDataBorrow`] — same
 /// scanner input ([`extract_python_refs`]), but the head doesn't resolve to

@@ -1,89 +1,25 @@
-//! Declarative registry of which AutomatedStep backends bind to workspace
-//! resources, and how.
+//! Workspace-resource head discovery for AutomatedSteps.
 //!
-//! Replaces the per-backend match arms that used to live in `publish.rs`
-//! (`discover_known_resources`) and `token_shape.rs`
-//! (`automated_step_resource_borrow_plan`). Adding a new resource-bound
-//! backend is one [`ResourceBindingDecl`] entry.
+//! Drives the publisher's "which resources does this step need" pass via
+//! [`collect_resource_heads`]. Source of truth is the backend registry
+//! (`crate::backends`):
 //!
-//! Two reference kinds are expressible:
-//! - `alias_paths` — the alias lives at a static path in the step's config
-//!   JSON (e.g. `resource_alias`, or `source_storage.resource_alias`).
-//!   Picked up by [`collect_resource_heads`] with no scanner.
-//! - `extra_scanner` — for backends whose resource references aren't a
-//!   single field lookup. Python scans its `<name>.<attr>` accesses;
-//!   SMTP scans Tera placeholders across template surfaces.
+//! - `BackendDecl::resource_alias_paths` — static JSON paths where the
+//!   step's config stores a resource alias (e.g. `["resource_alias"]`,
+//!   `["storage", "resource_alias"]`).
+//! - `BackendDecl::ref_scanner` — dynamic `<head>.<attr>` scanner whose
+//!   emitted heads might resolve to either graph slugs or workspace
+//!   resources; the caller (validate_resource_refs, publish handler)
+//!   filters by namespace.
+//!
+//! Phase 3 collapse — the legacy `ResourceBindingDecl` / `BINDINGS` /
+//! `python_scanner` / `smtp_scanner` are gone; the registry covers the
+//! same surface with one source of truth.
 
 use serde_json::Value;
 
 use crate::backends::ScanCtx;
 use crate::models::template::ExecutionBackendType;
-
-pub(crate) struct ResourceBindingDecl {
-    pub backend_type: ExecutionBackendType,
-    pub alias_paths: &'static [&'static [&'static str]],
-    pub extra_scanner: Option<ExtraScanner>,
-}
-
-pub(crate) type ExtraScanner = fn(&ScanCtx<'_>) -> Vec<String>;
-
-const SMTP_PATHS: &[&[&str]] = &[&["resource_alias"]];
-const LLM_PATHS: &[&[&str]] = &[&["resource_alias"]];
-
-// File-ops binds resources at the StorageConfig level. The op variants
-// each carry one or two StorageConfig fields; absent paths are no-ops, so
-// this single declaration covers every variant.
-const FILE_OPS_PATHS: &[&[&str]] = &[
-    &["storage", "resource_alias"],
-    &["source_storage", "resource_alias"],
-    &["destination_storage", "resource_alias"],
-];
-
-fn smtp_scanner(ctx: &ScanCtx<'_>) -> Vec<String> {
-    use crate::compiler::token_shape::smtp_template_placeholder_refs;
-    smtp_template_placeholder_refs(ctx.config)
-        .into_iter()
-        .map(|(head, _)| head)
-        .collect()
-}
-
-fn python_scanner(ctx: &ScanCtx<'_>) -> Vec<String> {
-    use crate::compiler::python_refs::extract_python_refs;
-    let entrypoint = ctx.entrypoint.unwrap_or("main.py");
-    let Some(node_files) = ctx.inline_sources.get(ctx.node_id) else {
-        return Vec::new();
-    };
-    let Some(source) = node_files.get(entrypoint) else {
-        return Vec::new();
-    };
-    extract_python_refs(source)
-        .into_iter()
-        .map(|r| r.head)
-        .collect()
-}
-
-pub(crate) const BINDINGS: &[ResourceBindingDecl] = &[
-    ResourceBindingDecl {
-        backend_type: ExecutionBackendType::Python,
-        alias_paths: &[],
-        extra_scanner: Some(python_scanner),
-    },
-    ResourceBindingDecl {
-        backend_type: ExecutionBackendType::Smtp,
-        alias_paths: SMTP_PATHS,
-        extra_scanner: Some(smtp_scanner),
-    },
-    ResourceBindingDecl {
-        backend_type: ExecutionBackendType::Llm,
-        alias_paths: LLM_PATHS,
-        extra_scanner: None,
-    },
-    ResourceBindingDecl {
-        backend_type: ExecutionBackendType::FileOps,
-        alias_paths: FILE_OPS_PATHS,
-        extra_scanner: None,
-    },
-];
 
 /// Collect every workspace resource head a step might reference. Empty
 /// alias strings are filtered. Unknown heads (not registered in the
@@ -93,19 +29,21 @@ pub(crate) fn collect_resource_heads(
     ctx: &ScanCtx<'_>,
     backend_type: ExecutionBackendType,
 ) -> Vec<String> {
-    let Some(decl) = BINDINGS.iter().find(|d| d.backend_type == backend_type) else {
+    let Some(decl) = crate::backends::lookup(backend_type) else {
         return Vec::new();
     };
     let mut heads = Vec::new();
-    for path in decl.alias_paths {
+    for path in decl.resource_alias_paths {
         if let Some(alias) = extract_str_at_path(ctx.config, path) {
             if !alias.is_empty() {
                 heads.push(alias);
             }
         }
     }
-    if let Some(scanner) = decl.extra_scanner {
-        heads.extend(scanner(ctx));
+    if let Some(scanner) = decl.ref_scanner {
+        for r in scanner(ctx) {
+            heads.push(r.head);
+        }
     }
     heads
 }
@@ -157,7 +95,9 @@ mod tests {
     }
 
     #[test]
-    fn unknown_backend_no_heads() {
+    fn unresourced_backend_no_heads() {
+        // Process has no resource_alias_paths and no ref_scanner — no
+        // resource heads expected.
         let cfg = json!({ "resource_alias": "x" });
         let heads = collect_resource_heads(&empty_ctx(&cfg), ExecutionBackendType::Process);
         assert!(heads.is_empty());
