@@ -28,18 +28,18 @@ fn registry_entries_are_well_formed() {
     let mut seen_types: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     for decl in BACKENDS {
-        assert!(!decl.display_name.is_empty(), "display_name missing for {:?}", decl.backend_type);
-        assert!(!decl.icon.is_empty(), "icon missing for {:?}", decl.backend_type);
+        assert!(!decl.meta.display_name.is_empty(), "display_name missing for {:?}", decl.backend_type);
+        assert!(!decl.meta.icon.is_empty(), "icon missing for {:?}", decl.backend_type);
         assert_eq!(
-            decl.executor_wire_name,
+            decl.meta.wire_name,
             decl.backend_type.as_wire_str(),
             "executor_wire_name mismatch for {:?}",
             decl.backend_type
         );
         assert!(
-            seen_wires.insert(decl.executor_wire_name),
+            seen_wires.insert(decl.meta.wire_name),
             "duplicate executor_wire_name '{}' in registry",
-            decl.executor_wire_name
+            decl.meta.wire_name
         );
         let type_key = format!("{:?}", decl.backend_type);
         assert!(
@@ -53,7 +53,7 @@ fn registry_entries_are_well_formed() {
 #[test]
 fn staged_file_channel_has_a_resource_lookup_path() {
     for decl in BACKENDS {
-        if decl.resource_channel == ResourceChannel::StagedFile {
+        if decl.meta.resource_channel == ResourceChannel::StagedFile {
             let has_static_path = !decl.resource_alias_paths.is_empty();
             let has_scanner = decl.ref_scanner.is_some();
             assert!(
@@ -71,7 +71,7 @@ fn lookup_round_trips_for_every_decl() {
     for decl in BACKENDS {
         let looked_up = lookup(decl.backend_type).expect("lookup must find registered decl");
         assert_eq!(
-            looked_up.executor_wire_name, decl.executor_wire_name,
+            looked_up.meta.wire_name, decl.meta.wire_name,
             "lookup returned the wrong decl"
         );
     }
@@ -122,9 +122,9 @@ fn default_editor_config_round_trips_through_validate() {
 #[test]
 fn engine_effect_decls_are_non_schedulable() {
     for decl in BACKENDS {
-        if let DispatchMode::EngineEffect { handler } = decl.dispatch_mode {
+        if let DispatchMode::EngineEffect { handler } = decl.meta.dispatch_mode {
             assert!(
-                !decl.schedulable,
+                !decl.meta.schedulable,
                 "{:?} declares DispatchMode::EngineEffect {{ handler: \"{handler}\" }} \
                  but also schedulable: true — engine effects don't dispatch executor \
                  jobs and have no scheduler-net path, so the Scheduled toggle would \
@@ -141,10 +141,10 @@ fn descriptor_serialization_matches_decl() {
     let all = descriptors();
     assert_eq!(all.len(), BACKENDS.len(), "descriptor count must match registry length");
     for (decl, descriptor) in BACKENDS.iter().zip(all.iter()) {
-        assert_eq!(descriptor.name, decl.executor_wire_name);
-        assert_eq!(descriptor.display_name, decl.display_name);
-        assert_eq!(descriptor.icon, decl.icon);
-        assert_eq!(descriptor.schedulable, decl.schedulable);
+        assert_eq!(descriptor.name, decl.meta.wire_name);
+        assert_eq!(descriptor.display_name, decl.meta.display_name);
+        assert_eq!(descriptor.icon, decl.meta.icon);
+        assert_eq!(descriptor.schedulable, decl.meta.schedulable);
         assert_eq!(descriptor.consumes_declared_outputs, decl.consumes_declared_outputs);
         assert_eq!(
             descriptor.default_output_port.fields.len(),

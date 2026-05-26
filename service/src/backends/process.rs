@@ -16,7 +16,7 @@ use crate::compiler::backend_configs::stage_all_files;
 use crate::compiler::CompileError;
 use crate::models::template::{ExecutionBackendType, FieldKind};
 
-use super::{BackendDecl, DefaultPortField, DispatchMode, ResourceChannel, ValidationCtx};
+use super::{BackendDecl, DefaultPortField, ValidationCtx, PROCESS_META};
 
 const DEFAULT_OUTPUT_FIELDS: &[DefaultPortField] = &[
     DefaultPortField {
@@ -37,20 +37,15 @@ const DEFAULT_OUTPUT_FIELDS: &[DefaultPortField] = &[
 ];
 
 pub static PROCESS_DECL: BackendDecl = BackendDecl {
+    meta: &PROCESS_META,
     backend_type: ExecutionBackendType::Process,
-    display_name: "Process",
-    icon: "terminal",
     default_output_fields: DEFAULT_OUTPUT_FIELDS,
     default_editor_config: default_editor_config,
     validate: validate,
     ref_scanner: None,
     resource_alias_paths: &[],
-    resource_channel: ResourceChannel::None,
-    dispatch_mode: DispatchMode::ExecutorJob,
     consumes_declared_outputs: false,
     pyi_introspection: false,
-    schedulable: true,
-    executor_wire_name: "process",
     borrow_shape: super::BorrowShape::Envelope,
     validate_ref_kind: super::accept_any_ref_kind,
 };

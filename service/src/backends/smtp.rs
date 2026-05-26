@@ -15,9 +15,7 @@ use crate::compiler::rhai_gen::parse_placeholder_segments;
 use crate::compiler::CompileError;
 use crate::models::template::{ExecutionBackendType, FieldKind};
 
-use super::{
-    BackendDecl, DefaultPortField, DispatchMode, RefSite, ResourceChannel, ScanCtx, ValidationCtx,
-};
+use super::{BackendDecl, DefaultPortField, RefSite, ScanCtx, ValidationCtx, SMTP_META};
 
 const DEFAULT_OUTPUT_FIELDS: &[DefaultPortField] = &[
     DefaultPortField { name: "outcome", label: "Outcome", kind: FieldKind::Json },
@@ -37,20 +35,15 @@ const DEFAULT_OUTPUT_FIELDS: &[DefaultPortField] = &[
 const RESOURCE_ALIAS_PATHS: &[&[&str]] = &[&["resource_alias"]];
 
 pub static SMTP_DECL: BackendDecl = BackendDecl {
+    meta: &SMTP_META,
     backend_type: ExecutionBackendType::Smtp,
-    display_name: "SMTP (Email)",
-    icon: "mail",
     default_output_fields: DEFAULT_OUTPUT_FIELDS,
     default_editor_config: default_editor_config,
     validate: validate,
     ref_scanner: Some(ref_scanner),
     resource_alias_paths: RESOURCE_ALIAS_PATHS,
-    resource_channel: ResourceChannel::StagedFile,
-    dispatch_mode: DispatchMode::ExecutorJob,
     consumes_declared_outputs: false,
     pyi_introspection: false,
-    schedulable: true,
-    executor_wire_name: "smtp",
     borrow_shape: super::BorrowShape::Envelope,
     validate_ref_kind: super::accept_any_ref_kind,
 };

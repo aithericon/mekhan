@@ -1079,7 +1079,7 @@ fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     // future engine-effect backends only need a new registry entry.
     if let WorkflowNodeData::AutomatedStep { execution_spec, .. } = &cx.node.data {
         if let Some(decl) = crate::backends::lookup(execution_spec.backend_type) {
-            if let crate::backends::DispatchMode::EngineEffect { handler } = decl.dispatch_mode {
+            if let crate::backends::DispatchMode::EngineEffect { handler } = decl.meta.dispatch_mode {
                 return lower_engine_effect(cx, handler);
             }
         }

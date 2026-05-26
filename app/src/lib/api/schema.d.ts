@@ -1989,8 +1989,13 @@ export interface components {
         };
         /**
          * @description Discriminator selecting which executor backend handles an automated step.
+         *
          *     Snake-case wire values: `"python"`, `"process"`, `"docker"`, `"http"`,
          *     `"llm"`, `"file_ops"`, `"kreuzberg"`, `"smtp"`, `"catalogue_query"`.
+         *
+         *     This is the canonical OpenAPI discriminator, the Y.Doc-stored string in
+         *     production templates, and the executor's `ExecutionSpec.backend` value.
+         *     Both the mekhan compiler and the executor registry key off it.
          * @enum {string}
          */
         ExecutionBackendType: "python" | "process" | "docker" | "http" | "llm" | "file_ops" | "kreuzberg" | "smtp" | "catalogue_query";
@@ -2767,6 +2772,11 @@ export interface components {
         };
         /**
          * @description How a resolved resource envelope reaches the running backend.
+         *
+         *     The executor and mekhan compiler both branch on this — the compiler to
+         *     decide what kind of borrow to emit, the executor to know whether to
+         *     merge the envelope into the runtime config (`ConfigOverlay`) or stage it
+         *     as a sidecar file (`StagedFile`).
          * @enum {string}
          */
         ResourceChannel: "staged_file" | "config_overlay" | "none";

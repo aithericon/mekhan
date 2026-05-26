@@ -29,6 +29,14 @@ use aithericon_executor_domain::{InputDeclaration, InputSource};
 use crate::compiler::CompileError;
 use crate::models::template::{ExecutionBackendType, FieldKind, Port, PortField};
 
+// Cross-crate metadata — the wire-name enum, dispatch mode, resource
+// channel, and the per-backend `BackendMeta` consts. Re-exported so
+// existing callers can keep importing from `crate::backends::*`.
+pub use aithericon_backends::{
+    BackendMeta, DispatchMode, ResourceChannel, CATALOGUE_QUERY_META, DOCKER_META, FILE_OPS_META,
+    HTTP_META, KREUZBERG_META, LLM_META, PROCESS_META, PYTHON_META, SMTP_META,
+};
+
 pub mod catalogue_query;
 pub mod docker;
 pub mod file_ops;
@@ -42,13 +50,21 @@ pub mod smtp;
 /// Per-backend declaration. Stored in a `&'static` slice so the registry has
 /// zero runtime cost and trivially serializes the metadata subset for
 /// `GET /api/v1/backends`.
+///
+/// The cross-crate metadata (wire name, display name, icon, dispatch mode,
+/// schedulable, resource channel) lives on `meta` — a borrow into the
+/// `aithericon-backends` crate. Everything else here is service-internal
+/// (pulls in `CompileError`, `InputDeclaration`, the placeholder scanner
+/// context) and stays inside `mekhan-service`.
 pub struct BackendDecl {
-    /// Discriminator + lookup key. Must be unique across [`BACKENDS`].
+    /// Cross-crate metadata block — wire name, display name, icon,
+    /// dispatch mode, schedulable, resource channel. The conformance test
+    /// asserts that `meta.backend_type == self.backend_type`.
+    pub meta: &'static BackendMeta,
+    /// Discriminator + lookup key. Equal to `meta.backend_type`; carried
+    /// as a separate field so dispatch-site match statements can pattern
+    /// against `decl.backend_type` without the indirection.
     pub backend_type: ExecutionBackendType,
-    /// Human label shown in the editor's backend picker.
-    pub display_name: &'static str,
-    /// Lucide icon name (frontend resolves to a component).
-    pub icon: &'static str,
     /// Canonical output port fields. Mirrors what
     /// `default_output_port(bt)` returns; emitted in the
     /// `BackendDescriptor` so the frontend can stop duplicating the list.
@@ -74,10 +90,6 @@ pub struct BackendDecl {
     /// resource references live only inside templates/source (see
     /// `ref_scanner`).
     pub resource_alias_paths: &'static [&'static [&'static str]],
-    /// How a resolved resource envelope reaches the backend at runtime.
-    pub resource_channel: ResourceChannel,
-    /// How the compiler lowers a step of this backend into Petri.
-    pub dispatch_mode: DispatchMode,
     /// True for backends whose declared output port fields are emitted
     /// into the AIR as a Rhai `outputs:` constant (Python / Kreuzberg /
     /// Llm today). Drives `lower::declared_outputs_rhai`.
@@ -85,15 +97,6 @@ pub struct BackendDecl {
     /// True for backends that get `.pyi` introspection stubs generated
     /// on publish / on demand (Python only today).
     pub pyi_introspection: bool,
-    /// True if this backend can run via `DeploymentModel::Scheduled`.
-    /// Engine-effect backends (e.g. CatalogueQuery) and any inherently
-    /// inline-only future backends set this `false` so the editor hides
-    /// the Scheduled toggle and the compiler rejects the combination.
-    pub schedulable: bool,
-    /// Snake-case wire string the executor uses to match `ExecutionSpec.backend`.
-    /// MUST equal `backend_type.as_wire_str()` — enforced by the
-    /// conformance test.
-    pub executor_wire_name: &'static str,
     /// How `ref_scanner` emissions are staged. Inert when
     /// `ref_scanner` is `None` (set to `Envelope` by convention).
     pub borrow_shape: BorrowShape,
@@ -102,6 +105,41 @@ pub struct BackendDecl {
     /// without per-site constraints; LLM uses a custom validator to
     /// enforce `images[].path → File` and content-sites → not-File.
     pub validate_ref_kind: RefKindValidator,
+}
+
+impl BackendDecl {
+    /// Cross-crate display name (read through `meta`). Convenience for
+    /// dispatch sites that previously inlined `decl.display_name`.
+    pub fn display_name(&self) -> &'static str {
+        self.meta.display_name
+    }
+
+    /// Cross-crate icon name.
+    pub fn icon(&self) -> &'static str {
+        self.meta.icon
+    }
+
+    /// Cross-crate dispatch mode.
+    pub fn dispatch_mode(&self) -> DispatchMode {
+        self.meta.dispatch_mode
+    }
+
+    /// Cross-crate resource channel.
+    pub fn resource_channel(&self) -> ResourceChannel {
+        self.meta.resource_channel
+    }
+
+    /// Cross-crate schedulable flag.
+    pub fn schedulable(&self) -> bool {
+        self.meta.schedulable
+    }
+
+    /// Cross-crate executor wire string. MUST equal
+    /// `self.backend_type.as_wire_str()`; the conformance test
+    /// double-checks.
+    pub fn executor_wire_name(&self) -> &'static str {
+        self.meta.wire_name
+    }
 }
 
 /// Validation context passed to a backend's `validate` fn. Bundles the small
@@ -208,40 +246,8 @@ pub fn accept_any_ref_kind(_: &RefKindCtx<'_>) -> Result<(), CompileError> {
     Ok(())
 }
 
-/// How a resolved resource envelope reaches the running backend.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum ResourceChannel {
-    /// SMTP-style. Compiler emits a `ResourceEnvelope` borrow; the publisher
-    /// stages `<alias>.json` as an `InputDeclaration`; the executor reads
-    /// the file at run time via `load_resource::<T>`.
-    StagedFile,
-    /// LLM-style. The backend's `prepare()` reads `<alias>.json` and merges
-    /// fields into the resolved config (per-step values win). The runtime
-    /// never sees a separate envelope file — everything is in `resolved_config`.
-    ConfigOverlay,
-    /// Backend doesn't bind a workspace resource (Process, Docker, …).
-    None,
-}
-
-/// Lowering mode — intrinsic to the backend, decided at the decl, NOT the
-/// step. Orthogonal to `DeploymentModel` (Inline / Scheduled) which is a
-/// per-step author choice on any `ExecutorJob` backend.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum DispatchMode {
-    /// Standard executor dispatch. The compiler emits an executor job; the
-    /// step's `DeploymentModel` decides whether it's inline via NATS or
-    /// submitted to a scheduler-net.
-    ExecutorJob,
-    /// Engine builtin effect (e.g. CatalogueQuery → `catalogue_lookup`). The
-    /// compiler skips executor lowering entirely and emits an effect handler
-    /// invocation directly into the Petri transition.
-    EngineEffect {
-        #[serde(rename = "handler")]
-        handler: &'static str,
-    },
-}
+// `DispatchMode` and `ResourceChannel` moved to `aithericon-backends` and
+// are re-exported at the top of this module.
 
 /// A canonical default-port field. Mirrors [`PortField`]'s frontend-visible
 /// shape but uses `&'static str` so the decl can live in a `const`.
@@ -332,9 +338,9 @@ pub struct BackendDescriptor {
 impl BackendDecl {
     pub fn to_descriptor(&self) -> BackendDescriptor {
         BackendDescriptor {
-            name: self.backend_type.as_wire_str().to_string(),
-            display_name: self.display_name.to_string(),
-            icon: self.icon.to_string(),
+            name: self.meta.wire_name.to_string(),
+            display_name: self.meta.display_name.to_string(),
+            icon: self.meta.icon.to_string(),
             default_output_port: Port {
                 id: "out".to_string(),
                 label: "Output".to_string(),
@@ -345,9 +351,9 @@ impl BackendDecl {
                     .collect(),
             },
             default_editor_config: (self.default_editor_config)(),
-            dispatch_mode: self.dispatch_mode,
-            resource_channel: self.resource_channel,
-            schedulable: self.schedulable,
+            dispatch_mode: self.meta.dispatch_mode,
+            resource_channel: self.meta.resource_channel,
+            schedulable: self.meta.schedulable,
             consumes_declared_outputs: self.consumes_declared_outputs,
         }
     }
@@ -365,8 +371,9 @@ mod tests {
     #[test]
     fn lookup_finds_smtp() {
         let decl = lookup(ExecutionBackendType::Smtp).expect("smtp registered");
-        assert_eq!(decl.executor_wire_name, "smtp");
+        assert_eq!(decl.executor_wire_name(), "smtp");
         assert_eq!(decl.backend_type, ExecutionBackendType::Smtp);
+        assert_eq!(decl.meta.backend_type, decl.backend_type);
     }
 
     #[test]

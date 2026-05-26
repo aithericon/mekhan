@@ -1661,53 +1661,11 @@ pub struct ExecutionSpecConfig {
     pub config: serde_json::Value,
 }
 
-/// Discriminator selecting which executor backend handles an automated step.
-/// Snake-case wire values: `"python"`, `"process"`, `"docker"`, `"http"`,
-/// `"llm"`, `"file_ops"`, `"kreuzberg"`, `"smtp"`, `"catalogue_query"`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum ExecutionBackendType {
-    Python,
-    Process,
-    Docker,
-    Http,
-    Llm,
-    FileOps,
-    Kreuzberg,
-    /// SMTP mailer with Tera-templated subject/body/recipients. Consumes an
-    /// `smtp` resource binding for host/port/auth and produces a structured
-    /// `outcome` envelope describing success or the precise failure mode.
-    Smtp,
-    /// Point-in-time read of the data catalogue. Does NOT dispatch an executor
-    /// job — the compiler lowers it to the engine's registered
-    /// `catalogue_lookup` effect (input port `query`, output `results`).
-    CatalogueQuery,
-}
-
-impl ExecutionBackendType {
-    /// Canonical snake_case wire string. Keep in lockstep with the
-    /// `#[serde(rename_all = "snake_case")]` derive — these strings are what
-    /// the executor and editor pass around at runtime.
-    pub fn as_wire_str(&self) -> &'static str {
-        match self {
-            Self::Python => "python",
-            Self::Process => "process",
-            Self::Docker => "docker",
-            Self::Http => "http",
-            Self::Llm => "llm",
-            Self::FileOps => "file_ops",
-            Self::Kreuzberg => "kreuzberg",
-            Self::Smtp => "smtp",
-            Self::CatalogueQuery => "catalogue_query",
-        }
-    }
-}
-
-impl std::fmt::Display for ExecutionBackendType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_wire_str())
-    }
-}
+// Wire-tag enum lives in the cross-crate `aithericon-backends` crate so
+// `mekhan-service` and `aithericon-executor-service` share one source of
+// truth. Re-exported here so existing imports (`models::template::ExecutionBackendType`)
+// keep working.
+pub use aithericon_backends::ExecutionBackendType;
 
 // --- Edge types ---
 

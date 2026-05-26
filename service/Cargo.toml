@@ -83,6 +83,11 @@ aithericon-sdk = { path = "../engine/sdk" }
 # `VaultResourceStore` so the CRUD handlers can write Vault-backed secret
 # storage when `VAULT_ADDR` is set.
 aithericon-resources = { path = "../shared/resources", features = ["vault"] }
+# Cross-crate backend metadata — the wire-name enum (ExecutionBackendType),
+# DispatchMode, ResourceChannel, and the &'static [BackendMeta] slice. The
+# compile-time decl (validate/ref_scan/default_editor_config fn pointers)
+# layers on top in `mekhan_service::backends::BackendDecl`.
+aithericon-backends = { path = "../shared/backends" }
 
 # Path-format regex for the B.9 Resource CRUD validator
 # (`POST /api/v1/resources`).

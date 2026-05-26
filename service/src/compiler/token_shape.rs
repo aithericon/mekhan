@@ -2231,7 +2231,7 @@ pub(crate) fn automated_step_borrow_plan(
                         &slugs,
                         &pos,
                         &node.id,
-                        decl.executor_wire_name,
+                        decl.meta.wire_name,
                         &r.site_label,
                         &r.head,
                         &r.attr,

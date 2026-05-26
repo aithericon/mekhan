@@ -5827,7 +5827,7 @@
       },
       "ExecutionBackendType": {
         "type": "string",
-        "description": "Discriminator selecting which executor backend handles an automated step.\nSnake-case wire values: `\"python\"`, `\"process\"`, `\"docker\"`, `\"http\"`,\n`\"llm\"`, `\"file_ops\"`, `\"kreuzberg\"`, `\"smtp\"`, `\"catalogue_query\"`.",
+        "description": "Discriminator selecting which executor backend handles an automated step.\n\nSnake-case wire values: `\"python\"`, `\"process\"`, `\"docker\"`, `\"http\"`,\n`\"llm\"`, `\"file_ops\"`, `\"kreuzberg\"`, `\"smtp\"`, `\"catalogue_query\"`.\n\nThis is the canonical OpenAPI discriminator, the Y.Doc-stored string in\nproduction templates, and the executor's `ExecutionSpec.backend` value.\nBoth the mekhan compiler and the executor registry key off it.",
         "enum": [
           "python",
           "process",
@@ -8010,7 +8010,7 @@
       },
       "ResourceChannel": {
         "type": "string",
-        "description": "How a resolved resource envelope reaches the running backend.",
+        "description": "How a resolved resource envelope reaches the running backend.\n\nThe executor and mekhan compiler both branch on this — the compiler to\ndecide what kind of borrow to emit, the executor to know whether to\nmerge the envelope into the runtime config (`ConfigOverlay`) or stage it\nas a sidecar file (`StagedFile`).",
         "enum": [
           "staged_file",
           "config_overlay",

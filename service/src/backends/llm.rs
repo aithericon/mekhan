@@ -29,8 +29,8 @@ use crate::compiler::CompileError;
 use crate::models::template::{ExecutionBackendType, FieldKind};
 
 use super::{
-    BackendDecl, BorrowShape, DefaultPortField, DispatchMode, RefKindCtx, RefSite, ResourceChannel,
-    ScanCtx, ValidationCtx,
+    BackendDecl, BorrowShape, DefaultPortField, RefKindCtx, RefSite, ScanCtx, ValidationCtx,
+    LLM_META,
 };
 
 const DEFAULT_OUTPUT_FIELDS: &[DefaultPortField] = &[
@@ -49,20 +49,15 @@ const DEFAULT_OUTPUT_FIELDS: &[DefaultPortField] = &[
 const RESOURCE_ALIAS_PATHS: &[&[&str]] = &[&["resource_alias"]];
 
 pub static LLM_DECL: BackendDecl = BackendDecl {
+    meta: &LLM_META,
     backend_type: ExecutionBackendType::Llm,
-    display_name: "LLM (AI Model)",
-    icon: "sparkles",
     default_output_fields: DEFAULT_OUTPUT_FIELDS,
     default_editor_config: default_editor_config,
     validate: validate,
     ref_scanner: Some(ref_scanner),
     resource_alias_paths: RESOURCE_ALIAS_PATHS,
-    resource_channel: ResourceChannel::ConfigOverlay,
-    dispatch_mode: DispatchMode::ExecutorJob,
     consumes_declared_outputs: true,
     pyi_introspection: false,
-    schedulable: true,
-    executor_wire_name: "llm",
     borrow_shape: BorrowShape::PerField,
     validate_ref_kind: validate_ref_kind,
 };

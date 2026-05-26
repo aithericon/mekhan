@@ -32,8 +32,8 @@ use crate::compiler::CompileError;
 use crate::models::template::{ExecutionBackendType, FieldKind};
 
 use super::{
-    accept_any_ref_kind, BackendDecl, BorrowShape, DefaultPortField, DispatchMode, RefSite,
-    ResourceChannel, ScanCtx, ValidationCtx,
+    accept_any_ref_kind, BackendDecl, BorrowShape, DefaultPortField, RefSite, ScanCtx,
+    ValidationCtx, PYTHON_META,
 };
 
 const DEFAULT_OUTPUT_FIELDS: &[DefaultPortField] = &[DefaultPortField {
@@ -43,9 +43,8 @@ const DEFAULT_OUTPUT_FIELDS: &[DefaultPortField] = &[DefaultPortField {
 }];
 
 pub static PYTHON_DECL: BackendDecl = BackendDecl {
+    meta: &PYTHON_META,
     backend_type: ExecutionBackendType::Python,
-    display_name: "Python",
-    icon: "code",
     default_output_fields: DEFAULT_OUTPUT_FIELDS,
     default_editor_config: default_editor_config,
     validate: validate,
@@ -56,12 +55,8 @@ pub static PYTHON_DECL: BackendDecl = BackendDecl {
     // that into this decl. For now this static-path list stays empty
     // and the dynamic source scanner stays where it is.
     resource_alias_paths: &[],
-    resource_channel: ResourceChannel::None,
-    dispatch_mode: DispatchMode::ExecutorJob,
     consumes_declared_outputs: false,
     pyi_introspection: true,
-    schedulable: true,
-    executor_wire_name: "python",
     borrow_shape: BorrowShape::Envelope,
     validate_ref_kind: accept_any_ref_kind,
 };

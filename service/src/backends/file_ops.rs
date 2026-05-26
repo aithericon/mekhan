@@ -27,7 +27,7 @@ use aithericon_executor_domain::InputDeclaration;
 use crate::compiler::CompileError;
 use crate::models::template::{ExecutionBackendType, FieldKind};
 
-use super::{BackendDecl, DefaultPortField, DispatchMode, ResourceChannel, ValidationCtx};
+use super::{BackendDecl, DefaultPortField, ValidationCtx, FILE_OPS_META};
 
 const DEFAULT_OUTPUT_FIELDS: &[DefaultPortField] = &[DefaultPortField {
     name: "files",
@@ -45,20 +45,15 @@ const RESOURCE_ALIAS_PATHS: &[&[&str]] = &[
 ];
 
 pub static FILE_OPS_DECL: BackendDecl = BackendDecl {
+    meta: &FILE_OPS_META,
     backend_type: ExecutionBackendType::FileOps,
-    display_name: "File Operations",
-    icon: "folder-open",
     default_output_fields: DEFAULT_OUTPUT_FIELDS,
     default_editor_config: default_editor_config,
     validate: validate,
     ref_scanner: None,
     resource_alias_paths: RESOURCE_ALIAS_PATHS,
-    resource_channel: ResourceChannel::StagedFile,
-    dispatch_mode: DispatchMode::ExecutorJob,
     consumes_declared_outputs: false,
     pyi_introspection: false,
-    schedulable: true,
-    executor_wire_name: "file_ops",
     borrow_shape: super::BorrowShape::Envelope,
     validate_ref_kind: super::accept_any_ref_kind,
 };

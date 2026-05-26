@@ -24,8 +24,8 @@ use crate::compiler::CompileError;
 use crate::models::template::{ExecutionBackendType, FieldKind};
 
 use super::{
-    accept_any_ref_kind, BackendDecl, BorrowShape, DefaultPortField, DispatchMode, RefSite,
-    ResourceChannel, ScanCtx, ValidationCtx,
+    accept_any_ref_kind, BackendDecl, BorrowShape, DefaultPortField, RefSite, ScanCtx,
+    ValidationCtx, KREUZBERG_META,
 };
 
 const DEFAULT_OUTPUT_FIELDS: &[DefaultPortField] = &[
@@ -42,20 +42,15 @@ const DEFAULT_OUTPUT_FIELDS: &[DefaultPortField] = &[
 ];
 
 pub static KREUZBERG_DECL: BackendDecl = BackendDecl {
+    meta: &KREUZBERG_META,
     backend_type: ExecutionBackendType::Kreuzberg,
-    display_name: "Document Extraction",
-    icon: "file-search",
     default_output_fields: DEFAULT_OUTPUT_FIELDS,
     default_editor_config: default_editor_config,
     validate: validate,
     ref_scanner: Some(ref_scanner),
     resource_alias_paths: &[],
-    resource_channel: ResourceChannel::None,
-    dispatch_mode: DispatchMode::ExecutorJob,
     consumes_declared_outputs: true,
     pyi_introspection: false,
-    schedulable: true,
-    executor_wire_name: "kreuzberg",
     borrow_shape: BorrowShape::PerField,
     validate_ref_kind: accept_any_ref_kind,
 };

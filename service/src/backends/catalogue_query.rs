@@ -27,7 +27,7 @@ use crate::compiler::backend_configs::CatalogueQueryConfig;
 use crate::compiler::CompileError;
 use crate::models::template::{ExecutionBackendType, FieldKind};
 
-use super::{BackendDecl, DefaultPortField, DispatchMode, ResourceChannel, ValidationCtx};
+use super::{BackendDecl, DefaultPortField, ValidationCtx, CATALOGUE_QUERY_META};
 
 /// Mirrors the engine `catalogue_lookup` handler's result token shape.
 /// Kept in lockstep with the legacy `default_output_port` arm so the
@@ -51,25 +51,15 @@ const DEFAULT_OUTPUT_FIELDS: &[DefaultPortField] = &[
 ];
 
 pub static CATALOGUE_QUERY_DECL: BackendDecl = BackendDecl {
+    meta: &CATALOGUE_QUERY_META,
     backend_type: ExecutionBackendType::CatalogueQuery,
-    display_name: "Catalogue Query",
-    icon: "database-zap",
     default_output_fields: DEFAULT_OUTPUT_FIELDS,
     default_editor_config: default_editor_config,
     validate: validate,
     ref_scanner: None,
     resource_alias_paths: &[],
-    resource_channel: ResourceChannel::None,
-    dispatch_mode: DispatchMode::EngineEffect {
-        handler: "catalogue_lookup",
-    },
     consumes_declared_outputs: false,
     pyi_introspection: false,
-    // Engine effects don't dispatch executor jobs — there's no scheduler
-    // path for them. The editor hides the Scheduled toggle (frontend
-    // collapse lands as a separate end-of-Phase-2 PR; this is metadata).
-    schedulable: false,
-    executor_wire_name: "catalogue_query",
     borrow_shape: super::BorrowShape::Envelope,
     validate_ref_kind: super::accept_any_ref_kind,
 };
