@@ -7,9 +7,12 @@
 # (10.20.x). When a separate cluster eventually exists for mekhan-prod, add
 # a sibling 41-deploy-prod.yml — don't re-add the path inline here.
 #
-# Image source: 30-build.yml produces `forge.aithericon.eu/milanender/
-# mekhan-service:$CI_COMMIT_SHA`. Workflow-level `depends_on: [30-build]`
-# enforces the ordering so deploy never races a half-finished image push.
+# Image source: 30-build.yml is currently disabled. This pipeline deploys
+# a HARD-PINNED SHA (see the `just ci::deploy-dev` step below) — the last
+# commit that has matching images in the registry from a prior 30-build
+# run. Bump that SHA manually each time you rebuild and push new images.
+# When 30-build is re-enabled, swap the pinned literal back to
+# "$CI_COMMIT_SHA" so deploys track the commit that triggered them.
 #
 # SECRETS MODEL (mirrors web-platform):
 #   - Single Woodpecker secret: `vault_token`.
@@ -28,18 +31,13 @@
 # runner picking up `role: deploy` MUST be on the mesh. YAML can't enforce.
 # =============================================================================
 
-depends_on:
-  - 30-build
-
 when:
-  # Auto on main — chained off 30-build via the workflow-level depends_on
-  # above. Push to main triggers build → deploy → verify automatically.
+  # Deploys the pinned SHA from the step below (build pipeline is
+  # currently disabled; see header). Every run of this pipeline — auto
+  # or manual — redeploys the same image until the SHA in the step is
+  # bumped.
   - branch: main
     event: push
-  # Manual run from any branch — for end-to-end testing of the deploy
-  # path on a feature branch (e.g. `ci-pipeline`). Deploys whatever
-  # image 30-build just produced on that same branch (depends_on
-  # ensures build finishes first).
   - event: manual
 
 labels:
@@ -94,7 +92,11 @@ steps:
       - export TF_VAR_postgres_admin_host=postgres-primary.service.consul
       - 'echo "  ✓ Secrets loaded from Vault"'
 
-      - just ci::deploy-dev "$CI_COMMIT_SHA"
+      # Pinned to a specific SHA while 30-build is disabled — this is the
+      # last commit that has matching images in the registry. Bump this
+      # manually after each manual rebuild, or switch back to
+      # "$CI_COMMIT_SHA" when 30-build is re-enabled.
+      - just ci::deploy-dev "c8548f11f9da15523ab164b4bc7cdec09482cc35"
     depends_on: []
 
   - name: verify-dev
