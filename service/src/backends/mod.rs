@@ -30,6 +30,7 @@ use crate::compiler::CompileError;
 use crate::models::template::{ExecutionBackendType, FieldKind, Port, PortField};
 
 pub mod docker;
+pub mod file_ops;
 pub mod http;
 pub mod process;
 pub mod smtp;
@@ -194,6 +195,7 @@ impl DefaultPortField {
 /// `lookup(bt)` returns `None`.
 pub static BACKENDS: &[&BackendDecl] = &[
     &docker::DOCKER_DECL,
+    &file_ops::FILE_OPS_DECL,
     &http::HTTP_DECL,
     &process::PROCESS_DECL,
     &smtp::SMTP_DECL,

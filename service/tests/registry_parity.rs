@@ -270,3 +270,72 @@ fn http_stages_attached_files_in_sorted_order_via_registry() {
     assert_eq!(inputs[1].name, "payload.json");
     assert!(inputs.iter().all(|i| i.required));
 }
+
+// ─── FileOps (Phase 2.d) ────────────────────────────────────────────────────
+
+#[test]
+fn file_ops_minimal_stat_compiles_through_registry() {
+    let cfg = json!({
+        "operation": "stat",
+        "path": "data/x.csv",
+        "storage": { "backend": "local", "endpoint": "/tmp" },
+    });
+    let (canonical, inputs) =
+        validate_and_transform(&ExecutionBackendType::FileOps, &cfg, &HashMap::new(), "stat")
+            .expect("file_ops stat must compile");
+    // FileOps emits NO InputDeclarations — it works on storage paths.
+    assert!(inputs.is_empty(), "file_ops emits no staged inputs");
+    assert_eq!(canonical["operation"], "stat");
+    assert_eq!(canonical["path"], "data/x.csv");
+}
+
+#[test]
+fn file_ops_rejects_garbage_operation_tag_via_registry() {
+    // No `operation` field at all — serde tag dispatch fails.
+    let cfg = json!({ "op": "stat" });
+    let err =
+        validate_and_transform(&ExecutionBackendType::FileOps, &cfg, &HashMap::new(), "stat")
+            .expect_err("missing operation tag must be rejected")
+            .to_string();
+    assert!(err.contains("invalid file_ops config"), "got: {err}");
+}
+
+#[test]
+fn file_ops_copy_with_two_storages_compiles_through_registry() {
+    let cfg = json!({
+        "operation": "copy",
+        "source": "in/x.csv",
+        "destination": "out/x.csv",
+        "source_storage": { "backend": "local", "endpoint": "/src", "resource_alias": "src_bucket" },
+        "destination_storage": { "backend": "local", "endpoint": "/dst", "resource_alias": "dst_bucket" },
+    });
+    let (canonical, inputs) =
+        validate_and_transform(&ExecutionBackendType::FileOps, &cfg, &HashMap::new(), "cp")
+            .expect("file_ops copy must compile");
+    assert!(inputs.is_empty(), "no staged inputs from file_ops");
+    assert_eq!(canonical["operation"], "copy");
+    // Resource aliases survive serde round-trip; the platform's
+    // collect_resource_heads pass picks them up from the alias paths
+    // declared on FILE_OPS_DECL.
+    assert_eq!(canonical["source_storage"]["resource_alias"], "src_bucket");
+    assert_eq!(
+        canonical["destination_storage"]["resource_alias"],
+        "dst_bucket"
+    );
+}
+
+#[test]
+fn file_ops_default_editor_config_round_trips_through_registry() {
+    use mekhan_service::backends::{lookup, BACKENDS};
+    let decl = lookup(ExecutionBackendType::FileOps).expect("file_ops registered");
+    // Decl is sourced from the registry slice — sanity-check it's the same
+    // entry the parity test exercises (catches a stray duplicate decl).
+    assert!(BACKENDS.iter().any(|d| std::ptr::eq(*d, decl)));
+    let cfg = (decl.default_editor_config)();
+    // Default seed is a `stat` op with an empty path; deserialization
+    // succeeds because every field has a default or is supplied.
+    let (_, inputs) =
+        validate_and_transform(&ExecutionBackendType::FileOps, &cfg, &HashMap::new(), "seed")
+            .expect("file_ops default editor config must validate");
+    assert!(inputs.is_empty());
+}
