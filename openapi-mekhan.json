@@ -3483,6 +3483,59 @@
         }
       }
     },
+    "/api/templates/{id}/bundle": {
+      "get": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "GET /api/templates/{id}/bundle",
+        "operationId": "get_template_bundle",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Template id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Template authoring bundle (graph + per-node inline files)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateBundle"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Template not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/templates/{id}/compile": {
       "post": {
         "tags": [
@@ -5645,7 +5698,7 @@
       },
       "ExecutionBackendType": {
         "type": "string",
-        "description": "Discriminator selecting which executor backend handles an automated step.\nSnake-case wire values: `\"python\"`, `\"process\"`, `\"docker\"`, `\"http\"`,\n`\"llm\"`, `\"file_ops\"`, `\"kreuzberg\"`.",
+        "description": "Discriminator selecting which executor backend handles an automated step.\nSnake-case wire values: `\"python\"`, `\"process\"`, `\"docker\"`, `\"http\"`,\n`\"llm\"`, `\"file_ops\"`, `\"kreuzberg\"`, `\"smtp\"`, `\"catalogue_query\"`.",
         "enum": [
           "python",
           "process",
@@ -5654,6 +5707,7 @@
           "llm",
           "file_ops",
           "kreuzberg",
+          "smtp",
           "catalogue_query"
         ]
       },
@@ -6520,7 +6574,8 @@
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "HPI tag/annotation propagated from the engine's `EffectCompleted`\nevent (`process_step_completed` ∘ `process_step_started`). A label\nfor human-process correlation — NOT a pointer to the\n`step_execution` table. See module-level docs."
           },
           "seq": {
             "type": "integer",
@@ -8670,6 +8725,34 @@
           },
           "title": {
             "type": "string"
+          }
+        }
+      },
+      "TemplateBundle": {
+        "type": "object",
+        "description": "Authoring bundle for a template — graph plus inline per-node files. This\nis the same `(graph, files)` pair the publish/new-version paths feed into\nthe compiler, served as plain JSON so non-collaborative clients (the CLI,\nCI jobs) don't need a Yjs/WSS channel just to read a published template.",
+        "required": [
+          "graph",
+          "files"
+        ],
+        "properties": {
+          "files": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "propertyNames": {
+                "type": "string"
+              }
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "graph": {
+            "$ref": "#/components/schemas/WorkflowGraph"
           }
         }
       },

@@ -1089,6 +1089,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/templates/{id}/bundle": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** GET /api/templates/{id}/bundle */
+        get: operations["get_template_bundle"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/templates/{id}/compile": {
         parameters: {
             query?: never;
@@ -1874,10 +1891,10 @@ export interface components {
         /**
          * @description Discriminator selecting which executor backend handles an automated step.
          *     Snake-case wire values: `"python"`, `"process"`, `"docker"`, `"http"`,
-         *     `"llm"`, `"file_ops"`, `"kreuzberg"`.
+         *     `"llm"`, `"file_ops"`, `"kreuzberg"`, `"smtp"`, `"catalogue_query"`.
          * @enum {string}
          */
-        ExecutionBackendType: "python" | "process" | "docker" | "http" | "llm" | "file_ops" | "kreuzberg" | "catalogue_query";
+        ExecutionBackendType: "python" | "process" | "docker" | "http" | "llm" | "file_ops" | "kreuzberg" | "smtp" | "catalogue_query";
         ExecutionSpecConfig: {
             backendType: components["schemas"]["ExecutionBackendType"];
             config: unknown;
@@ -2177,6 +2194,12 @@ export interface components {
             mime_type?: string | null;
             name: string;
             process_id: string;
+            /**
+             * @description HPI tag/annotation propagated from the engine's `EffectCompleted`
+             *     event (`process_step_completed` ∘ `process_step_started`). A label
+             *     for human-process correlation — NOT a pointer to the
+             *     `step_execution` table. See module-level docs.
+             */
             process_step?: string | null;
             /** Format: int64 */
             seq: number;
@@ -3030,6 +3053,20 @@ export interface components {
             descriptionMdsvex?: string | null;
             id: string;
             title: string;
+        };
+        /**
+         * @description Authoring bundle for a template — graph plus inline per-node files. This
+         *     is the same `(graph, files)` pair the publish/new-version paths feed into
+         *     the compiler, served as plain JSON so non-collaborative clients (the CLI,
+         *     CI jobs) don't need a Yjs/WSS channel just to read a published template.
+         */
+        TemplateBundle: {
+            files: {
+                [key: string]: {
+                    [key: string]: string;
+                };
+            };
+            graph: components["schemas"]["WorkflowGraph"];
         };
         /**
          * @description A test attached to a logical template family. `template_id` is the family
@@ -6067,6 +6104,47 @@ export interface operations {
             };
             /** @description Chain head is an unpublished web-editor draft */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    get_template_bundle: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Template id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Template authoring bundle (graph + per-node inline files) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TemplateBundle"];
+                };
+            };
+            /** @description Template not found */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

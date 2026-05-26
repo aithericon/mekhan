@@ -98,11 +98,27 @@ enum Commands {
         directory: String,
     },
 
-    /// Create a new workflow instance from a published template
+    /// Create a new workflow instance from a published template.
+    ///
+    /// Argument is either a template UUID (instantiates that template on
+    /// `--server`) or a path to a `.mekhan.json`-bearing directory (uses
+    /// the directory's pinned `server_url` + `template_id`). Defaults to
+    /// the current directory.
     Run {
-        /// Directory containing the template (defaults to current directory)
         #[arg(default_value = ".")]
-        directory: String,
+        template: String,
+
+        /// Seed a Start block's `initial` port. Repeatable. Format:
+        /// `<start_block_id>.<field>=<value>`. `<value>` is parsed as JSON
+        /// (`42`, `true`, `"x"`, `{...}`) and falls back to a bare string.
+        /// Mutually exclusive with `--start-tokens`.
+        #[arg(short = 'i', long = "input", value_name = "BLOCK.FIELD=VALUE")]
+        inputs: Vec<String>,
+
+        /// Path to a JSON file containing the full `start_tokens` array
+        /// (matches the test-fixture shape). Mutually exclusive with `-i`.
+        #[arg(long = "start-tokens", value_name = "PATH", conflicts_with = "inputs")]
+        start_tokens_file: Option<String>,
     },
 
     /// List workflow instances
@@ -182,7 +198,11 @@ async fn main() -> anyhow::Result<()> {
         Commands::Status { directory } => status::run(&cli.server, &directory).await,
         Commands::Publish { directory } => publish::run(&cli.server, &directory).await,
         Commands::Apply { directory } => apply::run(&cli.server, &directory).await,
-        Commands::Run { directory } => run::run(&cli.server, &directory).await,
+        Commands::Run {
+            template,
+            inputs,
+            start_tokens_file,
+        } => run::run(&cli.server, &template, &inputs, start_tokens_file.as_deref()).await,
         Commands::Instances { template } => {
             instances::run(&cli.server, template.as_deref()).await
         }

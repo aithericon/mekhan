@@ -271,6 +271,59 @@ pub async fn get_template(
     Ok(Json(template))
 }
 
+/// Authoring bundle for a template — graph plus inline per-node files. This
+/// is the same `(graph, files)` pair the publish/new-version paths feed into
+/// the compiler, served as plain JSON so non-collaborative clients (the CLI,
+/// CI jobs) don't need a Yjs/WSS channel just to read a published template.
+#[derive(serde::Serialize, utoipa::ToSchema)]
+pub struct TemplateBundle {
+    pub graph: WorkflowGraph,
+    pub files: HashMap<String, HashMap<String, String>>,
+}
+
+/// GET /api/templates/{id}/bundle
+#[utoipa::path(
+    get,
+    path = "/api/templates/{id}/bundle",
+    params(("id" = Uuid, Path, description = "Template id")),
+    responses(
+        (status = 200, description = "Template authoring bundle (graph + per-node inline files)", body = TemplateBundle),
+        (status = 404, description = "Template not found", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse),
+    ),
+    tag = "templates",
+)]
+pub async fn get_template_bundle(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<TemplateBundle>, ApiError> {
+    let existing = sqlx::query_as::<_, WorkflowTemplate>(
+        "SELECT * FROM workflow_templates WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .ok_or_else(|| ApiError::not_found("template not found"))?;
+
+    let (graph, files) = match reconstruct_graph_from_ydoc(&state, id).await {
+        Ok(Some((g, f))) => (g, f),
+        Ok(None) => {
+            let g = serde_json::from_value(existing.graph.clone())
+                .map_err(|e| ApiError::internal(format!("invalid graph: {e}")))?;
+            (g, HashMap::new())
+        }
+        Err(e) => {
+            tracing::error!("failed to load Y.Doc for template {id}: {e}");
+            let g = serde_json::from_value(existing.graph.clone())
+                .map_err(|e| ApiError::internal(format!("invalid graph: {e}")))?;
+            (g, HashMap::new())
+        }
+    };
+
+    Ok(Json(TemplateBundle { graph, files }))
+}
+
 /// PUT /api/templates/{id}
 #[utoipa::path(
     put,
