@@ -107,7 +107,11 @@
 		if (!template || !template.published) return;
 		try {
 			const next = await createNewVersion(template.id);
-			goto(`/templates/${next.id}/ide`);
+			// Full document load (not `goto`): the Yjs session + binding are
+			// created once at script top from the initial templateId, so a
+			// param-only nav would leave the IDE pinned to the published
+			// version's doc. See TemplateVersionMenu.select for the same reason.
+			window.location.assign(`/templates/${next.id}/ide`);
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to create new version';
 		}
