@@ -179,7 +179,7 @@ pub(crate) fn stage_all_files(node_files: &HashMap<String, InputSource>) -> Vec<
 }
 
 /// Format the available filenames for an error message.
-fn format_available(node_files: &HashMap<String, InputSource>) -> String {
+pub(crate) fn format_available(node_files: &HashMap<String, InputSource>) -> String {
     if node_files.is_empty() {
         return "(none)".to_string();
     }
@@ -194,7 +194,7 @@ fn format_available(node_files: &HashMap<String, InputSource>) -> String {
 
 /// Check that a referenced filename exists in the node's files; otherwise emit
 /// a validation error attributing the failure to a specific config field.
-fn require_node_file(
+pub(crate) fn require_node_file(
     filename: &str,
     field: &str,
     node_files: &HashMap<String, InputSource>,

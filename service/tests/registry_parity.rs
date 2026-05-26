@@ -201,3 +201,72 @@ fn docker_rejects_garbage_config_via_registry() {
         .to_string();
     assert!(err.contains("invalid docker config"), "got: {err}");
 }
+
+// ─── Http (Phase 2.c) ───────────────────────────────────────────────────────
+
+#[test]
+fn http_minimal_config_compiles_through_registry() {
+    let cfg = json!({ "method": "GET", "url": "https://api.example.com/v1/ping" });
+    let (canonical, inputs) =
+        validate_and_transform(&ExecutionBackendType::Http, &cfg, &HashMap::new(), "call")
+            .expect("http minimal config must compile");
+    assert!(inputs.is_empty(), "no attached files → no staged inputs");
+    assert_eq!(canonical["url"], "https://api.example.com/v1/ping");
+}
+
+#[test]
+fn http_rejects_body_and_body_from_input_via_registry() {
+    let cfg = json!({
+        "url": "https://api.example.com",
+        "body": { "k": "v" },
+        "body_from_input": "payload.json",
+    });
+    let err = validate_and_transform(&ExecutionBackendType::Http, &cfg, &HashMap::new(), "call")
+        .expect_err("body + body_from_input must be rejected")
+        .to_string();
+    assert!(err.contains("mutually exclusive"), "got: {err}");
+}
+
+#[test]
+fn http_rejects_missing_body_from_input_file_via_registry() {
+    let cfg = json!({
+        "url": "https://api.example.com",
+        "method": "POST",
+        "body_from_input": "payload.json",
+    });
+    let err = validate_and_transform(&ExecutionBackendType::Http, &cfg, &HashMap::new(), "call")
+        .expect_err("missing body_from_input file must be rejected")
+        .to_string();
+    assert!(err.contains("body_from_input"), "got: {err}");
+    assert!(err.contains("'payload.json'"), "got: {err}");
+}
+
+#[test]
+fn http_stages_attached_files_in_sorted_order_via_registry() {
+    use aithericon_executor_domain::InputSource;
+    let mut files = HashMap::new();
+    files.insert(
+        "payload.json".to_string(),
+        InputSource::Raw {
+            content: "{\"k\":1}".to_string(),
+        },
+    );
+    files.insert(
+        "ca-bundle.pem".to_string(),
+        InputSource::Raw {
+            content: "-----BEGIN CERTIFICATE-----\n".to_string(),
+        },
+    );
+    let cfg = json!({
+        "url": "https://api.example.com",
+        "method": "POST",
+        "body_from_input": "payload.json",
+    });
+    let (_, inputs) = validate_and_transform(&ExecutionBackendType::Http, &cfg, &files, "call")
+        .expect("http with files must compile");
+    // stage_all_files sorts by name for deterministic AIR
+    assert_eq!(inputs.len(), 2);
+    assert_eq!(inputs[0].name, "ca-bundle.pem");
+    assert_eq!(inputs[1].name, "payload.json");
+    assert!(inputs.iter().all(|i| i.required));
+}
