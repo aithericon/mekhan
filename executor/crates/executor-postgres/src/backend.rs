@@ -17,6 +17,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::debug;
 use uuid::Uuid;
 
+use aithericon_executor_backend::outputs::{fill_missing_declared, MissingOutputFallback};
 use aithericon_executor_backend::traits::{ExecutionBackend, StatusCallback};
 use aithericon_executor_domain::{
     ExecutionJob, ExecutionOutcome, ExecutionResult, ExecutionSpec, ExecutionStatus, ExecutorError,
@@ -385,19 +386,17 @@ fn make_success(run_context: &RunContext, start: Instant, rows: Vec<PgRow>) -> E
                 ]),
             });
             let mut outputs: HashMap<String, Value> = HashMap::new();
-            outputs.insert("rows".into(), Value::Array(json_rows));
+            let rows_value = Value::Array(json_rows);
+            outputs.insert("rows".into(), rows_value.clone());
             outputs.insert("row_count".into(), Value::Number(row_count.into()));
 
             // Map spec-declared output names (defensive — most consumers will
             // just look up "rows" / "row_count" directly).
-            for decl in &run_context.spec.outputs {
-                if !outputs.contains_key(&decl.name) {
-                    outputs.insert(
-                        decl.name.clone(),
-                        outputs.get("rows").cloned().unwrap_or(Value::Null),
-                    );
-                }
-            }
+            fill_missing_declared(
+                &mut outputs,
+                &run_context.spec.outputs,
+                MissingOutputFallback::Uniform(&rows_value),
+            );
 
             ExecutionResult {
                 outcome: ExecutionOutcome::Success,

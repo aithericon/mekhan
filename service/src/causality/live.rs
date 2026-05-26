@@ -59,6 +59,10 @@ pub struct LiveArtifactEvent {
     pub mime_type: Option<String>,
     pub storage_path: Option<String>,
     pub size_bytes: Option<i64>,
+    /// HPI tag/annotation propagated from the engine's `EffectCompleted`
+    /// event (`process_step_completed` ∘ `process_step_started`). A label
+    /// for human-process correlation — NOT a pointer to the
+    /// `step_execution` table. See module-level docs.
     pub process_step: Option<String>,
     pub signal_key: Option<String>,
     pub user_metadata: serde_json::Value,

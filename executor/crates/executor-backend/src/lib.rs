@@ -2,6 +2,7 @@
 pub mod docker;
 #[cfg(feature = "http")]
 pub mod http;
+pub mod outputs;
 pub mod process;
 #[cfg(feature = "python")]
 pub mod python;

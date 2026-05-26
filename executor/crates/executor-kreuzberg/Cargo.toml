@@ -43,3 +43,5 @@ chrono = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 serde_json = { workspace = true }
 tempfile = "3"
+aithericon-executor-test-harness = { workspace = true }
+async-trait = { workspace = true }

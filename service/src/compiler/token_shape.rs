@@ -1091,6 +1091,37 @@ fn topo_pos(order: &[petgraph::graph::NodeIndex], wg: &WorkflowDiGraph) -> BTree
     pos
 }
 
+/// Shared prelude for every borrow planner: the directed workflow graph, its
+/// topological order, the slug→node-id resolver, and the per-node topo
+/// position used by `resolve_ref` / `resolve_backend_ref` to verify the
+/// producer is strictly upstream of the consumer.
+///
+/// Built once via [`BorrowContext::build`]; each planner (guard read-arc,
+/// AutomatedStep / resource / HumanTask / LLM / Kreuzberg) consumes the same
+/// shape, so the four-line `wg + order + pos + slugs` recipe lives here
+/// rather than copy-pasted into every planner head.
+pub(crate) struct BorrowContext<'a> {
+    pub(crate) wg: WorkflowDiGraph<'a>,
+    pub(crate) order: Vec<petgraph::graph::NodeIndex>,
+    pub(crate) pos: BTreeMap<String, usize>,
+    pub(crate) slugs: SlugIndex,
+}
+
+impl<'a> BorrowContext<'a> {
+    pub(crate) fn build(graph: &'a WorkflowGraph) -> Result<Self, CompileError> {
+        let wg = WorkflowDiGraph::build(graph)?;
+        let order = topo_order(&wg)?;
+        let pos = topo_pos(&order, &wg);
+        let slugs = slug_index(graph)?;
+        Ok(Self {
+            wg,
+            order,
+            pos,
+            slugs,
+        })
+    }
+}
+
 // ─── Slug index: the `<slug>.<field>` ↔ node-id resolver ────────────────────
 
 /// Author-facing slug ↔ node-id resolution, the single source of truth for
@@ -1288,6 +1319,21 @@ enum RefResolution {
 /// The single resolver shared by `reachable_scope`, `check_guard` and
 /// `guard_readarc_plan` — the picker offers exactly what this binds, and no
 /// diagnostic contradicts it.
+///
+/// **Why a second resolver exists ([`resolve_backend_ref`])**: this function
+/// takes a structured [`GuardRef`] AST (parsed from Rhai source by
+/// [`guard_refs`]) plus the consumer node's full in/out shape context, and
+/// returns a [`RefResolution`] discriminated by whether the ref stays on
+/// the control token, borrows from a parked producer, or is unbindable.
+/// Backend planners (LLM, Kreuzberg, AutomatedStep) author refs as plain
+/// `{{slug.field}}` placeholder text, not Rhai expressions — they go
+/// through [`resolve_backend_ref`] which takes raw `(slug, attr)` strings
+/// and returns the producer node id + field kind for staging. The
+/// validation logic (upstream position, parked producer, field exists) is
+/// the same; the two entry points differ only in input shape and what they
+/// return to the caller. Don't try to unify the signatures — guard refs
+/// need the full shape context to decide control vs. borrow, while backend
+/// refs only need to verify "this exists and is upstream."
 fn resolve_ref(
     gref: &GuardRef,
     consumer: &WorkflowNode,
@@ -1937,10 +1983,7 @@ pub(crate) fn guard_readarc_plan(
     graph: &WorkflowGraph,
 ) -> Result<Vec<ReadArcBind>, CompileError> {
     let report = analyze(graph)?;
-    let wg = WorkflowDiGraph::build(graph)?;
-    let order = topo_order(&wg)?;
-    let pos = topo_pos(&order, &wg);
-    let slugs = slug_index(graph)?;
+    let BorrowContext { pos, slugs, .. } = BorrowContext::build(graph)?;
     let mut binds = Vec::new();
 
     for node in &graph.nodes {
@@ -2067,10 +2110,7 @@ pub(crate) fn automated_step_borrow_plan(
 ) -> Result<Vec<AutomatedStepDataBorrow>, CompileError> {
     use crate::models::template::ExecutionBackendType;
 
-    let wg = WorkflowDiGraph::build(graph)?;
-    let order = topo_order(&wg)?;
-    let pos = topo_pos(&order, &wg);
-    let slugs = slug_index(graph)?;
+    let BorrowContext { pos, slugs, .. } = BorrowContext::build(graph)?;
 
     let mut out: Vec<AutomatedStepDataBorrow> = Vec::new();
     let mut seen: std::collections::BTreeSet<(String, String)> = std::collections::BTreeSet::new();
@@ -2252,10 +2292,7 @@ pub(crate) struct HumanTaskDataBorrow {
 pub(crate) fn human_task_borrow_plan(
     graph: &WorkflowGraph,
 ) -> Result<Vec<HumanTaskDataBorrow>, CompileError> {
-    let wg = WorkflowDiGraph::build(graph)?;
-    let order = topo_order(&wg)?;
-    let pos = topo_pos(&order, &wg);
-    let slugs = slug_index(graph)?;
+    let BorrowContext { pos, slugs, .. } = BorrowContext::build(graph)?;
 
     let mut out: Vec<HumanTaskDataBorrow> = Vec::new();
     let mut seen: std::collections::BTreeSet<(String, String)> = std::collections::BTreeSet::new();
@@ -2398,6 +2435,11 @@ pub(crate) struct KreuzbergDataBorrow {
 /// Returns the producer node id and the resolved field kind on its data
 /// port. Hard-errors on: unknown slug, slug not strictly upstream, slug
 /// not a parked producer, unknown field on the producer's port.
+///
+/// Counterpart to [`resolve_ref`] (which resolves Rhai-source guard refs).
+/// Both run the same upstream/parked/exists checks; this one takes raw
+/// `(slug, attr)` strings (the picker emits them flat) and skips the
+/// control-token discrimination that guards need.
 fn resolve_backend_ref(
     graph: &WorkflowGraph,
     slugs: &SlugIndex,
@@ -2523,10 +2565,7 @@ pub(crate) fn llm_borrow_plan(
     use crate::compiler::placeholder_refs::scan_placeholders;
     use crate::models::template::{ExecutionBackendType, FieldKind, WorkflowNodeData};
 
-    let wg = WorkflowDiGraph::build(graph)?;
-    let order = topo_order(&wg)?;
-    let pos = topo_pos(&order, &wg);
-    let slugs = slug_index(graph)?;
+    let BorrowContext { pos, slugs, .. } = BorrowContext::build(graph)?;
 
     let mut out: Vec<LlmDataBorrow> = Vec::new();
 
@@ -2624,10 +2663,7 @@ pub(crate) fn kreuzberg_borrow_plan(
     use crate::compiler::placeholder_refs::scan_placeholders;
     use crate::models::template::{ExecutionBackendType, WorkflowNodeData};
 
-    let wg = WorkflowDiGraph::build(graph)?;
-    let order = topo_order(&wg)?;
-    let pos = topo_pos(&order, &wg);
-    let slugs = slug_index(graph)?;
+    let BorrowContext { pos, slugs, .. } = BorrowContext::build(graph)?;
 
     let mut out: Vec<KreuzbergDataBorrow> = Vec::new();
 
