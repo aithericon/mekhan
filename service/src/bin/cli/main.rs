@@ -14,6 +14,8 @@ mod pull;
 mod push;
 mod run;
 mod status;
+mod test_cmd;
+mod tests_fs;
 mod ws_client;
 
 use clap::{Parser, Subcommand};
@@ -130,6 +132,22 @@ enum Commands {
     /// Used by the frontend codegen pipeline to regenerate
     /// `app/src/lib/api/schema.d.ts`.
     Openapi,
+
+    /// Run template tests against the latest published version of a
+    /// template family. Exit code 0 only when every enabled test passes.
+    Test {
+        /// Either a template UUID or a directory holding `.mekhan.json`.
+        template: String,
+
+        /// Run only the test with this name (otherwise runs every enabled
+        /// test).
+        #[arg(short, long)]
+        name: Option<String>,
+
+        /// Include disabled tests in the run (default skips them).
+        #[arg(long)]
+        include_disabled: bool,
+    },
 }
 
 #[tokio::main]
@@ -179,6 +197,19 @@ async fn main() -> anyhow::Result<()> {
                 .map_err(|e| anyhow::anyhow!("serialize openapi: {e}"))?;
             println!("{json}");
             Ok(())
+        }
+        Commands::Test {
+            template,
+            name,
+            include_disabled,
+        } => {
+            test_cmd::run(
+                &cli.server,
+                &template,
+                name.as_deref(),
+                include_disabled,
+            )
+            .await
         }
     }
 }

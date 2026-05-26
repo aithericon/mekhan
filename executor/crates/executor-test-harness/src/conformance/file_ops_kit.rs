@@ -160,6 +160,7 @@ fn file_ops_spec(config: serde_json::Value) -> ExecutionSpec {
         inputs: vec![],
         outputs: vec![],
         config,
+        config_ref: None,
     }
 }
 

@@ -89,6 +89,7 @@ impl DockerConfig {
             inputs,
             outputs,
             config: serde_json::to_value(self).expect("DockerConfig serialization cannot fail"),
+            config_ref: None,
         }
     }
 

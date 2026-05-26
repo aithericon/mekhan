@@ -146,6 +146,7 @@ mod tests {
 
     fn minimal_graph() -> WorkflowGraph {
         WorkflowGraph {
+            definitions: Default::default(),
             nodes: vec![
                 WorkflowNode {
                     id: "n_start".to_string(),

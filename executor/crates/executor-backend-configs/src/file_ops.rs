@@ -167,6 +167,7 @@ mod tests {
             inputs: vec![],
             outputs: vec![],
             config: serde_json::json!({"operation": "unknown", "path": "test"}),
+            config_ref: None,
         };
         assert!(FileOpsConfig::from_spec(&spec).is_err());
     }

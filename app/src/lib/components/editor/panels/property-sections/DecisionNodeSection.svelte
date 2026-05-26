@@ -77,7 +77,9 @@
 
 	// The default (else) branch handle id is the literal "default" — it must
 	// match DecisionNode's `<Handle id="default">` and the compiler's default
-	// output place so a drawn edge wires.
+	// output place so a drawn edge wires. Mirrors the Rust constant
+	// `DEFAULT_BRANCH_HANDLE_ID` in service/src/models/template.rs; the
+	// compiler's `validate` pass rejects any other value.
 	const DEFAULT_BRANCH_ID = 'default';
 	function toggleDefault(enabled: boolean) {
 		onchange({ ...data, defaultBranch: enabled ? DEFAULT_BRANCH_ID : undefined });

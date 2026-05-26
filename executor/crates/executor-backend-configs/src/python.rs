@@ -70,6 +70,7 @@ impl PythonConfig {
             inputs,
             outputs,
             config: serde_json::to_value(self).expect("PythonConfig serialization cannot fail"),
+            config_ref: None,
         }
     }
 

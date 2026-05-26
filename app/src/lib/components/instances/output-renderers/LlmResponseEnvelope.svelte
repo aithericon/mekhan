@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Badge } from '$lib/components/ui/badge';
 	import Markdown from './Markdown.svelte';
+	import SmartValue from './SmartValue.svelte';
 	import type { RendererProps } from './types';
 
 	// Canonical LLM output shape from the executor-llm backend (see
@@ -23,12 +24,14 @@
 		[k: string]: unknown;
 	};
 
-	let { value }: RendererProps = $props();
+	let { value, ctx }: RendererProps = $props();
 	const env = $derived(value as Envelope);
 
-	const responseText = $derived(
-		typeof env.response === 'string' ? env.response : JSON.stringify(env.response, null, 2)
-	);
+	// Structured-response branch — JSON-typed LLM outputs cascade through
+	// SmartValue so KeyValueList / TabularArray / JsonBlock (CodeMirror) pick
+	// up the shape instead of getting dumped as a markdown-fenced blob.
+	const responseIsString = $derived(typeof env.response === 'string');
+	const responseDefined = $derived(env.response !== undefined && env.response !== null);
 
 	const usage = $derived(env.usage);
 
@@ -78,24 +81,35 @@
 		{/if}
 	</div>
 
-	{#if responseText}
-		<Markdown content={responseText} />
+	{#if responseDefined}
+		{#if responseIsString && (env.response as string).length > 0}
+			<Markdown content={env.response as string} />
+		{:else if responseIsString}
+			<div class="text-sm text-muted-foreground italic">Empty response.</div>
+		{:else}
+			<!-- Structured response — cascade through the registry so flat objects
+			     render as KeyValueList, arrays-of-objects as TabularArray, and
+			     deeply-nested shapes fall to the CodeMirror JsonBlock instead of
+			     a fenced-text dump. Reset nodeKind so we don't re-match this
+			     renderer on a nested envelope. -->
+			<SmartValue value={env.response} ctx={{ ...ctx, nodeKind: undefined }} />
+		{/if}
 	{:else}
 		<div class="text-sm text-muted-foreground italic">Empty response.</div>
 	{/if}
 
 	{#if extras.length > 0}
-		<dl class="grid grid-cols-[minmax(8rem,max-content)_1fr] gap-x-4 gap-y-2 text-sm">
+		<div class="space-y-2">
 			{#each extras as [key, val] (key)}
-				<dt class="font-mono text-muted-foreground">{key}</dt>
-				<dd class="break-words">
-					{#if typeof val === 'string'}
-						<span>{val}</span>
-					{:else}
-						<code class="rounded bg-muted px-1.5 py-0.5 font-mono text-sm">{JSON.stringify(val)}</code>
-					{/if}
-				</dd>
+				<div>
+					<div class="mb-1 font-mono text-sm text-muted-foreground">{key}</div>
+					<!-- Spec-declared output fields are typically the same data as
+					     `response` re-keyed (see backend.rs:215-219). Cascade so
+					     structured values get the proper renderer instead of being
+					     squished into a single-line code chip. -->
+					<SmartValue value={val} ctx={{ ...ctx, nodeKind: undefined }} />
+				</div>
 			{/each}
-		</dl>
+		</div>
 	{/if}
 </div>

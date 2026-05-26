@@ -90,6 +90,7 @@ mod tests {
                     "working_dir": "/tmp",
                     "inherit_env": true
                 }),
+                    config_ref: None,
             },
             metadata: HashMap::from([("petri_net_id".into(), "my-net".into())]),
             timeout: Some(std::time::Duration::from_secs(300)),
@@ -138,6 +139,7 @@ mod tests {
                     "command": "python3",
                     "args": ["train.py"]
                 }),
+                    config_ref: None,
             },
             metadata: Default::default(),
             timeout: None,
@@ -177,6 +179,7 @@ mod tests {
                 inputs: vec![],
                 outputs: vec![],
                 config: serde_json::json!({"command": "echo"}),
+                config_ref: None,
             },
             metadata: Default::default(),
             timeout: None,
@@ -420,6 +423,7 @@ mod tests {
                     }),
                 }],
                 config: serde_json::json!({"command": "run.sh"}),
+                config_ref: None,
             },
             metadata: Default::default(),
             timeout: None,

@@ -12,8 +12,24 @@
 
 	const templateFilter = $derived(page.url.searchParams.get('template_id') ?? undefined);
 	const statusFilter = $derived(page.url.searchParams.get('status') ?? undefined);
+	/// `'any'` returns everything; an explicit category scopes; absent
+	/// defaults to live-only (the historical view).
+	const modeFilter = $derived(page.url.searchParams.get('mode') ?? undefined);
 	const filteredTemplateName = $derived(
 		templateFilter ? (instances[0]?.template_name ?? 'this template') : null
+	);
+
+	const modeBadgeClass: Record<string, string> = {
+		draft: 'bg-amber-100 text-amber-800',
+		test_run: 'bg-purple-100 text-purple-800'
+	};
+
+	const liveActive = $derived(modeFilter === undefined || modeFilter === 'live');
+	const draftActive = $derived(modeFilter === 'draft');
+	const testActive = $derived(modeFilter === 'test_run');
+	const anyActive = $derived(modeFilter === 'any' || modeFilter === 'all');
+	const baseQuery = $derived(
+		templateFilter ? `template_id=${encodeURIComponent(templateFilter)}&` : ''
 	);
 
 	const statusColors: Record<string, string> = {
@@ -30,7 +46,8 @@
 		try {
 			const result = await listInstances({
 				templateId: templateFilter,
-				status: statusFilter
+				status: statusFilter,
+				mode: modeFilter
 			});
 			instances = result.items;
 		} catch (e) {
@@ -54,20 +71,62 @@
 	const formatDate = (s: string) => new Date(s).toLocaleString();
 
 	$effect(() => {
-		// Re-load when the URL filter (template_id / status) changes.
+		// Re-load when the URL filter (template_id / status / mode) changes.
 		void templateFilter;
 		void statusFilter;
+		void modeFilter;
 		load();
 	});
 </script>
 
 <div class="h-full overflow-y-auto" data-testid="instances-page">
 	<div class="mx-auto max-w-5xl px-6 py-8 animate-rise">
-		<div class="mb-6">
-			<h1 class="text-2xl font-semibold tracking-tight text-foreground">Instances</h1>
-			<p class="mt-1 text-sm text-muted-foreground">
-				Running and completed workflow instances
-			</p>
+		<div class="mb-6 flex items-end justify-between gap-4">
+			<div>
+				<h1 class="text-2xl font-semibold tracking-tight text-foreground">Instances</h1>
+				<p class="mt-1 text-sm text-muted-foreground">
+					Running and completed workflow instances
+				</p>
+			</div>
+			<!-- Mode filter pills. Default view hides drafts and test runs; `any`
+			     shows everything so the user can scope into them. -->
+			<nav
+				class="flex items-center gap-1 rounded-md border border-border bg-card p-0.5 text-xs"
+				data-testid="mode-filter"
+			>
+				<a
+					href="/instances?{baseQuery}"
+					class="rounded px-2 py-1 {liveActive
+						? 'bg-primary text-primary-foreground'
+						: 'text-muted-foreground hover:bg-accent'}"
+				>
+					Live
+				</a>
+				<a
+					href="/instances?{baseQuery}mode=draft"
+					class="rounded px-2 py-1 {draftActive
+						? 'bg-primary text-primary-foreground'
+						: 'text-muted-foreground hover:bg-accent'}"
+				>
+					Drafts
+				</a>
+				<a
+					href="/instances?{baseQuery}mode=test_run"
+					class="rounded px-2 py-1 {testActive
+						? 'bg-primary text-primary-foreground'
+						: 'text-muted-foreground hover:bg-accent'}"
+				>
+					Test runs
+				</a>
+				<a
+					href="/instances?{baseQuery}mode=any"
+					class="rounded px-2 py-1 {anyActive
+						? 'bg-primary text-primary-foreground'
+						: 'text-muted-foreground hover:bg-accent'}"
+				>
+					All
+				</a>
+			</nav>
 		</div>
 
 		{#if templateFilter}
@@ -125,6 +184,14 @@
 								<Badge class={statusColors[instance.status] ?? ''} variant="secondary">
 									{instance.status}
 								</Badge>
+								{#if instance.mode && instance.mode !== 'live'}
+									<Badge
+										class={modeBadgeClass[instance.mode] ?? ''}
+										variant="secondary"
+									>
+										{instance.mode === 'test_run' ? 'test run' : instance.mode}
+									</Badge>
+								{/if}
 							</div>
 							{#if instance.current_step}
 								<p class="mt-1 text-sm text-muted-foreground">

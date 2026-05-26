@@ -171,6 +171,7 @@ mod tests {
                     "args": ["train.py"],
                     "inherit_env": true
                 }),
+                    config_ref: None,
             },
             run_dir: RunDirectory::new(&PathBuf::from("/tmp"), "exec-789"),
             timeout: Duration::from_secs(3600),
@@ -204,6 +205,7 @@ mod tests {
                 inputs: vec![],
                 outputs: vec![],
                 config: serde_json::json!({"command": "true"}),
+                config_ref: None,
             },
             run_dir: RunDirectory::new(&PathBuf::from("/tmp"), "rt-test"),
             timeout: Duration::from_secs(60),

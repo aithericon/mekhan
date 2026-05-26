@@ -16,9 +16,10 @@ use uuid::Uuid;
 
 use crate::compiler::resource_refs::{KnownResource, KnownResources};
 use crate::compiler::{
-    compile_to_air_with_subworkflows_and_interfaces, generate_py_io_files, make_child_callable,
-    node_files_storage_path, node_input_scopes, node_namespace_scopes, node_output_fields,
-    CompileError, InterfaceRegistry, NodeKind, ResolvedChild, SubWorkflowAir,
+    compile_to_air_with_subworkflows_interfaces_and_configs, generate_py_io_files,
+    make_child_callable, node_files_storage_path, node_input_scopes, node_namespace_scopes,
+    node_output_fields, CompileError, ConfigStorage, InterfaceRegistry, NodeKind, ResolvedChild,
+    SubWorkflowAir,
 };
 use crate::models::error::ApiError;
 use crate::models::template::{
@@ -28,15 +29,22 @@ use crate::petri::resource_resolver::splice_resources_into_air;
 use crate::AppState;
 use aithericon_sdk::scenario::ScenarioDefinition;
 
-/// The three durable products of the publish compile step: the parameterizable
+/// The four durable products of the publish compile step: the parameterizable
 /// AIR the executor runs, the JSON graph every downstream consumer (trigger
-/// dispatcher, create-instance dialog) reads back, and the per-node compiler
+/// dispatcher, create-instance dialog) reads back, the per-node compiler
 /// sub-graph interface registry (sidecar — read at child-of-`SubWorkflow`
-/// resolution time).
+/// resolution time), and the per-node static config blobs the publish
+/// uploader writes to S3 (so the per-job NATS token only carries
+/// `config_ref { storage_path }` — see `executor-domain::ConfigRef`).
 pub struct CompiledArtifacts {
     pub air_json: serde_json::Value,
     pub graph_json: serde_json::Value,
     pub interface_json: serde_json::Value,
+    /// Resolved (`$ref`-inlined, backend-validated) configs keyed by node
+    /// id. Empty for graphs with no `AutomatedStep` nodes. Each entry is
+    /// uploaded by [`PublishService::upload_node_configs`] to the
+    /// deterministic S3 key the compiler embedded in the AIR.
+    pub node_configs: HashMap<String, serde_json::Value>,
 }
 
 /// Owns the publish pipeline's domain logic: inject the `_aithericon_io`
@@ -99,19 +107,26 @@ impl<'a> PublishService<'a> {
         // planner gets the inline source map directly via the `_inline`
         // entry point so it can still detect `<slug>.<field>` accesses.
         let air_files = node_files_storage_path(template_id, version, files);
-        let (mut air_json, interface_json) = compile_to_air_with_subworkflows_and_interfaces(
-            graph,
-            name,
-            description,
-            &air_files,
-            files,
-            &sub_air,
-            &known_resources,
-        )
-        .map_err(|e| {
-            let view = e.to_view();
-            ApiError::compile(format!("compilation failed: {e}"), vec![view])
-        })?;
+        let config_storage = ConfigStorage {
+            template_id,
+            version,
+            key_fn: None,
+        };
+        let (mut air_json, interface_json, node_configs) =
+            compile_to_air_with_subworkflows_interfaces_and_configs(
+                graph,
+                name,
+                description,
+                &air_files,
+                files,
+                &sub_air,
+                &known_resources,
+                config_storage,
+            )
+            .map_err(|e| {
+                let view = e.to_view();
+                ApiError::compile(format!("compilation failed: {e}"), vec![view])
+            })?;
 
         // Resolve every known resource against the workspace + ACL, write
         // audit rows, and splice the envelope into the AIR. The launcher
@@ -143,7 +158,36 @@ impl<'a> PublishService<'a> {
             air_json,
             graph_json,
             interface_json,
+            node_configs,
         })
+    }
+
+    /// Upload every per-node static config blob to the deterministic S3 key
+    /// the compiler embedded in the AIR's `config_ref`. Called by both
+    /// `apply_template` and `demos::seed_one` right after `upload_files`,
+    /// so the executor's `FetchConfigHook` is guaranteed to find the blob
+    /// before any instance fires.
+    pub async fn upload_node_configs(
+        &self,
+        template_id: Uuid,
+        version: i32,
+        node_configs: &HashMap<String, serde_json::Value>,
+    ) -> Result<(), String> {
+        for (node_id, config) in node_configs {
+            let bytes = serde_json::to_vec_pretty(config)
+                .map_err(|e| format!("serialize node config '{node_id}': {e}"))?;
+            self.state
+                .s3
+                .upload_node_config(template_id, version, node_id, &bytes)
+                .await
+                .map_err(|e| format!("upload node config '{node_id}': {e}"))?;
+            tracing::info!(
+                node_id = %node_id,
+                bytes = bytes.len(),
+                "uploaded static node config to S3",
+            );
+        }
+        Ok(())
     }
 
     /// Upload every node file to S3 under the deterministic

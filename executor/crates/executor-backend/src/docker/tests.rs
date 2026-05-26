@@ -130,6 +130,7 @@ fn docker_config_from_invalid_spec() {
         inputs: vec![],
         outputs: vec![],
         config: serde_json::json!({ "not_an_image": 42 }),
+        config_ref: None,
     };
 
     let result = DockerConfig::from_spec(&spec);
@@ -188,6 +189,7 @@ fn supports_docker_spec() {
         inputs: vec![],
         outputs: vec![],
         config: serde_json::json!({}),
+        config_ref: None,
     };
 
     assert!(backend.supports(&docker_spec));

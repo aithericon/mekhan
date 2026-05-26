@@ -259,39 +259,56 @@ pub enum CompileError {
         actual_kind: String,
     },
 
-    // --- Phase B.6 — `WorkflowGraph.resources` validation. The workflow
-    //     declares typed Resource aliases (`db: postgres`); we enforce that
-    //     each type is registered in `aithericon_resources::registry` and
-    //     that the alias doesn't collide with another in-scope identifier
-    //     (a step slug or a reserved control-token field).
-    /// `resources: { <alias>: <type_name> }` references a resource type
-    /// that isn't registered in the `aithericon_resources` registry. Either
-    /// a typo (`postgress`) or a missing `#[derive(ResourceType)]` on a
-    /// new built-in. The picker UI only offers registered types so this
-    /// usually means the YAML was hand-edited.
+    // --- Direct-mode resource validation. The compiler scans Python
+    //     source for `<head>.<field>` patterns and validates each `<head>`
+    //     against the workspace's resource list at publish time. The
+    //     variants below are kept under their original "alias" names for
+    //     the editor's error-discriminant wire format (the picker still
+    //     reads them); semantically `alias` now means "resource path
+    //     authored as a Python identifier".
+    /// A resource whose `path` references a type that isn't registered in
+    /// the `aithericon_resources` registry. Usually a database state
+    /// mismatch — a resource row exists with a type the server build
+    /// doesn't know about (e.g. older binary running against a newer DB).
     #[error(
-        "resource alias '{alias}' references unknown resource type '{type_name}' — \
+        "resource '{alias}' references unknown resource type '{type_name}' — \
          expected one of the built-in types in `aithericon_resources`"
     )]
     ResourceTypeUnknown { alias: String, type_name: String },
 
-    /// A resource alias name equals a step's explicit slug — `<alias>` would
-    /// be ambiguous between the staged resource envelope (`<alias>.json`)
-    /// and the producer's parked envelope. Rename one of them.
+    /// A resource path equals a step's explicit slug — `<path>.<field>`
+    /// would be ambiguous between the staged resource envelope and the
+    /// producer's parked envelope. Rename either the resource or the slug.
     #[error(
-        "resource alias '{alias}' collides with a step slug of the same name — \
-         resource aliases must be unique from producer slugs"
+        "resource '{alias}' collides with a step slug of the same name — \
+         rename the resource or the step"
     )]
     ResourceAliasCollidesWithSlug { alias: String },
 
-    /// A resource alias collides with a reserved control-token field
-    /// (`_instance_id`, `_template_id`, …). At runtime the system fields
+    /// A resource path collides with a reserved control-token field
+    /// (`_instance_id`, `_template_id`, …). At runtime the system field
     /// would shadow the resource binding (or vice versa) silently.
     #[error(
-        "resource alias '{alias}' collides with a reserved control-token field — \
-         pick a non-underscore-prefixed alias"
+        "resource '{alias}' collides with a reserved control-token field — \
+         pick a non-underscore-prefixed path"
     )]
     ResourceAliasCollidesWithToken { alias: String },
+
+    /// `executionSpec.config` (or a nested value) carries a
+    /// `{"$ref": "#/definitions/<name>"}` that the workflow-level
+    /// `definitions` map can't resolve — unknown name, cycle,
+    /// unsupported pointer shape, etc. Surfaced before lowering by the
+    /// `validate_schema_refs` pass so the editor can highlight the node.
+    /// `path` is the JSON pointer to the offending `$ref` inside the
+    /// node's `executionSpec.config`.
+    #[error(
+        "node '{node_id}': schema ref at config{path}: {message}"
+    )]
+    SchemaRefUnresolved {
+        node_id: String,
+        path: String,
+        message: String,
+    },
 }
 
 impl CompileError {
@@ -330,6 +347,7 @@ impl CompileError {
             Self::ResourceTypeUnknown { .. } => "resource_type_unknown",
             Self::ResourceAliasCollidesWithSlug { .. } => "resource_alias_collides_with_slug",
             Self::ResourceAliasCollidesWithToken { .. } => "resource_alias_collides_with_token",
+            Self::SchemaRefUnresolved { .. } => "schema_ref_unresolved",
         }
     }
 
@@ -368,7 +386,8 @@ impl CompileError {
             | Self::BackendRefUnresolved { node_id, .. }
             | Self::BackendRefNotUpstream { node_id, .. }
             | Self::BackendPlaceholderSyntax { node_id, .. }
-            | Self::LlmImageRefNotFileKind { node_id, .. } => Some(node_id),
+            | Self::LlmImageRefNotFileKind { node_id, .. }
+            | Self::SchemaRefUnresolved { node_id, .. } => Some(node_id),
             _ => None,
         }
     }

@@ -74,6 +74,38 @@ pub struct LoadedDemo {
     /// `node_id → { filename → content }` — same shape every
     /// `/api/templates` consumer expects.
     pub files: HashMap<String, HashMap<String, String>>,
+    /// Pre-authored template tests bundled with the demo (one per
+    /// `tests/<name>.json` sidecar). Empty when the demo carries no
+    /// `tests/` directory. Seeded into `template_tests` alongside the
+    /// template row, keyed by `name` for idempotency.
+    pub tests: Vec<LoadedTest>,
+}
+
+/// A single bundled template test, parsed from `demos/<demo>/tests/<name>.json`.
+/// Field shapes match `CreateTemplateTestRequest`; the seeder writes them
+/// straight to `template_tests` as JSONB without re-validating (compile-time
+/// validation is the user's problem when they author the file).
+#[derive(Debug, serde::Deserialize)]
+pub struct LoadedTest {
+    pub name: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_empty_array")]
+    pub start_tokens: serde_json::Value,
+    #[serde(default = "default_empty_object")]
+    pub human_answers: serde_json::Value,
+    #[serde(default = "default_empty_array")]
+    pub assertions: serde_json::Value,
+}
+
+fn default_true() -> bool {
+    true
+}
+fn default_empty_array() -> serde_json::Value {
+    serde_json::Value::Array(Vec::new())
+}
+fn default_empty_object() -> serde_json::Value {
+    serde_json::Value::Object(Default::default())
 }
 
 #[derive(Debug, Error)]
@@ -116,6 +148,18 @@ pub enum DemoLoadError {
         "task sidecar at {path} targets a `{node_type}` node — task.json is only valid for human_task"
     )]
     TaskSidecarTypeMismatch { path: PathBuf, node_type: String },
+    #[error("test sidecar read failed at {path}: {source}")]
+    TestSidecar {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("test sidecar parse failed at {path}: {source}")]
+    TestSidecarParse {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
 }
 
 /// Load one demo directory. Skips files inside `nodes/<id>/` whose
@@ -163,11 +207,56 @@ pub fn load_demo(dir: &Path) -> Result<LoadedDemo, DemoLoadError> {
 
     let files = read_node_files(&nodes_dir)?;
 
+    let tests = read_tests_dir(&dir.join("tests"))?;
+
     Ok(LoadedDemo {
         metadata,
         graph,
         files,
+        tests,
     })
+}
+
+/// Parse every `<name>.json` under `tests/` into a `LoadedTest`. Missing
+/// directory is fine (most demos won't have one yet). Sorted by filename
+/// so seed order is deterministic and `template_tests.created_at` reflects
+/// the on-disk authoring order.
+fn read_tests_dir(tests_dir: &Path) -> Result<Vec<LoadedTest>, DemoLoadError> {
+    if !tests_dir.is_dir() {
+        return Ok(Vec::new());
+    }
+    let entries = std::fs::read_dir(tests_dir).map_err(|e| DemoLoadError::TestSidecar {
+        path: tests_dir.to_path_buf(),
+        source: e,
+    })?;
+    let mut paths: Vec<PathBuf> = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|e| DemoLoadError::TestSidecar {
+            path: tests_dir.to_path_buf(),
+            source: e,
+        })?;
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) == Some("json") {
+            paths.push(path);
+        }
+    }
+    paths.sort();
+
+    let mut out = Vec::with_capacity(paths.len());
+    for path in paths {
+        let bytes = std::fs::read(&path).map_err(|e| DemoLoadError::TestSidecar {
+            path: path.clone(),
+            source: e,
+        })?;
+        let test: LoadedTest = serde_json::from_slice(&bytes).map_err(|e| {
+            DemoLoadError::TestSidecarParse {
+                path: path.clone(),
+                source: e,
+            }
+        })?;
+        out.push(test);
+    }
+    Ok(out)
 }
 
 /// Filename used for HumanTask form-definition sidecars under `nodes/<id>/`.
@@ -490,6 +579,7 @@ pub async fn seed_one(
         air_json,
         graph_json,
         interface_json,
+        node_configs,
     } = publisher
         .compile_artifacts(
             &demo.graph,
@@ -506,6 +596,10 @@ pub async fn seed_one(
 
     publisher
         .upload_files(template_id, 1, &files)
+        .await
+        .map_err(DemoSeedError::Upload)?;
+    publisher
+        .upload_node_configs(template_id, 1, &node_configs)
         .await
         .map_err(DemoSeedError::Upload)?;
 
@@ -551,6 +645,42 @@ pub async fn seed_one(
     let n = publisher.register_triggers(&row).await;
     if n > 0 {
         tracing::info!(template_id = %template_id, triggers = n, "demo triggers registered live");
+    }
+
+    // Seed any bundled template tests. Attached to the family root
+    // (`template_id` here since this is v1, so `base_template_id == id`).
+    // Failures are per-test best-effort — a malformed test fixture must
+    // not block the rest of the demo from being usable.
+    for test in &demo.tests {
+        let res = sqlx::query(
+            r#"
+            INSERT INTO template_tests
+                (template_id, name, enabled, start_tokens, human_answers, assertions, created_by)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            "#,
+        )
+        .bind(template_id)
+        .bind(&test.name)
+        .bind(test.enabled)
+        .bind(&test.start_tokens)
+        .bind(&test.human_answers)
+        .bind(&test.assertions)
+        .bind(DEMO_SEEDER_AUTHOR_ID)
+        .execute(&state.db)
+        .await;
+        match res {
+            Ok(_) => tracing::info!(
+                template_id = %template_id,
+                test_name = %test.name,
+                "demo test seeded"
+            ),
+            Err(e) => tracing::warn!(
+                template_id = %template_id,
+                test_name = %test.name,
+                error = %e,
+                "demo test seed failed (skipped)"
+            ),
+        }
     }
 
     Ok(SeedOutcome::Seeded)
@@ -678,6 +808,73 @@ mod tests {
         }
     }
 
+    /// Regression: the document-pipeline-v1 demo carries five LLM extractor
+    /// nodes whose `response_format.schema` resolves to a $ref against a
+    /// deeply-nested `ExtractionFields` definition. Before the
+    /// `config_ref` offload, each extractor's prepare-transition Rhai
+    /// literal would blow Rhai's expression-complexity limit and the demo
+    /// failed to seed. This test exercises the full compile path against
+    /// the actual demo file and asserts that every LLM node parks its
+    /// config in the side-channel — proving the panic is gone.
+    #[test]
+    fn document_pipeline_v1_compiles_with_strict_schemas() {
+        use crate::compiler::{
+            compile_to_air_with_subworkflows_interfaces_and_configs, node_files_inline,
+            resource_refs::KnownResources, ConfigStorage, SubWorkflowAir,
+        };
+
+        let demo = load_demo(&repo_root().join("demos/document-pipeline-v1"))
+            .expect("document-pipeline-v1 must load");
+
+        let files = node_files_inline(&demo.files);
+        let (_air, _iface, node_configs) =
+            compile_to_air_with_subworkflows_interfaces_and_configs(
+                &demo.graph,
+                &demo.metadata.name,
+                demo.metadata.description.as_deref().unwrap_or(""),
+                &files,
+                &demo.files,
+                &SubWorkflowAir::new(),
+                &KnownResources::new(),
+                ConfigStorage::ephemeral(),
+            )
+            .expect("document-pipeline-v1 must compile (no Rhai-complexity panic)");
+
+        // Every LLM extractor's resolved config must land in the
+        // side-channel — that's the proof the literal-inline path is
+        // gone. The classify node uses response_format: text (no schema),
+        // but the five extractors each carry a deeply-nested
+        // ExtractionFields shape.
+        for node_id in [
+            "classify",
+            "extract-bloodwork",
+            "extract-prescription",
+            "extract-clinical-note",
+            "extract-form-fields",
+            "extract-generic",
+        ] {
+            assert!(
+                node_configs.contains_key(node_id),
+                "node config for `{node_id}` must be parked in side-channel; got keys: {:?}",
+                node_configs.keys().collect::<Vec<_>>()
+            );
+        }
+        // And the heavy `$ref`-expanded schema must have made it into the
+        // side-channel (proves `inline_refs` ran before the offload).
+        let bw = node_configs
+            .get("extract-bloodwork")
+            .expect("extract-bloodwork config")
+            .to_string();
+        assert!(
+            bw.contains("ocr_span"),
+            "extract-bloodwork config must contain the expanded ExtractionFields schema: {bw}"
+        );
+        assert!(
+            !bw.contains("\"$ref\""),
+            "$ref must have been inlined before parking: {bw}"
+        );
+    }
+
     /// A task sidecar targeting a non-HumanTask node is a typo — fail at
     /// load time with a clear pointer, not at publish time with "engine
     /// rejected empty steps" three calls deep.
@@ -727,18 +924,18 @@ mod tests {
         );
     }
 
-    /// The vllm-smoke demo (text-only LLM step pointed at a local
-    /// OpenAI-compat server) must parse + compile cleanly through the same
-    /// AIR pipeline `/api/templates/{id}/publish` uses. The demo has no
-    /// node files, so this also covers the "LLM step with zero staged
-    /// inputs" case which the existing learning-path tests don't exercise.
+    /// The llm-smoke demo (text-only LLM step pointed at a local Ollama
+    /// daemon) must parse + compile cleanly through the same AIR pipeline
+    /// `/api/templates/{id}/publish` uses. The demo has no node files, so
+    /// this also covers the "LLM step with zero staged inputs" case which
+    /// the existing learning-path tests don't exercise.
     #[test]
-    fn vllm_smoke_demo_loads_and_compiles() {
+    fn llm_smoke_demo_loads_and_compiles() {
         use crate::compiler::{compile_to_air, node_files_inline};
 
         let root = repo_root().join("demos");
-        let demo = load_demo(&root.join("vllm-smoke")).expect("vllm-smoke must load");
-        assert_eq!(demo.metadata.name, "vLLM Smoke Test");
+        let demo = load_demo(&root.join("llm-smoke")).expect("llm-smoke must load");
+        assert_eq!(demo.metadata.name, "LLM Smoke Test");
         assert_eq!(
             demo.metadata.template_id,
             "00000000-0000-0000-0000-000000000020"
@@ -751,10 +948,10 @@ mod tests {
             demo.metadata.description.as_deref().unwrap_or(""),
             &files,
         )
-        .unwrap_or_else(|e| panic!("vllm-smoke must compile to AIR: {e:?}"));
+        .unwrap_or_else(|e| panic!("llm-smoke must compile to AIR: {e:?}"));
         assert!(
             air.to_string().contains("\"transitions\""),
-            "vllm-smoke AIR must declare transitions"
+            "llm-smoke AIR must declare transitions"
         );
     }
 
@@ -830,8 +1027,9 @@ mod tests {
     /// borrow plumbing on real bundled fixtures. The Kreuzberg `file` field
     /// references `{{ start.document }}` (path-site, File kind →
     /// StoragePath staging); the LLM `prompt` references
-    /// `{{ extract_text.full_text }}` (content-site → Raw staging). Both
-    /// must rewrite to the executor-resolver shape (`{{input_path:…}}` /
+    /// `{{ extract_text.content }}` (content-site → Raw staging; `content`
+    /// is kreuzberg's native ExtractionResult key — no remap). Both must
+    /// rewrite to the executor-resolver shape (`{{input_path:…}}` /
     /// `{{input:…}}`) and emit corresponding `job_inputs.push` snippets in
     /// the prepare-transition Rhai source. A break here means the LLM/
     /// Kreuzberg borrow phase regressed on real graphs — the focused unit
@@ -839,7 +1037,10 @@ mod tests {
     /// publish.
     #[test]
     fn ocr_classify_extract_demo_loads_and_compiles_with_borrows() {
-        use crate::compiler::{compile_to_air, node_files_inline};
+        use crate::compiler::{
+            compile_to_air_with_subworkflows_interfaces_and_configs, node_files_inline,
+            ConfigStorage, SubWorkflowAir,
+        };
 
         let root = repo_root().join("demos");
         let demo = load_demo(&root.join("07-ocr-classify-extract"))
@@ -850,15 +1051,34 @@ mod tests {
         );
 
         let files = node_files_inline(&demo.files);
-        let air = compile_to_air(
-            &demo.graph,
-            &demo.metadata.name,
-            demo.metadata.description.as_deref().unwrap_or(""),
-            &files,
-        )
-        .unwrap_or_else(|e| panic!("07-ocr-classify-extract must compile to AIR: {e:?}"));
+        let (air, _iface, node_configs) =
+            compile_to_air_with_subworkflows_interfaces_and_configs(
+                &demo.graph,
+                &demo.metadata.name,
+                demo.metadata.description.as_deref().unwrap_or(""),
+                &files,
+                &demo.files,
+                &SubWorkflowAir::new(),
+                &crate::compiler::resource_refs::KnownResources::new(),
+                ConfigStorage::ephemeral(),
+            )
+            .unwrap_or_else(|e| panic!("07-ocr-classify-extract must compile to AIR: {e:?}"));
 
         let air_str = air.to_string();
+
+        // The placeholder rewrites now land in the parked side-channel
+        // blob the publish layer uploads, not the AIR. The AIR still
+        // carries the borrow-input *staging* (the `job_inputs.push` with
+        // the `__pluck(d_<producer>, …)` call) — that's what binds the
+        // upstream envelope to the staged file name at runtime.
+        let ocr_cfg = node_configs
+            .get("extract_text")
+            .expect("extract_text node config must be parked")
+            .to_string();
+        let llm_cfg = node_configs
+            .get("classify")
+            .expect("classify node config must be parked")
+            .to_string();
 
         // Kreuzberg borrow: file kind producer → StoragePath staging.
         // The compiler rewrites `{{ start.document }}` in the Kreuzberg
@@ -869,8 +1089,8 @@ mod tests {
             "AIR must reference the start.document borrow input by its generated name; got: {air_str}"
         );
         assert!(
-            air_str.contains("input_path:__borrow_start__document"),
-            "Kreuzberg file field must be rewritten to {{input_path:…}}; got: {air_str}"
+            ocr_cfg.contains("input_path:__borrow_start__document"),
+            "Kreuzberg file field must be rewritten to {{input_path:…}} in side-channel; got: {ocr_cfg}"
         );
         assert!(
             air_str.contains("storage_path"),
@@ -878,16 +1098,16 @@ mod tests {
         );
 
         // LLM borrow: text-kind producer → Raw staging. The compiler
-        // rewrites `{{ extract_text.full_text }}` in the LLM prompt to
-        // `{{input:__borrow_extract_text__full_text}}` and emits a
+        // rewrites `{{ extract_text.content }}` in the LLM prompt to
+        // `{{input:__borrow_extract_text__content}}` and emits a
         // matching `job_inputs.push` with `raw`.
         assert!(
-            air_str.contains("__borrow_extract_text__full_text"),
-            "AIR must reference the extract_text.full_text borrow input by its generated name; got: {air_str}"
+            air_str.contains("__borrow_extract_text__content"),
+            "AIR must reference the extract_text.content borrow input by its generated name; got: {air_str}"
         );
         assert!(
-            air_str.contains("input:__borrow_extract_text__full_text"),
-            "LLM prompt must be rewritten to {{input:…}}; got: {air_str}"
+            llm_cfg.contains("input:__borrow_extract_text__content"),
+            "LLM prompt must be rewritten to {{input:…}} in side-channel; got: {llm_cfg}"
         );
 
         // Regression guard: the `job_inputs.push` snippets we emit call
@@ -1122,9 +1342,10 @@ mod tests {
             }
         }
 
-        // ── LLM prepare: borrows `extract_text.full_text` (FieldKind::Text)
+        // ── LLM prepare: borrows `extract_text.content` (FieldKind::Text)
         // → staging strategy is `raw` with `__pluck(d_extract_text,
-        // ["detail", "outputs", "full_text"])`.
+        // ["detail", "outputs", "content"])`. `content` is kreuzberg's
+        // native ExtractionResult key — declarations match 1:1, no remap.
         let classify_source = prepare_source("classify");
         let mut scope = Scope::new();
         scope.push("input", Map::new());
@@ -1132,7 +1353,7 @@ mod tests {
         let d_extract_text: Dynamic = engine
             .parse_json(
                 &json!({ "detail": { "outputs": {
-                    "full_text": "Invoice #INV-001 Amount: $1,234.56 Vendor: ACME"
+                    "content": "Invoice #INV-001 Amount: $1,234.56 Vendor: ACME"
                 } } })
                 .to_string(),
                 true,
@@ -1159,9 +1380,9 @@ mod tests {
                 m.get("name")
                     .and_then(|v| v.clone().try_cast::<String>())
                     .as_deref()
-                    == Some("__borrow_extract_text__full_text")
+                    == Some("__borrow_extract_text__content")
             })
-            .expect("__borrow_extract_text__full_text must be staged");
+            .expect("__borrow_extract_text__content must be staged");
         let source = borrow_entry
             .get("source")
             .and_then(|v| v.clone().try_cast::<Map>())
@@ -1243,7 +1464,7 @@ mod tests {
     /// canonical sorted JSON to stdout. Run with `--nocapture` before and
     /// after each refactor commit; the two outputs must `diff` clean.
     ///
-    /// Coverage rationale: 01-05 + 07 + vllm-smoke exercise every borrow
+    /// Coverage rationale: 01-05 + 07 + llm-smoke exercise every borrow
     /// phase touched by the refactor — c2 (Python), c3 (HumanTask),
     /// guards (Decision/Loop), c4/c5 (LLM/Kreuzberg upstream refs).
     ///
@@ -1266,7 +1487,7 @@ mod tests {
             "04-loop-counter",
             "05-parallel-fanout",
             "07-ocr-classify-extract",
-            "vllm-smoke",
+            "llm-smoke",
         ] {
             let demo = load_demo(&root.join(dir_name))
                 .unwrap_or_else(|e| panic!("{dir_name} must load: {e}"));
@@ -1288,5 +1509,38 @@ mod tests {
             println!("{canonical}");
             println!("=== /{dir_name} ===");
         }
+    }
+
+    /// `demos/<demo>/tests/<name>.json` round-trips into `LoadedDemo.tests`,
+    /// preserves all five fields verbatim (JSONB sidecars are stored as-is —
+    /// the runner does its own validation at run time), and stays empty for
+    /// demos that carry no `tests/` directory.
+    #[test]
+    fn hello_world_demo_carries_bundled_test() {
+        let demo = load_demo(&repo_root().join("demos/01-hello-world"))
+            .expect("01-hello-world must load");
+        assert_eq!(demo.tests.len(), 1, "expected the hello-alice fixture");
+        let test = &demo.tests[0];
+        assert_eq!(test.name, "hello-alice");
+        assert!(test.enabled);
+        // start_tokens passes through as raw JSONB.
+        let st = test.start_tokens.as_array().expect("array");
+        assert_eq!(st[0]["token"]["name"], "Alice");
+        // The interpolation assertion is the whole point of the bundled
+        // test — round-trip the literal so a regression in the loader
+        // (e.g. accidental field rename) breaks here, not at runtime.
+        let assertions = test.assertions.as_array().expect("array");
+        assert_eq!(assertions[0]["path"], "result.value.greeting");
+        assert_eq!(assertions[0]["op"], "eq");
+        assert_eq!(assertions[0]["value"], "Hello, {{ start.name }}!");
+    }
+
+    #[test]
+    fn demos_without_tests_dir_yield_empty_tests_vec() {
+        // 02-human-form has no tests/ directory — must not error, must
+        // return an empty Vec rather than e.g. `None`.
+        let demo = load_demo(&repo_root().join("demos/02-human-form"))
+            .expect("02-human-form must load");
+        assert!(demo.tests.is_empty());
     }
 }

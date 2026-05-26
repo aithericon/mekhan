@@ -14,7 +14,7 @@
 #   - Cross-stage attribution traces
 #
 # Upstream borrows:
-#   ocr.full_text
+#   ocr.content   # kreuzberg's native ExtractionResult key
 #   persist.fields
 #
 # Outputs:
@@ -30,7 +30,7 @@ def normalize(s: str) -> str:
     return re.sub(r"\s+", " ", (s or "").lower()).strip()
 
 update_phase("Normalize OCR", "running")
-hay = normalize(ocr.full_text)
+hay = normalize(ocr.content)
 log_info("ocr text normalized", chars=len(hay))
 update_phase("Normalize OCR", "completed")
 

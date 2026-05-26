@@ -3,7 +3,9 @@
 
 use crate::compiler::error::CompileError;
 use crate::compiler::graph::WorkflowDiGraph;
-use crate::models::template::{FieldKind, WorkflowGraph, WorkflowNode, WorkflowNodeData};
+use crate::models::template::{
+    FieldKind, WorkflowGraph, WorkflowNode, WorkflowNodeData, DEFAULT_BRANCH_HANDLE_ID,
+};
 use petgraph::visit::Bfs;
 use petgraph::{algo::is_cyclic_directed, Direction};
 use std::collections::{HashMap, HashSet};
@@ -86,6 +88,26 @@ pub(crate) fn validate(graph: &WorkflowGraph, wg: &WorkflowDiGraph) -> Result<()
                     "loop '{}' must have a non-empty condition",
                     node.id
                 )));
+            }
+        }
+    }
+
+    // Decision.defaultBranch is a free string on the wire (forward-compat
+    // for future multi-default decisions), but today the editor's
+    // `DecisionNode.svelte` hardcodes the Otherwise xyflow Handle id to
+    // `DEFAULT_BRANCH_HANDLE_ID`, so any other value would render as a
+    // floating edge in the UI even though the compiler would happily lower
+    // it. Reject at publish so hand-authored JSON can't silently produce a
+    // graph the editor won't render correctly.
+    for node in &graph.nodes {
+        if let WorkflowNodeData::Decision { default_branch, .. } = &node.data {
+            if let Some(db) = default_branch {
+                if db != DEFAULT_BRANCH_HANDLE_ID {
+                    return Err(CompileError::Validation(format!(
+                        "decision '{}' defaultBranch must be exactly \"{}\", got \"{}\"",
+                        node.id, DEFAULT_BRANCH_HANDLE_ID, db
+                    )));
+                }
             }
         }
     }
@@ -408,6 +430,31 @@ pub(crate) fn validate_guards<'a>(
     Ok(())
 }
 
+// --- Schema-ref validation (workflow-level `definitions`) ---
+
+/// Walk every `automated_step` config and confirm every
+/// `{"$ref": "#/definitions/<name>"}` resolves against
+/// `graph.definitions`. Runs before lowering so unresolved /
+/// cyclic / unsupported refs surface with the offending node id +
+/// JSON pointer to the ref inside the config.
+pub(crate) fn validate_schema_refs(graph: &WorkflowGraph) -> Result<(), CompileError> {
+    for node in &graph.nodes {
+        let WorkflowNodeData::AutomatedStep { execution_spec, .. } = &node.data else {
+            continue;
+        };
+        if let Err((path, e)) =
+            crate::compiler::schema_refs::validate_refs(&execution_spec.config, &graph.definitions)
+        {
+            return Err(CompileError::SchemaRefUnresolved {
+                node_id: node.id.clone(),
+                path,
+                message: e.to_string(),
+            });
+        }
+    }
+    Ok(())
+}
+
 // --- Trigger target-port resolution (shared) ---
 
 /// Resolve the port a trigger feeds on its target node.
@@ -431,6 +478,88 @@ pub fn resolve_trigger_target_port(
         _ => target_node.data.input_ports(),
     };
     ports.into_iter().find(|p| p.id == target_handle)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::template::{
+        DeploymentModel, ExecutionBackendType, ExecutionSpecConfig, Port, Position, RetryPolicy,
+        WorkflowEdge,
+    };
+
+    fn auto_step_with_config(id: &str, config: serde_json::Value) -> WorkflowNode {
+        WorkflowNode {
+            id: id.to_string(),
+            node_type: "automated_step".to_string(),
+            slug: None,
+            position: Position { x: 0.0, y: 0.0 },
+            data: WorkflowNodeData::AutomatedStep {
+                label: id.to_string(),
+                description: None,
+                execution_spec: ExecutionSpecConfig {
+                    backend_type: ExecutionBackendType::Llm,
+                    entrypoint: None,
+                    config,
+                },
+                input: Port::empty_input(),
+                output: Port::empty_input(),
+                retry_policy: RetryPolicy::default(),
+                deployment_model: DeploymentModel::default(),
+            },
+            parent_id: None,
+            width: None,
+            height: None,
+        }
+    }
+
+    #[test]
+    fn validate_schema_refs_surfaces_node_id_and_pointer() {
+        let graph = WorkflowGraph {
+            nodes: vec![auto_step_with_config(
+                "extract",
+                serde_json::json!({
+                    "response_format": {
+                        "schema": { "$ref": "#/definitions/Missing" }
+                    }
+                }),
+            )],
+            edges: Vec::<WorkflowEdge>::new(),
+            viewport: None,
+            instance_concurrency: Default::default(),
+            definitions: std::collections::BTreeMap::new(),
+        };
+        let err = validate_schema_refs(&graph).expect_err("unresolved ref must fail");
+        match err {
+            CompileError::SchemaRefUnresolved { node_id, path, message } => {
+                assert_eq!(node_id, "extract");
+                assert_eq!(path, "/response_format/schema");
+                assert!(message.contains("Missing"));
+            }
+            other => panic!("expected SchemaRefUnresolved, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_schema_refs_accepts_resolved_workflow() {
+        let mut definitions = std::collections::BTreeMap::new();
+        definitions.insert("Foo".to_string(), serde_json::json!({"type": "string"}));
+        let graph = WorkflowGraph {
+            nodes: vec![auto_step_with_config(
+                "extract",
+                serde_json::json!({
+                    "response_format": {
+                        "schema": { "$ref": "#/definitions/Foo" }
+                    }
+                }),
+            )],
+            edges: Vec::<WorkflowEdge>::new(),
+            viewport: None,
+            instance_concurrency: Default::default(),
+            definitions,
+        };
+        validate_schema_refs(&graph).expect("resolved ref must pass");
+    }
 }
 
 // --- Trigger node validation (Phase 5a) ---

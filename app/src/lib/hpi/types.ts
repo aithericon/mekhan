@@ -35,6 +35,11 @@ export type SignatureAudit = {
 	user_name: string;
 };
 
+export type SelectOption = {
+	value: string;
+	label: string;
+};
+
 export type TaskField = {
 	name: string;
 	label: string;
@@ -42,7 +47,7 @@ export type TaskField = {
 	required?: boolean;
 	placeholder?: string;
 	description_mdsvex?: string;
-	options?: string[];
+	options?: SelectOption[];
 	accept?: string;
 	max_file_size?: number;
 	max_files?: number;

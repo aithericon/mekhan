@@ -6,6 +6,9 @@
 	import NodePropertyPanel from '$lib/components/editor/panels/NodePropertyPanel.svelte';
 	import EditorToolbar from '$lib/components/editor/toolbar/EditorToolbar.svelte';
 	import CreateInstanceDialog from '$lib/components/instances/CreateInstanceDialog.svelte';
+	import TestsPanel from '$lib/components/templates/TestsPanel.svelte';
+	import PublishGateModal from '$lib/components/templates/PublishGateModal.svelte';
+	import { Sheet, SheetContent, SheetTitle } from '$lib/components/ui/sheet';
 	import {
 		getTemplate,
 		publishTemplate,
@@ -13,9 +16,12 @@
 		createNewVersion,
 		compileGraph,
 		CompileApiError,
-		type Template
+		PublishGateError,
+		type Template,
+		type FailingTestInfo
 	} from '$lib/api/client';
 	import { compileErrors } from '$lib/editor/compile-errors.svelte';
+	import { buildAssertionScope } from '$lib/editor/assertion-scope';
 	import { getSession, releaseSession } from '$lib/yjs/session-store';
 	import { YjsGraphBinding } from '$lib/yjs/graph-binding.svelte';
 	import type {
@@ -33,6 +39,8 @@
 	let selectedNodeId = $state<string | null>(null);
 	let airPreview = $state<object | null>(null);
 	let runDialogOpen = $state(false);
+	let testsPanelOpen = $state(false);
+	let publishGate = $state<FailingTestInfo[] | null>(null);
 
 	// Yjs session + binding
 	const session = getSession(templateId);
@@ -57,14 +65,17 @@
 		}
 	}
 
-	async function handlePublish() {
+	async function handlePublish(force = false) {
 		if (!template || template.published) return;
 		try {
 			saving = true;
-			template = await publishTemplate(template.id);
+			template = await publishTemplate(template.id, force);
 			compileErrors.clear();
+			publishGate = null;
 		} catch (e) {
-			if (e instanceof CompileApiError) {
+			if (e instanceof PublishGateError) {
+				publishGate = e.failingTests;
+			} else if (e instanceof CompileApiError) {
 				compileErrors.set(e.compileErrors);
 				error = `${e.message} — ${e.compileErrors.length} issue${e.compileErrors.length === 1 ? '' : 's'} highlighted on the canvas`;
 			} else {
@@ -233,6 +244,14 @@
 			: null
 	);
 
+	const humanTaskSlugs = $derived(
+		binding.graph.nodes
+			.filter((n) => (n.data as { type?: string } | null)?.type === 'human_task')
+			.map((n) => (n.slug && n.slug.trim() !== '' ? n.slug : n.id))
+	);
+
+	const assertionScope = $derived(buildAssertionScope(binding.graph));
+
 	$effect(() => {
 		load();
 	});
@@ -258,10 +277,11 @@
 			version={template?.version}
 			awareness={session.awareness}
 			provider={session.provider}
-			onpublish={handlePublish}
+			onpublish={() => handlePublish(false)}
 			onpreview={handlePreview}
 			onnewversion={handleNewVersion}
 			onrun={handleRun}
+			ontests={() => (testsPanelOpen = true)}
 			onrename={handleRename}
 			ondescriptionchange={handleDescriptionChange}
 		/>
@@ -323,6 +343,29 @@
 		{/if}
 	</div>
 {/if}
+
+<Sheet.Root open={testsPanelOpen} onOpenChange={(o: boolean) => (testsPanelOpen = o)}>
+	<SheetContent class="w-full max-w-md p-0 sm:max-w-md">
+		<SheetTitle class="sr-only">Tests</SheetTitle>
+		{#if template}
+			<TestsPanel templateId={template.id} {humanTaskSlugs} {assertionScope} />
+		{/if}
+	</SheetContent>
+</Sheet.Root>
+
+<PublishGateModal
+	open={publishGate !== null}
+	failingTests={publishGate ?? []}
+	onclose={() => (publishGate = null)}
+	onforce={async () => {
+		publishGate = null;
+		await handlePublish(true);
+	}}
+	onretry={async () => {
+		publishGate = null;
+		await handlePublish(false);
+	}}
+/>
 
 <CreateInstanceDialog
 	bind:open={runDialogOpen}

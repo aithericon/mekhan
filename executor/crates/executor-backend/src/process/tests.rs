@@ -118,6 +118,7 @@ fn process_config_from_spec_invalid() {
         inputs: vec![],
         outputs: vec![],
         config: serde_json::json!({ "command": 123 }),
+        config_ref: None,
     };
 
     let result = ProcessConfig::from_spec(&spec);
@@ -142,6 +143,7 @@ fn supports_process_spec() {
         inputs: vec![],
         outputs: vec![],
         config: serde_json::json!({}),
+        config_ref: None,
     };
 
     assert!(backend.supports(&process_spec));

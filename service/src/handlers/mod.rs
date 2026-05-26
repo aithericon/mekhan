@@ -6,6 +6,7 @@ pub mod observability;
 pub mod process_live;
 pub mod resources;
 pub mod task_stream;
+pub mod template_tests;
 pub mod templates;
 pub mod triggers;
 pub mod yjs_sync;

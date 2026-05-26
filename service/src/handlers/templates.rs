@@ -5,6 +5,7 @@ use axum::{
     http::StatusCode,
     Extension, Json,
 };
+use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::auth::AuthUser;
@@ -13,6 +14,7 @@ use crate::compiler::{
     node_files_inline, node_files_storage_path, node_input_scopes, node_namespace_scopes,
     node_output_fields,
 };
+use crate::handlers::template_tests::{run_test, RunContext};
 use crate::lifecycle::cleanup_net;
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::template::{
@@ -20,8 +22,18 @@ use crate::models::template::{
     ListTemplatesQuery, PaginatedResponse, UpdateTemplateRequest, WorkflowGraph, WorkflowNodeData,
     WorkflowTemplate,
 };
+use crate::models::template_test::{FailingTestInfo, PublishGateBlockedResponse, TemplateTest};
 use crate::process::publish::{resolve_subworkflow_air, CompiledArtifacts, PublishService};
 use crate::AppState;
+
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+pub struct PublishQuery {
+    /// Bypass the template-test gate. Failing or stale tests do not block
+    /// publish when `true`; an audit-level log records the override. Use
+    /// only when a test itself is broken and you need to ship.
+    #[serde(default)]
+    pub force: bool,
+}
 
 /// POST /api/templates
 #[utoipa::path(
@@ -426,12 +438,16 @@ pub async fn delete_template(
 #[utoipa::path(
     post,
     path = "/api/templates/{id}/publish",
-    params(("id" = Uuid, Path, description = "Template id")),
+    params(
+        ("id" = Uuid, Path, description = "Template id"),
+        PublishQuery,
+    ),
     responses(
         (status = 200, description = "Template published; AIR compiled and stored", body = WorkflowTemplate),
         (status = 400, description = "Compilation failed or graph invalid", body = ErrorResponse),
         (status = 404, description = "Template not found", body = ErrorResponse),
         (status = 409, description = "Template already published", body = ErrorResponse),
+        (status = 412, description = "Template tests failing; publish blocked", body = PublishGateBlockedResponse),
         (status = 500, description = "Server error", body = ErrorResponse),
     ),
     tag = "templates",
@@ -440,6 +456,7 @@ pub async fn publish_template(
     State(state): State<AppState>,
     user: AuthUser,
     Path(id): Path<Uuid>,
+    Query(query): Query<PublishQuery>,
 ) -> Result<Json<WorkflowTemplate>, ApiError> {
     let principal_id = user.subject_as_uuid();
     let existing = sqlx::query_as::<_, WorkflowTemplate>(
@@ -484,6 +501,7 @@ pub async fn publish_template(
         air_json,
         graph_json,
         interface_json,
+        node_configs,
     } = publisher
         .compile_artifacts(
             &graph,
@@ -501,6 +519,43 @@ pub async fn publish_template(
     // runtime. Non-fatal for UI publish (legacy behavior).
     if let Err(e) = publisher.upload_files(id, existing.version, &ydoc_files).await {
         tracing::warn!("S3 file upload failed (non-fatal): {e}");
+    }
+    // Upload the per-node static configs the compiler offloaded so the
+    // executor's `FetchConfigHook` can resolve `config_ref` at run time.
+    // Non-fatal in UI publish — matches the upload_files behavior so a
+    // transient S3 hiccup doesn't strand a draft.
+    if let Err(e) = publisher
+        .upload_node_configs(id, existing.version, &node_configs)
+        .await
+    {
+        tracing::warn!("S3 node-config upload failed (non-fatal): {e}");
+    }
+
+    // Template-test gate. Run every enabled test for this template family
+    // against the freshly-compiled AIR before flipping `published`. Failing
+    // (or erroring) tests block the publish unless `?force=true`.
+    let failing = run_publish_gate(&state, &existing, &air_json, &graph, user.subject_as_uuid()).await?;
+    if !failing.is_empty() {
+        if query.force {
+            tracing::warn!(
+                template_id = %id,
+                failing = failing.len(),
+                "publish gate bypassed via ?force=true"
+            );
+        } else {
+            let failing_json = serde_json::to_value(&failing)
+                .map_err(|e| ApiError::internal(e.to_string()))?;
+            return Err(ApiError {
+                status: StatusCode::PRECONDITION_FAILED,
+                body: Some(
+                    ErrorResponse::new(format!(
+                        "{} template test(s) failed; publish blocked. Pass ?force=true to override.",
+                        failing.len()
+                    ))
+                    .with_failing_tests(failing_json),
+                ),
+            });
+        }
     }
 
     // Persist the Y.Doc-reconstructed graph we just compiled into the `graph`
@@ -904,6 +959,7 @@ pub async fn apply_template(
         air_json,
         graph_json,
         interface_json,
+        node_configs,
     } = publisher
         .compile_artifacts(
             &graph,
@@ -932,6 +988,17 @@ pub async fn apply_template(
         .await
     {
         return Err(ApiError::internal(format!("S3 file upload failed: {e}")));
+    }
+    // Per-node static configs offloaded by the compiler. Fatal for apply —
+    // the executor `FetchConfigHook` would fail at run-time if a node's
+    // blob is missing, leaving a hard-to-trace runtime breakage.
+    if let Err(e) = publisher
+        .upload_node_configs(target_id, target_version, &node_configs)
+        .await
+    {
+        return Err(ApiError::internal(format!(
+            "S3 node-config upload failed: {e}"
+        )));
     }
 
     // 4. Single transaction: the only persisted, queryable transition. The
@@ -1378,6 +1445,70 @@ pub async fn analyze_graph(
         scopes,
         diagnostics,
     }))
+}
+
+/// Run every enabled test for `existing`'s template family against a
+/// freshly-compiled AIR. Returns the list of failing (or erroring, or
+/// stale) tests so the publish handler can either block or be overridden
+/// with `?force=true`.
+///
+/// "Stale" only matters in the strict sense after publish — pre-publish we
+/// always re-run, so the version-staleness check folds into the live result.
+async fn run_publish_gate(
+    state: &AppState,
+    existing: &WorkflowTemplate,
+    air_json: &serde_json::Value,
+    graph: &WorkflowGraph,
+    created_by: Uuid,
+) -> Result<Vec<FailingTestInfo>, ApiError> {
+    let family = existing.base_template_id.unwrap_or(existing.id);
+
+    let tests: Vec<TemplateTest> = sqlx::query_as::<_, TemplateTest>(
+        "SELECT * FROM template_tests \
+         WHERE template_id = $1 AND enabled = TRUE \
+         ORDER BY created_at ASC",
+    )
+    .bind(family)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    if tests.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let ctx = RunContext {
+        template_id: existing.id,
+        template_version: existing.version,
+        air_json: air_json.clone(),
+        graph: graph.clone(),
+        created_by,
+    };
+
+    let mut failing = Vec::new();
+    for test in &tests {
+        let run = run_test(state, &ctx, test).await?;
+        if run.status != "passed" {
+            let reason = match run.status.as_str() {
+                "failed" => "assertion failed".to_string(),
+                "error" => run
+                    .failure_detail
+                    .as_ref()
+                    .and_then(|d| d.get("reason"))
+                    .and_then(|r| r.as_str())
+                    .unwrap_or("runtime error")
+                    .to_string(),
+                other => format!("unexpected status '{other}'"),
+            };
+            failing.push(FailingTestInfo {
+                test_id: test.id,
+                name: test.name.clone(),
+                reason,
+                run_id: Some(run.id),
+            });
+        }
+    }
+    Ok(failing)
 }
 
 #[cfg(test)]

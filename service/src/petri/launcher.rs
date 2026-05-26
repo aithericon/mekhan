@@ -72,6 +72,13 @@ pub struct LaunchSpec<'a> {
     pub air_json: &'a Value,
     pub graph: &'a WorkflowGraph,
     pub start_tokens: &'a [StartToken],
+    /// Categorizes the instance. `None` ⇒ `'live'` (the historical default).
+    /// `Some("draft")` for user-initiated experiments; `Some("test_run")` is
+    /// reserved for the template-test runner.
+    pub mode: Option<&'a str>,
+    /// Set when `mode == "test_run"`. Forwards into the instance row so the
+    /// run can be reconciled with its originating `template_tests` row.
+    pub test_id: Option<Uuid>,
 }
 
 /// Owns the deploy-an-instance sequence. Behavior-identical to the code that
@@ -105,10 +112,11 @@ impl<'a> InstanceLauncher<'a> {
             spec.start_tokens,
         )?;
 
+        let mode = spec.mode.unwrap_or("live");
         let instance = sqlx::query_as::<_, WorkflowInstance>(
             r#"
-            INSERT INTO workflow_instances (id, template_id, template_version, net_id, status, created_by, started_at, metadata)
-            VALUES ($1, $2, $3, $4, 'running', $5, NOW(), $6)
+            INSERT INTO workflow_instances (id, template_id, template_version, net_id, status, created_by, started_at, metadata, mode, test_id)
+            VALUES ($1, $2, $3, $4, 'running', $5, NOW(), $6, $7, $8)
             RETURNING *
             "#,
         )
@@ -118,6 +126,8 @@ impl<'a> InstanceLauncher<'a> {
         .bind(&spec.net_id)
         .bind(spec.created_by)
         .bind(&spec.metadata)
+        .bind(mode)
+        .bind(spec.test_id)
         .fetch_one(self.db)
         .await
         .map_err(|e| {

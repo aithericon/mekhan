@@ -3,7 +3,10 @@
     {
       "id": "start",
       "type": "start",
-      "position": { "x": 40, "y": 160 },
+      "position": {
+        "x": 40,
+        "y": 160
+      },
       "data": {
         "type": "start",
         "label": "Start",
@@ -26,11 +29,14 @@
     {
       "id": "extract_text",
       "type": "automated_step",
-      "position": { "x": 320, "y": 160 },
+      "position": {
+        "x": 320,
+        "y": 160
+      },
       "data": {
         "type": "automated_step",
         "label": "Extract text (Kreuzberg)",
-        "description": "Borrows the uploaded file from Start via {{ start.document }} — compiler stages it via StoragePath, runner resolves to a local path, Kreuzberg reads it.",
+        "description": "Borrows the uploaded file from Start via {{ start.document }} \u2014 compiler stages it via StoragePath, runner resolves to a local path, Kreuzberg reads it. Outputs are kreuzberg's native ExtractionResult shape 1:1 \u2014 `content` (string), `mime_type`, `metadata`, `tables`, `detected_languages`. No renaming or remapping.",
         "executionSpec": {
           "backendType": "kreuzberg",
           "config": {
@@ -48,8 +54,36 @@
           "id": "out",
           "label": "OCR result",
           "fields": [
-            { "name": "full_text",  "label": "Full text", "kind": "text",   "required": true },
-            { "name": "page_count", "label": "Pages",     "kind": "number", "required": false }
+            {
+              "name": "content",
+              "label": "Content",
+              "kind": "text",
+              "required": true
+            },
+            {
+              "name": "mime_type",
+              "label": "MIME type",
+              "kind": "text",
+              "required": false
+            },
+            {
+              "name": "metadata",
+              "label": "Metadata",
+              "kind": "json",
+              "required": false
+            },
+            {
+              "name": "tables",
+              "label": "Tables",
+              "kind": "json",
+              "required": false
+            },
+            {
+              "name": "detected_languages",
+              "label": "Detected languages",
+              "kind": "json",
+              "required": false
+            }
           ]
         }
       }
@@ -57,31 +91,40 @@
     {
       "id": "classify",
       "type": "automated_step",
-      "position": { "x": 620, "y": 160 },
+      "position": {
+        "x": 620,
+        "y": 160
+      },
       "data": {
         "type": "automated_step",
         "label": "Classify (LLM)",
-        "description": "Borrows extract_text.full_text inline via {{ extract_text.full_text }} — compiler stages it as a Raw input, runner interpolates it into the prompt at dispatch time. Dispatches against the local vllm-metal server (`just dev vllm-up`); model must match the one vllm-metal is serving (recipe default mlx-community/Qwen3.5-9B-MLX-4bit — override here AND in `just dev vllm-up`'s VLLM_MODEL env var if changed). Qwen3 emits `<think>...</think>` blocks before the JSON answer by default; downstream consumers must tolerate the prefix.",
+        "description": "Borrows extract_text.content inline via {{ extract_text.content }} \u2014 compiler stages it as a Raw input, runner interpolates it into the prompt at dispatch time. `content` is kreuzberg's native key for the extracted text. Dispatches against the local Ollama daemon (`just dev ollama-up`); model must match the one Ollama has pulled (recipe default qwen3.5:9b \u2014 override here AND in `just dev ollama-up`'s OLLAMA_MODEL env var if changed). Qwen3 emits `<think>...</think>` blocks before the JSON answer by default; downstream consumers must tolerate the prefix.",
         "executionSpec": {
           "backendType": "llm",
           "config": {
-            "provider": "openai",
-            "model": "mlx-community/Qwen3.5-9B-MLX-4bit",
-            "base_url": "http://localhost:8000",
-            "api_key": "not-needed",
+            "provider": "ollama",
+            "model": "qwen3.5:9b",
+            "base_url": "http://localhost:11434",
             "temperature": 0,
             "max_tokens": 256,
             "system_prompt": "You are a document classifier. Return JSON.",
-            "prompt": "Classify this document into one of: invoice, receipt, contract, other.\n\nText:\n---\n{{ extract_text.full_text }}\n---\n\nReturn JSON: {document_class}.",
+            "prompt": "Classify this document into one of: invoice, receipt, contract, other.\n\nText:\n---\n{{ extract_text.content }}\n---\n\nReturn JSON: {document_class}.",
             "response_format": {
               "type": "json_schema",
               "schema": {
                 "type": "object",
-                "required": ["document_class"],
+                "required": [
+                  "document_class"
+                ],
                 "properties": {
                   "document_class": {
                     "type": "string",
-                    "enum": ["invoice", "receipt", "contract", "other"]
+                    "enum": [
+                      "invoice",
+                      "receipt",
+                      "contract",
+                      "other"
+                    ]
                   }
                 },
                 "additionalProperties": false
@@ -93,7 +136,12 @@
           "id": "out",
           "label": "Classification",
           "fields": [
-            { "name": "document_class", "label": "Class", "kind": "text", "required": true }
+            {
+              "name": "document_class",
+              "label": "Class",
+              "kind": "text",
+              "required": true
+            }
           ]
         }
       }
@@ -101,20 +149,47 @@
     {
       "id": "end",
       "type": "end",
-      "position": { "x": 920, "y": 160 },
+      "position": {
+        "x": 920,
+        "y": 160
+      },
       "data": {
         "type": "end",
         "label": "Done",
         "resultMapping": [
-          { "targetField": "document_class", "expression": "classify.document_class" },
-          { "targetField": "full_text",      "expression": "extract_text.full_text" }
+          {
+            "targetField": "document_class",
+            "expression": "classify.document_class"
+          },
+          {
+            "targetField": "content",
+            "expression": "extract_text.content"
+          }
         ]
       }
     }
   ],
   "edges": [
-    { "id": "e_start_extract",      "source": "start",        "target": "extract_text", "targetHandle": "in", "type": "sequence" },
-    { "id": "e_extract_classify",   "source": "extract_text", "target": "classify",     "targetHandle": "in", "type": "sequence" },
-    { "id": "e_classify_end",       "source": "classify",     "target": "end",          "targetHandle": "in", "type": "sequence" }
+    {
+      "id": "e_start_extract",
+      "source": "start",
+      "target": "extract_text",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e_extract_classify",
+      "source": "extract_text",
+      "target": "classify",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e_classify_end",
+      "source": "classify",
+      "target": "end",
+      "targetHandle": "in",
+      "type": "sequence"
+    }
   ]
 }

@@ -8,6 +8,8 @@
 import HumanTaskEnvelope from './HumanTaskEnvelope.svelte';
 import AutomatedStepEnvelope from './AutomatedStepEnvelope.svelte';
 import LlmResponseEnvelope from './LlmResponseEnvelope.svelte';
+import KreuzbergExtractionEnvelope from './KreuzbergExtractionEnvelope.svelte';
+import EndTerminalEnvelope from './EndTerminalEnvelope.svelte';
 import ProcessTokenEnvelope from './ProcessTokenEnvelope.svelte';
 import FileReference from './FileReference.svelte';
 import TabularArray from './TabularArray.svelte';
@@ -52,6 +54,24 @@ function matchesAutomatedStep(value: unknown, ctx: RenderContext): boolean {
 	return ctx.nodeKind === undefined || ctx.nodeKind === 'automated_step';
 }
 
+/** Workflow-exit terminal envelope deposited at `workflow_terminals[*]` by
+ *  End / Failure nodes. Built by `lower_end`'s result_shape transition
+ *  (`exit_code: { ok: true, value: <result_mapping> }`) and `lower_failure`
+ *  (`exit_code: { ok: false, error }`), riding atop the process token's
+ *  workflow-level `name` / `process_id` / `task_id` / `status` fields.
+ *  Distinguishing signature: all four workflow-metadata strings present.
+ *  `exit_code` is treated as optional so bare-End terminals (no result
+ *  mapping) still match and render the metadata cleanly. */
+function matchesEndTerminal(value: unknown, ctx: RenderContext): boolean {
+	if (!isObj(value)) return false;
+	if (typeof value.process_id !== 'string') return false;
+	if (typeof value.task_id !== 'string') return false;
+	if (typeof value.status !== 'string') return false;
+	if (typeof value.name !== 'string') return false;
+	if ('exit_code' in value && value.exit_code !== null && !isObj(value.exit_code)) return false;
+	return ctx.nodeKind === undefined || ctx.nodeKind === 'end';
+}
+
 /** Process-rooted token (carrying `_instance_id` stamped by Start, plus
  *  the other `_*` system fields and the declared business fields). Also
  *  matches the inbound at HumanTask after the wire-edge injection merges
@@ -60,6 +80,22 @@ function matchesAutomatedStep(value: unknown, ctx: RenderContext): boolean {
 function matchesProcessToken(value: unknown): boolean {
 	if (!isObj(value)) return false;
 	return typeof value._instance_id === 'string';
+}
+
+/** Kreuzberg `ExtractionResult` envelope, emitted 1:1 by `executor-kreuzberg`
+ *  (see `executor/crates/executor-kreuzberg/src/backend.rs::build_single_outputs`).
+ *  Stable signature is `content: string` + `mime_type: string` +
+ *  `metadata: object` + `tables: array` — distinctive enough that other LLM /
+ *  envelope shapes won't collide. The renderer surfaces extracted text and
+ *  per-table markdown bodies first, hides the diagnostic `metadata` blob
+ *  behind a disclosure. */
+function matchesKreuzbergExtraction(value: unknown): boolean {
+	if (!isObj(value)) return false;
+	if (typeof value.content !== 'string') return false;
+	if (typeof value.mime_type !== 'string') return false;
+	if (!isObj(value.metadata)) return false;
+	if (!Array.isArray(value.tables)) return false;
+	return true;
 }
 
 /** Canonical LLM output envelope from `executor-llm` (see
@@ -145,6 +181,18 @@ export const REGISTRY: OutputRenderer[] = [
 		label: 'LLM response',
 		matches: matchesLlmResponse,
 		component: LlmResponseEnvelope
+	},
+	{
+		name: 'kreuzberg-extraction',
+		label: 'Document extraction',
+		matches: matchesKreuzbergExtraction,
+		component: KreuzbergExtractionEnvelope
+	},
+	{
+		name: 'end-terminal',
+		label: 'Workflow result',
+		matches: matchesEndTerminal,
+		component: EndTerminalEnvelope
 	},
 	{
 		name: 'process-token',

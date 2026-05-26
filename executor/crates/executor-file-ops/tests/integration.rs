@@ -108,6 +108,7 @@ fn make_spec(config: Value) -> ExecutionSpec {
         inputs: vec![],
         outputs: vec![],
         config,
+        config_ref: None,
     }
 }
 
@@ -933,6 +934,7 @@ fn supports_file_ops_only() {
         inputs: vec![],
         outputs: vec![],
         config: serde_json::json!({}),
+        config_ref: None,
     };
     assert!(backend.supports(&file_ops_spec));
 
@@ -941,6 +943,7 @@ fn supports_file_ops_only() {
         inputs: vec![],
         outputs: vec![],
         config: serde_json::json!({}),
+        config_ref: None,
     };
     assert!(!backend.supports(&process_spec));
 
@@ -949,6 +952,7 @@ fn supports_file_ops_only() {
         inputs: vec![],
         outputs: vec![],
         config: serde_json::json!({}),
+        config_ref: None,
     };
     assert!(!backend.supports(&docker_spec));
 
@@ -957,6 +961,7 @@ fn supports_file_ops_only() {
         inputs: vec![],
         outputs: vec![],
         config: serde_json::json!({}),
+        config_ref: None,
     };
     assert!(!backend.supports(&llm_spec));
 }

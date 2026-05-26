@@ -6,6 +6,7 @@ use serde::Deserialize;
 use crate::doc_ops;
 use crate::formats::WorkflowFormat;
 use crate::fs_ops;
+use crate::tests_fs;
 use crate::ws_client;
 
 #[derive(Debug, Deserialize)]
@@ -48,14 +49,29 @@ pub async fn run(server: &str, template_id: &str, directory: Option<&str>, forma
     // Disconnect
     handle.disconnect().await?;
 
+    // Pull template tests into `tests/<name>.yaml` alongside the workflow.
+    // Best-effort: a tests-API failure shouldn't fail the whole pull, since
+    // tests are an add-on to the bundle, not load-bearing for execution.
+    let tests = match tests_fs::fetch_from_server(server, template_id).await {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("warning: failed to pull tests: {e}");
+            Vec::new()
+        }
+    };
+    if !tests.is_empty() {
+        tests_fs::write_tests(&dir, &tests)?;
+    }
+
     // Summary
     let file_count: usize = files.values().map(|f| f.len()).sum();
     println!(
-        "Pulled to ./{} ({} nodes, {} edges, {} files)",
+        "Pulled to ./{} ({} nodes, {} edges, {} files, {} test(s))",
         dir.display(),
         graph.nodes.len(),
         graph.edges.len(),
         file_count,
+        tests.len(),
     );
 
     Ok(())

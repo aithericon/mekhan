@@ -140,6 +140,13 @@ pub struct Provenance {
     pub node_id: String,
     pub node_label: String,
     pub note: String,
+    /// Set when the field is *both* a recursable container AND a usable
+    /// scalar leaf of the given type — currently only File envelopes (the
+    /// declared port-level `FieldKind::File`, which is a `FileRef` handle
+    /// in its own right *and* exposes `{url, filename, content_type}`
+    /// subkeys at runtime). `collect_leaves` emits the container path with
+    /// this scalar type *and* continues into the children.
+    pub anchor: Option<ScalarTy>,
 }
 
 impl Provenance {
@@ -148,7 +155,13 @@ impl Provenance {
             node_id: node.id.clone(),
             node_label: node.data.label().to_string(),
             note: note.into(),
+            anchor: None,
         }
+    }
+
+    fn with_anchor(mut self, anchor: ScalarTy) -> Provenance {
+        self.anchor = Some(anchor);
+        self
     }
 }
 
@@ -256,6 +269,14 @@ impl TokenShape {
     /// the lowering stamps on, etc.). `Opaque`/`Any`/`FileRef` are permissive
     /// `{}` — undeclared executor outputs and catalogue refs must not be
     /// rejected (the declared→enforced ramp tightens these later).
+    ///
+    /// Scalar types also accept `null` — the executor backends (LLM,
+    /// Python) legitimately set declared-but-unset optional outputs to
+    /// `null` so downstream consumers (Python `<slug>.<field>` access)
+    /// see `None` instead of `AttributeError`. Without the `null`
+    /// alternative, the engine's `t_<id>_yield` schema validator rejects
+    /// the parked envelope on the first nullable scalar and the whole
+    /// instance fails.
     pub fn to_json_schema(&self) -> Value {
         match self {
             TokenShape::Object(map) => {
@@ -273,10 +294,14 @@ impl TokenShape {
                 "type": "array",
                 "items": inner.to_json_schema()
             }),
-            TokenShape::Scalar(ScalarTy::Number) => serde_json::json!({ "type": "number" }),
-            TokenShape::Scalar(ScalarTy::Bool) => serde_json::json!({ "type": "boolean" }),
+            TokenShape::Scalar(ScalarTy::Number) => {
+                serde_json::json!({ "type": ["number", "null"] })
+            }
+            TokenShape::Scalar(ScalarTy::Bool) => {
+                serde_json::json!({ "type": ["boolean", "null"] })
+            }
             TokenShape::Scalar(ScalarTy::String) | TokenShape::Scalar(ScalarTy::Timestamp) => {
-                serde_json::json!({ "type": "string" })
+                serde_json::json!({ "type": ["string", "null"] })
             }
             // FileRef is a catalogue handle (string or object at runtime),
             // Json/Any/Opaque are deliberately unconstrained.
@@ -341,20 +366,28 @@ pub fn dynamic_token_definition() -> (String, Value) {
 fn port_to_shape(port: &Port, node: &WorkflowNode, note: &str) -> TokenShape {
     let mut o = TokenShape::object();
     for f in &port.fields {
-        let shape = match f.kind {
-            // A File field is an object at runtime (`{{ invoice_file.url }}`
-            // etc. is used in the fixture), so model the addressable subkeys.
+        let (shape, prov) = match f.kind {
+            // A File field is *both* a `FileRef` scalar handle (what
+            // Kreuzberg/LLM consume via `{{ <slug>.<file> }}`) AND an
+            // object exposing `{url, filename, content_type}` subkeys
+            // (what HumanTask blocks interpolate via `{{ <slug>.<file>.filename }}`).
+            // The outer field's provenance carries `anchor = FileRef` so
+            // `collect_leaves` emits both the container leaf and its
+            // children — and the picker can offer the full nested family.
             FieldKind::File => {
                 let mut fo = TokenShape::object();
                 let p = Provenance::new(node, "uploaded file (catalogue reference)");
                 fo.insert("url", TokenShape::Scalar(ScalarTy::String), p.clone());
                 fo.insert("filename", TokenShape::Scalar(ScalarTy::String), p.clone());
                 fo.insert("content_type", TokenShape::Scalar(ScalarTy::String), p);
-                fo
+                (fo, Provenance::new(node, note).with_anchor(ScalarTy::FileRef))
             }
-            k => TokenShape::Scalar(ScalarTy::from_kind(k)),
+            k => (
+                TokenShape::Scalar(ScalarTy::from_kind(k)),
+                Provenance::new(node, note),
+            ),
         };
-        o.insert(&f.name, shape, Provenance::new(node, note));
+        o.insert(&f.name, shape, prov);
     }
     o
 }
@@ -971,11 +1004,34 @@ fn collect_leaves(
 ) {
     match shape {
         TokenShape::Object(map) if !map.is_empty() => {
+            // Two distinct kinds of Object live in node shapes:
+            //   1. *Anchored* containers (currently: File envelopes) — the
+            //      container itself is a pickable scalar leaf, AND its
+            //      subkeys are addressable as nested leaves. Both are
+            //      user-meaningful nesting and must be preserved verbatim
+            //      (`start.document`, `start.document.filename`).
+            //   2. Plain Objects — runtime envelopes (HumanTask metadata
+            //      `{title, steps, data: {…}, …}`, AutomatedStep `{detail,
+            //      execution_id, run, …}`). Their interior nesting is *not*
+            //      part of the addressable surface the user typed — what
+            //      users wrote is the leaf identifier (`amount`, not
+            //      `data.amount`), so descendants RESET their prefix to the
+            //      bare child key. This matches the prior behaviour of the
+            //      now-removed `rsplit('.').next()` collapse in phase (2),
+            //      while leaving anchored nesting intact.
+            let anchored = prov.and_then(|p| p.anchor.clone());
+            if let (Some(p), Some(anchor)) = (prov, &anchored) {
+                out.push((prefix.to_string(), anchor.label().to_string(), p.clone()));
+            }
             for (k, f) in map {
-                let path = if prefix.is_empty() {
-                    k.clone()
+                let path = if anchored.is_some() {
+                    if prefix.is_empty() {
+                        k.clone()
+                    } else {
+                        format!("{prefix}.{k}")
+                    }
                 } else {
-                    format!("{prefix}.{k}")
+                    k.clone() // plain object: flatten — child is the new root
                 };
                 collect_leaves(&f.shape, &path, Some(&f.prov), out);
             }
@@ -1421,12 +1477,18 @@ fn reachable_scope(
                 if owner == node.id || !is_parked_producer(graph, &owner) {
                     continue;
                 }
-                let leaf = dotted.rsplit('.').next().unwrap_or(&dotted).to_string();
-                if is_control_leaf(&format!("input.{leaf}")) {
+                // Preserve the *full* dotted path — anchored containers (File
+                // envelopes) emit both the container leaf (`document`) and
+                // nested subkey leaves (`document.url`, `.filename`, …), and
+                // truncating to the last segment would (a) drop the container
+                // leaf entirely and (b) misattribute `document.url` to a
+                // nonexistent `start.url`. `is_control_leaf` is already
+                // head-aware, so it does the right thing on multi-segment input.
+                if is_control_leaf(&format!("input.{dotted}")) {
                     continue; // identity/routing — slim control token
                 }
                 let slug = slugs.slug_for(&owner).unwrap_or(&owner).to_string();
-                let path = format!("{slug}.{leaf}");
+                let path = format!("{slug}.{dotted}");
                 by_path.entry(path.clone()).or_insert(ScopeEntry {
                     path,
                     ty,
@@ -3589,5 +3651,65 @@ mod scope_reachability_tests {
             borrows[0].producer_field_kind,
             crate::models::template::FieldKind::Text
         );
+    }
+
+    /// File envelope nesting: a Start field `document: File` must surface
+    /// downstream as *both* a `FileRef` leaf (`start.document`, what Kreuzberg
+    /// and LLM borrow) *and* its three metadata subkeys (`start.document.url`,
+    /// `.filename`, `.content_type`, the dotted form HumanTask blocks
+    /// interpolate). Before the picker fix, the container leaf was missing
+    /// and the subkeys were truncated to `start.{url,filename,content_type}`.
+    #[test]
+    fn file_envelope_exposes_container_leaf_and_nested_subkeys() {
+        let json = r#"{
+          "nodes": [
+            {"id":"s","type":"start","slug":"start","position":{"x":0,"y":0},
+             "data":{"type":"start","label":"Start",
+                     "initial":{"id":"in","label":"Input","fields":[
+                       {"name":"document","label":"Doc","kind":"file","required":true}
+                     ]}}},
+            {"id":"ocr","type":"automated_step","slug":"ocr","position":{"x":0,"y":0},
+             "data":{"type":"automated_step","label":"OCR",
+                     "executionSpec":{"backendType":"kreuzberg","config":{"file":"{{ start.document }}"}},
+                     "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
+                     "deploymentModel":{"mode":"inline"}}},
+            {"id":"end","type":"end","position":{"x":0,"y":0},
+             "data":{"type":"end","label":"End"}}
+          ],
+          "edges":[
+            {"id":"e1","source":"s","target":"ocr","type":"sequence"},
+            {"id":"e2","source":"ocr","target":"end","type":"sequence"}
+          ]
+        }"#;
+        let g: WorkflowGraph = serde_json::from_str(json).expect("deser file-envelope graph");
+        let report = analyze(&g).expect("analyze");
+        let scope = report.scopes.get("ocr").expect("ocr scope");
+        let by_path: std::collections::BTreeMap<&str, &str> =
+            scope.iter().map(|e| (e.path.as_str(), e.ty.as_str())).collect();
+
+        assert_eq!(
+            by_path.get("start.document").copied(),
+            Some("FileRef"),
+            "container leaf must be a pickable FileRef; offered: {:?}",
+            by_path
+        );
+        assert_eq!(
+            by_path.get("start.document.url").copied(),
+            Some("String"),
+            "metadata subkey `url` must be nested under the file field, not flat at `start.url`; offered: {:?}",
+            by_path
+        );
+        assert_eq!(by_path.get("start.document.filename").copied(), Some("String"));
+        assert_eq!(by_path.get("start.document.content_type").copied(), Some("String"));
+
+        // The pre-fix flat form (the bug from the screenshot) must be gone:
+        // `start.url` would imply Start declared a top-level `url` field.
+        assert!(
+            !by_path.contains_key("start.url"),
+            "flat `start.url` must not be offered — that path lives under `document`: {:?}",
+            by_path
+        );
+        assert!(!by_path.contains_key("start.filename"));
+        assert!(!by_path.contains_key("start.content_type"));
     }
 }

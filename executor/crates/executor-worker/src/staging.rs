@@ -80,10 +80,19 @@ pub fn default_pipeline(
         .add_hook(CreateRunDirectoryHook)
         .add_hook(InjectEnvironmentHook);
 
-    // Plan secrets AFTER environment injection, BEFORE inputs staging.
-    // PlanSecretsHook writes ONLY to `resolved_*` side-channel fields. Plaintext
-    // never lands in `env`/`spec.config`/`spec.inputs[*].source.storage` so the
-    // subsequent WriteContextHook serializes the unresolved templates only.
+    // FetchConfigHook MUST run before PlanSecretsHook: secret resolution
+    // scans `spec.config` for `{{secret:KEY}}` refs, and the config isn't
+    // present yet on `config_ref`-shaped jobs (compiler offloads large
+    // configs to S3 and ships a pointer). Inline-spec jobs pass through.
+    if let Some(s) = store.clone() {
+        pipeline = pipeline.add_hook(FetchConfigHook { store: s });
+    }
+
+    // Plan secrets AFTER environment injection + config fetch, BEFORE
+    // inputs staging. PlanSecretsHook writes ONLY to `resolved_*`
+    // side-channel fields. Plaintext never lands in `env`/`spec.config`/
+    // `spec.inputs[*].source.storage`, so the subsequent WriteContextHook
+    // serializes the unresolved templates only (Gap #1 fix).
     if let Some(secrets) = secret_store {
         pipeline = pipeline.add_hook(PlanSecretsHook {
             store: secrets,
@@ -200,6 +209,75 @@ impl StagingHook for InjectEnvironmentHook {
             .insert("AITHERICON_EXECUTION_ID".into(), ctx.execution_id.clone());
 
         debug!("injected AITHERICON_* env vars");
+        Ok(ctx)
+    }
+}
+
+/// Fetches the static config blob referenced by `ExecutionSpec.config_ref`
+/// and writes it into `spec.config` so downstream hooks + backends see the
+/// resolved config exactly as if it had travelled inline.
+///
+/// The compiler-emitted prepare-transition keeps the per-job NATS token
+/// small (just a `config_ref { storage_path }`) — this hook is the
+/// counterparty that materialises the config at execution time. Inline-spec
+/// jobs (tests, programmatic) pass through unchanged when `config_ref` is
+/// `None`.
+pub struct FetchConfigHook {
+    pub store: Arc<dyn ArtifactStore>,
+}
+
+#[async_trait]
+impl StagingHook for FetchConfigHook {
+    fn name(&self) -> &'static str {
+        "fetch_config"
+    }
+
+    async fn stage(
+        &self,
+        _job: &ExecutionJob,
+        mut ctx: RunContext,
+    ) -> Result<RunContext, ExecutorError> {
+        let Some(ref config_ref) = ctx.spec.config_ref else {
+            return Ok(ctx);
+        };
+
+        // Download to a transient path inside the run_dir root (created by
+        // `CreateRunDirectoryHook` ahead of this hook). Deliberately NOT under
+        // `inputs_dir` so the backend's input-staging logic doesn't pick it
+        // up; deleted right after read so it never bleeds into artifacts.
+        let blob_path = ctx.run_dir.root.join("__node_config.json");
+        let storage_path = StoragePath(config_ref.storage_path.clone());
+        self.store
+            .download(&storage_path, &blob_path)
+            .await
+            .map_err(|e| {
+                ExecutorError::StagingFailed(format!(
+                    "fetch_config: download config blob '{}': {e}",
+                    config_ref.storage_path
+                ))
+            })?;
+        let bytes: Vec<u8> = tokio::fs::read(&blob_path).await.map_err(|e| {
+            ExecutorError::StagingFailed(format!(
+                "fetch_config: read downloaded config blob '{}': {e}",
+                config_ref.storage_path
+            ))
+        })?;
+        let resolved: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| {
+            ExecutorError::StagingFailed(format!(
+                "fetch_config: parse JSON config blob '{}': {e}",
+                config_ref.storage_path
+            ))
+        })?;
+        // Best-effort cleanup; the run-dir is the right place even if this
+        // fails (whole tree is removed by the cleanup policy).
+        let _ = tokio::fs::remove_file(&blob_path).await;
+
+        debug!(
+            storage_path = %config_ref.storage_path,
+            bytes = bytes.len(),
+            "fetched static node config",
+        );
+        ctx.spec.config = resolved;
         Ok(ctx)
     }
 }

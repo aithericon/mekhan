@@ -68,6 +68,7 @@ fn definition(ctx: &mut Context) {
                 }),
                 inputs: vec![],
                 outputs: vec![],
+                config_ref: None,
             },
         }],
     );
