@@ -310,31 +310,16 @@ fn resolve_resource(
 ) -> Result<ResolvedSmtpResource, SmtpOutcome> {
     if let Some(alias) = &config.resource_alias {
         if !alias.is_empty() {
-            // Look first in `staged_inputs` (the canonical map of resolved
-            // input names → paths the worker populates), then fall back to
-            // a direct `inputs_dir/<alias>.json` read since some staging
-            // paths might not register the inline input in `staged_inputs`.
-            let candidate_path = run_context
-                .staged_inputs
-                .get(&format!("{alias}.json"))
-                .cloned()
-                .unwrap_or_else(|| run_context.run_dir.inputs_dir.join(format!("{alias}.json")));
-            if candidate_path.exists() {
-                let bytes = std::fs::read(&candidate_path).map_err(|e| {
-                    SmtpOutcome::InvalidConfig {
-                        message: format!(
-                            "smtp backend: cannot read staged resource envelope {}: {e}",
-                            candidate_path.display()
-                        ),
-                    }
-                })?;
-                let value: serde_json::Value =
-                    serde_json::from_slice(&bytes).map_err(|e| SmtpOutcome::InvalidConfig {
-                        message: format!(
-                            "smtp backend: staged resource envelope {} is not JSON: {e}",
-                            candidate_path.display()
-                        ),
-                    })?;
+            // Shared loader: handles staged_inputs → inputs_dir fallback,
+            // returns Ok(None) when the file isn't present (we fall
+            // through to the test-harness `resolved_config` path below).
+            let envelope = aithericon_executor_backend::try_load_resource_envelope(
+                run_context, alias,
+            )
+            .map_err(|e| SmtpOutcome::InvalidConfig {
+                message: format!("smtp backend: {e}"),
+            })?;
+            if let Some(value) = envelope {
                 return ResolvedSmtpResource::from_resolved_value(&value).map_err(|e| {
                     SmtpOutcome::InvalidConfig {
                         message: format!("smtp backend: {e}"),

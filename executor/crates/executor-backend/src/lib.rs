@@ -12,8 +12,12 @@
 
 pub mod outputs;
 pub mod resolve;
+pub mod resource;
 pub mod tail;
 pub mod traits;
 
+pub use resource::{
+    load_resource, load_resource_envelope, try_load_resource, try_load_resource_envelope,
+};
 pub use tail::TailBuffer;
 pub use traits::{EventStream, ExecutionBackend, StatusCallback};

@@ -410,34 +410,10 @@ fn overlay_resource(
     alias: &str,
     run_context: &RunContext,
 ) -> Result<(), ExecutorError> {
-    let filename = format!("{alias}.json");
-    let candidate_path = run_context
-        .staged_inputs
-        .get(&filename)
-        .cloned()
-        .unwrap_or_else(|| run_context.run_dir.inputs_dir.join(&filename));
-    if !candidate_path.exists() {
-        return Err(ExecutorError::Config(format!(
-            "llm backend: resource '{alias}' not staged as <alias>.json — the compiler must \
-             emit a ResourceEnvelope borrow for this LLM step"
-        )));
-    }
-    let bytes = std::fs::read(&candidate_path).map_err(|e| {
-        ExecutorError::Config(format!(
-            "llm backend: cannot read staged resource envelope {}: {e}",
-            candidate_path.display()
-        ))
-    })?;
-    let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| {
-        ExecutorError::Config(format!(
-            "llm backend: staged resource envelope {} is not JSON: {e}",
-            candidate_path.display()
-        ))
-    })?;
+    let value = aithericon_executor_backend::load_resource_envelope(run_context, alias)?;
     let obj = value.as_object().ok_or_else(|| {
         ExecutorError::Config(format!(
-            "llm backend: resource envelope {} must be a JSON object",
-            candidate_path.display()
+            "llm backend: resource '{alias}' envelope must be a JSON object"
         ))
     })?;
 

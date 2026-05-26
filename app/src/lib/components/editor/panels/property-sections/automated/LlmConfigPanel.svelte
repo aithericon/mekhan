@@ -5,7 +5,7 @@
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { FormField } from '$lib/components/ui/form-field';
 	import InsertRefButton from '../InsertRefButton.svelte';
-	import { listResources, type ResourceSummary } from '$lib/api/resources';
+	import ResourcePicker from '../shared/ResourcePicker.svelte';
 	import type { ScopeEntry } from '$lib/editor/guard-scope';
 
 	type Props = {
@@ -36,39 +36,6 @@
 	const resourceType = $derived(resourceTypeForProvider[provider] ?? null);
 	const resourceAlias = $derived((config.resource_alias as string | undefined) ?? '');
 
-	let resources = $state<ResourceSummary[]>([]);
-	let resourcesLoading = $state(false);
-	let resourcesError = $state<string | null>(null);
-
-	async function loadResources(type: string | null) {
-		if (!type) {
-			resources = [];
-			resourcesError = null;
-			return;
-		}
-		resourcesLoading = true;
-		resourcesError = null;
-		try {
-			const page = await listResources({ resource_type: type, perPage: 200 });
-			resources = page.items;
-		} catch (e) {
-			resourcesError = e instanceof Error ? e.message : 'Failed to load resources';
-		} finally {
-			resourcesLoading = false;
-		}
-	}
-
-	// Initial load + reload when provider switches between resource-backed
-	// and inline-only. `$effect` runs after mount and any reactive update,
-	// so onMount isn't needed.
-	let lastLoadedType: string | null = null;
-	$effect(() => {
-		if (resourceType !== lastLoadedType) {
-			lastLoadedType = resourceType;
-			loadResources(resourceType);
-		}
-	});
-
 	function appendToField(field: 'prompt' | 'system_prompt', snippet: string) {
 		const curr = (config[field] as string | undefined) ?? '';
 		onchange({
@@ -85,14 +52,6 @@
 			delete next.resource_alias;
 		}
 		onchange(next);
-	}
-
-	function selectedResourceLabel(): string {
-		if (!resourceAlias) {
-			return resourcesLoading ? 'Loading…' : 'None — provide credentials inline';
-		}
-		const found = resources.find((r) => r.path === resourceAlias);
-		return found ? `${found.path} — ${found.display_name}` : resourceAlias;
 	}
 
 	const responseFormatType = $derived(
@@ -137,40 +96,15 @@
 	/>
 </FormField>
 
-{#if resourceType}
-	<div class="space-y-1.5">
-		<FormField label="Credentials resource" for="llm-resource">
-			<Select.Root
-				type="single"
-				value={resourceAlias}
-				onValueChange={(v) => setResourceAlias(v ?? '')}
-				disabled={readonly || resourcesLoading}
-			>
-				<Select.Trigger disabled={readonly || resourcesLoading} data-testid="llm-resource-select">
-					<span class="truncate text-sm">{selectedResourceLabel()}</span>
-				</Select.Trigger>
-				<Select.Content>
-					<Select.Item value="" label="None — provide credentials inline" />
-					{#each resources as r (r.id)}
-						<Select.Item value={r.path} label={`${r.path} — ${r.display_name}`} />
-					{/each}
-				</Select.Content>
-			</Select.Root>
-		</FormField>
-		{#if resourcesError}
-			<p class="text-sm text-destructive">{resourcesError}</p>
-		{:else if resources.length === 0 && !resourcesLoading}
-			<p class="text-sm italic text-muted-foreground">
-				No {providerLabels[provider]} resources configured in this workspace.
-				Add one under <code class="font-mono">/resources</code> to share an API key across steps.
-			</p>
-		{:else if resourceAlias}
-			<p class="text-sm italic text-muted-foreground">
-				API key + base URL come from the resource. Fields below override them per step.
-			</p>
-		{/if}
-	</div>
-{/if}
+<ResourcePicker
+	{resourceType}
+	selected={resourceAlias}
+	onChange={setResourceAlias}
+	label="Credentials resource"
+	{readonly}
+	testId="llm-resource-select"
+	typeLabel={providerLabels[provider]}
+/>
 
 <FormField
 	label={resourceAlias ? 'API Key (override)' : 'API Key (optional)'}

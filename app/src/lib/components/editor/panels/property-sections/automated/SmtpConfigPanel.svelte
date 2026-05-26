@@ -19,16 +19,14 @@
 	// subject sources are embedded inline so the executor doesn't need to
 	// coordinate with node-file storage at run time.
 
-	import { onMount } from 'svelte';
 	import Plus from '@lucide/svelte/icons/plus';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import { Input } from '$lib/components/ui/input';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import { FormField } from '$lib/components/ui/form-field';
-	import * as Select from '$lib/components/ui/select';
 	import InsertRefButton from '../InsertRefButton.svelte';
-	import { listResources, type ResourceSummary } from '$lib/api/resources';
+	import ResourcePicker from '../shared/ResourcePicker.svelte';
 	import type { ScopeEntry } from '$lib/editor/guard-scope';
 
 	type TemplateSource = { label: string; source: string };
@@ -42,21 +40,6 @@
 	};
 
 	let { config, readonly = false, onchange, scope = [] }: Props = $props();
-
-	let smtpResources = $state<ResourceSummary[]>([]);
-	let resourcesLoading = $state(true);
-	let resourcesError = $state<string | null>(null);
-
-	onMount(async () => {
-		try {
-			const page = await listResources({ resource_type: 'smtp', perPage: 200 });
-			smtpResources = page.items;
-		} catch (e) {
-			resourcesError = e instanceof Error ? e.message : 'Failed to load SMTP resources';
-		} finally {
-			resourcesLoading = false;
-		}
-	});
 
 	// Typed projections. Defaults match the executor's SmtpConfig defaults
 	// so partial drafts deserialize correctly when re-saving.
@@ -155,47 +138,20 @@
 		setAttachments(attachments.filter((_, i) => i !== idx));
 	}
 
-	function selectedResourceLabel(): string {
-		if (!resourceAlias) return resourcesLoading ? 'Loading…' : 'Choose an SMTP resource';
-		const found = smtpResources.find((r) => r.path === resourceAlias);
-		return found ? `${found.path} — ${found.display_name}` : resourceAlias;
-	}
-
 	function appendSnippet(target: string, snippet: string): string {
 		return target.length === 0 ? snippet : `${target}${snippet}`;
 	}
 </script>
 
-<div class="space-y-1.5">
-	<FormField label="SMTP resource" for="smtp-resource">
-		<Select.Root
-			type="single"
-			value={resourceAlias}
-			onValueChange={(v) => patch({ resource_alias: v ?? '' })}
-			disabled={readonly || resourcesLoading}
-		>
-			<Select.Trigger disabled={readonly || resourcesLoading} data-testid="smtp-resource-select">
-				<span class="truncate text-sm">{selectedResourceLabel()}</span>
-			</Select.Trigger>
-			<Select.Content>
-				{#if smtpResources.length === 0}
-					<Select.Item value="" label="No SMTP resources configured" disabled />
-				{:else}
-					{#each smtpResources as r (r.id)}
-						<Select.Item value={r.path} label={`${r.path} — ${r.display_name}`} />
-					{/each}
-				{/if}
-			</Select.Content>
-		</Select.Root>
-	</FormField>
-	{#if resourcesError}
-		<p class="text-sm text-destructive">{resourcesError}</p>
-	{:else if smtpResources.length === 0 && !resourcesLoading}
-		<p class="text-sm italic text-muted-foreground">
-			No SMTP resources defined in this workspace. Add one under /resources before publishing.
-		</p>
-	{/if}
-</div>
+<ResourcePicker
+	resourceType="smtp"
+	selected={resourceAlias}
+	onChange={(v) => patch({ resource_alias: v })}
+	label="SMTP resource"
+	{readonly}
+	testId="smtp-resource-select"
+	typeLabel="SMTP"
+/>
 
 {#snippet recipientRow(field: 'to' | 'cc' | 'bcc', addr: string, idx: number)}
 	<div class="flex items-center gap-1.5">

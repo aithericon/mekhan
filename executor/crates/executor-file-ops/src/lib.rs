@@ -39,6 +39,7 @@ pub mod backend;
 pub mod config;
 pub mod ops;
 pub mod resolve;
+mod resource_overlay;
 
 pub use backend::FileOpsBackend;
 pub use config::FileOpsConfig;

@@ -1,9 +1,21 @@
 <script lang="ts">
 	import KeyValueEditor from '../../shared/KeyValueEditor.svelte';
+	import ResourcePicker from '../shared/ResourcePicker.svelte';
 	import * as Select from '$lib/components/ui/select';
 	import { Input } from '$lib/components/ui/input';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import { FormField } from '$lib/components/ui/form-field';
+
+	// Maps the storage backend to the workspace resource type that can
+	// supply credentials + endpoint. Only `s3` has a workspace resource
+	// today; gcs / azblob fall back to inline credentials until those
+	// resource types ship.
+	const resourceTypeForBackend: Record<string, string | null> = {
+		local: null,
+		s3: 's3',
+		gcs: null,
+		azblob: null
+	};
 
 	type Props = {
 		config: Record<string, unknown>;
@@ -222,10 +234,25 @@
 				<Select.Item value="azblob" label="Azure Blob" />
 			</Select.Content>
 		</Select.Root>
+		<ResourcePicker
+			resourceType={resourceTypeForBackend[(storage.backend as string) ?? 'local']}
+			selected={(storage.resource_alias as string | undefined) ?? ''}
+			onChange={(v) => updateStorage({ resource_alias: v || undefined })}
+			label="Storage resource"
+			{readonly}
+			testId="file-ops-storage-resource"
+			typeLabel={storageLabels[(storage.backend as string) ?? 'local']}
+		/>
 		<Input
 			type="text"
 			value={(storage.endpoint as string) ?? ''}
-			placeholder={(storage.backend as string) === 'local' ? '/tmp/store' : 'https://...'}
+			placeholder={
+				storage.resource_alias
+					? 'Inherits from resource'
+					: (storage.backend as string) === 'local'
+						? '/tmp/store'
+						: 'https://...'
+			}
 			disabled={readonly}
 			oninput={(e) => updateStorage({ endpoint: (e.currentTarget as HTMLInputElement).value })}
 			class="h-6 px-1.5 py-0.5 font-mono text-sm"
@@ -234,7 +261,7 @@
 			<Input
 				type="text"
 				value={(storage.bucket as string) ?? ''}
-				placeholder="Bucket name"
+				placeholder={storage.resource_alias ? 'Inherits from resource' : 'Bucket name'}
 				disabled={readonly}
 				oninput={(e) => updateStorage({ bucket: (e.currentTarget as HTMLInputElement).value })}
 				class="h-6 px-1.5 py-0.5 text-sm"
@@ -260,10 +287,25 @@
 				<Select.Item value="azblob" label="Azure Blob" />
 			</Select.Content>
 		</Select.Root>
+		<ResourcePicker
+			resourceType={resourceTypeForBackend[(srcStorage.backend as string) ?? 'local']}
+			selected={(srcStorage.resource_alias as string | undefined) ?? ''}
+			onChange={(v) => updateSrcStorage({ resource_alias: v || undefined })}
+			label="Source storage resource"
+			{readonly}
+			testId="file-ops-source-resource"
+			typeLabel={storageLabels[(srcStorage.backend as string) ?? 'local']}
+		/>
 		<Input
 			type="text"
 			value={(srcStorage.endpoint as string) ?? ''}
-			placeholder={(srcStorage.backend as string) === 'local' ? '/tmp/store' : 'https://...'}
+			placeholder={
+				srcStorage.resource_alias
+					? 'Inherits from resource'
+					: (srcStorage.backend as string) === 'local'
+						? '/tmp/store'
+						: 'https://...'
+			}
 			disabled={readonly}
 			oninput={(e) => updateSrcStorage({ endpoint: (e.currentTarget as HTMLInputElement).value })}
 			class="h-6 px-1.5 py-0.5 font-mono text-sm"
@@ -272,7 +314,7 @@
 			<Input
 				type="text"
 				value={(srcStorage.bucket as string) ?? ''}
-				placeholder="Bucket name"
+				placeholder={srcStorage.resource_alias ? 'Inherits from resource' : 'Bucket name'}
 				disabled={readonly}
 				oninput={(e) => updateSrcStorage({ bucket: (e.currentTarget as HTMLInputElement).value })}
 				class="h-6 px-1.5 py-0.5 text-sm"

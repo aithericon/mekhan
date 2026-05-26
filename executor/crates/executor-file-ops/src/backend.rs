@@ -73,9 +73,14 @@ impl ExecutionBackend for FileOpsBackend {
             .map_err(|e| ExecutorError::Config(format!("file_ops input resolution: {e}")))?;
 
         // Deserialize resolved config
-        let config: FileOpsConfig = serde_json::from_value(raw_config).map_err(|e| {
+        let mut config: FileOpsConfig = serde_json::from_value(raw_config).map_err(|e| {
             ExecutorError::Config(format!("invalid file_ops backend config: {e}"))
         })?;
+
+        // Overlay any workspace-resource bindings (storage.resource_alias)
+        // before validation — `validate` checks for empty endpoint/bucket
+        // on S3 and we want those to be filled from the resource first.
+        crate::resource_overlay::overlay_file_ops_resources(&mut config, &run_context)?;
 
         ops::validate(&config)
             .map_err(|e| ExecutorError::Config(format!("file_ops validation: {e}")))?;

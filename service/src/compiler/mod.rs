@@ -9,6 +9,7 @@ mod pyio;
 pub(crate) mod human_task_refs;
 pub(crate) mod placeholder_refs;
 pub(crate) mod python_refs;
+pub(crate) mod resource_binding;
 pub mod resource_refs;
 pub(crate) mod schema_refs;
 mod rhai_gen;

@@ -2259,7 +2259,7 @@ pub(crate) fn automated_step_resource_borrow_plan(
     inline_sources: &std::collections::HashMap<String, std::collections::HashMap<String, String>>,
     known: &crate::compiler::resource_refs::KnownResources,
 ) -> Result<Vec<AutomatedStepResourceBorrow>, CompileError> {
-    use crate::models::template::ExecutionBackendType;
+    use crate::compiler::resource_binding::{collect_resource_heads, ScanCtx};
 
     if known.is_empty() {
         return Ok(Vec::new());
@@ -2273,63 +2273,13 @@ pub(crate) fn automated_step_resource_borrow_plan(
             continue;
         };
 
-        let heads: Vec<String> = match execution_spec.backend_type {
-            ExecutionBackendType::Python => {
-                let entrypoint = execution_spec
-                    .entrypoint
-                    .clone()
-                    .unwrap_or_else(|| "main.py".to_string());
-                let Some(node_files) = inline_sources.get(&node.id) else {
-                    continue;
-                };
-                let Some(source) = node_files.get(&entrypoint) else {
-                    continue;
-                };
-                crate::compiler::python_refs::extract_python_refs(source)
-                    .into_iter()
-                    .map(|r| r.head)
-                    .collect()
-            }
-            ExecutionBackendType::Smtp => {
-                // For SMTP we also pin the resource_alias declared on the
-                // config — even if the templates don't reference its public
-                // fields, the *transport* needs the resource binding. The
-                // launcher's ResourceResolver needs this hook to know which
-                // resource to splice for the alias name.
-                let mut heads: Vec<String> = smtp_template_placeholder_refs(&execution_spec.config)
-                    .into_iter()
-                    .map(|(head, _)| head)
-                    .collect();
-                if let Some(alias) = execution_spec
-                    .config
-                    .get("resource_alias")
-                    .and_then(|v| v.as_str())
-                {
-                    if !alias.is_empty() {
-                        heads.push(alias.to_string());
-                    }
-                }
-                heads
-            }
-            ExecutionBackendType::Llm => {
-                // LLM steps bind an OpenAI/Anthropic resource via
-                // `resource_alias`. Same envelope contract as SMTP — the
-                // backend's `prepare()` overlays api_key / base_url out of
-                // `<alias>.json`.
-                let mut heads: Vec<String> = Vec::new();
-                if let Some(alias) = execution_spec
-                    .config
-                    .get("resource_alias")
-                    .and_then(|v| v.as_str())
-                {
-                    if !alias.is_empty() {
-                        heads.push(alias.to_string());
-                    }
-                }
-                heads
-            }
-            _ => continue,
+        let ctx = ScanCtx {
+            config: &execution_spec.config,
+            node_id: &node.id,
+            inline_sources,
+            entrypoint: execution_spec.entrypoint.as_deref(),
         };
+        let heads = collect_resource_heads(&ctx, execution_spec.backend_type);
 
         for head in heads {
             let Some(info) = known.get(&head) else {

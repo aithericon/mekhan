@@ -250,6 +250,7 @@ mod tests {
             prefix: String::new(),
             credentials: StorageCredentials::default(),
             retry: Default::default(),
+            resource_alias: None,
         }
     }
 
@@ -727,6 +728,7 @@ mod tests {
             prefix: String::new(),
             credentials: StorageCredentials::default(),
             retry: Default::default(),
+            resource_alias: None,
         };
         let config = FileOpsConfig::Stat(StatConfig {
             path: "data/file.csv".into(),
