@@ -129,6 +129,14 @@ pub struct LlmConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
 
+    /// Optional workspace resource name (e.g. `openai_prod`) the LLM step is
+    /// bound to. When set, the compiler emits a ResourceEnvelope borrow that
+    /// stages `<resource_alias>.json` into the run dir; the backend overlays
+    /// the resource's `api_key` / `base_url` / `organization` on top of any
+    /// per-step values, so the step's authoring surface stays clean.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_alias: Option<String>,
+
     /// The user prompt to send to the LLM.
     pub prompt: String,
 
@@ -170,6 +178,7 @@ mod tests {
             model: "gpt-4o".into(),
             api_key: Some("sk-test".into()),
             base_url: None,
+            resource_alias: None,
             prompt: "Hello, world!".into(),
             system_prompt: Some("You are a helpful assistant.".into()),
             history: vec![ChatMessage {
@@ -237,6 +246,7 @@ mod tests {
             model: "qwen2.5:3b".into(),
             api_key: None,
             base_url: None,
+            resource_alias: None,
             prompt: "Hello".into(),
             system_prompt: None,
             history: vec![],

@@ -49,9 +49,10 @@ pub struct Postgres {
     pub sslmode: Option<String>,
 }
 
-/// OpenAI API credentials. Just the key — `base_url` overrides for self-
-/// hosted OpenAI-compatible endpoints belong on the workflow side, not in
-/// the resource (those are operational policy, not credentials).
+/// OpenAI API credentials + endpoint binding. `base_url` lives on the
+/// resource (not on the workflow step) so that self-hosted OpenAI-compatible
+/// endpoints — Azure, vLLM, a corp proxy — are paired with the matching key
+/// once and reused across every step that points at them.
 #[derive(ResourceType, Serialize, Deserialize, schemars::JsonSchema)]
 #[resource(name = "openai", display_name = "OpenAI", icon = "lucide-sparkles")]
 pub struct OpenAI {
@@ -61,6 +62,12 @@ pub struct OpenAI {
     /// to route bills correctly.
     #[serde(default)]
     pub organization: Option<String>,
+    /// Optional base URL override. Set this for OpenAI-compatible endpoints
+    /// — Azure OpenAI deployments, self-hosted vLLM/Ollama-OpenAI shims, or
+    /// internal proxies. Absent → the LLM backend uses the vendor default
+    /// (`https://api.openai.com/v1`).
+    #[serde(default)]
+    pub base_url: Option<String>,
 }
 
 /// Slack webhook target — v1 only supports incoming-webhook posting. Bot-

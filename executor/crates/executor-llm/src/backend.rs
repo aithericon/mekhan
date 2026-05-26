@@ -40,8 +40,16 @@ impl ExecutionBackend for LlmBackend {
         _job: &ExecutionJob,
         mut run_context: RunContext,
     ) -> Result<RunContext, ExecutorError> {
-        // Resolve {{input:NAME}} patterns in the raw config JSON.
-        let mut raw_config = run_context.spec.config.clone();
+        // Start from the secret-resolved overlay when PlanSecretsHook has
+        // populated it (e.g. `api_key: {{secret:openai-api-key#login}}` from
+        // an `openai` resource), otherwise fall back to `spec.config`. We
+        // MUST NOT read `spec.config` directly — it still carries the
+        // unresolved `{{secret:...}}` templates and would feed them straight
+        // into the provider adapter as a Bearer token.
+        let mut raw_config = run_context
+            .resolved_config
+            .clone()
+            .unwrap_or_else(|| run_context.spec.config.clone());
         aithericon_executor_backend::resolve::resolve_inputs(
             &mut raw_config,
             &run_context.staged_inputs,
@@ -49,8 +57,21 @@ impl ExecutionBackend for LlmBackend {
         .map_err(|e| ExecutorError::Config(format!("llm input resolution: {e}")))?;
 
         // Deserialize resolved config
-        let config: LlmConfig = serde_json::from_value(raw_config)
+        let mut config: LlmConfig = serde_json::from_value(raw_config)
             .map_err(|e| ExecutorError::Config(format!("invalid llm backend config: {e}")))?;
+
+        // Resource binding: when the step is bound to a workspace resource
+        // (e.g. `openai_prod`), the compiler stages `<alias>.json` into the
+        // run dir's inputs via a ResourceEnvelope borrow. PlanSecretsHook
+        // resolves any `{{secret:...}}` refs in that file at staging time, so
+        // it carries plaintext credentials by the time we read it. Per-step
+        // overrides (set in the LLM panel) WIN over resource values — that
+        // matches how SMTP treats `from` against `from_address`.
+        if let Some(alias) = config.resource_alias.clone() {
+            if !alias.is_empty() {
+                overlay_resource(&mut config, &alias, &run_context)?;
+            }
+        }
 
         // Validate: model must be non-empty
         if config.model.is_empty() {
@@ -126,7 +147,16 @@ impl ExecutionBackend for LlmBackend {
 
         // Merge config-level api_key and base_url into env so adapters can
         // find them alongside process-level environment variables.
+        //
+        // Overlay `resolved_env` on top of `env`: any env entry that carried
+        // a `{{secret:KEY}}` template has its plaintext in `resolved_env`
+        // courtesy of `PlanSecretsHook`. Without this overlay, an env-routed
+        // `OPENAI_API_KEY={{secret:...}}` would reach the adapter as the
+        // literal template string (and produce a 401 from the provider).
         let mut env = run_context.env.clone();
+        for (k, v) in &run_context.resolved_env {
+            env.insert(k.clone(), v.clone());
+        }
         if let Some(ref api_key) = config.api_key {
             // Set the provider-specific env var key
             let env_key = match config.provider {
@@ -364,6 +394,64 @@ impl ExecutionBackend for LlmBackend {
     fn supports(&self, spec: &ExecutionSpec) -> bool {
         spec.backend == "llm"
     }
+}
+
+// ---------------------------------------------------------------------------
+// Resource envelope overlay
+// ---------------------------------------------------------------------------
+
+/// Read `<alias>.json` from the staged-inputs side-channel and overlay the
+/// fields the LLM backend cares about (`api_key`, `base_url`, `organization`)
+/// onto the deserialized config. Per-step values, when set, take precedence —
+/// callers can still pin a one-off api_key on a single step without touching
+/// the resource.
+fn overlay_resource(
+    config: &mut LlmConfig,
+    alias: &str,
+    run_context: &RunContext,
+) -> Result<(), ExecutorError> {
+    let filename = format!("{alias}.json");
+    let candidate_path = run_context
+        .staged_inputs
+        .get(&filename)
+        .cloned()
+        .unwrap_or_else(|| run_context.run_dir.inputs_dir.join(&filename));
+    if !candidate_path.exists() {
+        return Err(ExecutorError::Config(format!(
+            "llm backend: resource '{alias}' not staged as <alias>.json — the compiler must \
+             emit a ResourceEnvelope borrow for this LLM step"
+        )));
+    }
+    let bytes = std::fs::read(&candidate_path).map_err(|e| {
+        ExecutorError::Config(format!(
+            "llm backend: cannot read staged resource envelope {}: {e}",
+            candidate_path.display()
+        ))
+    })?;
+    let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| {
+        ExecutorError::Config(format!(
+            "llm backend: staged resource envelope {} is not JSON: {e}",
+            candidate_path.display()
+        ))
+    })?;
+    let obj = value.as_object().ok_or_else(|| {
+        ExecutorError::Config(format!(
+            "llm backend: resource envelope {} must be a JSON object",
+            candidate_path.display()
+        ))
+    })?;
+
+    if config.api_key.is_none() {
+        if let Some(v) = obj.get("api_key").and_then(|v| v.as_str()) {
+            config.api_key = Some(v.to_string());
+        }
+    }
+    if config.base_url.is_none() {
+        if let Some(v) = obj.get("base_url").and_then(|v| v.as_str()) {
+            config.base_url = Some(v.to_string());
+        }
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

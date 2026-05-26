@@ -5,6 +5,7 @@
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { FormField } from '$lib/components/ui/form-field';
 	import InsertRefButton from '../InsertRefButton.svelte';
+	import { listResources, type ResourceSummary } from '$lib/api/resources';
 	import type { ScopeEntry } from '$lib/editor/guard-scope';
 
 	type Props = {
@@ -16,6 +17,58 @@
 
 	let { config, readonly = false, onchange, scope = [] }: Props = $props();
 
+	// Per-provider resource type map — resource pickers are provider-scoped.
+	// Only `openai` has a workspace resource type today; `anthropic` / `ollama`
+	// fall back to manual api_key + base_url until those resource types ship.
+	const resourceTypeForProvider: Record<string, string | null> = {
+		openai: 'openai',
+		anthropic: null,
+		ollama: null
+	};
+
+	const providerLabels: Record<string, string> = {
+		openai: 'OpenAI',
+		anthropic: 'Anthropic',
+		ollama: 'Ollama'
+	};
+
+	const provider = $derived((config.provider as string) ?? 'openai');
+	const resourceType = $derived(resourceTypeForProvider[provider] ?? null);
+	const resourceAlias = $derived((config.resource_alias as string | undefined) ?? '');
+
+	let resources = $state<ResourceSummary[]>([]);
+	let resourcesLoading = $state(false);
+	let resourcesError = $state<string | null>(null);
+
+	async function loadResources(type: string | null) {
+		if (!type) {
+			resources = [];
+			resourcesError = null;
+			return;
+		}
+		resourcesLoading = true;
+		resourcesError = null;
+		try {
+			const page = await listResources({ resource_type: type, perPage: 200 });
+			resources = page.items;
+		} catch (e) {
+			resourcesError = e instanceof Error ? e.message : 'Failed to load resources';
+		} finally {
+			resourcesLoading = false;
+		}
+	}
+
+	// Initial load + reload when provider switches between resource-backed
+	// and inline-only. `$effect` runs after mount and any reactive update,
+	// so onMount isn't needed.
+	let lastLoadedType: string | null = null;
+	$effect(() => {
+		if (resourceType !== lastLoadedType) {
+			lastLoadedType = resourceType;
+			loadResources(resourceType);
+		}
+	});
+
 	function appendToField(field: 'prompt' | 'system_prompt', snippet: string) {
 		const curr = (config[field] as string | undefined) ?? '';
 		onchange({
@@ -24,11 +77,23 @@
 		});
 	}
 
-	const providerLabels: Record<string, string> = {
-		openai: 'OpenAI',
-		anthropic: 'Anthropic',
-		ollama: 'Ollama'
-	};
+	function setResourceAlias(alias: string) {
+		const next: Record<string, unknown> = { ...config };
+		if (alias) {
+			next.resource_alias = alias;
+		} else {
+			delete next.resource_alias;
+		}
+		onchange(next);
+	}
+
+	function selectedResourceLabel(): string {
+		if (!resourceAlias) {
+			return resourcesLoading ? 'Loading…' : 'None — provide credentials inline';
+		}
+		const found = resources.find((r) => r.path === resourceAlias);
+		return found ? `${found.path} — ${found.display_name}` : resourceAlias;
+	}
 
 	const responseFormatType = $derived(
 		((config.response_format as Record<string, unknown>)?.type as string) ?? 'text'
@@ -72,24 +137,65 @@
 	/>
 </FormField>
 
-<FormField label="API Key (optional)" for="llm-api-key">
+{#if resourceType}
+	<div class="space-y-1.5">
+		<FormField label="Credentials resource" for="llm-resource">
+			<Select.Root
+				type="single"
+				value={resourceAlias}
+				onValueChange={(v) => setResourceAlias(v ?? '')}
+				disabled={readonly || resourcesLoading}
+			>
+				<Select.Trigger disabled={readonly || resourcesLoading} data-testid="llm-resource-select">
+					<span class="truncate text-sm">{selectedResourceLabel()}</span>
+				</Select.Trigger>
+				<Select.Content>
+					<Select.Item value="" label="None — provide credentials inline" />
+					{#each resources as r (r.id)}
+						<Select.Item value={r.path} label={`${r.path} — ${r.display_name}`} />
+					{/each}
+				</Select.Content>
+			</Select.Root>
+		</FormField>
+		{#if resourcesError}
+			<p class="text-sm text-destructive">{resourcesError}</p>
+		{:else if resources.length === 0 && !resourcesLoading}
+			<p class="text-sm italic text-muted-foreground">
+				No {providerLabels[provider]} resources configured in this workspace.
+				Add one under <code class="font-mono">/resources</code> to share an API key across steps.
+			</p>
+		{:else if resourceAlias}
+			<p class="text-sm italic text-muted-foreground">
+				API key + base URL come from the resource. Fields below override them per step.
+			</p>
+		{/if}
+	</div>
+{/if}
+
+<FormField
+	label={resourceAlias ? 'API Key (override)' : 'API Key (optional)'}
+	for="llm-api-key"
+>
 	<Input
 		id="llm-api-key"
 		type="password"
 		value={(config.api_key as string) ?? ''}
-		placeholder="Falls back to env var"
+		placeholder={resourceAlias ? 'Inherits from resource' : 'Falls back to env var'}
 		disabled={readonly}
 		oninput={(e) =>
 			onchange({ ...config, api_key: (e.currentTarget as HTMLInputElement).value || undefined })}
 	/>
 </FormField>
 
-<FormField label="Base URL (optional)" for="llm-base-url">
+<FormField
+	label={resourceAlias ? 'Base URL (override)' : 'Base URL (optional)'}
+	for="llm-base-url"
+>
 	<Input
 		id="llm-base-url"
 		type="text"
 		value={(config.base_url as string) ?? ''}
-		placeholder="Custom endpoint or proxy"
+		placeholder={resourceAlias ? 'Inherits from resource' : 'Custom endpoint or proxy'}
 		disabled={readonly}
 		oninput={(e) =>
 			onchange({ ...config, base_url: (e.currentTarget as HTMLInputElement).value || undefined })}
