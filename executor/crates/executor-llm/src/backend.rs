@@ -5,6 +5,9 @@ use chrono::Utc;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
+use aithericon_executor_backend::outputs::{
+    fill_missing_declared, unpack_by_name, MissingOutputFallback,
+};
 use aithericon_executor_backend::traits::{ExecutionBackend, StatusCallback};
 use aithericon_executor_domain::{
     ExecutionJob, ExecutionOutcome, ExecutionResult, ExecutionSpec, ExecutionStatus, ExecutorError,
@@ -219,52 +222,24 @@ impl ExecutionBackend for LlmBackend {
                         // finish_reason/model) so workflow authors don't have to
                         // dodge vendor-side reserved names.
                         if let Some(ref extracted) = resp.structured_output {
-                            if let Some(obj) = extracted.as_object() {
-                                for decl in &run_context.spec.outputs {
-                                    if let Some(v) = obj.get(&decl.name) {
-                                        outputs.insert(decl.name.clone(), v.clone());
-                                    }
-                                }
-                            }
+                            unpack_by_name(&mut outputs, &run_context.spec.outputs, extracted);
                         }
 
-                        // Two fallbacks for declared outputs the per-key
-                        // unpack didn't fill:
-                        //
-                        //   - REQUIRED outputs get the whole
-                        //     `response_value`. Keeps single-output and
-                        //     non-structured shapes (free-text
-                        //     completions) working — a `prompt:
-                        //     "summarize this"` step with one declared
-                        //     `response` field would otherwise emit
-                        //     `outputs = {}` and the required-output
-                        //     check would fail.
-                        //
-                        //   - OPTIONAL outputs get `null`. The LLM
-                        //     legitimately leaves them missing when the
-                        //     response_format schema marks them
-                        //     omittable (e.g. `document_date` on a
-                        //     doc-classifier when the doc doesn't carry
-                        //     one). Filling with the full response
-                        //     object produces a typed-port mismatch
-                        //     downstream; OMITTING them makes downstream
-                        //     Python code that reads `classify.field`
-                        //     raise `AttributeError`. `null` is the
-                        //     Python-idiomatic middle ground — the
-                        //     parked envelope keeps the key, slug.field
-                        //     access returns `None`, and the engine's
-                        //     scalar schemas (see `TokenShape::to_json_schema`)
-                        //     allow null on declared scalars.
-                        for decl in &run_context.spec.outputs {
-                            if !outputs.contains_key(&decl.name) {
-                                let v = if decl.required {
-                                    response_value.clone()
-                                } else {
-                                    serde_json::Value::Null
-                                };
-                                outputs.insert(decl.name.clone(), v);
-                            }
-                        }
+                        // Fallback for declared outputs the per-key unpack
+                        // didn't fill: REQUIRED ports get the whole
+                        // `response_value` (keeps single-output / free-text
+                        // shapes working — a `prompt: "summarize"` step with
+                        // one declared `response` field would otherwise emit
+                        // `outputs = {}` and the required check would fail);
+                        // OPTIONAL ports get `null` (the LLM legitimately
+                        // omits them when response_format marks them
+                        // omittable — Python-idiomatic, schemas allow null on
+                        // declared scalars).
+                        fill_missing_declared(
+                            &mut outputs,
+                            &run_context.spec.outputs,
+                            MissingOutputFallback::RequiredOrNull(&response_value),
+                        );
 
                         // Write to expected_outputs file paths
                         for (name, path) in &run_context.expected_outputs {
