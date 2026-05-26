@@ -1,7 +1,7 @@
-//! End-to-end coverage of the shipped `vllm-smoke` demo against the live
-//! dev stack + a local vllm-metal server.
+//! End-to-end coverage of the shipped `llm-smoke` demo against the live
+//! dev stack + a local Ollama daemon.
 //!
-//! Loads `demos/vllm-smoke/` via [`mekhan_service::demos::load_demo`] — the
+//! Loads `demos/llm-smoke/` via [`mekhan_service::demos::load_demo`] — the
 //! same disk fixture the runtime seeder publishes at service startup — and
 //! drives it through:
 //!
@@ -11,26 +11,26 @@
 //! 3. POST `/api/v1/instances` with no `start_tokens` (Start's `initial.fields`
 //!    is `[]` — the workflow needs no inputs at all).
 //! 4. Wait for the AutomatedStep `ask` to dispatch via NATS → executor →
-//!    LlmBackend → HTTP `/v1/chat/completions` against vllm-metal at
-//!    `http://localhost:8000` → response → output port → End node.
+//!    LlmBackend → Ollama native `/api/chat` against the local daemon at
+//!    `http://localhost:11434` → response → output port → End node.
 //! 5. Assert the instance reaches `completed`. Reaching terminal `completed`
 //!    is a sufficient end-to-end proof: any LLM-side failure (network error,
-//!    auth, model-id mismatch, vllm-metal crash, timeout) surfaces as the
+//!    model not pulled, daemon crash, timeout) surfaces as the
 //!    AutomatedStep going `failed`, which the lifecycle listener propagates
 //!    to the instance as `failed` — NOT `completed`.
 //!
 //! Companion to `showcase_demo_e2e.rs` (HumanTask + Python branch). This
-//! test catches drift between the shipped vllm-smoke demo and the platform:
+//! test catches drift between the shipped llm-smoke demo and the platform:
 //! a new required field on `WorkflowNodeData`, an LLM compiler-validation
-//! tightening, an executor `llm` feature regression, a vllm-metal protocol
+//! tightening, an executor `llm` feature regression, an Ollama protocol
 //! shift — all surface as a publish-time compile error or a `failed`
 //! instance here, never on the user's first try.
 //!
 //! Requires:
 //!   - `just dev::up` (engine :3030, executor with `llm` feature, NATS :4333,
 //!     postgres :5439)
-//!   - `just dev::up-vllm` (vllm-metal at :8000 serving the model the demo
-//!     references — default `mlx-community/Qwen3.5-9B-MLX-4bit`)
+//!   - `just dev::up-ollama` (Ollama at :11434 with the model the demo
+//!     references — default `qwen3.5:9b`)
 //!
 //! Skipped (with a clear panic) if either is unreachable.
 //!
@@ -65,8 +65,8 @@ fn engine_nats_url() -> String {
     std::env::var("ENGINE_NATS_URL").unwrap_or_else(|_| common::nats_url())
 }
 
-fn vllm_url() -> String {
-    std::env::var("TEST_VLLM_URL").unwrap_or_else(|_| "http://localhost:8000".to_string())
+fn ollama_url() -> String {
+    std::env::var("TEST_OLLAMA_URL").unwrap_or_else(|_| "http://localhost:11434".to_string())
 }
 
 async fn engine_available() -> bool {
@@ -76,9 +76,9 @@ async fn engine_available() -> bool {
     )
 }
 
-async fn vllm_available() -> bool {
+async fn ollama_available() -> bool {
     matches!(
-        reqwest::get(format!("{}/v1/models", vllm_url())).await,
+        reqwest::get(format!("{}/api/tags", ollama_url())).await,
         Ok(r) if r.status().is_success()
     )
 }
@@ -152,7 +152,7 @@ fn demo_dir() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .expect("service crate has a parent")
-        .join("demos/vllm-smoke")
+        .join("demos/llm-smoke")
 }
 
 async fn wait_for_terminal_status(
@@ -179,18 +179,18 @@ async fn wait_for_terminal_status(
 }
 
 #[tokio::test]
-async fn vllm_smoke_demo_completes_against_local_vllm() {
+async fn llm_smoke_demo_completes_against_local_ollama() {
     if !engine_available().await {
         panic!(
             "engine not available at {} — start the stack with `just dev::up`",
             engine_url()
         );
     }
-    if !vllm_available().await {
+    if !ollama_available().await {
         panic!(
-            "vllm-metal not available at {} — start it with `just dev::up-vllm` \
-             (model must be loaded; check `.dev/log/vllm.log`)",
-            vllm_url()
+            "ollama not available at {} — start it with `just dev::up-ollama` \
+             (model must be pulled; check `.dev/log/ollama.log`)",
+            ollama_url()
         );
     }
 
@@ -209,12 +209,12 @@ async fn vllm_smoke_demo_completes_against_local_vllm() {
     // `00000000-0000-0000-0000-000000000020` is unaffected. The shape of
     // the graph comes straight from disk — drift between this fixture
     // and any platform contract surfaces here.
-    let demo = demos::load_demo(&demo_dir()).expect("load demos/vllm-smoke");
-    assert_eq!(demo.metadata.name, "vLLM Smoke Test");
+    let demo = demos::load_demo(&demo_dir()).expect("load demos/llm-smoke");
+    assert_eq!(demo.metadata.name, "LLM Smoke Test");
 
     // POST a fresh copy. Name is uniqued so successive runs can't collide
     // on any name constraint.
-    let unique_name = format!("vLLM Smoke E2E {}", Uuid::new_v4().simple());
+    let unique_name = format!("LLM Smoke E2E {}", Uuid::new_v4().simple());
     let resp = app
         .clone()
         .oneshot(
@@ -272,7 +272,7 @@ async fn vllm_smoke_demo_completes_against_local_vllm() {
                 .body(Body::from(
                     json!({
                         "template_id": template_id,
-                        "metadata": { "e2e": "vllm_smoke_demo" }
+                        "metadata": { "e2e": "llm_smoke_demo" }
                     })
                     .to_string(),
                 ))
@@ -293,10 +293,10 @@ async fn vllm_smoke_demo_completes_against_local_vllm() {
     let terminal = wait_for_terminal_status(&db, instance_id, Duration::from_secs(180)).await;
     assert_eq!(
         terminal, "completed",
-        "instance ended `{terminal}` — the vllm-smoke demo did not round-trip; \
-         check vllm-metal (.dev/log/vllm.log: model loaded? port 8000 listening?), \
-         the executor (.dev/log/executor.log: LLM backend dispatched? auth error?), \
-         and that the demo's model id matches what vllm-metal is serving"
+        "instance ended `{terminal}` — the llm-smoke demo did not round-trip; \
+         check ollama (.dev/log/ollama.log: model pulled? port 11434 listening?), \
+         the executor (.dev/log/executor.log: LLM backend dispatched? model name match?), \
+         and that the demo's model id matches what ollama has pulled"
     );
 
     cleanup_durables(&cleanup_nats).await;
