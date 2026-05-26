@@ -96,7 +96,7 @@ steps:
       # last commit that has matching images in the registry. Bump this
       # manually after each manual rebuild, or switch back to
       # "$CI_COMMIT_SHA" when 30-build is re-enabled.
-      - just ci::deploy-dev "c8548f11f9da15523ab164b4bc7cdec09482cc35"
+      - just ci::deploy-dev "9f922a0"
     depends_on: []
 
   - name: verify-dev
