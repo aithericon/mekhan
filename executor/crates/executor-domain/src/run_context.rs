@@ -20,10 +20,12 @@ use crate::run_dir::RunDirectory;
 /// plaintext is **never** serialized to disk (no `context.json` leak — Gap #1).
 /// The on-disk shape carries only the unresolved templates:
 ///
-/// * `env`, `spec.config`, `spec.inputs[].source.storage`,
-///   `spec.outputs[].upload_to.storage` — serialized, may contain `{{secret:KEY}}`
+/// * `env`, `spec.config`, `spec.inputs[].source.value`,
+///   `spec.inputs[].source.storage`, `spec.outputs[].upload_to.storage` —
+///   serialized, may contain `{{secret:KEY}}`
 /// * `resolved_env`, `resolved_config`, `resolved_input_storage`,
-///   `resolved_output_storage` — `#[serde(skip)]`, populated by `PlanSecretsHook`
+///   `resolved_output_storage`, `resolved_inline_inputs` — `#[serde(skip)]`,
+///   populated by `PlanSecretsHook`
 ///
 /// Backends read from the `resolved_*` side-channel when spawning child
 /// processes (`Command::env(k, v)`) or making outbound HTTP requests. The
@@ -82,6 +84,19 @@ pub struct RunContext {
     /// `spec.outputs[].upload_to.storage` when present.
     #[serde(skip)]
     pub resolved_output_storage: HashMap<String, serde_json::Value>,
+
+    /// Resolved inline input JSON values. NEVER serialized.
+    ///
+    /// Keyed by input name. Populated for any `spec.inputs[].source =
+    /// Inline { value }` whose `value` carried `{{secret:KEY}}` templates.
+    /// `StageInputsHook` reads this instead of `value` when present, so the
+    /// staged input file on disk receives plaintext while `spec.inputs[]`
+    /// (and therefore `context.json`) keeps the unresolved template.
+    ///
+    /// This is the path the compiler-emitted `__resources["<slug>"]` envelope
+    /// flows through (Python AutomatedSteps read `<slug>.json` directly).
+    #[serde(skip)]
+    pub resolved_inline_inputs: HashMap<String, serde_json::Value>,
 
     /// Metadata echoed through status updates.
     #[serde(default)]
@@ -145,6 +160,13 @@ impl fmt::Debug for RunContext {
                     self.resolved_output_storage.len()
                 ),
             )
+            .field(
+                "resolved_inline_inputs",
+                &format_args!(
+                    "<{} resolved entries, elided>",
+                    self.resolved_inline_inputs.len()
+                ),
+            )
             .field("metadata", &self.metadata)
             .field("staged_inputs", &self.staged_inputs)
             .field("expected_outputs", &self.expected_outputs)
@@ -180,6 +202,7 @@ mod tests {
             resolved_config: None,
             resolved_input_storage: HashMap::new(),
             resolved_output_storage: HashMap::new(),
+            resolved_inline_inputs: HashMap::new(),
             metadata: HashMap::from([("user".into(), "alice".into())]),
             staged_inputs: Default::default(),
             expected_outputs: Default::default(),
@@ -220,6 +243,10 @@ mod tests {
                 "o1".into(),
                 serde_json::json!({"key": "PLAINTEXT-VALUE-XYZ"}),
             )]),
+            resolved_inline_inputs: HashMap::from([(
+                "local_pg.json".into(),
+                serde_json::json!({"password": "PLAINTEXT-VALUE-XYZ"}),
+            )]),
             metadata: HashMap::new(),
             staged_inputs: Default::default(),
             expected_outputs: Default::default(),
@@ -236,12 +263,14 @@ mod tests {
         assert!(!json.contains("resolved_config"));
         assert!(!json.contains("resolved_input_storage"));
         assert!(!json.contains("resolved_output_storage"));
+        assert!(!json.contains("resolved_inline_inputs"));
 
         let deserialized: RunContext = serde_json::from_str(&json).unwrap();
         assert!(deserialized.resolved_env.is_empty());
         assert!(deserialized.resolved_config.is_none());
         assert!(deserialized.resolved_input_storage.is_empty());
         assert!(deserialized.resolved_output_storage.is_empty());
+        assert!(deserialized.resolved_inline_inputs.is_empty());
 
         // Sanity: the Debug impl must not include plaintext either.
         ctx.resolved_env.insert("K".into(), "SECRET".into());

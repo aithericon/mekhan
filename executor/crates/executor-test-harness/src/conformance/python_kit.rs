@@ -119,6 +119,7 @@ impl BackendTestKit for PythonTestKit {
             resolved_config: None,
             resolved_input_storage: HashMap::new(),
             resolved_output_storage: HashMap::new(),
+            resolved_inline_inputs: HashMap::new(),
             metadata: HashMap::new(),
             staged_inputs: HashMap::new(),
             expected_outputs: HashMap::new(),

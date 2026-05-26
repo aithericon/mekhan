@@ -317,8 +317,18 @@ impl StagingHook for StageInputsHook {
         for input in inputs {
             match &input.source {
                 aithericon_executor_domain::InputSource::Inline { value } => {
+                    // Prefer the resolved value from PlanSecretsHook's
+                    // side-channel — `value` itself still carries
+                    // `{{secret:KEY}}` templates, so writing it verbatim
+                    // would land the unresolved placeholder in the input
+                    // file the child reads (e.g. Python's AccessibleDict
+                    // would surface the literal "{{secret:...}}" string).
+                    let effective_value = ctx
+                        .resolved_inline_inputs
+                        .get(&input.name)
+                        .unwrap_or(value);
                     let dest = ctx.run_dir.inputs_dir.join(&input.name);
-                    let data = serde_json::to_vec_pretty(value).map_err(|e| {
+                    let data = serde_json::to_vec_pretty(effective_value).map_err(|e| {
                         ExecutorError::StagingFailed(format!(
                             "failed to serialize inline input '{}': {e}",
                             input.name
@@ -749,9 +759,35 @@ impl StagingHook for PlanSecretsHook {
             }
         }
 
+        // 5. Plan resolved inline input JSON values WITHOUT mutating
+        //    spec.inputs[].source.value. `StageInputsHook` reads
+        //    `resolved_inline_inputs` first, falling back to `value`.
+        //
+        //    This is the path the compiler-emitted `__resources["<slug>"]`
+        //    envelope flows through — secret fields are spliced into the AIR
+        //    as `{{secret:KEY}}` strings, ride into the prepare transition's
+        //    `job_inputs[].source.value`, and need to be resolved before
+        //    `StageInputsHook` writes `<slug>.json` to the inputs dir (which
+        //    the Python runner loads as an `AccessibleDict` global).
+        for input in ctx.spec.inputs.iter() {
+            if let aithericon_executor_domain::InputSource::Inline { value } = &input.source {
+                if json_contains_secret_template(value) {
+                    let resolved =
+                        aithericon_secrets::resolve_secrets(value, effective_store.as_ref())
+                            .await
+                            .map_err(|e| {
+                                ExecutorError::SecretResolutionFailed(e.to_string())
+                            })?;
+                    ctx.resolved_inline_inputs
+                        .insert(input.name.clone(), resolved);
+                }
+            }
+        }
+
         debug!(
             resolved_env_count = ctx.resolved_env.len(),
             resolved_config = ctx.resolved_config.is_some(),
+            resolved_inline_input_count = ctx.resolved_inline_inputs.len(),
             "planned secrets into RunContext side-channel"
         );
         Ok(ctx)
@@ -816,6 +852,7 @@ mod tests {
             resolved_config: None,
             resolved_input_storage: HashMap::new(),
             resolved_output_storage: HashMap::new(),
+            resolved_inline_inputs: HashMap::new(),
             metadata: HashMap::new(),
             staged_inputs: HashMap::new(),
             expected_outputs: HashMap::new(),

@@ -277,6 +277,7 @@ fn make_run_context(spec: ExecutionSpec, timeout: Duration, tenant_id: Uuid) -> 
         resolved_config: None,
         resolved_input_storage: HashMap::new(),
         resolved_output_storage: HashMap::new(),
+        resolved_inline_inputs: HashMap::new(),
         metadata,
         staged_inputs: HashMap::new(),
         expected_outputs: HashMap::new(),
@@ -477,6 +478,7 @@ async fn fail_closed_when_tenant_metadata_missing() {
         resolved_config: None,
         resolved_input_storage: HashMap::new(),
         resolved_output_storage: HashMap::new(),
+        resolved_inline_inputs: HashMap::new(),
         metadata: HashMap::new(), // <-- intentionally empty
         staged_inputs: HashMap::new(),
         expected_outputs: HashMap::new(),

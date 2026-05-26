@@ -34,12 +34,14 @@ work_dir  := ".dev/work"
 # included so demo 07 (OCR + LLM classification) works out of the box —
 # first build pulls heavy pdfium deps, but the cached rebuild cost is
 # normal.
-executor_features := "docker,python,http,http-cancel,file-ops,opendal-s3,url-inputs,llm,kreuzberg"
+executor_features := "docker,python,http,http-cancel,file-ops,opendal-s3,url-inputs,llm,kreuzberg,smtp,vault"
 
 # Local infra endpoints (also baked into service/mekhan.toml + engine env)
 nats_url     := "nats://localhost:4333"
 database_url := "postgres://mekhan:mekhan@localhost:5439/mekhan"
 s3_endpoint  := "http://localhost:9005"
+vault_addr   := "http://localhost:8200"
+vault_token  := "root"
 
 # ── Entrypoints ──────────────────────────────────────────────────────────────
 
@@ -153,7 +155,7 @@ openapi:
 # ── Infra ────────────────────────────────────────────────────────────────────
 
 _infra-up:
-    @echo "▶ infra up (postgres + nats + rustfs)…"
+    @echo "▶ infra up (postgres + nats + rustfs + vault)…"
     @docker compose up -d
 
 _infra-down:
@@ -193,6 +195,11 @@ _wait-infra:
     echo "▶ waiting for rustfs…"
     for _ in $(seq 1 30); do
       curl -sf "{{s3_endpoint}}/" >/dev/null 2>&1 && break
+      sleep 1
+    done
+    echo "▶ waiting for vault…"
+    for _ in $(seq 1 30); do
+      curl -sf "{{vault_addr}}/v1/sys/health?standbyok=true" >/dev/null 2>&1 && break
       sleep 1
     done
 
@@ -279,6 +286,54 @@ up-ollama:
 down-ollama:
     @just dev::_kill ollama
 
+# ── MailHog (test SMTP capture server) ───────────────────────────────────────
+#
+# MailHog is a tiny SMTP-receiving service that captures every message and
+# exposes them through an HTTP API + web UI. Used by the SMTP executor
+# backend in dev/test:
+#   • SMTP port:  1025   (point your `mail` resource at host=localhost port=1025)
+#   • Web UI:     8025   (browse received messages)
+#   • API:        8025/api/v1/messages
+#
+# Requires Docker (idempotent: re-running just makes the container available
+# again; pre-existing containers are detected and reused).
+#
+# Env:
+#   MAILHOG_TAG  — image tag (default `mailhog/mailhog:latest`)
+mailhog-up:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    tag="${MAILHOG_TAG:-mailhog/mailhog:latest}"
+    container="mekhan-mailhog"
+    if docker ps --format '{{{{.Names}}}}' | grep -Fxq "$container"; then
+      echo "  ✓ mailhog already running (container: $container)"
+      echo "    SMTP   localhost:1025"
+      echo "    UI     http://localhost:8025"
+      exit 0
+    fi
+    if docker ps -a --format '{{{{.Names}}}}' | grep -Fxq "$container"; then
+      docker start "$container" >/dev/null
+    else
+      echo "▶ starting mailhog (image: $tag) — SMTP :1025, UI :8025"
+      docker run -d --rm --name "$container" \
+        -p 1025:1025 -p 8025:8025 \
+        "$tag" >/dev/null
+    fi
+    echo "  ✓ mailhog up"
+    echo "    SMTP   localhost:1025  (host=localhost port=1025 in your `smtp` resource)"
+    echo "    UI     http://localhost:8025  (received messages land here)"
+
+mailhog-down:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    container="mekhan-mailhog"
+    if docker ps --format '{{{{.Names}}}}' | grep -Fxq "$container"; then
+      docker stop "$container" >/dev/null
+      echo "  ✓ mailhog stopped"
+    else
+      echo "  · mailhog not running"
+    fi
+
 # ── Executor (aithericon-executor-service, daemon mode) ──────────────────────
 
 up-executor:
@@ -337,8 +392,12 @@ up-executor:
     echo "▶ starting executor…"
     # CWD must contain executor.toml — executor loads `./executor.toml`.
     # Use bash -c so we can `cd` before exec inside nohup's child shell.
+    # VAULT_ADDR is set so PlanSecretsHook can unwrap per-job wrapping tokens
+    # the engine attaches; VAULT_TOKEN is intentionally NOT set on the
+    # executor — it authenticates by exchanging the wrapping token itself.
     bin="$PWD/executor/target/debug/aithericon-executor-service"
     nohup env RUST_LOG="info,aithericon_executor=debug" \
+      VAULT_ADDR="{{vault_addr}}" \
       bash -c 'cd "{{work_dir}}/executor" && exec "$0"' "$bin" \
       > "{{log_dir}}/executor.log" 2>&1 &
     echo $! > "{{pid_dir}}/executor.pid"
@@ -396,12 +455,20 @@ up-engine scheduler="off":
     fi
 
     echo "▶ starting engine on :3030…"
+    # VAULT_ADDR + VAULT_TOKEN flip the engine's `executor-vault-secrets`
+    # path on: at job-submit time it scans the spec for secret-template
+    # refs, resolves them via VaultSecretStore, and wraps them into a
+    # single-use wrapping token attached to the job. Without these env
+    # vars, secrets travel unresolved and the executor's PlanSecretsHook
+    # falls back to EnvVarSecretStore (which can't resolve resource paths).
     nohup env \
       RUST_LOG="info,petri_application=debug,petri_api=debug" \
       NATS_URL="{{nats_url}}" \
       EXECUTOR_NATS_URL="{{nats_url}}" \
       EXECUTOR_ENABLED="true" \
       EXECUTOR_NAMESPACE="executor" \
+      VAULT_ADDR="{{vault_addr}}" \
+      VAULT_TOKEN="{{vault_token}}" \
       PORT="3030" \
       "$PWD/engine/target/debug/core-engine" \
       > "{{log_dir}}/engine.log" 2>&1 &
@@ -808,6 +875,11 @@ up-mekhan auth_mode="dev_noop":
       mode_assign="MEKHAN__AUTH__MODE=dev_noop"
       echo "▶ starting mekhan-service on :3100 (auth: dev_noop — offline)…"
     fi
+    # VAULT_ADDR + VAULT_TOKEN promote the resource_store from the
+    # in-memory placeholder (which loses secrets on every mekhan restart)
+    # to a real VaultResourceStore. Resource secrets created via the
+    # `/api/resources` CRUD path now land in Vault and survive restarts
+    # (until `just dev reset` wipes the dev vault container).
     nohup env \
       RUST_LOG="info,mekhan_service=debug" \
       MEKHAN__DATABASE_URL="{{database_url}}" \
@@ -818,6 +890,8 @@ up-mekhan auth_mode="dev_noop":
       MEKHAN__S3__SECRET_KEY="rustfsadmin" \
       MEKHAN__DEMOS__SEED="true" \
       MEKHAN__DEMOS__DIR="$PWD/demos" \
+      VAULT_ADDR="{{vault_addr}}" \
+      VAULT_TOKEN="{{vault_token}}" \
       ${mode_assign:+"$mode_assign"} \
       "$PWD/target/debug/mekhan-service" \
       > "{{log_dir}}/mekhan.log" 2>&1 &
@@ -895,6 +969,7 @@ _summary auth="DISABLED (dev_noop) — every request is the dev user":
     @echo "  postgres   → localhost:5439              (db: mekhan / user: mekhan / pw: mekhan)"
     @echo "  nats       → localhost:4333              (http monitor: http://localhost:8333)"
     @echo "  rustfs     → http://localhost:9005       (console: http://localhost:9006 / admin: rustfsadmin)"
+    @echo "  vault      → http://localhost:8200       (dev mode; root token: root; KV v2 at secret/)"
     @echo "  ollama     → http://localhost:11434      (native /api/chat; up if installed, see just/dev.just::up-ollama)"
     @echo "  executor   → daemon (NATS-driven)        (cancel: http://localhost:3105)"
     @echo "  engine     → http://localhost:3030"

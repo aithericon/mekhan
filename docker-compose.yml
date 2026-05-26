@@ -31,6 +31,34 @@ services:
       timeout: 3s
       retries: 5
 
+  # ── Vault: local secret store for the `resources` subsystem ──────────────
+  # Runs in -dev mode: root token "root", in-memory storage (wiped on restart),
+  # KV v2 auto-mounted at `secret/`. Mekhan-service writes resource secrets to
+  # `secret/data/aithericon/resources/{workspace}/{resource}/v{version}`;
+  # mekhan + engine read with VAULT_TOKEN, executor unwraps per-job wrapping
+  # tokens with VAULT_ADDR alone.
+  #
+  # NOT FOR PRODUCTION — dev mode disables persistence + uses an HTTP listener
+  # with a known root token. `just dev reset` wipes the container (along with
+  # pg/nats/rustfs) so resources start clean.
+  vault:
+    image: hashicorp/vault:1.18
+    container_name: mekhan-vault
+    cap_add:
+      - IPC_LOCK
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: "root"
+      VAULT_DEV_LISTEN_ADDRESS: "0.0.0.0:8200"
+      VAULT_ADDR: "http://127.0.0.1:8200"
+    ports:
+      - "8200:8200"
+    healthcheck:
+      # Dev mode: unsealed + active from boot. 200 = standby-allowed active leader.
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8200/v1/sys/health?standbyok=true"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   rustfs:
     image: rustfs/rustfs:latest
     container_name: mekhan-rustfs

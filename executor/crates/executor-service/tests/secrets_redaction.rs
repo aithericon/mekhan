@@ -23,7 +23,8 @@ use tokio_util::sync::CancellationToken;
 use aithericon_executor_backend::ExecutionBackend;
 use aithericon_executor_process::{ProcessBackend, ProcessConfig};
 use aithericon_executor_domain::{
-    ExecutionJob, ExecutionStatus, JobPriority, RunContext, RunDirectory,
+    ExecutionJob, ExecutionStatus, InputDeclaration, InputSource, JobPriority, RunContext,
+    RunDirectory,
 };
 use aithericon_executor_worker::staging::default_pipeline;
 use aithericon_secrets::{SecretError, SecretStore};
@@ -141,6 +142,7 @@ async fn secret_template_stays_on_disk_plaintext_only_reaches_child() {
         resolved_config: None,
         resolved_input_storage: HashMap::new(),
         resolved_output_storage: HashMap::new(),
+        resolved_inline_inputs: HashMap::new(),
         metadata: HashMap::new(),
         staged_inputs: HashMap::new(),
         expected_outputs: HashMap::new(),
@@ -314,6 +316,7 @@ async fn no_secret_store_means_no_resolution_at_all() {
         resolved_config: None,
         resolved_input_storage: HashMap::new(),
         resolved_output_storage: HashMap::new(),
+        resolved_inline_inputs: HashMap::new(),
         metadata: HashMap::new(),
         staged_inputs: HashMap::new(),
         expected_outputs: HashMap::new(),
@@ -335,6 +338,261 @@ async fn no_secret_store_means_no_resolution_at_all() {
     let on_disk = std::fs::read_to_string(&ctx.run_dir.context_file).unwrap();
     assert!(on_disk.contains("{{secret:TEST_API_KEY}}"));
     assert!(!on_disk.contains(SECRET_PLAINTEXT));
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// Python-AutomatedStep × resource flow.
+///
+/// The service-side compiler synthesizes `job_inputs = [{ name: "<slug>.json",
+/// source: { type: "inline", value: { ..., "<secret_field>":
+/// "{{secret:<vault_path>#<field>}}", ... } }]` for every resource a Python
+/// step reads. The Python runner then loads each `<slug>.json` as an
+/// `AccessibleDict` global so user code can write `local_pg.password` directly.
+///
+/// Until this fix, `PlanSecretsHook` resolved `{{secret:...}}` only in env
+/// vars / config / storage credentials — NOT in inline input values — so the
+/// `<slug>.json` file ended up on disk carrying the unresolved placeholder
+/// string, and the Python runner surfaced the literal template to user code
+/// (observed bug: `Your password is {{secret:...}}` in dev logs).
+///
+/// This test locks down the fix: an inline input whose JSON contains a
+/// `{{secret:KEY}}` reference must be:
+///   1. resolved to plaintext in the staged file on disk (what the child reads)
+///   2. kept as the unresolved template in `spec.inputs` (and therefore in
+///      `context.json`) — defense in depth
+///   3. populated in the `resolved_inline_inputs` side-channel
+#[tokio::test]
+async fn inline_input_secret_is_resolved_in_staged_file_only() {
+    const RESOURCE_FIELD_PLAINTEXT: &str = "PLAINTEXT-PG-PASSWORD-XYZ";
+    const RESOURCE_SECRET_KEY: &str =
+        "aithericon/resources/00000000-0000-0000-0000-000000000000/r-abc/v1#login";
+
+    let secret_store = Arc::new(InMemoryStore(HashMap::from([(
+        RESOURCE_SECRET_KEY.to_string(),
+        RESOURCE_FIELD_PLAINTEXT.to_string(),
+    )])));
+
+    let tmp = std::env::temp_dir().join(format!(
+        "secrets-inline-{}-{}",
+        std::process::id(),
+        uuid_like()
+    ));
+
+    let pipeline = default_pipeline(
+        tmp.clone(),
+        None,
+        Some(secret_store.clone() as Arc<dyn SecretStore>),
+        None,
+        None,
+    );
+
+    let backend = ProcessBackend::new();
+
+    // Mimic what the compiler emits: an inline input named `local_pg.json`
+    // whose value is the resource envelope. `host` is public; `password` is
+    // a `{{secret:...}}` template that PlanSecretsHook must resolve before
+    // StageInputsHook writes the file.
+    let inline_envelope = serde_json::json!({
+        "host": "db.example.com",
+        "port": 5432,
+        "password": format!("{{{{secret:{}}}}}", RESOURCE_SECRET_KEY),
+    });
+
+    let mut spec = ProcessConfig {
+        command: "true".into(), // we don't need to exec; only stage
+        args: vec![],
+        env: HashMap::new(),
+        working_dir: None,
+        inherit_env: false,
+    }
+    .into_spec();
+    spec.inputs = vec![InputDeclaration {
+        name: "local_pg.json".into(),
+        source: InputSource::Inline {
+            value: inline_envelope.clone(),
+        },
+        required: true,
+    }];
+
+    let execution_id = format!("secrets-inline-{}", uuid_like());
+    let job = ExecutionJob {
+        execution_id: execution_id.clone(),
+        spec: spec.clone(),
+        metadata: HashMap::new(),
+        timeout: Some(Duration::from_secs(30)),
+        priority: JobPriority::Medium,
+        stream_events: None,
+        wrapped_secrets: None,
+    };
+
+    let run_dir = RunDirectory::new(&tmp, &execution_id);
+    let initial_ctx = RunContext {
+        execution_id: execution_id.clone(),
+        spec: spec.clone(),
+        run_dir: run_dir.clone(),
+        timeout: Duration::from_secs(30),
+        env: HashMap::new(),
+        resolved_env: HashMap::new(),
+        resolved_config: None,
+        resolved_input_storage: HashMap::new(),
+        resolved_output_storage: HashMap::new(),
+        resolved_inline_inputs: HashMap::new(),
+        metadata: HashMap::new(),
+        staged_inputs: HashMap::new(),
+        expected_outputs: HashMap::new(),
+        staged_events: Vec::new(),
+        backend_state: serde_json::Value::Null,
+    };
+
+    let ctx = pipeline
+        .prepare(&job, initial_ctx, &backend as &dyn ExecutionBackend)
+        .await
+        .expect("staging pipeline failed");
+
+    // (1) The staged file on disk must contain the resolved plaintext —
+    //     that's what the Python runner reads and promotes to AccessibleDict.
+    let staged_path = ctx
+        .staged_inputs
+        .get("local_pg.json")
+        .expect("local_pg.json should have been staged");
+    let staged_contents =
+        std::fs::read_to_string(staged_path).expect("staged file must exist");
+    assert!(
+        staged_contents.contains(RESOURCE_FIELD_PLAINTEXT),
+        "staged inputs/local_pg.json must contain the resolved plaintext, got: {staged_contents}"
+    );
+    assert!(
+        !staged_contents.contains("{{secret:"),
+        "staged inputs/local_pg.json must NOT carry the unresolved template, got: {staged_contents}"
+    );
+    // Public fields ride through untouched.
+    assert!(staged_contents.contains("db.example.com"));
+
+    // (2) context.json must keep the unresolved template — plaintext never
+    //     touches the serialized spec.
+    let on_disk_context = std::fs::read_to_string(&ctx.run_dir.context_file)
+        .expect("context.json must have been written");
+    assert!(
+        on_disk_context.contains("{{secret:"),
+        "context.json must preserve the unresolved template in spec.inputs[].source.value"
+    );
+    assert!(
+        !on_disk_context.contains(RESOURCE_FIELD_PLAINTEXT),
+        "context.json must NOT contain resolved plaintext, got: {on_disk_context}"
+    );
+    assert!(
+        !on_disk_context.contains("resolved_inline_inputs"),
+        "the #[serde(skip)] field name must not appear in context.json"
+    );
+
+    // (3) The side-channel carries the resolved envelope keyed by input name.
+    let resolved = ctx
+        .resolved_inline_inputs
+        .get("local_pg.json")
+        .expect("resolved_inline_inputs side-channel must be populated");
+    assert_eq!(
+        resolved.get("password").and_then(|v| v.as_str()),
+        Some(RESOURCE_FIELD_PLAINTEXT)
+    );
+    assert_eq!(
+        resolved.get("host").and_then(|v| v.as_str()),
+        Some("db.example.com")
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// Inline inputs with no `{{secret:...}}` template must NOT trigger
+/// resolution — `resolved_inline_inputs` stays empty, and `StageInputsHook`
+/// writes the inline value verbatim. Locks down the no-secrets fast path so
+/// a future regression doesn't synthesize side-channel entries for every
+/// inline input.
+#[tokio::test]
+async fn inline_input_without_secret_template_is_not_diverted() {
+    let secret_store = Arc::new(InMemoryStore(HashMap::from([(
+        "UNUSED".into(),
+        "unused-value".into(),
+    )])));
+
+    let tmp = std::env::temp_dir().join(format!(
+        "secrets-inline-bypass-{}-{}",
+        std::process::id(),
+        uuid_like()
+    ));
+
+    let pipeline = default_pipeline(
+        tmp.clone(),
+        None,
+        Some(secret_store.clone() as Arc<dyn SecretStore>),
+        None,
+        None,
+    );
+
+    let backend = ProcessBackend::new();
+
+    let inline_envelope = serde_json::json!({"key": "plain-value", "n": 42});
+
+    let mut spec = ProcessConfig {
+        command: "true".into(),
+        args: vec![],
+        env: HashMap::new(),
+        working_dir: None,
+        inherit_env: false,
+    }
+    .into_spec();
+    spec.inputs = vec![InputDeclaration {
+        name: "plain.json".into(),
+        source: InputSource::Inline {
+            value: inline_envelope.clone(),
+        },
+        required: true,
+    }];
+
+    let execution_id = format!("secrets-inline-bypass-{}", uuid_like());
+    let job = ExecutionJob {
+        execution_id: execution_id.clone(),
+        spec: spec.clone(),
+        metadata: HashMap::new(),
+        timeout: Some(Duration::from_secs(30)),
+        priority: JobPriority::Medium,
+        stream_events: None,
+        wrapped_secrets: None,
+    };
+
+    let run_dir = RunDirectory::new(&tmp, &execution_id);
+    let initial_ctx = RunContext {
+        execution_id: execution_id.clone(),
+        spec: spec.clone(),
+        run_dir: run_dir.clone(),
+        timeout: Duration::from_secs(30),
+        env: HashMap::new(),
+        resolved_env: HashMap::new(),
+        resolved_config: None,
+        resolved_input_storage: HashMap::new(),
+        resolved_output_storage: HashMap::new(),
+        resolved_inline_inputs: HashMap::new(),
+        metadata: HashMap::new(),
+        staged_inputs: HashMap::new(),
+        expected_outputs: HashMap::new(),
+        staged_events: Vec::new(),
+        backend_state: serde_json::Value::Null,
+    };
+
+    let ctx = pipeline
+        .prepare(&job, initial_ctx, &backend as &dyn ExecutionBackend)
+        .await
+        .expect("staging pipeline failed");
+
+    assert!(
+        ctx.resolved_inline_inputs.is_empty(),
+        "no secret template → resolved_inline_inputs must stay empty"
+    );
+
+    let staged_path = ctx.staged_inputs.get("plain.json").unwrap();
+    let staged = std::fs::read_to_string(staged_path).unwrap();
+    assert!(staged.contains("plain-value"));
+    assert!(staged.contains("42"));
 
     let _ = std::fs::remove_dir_all(&tmp);
 }

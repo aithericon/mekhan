@@ -42,6 +42,7 @@ Local endpoints once `just dev` is up:
 - Postgres → `localhost:5439` (`mekhan:mekhan@.../mekhan`)
 - NATS → `nats://localhost:4333` (HTTP monitor :8333)
 - rustfs (S3) → http://localhost:9005 (admin `rustfsadmin/rustfsadmin`, console :9006)
+- vault → http://localhost:8200 (dev mode, root token `root`, KV v2 at `secret/`)
 - executor cancel → http://localhost:3105
 
 Auth defaults to `dev_noop` (every request is a fixed dev user, fully offline). Use `just dev up-auth` to run mekhan in BFF mode against Zitadel — requires `bash deploy/zitadel/bootstrap.sh` once to write `service/mekhan.local.toml`.
@@ -150,6 +151,7 @@ Pipeline phases live in `compiler/{graph,validate,lower,wire,compile,subworkflow
 - **`cargo fmt`** locally may disagree with what CI's nix-pinned toolchain enforces. Don't auto-`cargo fmt` to "fix" CI — fix the specific line CI flagged.
 - **mekhan-service and aithericon-executor-service are separate binaries in separate workspaces.** A change to a runner trait used by both needs BOTH rebuilt + restarted + republished before live dev reflects it.
 - **The dev NATS is disposable.** `just dev reset` wipes pg/nats/rustfs volumes — both the `nats data` *volume* and the container restart (just restarting the container without removing `mekhan-natsdata` keeps stale JetStream state).
+- **Dev Vault is in-memory and ephemeral.** `mekhan-vault` runs in `-dev` mode with root token `root` and no persistence — every `just dev down`/`reset` wipes resource secrets (the Postgres `resources` rows survive, but `resource_versions.vault_path` will then point at empty Vault entries). `_infra-wipe` has no vault volume to scrub for the same reason. Resource CRUD flow: mekhan writes to `secret/data/aithericon/resources/{workspace}/{resource}/v{version}` via `VaultResourceStore` (auto-selected when `VAULT_ADDR`/`VAULT_TOKEN` are set); engine wraps secrets into single-use tokens at job-submit; executor unwraps with `VAULT_ADDR` alone.
 - **Worktree builds** that touch engine/executor/shared sibling crates resolve workspaces upward through `.claude/worktrees/...`; that's why the umbrella's `exclude` list contains `.claude`. Don't remove it.
 
 ## Reference

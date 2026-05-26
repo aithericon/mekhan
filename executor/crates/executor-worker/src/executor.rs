@@ -130,6 +130,7 @@ impl JobExecutor {
             resolved_config: None,
             resolved_input_storage: Default::default(),
             resolved_output_storage: Default::default(),
+            resolved_inline_inputs: Default::default(),
             metadata: job.metadata.clone(),
             staged_inputs: Default::default(),
             expected_outputs: Default::default(),

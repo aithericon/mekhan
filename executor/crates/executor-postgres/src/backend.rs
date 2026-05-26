@@ -816,6 +816,7 @@ mod tests {
             resolved_config: None,
             resolved_input_storage: HashMap::new(),
             resolved_output_storage: HashMap::new(),
+            resolved_inline_inputs: HashMap::new(),
             metadata: HashMap::new(), // <-- tenant_id deliberately absent
             staged_inputs: HashMap::new(),
             expected_outputs: HashMap::new(),
@@ -868,6 +869,7 @@ mod tests {
             resolved_config: None,
             resolved_input_storage: HashMap::new(),
             resolved_output_storage: HashMap::new(),
+            resolved_inline_inputs: HashMap::new(),
             metadata: HashMap::from([(TENANT_ID_METADATA_KEY.into(), Uuid::new_v4().to_string())]),
             staged_inputs: HashMap::new(),
             expected_outputs: HashMap::new(),
@@ -918,6 +920,7 @@ mod tests {
             resolved_config: None,
             resolved_input_storage: HashMap::new(),
             resolved_output_storage: HashMap::new(),
+            resolved_inline_inputs: HashMap::new(),
             metadata: HashMap::from([(TENANT_ID_METADATA_KEY.into(), Uuid::new_v4().to_string())]),
             staged_inputs: HashMap::new(),
             expected_outputs: HashMap::new(),
