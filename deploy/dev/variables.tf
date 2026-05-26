@@ -89,15 +89,6 @@ variable "traefik_enabled" {
   default     = true
 }
 
-# ── mekhan-service runtime config ───────────────────────────────────────────
-# These point at infra deployed by sibling HetznerCluster layers:
-#   Postgres  — layer 06b (service: postgres.service.consul:5432)
-#   NATS      — layer 04c (service: nats.service.consul:4222)
-#   rustfs/S3 — Hetzner Object Storage (fsn1.your-objectstorage.com)
-#   Zitadel   — layer 06d/e (id.dev.aithericon.eu)
-
-# ── Postgres admin (for `CREATE ROLE/DATABASE` at apply time) ────────────────
-
 variable "postgres_admin_host" {
   description = "Patroni primary as resolvable from the OPERATOR's machine. Uses the Consul alt-domain so it doesn't clash with any local .service.consul. From HetznerCluster env.hcl: postgres-primary.service.consul.aithericon"
   type        = string
