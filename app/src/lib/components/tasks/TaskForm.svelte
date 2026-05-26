@@ -17,7 +17,6 @@
 	import { CalendarDate, getLocalTimeZone } from '@internationalized/date';
 	import { renderMdsvex } from '$lib/mdsvex';
 	import { MDSVEX_CLASS } from '$lib/mdsvex-styles';
-	import { authFetch } from '$lib/auth/fetch';
 	import { toast } from 'svelte-sonner';
 	import Check from '@lucide/svelte/icons/check';
 	import ArrowRight from '@lucide/svelte/icons/arrow-right';
@@ -32,8 +31,7 @@
 		parseFileValue,
 		validateFields,
 		coerceFormData,
-		fieldsForStep,
-		type UploadedFile
+		fieldsForStep
 	} from './task-form-values.svelte.ts';
 
 	interface Props {
@@ -230,27 +228,17 @@
 		oncancel?.(reason || undefined);
 	}
 
-	// File upload handler
-	async function handleUpload(field: TaskField, files: File[]) {
-		for (const file of files) {
-			const fd = new FormData();
-			fd.append('file', file);
-			fd.append('field_name', field.name);
-			try {
-				const res = await authFetch('/api/files/upload', { method: 'POST', body: fd });
-				if (res.ok) {
-					const result = (await res.json()) as UploadedFile;
-					const current = parseFileValue(getTextValue(field.name));
-					current.push(result);
-					setTextValue(field.name, JSON.stringify(current));
-				} else {
-					const err = (await res.json().catch(() => ({}))) as { error?: string };
-					toast.error(err.error ?? 'Upload failed');
-				}
-			} catch {
-				toast.error('Network error — please try again');
-			}
-		}
+	// File upload handler.
+	//
+	// Disabled at runtime: the `/api/v1/files/upload/{template_id}/{node_id}`
+	// route is template-scoped (used by the IDE to attach files to a specific
+	// workflow node). At task-completion time TaskForm only has a `task_id`,
+	// not the originating template/node ids, so it cannot call that route
+	// correctly. Until a dedicated task-scoped upload endpoint exists, file
+	// fields surface as a no-op with an explicit toast rather than firing a
+	// 404 silently.
+	async function handleUpload(_field: TaskField, _files: File[]) {
+		toast.error('File uploads from task forms are not yet supported.');
 	}
 
 	function removeFile(fieldName: string, url: string) {

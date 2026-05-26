@@ -35,10 +35,10 @@ pub struct PublishQuery {
     pub force: bool,
 }
 
-/// POST /api/templates
+/// POST /api/v1/templates
 #[utoipa::path(
     post,
-    path = "/api/templates",
+    path = "/api/v1/templates",
     request_body = CreateTemplateRequest,
     responses(
         (status = 201, description = "Template created", body = WorkflowTemplate),
@@ -102,10 +102,10 @@ pub async fn create_template(
     Ok((StatusCode::CREATED, Json(template)))
 }
 
-/// GET /api/templates
+/// GET /api/v1/templates
 #[utoipa::path(
     get,
-    path = "/api/templates",
+    path = "/api/v1/templates",
     params(ListTemplatesQuery),
     responses(
         (status = 200, description = "Paginated list of templates", body = PaginatedResponse<WorkflowTemplate>),
@@ -240,10 +240,10 @@ pub async fn list_templates(
     })
 }
 
-/// GET /api/templates/{id}
+/// GET /api/v1/templates/{id}
 #[utoipa::path(
     get,
-    path = "/api/templates/{id}",
+    path = "/api/v1/templates/{id}",
     params(("id" = Uuid, Path, description = "Template id")),
     responses(
         (status = 200, description = "Template", body = WorkflowTemplate),
@@ -281,10 +281,10 @@ pub struct TemplateBundle {
     pub files: HashMap<String, HashMap<String, String>>,
 }
 
-/// GET /api/templates/{id}/bundle
+/// GET /api/v1/templates/{id}/bundle
 #[utoipa::path(
     get,
-    path = "/api/templates/{id}/bundle",
+    path = "/api/v1/templates/{id}/bundle",
     params(("id" = Uuid, Path, description = "Template id")),
     responses(
         (status = 200, description = "Template authoring bundle (graph + per-node inline files)", body = TemplateBundle),
@@ -324,10 +324,10 @@ pub async fn get_template_bundle(
     Ok(Json(TemplateBundle { graph, files }))
 }
 
-/// PUT /api/templates/{id}
+/// PUT /api/v1/templates/{id}
 #[utoipa::path(
     put,
-    path = "/api/templates/{id}",
+    path = "/api/v1/templates/{id}",
     params(("id" = Uuid, Path, description = "Template id")),
     request_body = UpdateTemplateRequest,
     responses(
@@ -386,11 +386,11 @@ pub async fn update_template(
     Ok(Json(template))
 }
 
-/// DELETE /api/templates/{id}
+/// DELETE /api/v1/templates/{id}
 /// Per Section 11.7: cascade cleanup for published templates with finished instances.
 #[utoipa::path(
     delete,
-    path = "/api/templates/{id}",
+    path = "/api/v1/templates/{id}",
     params(("id" = Uuid, Path, description = "Template id")),
     responses(
         (status = 204, description = "Template deleted"),
@@ -487,10 +487,10 @@ pub async fn delete_template(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// POST /api/templates/{id}/publish
+/// POST /api/v1/templates/{id}/publish
 #[utoipa::path(
     post,
-    path = "/api/templates/{id}/publish",
+    path = "/api/v1/templates/{id}/publish",
     params(
         ("id" = Uuid, Path, description = "Template id"),
         PublishQuery,
@@ -605,6 +605,7 @@ pub async fn publish_template(
                         "{} template test(s) failed; publish blocked. Pass ?force=true to override.",
                         failing.len()
                     ))
+                    .with_code("publish-gate")
                     .with_failing_tests(failing_json),
                 ),
             });
@@ -797,10 +798,10 @@ async fn latest_in_chain(
     .ok_or_else(|| ApiError::not_found("template chain not found"))
 }
 
-/// POST /api/templates/{id}/new-version
+/// POST /api/v1/templates/{id}/new-version
 #[utoipa::path(
     post,
-    path = "/api/templates/{id}/new-version",
+    path = "/api/v1/templates/{id}/new-version",
     params(("id" = Uuid, Path, description = "Source template id")),
     responses(
         (status = 201, description = "New draft version created from published source", body = WorkflowTemplate),
@@ -947,7 +948,7 @@ pub(crate) fn apply_mode(latest: &WorkflowTemplate) -> Result<ApplyMode, String>
     }
 }
 
-/// POST /api/templates/{id}/apply
+/// POST /api/v1/templates/{id}/apply
 ///
 /// GitOps entry point: atomically publish a new version of the chain straight
 /// from a git-authored artifact. The supplied `graph` REPLACES the chain head
@@ -958,7 +959,7 @@ pub(crate) fn apply_mode(latest: &WorkflowTemplate) -> Result<ApplyMode, String>
 /// templates.
 #[utoipa::path(
     post,
-    path = "/api/templates/{id}/apply",
+    path = "/api/v1/templates/{id}/apply",
     params(("id" = Uuid, Path, description = "Any template id in the target chain")),
     request_body = ApplyTemplateRequest,
     responses(
@@ -1136,10 +1137,10 @@ pub async fn apply_template(
     Ok(Json(applied))
 }
 
-/// GET /api/templates/{id}/versions
+/// GET /api/v1/templates/{id}/versions
 #[utoipa::path(
     get,
-    path = "/api/templates/{id}/versions",
+    path = "/api/v1/templates/{id}/versions",
     params(("id" = Uuid, Path, description = "Any template id in the version chain")),
     responses(
         (status = 200, description = "All versions in the template's chain, newest first", body = Vec<WorkflowTemplate>),
@@ -1175,10 +1176,10 @@ pub async fn list_versions(
     Ok(Json(versions))
 }
 
-/// GET /api/templates/{id}/air
+/// GET /api/v1/templates/{id}/air
 #[utoipa::path(
     get,
-    path = "/api/templates/{id}/air",
+    path = "/api/v1/templates/{id}/air",
     params(("id" = Uuid, Path, description = "Template id")),
     responses(
         (status = 200, description = "Compiled AIR JSON for the published template", body = serde_json::Value),
@@ -1212,10 +1213,10 @@ pub async fn get_air(
     Ok(Json(air))
 }
 
-/// POST /api/templates/{id}/compile
+/// POST /api/v1/templates/{id}/compile
 #[utoipa::path(
     post,
-    path = "/api/templates/{id}/compile",
+    path = "/api/v1/templates/{id}/compile",
     params(("id" = Uuid, Path, description = "Template id")),
     responses(
         (status = 200, description = "Compiled AIR JSON preview from current draft graph", body = serde_json::Value),
@@ -1272,10 +1273,10 @@ pub async fn compile_preview(
     Ok(Json(air))
 }
 
-/// GET /api/templates/{id}/io-stubs
+/// GET /api/v1/templates/{id}/io-stubs
 #[utoipa::path(
     get,
-    path = "/api/templates/{id}/io-stubs",
+    path = "/api/v1/templates/{id}/io-stubs",
     params(("id" = Uuid, Path, description = "Template id")),
     responses(
         (status = 200, description = "Per-node generated `_aithericon_io` files", body = serde_json::Value),
@@ -1388,15 +1389,15 @@ pub async fn io_stubs(
     })))
 }
 
-/// POST /api/compile
-/// POST /api/compile
+/// POST /api/v1/compile
+/// POST /api/v1/compile
 ///
 /// Stateless compilation: accepts a graph (and optional inline file contents)
 /// and returns AIR JSON without database access. Used by the editor's "Preview
 /// AIR" button before publish.
 #[utoipa::path(
     post,
-    path = "/api/compile",
+    path = "/api/v1/compile",
     request_body = CompileRequest,
     responses(
         (status = 200, description = "Compiled AIR JSON", body = serde_json::Value),
@@ -1453,7 +1454,7 @@ pub struct TypeSurfaceResponse {
 /// needed) so feedback lands while editing, not at publish.
 #[utoipa::path(
     post,
-    path = "/api/analyze",
+    path = "/api/v1/analyze",
     request_body = CompileRequest,
     responses(
         (status = 200, description = "Shape-aware scope + diagnostics", body = TypeSurfaceResponse),

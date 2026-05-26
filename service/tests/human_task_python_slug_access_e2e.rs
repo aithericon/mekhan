@@ -6,7 +6,7 @@
 //! (`vendor_name`, `invoice_amount`, `verified`). The Python source uses
 //! direct slug access (`review.vendor_name` etc. — exactly what the
 //! editor's picker offers) and `assert`s the values match what the test
-//! POSTs to `/api/tasks/.../complete`.
+//! POSTs to `/api/v1/tasks/.../complete`.
 //!
 //!   * Without the compiler hoist (`apply_control_data_foundation` in
 //!     `compile.rs`) → `<slug>.json` is the raw HumanTask envelope (form
@@ -254,7 +254,7 @@ async fn complete_review_task(app: &axum::Router, task_id: &str) {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/tasks/{task_id}/complete"))
+                .uri(format!("/api/v1/tasks/{task_id}/complete"))
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
@@ -324,7 +324,7 @@ async fn showcase_human_task_to_python_direct_slug_access() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/templates")
+                .uri("/api/v1/templates")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
@@ -351,7 +351,7 @@ async fn showcase_human_task_to_python_direct_slug_access() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/templates/{template_id}/publish"))
+                .uri(format!("/api/v1/templates/{template_id}/publish"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -366,7 +366,7 @@ async fn showcase_human_task_to_python_direct_slug_access() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/instances")
+                .uri("/api/v1/instances")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({

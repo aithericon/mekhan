@@ -129,7 +129,7 @@ async fn seed_artifact(
 }
 
 // ---------------------------------------------------------------------------
-// GET /api/processes -> empty list
+// GET /api/v1/processes -> empty list
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -139,7 +139,7 @@ async fn process_list_empty() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/api/processes")
+                .uri("/api/v1/processes")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -153,7 +153,7 @@ async fn process_list_empty() {
 }
 
 // ---------------------------------------------------------------------------
-// GET /api/processes -> list with seeded data
+// GET /api/v1/processes -> list with seeded data
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -166,7 +166,7 @@ async fn process_list_with_data() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/api/processes")
+                .uri("/api/v1/processes")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -180,7 +180,7 @@ async fn process_list_with_data() {
 }
 
 // ---------------------------------------------------------------------------
-// GET /api/processes?filter[status][eq]=active
+// GET /api/v1/processes?filter[status][eq]=active
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -194,7 +194,7 @@ async fn process_filter_by_status() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/api/processes?filter[status][eq]=active")
+                .uri("/api/v1/processes?filter[status][eq]=active")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -208,7 +208,7 @@ async fn process_filter_by_status() {
 }
 
 // ---------------------------------------------------------------------------
-// GET /api/processes?sort=-created_at
+// GET /api/v1/processes?sort=-created_at
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -223,7 +223,7 @@ async fn process_sort_desc() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/api/processes?sort=-created_at")
+                .uri("/api/v1/processes?sort=-created_at")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -237,7 +237,7 @@ async fn process_sort_desc() {
 }
 
 // ---------------------------------------------------------------------------
-// GET /api/processes?search=Campaign
+// GET /api/v1/processes?search=Campaign
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -250,7 +250,7 @@ async fn process_search() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/api/processes?search=Campaign")
+                .uri("/api/v1/processes?search=Campaign")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -264,7 +264,7 @@ async fn process_search() {
 }
 
 // ---------------------------------------------------------------------------
-// GET /api/processes/{process_id} -> 404
+// GET /api/v1/processes/{process_id} -> 404
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -274,7 +274,7 @@ async fn process_get_not_found() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/api/processes/nonexistent")
+                .uri("/api/v1/processes/nonexistent")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -285,7 +285,7 @@ async fn process_get_not_found() {
 }
 
 // ---------------------------------------------------------------------------
-// GET /api/processes/{process_id} -> detail with tasks, metrics, logs
+// GET /api/v1/processes/{process_id} -> detail with tasks, metrics, logs
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -303,7 +303,7 @@ async fn process_get_detail() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri(&format!("/api/processes/{tid}"))
+                .uri(&format!("/api/v1/processes/{tid}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -321,7 +321,7 @@ async fn process_get_detail() {
 }
 
 // ---------------------------------------------------------------------------
-// PUT /api/processes/{process_id} -> update name
+// PUT /api/v1/processes/{process_id} -> update name
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -335,7 +335,7 @@ async fn process_update() {
         .oneshot(
             Request::builder()
                 .method("PUT")
-                .uri(&format!("/api/processes/{tid}"))
+                .uri(&format!("/api/v1/processes/{tid}"))
                 .header("content-type", "application/json")
                 .body(Body::from(
                     serde_json::to_string(&json!({
@@ -356,7 +356,7 @@ async fn process_update() {
 }
 
 // ---------------------------------------------------------------------------
-// GET /api/processes/stats
+// GET /api/v1/processes/stats
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -371,7 +371,7 @@ async fn process_stats() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/api/processes/stats")
+                .uri("/api/v1/processes/stats")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -387,7 +387,7 @@ async fn process_stats() {
 }
 
 // ---------------------------------------------------------------------------
-// GET /api/processes/{process_id}/metrics
+// GET /api/v1/processes/{process_id}/metrics
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -406,7 +406,7 @@ async fn process_metrics() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(&format!("/api/processes/{tid}/metrics"))
+                .uri(&format!("/api/v1/processes/{tid}/metrics"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -421,7 +421,7 @@ async fn process_metrics() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri(&format!("/api/processes/{tid}/metrics?key=loss"))
+                .uri(&format!("/api/v1/processes/{tid}/metrics?key=loss"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -434,7 +434,7 @@ async fn process_metrics() {
 }
 
 // ---------------------------------------------------------------------------
-// GET /api/processes/{process_id}/logs
+// GET /api/v1/processes/{process_id}/logs
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -453,7 +453,7 @@ async fn process_logs() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(&format!("/api/processes/{tid}/logs"))
+                .uri(&format!("/api/v1/processes/{tid}/logs"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -468,7 +468,7 @@ async fn process_logs() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri(&format!("/api/processes/{tid}/logs?filter[level][eq]=error"))
+                .uri(&format!("/api/v1/processes/{tid}/logs?filter[level][eq]=error"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -482,7 +482,7 @@ async fn process_logs() {
 }
 
 // ---------------------------------------------------------------------------
-// GET /api/processes/{process_id}/tasks
+// GET /api/v1/processes/{process_id}/tasks
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -497,7 +497,7 @@ async fn process_tasks() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri(&format!("/api/processes/{tid}/tasks"))
+                .uri(&format!("/api/v1/processes/{tid}/tasks"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -510,7 +510,7 @@ async fn process_tasks() {
 }
 
 // ---------------------------------------------------------------------------
-// GET /api/processes/{process_id}/artifacts
+// GET /api/v1/processes/{process_id}/artifacts
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -525,7 +525,7 @@ async fn process_artifacts() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri(&format!("/api/processes/{tid}/artifacts"))
+                .uri(&format!("/api/v1/processes/{tid}/artifacts"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -538,7 +538,7 @@ async fn process_artifacts() {
 }
 
 // ---------------------------------------------------------------------------
-// GET /api/tasks -> list all tasks across processes
+// GET /api/v1/tasks -> list all tasks across processes
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -554,7 +554,7 @@ async fn task_list_all() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/api/tasks")
+                .uri("/api/v1/tasks")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -567,7 +567,7 @@ async fn task_list_all() {
 }
 
 // ---------------------------------------------------------------------------
-// GET /api/tasks?filter[status][eq]=pending
+// GET /api/v1/tasks?filter[status][eq]=pending
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -581,7 +581,7 @@ async fn task_filter_by_status() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/api/tasks?filter[status][eq]=pending")
+                .uri("/api/v1/tasks?filter[status][eq]=pending")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -595,7 +595,7 @@ async fn task_filter_by_status() {
 }
 
 // ---------------------------------------------------------------------------
-// GET /api/tasks/{id}
+// GET /api/v1/tasks/{id}
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -608,7 +608,7 @@ async fn task_get_single() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/api/tasks/tg-1")
+                .uri("/api/v1/tasks/tg-1")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -622,7 +622,7 @@ async fn task_get_single() {
 }
 
 // ---------------------------------------------------------------------------
-// GET /api/tasks/{id} -> 404
+// GET /api/v1/tasks/{id} -> 404
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -632,7 +632,7 @@ async fn task_get_not_found() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/api/tasks/nonexistent")
+                .uri("/api/v1/tasks/nonexistent")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -657,7 +657,7 @@ async fn process_pagination() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/api/processes?page=0&page_size=2")
+                .uri("/api/v1/processes?page=0&page_size=2")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -686,7 +686,7 @@ async fn process_invalid_filter_field() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/api/processes?filter[nonexistent][eq]=foo")
+                .uri("/api/v1/processes?filter[nonexistent][eq]=foo")
                 .body(Body::empty())
                 .unwrap(),
         )

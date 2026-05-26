@@ -13,7 +13,7 @@
 	import type { RendererProps } from './types';
 
 	// The OpenAPI-derived shape that comes back from
-	// `/api/processes/{id}/logs/tail` (the `LogRow` re-export in
+	// `/api/v1/processes/{id}/logs/tail` (the `LogRow` re-export in
 	// `$lib/api/client` is a hand-rolled near-duplicate with stricter optionality
 	// — we use the schema-derived one so the response flows through unmunged).
 	type LogRow = components['schemas']['LogRow'];

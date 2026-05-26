@@ -1604,11 +1604,11 @@ pub struct FieldMapping {
     pub expression: String,
 }
 
-/// How a `POST /api/triggers/{id}/fire` caller wants the response delivered.
+/// How a `POST /api/v1/triggers/{id}/fire` caller wants the response delivered.
 /// The caller selects per-request (query `?reply=`, `Prefer` header, or a
 /// JSON body field); a Trigger node's optional `replyDefault` is used only
 /// when the caller doesn't specify. `Sse` is never *executed* on the fire
-/// endpoint — SSE is the dedicated `GET /api/instances/{id}/stream` — but is
+/// endpoint — SSE is the dedicated `GET /api/v1/instances/{id}/stream` — but is
 /// modeled so a node can advertise it as the intended consumption mode.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema,
@@ -1733,8 +1733,8 @@ pub struct WorkflowEdge {
 
 // --- API request/response types ---
 
-/// Request body for stateless compilation. Used by `POST /api/compile` and
-/// `POST /api/templates/{id}/compile`. `files` is a per-node, per-filename map
+/// Request body for stateless compilation. Used by `POST /api/v1/compile` and
+/// `POST /api/v1/templates/{id}/compile`. `files` is a per-node, per-filename map
 /// of inline contents; the preview compile emits `InputSource::Raw` entries so
 /// the AIR matches the StoragePath-keyed shape produced by publish.
 #[derive(Debug, Deserialize, ToSchema)]
@@ -1763,7 +1763,7 @@ pub struct SourceRef {
     pub git_ref: Option<String>,
 }
 
-/// Request body for `POST /api/templates/{id}/apply` — the GitOps path.
+/// Request body for `POST /api/v1/templates/{id}/apply` — the GitOps path.
 /// The `graph` REPLACES the chain head wholesale (no CRDT merge); binary
 /// assets are uploaded out-of-band via the files endpoint before this call.
 #[derive(Debug, Deserialize, ToSchema)]
@@ -2627,19 +2627,19 @@ mod tests {
         let img = TaskBlockConfig::Image {
             filenames: vec![],
             display: ImageDisplay::Single,
-            url: Some("/api/files/k.png".to_string()),
+            url: Some("/api/v1/files/k.png".to_string()),
             alt: Some("Invoice".to_string()),
             caption: None,
         };
         let j = serde_json::to_value(&img).unwrap();
         assert_eq!(j["type"], "image");
-        assert_eq!(j["url"], "/api/files/k.png");
+        assert_eq!(j["url"], "/api/v1/files/k.png");
         assert!(j.get("filenames").is_none(), "empty filenames omitted: {j}");
         assert!(j.get("caption").is_none());
 
         let dl = TaskBlockConfig::Download {
             downloads: vec![DownloadItemConfig {
-                url: "/api/files/k.pdf".to_string(),
+                url: "/api/v1/files/k.pdf".to_string(),
                 filename: "invoice.pdf".to_string(),
                 size: None,
                 mime_type: Some("application/pdf".to_string()),
@@ -2649,7 +2649,7 @@ mod tests {
         };
         let j = serde_json::to_value(&dl).unwrap();
         assert_eq!(j["type"], "download");
-        assert_eq!(j["downloads"][0]["url"], "/api/files/k.pdf");
+        assert_eq!(j["downloads"][0]["url"], "/api/v1/files/k.pdf");
         assert_eq!(j["downloads"][0]["mime_type"], "application/pdf");
         assert!(j["downloads"][0].get("size").is_none());
 

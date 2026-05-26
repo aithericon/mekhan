@@ -49,7 +49,7 @@ async fn main() -> anyhow::Result<()> {
     // Silent-drop DLQ wiring: ensure the JetStream stream + spawn the
     // background drainer. After this point, every `record_silent_drop*`
     // call also publishes a `SilentDropRecord` to MEKHAN_SILENT_DROPS,
-    // queryable via `GET /api/observability/silent-drops`.
+    // queryable via `GET /api/v1/observability/silent-drops`.
     mekhan_nats
         .ensure_silent_drops_stream()
         .await
@@ -399,7 +399,7 @@ async fn build_introspection(
 }
 
 /// Build the optional Zitadel Management broker for the embedded
-/// `/api/auth/tokens` feature. Active only in `bff` mode when `auth.broker_pat`
+/// `/api/v1/auth/tokens` feature. Active only in `bff` mode when `auth.broker_pat`
 /// is configured (provisioned by `deploy/zitadel/bootstrap.sh`); otherwise
 /// `None` and the token endpoints 503 / the UI hides the section. Mirrors
 /// [`build_introspection`]; synchronous — the client validates its PAT lazily.
@@ -413,7 +413,7 @@ fn build_zitadel_mgmt(config: &AppConfig) -> anyhow::Result<Option<Arc<ZitadelMg
     ) else {
         tracing::info!(
             "auth: token broker disabled (no auth.broker_pat) \
-             — embedded /api/auth/tokens unavailable"
+             — embedded /api/v1/auth/tokens unavailable"
         );
         return Ok(None);
     };

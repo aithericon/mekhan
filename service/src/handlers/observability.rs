@@ -1,7 +1,7 @@
 //! Observability endpoints.
 //!
 //! Currently just the silent-drop DLQ inspector
-//! (`GET /api/observability/silent-drops`). Reads the `MEKHAN_SILENT_DROPS`
+//! (`GET /api/v1/observability/silent-drops`). Reads the `MEKHAN_SILENT_DROPS`
 //! JetStream stream via an ephemeral pull consumer and returns the
 //! captured [`SilentDropRecord`]s — what each silent-drop call site
 //! ACKed and dropped, with the raw payload + per-site context that
@@ -42,7 +42,7 @@ pub struct SilentDropsResponse {
     pub records: Vec<SilentDropRecord>,
 }
 
-/// `GET /api/observability/silent-drops`
+/// `GET /api/v1/observability/silent-drops`
 ///
 /// Reads the dead-letter queue: every record any consumer ACKed and
 /// dropped because it couldn't parse the input. Drains up to `limit`
@@ -53,7 +53,7 @@ pub struct SilentDropsResponse {
 /// endpoint just exposes whatever is currently retained.
 #[utoipa::path(
     get,
-    path = "/api/observability/silent-drops",
+    path = "/api/v1/observability/silent-drops",
     params(
         ("limit" = Option<usize>, Query, description = "Max records to return (default 100, hard cap 1000)"),
         ("kind" = Option<String>, Query, description = "Filter by kind (broker-side subject filter)")

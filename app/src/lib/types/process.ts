@@ -1,22 +1,11 @@
 /**
  * Frontend-only process shapes. The wire types (`HpiProcess`, `HpiTask`,
  * `HpiMetric`, `HpiMetricSummary`, `HpiLog`, `ProcessDetail`, `ProcessStats`)
- * are exported from `$lib/api/client` — import them from there.
- *
- * What lives here:
- *   - Pagination envelope for the process/task/log/artifact list endpoints,
- *     which use a custom DSL not modeled in the spec yet.
- *   - The canonical phase/progress timeline shapes.
+ * plus the paginated envelopes (`PaginatedProcesses`, `PaginatedLogs`,
+ * `PaginatedArtifacts`) are exported from `$lib/api/client` — import them
+ * from there. This module is now scoped to the canonical phase/progress
+ * timeline shapes that the SPA renders on top of `process.config.progress`.
  */
-export interface PaginatedProcessResponse<T> {
-	items: T[];
-	total: number;
-	page: number;
-	page_size: number;
-	total_pages: number;
-	has_next: boolean;
-	has_previous: boolean;
-}
 
 export interface ProcessTimelineEntry {
 	step: string;

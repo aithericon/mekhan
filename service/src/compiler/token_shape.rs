@@ -57,7 +57,7 @@
 //! place/port; an unresolvable `$ref` *fails* (not bypasses). [`analyze`] is
 //! pure; [`compile_to_air_with_shapes`] additionally returns the
 //! [`ShapeReport`] and annotates the AIR. The editor consumes the same
-//! `analyze` via `surface_types` → `POST /api/analyze`.
+//! `analyze` via `surface_types` → `POST /api/v1/analyze`.
 
 use std::collections::BTreeMap;
 
@@ -1868,8 +1868,8 @@ pub struct TypeSurface {
 /// The DX lever: pure, graph-only, and **independent of `compile_to_air`
 /// succeeding**. A draft with an unstaged Python step (unpublishable) still
 /// gets full type surfacing here — feedback lands while editing, not at
-/// publish when it's too late. This is what `POST /api/compile` (or a sibling
-/// `/api/analyze`) should additionally return on every edit.
+/// publish when it's too late. This is what `POST /api/v1/compile` (or a sibling
+/// `/api/v1/analyze`) should additionally return on every edit.
 pub fn surface_types(graph: &WorkflowGraph) -> TypeSurface {
     match analyze(graph) {
         Ok(r) => TypeSurface {
@@ -2704,7 +2704,7 @@ mod port_contract_tests {
         let token = json!({
             "invoice_file": {
                 "key": "blob/abc",
-                "url": "/api/files/blob/abc",
+                "url": "/api/v1/files/blob/abc",
                 "filename": "invoice.png",
                 "content_type": "image/png",
                 "size": 1234

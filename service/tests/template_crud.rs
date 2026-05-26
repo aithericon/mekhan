@@ -17,7 +17,7 @@ async fn body_json(body: Body) -> Value {
 }
 
 // ---------------------------------------------------------------------------
-// POST /api/templates -> 201, returns template with correct name
+// POST /api/v1/templates -> 201, returns template with correct name
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -29,7 +29,7 @@ async fn create_template_returns_201() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/templates")
+                .uri("/api/v1/templates")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
@@ -56,7 +56,7 @@ async fn create_template_returns_201() {
 }
 
 // ---------------------------------------------------------------------------
-// GET /api/templates -> paginated list includes created template
+// GET /api/v1/templates -> paginated list includes created template
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -70,7 +70,7 @@ async fn list_templates_includes_created() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/templates")
+                .uri("/api/v1/templates")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
@@ -93,7 +93,7 @@ async fn list_templates_includes_created() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/api/templates")
+                .uri("/api/v1/templates")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -112,7 +112,7 @@ async fn list_templates_includes_created() {
 }
 
 // ---------------------------------------------------------------------------
-// GET /api/templates/:id -> 200 with correct data
+// GET /api/v1/templates/:id -> 200 with correct data
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -125,7 +125,7 @@ async fn get_template_by_id_returns_200() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/templates")
+                .uri("/api/v1/templates")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
@@ -147,7 +147,7 @@ async fn get_template_by_id_returns_200() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri(&format!("/api/templates/{id}"))
+                .uri(&format!("/api/v1/templates/{id}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -161,7 +161,7 @@ async fn get_template_by_id_returns_200() {
 }
 
 // ---------------------------------------------------------------------------
-// GET /api/templates/:nonexistent -> 404
+// GET /api/v1/templates/:nonexistent -> 404
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -172,7 +172,7 @@ async fn get_nonexistent_template_returns_404() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri(&format!("/api/templates/{}", Uuid::new_v4()))
+                .uri(&format!("/api/v1/templates/{}", Uuid::new_v4()))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -183,7 +183,7 @@ async fn get_nonexistent_template_returns_404() {
 }
 
 // ---------------------------------------------------------------------------
-// PUT /api/templates/:id -> updates name/description
+// PUT /api/v1/templates/:id -> updates name/description
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -196,7 +196,7 @@ async fn update_template_changes_name_and_description() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/templates")
+                .uri("/api/v1/templates")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
@@ -218,7 +218,7 @@ async fn update_template_changes_name_and_description() {
         .oneshot(
             Request::builder()
                 .method("PUT")
-                .uri(&format!("/api/templates/{id}"))
+                .uri(&format!("/api/v1/templates/{id}"))
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
@@ -253,7 +253,7 @@ async fn update_published_template_returns_409() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/templates")
+                .uri("/api/v1/templates")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
@@ -276,7 +276,7 @@ async fn update_published_template_returns_409() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(&format!("/api/templates/{id}/publish"))
+                .uri(&format!("/api/v1/templates/{id}/publish"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -290,7 +290,7 @@ async fn update_published_template_returns_409() {
         .oneshot(
             Request::builder()
                 .method("PUT")
-                .uri(&format!("/api/templates/{id}"))
+                .uri(&format!("/api/v1/templates/{id}"))
                 .header("content-type", "application/json")
                 .body(Body::from(json!({"name": "Nope"}).to_string()))
                 .unwrap(),
@@ -302,7 +302,7 @@ async fn update_published_template_returns_409() {
 }
 
 // ---------------------------------------------------------------------------
-// DELETE /api/templates/:id -> 204
+// DELETE /api/v1/templates/:id -> 204
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -315,7 +315,7 @@ async fn delete_template_returns_204() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/templates")
+                .uri("/api/v1/templates")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
@@ -336,7 +336,7 @@ async fn delete_template_returns_204() {
         .oneshot(
             Request::builder()
                 .method("DELETE")
-                .uri(&format!("/api/templates/{id}"))
+                .uri(&format!("/api/v1/templates/{id}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -368,7 +368,7 @@ async fn delete_nonexistent_template_returns_404() {
         .oneshot(
             Request::builder()
                 .method("DELETE")
-                .uri(&format!("/api/templates/{}", Uuid::new_v4()))
+                .uri(&format!("/api/v1/templates/{}", Uuid::new_v4()))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -379,7 +379,7 @@ async fn delete_nonexistent_template_returns_404() {
 }
 
 // ---------------------------------------------------------------------------
-// POST /api/templates/:id/compile -> preview compile (no publish)
+// POST /api/v1/templates/:id/compile -> preview compile (no publish)
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -392,7 +392,7 @@ async fn compile_preview_returns_air_json() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/templates")
+                .uri("/api/v1/templates")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
@@ -413,7 +413,7 @@ async fn compile_preview_returns_air_json() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(&format!("/api/templates/{id}/compile"))
+                .uri(&format!("/api/v1/templates/{id}/compile"))
                 .body(Body::empty())
                 .unwrap(),
         )

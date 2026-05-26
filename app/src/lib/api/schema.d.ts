@@ -4,62 +4,6 @@
  */
 
 export interface paths {
-    "/api/analyze": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Stateless shape analysis: the editor's single source of truth for guard
-         *     scope + diagnostics. Independent of `compile_to_air` succeeding (no files
-         *     needed) so feedback lands while editing, not at publish.
-         */
-        post: operations["analyze_graph"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/auth/tokens": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** GET /api/auth/tokens — the caller's automation tokens. */
-        get: operations["list_tokens"];
-        put?: never;
-        /** POST /api/auth/tokens — mint a token. The `secret` is returned once. */
-        post: operations["create_token"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/auth/tokens/{id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        /** DELETE /api/auth/tokens/{id} — revoke a token (ownership-guarded). */
-        delete: operations["revoke_token"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/backends": {
         parameters: {
             query?: never;
@@ -93,7 +37,63 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/catalogue": {
+    "/api/v1/analyze": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stateless shape analysis: the editor's single source of truth for guard
+         *     scope + diagnostics. Independent of `compile_to_air` succeeding (no files
+         *     needed) so feedback lands while editing, not at publish.
+         */
+        post: operations["analyze_graph"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/tokens": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** GET /api/v1/auth/tokens — the caller's automation tokens. */
+        get: operations["list_tokens"];
+        put?: never;
+        /** POST /api/v1/auth/tokens — mint a token. The `secret` is returned once. */
+        post: operations["create_token"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/tokens/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** DELETE /api/v1/auth/tokens/{id} — revoke a token (ownership-guarded). */
+        delete: operations["revoke_token"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/catalogue": {
         parameters: {
             query?: never;
             header?: never;
@@ -101,7 +101,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * GET /api/catalogue
+         * GET /api/v1/catalogue
          * @description List/search catalogue entries with full filter, sort, pagination support.
          *
          *     Query parameters:
@@ -114,7 +114,7 @@ export interface paths {
          *       - `file_metadata` — JSONB containment on file_metadata
          *
          *     Example:
-         *       GET /api/catalogue?filter[category][eq]=model&filter[source_net][contains]=surrogate&sort=-size_bytes&page=0&page_size=10
+         *       GET /api/v1/catalogue?filter[category][eq]=model&filter[source_net][contains]=surrogate&sort=-size_bytes&page=0&page_size=10
          */
         get: operations["list_entries"];
         put?: never;
@@ -125,7 +125,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/catalogue/distinct-jsonb/{column}/{key}": {
+    "/api/v1/catalogue/distinct-jsonb/{column}/{key}": {
         parameters: {
             query?: never;
             header?: never;
@@ -133,9 +133,9 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * GET /api/catalogue/distinct-jsonb/:column/:key
+         * GET /api/v1/catalogue/distinct-jsonb/:column/:key
          * @description Distinct values for a JSONB key within file_metadata or user_metadata.
-         *     Example: GET /api/catalogue/distinct-jsonb/file_metadata/format → ["json", "csv"]
+         *     Example: GET /api/v1/catalogue/distinct-jsonb/file_metadata/format → ["json", "csv"]
          */
         get: operations["distinct_jsonb_values"];
         put?: never;
@@ -146,7 +146,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/catalogue/distinct/{column}": {
+    "/api/v1/catalogue/distinct/{column}": {
         parameters: {
             query?: never;
             header?: never;
@@ -154,11 +154,11 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * GET /api/catalogue/distinct/:column
+         * GET /api/v1/catalogue/distinct/:column
          * @description Returns distinct non-null values for a column (for populating filter dropdowns).
          *     Column must be in the allowed filter fields whitelist.
          *
-         *     Example: GET /api/catalogue/distinct/category → ["model", "dataset", "plot"]
+         *     Example: GET /api/v1/catalogue/distinct/category → ["model", "dataset", "plot"]
          */
         get: operations["distinct_values"];
         put?: never;
@@ -169,7 +169,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/catalogue/download/{*path}": {
+    "/api/v1/catalogue/download/{*path}": {
         parameters: {
             query?: never;
             header?: never;
@@ -177,9 +177,9 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * GET /api/catalogue/download/{path} — download artifact bytes by storage path.
+         * GET /api/v1/catalogue/download/{path} — download artifact bytes by storage path.
          * @description The path parameter is the S3 storage_path from the catalogue entry.
-         *     Example: GET /api/catalogue/download/artifacts/exec-123/gp_model/gp_model.json
+         *     Example: GET /api/v1/catalogue/download/artifacts/exec-123/gp_model/gp_model.json
          */
         get: operations["download_artifact"];
         put?: never;
@@ -190,14 +190,14 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/catalogue/lineage/{process_id}": {
+    "/api/v1/catalogue/lineage/{process_id}": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** GET /api/catalogue/lineage/{process_id} — all artifacts for a campaign, grouped by step. */
+        /** GET /api/v1/catalogue/lineage/{process_id} — all artifacts for a campaign, grouped by step. */
         get: operations["lineage"];
         put?: never;
         post?: never;
@@ -207,7 +207,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/catalogue/stats": {
+    "/api/v1/catalogue/stats": {
         parameters: {
             query?: never;
             header?: never;
@@ -215,7 +215,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * GET /api/catalogue/stats
+         * GET /api/v1/catalogue/stats
          * @description Aggregate statistics. Accepts the same filter params as the list endpoint,
          *     so you can get stats for a subset (e.g., stats for a specific net or category).
          */
@@ -228,14 +228,14 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/catalogue/stats/by-net": {
+    "/api/v1/catalogue/stats/by-net": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** GET /api/catalogue/stats/by-net — per-net breakdown. */
+        /** GET /api/v1/catalogue/stats/by-net — per-net breakdown. */
         get: operations["stats_by_net"];
         put?: never;
         post?: never;
@@ -245,14 +245,14 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/catalogue/{execution_id}/{id}": {
+    "/api/v1/catalogue/{execution_id}/{id}": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** GET /api/catalogue/{execution_id}/{id} — single catalogue entry. */
+        /** GET /api/v1/catalogue/{execution_id}/{id} — single catalogue entry. */
         get: operations["get_entry"];
         put?: never;
         post?: never;
@@ -262,7 +262,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/compile": {
+    "/api/v1/compile": {
         parameters: {
             query?: never;
             header?: never;
@@ -272,8 +272,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * POST /api/compile
-         *     POST /api/compile
+         * POST /api/v1/compile
+         *     POST /api/v1/compile
          * @description Stateless compilation: accepts a graph (and optional inline file contents)
          *     and returns AIR JSON without database access. Used by the editor's "Preview
          *     AIR" button before publish.
@@ -285,7 +285,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/files/upload/{id}/{node_id}": {
+    "/api/v1/files/upload/{id}/{node_id}": {
         parameters: {
             query?: never;
             header?: never;
@@ -295,7 +295,7 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * POST /api/files/upload/{id}/{node_id}
+         * POST /api/v1/files/upload/{id}/{node_id}
          *     Accepts multipart/form-data with a `file` field.
          */
         post: operations["upload_file"];
@@ -305,7 +305,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/files/{*key}": {
+    "/api/v1/files/{*key}": {
         parameters: {
             query?: never;
             header?: never;
@@ -313,7 +313,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * GET /api/files/{key}
+         * GET /api/v1/files/{key}
          *     Serves a file from S3 with the correct content type.
          * @description `key` is a multi-segment S3 path (templates/{id}/v{ver}/{node}/{file}).
          *     utoipa-axum 0.2 forwards the path string verbatim to axum::Router, so a
@@ -331,17 +331,17 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/instances": {
+    "/api/v1/instances": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** GET /api/instances */
+        /** GET /api/v1/instances */
         get: operations["list_instances"];
         put?: never;
-        /** POST /api/instances */
+        /** POST /api/v1/instances */
         post: operations["create_instance"];
         delete?: never;
         options?: never;
@@ -349,25 +349,25 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/instances/{id}": {
+    "/api/v1/instances/{id}": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** GET /api/instances/:id */
+        /** GET /api/v1/instances/:id */
         get: operations["get_instance"];
         put?: never;
         post?: never;
-        /** DELETE /api/instances/:id */
+        /** DELETE /api/v1/instances/:id */
         delete: operations["cancel_instance"];
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/instances/{id}/events": {
+    "/api/v1/instances/{id}/events": {
         parameters: {
             query?: never;
             header?: never;
@@ -375,7 +375,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * GET /api/instances/:id/events
+         * GET /api/v1/instances/:id/events
          * @description Returns the full event log for an instance from JetStream.
          */
         get: operations["get_instance_events"];
@@ -387,7 +387,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/instances/{id}/promote-to-test": {
+    "/api/v1/instances/{id}/promote-to-test": {
         parameters: {
             query?: never;
             header?: never;
@@ -397,7 +397,7 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * POST /api/instances/{id}/promote-to-test — create a `template_tests` row
+         * POST /api/v1/instances/{id}/promote-to-test — create a `template_tests` row
          *     from an existing instance's event log.
          * @description Scoops the instance's start tokens (from the initial Start-place tokens)
          *     and human-task completions (from signal-place tokens) into a new test
@@ -411,7 +411,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/instances/{id}/state": {
+    "/api/v1/instances/{id}/state": {
         parameters: {
             query?: never;
             header?: never;
@@ -419,7 +419,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * GET /api/instances/:id/state
+         * GET /api/v1/instances/:id/state
          * @description Returns instance state with marking projected from JetStream events (source
          *     of truth) and best-effort engine status for enabled transitions / run mode.
          */
@@ -432,7 +432,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/instances/{id}/step-executions": {
+    "/api/v1/instances/{id}/step-executions": {
         parameters: {
             query?: never;
             header?: never;
@@ -440,7 +440,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * GET /api/instances/:id/step-executions
+         * GET /api/v1/instances/:id/step-executions
          * @description Returns one row per workflow node × execution iteration for an instance.
          *     Materialized by the step-executions projection consumer; the frontend
          *     overlays this data on the canvas node cards.
@@ -454,7 +454,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/instances/{id}/stream": {
+    "/api/v1/instances/{id}/stream": {
         parameters: {
             query?: never;
             header?: never;
@@ -462,7 +462,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * GET /api/instances/{id}/stream
+         * GET /api/v1/instances/{id}/stream
          * @description SSE stream of the instance's domain events, replayed from the start
          *     (`DeliverPolicy::All`) then live, terminated by a final `result` event
          *     carrying the structured envelope. Composes with FireAndForget: fire, get
@@ -478,7 +478,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/observability/silent-drops": {
+    "/api/v1/observability/silent-drops": {
         parameters: {
             query?: never;
             header?: never;
@@ -486,7 +486,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * `GET /api/observability/silent-drops`
+         * `GET /api/v1/observability/silent-drops`
          * @description Reads the dead-letter queue: every record any consumer ACKed and
          *     dropped because it couldn't parse the input. Drains up to `limit`
          *     recent records from `MEKHAN_SILENT_DROPS` and returns them along
@@ -504,7 +504,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/processes": {
+    "/api/v1/processes": {
         parameters: {
             query?: never;
             header?: never;
@@ -512,7 +512,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * GET /api/processes — list processes with filter/sort/pagination.
+         * GET /api/v1/processes — list processes with filter/sort/pagination.
          * @description Query parameters use a custom DSL (see `query/extractor.rs`): `filter`,
          *     `sort`, `page`, `page_size`. Response shape is paginated.
          */
@@ -525,14 +525,14 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/processes/stats": {
+    "/api/v1/processes/stats": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** GET /api/processes/stats — aggregate process statistics. */
+        /** GET /api/v1/processes/stats — aggregate process statistics. */
         get: operations["process_stats"];
         put?: never;
         post?: never;
@@ -542,16 +542,16 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/processes/{process_id}": {
+    "/api/v1/processes/{process_id}": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** GET /api/processes/{process_id} — get process detail (with tasks, metrics, logs, artifact count). */
+        /** GET /api/v1/processes/{process_id} — get process detail (with tasks, metrics, logs, artifact count). */
         get: operations["get_process"];
-        /** PUT /api/processes/{process_id} — partial update of a process. */
+        /** PUT /api/v1/processes/{process_id} — partial update of a process. */
         put: operations["update_process"];
         post?: never;
         delete?: never;
@@ -560,14 +560,14 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/processes/{process_id}/artifacts": {
+    "/api/v1/processes/{process_id}/artifacts": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** GET /api/processes/{process_id}/artifacts — list catalogue entries for a process. */
+        /** GET /api/v1/processes/{process_id}/artifacts — list catalogue entries for a process. */
         get: operations["get_process_artifacts"];
         put?: never;
         post?: never;
@@ -577,7 +577,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/processes/{process_id}/artifacts/list": {
+    "/api/v1/processes/{process_id}/artifacts/list": {
         parameters: {
             query?: never;
             header?: never;
@@ -593,7 +593,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/processes/{process_id}/artifacts/stream": {
+    "/api/v1/processes/{process_id}/artifacts/stream": {
         parameters: {
             query?: never;
             header?: never;
@@ -610,14 +610,14 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/processes/{process_id}/logs": {
+    "/api/v1/processes/{process_id}/logs": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** GET /api/processes/{process_id}/logs — list logs for a process with filter/pagination. */
+        /** GET /api/v1/processes/{process_id}/logs — list logs for a process with filter/pagination. */
         get: operations["get_process_logs"];
         put?: never;
         post?: never;
@@ -627,7 +627,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/processes/{process_id}/logs/stream": {
+    "/api/v1/processes/{process_id}/logs/stream": {
         parameters: {
             query?: never;
             header?: never;
@@ -644,7 +644,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/processes/{process_id}/logs/tail": {
+    "/api/v1/processes/{process_id}/logs/tail": {
         parameters: {
             query?: never;
             header?: never;
@@ -660,14 +660,14 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/processes/{process_id}/metrics": {
+    "/api/v1/processes/{process_id}/metrics": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** GET /api/processes/{process_id}/metrics — list metrics for a process. */
+        /** GET /api/v1/processes/{process_id}/metrics — list metrics for a process. */
         get: operations["get_process_metrics"];
         put?: never;
         post?: never;
@@ -677,7 +677,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/processes/{process_id}/metrics/series": {
+    "/api/v1/processes/{process_id}/metrics/series": {
         parameters: {
             query?: never;
             header?: never;
@@ -693,7 +693,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/processes/{process_id}/metrics/stream": {
+    "/api/v1/processes/{process_id}/metrics/stream": {
         parameters: {
             query?: never;
             header?: never;
@@ -713,14 +713,14 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/processes/{process_id}/metrics/summary": {
+    "/api/v1/processes/{process_id}/metrics/summary": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** GET /api/processes/{process_id}/metrics/summary — aggregated metric stats per key. */
+        /** GET /api/v1/processes/{process_id}/metrics/summary — aggregated metric stats per key. */
         get: operations["get_process_metrics_summary"];
         put?: never;
         post?: never;
@@ -730,14 +730,14 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/processes/{process_id}/tasks": {
+    "/api/v1/processes/{process_id}/tasks": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** GET /api/processes/{process_id}/tasks — list tasks for a process. */
+        /** GET /api/v1/processes/{process_id}/tasks — list tasks for a process. */
         get: operations["get_process_tasks"];
         put?: never;
         post?: never;
@@ -747,7 +747,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/provenance/from-artifact/{execution_id}/{artifact_id}": {
+    "/api/v1/provenance/from-artifact/{execution_id}/{artifact_id}": {
         parameters: {
             query?: never;
             header?: never;
@@ -755,7 +755,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * GET /api/provenance/from-artifact/{execution_id}/{artifact_id}?depth=10
+         * GET /api/v1/provenance/from-artifact/{execution_id}/{artifact_id}?depth=10
          * @description Resolves a catalogue entry to its producing token and returns the full
          *     ancestry chain. Uses `source_event_sequence` for direct lookup when
          *     available, falling back to signal_key → cross-link resolution.
@@ -769,7 +769,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/provenance/link/{signal_key}": {
+    "/api/v1/provenance/link/{signal_key}": {
         parameters: {
             query?: never;
             header?: never;
@@ -777,7 +777,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * GET /api/provenance/link/{signal_key}
+         * GET /api/v1/provenance/link/{signal_key}
          * @description Look up a cross-net bridge link by signal_key.
          */
         get: operations["cross_link"];
@@ -789,7 +789,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/provenance/{net_id}/{event_seq}/detail": {
+    "/api/v1/provenance/{net_id}/{event_seq}/detail": {
         parameters: {
             query?: never;
             header?: never;
@@ -797,7 +797,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * GET /api/provenance/{net_id}/{event_seq}/detail
+         * GET /api/v1/provenance/{net_id}/{event_seq}/detail
          * @description Returns the full context for a causality event by joining to domain
          *     tables based on effect_handler. Enables rich detail views in the
          *     provenance DAG visualization.
@@ -811,7 +811,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/provenance/{net_id}/{token_id}": {
+    "/api/v1/provenance/{net_id}/{token_id}": {
         parameters: {
             query?: never;
             header?: never;
@@ -819,7 +819,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * GET /api/provenance/{net_id}/{token_id}?depth=10
+         * GET /api/v1/provenance/{net_id}/{token_id}?depth=10
          * @description Recursive CTE walking token ancestry: for a given token, find which events
          *     produced it, what tokens those events consumed, and recurse.
          */
@@ -832,17 +832,17 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/resources": {
+    "/api/v1/resources": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** `GET /api/resources` — paginated list, optionally filtered by type. */
+        /** `GET /api/v1/resources` — paginated list, optionally filtered by type. */
         get: operations["list_resources"];
         put?: never;
-        /** `POST /api/resources` — create a logical resource and its v1 row. */
+        /** `POST /api/v1/resources` — create a logical resource and its v1 row. */
         post: operations["create_resource"];
         delete?: never;
         options?: never;
@@ -850,7 +850,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/resources/types": {
+    "/api/v1/resources/types": {
         parameters: {
             query?: never;
             header?: never;
@@ -858,7 +858,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * `GET /api/resources/types` — registry introspection. Powers the
+         * `GET /api/v1/resources/types` — registry introspection. Powers the
          *     frontend picker's type list and the schema-driven create form.
          */
         get: operations["list_resource_types"];
@@ -870,7 +870,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/resources/{id}": {
+    "/api/v1/resources/{id}": {
         parameters: {
             query?: never;
             header?: never;
@@ -878,19 +878,19 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * `GET /api/resources/{id}` — admin view. Secret fields are listed by
+         * `GET /api/v1/resources/{id}` — admin view. Secret fields are listed by
          *     name only; values never leave Vault on the read path.
          */
         get: operations["get_resource"];
         /**
-         * `PUT /api/resources/{id}` — update display_name and/or config. Setting
+         * `PUT /api/v1/resources/{id}` — update display_name and/or config. Setting
          *     `config` bumps `latest_version` and writes a fresh vault_path; name-only
          *     updates do not.
          */
         put: operations["update_resource"];
         post?: never;
         /**
-         * `DELETE /api/resources/{id}` — soft delete. Preserves
+         * `DELETE /api/v1/resources/{id}` — soft delete. Preserves
          *     `resource_versions` rows + Vault paths so already-pinned instances keep
          *     resolving.
          */
@@ -900,14 +900,14 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/resources/{id}/audit": {
+    "/api/v1/resources/{id}/audit": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** `GET /api/resources/{id}/audit` — paginated audit trail for a resource. */
+        /** `GET /api/v1/resources/{id}/audit` — paginated audit trail for a resource. */
         get: operations["list_resource_audit"];
         put?: never;
         post?: never;
@@ -917,7 +917,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/resources/{id}/rotate": {
+    "/api/v1/resources/{id}/rotate": {
         parameters: {
             query?: never;
             header?: never;
@@ -927,7 +927,7 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * `POST /api/resources/{id}/rotate` — write a new version. Identical to
+         * `POST /api/v1/resources/{id}/rotate` — write a new version. Identical to
          *     `update_resource` with only `config` set, plus a different audit verb.
          */
         post: operations["rotate_resource"];
@@ -937,7 +937,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/tasks": {
+    "/api/v1/tasks": {
         parameters: {
             query?: never;
             header?: never;
@@ -945,7 +945,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * GET /api/tasks — list all tasks with filter/sort/pagination.
+         * GET /api/v1/tasks — list all tasks with filter/sort/pagination.
          * @description Returns `{ tasks, total, page, page_size, total_pages, has_next, has_previous }`
          *     where each task is a `HumanTask`-shaped JSON object (see `to_human_task_json`).
          *     The `tasks` key is what the Mekhan frontend's task store expects; the rest
@@ -960,7 +960,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/tasks/stream": {
+    "/api/v1/tasks/stream": {
         parameters: {
             query?: never;
             header?: never;
@@ -968,7 +968,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * GET /api/tasks/stream — SSE endpoint for real-time task events from NATS.
+         * GET /api/v1/tasks/stream — SSE endpoint for real-time task events from NATS.
          * @description Emits `{event, data}` lines for `task_created`, `task_completed`,
          *     `task_failed`, `task_cancelled`, `process_update`. `data` is the raw
          *     NATS payload as a JSON string (clients re-parse it).
@@ -982,7 +982,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/tasks/{id}": {
+    "/api/v1/tasks/{id}": {
         parameters: {
             query?: never;
             header?: never;
@@ -990,7 +990,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * GET /api/tasks/:id — get a single task.
+         * GET /api/v1/tasks/:id — get a single task.
          * @description Returns a `HumanTask`-shaped JSON object built from the DB row + `detail`
          *     JSONB projected by the causality consumer. This includes `task_id`, `steps`,
          *     `instructions_mdsvex`, `net_id`, `place`, etc. — everything the frontend
@@ -1005,7 +1005,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/tasks/{id}/cancel": {
+    "/api/v1/tasks/{id}/cancel": {
         parameters: {
             query?: never;
             header?: never;
@@ -1014,7 +1014,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** POST /api/tasks/{id}/cancel — cancel a task and publish NATS signal. */
+        /** POST /api/v1/tasks/{id}/cancel — cancel a task and publish NATS signal. */
         post: operations["cancel_task"];
         delete?: never;
         options?: never;
@@ -1022,7 +1022,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/tasks/{id}/complete": {
+    "/api/v1/tasks/{id}/complete": {
         parameters: {
             query?: never;
             header?: never;
@@ -1031,7 +1031,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** POST /api/tasks/{id}/complete — complete a task and publish NATS signal. */
+        /** POST /api/v1/tasks/{id}/complete — complete a task and publish NATS signal. */
         post: operations["complete_task"];
         delete?: never;
         options?: never;
@@ -1039,17 +1039,17 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/templates": {
+    "/api/v1/templates": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** GET /api/templates */
+        /** GET /api/v1/templates */
         get: operations["list_templates"];
         put?: never;
-        /** POST /api/templates */
+        /** POST /api/v1/templates */
         post: operations["create_template"];
         delete?: never;
         options?: never;
@@ -1057,20 +1057,20 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/templates/{id}": {
+    "/api/v1/templates/{id}": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** GET /api/templates/{id} */
+        /** GET /api/v1/templates/{id} */
         get: operations["get_template"];
-        /** PUT /api/templates/{id} */
+        /** PUT /api/v1/templates/{id} */
         put: operations["update_template"];
         post?: never;
         /**
-         * DELETE /api/templates/{id}
+         * DELETE /api/v1/templates/{id}
          *     Per Section 11.7: cascade cleanup for published templates with finished instances.
          */
         delete: operations["delete_template"];
@@ -1079,14 +1079,14 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/templates/{id}/air": {
+    "/api/v1/templates/{id}/air": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** GET /api/templates/{id}/air */
+        /** GET /api/v1/templates/{id}/air */
         get: operations["get_air"];
         put?: never;
         post?: never;
@@ -1096,7 +1096,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/templates/{id}/apply": {
+    "/api/v1/templates/{id}/apply": {
         parameters: {
             query?: never;
             header?: never;
@@ -1106,7 +1106,7 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * POST /api/templates/{id}/apply
+         * POST /api/v1/templates/{id}/apply
          * @description GitOps entry point: atomically publish a new version of the chain straight
          *     from a git-authored artifact. The supplied `graph` REPLACES the chain head
          *     wholesale (no CRDT merge). Either seeds-and-publishes a fresh `mekhan init`
@@ -1122,14 +1122,14 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/templates/{id}/bundle": {
+    "/api/v1/templates/{id}/bundle": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** GET /api/templates/{id}/bundle */
+        /** GET /api/v1/templates/{id}/bundle */
         get: operations["get_template_bundle"];
         put?: never;
         post?: never;
@@ -1139,7 +1139,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/templates/{id}/compile": {
+    "/api/v1/templates/{id}/compile": {
         parameters: {
             query?: never;
             header?: never;
@@ -1148,7 +1148,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** POST /api/templates/{id}/compile */
+        /** POST /api/v1/templates/{id}/compile */
         post: operations["compile_preview"];
         delete?: never;
         options?: never;
@@ -1156,7 +1156,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/templates/{id}/io-stubs": {
+    "/api/v1/templates/{id}/io-stubs": {
         parameters: {
             query?: never;
             header?: never;
@@ -1164,7 +1164,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * GET /api/templates/{id}/io-stubs
+         * GET /api/v1/templates/{id}/io-stubs
          *     Generated `_aithericon_io` pair (`.py` SDK delegate + typed `.pyi` overlay)
          *     per Python automated step, derived from each node's input scope. An
          *     authoring aid: unlike compile it does NOT require the graph to be
@@ -1183,7 +1183,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/templates/{id}/new-version": {
+    "/api/v1/templates/{id}/new-version": {
         parameters: {
             query?: never;
             header?: never;
@@ -1192,7 +1192,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** POST /api/templates/{id}/new-version */
+        /** POST /api/v1/templates/{id}/new-version */
         post: operations["new_version"];
         delete?: never;
         options?: never;
@@ -1200,7 +1200,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/templates/{id}/publish": {
+    "/api/v1/templates/{id}/publish": {
         parameters: {
             query?: never;
             header?: never;
@@ -1209,7 +1209,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** POST /api/templates/{id}/publish */
+        /** POST /api/v1/templates/{id}/publish */
         post: operations["publish_template"];
         delete?: never;
         options?: never;
@@ -1217,17 +1217,17 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/templates/{id}/tests": {
+    "/api/v1/templates/{id}/tests": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** GET /api/templates/{id}/tests — list tests for a template family. */
+        /** GET /api/v1/templates/{id}/tests — list tests for a template family. */
         get: operations["list_tests"];
         put?: never;
-        /** POST /api/templates/{id}/tests — create a new test. */
+        /** POST /api/v1/templates/{id}/tests — create a new test. */
         post: operations["create_test"];
         delete?: never;
         options?: never;
@@ -1235,7 +1235,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/templates/{id}/tests/run-all": {
+    "/api/v1/templates/{id}/tests/run-all": {
         parameters: {
             query?: never;
             header?: never;
@@ -1245,7 +1245,7 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * POST /api/templates/{id}/tests/run-all — run every enabled test for a
+         * POST /api/v1/templates/{id}/tests/run-all — run every enabled test for a
          *     template family. Used by the editor's "Run all" button and by the
          *     publication gate.
          */
@@ -1256,14 +1256,14 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/templates/{id}/triggers": {
+    "/api/v1/templates/{id}/triggers": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** GET /api/templates/{id}/triggers */
+        /** GET /api/v1/templates/{id}/triggers */
         get: operations["list_template_triggers"];
         put?: never;
         post?: never;
@@ -1273,14 +1273,14 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/templates/{id}/versions": {
+    "/api/v1/templates/{id}/versions": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** GET /api/templates/{id}/versions */
+        /** GET /api/v1/templates/{id}/versions */
         get: operations["list_versions"];
         put?: never;
         post?: never;
@@ -1290,7 +1290,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/templates/{template_id}/tests/{test_id}": {
+    "/api/v1/templates/{template_id}/tests/{test_id}": {
         parameters: {
             query?: never;
             header?: never;
@@ -1300,15 +1300,15 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        /** DELETE /api/templates/{template_id}/tests/{test_id} */
+        /** DELETE /api/v1/templates/{template_id}/tests/{test_id} */
         delete: operations["delete_test"];
         options?: never;
         head?: never;
-        /** PATCH /api/templates/{template_id}/tests/{test_id} — partial update. */
+        /** PATCH /api/v1/templates/{template_id}/tests/{test_id} — partial update. */
         patch: operations["update_test"];
         trace?: never;
     };
-    "/api/templates/{template_id}/tests/{test_id}/run": {
+    "/api/v1/templates/{template_id}/tests/{test_id}/run": {
         parameters: {
             query?: never;
             header?: never;
@@ -1317,7 +1317,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** POST /api/templates/{template_id}/tests/{test_id}/run — execute one test. */
+        /** POST /api/v1/templates/{template_id}/tests/{test_id}/run — execute one test. */
         post: operations["run_one"];
         delete?: never;
         options?: never;
@@ -1325,7 +1325,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/templates/{template_id}/tests/{test_id}/runs": {
+    "/api/v1/templates/{template_id}/tests/{test_id}/runs": {
         parameters: {
             query?: never;
             header?: never;
@@ -1333,7 +1333,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * GET /api/templates/{template_id}/tests/{test_id}/runs — recent run history.
+         * GET /api/v1/templates/{template_id}/tests/{test_id}/runs — recent run history.
          * @description Returns newest-first. The editor's detail sheet shows the latest one
          *     (failure_detail + final_scope + instance_id) so authors can diagnose a
          *     failure without chasing it through `/instances`.
@@ -1347,14 +1347,14 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/triggers": {
+    "/api/v1/triggers": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** GET /api/triggers */
+        /** GET /api/v1/triggers */
         get: operations["list_triggers"];
         put?: never;
         post?: never;
@@ -1364,7 +1364,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/triggers/metrics": {
+    "/api/v1/triggers/metrics": {
         parameters: {
             query?: never;
             header?: never;
@@ -1372,7 +1372,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * GET /api/triggers/metrics
+         * GET /api/v1/triggers/metrics
          * @description Returns aggregate counters per source kind plus the registry size. Useful
          *     for /admin dashboards and the editor's trigger landing page.
          */
@@ -1385,7 +1385,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/triggers/preview/cron": {
+    "/api/v1/triggers/preview/cron": {
         parameters: {
             query?: never;
             header?: never;
@@ -1395,7 +1395,7 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * POST /api/triggers/preview/cron
+         * POST /api/v1/triggers/preview/cron
          * @description Returns the next N fire times for a cron schedule. Used by the editor's
          *     trigger inspector to show users when their cron will fire next without
          *     having to ship the workflow first.
@@ -1407,7 +1407,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/triggers/source-scope": {
+    "/api/v1/triggers/source-scope": {
         parameters: {
             query?: never;
             header?: never;
@@ -1415,7 +1415,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * GET /api/triggers/source-scope?kind=cron
+         * GET /api/v1/triggers/source-scope?kind=cron
          * @description The per-source scope contract, surfaced so the editor can show authors
          *     exactly which identifiers are in scope under each mapping expression
          *     instead of leaving them to guess.
@@ -1429,7 +1429,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/triggers/{node_id}/enabled": {
+    "/api/v1/triggers/{node_id}/enabled": {
         parameters: {
             query?: never;
             header?: never;
@@ -1443,7 +1443,7 @@ export interface paths {
         options?: never;
         head?: never;
         /**
-         * PATCH /api/triggers/{node_id}/enabled
+         * PATCH /api/v1/triggers/{node_id}/enabled
          * @description Arm or pause a single trigger on its **published** template. This is the
          *     deliberate inverse of the rest of the template: a trigger's `source`,
          *     `payload_mapping` and target are frozen at publish, but whether it is
@@ -1459,7 +1459,7 @@ export interface paths {
         patch: operations["set_trigger_enabled"];
         trace?: never;
     };
-    "/api/triggers/{node_id}/fire": {
+    "/api/v1/triggers/{node_id}/fire": {
         parameters: {
             query?: never;
             header?: never;
@@ -1475,14 +1475,14 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/triggers/{node_id}/history": {
+    "/api/v1/triggers/{node_id}/history": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** GET /api/triggers/{node_id}/history */
+        /** GET /api/v1/triggers/{node_id}/history */
         get: operations["trigger_history"];
         put?: never;
         post?: never;
@@ -1492,7 +1492,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/health": {
+    "/healthz": {
         parameters: {
             query?: never;
             header?: never;
@@ -1500,8 +1500,13 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * GET /health
-         * @description Liveness probe — fixed shape, no DB / NATS dependencies.
+         * GET /healthz
+         * @description Liveness probe — fixed shape, no DB / NATS dependencies. Lives at the
+         *     root (NOT under `/api/v1`) and OUTSIDE the auth layer so load balancers,
+         *     Nomad/k8s probes, and uptime monitors can poll it without a session
+         *     cookie. The path follows k8s convention; spec stays in the OpenAPI doc
+         *     for completeness but the runtime mount is intentionally separate from
+         *     the main protected `OpenApiRouter`.
          */
         get: operations["liveness"];
         put?: never;
@@ -1533,7 +1538,7 @@ export interface components {
             transition_name?: string | null;
         };
         /**
-         * @description Request body for `POST /api/templates/{id}/apply` — the GitOps path.
+         * @description Request body for `POST /api/v1/templates/{id}/apply` — the GitOps path.
          *     The `graph` REPLACES the chain head wholesale (no CRDT merge); binary
          *     assets are uploaded out-of-band via the files endpoint before this call.
          */
@@ -1547,7 +1552,7 @@ export interface components {
             source_ref?: null | components["schemas"]["SourceRef"];
         };
         /**
-         * @description Response shape for `GET /api/processes/{process_id}/artifacts/list`.
+         * @description Response shape for `GET /api/v1/processes/{process_id}/artifacts/list`.
          *
          *     Frontend reads `body.entries[]` directly — keep the single-field envelope.
          */
@@ -1706,8 +1711,8 @@ export interface components {
             node_id?: string | null;
         };
         /**
-         * @description Request body for stateless compilation. Used by `POST /api/compile` and
-         *     `POST /api/templates/{id}/compile`. `files` is a per-node, per-filename map
+         * @description Request body for stateless compilation. Used by `POST /api/v1/compile` and
+         *     `POST /api/v1/templates/{id}/compile`. `files` is a per-node, per-filename map
          *     of inline contents; the preview compile emits `InputSource::Raw` entries so
          *     the AIR matches the StoragePath-keyed shape produced by publish.
          */
@@ -1757,7 +1762,7 @@ export interface components {
             template_id: string;
         };
         /**
-         * @description Request body for `POST /api/resources`. Carries every field needed to
+         * @description Request body for `POST /api/v1/resources`. Carries every field needed to
          *     land both a `resources` row and the first `resource_versions` row.
          */
         CreateResourceRequest: {
@@ -1807,7 +1812,7 @@ export interface components {
             name: string;
             start_tokens: components["schemas"]["StartToken"][];
         };
-        /** @description Request body for `POST /api/auth/tokens`. */
+        /** @description Request body for `POST /api/v1/auth/tokens`. */
         CreateTokenRequest: {
             /** @description Optional longer note — stored as the machine-user `description`. */
             description?: string | null;
@@ -1820,7 +1825,7 @@ export interface components {
             name: string;
         };
         /**
-         * @description Response of `POST /api/auth/tokens`. Identical to [`TokenSummary`] plus the
+         * @description Response of `POST /api/v1/auth/tokens`. Identical to [`TokenSummary`] plus the
          *     one-time `secret` — Mekhan never stores or re-serves it.
          */
         CreatedToken: {
@@ -1933,15 +1938,23 @@ export interface components {
             run_mode?: string | null;
         };
         /**
-         * @description Uniform error body returned by every fallible handler. Replaces the ad-hoc
-         *     `json!({"error": ...})` pattern so the spec exposes a single
-         *     `ErrorResponse` schema and the frontend gets one consistent error shape.
+         * @description Uniform error body returned by every fallible handler. The spec exposes a
+         *     single `ErrorResponse` schema and the frontend gets one consistent error
+         *     shape: switch on `code` (machine-readable, stable kebab-case) for
+         *     programmatic handling; render `error` for humans.
+         *
+         *     `code` is populated automatically by every `ApiError::*` constructor.
+         *     Stable values: `"bad-request"`, `"unauthorized"`, `"forbidden"`,
+         *     `"not-found"`, `"conflict"`, `"precondition-failed"`, `"internal"`,
+         *     `"compile-failed"`, `"publish-gate"`. Absent only on the few
+         *     extractor-level rejections that don't flow through `ApiError`.
          *
          *     Optional `compile_errors` carries structured per-edge / per-node failures
-         *     from the workflow compiler so the editor can highlight inline (Phase 2
-         *     typed-ports). Absent on non-compile errors.
+         *     from the workflow compiler so the editor can highlight inline.
+         *     Optional `failing_tests` carries the publish gate's per-test detail.
          */
         ErrorResponse: {
+            code?: string | null;
             compile_errors?: components["schemas"]["CompileErrorView"][] | null;
             error: string;
             /**
@@ -2023,7 +2036,7 @@ export interface components {
             targetField: string;
         };
         /**
-         * @description Response shape for `POST /api/files/upload/{id}/{node_id}`.
+         * @description Response shape for `POST /api/v1/files/upload/{id}/{node_id}`.
          *
          *     The handler returns S3 metadata after a successful upload.
          */
@@ -2196,7 +2209,7 @@ export interface components {
             mode: "single_active_coalesce";
         };
         /**
-         * @description Response shape for `GET /api/instances/{id}/events`.
+         * @description Response shape for `GET /api/v1/instances/{id}/events`.
          *
          *     Mirrors the literal `json!({ "net_id": ..., "events": [...], "event_count": ... })`
          *     envelope the handler previously emitted. `events` stays `Vec<serde_json::Value>`
@@ -2331,7 +2344,7 @@ export interface components {
             timestamp: string;
         };
         /**
-         * @description Response shape for `GET /api/processes/{process_id}/logs/tail`.
+         * @description Response shape for `GET /api/v1/processes/{process_id}/logs/tail`.
          *
          *     Frontend reads `body.logs[]` directly — keep the single-field envelope.
          */
@@ -2725,16 +2738,16 @@ export interface components {
             failing_tests: components["schemas"]["FailingTestInfo"][];
         };
         /**
-         * @description How a `POST /api/triggers/{id}/fire` caller wants the response delivered.
+         * @description How a `POST /api/v1/triggers/{id}/fire` caller wants the response delivered.
          *     The caller selects per-request (query `?reply=`, `Prefer` header, or a
          *     JSON body field); a Trigger node's optional `replyDefault` is used only
          *     when the caller doesn't specify. `Sse` is never *executed* on the fire
-         *     endpoint — SSE is the dedicated `GET /api/instances/{id}/stream` — but is
+         *     endpoint — SSE is the dedicated `GET /api/v1/instances/{id}/stream` — but is
          *     modeled so a node can advertise it as the intended consumption mode.
          * @enum {string}
          */
         ReplyMode: "fire_and_forget" | "wait_for_result" | "sse";
-        /** @description One row from `resource_audit`. Returned by `GET /api/resources/{id}/audit`. */
+        /** @description One row from `resource_audit`. Returned by `GET /api/v1/resources/{id}/audit`. */
         ResourceAuditEntry: {
             action: string;
             /** Format: int64 */
@@ -2767,7 +2780,7 @@ export interface components {
             memoryMb?: number | null;
         };
         /**
-         * @description Admin view returned by `GET /api/resources/{id}`. Secret fields appear
+         * @description Admin view returned by `GET /api/v1/resources/{id}`. Secret fields appear
          *     in `redacted_secret_fields` so the picker can render "<redacted>"
          *     placeholders without ever shipping the real values.
          */
@@ -2795,7 +2808,7 @@ export interface components {
             updated_at: string;
         };
         /**
-         * @description Compact list-row shape. Returned by `GET /api/resources` — never carries
+         * @description Compact list-row shape. Returned by `GET /api/v1/resources` — never carries
          *     per-version data (`public_config`, `vault_path`) so the list endpoint
          *     stays cheap to render.
          */
@@ -2820,7 +2833,7 @@ export interface components {
             updated_at: string;
         };
         /**
-         * @description One descriptor surfaced by `GET /api/resources/types`. Drives the
+         * @description One descriptor surfaced by `GET /api/v1/resources/types`. Drives the
          *     picker's type list and the schema-driven create form. `schema` is the
          *     schemars JSON Schema of the underlying ResourceType struct; the frontend
          *     renders it field-by-field.
@@ -2866,7 +2879,7 @@ export interface components {
             maxRetries?: number;
         };
         /**
-         * @description Request body for `POST /api/resources/{id}/rotate`. Always bumps
+         * @description Request body for `POST /api/v1/resources/{id}/rotate`. Always bumps
          *     version. The body carries the new config — the type cannot change at
          *     rotation time (`resource_type` is immutable for a logical resource).
          */
@@ -3016,7 +3029,7 @@ export interface components {
             token: unknown;
         };
         /**
-         * @description Response shape for `GET /api/instances/{id}/step-executions`.
+         * @description Response shape for `GET /api/v1/instances/{id}/step-executions`.
          *
          *     One row per `(workflow node, execution iteration)` for an instance.
          *     Materialized by the step-executions projection consumer
@@ -3120,7 +3133,7 @@ export interface components {
          */
         TaskFieldKind: "text" | "textarea" | "number" | "select" | "checkbox" | "file" | "signature";
         /**
-         * @description Response shape for `GET /api/tasks`.
+         * @description Response shape for `GET /api/v1/tasks`.
          *
          *     `tasks` is `Vec<serde_json::Value>` because each task is a
          *     `HumanTask`-shaped JSON built by `to_human_task_json` from heterogeneous DB
@@ -3233,7 +3246,7 @@ export interface components {
             role: string;
             token_id: string;
         };
-        /** @description One token row in `GET /api/auth/tokens`. Never carries the secret. */
+        /** @description One token row in `GET /api/v1/auth/tokens`. Never carries the secret. */
         TokenSummary: {
             /** @description RFC 3339 creation timestamp, when Zitadel reports it. */
             created_at?: string | null;
@@ -3242,7 +3255,7 @@ export interface components {
             expires_at?: string | null;
             /**
              * @description Opaque token id (the backing Zitadel machine-user id). Pass back to
-             *     `DELETE /api/auth/tokens/{id}` to revoke.
+             *     `DELETE /api/v1/auth/tokens/{id}` to revoke.
              */
             id: string;
             name: string;
@@ -3318,7 +3331,7 @@ export interface components {
             };
         };
         /**
-         * @description Request body for `PUT /api/resources/{id}`. Either `display_name` or
+         * @description Request body for `PUT /api/v1/resources/{id}`. Either `display_name` or
          *     `config` (or both) may be set; if `config` is set the call bumps
          *     `latest_version` and writes a new vault_path. `display_name`-only
          *     updates do **not** bump version.
@@ -3784,6 +3797,26 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    list_backends: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Registered backends */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackendDescriptor"][];
+                };
+            };
+        };
+    };
     analyze_graph: {
         parameters: {
             query?: never;
@@ -3941,26 +3974,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-        };
-    };
-    list_backends: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Registered backends */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BackendDescriptor"][];
                 };
             };
         };

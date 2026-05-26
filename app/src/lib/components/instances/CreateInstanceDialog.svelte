@@ -132,7 +132,7 @@
 			const resp = await uploadFile(templateId, startId, file);
 			const value: StartFileValue = {
 				key: resp.key,
-				url: `/api/files/${resp.key}`,
+				url: `/api/v1/files/${resp.key}`,
 				filename: resp.filename,
 				content_type: resp.content_type,
 				size: resp.size

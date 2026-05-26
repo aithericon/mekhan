@@ -138,7 +138,7 @@ async fn wait_for_completion(db: &sqlx::PgPool, id: Uuid, timeout: Duration) {
 
 /// `Start → ParallelSplit → (taskA, taskB) → ParallelJoin → End`.
 /// Branch nodes are HumanTasks whose `task_id` and place are picked up from
-/// the spawned hpi_tasks row and completed via `POST /api/tasks/{id}/complete`.
+/// the spawned hpi_tasks row and completed via `POST /api/v1/tasks/{id}/complete`.
 fn parallel_graph() -> Value {
     json!({
         "nodes": [
@@ -200,7 +200,7 @@ async fn publish_and_start(app: &axum::Router, graph: Value) -> (Uuid, String) {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/templates")
+                .uri("/api/v1/templates")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
@@ -225,7 +225,7 @@ async fn publish_and_start(app: &axum::Router, graph: Value) -> (Uuid, String) {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/templates/{template_id}/publish"))
+                .uri(format!("/api/v1/templates/{template_id}/publish"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -240,7 +240,7 @@ async fn publish_and_start(app: &axum::Router, graph: Value) -> (Uuid, String) {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/instances")
+                .uri("/api/v1/instances")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
@@ -299,7 +299,7 @@ async fn complete_task(app: &axum::Router, task_id: &str) {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/tasks/{task_id}/complete"))
+                .uri(format!("/api/v1/tasks/{task_id}/complete"))
                 .header("content-type", "application/json")
                 .body(Body::from(json!({ "data": {} }).to_string()))
                 .unwrap(),

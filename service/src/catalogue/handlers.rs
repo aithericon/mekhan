@@ -11,7 +11,7 @@ use crate::query::extractor::QueryParams;
 use crate::query::pagination::Paginated;
 use crate::AppState;
 
-/// GET /api/catalogue
+/// GET /api/v1/catalogue
 ///
 /// List/search catalogue entries with full filter, sort, pagination support.
 ///
@@ -25,10 +25,10 @@ use crate::AppState;
 ///   - `file_metadata` — JSONB containment on file_metadata
 ///
 /// Example:
-///   GET /api/catalogue?filter[category][eq]=model&filter[source_net][contains]=surrogate&sort=-size_bytes&page=0&page_size=10
+///   GET /api/v1/catalogue?filter[category][eq]=model&filter[source_net][contains]=surrogate&sort=-size_bytes&page=0&page_size=10
 #[utoipa::path(
     get,
-    path = "/api/catalogue",
+    path = "/api/v1/catalogue",
     responses(
         (status = 200, description = "Paginated catalogue entries", body = Paginated<CatalogueEntry>),
         (status = 400, description = "Invalid query DSL", body = ErrorResponse),
@@ -48,13 +48,13 @@ pub async fn list_entries(
     ))
 }
 
-/// GET /api/catalogue/stats
+/// GET /api/v1/catalogue/stats
 ///
 /// Aggregate statistics. Accepts the same filter params as the list endpoint,
 /// so you can get stats for a subset (e.g., stats for a specific net or category).
 #[utoipa::path(
     get,
-    path = "/api/catalogue/stats",
+    path = "/api/v1/catalogue/stats",
     responses(
         (status = 200, description = "Aggregate stats", body = CatalogueStats),
         (status = 400, description = "Invalid query DSL", body = ErrorResponse),
@@ -72,10 +72,10 @@ pub async fn stats(
     Ok(Json(stats))
 }
 
-/// GET /api/catalogue/stats/by-net — per-net breakdown.
+/// GET /api/v1/catalogue/stats/by-net — per-net breakdown.
 #[utoipa::path(
     get,
-    path = "/api/catalogue/stats/by-net",
+    path = "/api/v1/catalogue/stats/by-net",
     responses(
         (status = 200, description = "Per-net summary stats", body = Vec<NetStats>),
         (status = 500, description = "Server error", body = ErrorResponse),
@@ -92,10 +92,10 @@ pub async fn stats_by_net(
     Ok(Json(stats))
 }
 
-/// GET /api/catalogue/lineage/{process_id} — all artifacts for a campaign, grouped by step.
+/// GET /api/v1/catalogue/lineage/{process_id} — all artifacts for a campaign, grouped by step.
 #[utoipa::path(
     get,
-    path = "/api/catalogue/lineage/{process_id}",
+    path = "/api/v1/catalogue/lineage/{process_id}",
     params(("process_id" = String, Path, description = "Process id")),
     responses(
         (status = 200, description = "Artifacts grouped by step + iteration", body = LineageResponse),
@@ -118,15 +118,15 @@ pub async fn lineage(
     Ok(Json(response))
 }
 
-/// GET /api/catalogue/distinct/:column
+/// GET /api/v1/catalogue/distinct/:column
 ///
 /// Returns distinct non-null values for a column (for populating filter dropdowns).
 /// Column must be in the allowed filter fields whitelist.
 ///
-/// Example: GET /api/catalogue/distinct/category → ["model", "dataset", "plot"]
+/// Example: GET /api/v1/catalogue/distinct/category → ["model", "dataset", "plot"]
 #[utoipa::path(
     get,
-    path = "/api/catalogue/distinct/{column}",
+    path = "/api/v1/catalogue/distinct/{column}",
     params(("column" = String, Path, description = "Allowed filter column name")),
     responses(
         (status = 200, description = "Distinct non-null values", body = Vec<String>),
@@ -149,13 +149,13 @@ pub async fn distinct_values(
     Ok(Json(values))
 }
 
-/// GET /api/catalogue/distinct-jsonb/:column/:key
+/// GET /api/v1/catalogue/distinct-jsonb/:column/:key
 ///
 /// Distinct values for a JSONB key within file_metadata or user_metadata.
-/// Example: GET /api/catalogue/distinct-jsonb/file_metadata/format → ["json", "csv"]
+/// Example: GET /api/v1/catalogue/distinct-jsonb/file_metadata/format → ["json", "csv"]
 #[utoipa::path(
     get,
-    path = "/api/catalogue/distinct-jsonb/{column}/{key}",
+    path = "/api/v1/catalogue/distinct-jsonb/{column}/{key}",
     params(
         ("column" = String, Path, description = "JSONB column (file_metadata or user_metadata)"),
         ("key" = String, Path, description = "JSONB key inside the column"),
@@ -181,13 +181,13 @@ pub async fn distinct_jsonb_values(
     Ok(Json(values))
 }
 
-/// GET /api/catalogue/download/{path} — download artifact bytes by storage path.
+/// GET /api/v1/catalogue/download/{path} — download artifact bytes by storage path.
 ///
 /// The path parameter is the S3 storage_path from the catalogue entry.
-/// Example: GET /api/catalogue/download/artifacts/exec-123/gp_model/gp_model.json
+/// Example: GET /api/v1/catalogue/download/artifacts/exec-123/gp_model/gp_model.json
 #[utoipa::path(
     get,
-    path = "/api/catalogue/download/{*path}",
+    path = "/api/v1/catalogue/download/{*path}",
     params(("path" = String, Path, description = "S3 storage path (may contain slashes)")),
     responses(
         (status = 200, description = "Artifact bytes with Content-Disposition: attachment", content_type = "application/octet-stream"),
@@ -201,10 +201,7 @@ pub async fn download_artifact(
     Path(storage_path): Path<String>,
 ) -> impl IntoResponse {
     if storage_path.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "storage path required" })),
-        )
+        return crate::models::error::ApiError::bad_request("storage path required")
             .into_response();
     }
 
@@ -214,10 +211,7 @@ pub async fn download_artifact(
         Ok(result) => result,
         Err(e) => {
             tracing::warn!(path = %storage_path, error = %e, "catalogue download failed");
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({ "error": format!("artifact not found: {e}") })),
-            )
+            return crate::models::error::ApiError::not_found(format!("artifact not found: {e}"))
                 .into_response();
         }
     };
@@ -240,10 +234,10 @@ pub async fn download_artifact(
         .into_response()
 }
 
-/// GET /api/catalogue/{execution_id}/{id} — single catalogue entry.
+/// GET /api/v1/catalogue/{execution_id}/{id} — single catalogue entry.
 #[utoipa::path(
     get,
-    path = "/api/catalogue/{execution_id}/{id}",
+    path = "/api/v1/catalogue/{execution_id}/{id}",
     params(
         ("execution_id" = String, Path, description = "Execution id"),
         ("id" = String, Path, description = "Catalogue entry id"),

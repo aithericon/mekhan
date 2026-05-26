@@ -25,7 +25,7 @@ pub async fn run(server: &str, template_id: &str, directory: Option<&str>, forma
     let client = reqwest::Client::new();
 
     // Fetch template name via REST for directory naming.
-    let info_url = format!("{}/api/templates/{}", server, template_id);
+    let info_url = format!("{}/api/v1/templates/{}", server, template_id);
     let info: TemplateInfo = crate::http::auth(client.get(&info_url))
         .send()
         .await
@@ -49,7 +49,7 @@ pub async fn run(server: &str, template_id: &str, directory: Option<&str>, forma
     // Fetch the authoring bundle (graph + per-node inline files) over plain
     // HTTPS. The collaborative WSS channel is for live editing of drafts; the
     // CLI just needs the snapshot.
-    let bundle_url = format!("{}/api/templates/{}/bundle", server, template_id);
+    let bundle_url = format!("{}/api/v1/templates/{}/bundle", server, template_id);
     let resp = crate::http::auth(client.get(&bundle_url))
         .send()
         .await

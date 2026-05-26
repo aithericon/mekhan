@@ -31,7 +31,7 @@ deploy-prod ──►   ▼ tofu apply -var=image_tag=$SHA        │
               ┌─────────────────────────────────┐         │
               │ nomad_job "mekhan-service"      │ ───────►│ mekhan-service (canary rolling update)
               │  - constraint: node.class=...   │         │  count=2 prod / 1 dev
-              │  - provider="consul" + Traefik  │         │  /api/health → HTTP check
+              │  - provider="consul" + Traefik  │         │  /healthz → HTTP check
               │  - env vars from TF_VAR_*       │         │
               └─────────────────────────────────┘         └─ Zitadel (06d/e) for auth_mode=bff
                             ▲
@@ -180,7 +180,7 @@ just ci::verify-deploy prod
 | Symptom | Likely cause |
 |---|---|
 | `tofu apply` hangs and times out talking to Nomad | Runner not on the NetBird/WireGuard mesh — can't reach 10.20.0.10:4646. Tag the runner correctly or run from a machine that has the tunnel. |
-| Nomad deployment fails health check | `/api/health` not responding — check `nomad alloc logs <alloc-id>`. Common cause: `MEKHAN__DATABASE_URL` wrong, or Postgres firewall doesn't allow the Nomad client subnet. |
+| Nomad deployment fails health check | `/healthz` not responding — check `nomad alloc logs <alloc-id>`. Common cause: `MEKHAN__DATABASE_URL` wrong, or Postgres firewall doesn't allow the Nomad client subnet. |
 | Image pull fails on Nomad client | Registry creds wrong, or the Nomad client host's docker daemon isn't authenticated to `forge.aithericon.eu`. The jobspec passes explicit `auth { username; password }` so this shouldn't happen unless the secret values are wrong. |
 | Traefik returns 404 for `mekhan.aithericon.eu` | DNS doesn't point at the LB, **or** mekhan-service didn't register in Consul (check `nomad job status mekhan-service` for healthy allocs). |
 | `tofu init` fails with "state decryption failed" | `TF_VAR_state_encryption_passphrase` differs from what the state object was originally written with. Stable passphrase is critical. |

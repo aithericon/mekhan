@@ -614,7 +614,7 @@ fn apply_backend_borrows(
                 // executor's global ArtifactStore concatenates `path` with
                 // its configured prefix, so `path` must be the S3 object
                 // key (`templates/{id}/blobs/{node_id}/{filename}`) — not
-                // the platform-facing URL (`/api/files/<key>`), which would
+                // the platform-facing URL (`/api/v1/files/<key>`), which would
                 // 404 against S3. The `storage` key is *omitted* so the
                 // input falls through to the global store; emitting an
                 // empty `{}` would deserialize as a partial `StorageConfig`

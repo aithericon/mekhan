@@ -87,7 +87,7 @@
 	// For image files, the Y.Text content is the S3 key — build the URL
 	const activeImageSrc = $derived(
 		activeTabInfo && activeYText && isImageFile(activeTabInfo.filename)
-			? `/api/files/${activeYText.toString()}`
+			? `/api/v1/files/${activeYText.toString()}`
 			: null
 	);
 </script>

@@ -34,7 +34,7 @@ export type ScopeEntry = {
 	qualified: string;
 };
 
-/** Result of one `/api/analyze` round-trip. `graphOk: false` means the
+/** Result of one `/api/v1/analyze` round-trip. `graphOk: false` means the
  *  compiler refused to scope the graph (dangling edge, missing End, cycle),
  *  in which case `scopes` is empty and `diagnostics` carries the reasons.
  *  Picker UIs should grey themselves out and surface the diagnostic. */
@@ -108,7 +108,7 @@ export async function fetchNodeScopes(graph: WorkflowGraph): Promise<ScopeAnalys
 }
 
 /**
- * Lazy, module-cached fetch of `/api/resources/types`. The registry is
+ * Lazy, module-cached fetch of `/api/v1/resources/types`. The registry is
  * compile-time on the server (built from `inventory::submit!`) — values
  * never change at runtime, so one fetch per session is enough. The
  * promise is cached so multiple pickers opening at once share one

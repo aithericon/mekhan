@@ -3,7 +3,7 @@
 Status: **Implemented (landed on `main`)**
 Author: implementation + integration record (control/data foundation and follow-ups).
 Landed by: `b804d82` (native foundation), `7743b6b` (borrow-reachable scope + trigger-ingestion type gate), `9108e14` (stale-test alignment), `8c277ea` (producer-namespaced slug refs), `e0695bb` (Start as parked producer + Process group + two-column ref picker).
-Related code: `service/src/compiler/token_shape.rs`, `service/src/compiler/compile.rs` (`apply_control_data_foundation`), `service/src/compiler/lower.rs` (`split_outputs`, `park_outputs`), `service/src/compiler/error.rs` (`SlugConflict`), `service/src/models/template.rs` (`WorkflowNode.slug`), `service/src/handlers/templates.rs` (`/api/analyze`), `app/src/lib/editor/guard-scope.ts`, `app/.../property-sections/RefPicker.svelte`.
+Related code: `service/src/compiler/token_shape.rs`, `service/src/compiler/compile.rs` (`apply_control_data_foundation`), `service/src/compiler/lower.rs` (`split_outputs`, `park_outputs`), `service/src/compiler/error.rs` (`SlugConflict`), `service/src/models/template.rs` (`WorkflowNode.slug`), `service/src/handlers/templates.rs` (`/api/v1/analyze`), `app/src/lib/editor/guard-scope.ts`, `app/.../property-sections/RefPicker.svelte`.
 Supersedes in part: [`05-typed-ports.md`](./05-typed-ports.md), [`07-runtime-port-enforcement.md`](./07-runtime-port-enforcement.md).
 
 ## 1. The problem this solved
@@ -78,7 +78,7 @@ The engine `SchemaRegistry` validates every token crossing a schemed place/port.
 
 ## 7. Editor surface
 
-`surface_types()` → `POST /api/analyze` → `TypeSurface { place_schemas, scopes, diagnostics, graph_ok }`. It is pure and independent of `compile_to_air` succeeding, so a draft with an unstaged Python step (unpublishable) still gets full type surfacing while editing — feedback lands before publish, not at publish.
+`surface_types()` → `POST /api/v1/analyze` → `TypeSurface { place_schemas, scopes, diagnostics, graph_ok }`. It is pure and independent of `compile_to_air` succeeding, so a draft with an unstaged Python step (unpublishable) still gets full type surfacing while editing — feedback lands before publish, not at publish.
 
 The editor (`guard-scope.ts::fetchNodeScopes`, debounced in `NodePropertyPanel.svelte`) consumes this — no client-side scope reimplementation. `RefPicker.svelte` is a two-column node→variable popover (producer column + that producer's variables, filterable) used by `GuardEditor` in simple and advanced modes.
 
@@ -103,6 +103,6 @@ The editor (`guard-scope.ts::fetchNodeScopes`, debounced in `NodePropertyPanel.s
 | Read-arc synthesis | `apply_control_data_foundation` — `compile.rs` |
 | Slugs | `WorkflowNode.slug` (`models/template.rs`), `slug_index()`, `CompileError::SlugConflict` |
 | One resolver | `guard_refs()` → `resolve_ref()`; consumers `reachable_scope()`, `check_guard()`, `guard_readarc_plan()` |
-| Editor surface | `surface_types()` → `/api/analyze`; `guard-scope.ts`, `RefPicker.svelte` |
+| Editor surface | `surface_types()` → `/api/v1/analyze`; `guard-scope.ts`, `RefPicker.svelte` |
 | Ingestion gate | `validate_token_against_port()` (`token_shape.rs`), trigger dispatcher |
 | Tests | `service/tests/token_shape_prototype.rs`, inline `scope_reachability_tests`, `compiler_tests.rs`, `compiler_e2e.rs` |

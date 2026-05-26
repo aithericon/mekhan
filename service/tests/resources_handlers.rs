@@ -113,7 +113,7 @@ async fn post_create(app: &Router, body: Value) -> (StatusCode, Value) {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/resources")
+                .uri("/api/v1/resources")
                 .header("content-type", "application/json")
                 .body(Body::from(body.to_string()))
                 .unwrap(),
@@ -134,7 +134,7 @@ async fn list_returns_empty_for_fresh_workspace() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/api/resources")
+                .uri("/api/v1/resources")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -153,7 +153,7 @@ async fn types_returns_registry_descriptors() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/api/resources/types")
+                .uri("/api/v1/resources/types")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -209,7 +209,7 @@ async fn create_persists_public_config_and_writes_secret_via_store() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri(format!("/api/resources/{id}"))
+                .uri(format!("/api/v1/resources/{id}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -325,7 +325,7 @@ async fn get_returns_404_for_soft_deleted() {
     .await;
     let id = Uuid::parse_str(body["id"].as_str().unwrap()).unwrap();
 
-    // Soft-delete directly in the DB — equivalent to DELETE /api/resources/{id}
+    // Soft-delete directly in the DB — equivalent to DELETE /api/v1/resources/{id}
     // but bypassing the handler so we can assert GET's filter independent
     // of the delete handler.
     sqlx::query("UPDATE resources SET deleted_at = NOW() WHERE id = $1")
@@ -338,7 +338,7 @@ async fn get_returns_404_for_soft_deleted() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri(format!("/api/resources/{id}"))
+                .uri(format!("/api/v1/resources/{id}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -366,7 +366,7 @@ async fn update_bumps_version_and_writes_new_vault_path() {
         .oneshot(
             Request::builder()
                 .method("PUT")
-                .uri(format!("/api/resources/{id}"))
+                .uri(format!("/api/v1/resources/{id}"))
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
@@ -432,7 +432,7 @@ async fn delete_marks_row_and_preserves_versions() {
         .oneshot(
             Request::builder()
                 .method("DELETE")
-                .uri(format!("/api/resources/{id}"))
+                .uri(format!("/api/v1/resources/{id}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -478,7 +478,7 @@ async fn rotate_bumps_version_without_changing_schema() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/resources/{id}/rotate"))
+                .uri(format!("/api/v1/resources/{id}/rotate"))
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
@@ -533,7 +533,7 @@ async fn audit_returns_one_row_per_write_action() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/resources/{id}/rotate"))
+                .uri(format!("/api/v1/resources/{id}/rotate"))
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
@@ -557,7 +557,7 @@ async fn audit_returns_one_row_per_write_action() {
         .oneshot(
             Request::builder()
                 .method("DELETE")
-                .uri(format!("/api/resources/{id}"))
+                .uri(format!("/api/v1/resources/{id}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -569,7 +569,7 @@ async fn audit_returns_one_row_per_write_action() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri(format!("/api/resources/{id}/audit"))
+                .uri(format!("/api/v1/resources/{id}/audit"))
                 .body(Body::empty())
                 .unwrap(),
         )

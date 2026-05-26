@@ -255,7 +255,7 @@ async fn create_template(app: &axum::Router, name: &str, graph: Value) -> Uuid {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/templates")
+                .uri("/api/v1/templates")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({ "name": name, "graph": graph, "author_id": Uuid::new_v4() })
@@ -281,7 +281,7 @@ async fn publish(app: &axum::Router, id: Uuid) {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/templates/{id}/publish"))
+                .uri(format!("/api/v1/templates/{id}/publish"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -445,7 +445,7 @@ async fn malformed_catalogue_register_bumps_silent_drops() {
 
 /// Full DLQ round-trip: publish a malformed catalogue_register event, verify
 /// the record reaches the `MEKHAN_SILENT_DROPS` stream via the drainer, and
-/// the `GET /api/observability/silent-drops` endpoint returns it with the
+/// the `GET /api/v1/observability/silent-drops` endpoint returns it with the
 /// payload + per-site context intact.
 ///
 /// This is the test that proves the dead-letter queue actually does what it
@@ -568,7 +568,7 @@ async fn dlq_endpoint_returns_malformed_payload() {
     );
 }
 
-/// Helper: poll `GET /api/observability/silent-drops` until a record
+/// Helper: poll `GET /api/v1/observability/silent-drops` until a record
 /// carrying `sentinel` shows up (or timeout). Returns the records array
 /// of the matching response.
 async fn poll_dlq_for_sentinel(
@@ -584,7 +584,7 @@ async fn poll_dlq_for_sentinel(
             .oneshot(
                 Request::builder()
                     .method("GET")
-                    .uri(format!("/api/observability/silent-drops?kind={kind}"))
+                    .uri(format!("/api/v1/observability/silent-drops?kind={kind}"))
                     .body(Body::empty())
                     .unwrap(),
             )

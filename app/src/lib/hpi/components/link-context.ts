@@ -16,8 +16,8 @@ export function getLinkId(): string | null {
 /** Append `?link=` to a URL if it's an internal file URL and a linkId is available. */
 export function withLinkParam(url: string, linkId: string | null): string {
 	if (!linkId) return url;
-	// Match both relative (/api/files/...) and absolute (https://app.hpi.dev/api/files/...) URLs
-	if (!url.includes('/api/files/')) return url;
+	// Match both relative (/api/v1/files/...) and absolute (https://app.hpi.dev/api/v1/files/...) URLs
+	if (!url.includes('/api/v1/files/')) return url;
 	const sep = url.includes('?') ? '&' : '?';
 	return `${url}${sep}link=${encodeURIComponent(linkId)}`;
 }

@@ -242,7 +242,7 @@ fi
 
 log "Checking mekhan-service..."
 
-if curl -sf "$BACKEND_URL/api/templates?page=1&per_page=1" > /dev/null 2>&1; then
+if curl -sf "$BACKEND_URL/api/v1/templates?page=1&per_page=1" > /dev/null 2>&1; then
     log "mekhan-service already running"
 else
     # Kill stale process on port 3100 if any
@@ -283,7 +283,7 @@ else
         echo $! > "$PID_DIR/mekhan-service.pid"
     )
 
-    wait_for_url "$BACKEND_URL/api/templates?page=1&per_page=1" "mekhan-service" 60
+    wait_for_url "$BACKEND_URL/api/v1/templates?page=1&per_page=1" "mekhan-service" 60
 fi
 
 # ---------------------------------------------------------------------------
@@ -298,7 +298,7 @@ for check in \
     "NATS:http://localhost:8333/healthz" \
     "petri-lab:$PETRI_URL/api/nets" \
     "HPI:$HPI_URL" \
-    "mekhan-service:$BACKEND_URL/api/templates?page=1&per_page=1"; do
+    "mekhan-service:$BACKEND_URL/api/v1/templates?page=1&per_page=1"; do
     label="${check%%:*}"
     url="${check#*:}"
     if curl -sf "$url" > /dev/null 2>&1; then

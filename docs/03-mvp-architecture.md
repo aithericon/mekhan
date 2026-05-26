@@ -810,34 +810,34 @@ On publish:
 ### Template Endpoints
 
 ```
-GET    /api/templates                    # List templates (paginated, filterable)
-POST   /api/templates                    # Create new template
-GET    /api/templates/:id                # Get template (with graph)
-PUT    /api/templates/:id                # Update template (draft only)
-DELETE /api/templates/:id                # Delete template (draft only)
-POST   /api/templates/:id/publish        # Publish template (compiles + locks)
-POST   /api/templates/:id/new-version    # Create new version from published
-GET    /api/templates/:id/versions       # List all versions in chain
-GET    /api/templates/:id/air            # Get compiled AIR JSON (published only)
-POST   /api/templates/:id/compile        # Preview AIR compilation (without publishing)
+GET    /api/v1/templates                    # List templates (paginated, filterable)
+POST   /api/v1/templates                    # Create new template
+GET    /api/v1/templates/:id                # Get template (with graph)
+PUT    /api/v1/templates/:id                # Update template (draft only)
+DELETE /api/v1/templates/:id                # Delete template (draft only)
+POST   /api/v1/templates/:id/publish        # Publish template (compiles + locks)
+POST   /api/v1/templates/:id/new-version    # Create new version from published
+GET    /api/v1/templates/:id/versions       # List all versions in chain
+GET    /api/v1/templates/:id/air            # Get compiled AIR JSON (published only)
+POST   /api/v1/templates/:id/compile        # Preview AIR compilation (without publishing)
 ```
 
 ### Instance Endpoints
 
 ```
-GET    /api/instances                     # List instances (paginated, filterable)
-POST   /api/instances                     # Create + deploy instance
-GET    /api/instances/:id                 # Get instance details
-GET    /api/instances/:id/state           # Get live state from petri-lab
-GET    /api/instances/:id/events          # Get event stream from petri-lab
-DELETE /api/instances/:id                 # Cancel instance
+GET    /api/v1/instances                     # List instances (paginated, filterable)
+POST   /api/v1/instances                     # Create + deploy instance
+GET    /api/v1/instances/:id                 # Get instance details
+GET    /api/v1/instances/:id/state           # Get live state from petri-lab
+GET    /api/v1/instances/:id/events          # Get event stream from petri-lab
+DELETE /api/v1/instances/:id                 # Cancel instance
 ```
 
 ### Request/Response Schemas
 
 #### Create Template
 ```typescript
-// POST /api/templates
+// POST /api/v1/templates
 Request: {
   name: string;
   description?: string;
@@ -857,7 +857,7 @@ Response: {
 
 #### Update Template
 ```typescript
-// PUT /api/templates/:id
+// PUT /api/v1/templates/:id
 Request: {
   name?: string;
   description?: string;
@@ -870,7 +870,7 @@ Response: { /* full template */ }
 
 #### Publish Template
 ```typescript
-// POST /api/templates/:id/publish
+// POST /api/v1/templates/:id/publish
 Request: {} // No body needed
 
 Response: {
@@ -885,7 +885,7 @@ Response: {
 
 #### Create Instance
 ```typescript
-// POST /api/instances
+// POST /api/v1/instances
 Request: {
   template_id: string;           // Must be a published template
   metadata?: Record<string, unknown>;  // Instance-specific context
@@ -903,7 +903,7 @@ Response: {
 
 #### Get Instance State
 ```typescript
-// GET /api/instances/:id/state
+// GET /api/v1/instances/:id/state
 Response: {
   instance_id: string;
   net_id: string;
@@ -918,7 +918,7 @@ Response: {
 
 #### List Templates
 ```typescript
-// GET /api/templates?page=1&per_page=20&published=true&search=approval
+// GET /api/v1/templates?page=1&per_page=20&published=true&search=approval
 Response: {
   items: Template[];
   total: number;
@@ -952,7 +952,7 @@ Response: {
 ```
 User clicks "Run Workflow" on a published template
     │
-    ├── Frontend: POST /api/instances { template_id }
+    ├── Frontend: POST /api/v1/instances { template_id }
     │
     ├── mekhan-service:
     │   1. Fetch template from DB (must be published)
@@ -1047,12 +1047,12 @@ Token arrives at p_{id}_input (automated step block)
 mekhan-app frontend polls or subscribes to state:
     │
     ├── Option A: Polling
-    │   GET /api/instances/{id}/state (via mekhan-service)
+    │   GET /api/v1/instances/{id}/state (via mekhan-service)
     │   mekhan-service proxies to: GET /api/nets/{net_id}/state
     │   Returns marking (which places have tokens) + enabled transitions
     │
     ├── Option B: SSE (preferred for live updates)
-    │   GET /api/instances/{id}/events (via mekhan-service)
+    │   GET /api/v1/instances/{id}/events (via mekhan-service)
     │   mekhan-service proxies to: GET /api/nets/{net_id}/events/stream
     │   Returns real-time DomainEvent stream
     │
@@ -1272,7 +1272,7 @@ The `template_id` field in `NetCreated` events is set to the Mekhan template UUI
 ### 11.2 Instance Lifecycle State Machine
 
 ```
-                  POST /api/instances
+                  POST /api/v1/instances
                         │
                         ▼
                     ┌─────────┐
@@ -1323,7 +1323,7 @@ mekhan-service subscribes to lifecycle events for its nets via a NATS consumer f
 2. Schedule deferred cleanup (see 11.4)
 ```
 
-#### On User-Initiated Cancel (DELETE /api/instances/:id)
+#### On User-Initiated Cancel (DELETE /api/v1/instances/:id)
 
 ```
 1. Call petri-lab: POST /api/nets/{net_id}/terminate
@@ -1467,7 +1467,7 @@ When a user deletes a workflow template, associated test/draft instances must be
 #### Cascade Sequence
 
 ```
-DELETE /api/templates/:id
+DELETE /api/v1/templates/:id
     │
     ├── Check: any running instances?
     │   YES → 409 Conflict: "Cannot delete template with active instances"

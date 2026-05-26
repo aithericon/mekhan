@@ -48,7 +48,7 @@ pub async fn run(
 
     // Single-test mode: look the test up by name, then POST /run.
     if let Some(name) = name_filter {
-        let list_url = format!("{server}/api/templates/{template_id}/tests");
+        let list_url = format!("{server}/api/v1/templates/{template_id}/tests");
         let tests: Vec<TemplateTest> = crate::http::auth(client.get(&list_url))
             .send()
             .await
@@ -63,7 +63,7 @@ pub async fn run(
             .find(|t| t.name == name)
             .with_context(|| format!("no test named '{name}'"))?;
         let run_url = format!(
-            "{server}/api/templates/{template_id}/tests/{}/run",
+            "{server}/api/v1/templates/{template_id}/tests/{}/run",
             target.id
         );
         let run: TemplateTestRun = crate::http::auth(client.post(&run_url))
@@ -86,7 +86,7 @@ pub async fn run(
 
     // Run-all path.
     let run_url = format!(
-        "{server}/api/templates/{template_id}/tests/run-all?include_disabled={}",
+        "{server}/api/v1/templates/{template_id}/tests/run-all?include_disabled={}",
         include_disabled
     );
     let resp = crate::http::auth(client.post(&run_url))
@@ -103,7 +103,7 @@ pub async fn run(
 
     // We need names to print — fetch tests once for the join.
     let tests: Vec<TemplateTest> = crate::http::auth(
-        client.get(format!("{server}/api/templates/{template_id}/tests")),
+        client.get(format!("{server}/api/v1/templates/{template_id}/tests")),
     )
     .send()
     .await

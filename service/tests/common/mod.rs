@@ -206,7 +206,7 @@ pub async fn test_app_with_introspection(
 }
 
 /// Build the full Axum Router with a caller-supplied [`ZitadelMgmt`] wired
-/// into `AppState.zitadel_mgmt` (the embedded `/api/auth/tokens` broker). The
+/// into `AppState.zitadel_mgmt` (the embedded `/api/v1/auth/tokens` broker). The
 /// cookie `Authenticator` is a mock that *requires* a cookie, so a request
 /// with no cookie (e.g. a Bearer PAT) 401s — letting tests prove the
 /// cookie-only privilege boundary as well as the happy path.

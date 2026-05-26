@@ -161,7 +161,7 @@ async fn create_template(app: &axum::Router, name: &str, graph: Value) -> Uuid {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/templates")
+                .uri("/api/v1/templates")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({ "name": name, "graph": graph, "author_id": Uuid::new_v4() })
@@ -187,7 +187,7 @@ async fn publish(app: &axum::Router, id: Uuid) {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/templates/{id}/publish"))
+                .uri(format!("/api/v1/templates/{id}/publish"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -204,7 +204,7 @@ async fn create_instance(app: &axum::Router, template_id: Uuid) -> Uuid {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/instances")
+                .uri("/api/v1/instances")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
@@ -380,7 +380,7 @@ async fn loop_body_with_subworkflow_and_catalogue_query_composes() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri(format!("/api/instances/{instance}/state"))
+                .uri(format!("/api/v1/instances/{instance}/state"))
                 .body(Body::empty())
                 .unwrap(),
         )

@@ -55,7 +55,7 @@ async fn real_zitadel_pat_authorizes_apply() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/templates")
+                .uri("/api/v1/templates")
                 .header("content-type", "application/json")
                 .header("cookie", "mekhan_session=valid")
                 .body(Body::from(
@@ -77,7 +77,7 @@ async fn real_zitadel_pat_authorizes_apply() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/templates/{id}/apply"))
+                .uri(format!("/api/v1/templates/{id}/apply"))
                 .header("content-type", "application/json")
                 .header("authorization", format!("Bearer {pat}"))
                 .body(Body::from(
@@ -148,7 +148,7 @@ async fn real_zitadel_broker_create_apply_revoke() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/templates")
+                .uri("/api/v1/templates")
                 .header("content-type", "application/json")
                 .header("cookie", "mekhan_session=valid")
                 .body(Body::from(
@@ -168,7 +168,7 @@ async fn real_zitadel_broker_create_apply_revoke() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/templates/{id}/apply"))
+                .uri(format!("/api/v1/templates/{id}/apply"))
                 .header("content-type", "application/json")
                 .header("authorization", format!("Bearer {}", created.secret))
                 .body(Body::from(

@@ -4,10 +4,10 @@
 //! — the same disk fixture the runtime seeder publishes at service startup
 //! — then drives it through the full pipeline:
 //!
-//! 1. POST `/api/templates` with the loaded `(graph, files)`.
-//! 2. POST `/api/templates/{id}/publish` (stages Python files + generated
+//! 1. POST `/api/v1/templates` with the loaded `(graph, files)`.
+//! 2. POST `/api/v1/templates/{id}/publish` (stages Python files + generated
 //!    `_aithericon_io.{py,pyi}` to S3, compiles AIR).
-//! 3. POST `/api/instances` with `start_tokens` seeding the Start block's
+//! 3. POST `/api/v1/instances` with `start_tokens` seeding the Start block's
 //!    `invoice_file` + `invoice_id` fields.
 //! 4. Complete the Review human task with a *low-value* amount (< $5,000)
 //!    so the Decision routes to the `Processed` end — exercises Start →
@@ -227,7 +227,7 @@ async fn invoice_processing_demo_low_value_path_completes() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/templates")
+                .uri("/api/v1/templates")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
@@ -257,7 +257,7 @@ async fn invoice_processing_demo_low_value_path_completes() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/templates/{template_id}/publish"))
+                .uri(format!("/api/v1/templates/{template_id}/publish"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -277,7 +277,7 @@ async fn invoice_processing_demo_low_value_path_completes() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/instances")
+                .uri("/api/v1/instances")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
@@ -290,7 +290,7 @@ async fn invoice_processing_demo_low_value_path_completes() {
                                     "filename": "synthetic-invoice.png",
                                     "content_type": "image/png",
                                     "size": 1024,
-                                    "url": "/api/files/test-fixtures/synthetic-invoice.png"
+                                    "url": "/api/v1/files/test-fixtures/synthetic-invoice.png"
                                 },
                                 "invoice_id": "E2E-LOW-VALUE"
                             }
@@ -317,7 +317,7 @@ async fn invoice_processing_demo_low_value_path_completes() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/tasks/{task_id}/complete"))
+                .uri(format!("/api/v1/tasks/{task_id}/complete"))
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({

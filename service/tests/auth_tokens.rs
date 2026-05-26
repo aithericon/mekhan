@@ -1,4 +1,4 @@
-//! Integration tests for the embedded `/api/auth/tokens` endpoints, driving
+//! Integration tests for the embedded `/api/v1/auth/tokens` endpoints, driving
 //! the real router (so `require_auth_middleware` + the `AuthUser` cookie
 //! extractor are exercised) with the broker pointed at a wiremock Zitadel.
 //!
@@ -89,7 +89,7 @@ async fn create_list_revoke_round_trip_over_cookie_auth() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/auth/tokens")
+                .uri("/api/v1/auth/tokens")
                 .header("content-type", "application/json")
                 .header("cookie", "mekhan_session=valid")
                 .body(Body::from(json!({ "name": "ci" }).to_string()))
@@ -108,7 +108,7 @@ async fn create_list_revoke_round_trip_over_cookie_auth() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/api/auth/tokens")
+                .uri("/api/v1/auth/tokens")
                 .header("cookie", "mekhan_session=valid")
                 .body(Body::empty())
                 .unwrap(),
@@ -126,7 +126,7 @@ async fn create_list_revoke_round_trip_over_cookie_auth() {
         .oneshot(
             Request::builder()
                 .method("DELETE")
-                .uri("/api/auth/tokens/u-1")
+                .uri("/api/v1/auth/tokens/u-1")
                 .header("cookie", "mekhan_session=valid")
                 .body(Body::empty())
                 .unwrap(),
@@ -149,7 +149,7 @@ async fn bearer_without_cookie_cannot_reach_token_endpoints() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/api/auth/tokens")
+                .uri("/api/v1/auth/tokens")
                 .header("authorization", "Bearer some-pat")
                 .body(Body::empty())
                 .unwrap(),
@@ -186,7 +186,7 @@ async fn revoking_another_users_token_id_is_404() {
         .oneshot(
             Request::builder()
                 .method("DELETE")
-                .uri("/api/auth/tokens/u-bob")
+                .uri("/api/v1/auth/tokens/u-bob")
                 .header("cookie", "mekhan_session=valid")
                 .body(Body::empty())
                 .unwrap(),

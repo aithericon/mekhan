@@ -10,7 +10,7 @@ import { authFetch } from '$lib/auth/fetch';
 import { connectSse, type SseConnection } from '$lib/net/sse';
 import type { HumanTask } from '$lib/types/tasks';
 
-const SSE_URL = '/api/tasks/stream';
+const SSE_URL = '/api/v1/tasks/stream';
 const SSE_MAX_RETRIES = 5;
 const SSE_INITIAL_RETRY_MS = 1000;
 

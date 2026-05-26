@@ -147,7 +147,7 @@ async fn create_with_graph(
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/templates")
+                .uri("/api/v1/templates")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
@@ -172,7 +172,7 @@ async fn publish(app: &axum::Router, id: Uuid) -> Value {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/templates/{id}/publish"))
+                .uri(format!("/api/v1/templates/{id}/publish"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -232,7 +232,7 @@ async fn subworkflow_pins_child_at_parent_publish() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/templates/{child_v1}/new-version"))
+                .uri(format!("/api/v1/templates/{child_v1}/new-version"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -272,7 +272,7 @@ async fn subworkflow_pins_child_at_parent_publish() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri(format!("/api/templates/{parent}/air"))
+                .uri(format!("/api/v1/templates/{parent}/air"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -369,7 +369,7 @@ async fn subworkflow_spawns_child_and_completes() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/instances")
+                .uri("/api/v1/instances")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
@@ -431,7 +431,7 @@ async fn create_with_graph_json(
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/templates")
+                .uri("/api/v1/templates")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
@@ -602,7 +602,7 @@ async fn subworkflow_borrows_child_output_field() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/instances")
+                .uri("/api/v1/instances")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({

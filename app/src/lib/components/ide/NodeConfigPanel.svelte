@@ -21,7 +21,7 @@
 		binding: YjsGraphBinding;
 		nodeId: string;
 		readonly?: boolean;
-		/** This node's in-scope refs (from `/api/analyze`). Drives the
+		/** This node's in-scope refs (from `/api/v1/analyze`). Drives the
 		 *  Inputs-in-scope picker and every nested section that embeds a
 		 *  RefPicker (Decision, Loop, AutomatedStep, HumanTask). */
 		scope?: ScopeEntry[];

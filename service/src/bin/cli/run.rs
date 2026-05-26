@@ -42,7 +42,7 @@ pub async fn run(
 
     println!("Creating instance from template {}...", template_id);
 
-    let url = format!("{}/api/instances", server_url);
+    let url = format!("{}/api/v1/instances", server_url);
     let client = reqwest::Client::new();
     let body = json!({
         "template_id": template_id,

@@ -24,20 +24,22 @@ export default defineConfig({
 	},
 	server: {
 		proxy: {
-			// Petri-lab engine API (port 3030)
-			'/petri': {
-				target: 'http://localhost:3030',
-				changeOrigin: true,
-				rewrite: (path: string) => path.replace(/^\/petri/, '')
-			},
 			// Yjs WebSocket — must come before generic /api so the upgrade is preserved
 			'/api/yjs': {
 				target: 'http://localhost:3100',
 				ws: true,
 				changeOrigin: true
 			},
-			// All other /api/* requests → mekhan-service
+			// All /api/* requests → mekhan-service (includes /api/v1/* JSON API,
+			// /api/auth/* OAuth bootstrap, /api/triggers/webhook/*).
 			'/api': {
+				target: 'http://localhost:3100',
+				changeOrigin: true
+			},
+			// Engine traffic also flows through mekhan in dev for parity with
+			// prod single-origin serving. mekhan's `/petri/*` proxy strips the
+			// prefix and forwards to `config.petri_lab_url` (default :3030).
+			'/petri': {
 				target: 'http://localhost:3100',
 				changeOrigin: true
 			}

@@ -5,7 +5,7 @@
 //!
 //! Drives every seam the per-handler tests stub out: the engine launches the
 //! AIR, the executor would handle Automated steps, the causality consumer
-//! projects `hpi_tasks`, the `/api/tasks/.../complete` path sends a
+//! projects `hpi_tasks`, the `/api/v1/tasks/.../complete` path sends a
 //! `human.completed.<net_id>.<place>` NATS message, and the runner's
 //! auto-completer + scope builder run against real `causality_events` /
 //! `step_execution` rows rather than a hand-seeded fixture.
@@ -198,7 +198,7 @@ fn demo_graph() -> Value {
 }
 
 /// Poll `hpi_tasks` until the engine's `human.request` effect projects a
-/// pending row for this net. Returns the task id the `/api/tasks/.../complete`
+/// pending row for this net. Returns the task id the `/api/v1/tasks/.../complete`
 /// endpoint takes.
 async fn wait_for_pending_task(db: &sqlx::PgPool, net_id: &str, timeout: Duration) -> String {
     let start = std::time::Instant::now();
@@ -227,7 +227,7 @@ async fn complete_task(app: &axum::Router, task_id: &str, data: Value) {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/tasks/{task_id}/complete"))
+                .uri(format!("/api/v1/tasks/{task_id}/complete"))
                 .header("content-type", "application/json")
                 .body(Body::from(json!({ "data": data }).to_string()))
                 .unwrap(),
@@ -290,7 +290,7 @@ async fn template_tests_live_full_cycle() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/templates")
+                .uri("/api/v1/templates")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
@@ -316,7 +316,7 @@ async fn template_tests_live_full_cycle() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/templates/{template_id}/publish"))
+                .uri(format!("/api/v1/templates/{template_id}/publish"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -333,7 +333,7 @@ async fn template_tests_live_full_cycle() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/instances")
+                .uri("/api/v1/instances")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
@@ -381,7 +381,7 @@ async fn template_tests_live_full_cycle() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/instances/{instance_id}/promote-to-test"))
+                .uri(format!("/api/v1/instances/{instance_id}/promote-to-test"))
                 .header("content-type", "application/json")
                 .body(Body::from(json!({ "name": "live-promoted" }).to_string()))
                 .unwrap(),
@@ -439,7 +439,7 @@ async fn template_tests_live_full_cycle() {
         .oneshot(
             Request::builder()
                 .method("PATCH")
-                .uri(format!("/api/templates/{template_id}/tests/{test_id}"))
+                .uri(format!("/api/v1/templates/{template_id}/tests/{test_id}"))
                 .header("content-type", "application/json")
                 .body(Body::from(serde_json::to_vec(&patch_body).unwrap()))
                 .unwrap(),
@@ -456,7 +456,7 @@ async fn template_tests_live_full_cycle() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/templates/{template_id}/tests/{test_id}/run"))
+                .uri(format!("/api/v1/templates/{template_id}/tests/{test_id}/run"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -486,7 +486,7 @@ async fn template_tests_live_full_cycle() {
         .oneshot(
             Request::builder()
                 .method("PATCH")
-                .uri(format!("/api/templates/{template_id}/tests/{test_id}"))
+                .uri(format!("/api/v1/templates/{template_id}/tests/{test_id}"))
                 .header("content-type", "application/json")
                 .body(Body::from(serde_json::to_vec(&patch_body).unwrap()))
                 .unwrap(),
@@ -500,7 +500,7 @@ async fn template_tests_live_full_cycle() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/templates/{template_id}/tests/{test_id}/run"))
+                .uri(format!("/api/v1/templates/{template_id}/tests/{test_id}/run"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -544,7 +544,7 @@ async fn template_tests_live_full_cycle() {
         .oneshot(
             Request::builder()
                 .method("PATCH")
-                .uri(format!("/api/templates/{template_id}/tests/{test_id}"))
+                .uri(format!("/api/v1/templates/{template_id}/tests/{test_id}"))
                 .header("content-type", "application/json")
                 .body(Body::from(serde_json::to_vec(&patch_body).unwrap()))
                 .unwrap(),
@@ -558,7 +558,7 @@ async fn template_tests_live_full_cycle() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/templates/{template_id}/tests/{test_id}/run"))
+                .uri(format!("/api/v1/templates/{template_id}/tests/{test_id}/run"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -592,7 +592,7 @@ async fn template_tests_live_full_cycle() {
         .oneshot(
             Request::builder()
                 .method("PATCH")
-                .uri(format!("/api/templates/{template_id}/tests/{test_id}"))
+                .uri(format!("/api/v1/templates/{template_id}/tests/{test_id}"))
                 .header("content-type", "application/json")
                 .body(Body::from(serde_json::to_vec(&patch_body).unwrap()))
                 .unwrap(),
@@ -606,7 +606,7 @@ async fn template_tests_live_full_cycle() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/templates/{template_id}/tests/{test_id}/run"))
+                .uri(format!("/api/v1/templates/{template_id}/tests/{test_id}/run"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -633,7 +633,7 @@ async fn template_tests_live_full_cycle() {
         .oneshot(
             Request::builder()
                 .method("PATCH")
-                .uri(format!("/api/templates/{template_id}/tests/{test_id}"))
+                .uri(format!("/api/v1/templates/{template_id}/tests/{test_id}"))
                 .header("content-type", "application/json")
                 .body(Body::from(serde_json::to_vec(&patch_body).unwrap()))
                 .unwrap(),
@@ -647,7 +647,7 @@ async fn template_tests_live_full_cycle() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/templates/{template_id}/tests/{test_id}/run"))
+                .uri(format!("/api/v1/templates/{template_id}/tests/{test_id}/run"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -675,7 +675,7 @@ async fn template_tests_live_full_cycle() {
             Request::builder()
                 .method("GET")
                 .uri(format!(
-                    "/api/templates/{template_id}/tests/{test_id}/runs"
+                    "/api/v1/templates/{template_id}/tests/{test_id}/runs"
                 ))
                 .body(Body::empty())
                 .unwrap(),

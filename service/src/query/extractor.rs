@@ -8,7 +8,6 @@
 
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
-use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -167,11 +166,7 @@ pub struct QueryParamsRejection(pub String);
 
 impl IntoResponse for QueryParamsRejection {
     fn into_response(self) -> Response {
-        (
-            StatusCode::BAD_REQUEST,
-            axum::Json(serde_json::json!({ "error": self.0 })),
-        )
-            .into_response()
+        crate::models::error::ApiError::bad_request(self.0).into_response()
     }
 }
 

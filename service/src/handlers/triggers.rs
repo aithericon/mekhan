@@ -1,10 +1,10 @@
 //! HTTP handlers for the trigger API (Phase 5 of typed-ports).
 //!
 //! Endpoints:
-//! - GET    `/api/triggers`                       — list all registered triggers
-//! - GET    `/api/templates/{id}/triggers`        — list triggers per template
-//! - POST   `/api/triggers/{node_id}/fire`        — manual fire (Phase 5a)
-//! - GET    `/api/triggers/{node_id}/history`     — recent fire history
+//! - GET    `/api/v1/triggers`                       — list all registered triggers
+//! - GET    `/api/v1/templates/{id}/triggers`        — list triggers per template
+//! - POST   `/api/v1/triggers/{node_id}/fire`        — manual fire (Phase 5a)
+//! - GET    `/api/v1/triggers/{node_id}/history`     — recent fire history
 //!
 //! Webhook receiver lives under `/api/triggers/webhook/{slug}` and lands in
 //! Phase 5e.
@@ -135,10 +135,10 @@ pub struct CronPreviewResponse {
     pub error: Option<String>,
 }
 
-/// GET /api/triggers
+/// GET /api/v1/triggers
 #[utoipa::path(
     get,
-    path = "/api/triggers",
+    path = "/api/v1/triggers",
     responses(
         (status = 200, description = "All registered triggers", body = TriggerListResponse),
     ),
@@ -154,10 +154,10 @@ pub async fn list_triggers(State(state): State<AppState>) -> Json<TriggerListRes
     Json(TriggerListResponse { triggers })
 }
 
-/// GET /api/templates/{id}/triggers
+/// GET /api/v1/templates/{id}/triggers
 #[utoipa::path(
     get,
-    path = "/api/templates/{id}/triggers",
+    path = "/api/v1/templates/{id}/triggers",
     params(("id" = Uuid, Path, description = "Template id")),
     responses(
         (status = 200, description = "Triggers for this template", body = TriggerListResponse),
@@ -177,7 +177,7 @@ pub async fn list_template_triggers(
     Json(TriggerListResponse { triggers })
 }
 
-/// POST /api/triggers/{node_id}/fire
+/// POST /api/v1/triggers/{node_id}/fire
 ///
 /// Accepts either `application/json` (`{ "payload": { ... } }` — the scope
 /// keys for `payload_mapping`) or `multipart/form-data` for file entrypoints:
@@ -223,7 +223,7 @@ fn resolve_reply_mode(
 
 #[utoipa::path(
     post,
-    path = "/api/triggers/{node_id}/fire",
+    path = "/api/v1/triggers/{node_id}/fire",
     params(("node_id" = String, Path, description = "Trigger node id")),
     request_body = FireTriggerRequest,
     responses(
@@ -387,7 +387,7 @@ pub async fn fire_trigger(
 /// Build the fire payload from a `multipart/form-data` body: merge the JSON
 /// `payload` part with one uploaded-file reference per remaining part. Files
 /// land in blob storage scoped to the trigger's template + target node so
-/// they're retrievable via `/api/files/{key}` exactly like create-instance
+/// they're retrievable via `/api/v1/files/{key}` exactly like create-instance
 /// uploads, and the injected reference object is accepted as-is by a `file`
 /// port field (`FieldKind::File` accepts an object).
 async fn build_multipart_payload(
@@ -477,7 +477,7 @@ async fn build_multipart_payload(
             name,
             serde_json::json!({
                 "key": key,
-                "url": format!("/api/files/{key}"),
+                "url": format!("/api/v1/files/{key}"),
                 "filename": filename,
                 "content_type": content_type,
                 "size": size,
@@ -497,10 +497,10 @@ async fn build_multipart_payload(
     Ok(Value::Object(payload))
 }
 
-/// GET /api/triggers/{node_id}/history
+/// GET /api/v1/triggers/{node_id}/history
 #[utoipa::path(
     get,
-    path = "/api/triggers/{node_id}/history",
+    path = "/api/v1/triggers/{node_id}/history",
     params(("node_id" = String, Path, description = "Trigger node id")),
     responses(
         (status = 200, description = "Recent fire history", body = TriggerHistoryResponse),
@@ -520,7 +520,7 @@ pub struct SetTriggerEnabledRequest {
     pub enabled: bool,
 }
 
-/// PATCH /api/triggers/{node_id}/enabled
+/// PATCH /api/v1/triggers/{node_id}/enabled
 ///
 /// Arm or pause a single trigger on its **published** template. This is the
 /// deliberate inverse of the rest of the template: a trigger's `source`,
@@ -535,7 +535,7 @@ pub struct SetTriggerEnabledRequest {
 /// it then survives restarts via the normal `hydrate()` path.
 #[utoipa::path(
     patch,
-    path = "/api/triggers/{node_id}/enabled",
+    path = "/api/v1/triggers/{node_id}/enabled",
     params(("node_id" = String, Path, description = "Trigger node id")),
     request_body = SetTriggerEnabledRequest,
     responses(
@@ -638,13 +638,13 @@ pub struct TriggerMetricsResponse {
     pub total_registered: usize,
 }
 
-/// GET /api/triggers/metrics
+/// GET /api/v1/triggers/metrics
 ///
 /// Returns aggregate counters per source kind plus the registry size. Useful
 /// for /admin dashboards and the editor's trigger landing page.
 #[utoipa::path(
     get,
-    path = "/api/triggers/metrics",
+    path = "/api/v1/triggers/metrics",
     responses(
         (status = 200, description = "Per-source-kind fire counters", body = TriggerMetricsResponse),
     ),
@@ -657,14 +657,14 @@ pub async fn trigger_metrics(State(state): State<AppState>) -> Json<TriggerMetri
     })
 }
 
-/// POST /api/triggers/preview/cron
+/// POST /api/v1/triggers/preview/cron
 ///
 /// Returns the next N fire times for a cron schedule. Used by the editor's
 /// trigger inspector to show users when their cron will fire next without
 /// having to ship the workflow first.
 #[utoipa::path(
     post,
-    path = "/api/triggers/preview/cron",
+    path = "/api/v1/triggers/preview/cron",
     request_body = CronPreviewRequest,
     responses(
         (status = 200, description = "Upcoming fire times (or error)", body = CronPreviewResponse),
@@ -714,14 +714,14 @@ pub struct SourceScopeResponse {
     pub scope: Vec<crate::triggers::ScopeVar>,
 }
 
-/// GET /api/triggers/source-scope?kind=cron
+/// GET /api/v1/triggers/source-scope?kind=cron
 ///
 /// The per-source scope contract, surfaced so the editor can show authors
 /// exactly which identifiers are in scope under each mapping expression
 /// instead of leaving them to guess.
 #[utoipa::path(
     get,
-    path = "/api/triggers/source-scope",
+    path = "/api/v1/triggers/source-scope",
     params(("kind" = String, Query, description = "Source kind: cron|catalog|net_completion|webhook|manual")),
     responses(
         (status = 200, description = "Available scope identifiers for the source kind", body = SourceScopeResponse),

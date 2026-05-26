@@ -15,7 +15,7 @@ import createClient, { type Middleware } from 'openapi-fetch';
 import { authFetch } from '$lib/auth/fetch';
 import type { components, paths } from './schema';
 
-const API_BASE = '/api';
+const API_BASE = '/api/v1';
 
 /**
  * BFF model: the `mekhan_session` HttpOnly cookie is sent automatically on
@@ -147,19 +147,39 @@ export type PaginatedProcesses = components['schemas']['Paginated_HpiProcess'];
 export type PaginatedLogs = components['schemas']['Paginated_HpiLog'];
 export type PaginatedArtifacts = components['schemas']['Paginated_CatalogueEntry'];
 
+/// Error thrown by `unwrap` (and `rawJson`) when the API returns a non-2xx
+/// status. Carries the structured `ErrorResponse` envelope so callers can
+/// switch on `code` for programmatic handling rather than parsing the
+/// human-readable `message`.
+export class ApiError extends Error {
+	readonly status: number;
+	readonly code: string | undefined;
+	readonly body: { error?: string; code?: string; [k: string]: unknown };
+	constructor(status: number, body: Record<string, unknown> | string | undefined) {
+		const envelope =
+			typeof body === 'object' && body !== null
+				? (body as { error?: string; code?: string })
+				: { error: typeof body === 'string' ? body : undefined };
+		const message = envelope.error ?? `API error ${status}`;
+		super(`API error ${status}: ${message}`);
+		this.name = 'ApiError';
+		this.status = status;
+		this.code = envelope.code;
+		this.body = envelope as { error?: string; code?: string };
+	}
+}
+
 // Internal helper — `openapi-fetch` returns { data, error }. We surface the
 // older "throws on non-2xx" contract so call sites don't need to change.
 function unwrap<T>(result: { data?: T; error?: unknown; response: Response }): T {
 	if (result.error !== undefined) {
-		const status = result.response.status;
-		const body =
-			typeof result.error === 'object'
-				? JSON.stringify(result.error)
-				: String(result.error);
-		throw new Error(`API error ${status}: ${body}`);
+		throw new ApiError(
+			result.response.status,
+			result.error as Record<string, unknown> | string | undefined
+		);
 	}
 	if (result.data === undefined) {
-		throw new Error(`API error ${result.response.status}: empty body`);
+		throw new ApiError(result.response.status, 'empty body');
 	}
 	return result.data;
 }
@@ -173,7 +193,7 @@ export async function listTemplates(
 	published?: boolean
 ): Promise<PaginatedTemplateResponse> {
 	return unwrap(
-		await client.GET('/api/templates', {
+		await client.GET('/api/v1/templates', {
 			params: {
 				query: { page, per_page: perPage, search, published }
 			}
@@ -183,17 +203,17 @@ export async function listTemplates(
 
 export async function getTemplate(id: string): Promise<Template> {
 	return unwrap(
-		await client.GET('/api/templates/{id}', { params: { path: { id } } })
+		await client.GET('/api/v1/templates/{id}', { params: { path: { id } } })
 	);
 }
 
 export async function createTemplate(data: CreateTemplateRequest): Promise<Template> {
-	return unwrap(await client.POST('/api/templates', { body: data }));
+	return unwrap(await client.POST('/api/v1/templates', { body: data }));
 }
 
 export async function updateTemplate(id: string, data: UpdateTemplateRequest): Promise<Template> {
 	return unwrap(
-		await client.PUT('/api/templates/{id}', {
+		await client.PUT('/api/v1/templates/{id}', {
 			params: { path: { id } },
 			body: data
 		})
@@ -201,9 +221,12 @@ export async function updateTemplate(id: string, data: UpdateTemplateRequest): P
 }
 
 export async function deleteTemplate(id: string): Promise<void> {
-	const res = await client.DELETE('/api/templates/{id}', { params: { path: { id } } });
+	const res = await client.DELETE('/api/v1/templates/{id}', { params: { path: { id } } });
 	if (res.error !== undefined && res.response.status >= 400) {
-		throw new Error(`API error ${res.response.status}: ${JSON.stringify(res.error)}`);
+		throw new ApiError(
+			res.response.status,
+			res.error as Record<string, unknown> | string | undefined
+		);
 	}
 }
 
@@ -241,7 +264,7 @@ export async function publishTemplate(id: string, force = false): Promise<Templa
 	// rejects non-primitive query values with the unhelpful
 	// "Deeply-nested arrays/objects aren't supported".
 	const forceBool = force === true;
-	const res = await client.POST('/api/templates/{id}/publish', {
+	const res = await client.POST('/api/v1/templates/{id}/publish', {
 		params: { path: { id }, query: { force: forceBool } }
 	});
 	const rawErr = res.error as unknown;
@@ -263,8 +286,10 @@ export async function publishTemplate(id: string, force = false): Promise<Templa
 		if (body && Array.isArray(body.compile_errors) && body.compile_errors.length > 0) {
 			throw new CompileApiError(body.error ?? 'compilation failed', body.compile_errors);
 		}
-		const detail = typeof rawErr === 'object' ? JSON.stringify(rawErr) : String(rawErr);
-		throw new Error(`API error ${res.response.status}: ${detail}`);
+		throw new ApiError(
+			res.response.status,
+			rawErr as Record<string, unknown> | string | undefined
+		);
 	}
 	return res.data as Template;
 }
@@ -273,7 +298,7 @@ export async function publishTemplate(id: string, force = false): Promise<Templa
 
 export async function listTemplateTests(templateId: string): Promise<TemplateTest[]> {
 	return unwrap(
-		await client.GET('/api/templates/{id}/tests', { params: { path: { id: templateId } } })
+		await client.GET('/api/v1/templates/{id}/tests', { params: { path: { id: templateId } } })
 	);
 }
 
@@ -282,7 +307,7 @@ export async function createTemplateTest(
 	body: CreateTemplateTestRequest
 ): Promise<TemplateTest> {
 	return unwrap(
-		await client.POST('/api/templates/{id}/tests', {
+		await client.POST('/api/v1/templates/{id}/tests', {
 			params: { path: { id: templateId } },
 			body
 		})
@@ -295,7 +320,7 @@ export async function updateTemplateTest(
 	body: UpdateTemplateTestRequest
 ): Promise<TemplateTest> {
 	return unwrap(
-		await client.PATCH('/api/templates/{template_id}/tests/{test_id}', {
+		await client.PATCH('/api/v1/templates/{template_id}/tests/{test_id}', {
 			params: { path: { template_id: templateId, test_id: testId } },
 			body
 		})
@@ -303,11 +328,14 @@ export async function updateTemplateTest(
 }
 
 export async function deleteTemplateTest(templateId: string, testId: string): Promise<void> {
-	const res = await client.DELETE('/api/templates/{template_id}/tests/{test_id}', {
+	const res = await client.DELETE('/api/v1/templates/{template_id}/tests/{test_id}', {
 		params: { path: { template_id: templateId, test_id: testId } }
 	});
 	if (res.error !== undefined && res.response.status >= 400) {
-		throw new Error(`API error ${res.response.status}: ${JSON.stringify(res.error)}`);
+		throw new ApiError(
+			res.response.status,
+			res.error as Record<string, unknown> | string | undefined
+		);
 	}
 }
 
@@ -316,7 +344,7 @@ export async function runTemplateTest(
 	testId: string
 ): Promise<TemplateTestRun> {
 	return unwrap(
-		await client.POST('/api/templates/{template_id}/tests/{test_id}/run', {
+		await client.POST('/api/v1/templates/{template_id}/tests/{test_id}/run', {
 			params: { path: { template_id: templateId, test_id: testId } }
 		})
 	);
@@ -327,7 +355,7 @@ export async function runAllTemplateTests(
 	includeDisabled = false
 ): Promise<RunAllResponse> {
 	return unwrap(
-		await client.POST('/api/templates/{id}/tests/run-all', {
+		await client.POST('/api/v1/templates/{id}/tests/run-all', {
 			params: { path: { id: templateId }, query: { include_disabled: includeDisabled } }
 		})
 	);
@@ -339,7 +367,7 @@ export async function listTestRuns(
 	limit = 10
 ): Promise<TemplateTestRun[]> {
 	return unwrap(
-		await client.GET('/api/templates/{template_id}/tests/{test_id}/runs', {
+		await client.GET('/api/v1/templates/{template_id}/tests/{test_id}/runs', {
 			params: {
 				path: { template_id: templateId, test_id: testId },
 				query: { limit }
@@ -353,7 +381,7 @@ export async function promoteInstanceToTest(
 	body: PromoteToTestRequest
 ): Promise<TemplateTest> {
 	return unwrap(
-		await client.POST('/api/instances/{id}/promote-to-test', {
+		await client.POST('/api/v1/instances/{id}/promote-to-test', {
 			params: { path: { id: instanceId } },
 			body
 		})
@@ -362,30 +390,30 @@ export async function promoteInstanceToTest(
 
 export async function createNewVersion(id: string): Promise<Template> {
 	return unwrap(
-		await client.POST('/api/templates/{id}/new-version', { params: { path: { id } } })
+		await client.POST('/api/v1/templates/{id}/new-version', { params: { path: { id } } })
 	);
 }
 
 export async function getTemplateVersions(id: string): Promise<Template[]> {
 	return unwrap(
-		await client.GET('/api/templates/{id}/versions', { params: { path: { id } } })
+		await client.GET('/api/v1/templates/{id}/versions', { params: { path: { id } } })
 	) as unknown as Template[];
 }
 
 export async function compileTemplate(id: string): Promise<object> {
 	return unwrap(
-		await client.POST('/api/templates/{id}/compile', { params: { path: { id } } })
+		await client.POST('/api/v1/templates/{id}/compile', { params: { path: { id } } })
 	) as unknown as object;
 }
 
 export async function getTemplateAir(id: string): Promise<object> {
 	return unwrap(
-		await client.GET('/api/templates/{id}/air', { params: { path: { id } } })
+		await client.GET('/api/v1/templates/{id}/air', { params: { path: { id } } })
 	) as unknown as object;
 }
 
 export async function compileGraph(data: CompileRequest): Promise<object> {
-	return unwrap(await client.POST('/api/compile', { body: data })) as unknown as object;
+	return unwrap(await client.POST('/api/v1/compile', { body: data })) as unknown as object;
 }
 
 /** Shape-aware analysis surface — the editor's single source of truth for
@@ -393,7 +421,7 @@ export async function compileGraph(data: CompileRequest): Promise<object> {
 export type TypeSurfaceResponse = components['schemas']['TypeSurfaceResponse'];
 
 export async function analyzeGraph(data: CompileRequest): Promise<TypeSurfaceResponse> {
-	return unwrap(await client.POST('/api/analyze', { body: data })) as TypeSurfaceResponse;
+	return unwrap(await client.POST('/api/v1/analyze', { body: data })) as TypeSurfaceResponse;
 }
 
 /**
@@ -407,13 +435,13 @@ export async function getIoStubs(
 	id: string
 ): Promise<Record<string, Record<string, string>>> {
 	const res = unwrap(
-		await client.GET('/api/templates/{id}/io-stubs', { params: { path: { id } } })
+		await client.GET('/api/v1/templates/{id}/io-stubs', { params: { path: { id } } })
 	) as { generated?: Record<string, Record<string, string>> };
 	return res.generated ?? {};
 }
 
 /** A leaf field at a Python step's input scope. Picker UIs render this as
- *  the qualified `<slug>.<field>` / `input.<path>` form via `/api/analyze`;
+ *  the qualified `<slug>.<field>` / `input.<path>` form via `/api/v1/analyze`;
  *  at runtime the Python runner exposes each upstream `<slug>` as a
  *  module global, so the same identifier the picker shows is the exact
  *  identifier the user writes (no `token[...]` wrapping). Kept for the
@@ -436,7 +464,7 @@ export type StepScopes = {
 export async function getStepScopes(id: string): Promise<StepScopes> {
 	try {
 		const res = unwrap(
-			await client.GET('/api/templates/{id}/io-stubs', { params: { path: { id } } })
+			await client.GET('/api/v1/templates/{id}/io-stubs', { params: { path: { id } } })
 		) as { scopes?: Record<string, StepScopeField[]>; diagnostic?: string };
 		return { scopes: res.scopes ?? {}, diagnostic: res.diagnostic ?? 'ok' };
 	} catch (e) {
@@ -456,7 +484,7 @@ export async function listInstances(opts?: {
 	mode?: string;
 }): Promise<components['schemas']['PaginatedResponse_InstanceListItem']> {
 	return unwrap(
-		await client.GET('/api/instances', {
+		await client.GET('/api/v1/instances', {
 			params: {
 				query: {
 					page: opts?.page ?? 1,
@@ -472,17 +500,17 @@ export async function listInstances(opts?: {
 
 export async function getInstance(id: string): Promise<WorkflowInstance> {
 	return unwrap(
-		await client.GET('/api/instances/{id}', { params: { path: { id } } })
+		await client.GET('/api/v1/instances/{id}', { params: { path: { id } } })
 	);
 }
 
 export async function createInstance(data: CreateInstanceRequest): Promise<WorkflowInstance> {
-	return unwrap(await client.POST('/api/instances', { body: data }));
+	return unwrap(await client.POST('/api/v1/instances', { body: data }));
 }
 
 export async function getInstanceState(id: string): Promise<InstanceStateResponse> {
 	return unwrap(
-		await client.GET('/api/instances/{id}/state', { params: { path: { id } } })
+		await client.GET('/api/v1/instances/{id}/state', { params: { path: { id } } })
 	);
 }
 
@@ -494,16 +522,19 @@ export async function getInstanceState(id: string): Promise<InstanceStateRespons
  */
 export async function listStepExecutions(id: string): Promise<StepExecution[]> {
 	return unwrap(
-		await client.GET('/api/instances/{id}/step-executions', {
+		await client.GET('/api/v1/instances/{id}/step-executions', {
 			params: { path: { id } }
 		})
 	) as StepExecution[];
 }
 
 export async function cancelInstance(id: string): Promise<void> {
-	const res = await client.DELETE('/api/instances/{id}', { params: { path: { id } } });
+	const res = await client.DELETE('/api/v1/instances/{id}', { params: { path: { id } } });
 	if (res.error !== undefined && res.response.status >= 400) {
-		throw new Error(`API error ${res.response.status}: ${JSON.stringify(res.error)}`);
+		throw new ApiError(
+			res.response.status,
+			res.error as Record<string, unknown> | string | undefined
+		);
 	}
 }
 
@@ -556,7 +587,7 @@ export async function listProcesses(params?: {
 	sort?: string;
 	page?: number;
 	page_size?: number;
-}): Promise<import('$lib/types/process').PaginatedProcessResponse<HpiProcess>> {
+}): Promise<PaginatedProcesses> {
 	const qs = new URLSearchParams();
 	if (params?.status) qs.set('status', params.status);
 	if (params?.kind) qs.set('kind', params.kind);
@@ -575,7 +606,7 @@ export async function listProcesses(params?: {
  *  `instance_id` column directly errors with `uuid = text`. */
 export async function listProcessesByInstance(
 	instanceId: string
-): Promise<import('$lib/types/process').PaginatedProcessResponse<HpiProcess>> {
+): Promise<PaginatedProcesses> {
 	const qs = new URLSearchParams();
 	qs.set('filter[net_id][eq]', `mekhan-${instanceId}`);
 	qs.set('sort', '-created_at');
@@ -583,12 +614,12 @@ export async function listProcessesByInstance(
 }
 
 export async function getProcessStats(): Promise<ProcessStats> {
-	return unwrap(await client.GET('/api/processes/stats', {}));
+	return unwrap(await client.GET('/api/v1/processes/stats', {}));
 }
 
 export async function getProcess(processId: string): Promise<ProcessDetail> {
 	return unwrap(
-		await client.GET('/api/processes/{process_id}', { params: { path: { process_id: processId } } })
+		await client.GET('/api/v1/processes/{process_id}', { params: { path: { process_id: processId } } })
 	);
 }
 
@@ -597,7 +628,7 @@ export async function updateProcess(
 	data: { name?: string; kind?: string; status?: string; owner?: string }
 ): Promise<HpiProcess> {
 	return unwrap(
-		await client.PUT('/api/processes/{process_id}', {
+		await client.PUT('/api/v1/processes/{process_id}', {
 			params: { path: { process_id: processId } },
 			body: data
 		})
@@ -609,7 +640,7 @@ export async function getProcessMetrics(
 	params?: { key?: string; limit?: number }
 ): Promise<HpiMetric[]> {
 	return unwrap(
-		await client.GET('/api/processes/{process_id}/metrics', {
+		await client.GET('/api/v1/processes/{process_id}/metrics', {
 			params: { path: { process_id: processId }, query: params }
 		})
 	);
@@ -617,7 +648,7 @@ export async function getProcessMetrics(
 
 export async function getProcessMetricsSummary(processId: string): Promise<HpiMetricSummary[]> {
 	return unwrap(
-		await client.GET('/api/processes/{process_id}/metrics/summary', {
+		await client.GET('/api/v1/processes/{process_id}/metrics/summary', {
 			params: { path: { process_id: processId } }
 		})
 	);
@@ -626,7 +657,7 @@ export async function getProcessMetricsSummary(processId: string): Promise<HpiMe
 export async function getProcessLogs(
 	processId: string,
 	params?: { level?: string; source?: string; search?: string; page?: number; page_size?: number }
-): Promise<import('$lib/types/process').PaginatedProcessResponse<HpiLog>> {
+): Promise<PaginatedLogs> {
 	const qs = new URLSearchParams();
 	if (params?.level) qs.set('level', params.level);
 	if (params?.source) qs.set('source', params.source);
@@ -639,7 +670,7 @@ export async function getProcessLogs(
 
 export async function getProcessTasks(processId: string): Promise<HpiTask[]> {
 	return unwrap(
-		await client.GET('/api/processes/{process_id}/tasks', {
+		await client.GET('/api/v1/processes/{process_id}/tasks', {
 			params: { path: { process_id: processId } }
 		})
 	) as unknown as HpiTask[];
@@ -788,7 +819,7 @@ function toIso(d: Date | string): string {
 export async function getProcessArtifacts(
 	processId: string,
 	params?: { page?: number; page_size?: number }
-): Promise<import('$lib/types/process').PaginatedProcessResponse<CatalogueEntry>> {
+): Promise<PaginatedArtifacts> {
 	const qs = new URLSearchParams();
 	if (params?.page !== undefined) qs.set('page', String(params.page));
 	if (params?.page_size) qs.set('page_size', String(params.page_size));
@@ -797,19 +828,6 @@ export async function getProcessArtifacts(
 }
 
 // ── Catalogue ───────────────────────────────────────────────────────────────
-
-/** Pagination envelope for `GET /api/catalogue` — the backend returns this
- *  shape through its custom query-DSL repository, but the spec types the
- *  response as `serde_json::Value` since the DSL isn't modeled in utoipa. */
-export interface PaginatedCatalogueResponse {
-	items: CatalogueEntry[];
-	total: number;
-	page: number;
-	page_size: number;
-	total_pages: number;
-	has_next: boolean;
-	has_previous: boolean;
-}
 
 export async function listCatalogueEntries(params?: {
 	category?: string;
@@ -821,7 +839,7 @@ export async function listCatalogueEntries(params?: {
 	page_size?: number;
 	metadata?: string;
 	file_metadata?: string;
-}): Promise<PaginatedCatalogueResponse> {
+}): Promise<PaginatedArtifacts> {
 	const qs = new URLSearchParams();
 	if (params?.category) qs.set('filter[category][eq]', params.category);
 	if (params?.source_net) qs.set('filter[source_net][eq]', params.source_net);
@@ -838,23 +856,23 @@ export async function listCatalogueEntries(params?: {
 
 export async function getCatalogueEntry(executionId: string, id: string): Promise<CatalogueEntry> {
 	return unwrap(
-		await client.GET('/api/catalogue/{execution_id}/{id}', {
+		await client.GET('/api/v1/catalogue/{execution_id}/{id}', {
 			params: { path: { execution_id: executionId, id } }
 		})
 	);
 }
 
 export async function getCatalogueStats(): Promise<CatalogueStats> {
-	return unwrap(await client.GET('/api/catalogue/stats', {}));
+	return unwrap(await client.GET('/api/v1/catalogue/stats', {}));
 }
 
 export async function getCatalogueStatsByNet(): Promise<CatalogueNetStats[]> {
-	return unwrap(await client.GET('/api/catalogue/stats/by-net', {}));
+	return unwrap(await client.GET('/api/v1/catalogue/stats/by-net', {}));
 }
 
 export async function getCatalogueLineage(processId: string): Promise<LineageResponse> {
 	return unwrap(
-		await client.GET('/api/catalogue/lineage/{process_id}', {
+		await client.GET('/api/v1/catalogue/lineage/{process_id}', {
 			params: { path: { process_id: processId } }
 		})
 	);
@@ -862,13 +880,13 @@ export async function getCatalogueLineage(processId: string): Promise<LineageRes
 
 export async function getCatalogueDistinct(column: string): Promise<string[]> {
 	return unwrap(
-		await client.GET('/api/catalogue/distinct/{column}', { params: { path: { column } } })
+		await client.GET('/api/v1/catalogue/distinct/{column}', { params: { path: { column } } })
 	);
 }
 
 export async function getCatalogueDistinctJsonb(column: string, key: string): Promise<string[]> {
 	return unwrap(
-		await client.GET('/api/catalogue/distinct-jsonb/{column}/{key}', {
+		await client.GET('/api/v1/catalogue/distinct-jsonb/{column}/{key}', {
 			params: { path: { column, key } }
 		})
 	);
@@ -894,8 +912,7 @@ export async function uploadFile(
 	});
 
 	if (!res.ok) {
-		const body = await res.text();
-		throw new Error(`Upload error ${res.status}: ${body}`);
+		throw new ApiError(res.status, await parseErrorBody(res));
 	}
 
 	return res.json();
@@ -909,7 +926,7 @@ export async function getProvenanceFromArtifact(
 	depth = 20
 ): Promise<ProvenanceResponse> {
 	return unwrap(
-		await client.GET('/api/provenance/from-artifact/{execution_id}/{artifact_id}', {
+		await client.GET('/api/v1/provenance/from-artifact/{execution_id}/{artifact_id}', {
 			params: { path: { execution_id: executionId, artifact_id: artifactId }, query: { depth } }
 		})
 	);
@@ -921,7 +938,7 @@ export async function getTokenProvenance(
 	depth = 20
 ): Promise<ProvenanceResponse> {
 	return unwrap(
-		await client.GET('/api/provenance/{net_id}/{token_id}', {
+		await client.GET('/api/v1/provenance/{net_id}/{token_id}', {
 			params: { path: { net_id: netId, token_id: tokenId }, query: { depth } }
 		})
 	);
@@ -929,7 +946,7 @@ export async function getTokenProvenance(
 
 export async function getEventDetail(netId: string, eventSeq: number): Promise<EventDetail> {
 	return unwrap(
-		await client.GET('/api/provenance/{net_id}/{event_seq}/detail', {
+		await client.GET('/api/v1/provenance/{net_id}/{event_seq}/detail', {
 			params: { path: { net_id: netId, event_seq: eventSeq } }
 		})
 	);
@@ -937,7 +954,7 @@ export async function getEventDetail(netId: string, eventSeq: number): Promise<E
 
 export async function getCrossLink(signalKey: string): Promise<CrossLink> {
 	return unwrap(
-		await client.GET('/api/provenance/link/{signal_key}', {
+		await client.GET('/api/v1/provenance/link/{signal_key}', {
 			params: { path: { signal_key: signalKey } }
 		})
 	);
@@ -950,38 +967,65 @@ export async function getCrossLink(signalKey: string): Promise<CrossLink> {
 // broker configured) so the UI can simply hide the section.
 
 export async function listAccessTokens(): Promise<TokenSummary[] | null> {
-	const res = await client.GET('/api/auth/tokens', {});
+	const res = await client.GET('/api/v1/auth/tokens', {});
 	if (res.response.status === 503) return null;
 	return unwrap(res);
 }
 
 export async function createAccessToken(body: CreateTokenRequest): Promise<CreatedToken> {
-	return unwrap(await client.POST('/api/auth/tokens', { body }));
+	return unwrap(await client.POST('/api/v1/auth/tokens', { body }));
 }
 
 export async function revokeAccessToken(id: string): Promise<void> {
-	const res = await client.DELETE('/api/auth/tokens/{id}', { params: { path: { id } } });
+	const res = await client.DELETE('/api/v1/auth/tokens/{id}', { params: { path: { id } } });
 	if (res.error !== undefined && res.response.status >= 400) {
-		throw new Error(`API error ${res.response.status}: ${JSON.stringify(res.error)}`);
+		throw new ApiError(
+			res.response.status,
+			res.error as Record<string, unknown> | string | undefined
+		);
 	}
 }
 
-// ── Untyped raw-JSON helper ────────────────────────────────────────────────
+// ── Raw-JSON helper for query-DSL endpoints ────────────────────────────────
 //
-// A handful of routes return `serde_json::Value` envelopes
-// (`{ tasks }`, `{ entries }`, custom query DSL responses on processes/logs/
-// artifacts/catalogue list, plus the HPI-task-shaped tasks endpoints). openapi-fetch
-// can't help here — the schema says "object" with no fields. Until those
-// responses are typed on the backend, fall back to plain fetch with the call
-// site asserting the shape.
-async function rawJson<T>(path: string, init?: RequestInit): Promise<T> {
+// Most JSON endpoints route through `client.GET/POST/...` via openapi-fetch
+// and pick up types from `schema.d.ts`. A subset cannot:
+//
+//   1. The paginated query-DSL routes (`/processes`, `/processes/{}/logs`,
+//      `/processes/{}/artifacts`, `/catalogue`, `/tasks`) accept bracket
+//      notation in the query string (`filter[col][op]=value&sort=-col&...`)
+//      that utoipa does not derive `IntoParams` for. The RESPONSE shape IS
+//      typed in the spec — call sites cast through `Paginated_*` schema
+//      aliases — but the REQUEST query has to be hand-built. Adding
+//      `IntoParams` declarations on the Rust handlers would let these flow
+//      through `client.GET`; tracked as a follow-up.
+//   2. The HumanTask-shaped endpoints (`/tasks/{id}`, `/tasks/{id}/complete`,
+//      `/tasks/{id}/cancel`) return a heterogeneous JSON object assembled
+//      from `HpiTask.detail` — the wire shape is intentionally `Value`.
+//
+// `rawJson` is exported so call sites outside this module share the same
+// `ApiError` envelope decoding. Path is API_BASE-relative (e.g.
+// `'/tasks/{id}'`).
+export async function rawJson<T>(path: string, init?: RequestInit): Promise<T> {
 	const res = await authFetch(`${API_BASE}${path}`, {
 		...init,
 		headers: { 'Content-Type': 'application/json', ...init?.headers }
 	});
 	if (!res.ok) {
-		const body = await res.text();
-		throw new Error(`API error ${res.status}: ${body}`);
+		throw new ApiError(res.status, await parseErrorBody(res));
 	}
 	return res.json() as Promise<T>;
+}
+
+/// Try to decode an error `Response` as the standard `ErrorResponse` JSON
+/// envelope; fall back to the raw body text. Used by every direct-fetch call
+/// site (multipart uploads, SSE) so they still surface the structured `code`.
+async function parseErrorBody(res: Response): Promise<Record<string, unknown> | string> {
+	const text = await res.text();
+	try {
+		const parsed = JSON.parse(text);
+		return typeof parsed === 'object' && parsed !== null ? parsed : text;
+	} catch {
+		return text;
+	}
 }
