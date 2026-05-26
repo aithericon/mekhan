@@ -92,6 +92,16 @@ cargo test -p mekhan-service --test compiler_e2e -- <pattern>
 
 `mekhan-service` integration tests under `service/tests/` mostly need a live local stack (`just dev`). Heavy / Docker-dependent gated lanes (`MEKHAN_E2E_ZITADEL=1`, `TEST_S3_BUCKET=...`) are documented inline in the test files and in `just ci::test-e2e-zitadel`.
 
+## API surface conventions
+
+- **`/api/v1/*` is the JSON contract.** Every `#[utoipa::path]` handler hard-codes the version in its path attribute. Bumping requires either side-by-side mounting at `/api/v2/*` or a coordinated client/server cut — there is no implicit "latest" alias.
+- **`/healthz` is the liveness probe.** Lives at the root, OUTSIDE the auth gate, k8s-conventional. Load balancers and uptime monitors poll it without a session cookie. Mounted via `build_public_openapi_router` in `service/src/lib.rs`.
+- **Unversioned siblings exist on purpose** because they have external contracts mekhan doesn't control:
+  - `/api/auth/{login,callback,session,logout}` — OAuth bootstrap; the callback URL is registered with Zitadel.
+  - `/api/yjs/{template_id}` — Yjs CRDT WebSocket (binary protocol, not OpenAPI-modeled).
+  - `/api/triggers/webhook/{slug}` — webhook receivers; external senders post here.
+- **`/petri/*` is the engine reverse proxy** mounted INSIDE the auth gate. Streams request + response bodies (`reqwest::Body::wrap_stream` → `axum::body::Body::from_stream`) so SSE survives, strips hop-by-hop headers per RFC 7230, and inherits the same session-cookie auth as every other API route. Forwards to `config.petri_lab_url` (default `http://localhost:3030`).
+
 ## OpenAPI is a hard contract
 
 The frontend client is generated from `openapi-mekhan.json`. After **any** change to a Rust `#[utoipa::path]` handler, `ToSchema`-derived DTO, or `IntoParams` query type, you MUST regenerate:
@@ -109,14 +119,21 @@ just dev::openapi
 ### Three Rust services, one frontend
 
 ```
-┌──────────┐  /api (HTTP, OpenAPI)   ┌──────────────┐   /petri (HTTP)   ┌────────────┐
-│ SvelteKit│ ──────────────────────▶ │ mekhan-service│ ────────────────▶ │ core-engine │
-│  :5173   │  /api/yjs (WS, CRDT)   │     :3100     │                   │   :3030     │
-└──────────┘ ◀─────────────────────  └──────────────┘ ◀── NATS (jetstream) ──────────┘
-                                              │                              ▲
-                                              ▼                              │
-                                    Postgres + S3 (rustfs)         NATS ──▶ executor (daemon)
+┌──────────┐  /api/v1/* (HTTP, OpenAPI) ┌──────────────┐   /petri/* (HTTP, proxied)  ┌────────────┐
+│ SvelteKit│ ──────────────────────────▶│ mekhan-service├──────────────────────────▶ │ core-engine │
+│  :5173   │  /api/yjs/* (WS, CRDT)     │     :3100     │                            │   :3030     │
+│          │  /healthz (LB probe)       │               │                            │             │
+└──────────┘ ◀───────────────────────── └──────────────┘ ◀── NATS (jetstream) ──────────────────────┘
+                                                │                                     ▲
+                                                ▼                                     │
+                                      Postgres + S3 (rustfs)              NATS ──▶ executor (daemon)
 ```
+
+The SPA goes through mekhan for ALL backend traffic — JSON API, Yjs CRDT WS,
+AND engine calls. `/petri/*` is a reverse proxy inside mekhan (streaming
+bodies, hop-by-hop header strip) so prod can run single-origin without a
+separate engine ingress, and dev keeps parity by routing through mekhan
+instead of Vite's old direct-to-engine rewrite.
 
 - **mekhan-service** is the BFF + control plane. Owns templates/instances/triggers/auth/files/catalogue/causality projections + the Yjs collaboration server. Compiles `WorkflowGraph` → AIR JSON and POSTs to the engine for deploy/activate. Lives in `service/src/`.
 - **core-engine** (in `engine/`) is the Petri-net executor: event-sourced, NATS-streamed, with bridges to Nomad/Slurm. Don't reimplement engine concerns in `service` — `service` is a compiler + control plane on top of it.

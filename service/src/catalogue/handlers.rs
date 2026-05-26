@@ -201,10 +201,7 @@ pub async fn download_artifact(
     Path(storage_path): Path<String>,
 ) -> impl IntoResponse {
     if storage_path.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "storage path required" })),
-        )
+        return crate::models::error::ApiError::bad_request("storage path required")
             .into_response();
     }
 
@@ -214,10 +211,7 @@ pub async fn download_artifact(
         Ok(result) => result,
         Err(e) => {
             tracing::warn!(path = %storage_path, error = %e, "catalogue download failed");
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({ "error": format!("artifact not found: {e}") })),
-            )
+            return crate::models::error::ApiError::not_found(format!("artifact not found: {e}"))
                 .into_response();
         }
     };

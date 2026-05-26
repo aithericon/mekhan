@@ -1459,7 +1459,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/health": {
+    "/healthz": {
         parameters: {
             query?: never;
             header?: never;
@@ -1467,8 +1467,13 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * GET /health
-         * @description Liveness probe — fixed shape, no DB / NATS dependencies.
+         * GET /healthz
+         * @description Liveness probe — fixed shape, no DB / NATS dependencies. Lives at the
+         *     root (NOT under `/api/v1`) and OUTSIDE the auth layer so load balancers,
+         *     Nomad/k8s probes, and uptime monitors can poll it without a session
+         *     cookie. The path follows k8s convention; spec stays in the OpenAPI doc
+         *     for completeness but the runtime mount is intentionally separate from
+         *     the main protected `OpenApiRouter`.
          */
         get: operations["liveness"];
         put?: never;
@@ -1847,15 +1852,23 @@ export interface components {
             run_mode?: string | null;
         };
         /**
-         * @description Uniform error body returned by every fallible handler. Replaces the ad-hoc
-         *     `json!({"error": ...})` pattern so the spec exposes a single
-         *     `ErrorResponse` schema and the frontend gets one consistent error shape.
+         * @description Uniform error body returned by every fallible handler. The spec exposes a
+         *     single `ErrorResponse` schema and the frontend gets one consistent error
+         *     shape: switch on `code` (machine-readable, stable kebab-case) for
+         *     programmatic handling; render `error` for humans.
+         *
+         *     `code` is populated automatically by every `ApiError::*` constructor.
+         *     Stable values: `"bad-request"`, `"unauthorized"`, `"forbidden"`,
+         *     `"not-found"`, `"conflict"`, `"precondition-failed"`, `"internal"`,
+         *     `"compile-failed"`, `"publish-gate"`. Absent only on the few
+         *     extractor-level rejections that don't flow through `ApiError`.
          *
          *     Optional `compile_errors` carries structured per-edge / per-node failures
-         *     from the workflow compiler so the editor can highlight inline (Phase 2
-         *     typed-ports). Absent on non-compile errors.
+         *     from the workflow compiler so the editor can highlight inline.
+         *     Optional `failing_tests` carries the publish gate's per-test detail.
          */
         ErrorResponse: {
+            code?: string | null;
             compile_errors?: components["schemas"]["CompileErrorView"][] | null;
             error: string;
             /**

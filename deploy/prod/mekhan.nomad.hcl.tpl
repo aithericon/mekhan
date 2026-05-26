@@ -60,7 +60,7 @@ job "mekhan-service" {
 
       check {
         type     = "http"
-        path     = "/api/v1/health"
+        path     = "/healthz"
         interval = "10s"
         timeout  = "2s"
       }

@@ -2,12 +2,26 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Mekhan API",
-    "description": "SOP workflow management — Petri-net backed, real-time collaborative editing.\n\nRoutes are organized by domain: templates (the visual workflow editor'ssaved state), instances (running workflows), processes (HPI observabilityover running instances), catalogue (artifact registry), and provenance(token-level causality across nets).\n\nThe Yjs WebSocket endpoint at `/api/yjs/{template_id}` carries thecollaborative editor's binary CRDT protocol and is intentionally notmodeled here.",
+    "description": "SOP workflow management — Petri-net backed, real-time collaborative editing.\n\nRoutes are organized by domain: templates (the visual workflow editor'ssaved state), instances (running workflows), processes (HPI observabilityover running instances), catalogue (artifact registry), and provenance(token-level causality across nets).\n\nThe JSON API lives under `/api/v1/*`; `/healthz` is the unauthenticatedliveness probe. The Yjs WebSocket endpoint at `/api/yjs/{template_id}`carries the collaborative editor's binary CRDT protocol and isintentionally not modeled here.",
     "license": {
       "name": ""
     },
     "version": "0.1.0"
   },
+  "servers": [
+    {
+      "url": "/",
+      "description": "Same-origin BFF (production single-origin posture)."
+    },
+    {
+      "url": "http://localhost:3100",
+      "description": "Local mekhan-service direct."
+    },
+    {
+      "url": "http://localhost:5173",
+      "description": "SvelteKit dev server (proxies /api/* to mekhan)."
+    }
+  ],
   "paths": {
     "/api/v1/analyze": {
       "post": {
@@ -4574,13 +4588,13 @@
         }
       }
     },
-    "/health": {
+    "/healthz": {
       "get": {
         "tags": [
           "health"
         ],
-        "summary": "GET /health",
-        "description": "Liveness probe — fixed shape, no DB / NATS dependencies.",
+        "summary": "GET /healthz",
+        "description": "Liveness probe — fixed shape, no DB / NATS dependencies. Lives at the\nroot (NOT under `/api/v1`) and OUTSIDE the auth layer so load balancers,\nNomad/k8s probes, and uptime monitors can poll it without a session\ncookie. The path follows k8s convention; spec stays in the OpenAPI doc\nfor completeness but the runtime mount is intentionally separate from\nthe main protected `OpenApiRouter`.",
         "operationId": "liveness",
         "responses": {
           "200": {
@@ -5571,11 +5585,17 @@
       },
       "ErrorResponse": {
         "type": "object",
-        "description": "Uniform error body returned by every fallible handler. Replaces the ad-hoc\n`json!({\"error\": ...})` pattern so the spec exposes a single\n`ErrorResponse` schema and the frontend gets one consistent error shape.\n\nOptional `compile_errors` carries structured per-edge / per-node failures\nfrom the workflow compiler so the editor can highlight inline (Phase 2\ntyped-ports). Absent on non-compile errors.",
+        "description": "Uniform error body returned by every fallible handler. The spec exposes a\nsingle `ErrorResponse` schema and the frontend gets one consistent error\nshape: switch on `code` (machine-readable, stable kebab-case) for\nprogrammatic handling; render `error` for humans.\n\n`code` is populated automatically by every `ApiError::*` constructor.\nStable values: `\"bad-request\"`, `\"unauthorized\"`, `\"forbidden\"`,\n`\"not-found\"`, `\"conflict\"`, `\"precondition-failed\"`, `\"internal\"`,\n`\"compile-failed\"`, `\"publish-gate\"`. Absent only on the few\nextractor-level rejections that don't flow through `ApiError`.\n\nOptional `compile_errors` carries structured per-edge / per-node failures\nfrom the workflow compiler so the editor can highlight inline.\nOptional `failing_tests` carries the publish gate's per-test detail.",
         "required": [
           "error"
         ],
         "properties": {
+          "code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "compile_errors": {
             "type": [
               "array",

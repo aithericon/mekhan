@@ -7,11 +7,9 @@ use axum::{
     },
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
-    Json,
 };
 use axum_extra::extract::cookie::CookieJar;
 use futures::{SinkExt, StreamExt};
-use serde_json::json;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
@@ -36,11 +34,11 @@ pub async fn ws_handler(
     // dev_noop accepts unauthenticated and bff requires a valid session.
     if let Err(e) = state.authenticator.authenticate(&headers, &jar).await {
         tracing::debug!(template_id = %template_id, "yjs ws auth rejected: {e}");
-        return (
+        return crate::models::error::ApiError::new(
             StatusCode::FORBIDDEN,
-            Json(json!({"error": "unauthenticated"})),
+            "unauthenticated",
         )
-            .into_response();
+        .into_response();
     }
 
     // Verify the template exists. Published templates connect read-only so the
@@ -55,19 +53,12 @@ pub async fn ws_handler(
     let readonly = match existing {
         Ok(Some(t)) => t.published,
         Ok(None) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({"error": "template not found"})),
-            )
+            return crate::models::error::ApiError::not_found("template not found")
                 .into_response();
         }
         Err(e) => {
             tracing::error!("failed to check template for WS: {e}");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": e.to_string()})),
-            )
-                .into_response();
+            return crate::models::error::ApiError::internal(e.to_string()).into_response();
         }
     };
 

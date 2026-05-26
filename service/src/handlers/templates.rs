@@ -605,6 +605,7 @@ pub async fn publish_template(
                         "{} template test(s) failed; publish blocked. Pass ?force=true to override.",
                         failing.len()
                     ))
+                    .with_code("publish-gate")
                     .with_failing_tests(failing_json),
                 ),
             });

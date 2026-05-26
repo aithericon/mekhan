@@ -9,12 +9,17 @@ pub struct HealthResponse {
     pub version: String,
 }
 
-/// GET /health
+/// GET /healthz
 ///
-/// Liveness probe — fixed shape, no DB / NATS dependencies.
+/// Liveness probe — fixed shape, no DB / NATS dependencies. Lives at the
+/// root (NOT under `/api/v1`) and OUTSIDE the auth layer so load balancers,
+/// Nomad/k8s probes, and uptime monitors can poll it without a session
+/// cookie. The path follows k8s convention; spec stays in the OpenAPI doc
+/// for completeness but the runtime mount is intentionally separate from
+/// the main protected `OpenApiRouter`.
 #[utoipa::path(
     get,
-    path = "/health",
+    path = "/healthz",
     responses(
         (status = 200, description = "Service is alive", body = HealthResponse),
     ),

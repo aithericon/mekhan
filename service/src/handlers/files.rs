@@ -4,7 +4,6 @@ use axum::{
     response::IntoResponse,
     Json,
 };
-use serde_json::json;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
@@ -146,11 +145,7 @@ pub async fn get_file(
             .into_response(),
         Err(e) => {
             tracing::warn!(key = %key, error = %e, "failed to get file from S3");
-            (
-                StatusCode::NOT_FOUND,
-                Json(json!({ "error": "File not found" })),
-            )
-                .into_response()
+            crate::models::error::ApiError::not_found("File not found").into_response()
         }
     }
 }

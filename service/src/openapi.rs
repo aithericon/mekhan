@@ -10,9 +10,15 @@ use utoipa::OpenApi;
                        saved state), instances (running workflows), processes (HPI observability\
                        over running instances), catalogue (artifact registry), and provenance\
                        (token-level causality across nets).\n\n\
-                       The Yjs WebSocket endpoint at `/api/yjs/{template_id}` carries the\
-                       collaborative editor's binary CRDT protocol and is intentionally not\
-                       modeled here."
+                       The JSON API lives under `/api/v1/*`; `/healthz` is the unauthenticated\
+                       liveness probe. The Yjs WebSocket endpoint at `/api/yjs/{template_id}`\
+                       carries the collaborative editor's binary CRDT protocol and is\
+                       intentionally not modeled here."
+    ),
+    servers(
+        (url = "/", description = "Same-origin BFF (production single-origin posture)."),
+        (url = "http://localhost:3100", description = "Local mekhan-service direct."),
+        (url = "http://localhost:5173", description = "SvelteKit dev server (proxies /api/* to mekhan).")
     ),
     components(
         // SSE event payload types — not referenced from any handler signature

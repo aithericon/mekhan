@@ -102,13 +102,20 @@ pub struct AppState {
     pub resource_resolver: Arc<crate::petri::resource_resolver::ResourceResolver>,
 }
 
-/// Build the `OpenApiRouter` containing every `#[utoipa::path]`-annotated
-/// handler. Single source of truth for both [`build_router`] (runtime mount +
-/// swagger-ui) and [`openapi_spec`] (CLI dump for frontend codegen).
-fn build_openapi_router() -> OpenApiRouter<AppState> {
-    OpenApiRouter::<AppState>::with_openapi(ApiDoc::openapi())
-        // Health
+/// Public OpenApiRouter — routes mounted OUTSIDE the auth gate.
+///
+/// Currently only the `/healthz` liveness probe. Anything that load balancers,
+/// uptime monitors, or container orchestrators need to reach without a session
+/// cookie belongs here.
+fn build_public_openapi_router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::<AppState>::new()
         .routes(routes!(handlers::health::liveness))
+}
+
+/// Protected OpenApiRouter — every `#[utoipa::path]`-annotated handler that
+/// requires authentication. Mounted behind `require_auth_middleware`.
+fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::<AppState>::with_openapi(ApiDoc::openapi())
         // Auth tokens — embedded per-user PAT management. Cookie-only by
         // construction (the `AuthUser` arg re-runs the cookie authenticator,
         // so a Bearer PAT behind `require_auth_middleware` can't reach these
@@ -239,29 +246,36 @@ pub fn build_router(state: AppState) -> Router {
     let frontend_dir = state.config.frontend_dir.clone();
     let cors_config = state.config.clone();
 
-    // Every #[utoipa::path]-annotated handler is registered via OpenApiRouter
-    // so the spec stays in sync with the runtime mounts. Versioning policy:
-    // the JSON API surface lives under `/api/v1/*` (path attrs embed the
-    // version directly). Three sibling prefixes intentionally stay
-    // unversioned because they are NOT OpenAPI-modeled and have external
-    // contracts mekhan does not control:
-    //   - `/api/v1/auth/{login,callback,session,logout}` — OAuth bootstrap;
-    //      the callback URL is registered in Zitadel.
-    //   - `/api/yjs/{template_id}` — Yjs CRDT WebSocket (binary protocol).
-    //   - `/api/triggers/webhook/{slug}` — external webhook receivers.
-    let (api_router, api_spec) = build_openapi_router().split_for_parts();
+    // Versioning policy:
+    //   - JSON API surface lives under `/api/v1/*` (path attrs embed the
+    //     version directly).
+    //   - `/healthz` sits at the root, outside auth, k8s-conventional.
+    //   - The unversioned siblings (`/api/auth/*` OAuth bootstrap,
+    //     `/api/yjs/{template_id}` WS, `/api/triggers/webhook/{slug}`) are
+    //     NOT OpenAPI-modeled and have external contracts mekhan does not
+    //     control.
+    //
+    // The protected OpenApiRouter holds every authenticated handler; the
+    // public one holds only `/healthz`. Both contribute to the same
+    // `api_spec` so the published OpenAPI document stays a single document.
+    let (protected_router, mut api_spec) =
+        build_protected_openapi_router().split_for_parts();
+    let (public_router, public_spec) = build_public_openapi_router().split_for_parts();
+    api_spec.merge(public_spec);
 
     // The auth middleware gates every JSON API route. The WS endpoint is
     // mounted OUTSIDE this layer because it isn't OpenAPI-modeled — it
     // authenticates inside the handler via the same `mekhan_session` cookie
     // (which rides the same-origin WS upgrade) through the `Authenticator`.
-    let protected: Router = api_router
+    let protected: Router = protected_router
         .layer(DefaultBodyLimit::max(50 * 1024 * 1024))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             auth::extractor::require_auth_middleware,
         ))
         .with_state(state.clone());
+
+    let public: Router = public_router.with_state(state.clone());
 
     let ws_router: Router = Router::new()
         .route(
@@ -319,13 +333,15 @@ pub fn build_router(state: AppState) -> Router {
 
     let swagger = SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", api_spec);
 
+    // Public surface (unauthenticated): `/healthz` first, then everything
+    // else gated by auth. SPA fallback comes last so handler routes win.
     let app = if let Some(dir) = frontend_dir {
         let path = PathBuf::from(dir);
         let index = path.join("index.html");
         let spa = ServeDir::new(&path).fallback(ServeFile::new(&index));
-        protected.merge(swagger).fallback_service(spa)
+        public.merge(protected).merge(swagger).fallback_service(spa)
     } else {
-        protected.merge(swagger)
+        public.merge(protected).merge(swagger)
     };
 
     app.layer(build_cors_layer(&cors_config))
@@ -368,8 +384,12 @@ fn build_cors_layer(cfg: &AppConfig) -> CorsLayer {
 }
 
 /// Build the OpenAPI document without booting any state — used by the CLI's
-/// `mekhan openapi` subcommand to dump the spec for codegen pipelines.
+/// `mekhan openapi` subcommand to dump the spec for codegen pipelines. Merges
+/// the public (`/healthz`) and protected halves so the published spec is a
+/// single document.
 pub fn openapi_spec() -> utoipa::openapi::OpenApi {
-    let (_, api) = build_openapi_router().split_for_parts();
+    let (_, mut api) = build_protected_openapi_router().split_for_parts();
+    let (_, public) = build_public_openapi_router().split_for_parts();
+    api.merge(public);
     api
 }

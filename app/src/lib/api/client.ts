@@ -147,19 +147,39 @@ export type PaginatedProcesses = components['schemas']['Paginated_HpiProcess'];
 export type PaginatedLogs = components['schemas']['Paginated_HpiLog'];
 export type PaginatedArtifacts = components['schemas']['Paginated_CatalogueEntry'];
 
+/// Error thrown by `unwrap` (and `rawJson`) when the API returns a non-2xx
+/// status. Carries the structured `ErrorResponse` envelope so callers can
+/// switch on `code` for programmatic handling rather than parsing the
+/// human-readable `message`.
+export class ApiError extends Error {
+	readonly status: number;
+	readonly code: string | undefined;
+	readonly body: { error?: string; code?: string; [k: string]: unknown };
+	constructor(status: number, body: Record<string, unknown> | string | undefined) {
+		const envelope =
+			typeof body === 'object' && body !== null
+				? (body as { error?: string; code?: string })
+				: { error: typeof body === 'string' ? body : undefined };
+		const message = envelope.error ?? `API error ${status}`;
+		super(`API error ${status}: ${message}`);
+		this.name = 'ApiError';
+		this.status = status;
+		this.code = envelope.code;
+		this.body = envelope as { error?: string; code?: string };
+	}
+}
+
 // Internal helper — `openapi-fetch` returns { data, error }. We surface the
 // older "throws on non-2xx" contract so call sites don't need to change.
 function unwrap<T>(result: { data?: T; error?: unknown; response: Response }): T {
 	if (result.error !== undefined) {
-		const status = result.response.status;
-		const body =
-			typeof result.error === 'object'
-				? JSON.stringify(result.error)
-				: String(result.error);
-		throw new Error(`API error ${status}: ${body}`);
+		throw new ApiError(
+			result.response.status,
+			result.error as Record<string, unknown> | string | undefined
+		);
 	}
 	if (result.data === undefined) {
-		throw new Error(`API error ${result.response.status}: empty body`);
+		throw new ApiError(result.response.status, 'empty body');
 	}
 	return result.data;
 }
@@ -203,7 +223,10 @@ export async function updateTemplate(id: string, data: UpdateTemplateRequest): P
 export async function deleteTemplate(id: string): Promise<void> {
 	const res = await client.DELETE('/api/v1/templates/{id}', { params: { path: { id } } });
 	if (res.error !== undefined && res.response.status >= 400) {
-		throw new Error(`API error ${res.response.status}: ${JSON.stringify(res.error)}`);
+		throw new ApiError(
+			res.response.status,
+			res.error as Record<string, unknown> | string | undefined
+		);
 	}
 }
 
@@ -263,8 +286,10 @@ export async function publishTemplate(id: string, force = false): Promise<Templa
 		if (body && Array.isArray(body.compile_errors) && body.compile_errors.length > 0) {
 			throw new CompileApiError(body.error ?? 'compilation failed', body.compile_errors);
 		}
-		const detail = typeof rawErr === 'object' ? JSON.stringify(rawErr) : String(rawErr);
-		throw new Error(`API error ${res.response.status}: ${detail}`);
+		throw new ApiError(
+			res.response.status,
+			rawErr as Record<string, unknown> | string | undefined
+		);
 	}
 	return res.data as Template;
 }
@@ -307,7 +332,10 @@ export async function deleteTemplateTest(templateId: string, testId: string): Pr
 		params: { path: { template_id: templateId, test_id: testId } }
 	});
 	if (res.error !== undefined && res.response.status >= 400) {
-		throw new Error(`API error ${res.response.status}: ${JSON.stringify(res.error)}`);
+		throw new ApiError(
+			res.response.status,
+			res.error as Record<string, unknown> | string | undefined
+		);
 	}
 }
 
@@ -503,7 +531,10 @@ export async function listStepExecutions(id: string): Promise<StepExecution[]> {
 export async function cancelInstance(id: string): Promise<void> {
 	const res = await client.DELETE('/api/v1/instances/{id}', { params: { path: { id } } });
 	if (res.error !== undefined && res.response.status >= 400) {
-		throw new Error(`API error ${res.response.status}: ${JSON.stringify(res.error)}`);
+		throw new ApiError(
+			res.response.status,
+			res.error as Record<string, unknown> | string | undefined
+		);
 	}
 }
 
@@ -556,7 +587,7 @@ export async function listProcesses(params?: {
 	sort?: string;
 	page?: number;
 	page_size?: number;
-}): Promise<import('$lib/types/process').PaginatedProcessResponse<HpiProcess>> {
+}): Promise<PaginatedProcesses> {
 	const qs = new URLSearchParams();
 	if (params?.status) qs.set('status', params.status);
 	if (params?.kind) qs.set('kind', params.kind);
@@ -575,7 +606,7 @@ export async function listProcesses(params?: {
  *  `instance_id` column directly errors with `uuid = text`. */
 export async function listProcessesByInstance(
 	instanceId: string
-): Promise<import('$lib/types/process').PaginatedProcessResponse<HpiProcess>> {
+): Promise<PaginatedProcesses> {
 	const qs = new URLSearchParams();
 	qs.set('filter[net_id][eq]', `mekhan-${instanceId}`);
 	qs.set('sort', '-created_at');
@@ -626,7 +657,7 @@ export async function getProcessMetricsSummary(processId: string): Promise<HpiMe
 export async function getProcessLogs(
 	processId: string,
 	params?: { level?: string; source?: string; search?: string; page?: number; page_size?: number }
-): Promise<import('$lib/types/process').PaginatedProcessResponse<HpiLog>> {
+): Promise<PaginatedLogs> {
 	const qs = new URLSearchParams();
 	if (params?.level) qs.set('level', params.level);
 	if (params?.source) qs.set('source', params.source);
@@ -788,7 +819,7 @@ function toIso(d: Date | string): string {
 export async function getProcessArtifacts(
 	processId: string,
 	params?: { page?: number; page_size?: number }
-): Promise<import('$lib/types/process').PaginatedProcessResponse<CatalogueEntry>> {
+): Promise<PaginatedArtifacts> {
 	const qs = new URLSearchParams();
 	if (params?.page !== undefined) qs.set('page', String(params.page));
 	if (params?.page_size) qs.set('page_size', String(params.page_size));
@@ -797,19 +828,6 @@ export async function getProcessArtifacts(
 }
 
 // ── Catalogue ───────────────────────────────────────────────────────────────
-
-/** Pagination envelope for `GET /api/catalogue` — the backend returns this
- *  shape through its custom query-DSL repository, but the spec types the
- *  response as `serde_json::Value` since the DSL isn't modeled in utoipa. */
-export interface PaginatedCatalogueResponse {
-	items: CatalogueEntry[];
-	total: number;
-	page: number;
-	page_size: number;
-	total_pages: number;
-	has_next: boolean;
-	has_previous: boolean;
-}
 
 export async function listCatalogueEntries(params?: {
 	category?: string;
@@ -821,7 +839,7 @@ export async function listCatalogueEntries(params?: {
 	page_size?: number;
 	metadata?: string;
 	file_metadata?: string;
-}): Promise<PaginatedCatalogueResponse> {
+}): Promise<PaginatedArtifacts> {
 	const qs = new URLSearchParams();
 	if (params?.category) qs.set('filter[category][eq]', params.category);
 	if (params?.source_net) qs.set('filter[source_net][eq]', params.source_net);
@@ -894,8 +912,7 @@ export async function uploadFile(
 	});
 
 	if (!res.ok) {
-		const body = await res.text();
-		throw new Error(`Upload error ${res.status}: ${body}`);
+		throw new ApiError(res.status, await parseErrorBody(res));
 	}
 
 	return res.json();
@@ -962,26 +979,53 @@ export async function createAccessToken(body: CreateTokenRequest): Promise<Creat
 export async function revokeAccessToken(id: string): Promise<void> {
 	const res = await client.DELETE('/api/v1/auth/tokens/{id}', { params: { path: { id } } });
 	if (res.error !== undefined && res.response.status >= 400) {
-		throw new Error(`API error ${res.response.status}: ${JSON.stringify(res.error)}`);
+		throw new ApiError(
+			res.response.status,
+			res.error as Record<string, unknown> | string | undefined
+		);
 	}
 }
 
-// ── Untyped raw-JSON helper ────────────────────────────────────────────────
+// ── Raw-JSON helper for query-DSL endpoints ────────────────────────────────
 //
-// A handful of routes return `serde_json::Value` envelopes
-// (`{ tasks }`, `{ entries }`, custom query DSL responses on processes/logs/
-// artifacts/catalogue list, plus the HPI-task-shaped tasks endpoints). openapi-fetch
-// can't help here — the schema says "object" with no fields. Until those
-// responses are typed on the backend, fall back to plain fetch with the call
-// site asserting the shape.
-async function rawJson<T>(path: string, init?: RequestInit): Promise<T> {
+// Most JSON endpoints route through `client.GET/POST/...` via openapi-fetch
+// and pick up types from `schema.d.ts`. A subset cannot:
+//
+//   1. The paginated query-DSL routes (`/processes`, `/processes/{}/logs`,
+//      `/processes/{}/artifacts`, `/catalogue`, `/tasks`) accept bracket
+//      notation in the query string (`filter[col][op]=value&sort=-col&...`)
+//      that utoipa does not derive `IntoParams` for. The RESPONSE shape IS
+//      typed in the spec — call sites cast through `Paginated_*` schema
+//      aliases — but the REQUEST query has to be hand-built. Adding
+//      `IntoParams` declarations on the Rust handlers would let these flow
+//      through `client.GET`; tracked as a follow-up.
+//   2. The HumanTask-shaped endpoints (`/tasks/{id}`, `/tasks/{id}/complete`,
+//      `/tasks/{id}/cancel`) return a heterogeneous JSON object assembled
+//      from `HpiTask.detail` — the wire shape is intentionally `Value`.
+//
+// `rawJson` is exported so call sites outside this module share the same
+// `ApiError` envelope decoding. Path is API_BASE-relative (e.g.
+// `'/tasks/{id}'`).
+export async function rawJson<T>(path: string, init?: RequestInit): Promise<T> {
 	const res = await authFetch(`${API_BASE}${path}`, {
 		...init,
 		headers: { 'Content-Type': 'application/json', ...init?.headers }
 	});
 	if (!res.ok) {
-		const body = await res.text();
-		throw new Error(`API error ${res.status}: ${body}`);
+		throw new ApiError(res.status, await parseErrorBody(res));
 	}
 	return res.json() as Promise<T>;
+}
+
+/// Try to decode an error `Response` as the standard `ErrorResponse` JSON
+/// envelope; fall back to the raw body text. Used by every direct-fetch call
+/// site (multipart uploads, SSE) so they still surface the structured `code`.
+async function parseErrorBody(res: Response): Promise<Record<string, unknown> | string> {
+	const text = await res.text();
+	try {
+		const parsed = JSON.parse(text);
+		return typeof parsed === 'object' && parsed !== null ? parsed : text;
+	} catch {
+		return text;
+	}
 }
