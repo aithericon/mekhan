@@ -30,6 +30,7 @@ tracing = { workspace = true }
 chrono = { workspace = true }
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
+tempfile = "3"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 bollard = { workspace = true, optional = true }
 aithericon-executor-file-ops = { workspace = true, optional = true }
