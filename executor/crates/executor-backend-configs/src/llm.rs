@@ -167,6 +167,20 @@ pub struct LlmConfig {
     pub images: Vec<ImageInput>,
 }
 
+/// Resolved OpenAI-compatible resource binding read from the staged
+/// `<alias>.json` envelope. Mirrors `aithericon_resources::types::OpenAI`
+/// so the mekhan side and the backend stay in lockstep without a dep
+/// edge between them. Used when the LLM step binds to a workspace
+/// resource via `resource_alias`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResolvedOpenAiResource {
+    pub api_key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub organization: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

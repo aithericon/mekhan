@@ -1,9 +1,9 @@
 //! SMTP executor backend with Tera-templated subject + body.
 //!
 //! The backend is stateless and side-effect-free until [`SmtpBackend::execute`]
-//! runs — it pulls the resolved SMTP resource (host/port/auth) out of
-//! `RunContext.resolved_config` (the `#[serde(skip)]` side-channel populated
-//! by the worker's `PlanSecretsHook`), renders Tera templates against the
+//! runs — it loads the SMTP resource (host/port/auth) from the staged
+//! `<alias>.json` envelope (single channel, written by the worker's
+//! resource-envelope staging hook), renders Tera templates against the
 //! staged input files, builds a MIME message, and dispatches via
 //! `lettre::AsyncSmtpTransport`. Failures are mapped to a structured
 //! [`outcome::SmtpOutcome`] so the mekhan instance view can render a
@@ -87,14 +87,10 @@ impl ExecutionBackend for SmtpBackend {
         let config = SmtpConfig::from_spec(&run_context.spec)?;
         config.validate()?;
 
-        // The resolved resource rides through the staged-inputs pipeline as
+        // The SMTP resource rides through the staged-inputs pipeline as
         // `<resource_alias>.json` — same channel the Python runner uses for
-        // its resource borrows. `PlanSecretsHook` walks inline input values
-        // at staging time, substituting `{{secret:resources/<id>/v<n>#field}}`
-        // patterns with the live Vault values, so by the time we read the
-        // file here it has plaintext credentials. Path of last resort:
-        // `resolved_config["smtp_resource"]` (kept for harness tests that
-        // don't go through the full staging pipeline).
+        // its resource borrows. The resource-envelope staging hook writes
+        // the file with plaintext credentials after fetching from Vault.
         let resource = match resolve_resource(&config, run_context) {
             Ok(r) => r,
             Err(out) => return Ok(failure_result(out, start.elapsed(), run_context)),
@@ -294,55 +290,27 @@ impl ExecutionBackend for SmtpBackend {
     }
 }
 
-/// Resolve the SMTP resource view from the staging pipeline.
+/// Load the SMTP resource from the staged `<alias>.json` envelope.
 ///
-/// Preferred path: the compiler emits a `BorrowResolution::ResourceEnvelope`
-/// for the SMTP step's `resource_alias`, which stages `<alias>.json` into
-/// `run_dir/inputs/`. `PlanSecretsHook` walks inline input contents at
-/// staging time so the file has plaintext secrets by the time we read it.
-///
-/// Fallback path: `resolved_config["smtp_resource"]` — used by unit tests
-/// that construct a `RunContext` directly with a pre-resolved resource
-/// rather than going through the full staging pipeline.
+/// The compiler emits a `BorrowResolution::ResourceEnvelope` for the
+/// step's `resource_alias`, which the worker's staging pipeline writes
+/// to `run_dir/inputs/<alias>.json` with plaintext credentials. This is
+/// the single channel — there is no `resolved_config` fallback.
 fn resolve_resource(
     config: &SmtpConfig,
     run_context: &RunContext,
 ) -> Result<ResolvedSmtpResource, SmtpOutcome> {
-    if let Some(alias) = &config.resource_alias {
-        if !alias.is_empty() {
-            // Shared loader: handles staged_inputs → inputs_dir fallback,
-            // returns Ok(None) when the file isn't present (we fall
-            // through to the test-harness `resolved_config` path below).
-            let envelope = aithericon_executor_backend::try_load_resource_envelope(
-                run_context, alias,
-            )
-            .map_err(|e| SmtpOutcome::InvalidConfig {
-                message: format!("smtp backend: {e}"),
-            })?;
-            if let Some(value) = envelope {
-                return ResolvedSmtpResource::from_resolved_value(&value).map_err(|e| {
-                    SmtpOutcome::InvalidConfig {
-                        message: format!("smtp backend: {e}"),
-                    }
-                });
-            }
-        }
-    }
-
-    if let Some(rc) = run_context.resolved_config.as_ref() {
-        return ResolvedSmtpResource::from_resolved(rc).map_err(|e| SmtpOutcome::InvalidConfig {
+    let alias = config
+        .resource_alias
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| SmtpOutcome::InvalidConfig {
+            message: "smtp backend: resource_alias is required".into(),
+        })?;
+    aithericon_executor_backend::load_resource::<ResolvedSmtpResource>(run_context, alias)
+        .map_err(|e| SmtpOutcome::InvalidConfig {
             message: format!("smtp backend: {e}"),
-        });
-    }
-
-    Err(SmtpOutcome::InvalidConfig {
-        message: format!(
-            "smtp backend: resource '{}' not staged as <alias>.json and no resolved_config — \
-             the compiler must emit a ResourceEnvelope borrow OR a test harness must \
-             populate resolved_config['smtp_resource']",
-            config.resource_alias.as_deref().unwrap_or("<unset>")
-        ),
-    })
+        })
 }
 
 /// Render one template + propagate the outcome on failure.

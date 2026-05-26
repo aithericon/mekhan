@@ -41,23 +41,25 @@ fn write_input(dir: &PathBuf, name: &str, v: serde_json::Value) {
     std::fs::write(dir.join(name), serde_json::to_vec(&v).unwrap()).unwrap();
 }
 
-fn fake_resource() -> serde_json::Value {
+fn fake_resource_envelope() -> serde_json::Value {
     serde_json::json!({
-        "smtp_resource": {
-            "host": "smtp.example.com",
-            "port": 587,
-            "username": "noreply@example.com",
-            "password": "DO-NOT-LEAK",
-            "from_address": "hello@example.com"
-        }
+        "host": "smtp.example.com",
+        "port": 587,
+        "username": "noreply@example.com",
+        "password": "DO-NOT-LEAK",
+        "from_address": "hello@example.com"
     })
+}
+
+fn stage_resource(ctx: &RunContext, alias: &str, envelope: &serde_json::Value) {
+    write_input(&ctx.run_dir.inputs_dir, &format!("{alias}.json"), envelope.clone());
 }
 
 fn noop_status_cb() -> StatusCallback {
     Box::new(|_: ExecutionStatus, _: serde_json::Value| Box::pin(async {}))
 }
 
-fn run_context(tmp: &TempDir, spec: ExecutionSpec, resolved: Option<serde_json::Value>) -> RunContext {
+fn run_context(tmp: &TempDir, spec: ExecutionSpec) -> RunContext {
     let dir = RunDirectory::new(tmp.path(), "test-exec");
     for d in dir.all_dirs() {
         std::fs::create_dir_all(d).unwrap();
@@ -69,7 +71,7 @@ fn run_context(tmp: &TempDir, spec: ExecutionSpec, resolved: Option<serde_json::
         timeout: std::time::Duration::from_secs(30),
         env: HashMap::new(),
         resolved_env: HashMap::new(),
-        resolved_config: resolved,
+        resolved_config: None,
         resolved_input_storage: HashMap::new(),
         resolved_output_storage: HashMap::new(),
         resolved_inline_inputs: HashMap::new(),
@@ -106,7 +108,8 @@ async fn renders_subject_and_body_against_inputs() {
     let config = base_config();
     let spec = config.into_spec();
 
-    let ctx = run_context(&tmp, spec, Some(fake_resource()));
+    let ctx = run_context(&tmp, spec);
+    stage_resource(&ctx, "mail", &fake_resource_envelope());
     write_input(
         &ctx.run_dir.inputs_dir,
         "intake.json",
@@ -155,7 +158,8 @@ async fn template_render_error_surfaces_structured_outcome() {
     config.subject = TemplateSource::new("subject.tera", "Hi {{ missing.field }}");
     let spec = config.into_spec();
 
-    let ctx = run_context(&tmp, spec, Some(fake_resource()));
+    let ctx = run_context(&tmp, spec);
+    stage_resource(&ctx, "mail", &fake_resource_envelope());
     write_input(
         &ctx.run_dir.inputs_dir,
         "intake.json",
@@ -183,10 +187,12 @@ async fn template_render_error_surfaces_structured_outcome() {
 }
 
 #[tokio::test]
-async fn missing_resolved_config_is_invalid_config() {
+async fn missing_resource_envelope_is_invalid_config() {
     let tmp = TempDir::new().unwrap();
     let spec = base_config().into_spec();
-    let ctx = run_context(&tmp, spec, None);
+    // No stage_resource call — the staged <alias>.json is absent, so
+    // the typed loader returns Config error → InvalidConfig outcome.
+    let ctx = run_context(&tmp, spec);
 
     let backend = SmtpBackend::new().with_sink(CapturingSink::new());
     let result = backend
@@ -207,7 +213,8 @@ async fn from_override_wins_over_resource_default() {
     config.from = Some("Alt <alt@example.com>".into());
     let spec = config.into_spec();
 
-    let ctx = run_context(&tmp, spec, Some(fake_resource()));
+    let ctx = run_context(&tmp, spec);
+    stage_resource(&ctx, "mail", &fake_resource_envelope());
     write_input(
         &ctx.run_dir.inputs_dir,
         "intake.json",
@@ -245,7 +252,8 @@ async fn multipart_alternative_when_both_bodies_set() {
     ));
     let spec = config.into_spec();
 
-    let ctx = run_context(&tmp, spec, Some(fake_resource()));
+    let ctx = run_context(&tmp, spec);
+    stage_resource(&ctx, "mail", &fake_resource_envelope());
     write_input(
         &ctx.run_dir.inputs_dir,
         "intake.json",
@@ -281,7 +289,8 @@ async fn attachments_go_through_multipart_mixed() {
     }];
     let spec = config.into_spec();
 
-    let mut ctx = run_context(&tmp, spec, Some(fake_resource()));
+    let mut ctx = run_context(&tmp, spec);
+    stage_resource(&ctx, "mail", &fake_resource_envelope());
     write_input(
         &ctx.run_dir.inputs_dir,
         "intake.json",
@@ -309,7 +318,8 @@ async fn invalid_recipient_address_surfaces_structured_outcome() {
     config.to = vec!["not a real address".into()];
     let spec = config.into_spec();
 
-    let ctx = run_context(&tmp, spec, Some(fake_resource()));
+    let ctx = run_context(&tmp, spec);
+    stage_resource(&ctx, "mail", &fake_resource_envelope());
     write_input(
         &ctx.run_dir.inputs_dir,
         "intake.json",
@@ -337,7 +347,8 @@ async fn dry_run_does_not_call_sink_or_transport() {
     config.dry_run = true;
     let spec = config.into_spec();
 
-    let ctx = run_context(&tmp, spec, Some(fake_resource()));
+    let ctx = run_context(&tmp, spec);
+    stage_resource(&ctx, "mail", &fake_resource_envelope());
     write_input(
         &ctx.run_dir.inputs_dir,
         "intake.json",
@@ -378,7 +389,8 @@ async fn missing_attachment_input_is_attachment_error() {
     }];
     let spec = config.into_spec();
 
-    let ctx = run_context(&tmp, spec, Some(fake_resource()));
+    let ctx = run_context(&tmp, spec);
+    stage_resource(&ctx, "mail", &fake_resource_envelope());
     write_input(
         &ctx.run_dir.inputs_dir,
         "intake.json",

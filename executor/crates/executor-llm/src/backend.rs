@@ -14,6 +14,8 @@ use aithericon_executor_domain::{
     LogEntry, LogLevel, LogSummary, MetricSummary, RunContext,
 };
 
+use aithericon_executor_backend_configs::llm::ResolvedOpenAiResource;
+
 use crate::adapters;
 use crate::config::{ImageInput, LlmConfig};
 use crate::port::{CompletionRequest, ImageData, ResponseFormat};
@@ -400,32 +402,24 @@ impl ExecutionBackend for LlmBackend {
 // Resource envelope overlay
 // ---------------------------------------------------------------------------
 
-/// Read `<alias>.json` from the staged-inputs side-channel and overlay the
-/// fields the LLM backend cares about (`api_key`, `base_url`, `organization`)
-/// onto the deserialized config. Per-step values, when set, take precedence —
-/// callers can still pin a one-off api_key on a single step without touching
-/// the resource.
+/// Read `<alias>.json` from the staged-inputs side-channel and overlay
+/// the fields the LLM backend cares about (`api_key`, `base_url`) onto
+/// the deserialized config. Per-step values, when set, take precedence —
+/// callers can still pin a one-off api_key on a single step without
+/// touching the resource.
 fn overlay_resource(
     config: &mut LlmConfig,
     alias: &str,
     run_context: &RunContext,
 ) -> Result<(), ExecutorError> {
-    let value = aithericon_executor_backend::load_resource_envelope(run_context, alias)?;
-    let obj = value.as_object().ok_or_else(|| {
-        ExecutorError::Config(format!(
-            "llm backend: resource '{alias}' envelope must be a JSON object"
-        ))
-    })?;
+    let resource =
+        aithericon_executor_backend::load_resource::<ResolvedOpenAiResource>(run_context, alias)?;
 
     if config.api_key.is_none() {
-        if let Some(v) = obj.get("api_key").and_then(|v| v.as_str()) {
-            config.api_key = Some(v.to_string());
-        }
+        config.api_key = Some(resource.api_key);
     }
     if config.base_url.is_none() {
-        if let Some(v) = obj.get("base_url").and_then(|v| v.as_str()) {
-            config.base_url = Some(v.to_string());
-        }
+        config.base_url = resource.base_url;
     }
     Ok(())
 }

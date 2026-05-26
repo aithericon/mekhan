@@ -56,10 +56,10 @@ pub struct SmtpConfig {
     #[serde(default)]
     pub attachments: Vec<AttachmentSpec>,
 
-    /// Resource alias inside the workflow — used by the compiler to look up
-    /// the right SMTP resource binding. Echoed here for diagnostics and to
-    /// drive the template-context variable name; the backend reads transport
-    /// config from `resolved_config["smtp_resource"]`, not from this field.
+    /// Resource alias inside the workflow — names the SMTP resource binding
+    /// the compiler stages as `<alias>.json` in the run directory. Required
+    /// for the backend to find transport credentials. Echoed here so the
+    /// Tera context can also expose the alias to templates that want it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource_alias: Option<String>,
 
@@ -168,14 +168,15 @@ impl SmtpConfig {
     }
 }
 
-/// Resolved SMTP resource binding parked in `RunContext.resolved_config` by
-/// the launcher's `ResourceResolver`. The structure mirrors
-/// `aithericon_resources::types::Smtp` exactly so the mekhan side and the
-/// backend stay in lockstep without a dep edge between them.
+/// Resolved SMTP resource binding read from the staged `<alias>.json`
+/// envelope. The structure mirrors `aithericon_resources::types::Smtp`
+/// exactly so the mekhan side and the backend stay in lockstep without a
+/// dep edge between them.
 ///
-/// `password` is intentionally `String` and not redacted — the resolved-config
-/// side-channel is `#[serde(skip)]`, never serialized to disk, never logged
-/// via the elision-Debug impl on `RunContext`.
+/// `password` is intentionally `String` and not redacted — the staged
+/// envelope file is written into the per-run inputs directory which is
+/// cleaned up at run end, never serialized to the status stream, and
+/// never logged via the elision-Debug impl on `RunContext`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResolvedSmtpResource {
     pub host: String,
@@ -184,34 +185,4 @@ pub struct ResolvedSmtpResource {
     pub password: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub from_address: Option<String>,
-}
-
-impl ResolvedSmtpResource {
-    /// Extract from a `resolved_config` JSON blob. The launcher writes the
-    /// resource under the `smtp_resource` key — keep this in one place so
-    /// the executor and the service-side compiler agree.
-    pub const RESOLVED_CONFIG_KEY: &'static str = "smtp_resource";
-
-    pub fn from_resolved(resolved: &serde_json::Value) -> Result<Self, ExecutorError> {
-        let v = resolved
-            .get(Self::RESOLVED_CONFIG_KEY)
-            .ok_or_else(|| {
-                ExecutorError::Config(format!(
-                    "smtp backend: resolved_config missing '{}' key",
-                    Self::RESOLVED_CONFIG_KEY
-                ))
-            })?
-            .clone();
-        Self::from_resolved_value(&v)
-    }
-
-    /// Deserialize directly from a JSON object whose keys are the resource
-    /// fields (host, port, username, password, from_address) — used when the
-    /// envelope is read out of a staged `<alias>.json` file rather than
-    /// nested under the `smtp_resource` side-channel key.
-    pub fn from_resolved_value(v: &serde_json::Value) -> Result<Self, ExecutorError> {
-        serde_json::from_value(v.clone()).map_err(|e| {
-            ExecutorError::Config(format!("smtp backend: invalid resolved resource shape: {e}"))
-        })
-    }
 }
