@@ -16,6 +16,7 @@ use aithericon_executor_backend_configs::{
     file_ops::FileOpsConfig, http::HttpConfig, kreuzberg::KreuzbergConfig, llm::LlmConfig,
     process::ProcessConfig,
     python::{default_python, PythonConfig},
+    smtp::{AttachmentSpec as SmtpAttachmentSpec, SmtpConfig, TemplateSource},
 };
 use aithericon_executor_domain::{InputDeclaration, InputSource};
 
@@ -370,8 +371,107 @@ pub fn validate_and_transform(
             })?;
             Ok((token, vec![]))
         }
+
+        ExecutionBackendType::Smtp => {
+            // SMTP carries Tera template sources inline in the config. The
+            // editor stores them as IDE node files for authoring + ref-picker
+            // ergonomics, but at save/publish time those file contents are
+            // embedded into the config as `TemplateSource { label, source }`
+            // so the executor never has to coordinate with node-file storage.
+            // Attachments DO flow through the staged-inputs pipeline because
+            // they typically reference upstream-step output artifacts.
+            let parsed: SmtpConfig = serde_json::from_value(config.clone())
+                .map_err(|e| CompileError::Validation(format!("invalid smtp config: {e}")))?;
+            parsed.validate().map_err(|e| {
+                // ExecutorError flattens to a Display string with the per-field
+                // detail; surface that as a Validation error.
+                CompileError::Validation(format!("smtp config: {e}"))
+            })?;
+
+            // Placeholder syntax check across every Tera template surface so
+            // a typo in `{{ user.emial }}` is flagged at publish time, not
+            // when an instance tries to send. We only validate `{{...}}`
+            // here — Tera also supports `{%...%}` blocks but compile-time
+            // scope-checking of those is out of scope for v1 (documented).
+            validate_placeholders(
+                &parsed.subject.source,
+                node_id,
+                "smtp",
+                &format!("subject({})", parsed.subject.label),
+            )?;
+            if let Some(ref t) = parsed.body_text {
+                validate_placeholders(
+                    &t.source,
+                    node_id,
+                    "smtp",
+                    &format!("body_text({})", t.label),
+                )?;
+            }
+            if let Some(ref h) = parsed.body_html {
+                validate_placeholders(
+                    &h.source,
+                    node_id,
+                    "smtp",
+                    &format!("body_html({})", h.label),
+                )?;
+            }
+            // Recipient and from templates are short single-line strings —
+            // still scan them so a misspelled `{{ user.emial }}` in the
+            // To: row is flagged with the right field name.
+            for (i, addr) in parsed.to.iter().enumerate() {
+                validate_placeholders(addr, node_id, "smtp", &format!("to[{i}]"))?;
+            }
+            for (i, addr) in parsed.cc.iter().enumerate() {
+                validate_placeholders(addr, node_id, "smtp", &format!("cc[{i}]"))?;
+            }
+            for (i, addr) in parsed.bcc.iter().enumerate() {
+                validate_placeholders(addr, node_id, "smtp", &format!("bcc[{i}]"))?;
+            }
+            if let Some(ref f) = parsed.from {
+                validate_placeholders(f, node_id, "smtp", "from")?;
+            }
+
+            // Attachments: each carries an `input_name` chosen by the
+            // frontend. Today the wire shape is opaque — the SmtpConfigPanel
+            // emits stable `_att_<idx>` names paired with InputDeclarations
+            // that the publisher resolves to StoragePath refs at publish
+            // time. v1 doesn't synthesize them here because that requires
+            // up/downstream context the editor already has. The validation
+            // we DO perform: every entry's `input_name` must round-trip to
+            // a unique field name to avoid collisions in the run dir.
+            let mut seen_input_names: std::collections::BTreeSet<&str> =
+                std::collections::BTreeSet::new();
+            for a in &parsed.attachments {
+                if !seen_input_names.insert(a.input_name.as_str()) {
+                    return Err(CompileError::Validation(format!(
+                        "smtp config: duplicate attachment input_name '{}'",
+                        a.input_name
+                    )));
+                }
+            }
+
+            // Re-serialize the validated SmtpConfig so the executor sees a
+            // canonical shape (any unknown fields the frontend sent would
+            // have been dropped at deserialize time).
+            let canonical_config = serde_json::to_value(&parsed).map_err(|e| {
+                CompileError::Compilation(format!("failed to serialize smtp config: {e}"))
+            })?;
+
+            // SMTP doesn't ingest node files itself — the templates ride the
+            // config inline. Attachments are pure-pipeline inputs (the
+            // publish path / mekhan resolves their source separately from
+            // graph node files). Emit an empty inputs list and let the
+            // caller layer attachment InputDeclarations on top once the
+            // upstream-ref resolution lands.
+            Ok((canonical_config, vec![]))
+        }
     }
 }
+
+// Aliases used by handlers/tests that want to construct an SMTP config
+// without reaching into the executor configs crate.
+pub type SmtpAttachment = SmtpAttachmentSpec;
+pub type SmtpTemplateSource = TemplateSource;
 
 #[cfg(test)]
 mod tests {
@@ -673,5 +773,109 @@ mod tests {
             }
             other => panic!("expected BackendPlaceholderSyntax, got {other:?}"),
         }
+    }
+
+    // ─── SMTP arm ─────────────────────────────────────────────────────────
+
+    fn smtp_minimal_config() -> serde_json::Value {
+        json!({
+            "to": ["{{ intake.email }}"],
+            "subject": { "label": "subject.tera", "source": "Welcome, {{ intake.name }}!" },
+            "body_text": { "label": "body.txt.tera", "source": "Hi {{ intake.name }}." },
+            "resource_alias": "mail",
+        })
+    }
+
+    #[test]
+    fn smtp_minimal_config_compiles() {
+        let (canonical, inputs) =
+            validate_and_transform(&ExecutionBackendType::Smtp, &smtp_minimal_config(), &HashMap::new(), "send")
+                .unwrap();
+        // SMTP doesn't pull node files for templates (they're embedded);
+        // attachments would be the only InputDeclaration source — none here.
+        assert!(inputs.is_empty());
+        // Canonical re-serialization preserves the inline source strings.
+        assert_eq!(canonical["subject"]["source"], "Welcome, {{ intake.name }}!");
+        assert_eq!(canonical["body_text"]["label"], "body.txt.tera");
+        assert_eq!(canonical["resource_alias"], "mail");
+    }
+
+    #[test]
+    fn smtp_rejects_missing_recipients() {
+        let mut cfg = smtp_minimal_config();
+        cfg["to"] = json!([]);
+        let err = validate_and_transform(&ExecutionBackendType::Smtp, &cfg, &HashMap::new(), "send")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("at least one recipient"), "got: {err}");
+    }
+
+    #[test]
+    fn smtp_rejects_missing_body() {
+        let mut cfg = smtp_minimal_config();
+        cfg.as_object_mut().unwrap().remove("body_text");
+        let err = validate_and_transform(&ExecutionBackendType::Smtp, &cfg, &HashMap::new(), "send")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("body_text or body_html"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn smtp_rejects_empty_subject_source() {
+        let mut cfg = smtp_minimal_config();
+        cfg["subject"]["source"] = json!("");
+        let err = validate_and_transform(&ExecutionBackendType::Smtp, &cfg, &HashMap::new(), "send")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("subject"), "got: {err}");
+    }
+
+    #[test]
+    fn smtp_rejects_malformed_placeholder_in_subject() {
+        let mut cfg = smtp_minimal_config();
+        // `{{ user.name + 1 }}` is not a valid dotted-path placeholder.
+        cfg["subject"]["source"] = json!("Hi {{ user.name + 1 }}");
+        let err = validate_and_transform(&ExecutionBackendType::Smtp, &cfg, &HashMap::new(), "send")
+            .unwrap_err();
+        match err {
+            CompileError::BackendPlaceholderSyntax {
+                node_id, backend, site, ..
+            } => {
+                assert_eq!(node_id, "send");
+                assert_eq!(backend, "smtp");
+                assert!(site.contains("subject"), "site was {site}");
+            }
+            other => panic!("expected BackendPlaceholderSyntax, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn smtp_rejects_malformed_placeholder_in_recipient() {
+        let mut cfg = smtp_minimal_config();
+        cfg["to"] = json!(["{{ user.name + 1 }}"]);
+        let err = validate_and_transform(&ExecutionBackendType::Smtp, &cfg, &HashMap::new(), "send")
+            .unwrap_err();
+        match err {
+            CompileError::BackendPlaceholderSyntax { site, .. } => {
+                assert!(site.starts_with("to["), "site was {site}");
+            }
+            other => panic!("expected BackendPlaceholderSyntax, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn smtp_rejects_duplicate_attachment_input_names() {
+        let mut cfg = smtp_minimal_config();
+        cfg["attachments"] = json!([
+            { "filename": "a.pdf", "input_name": "_att_0" },
+            { "filename": "b.pdf", "input_name": "_att_0" }, // duplicate
+        ]);
+        let err = validate_and_transform(&ExecutionBackendType::Smtp, &cfg, &HashMap::new(), "send")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("duplicate attachment"), "got: {err}");
     }
 }

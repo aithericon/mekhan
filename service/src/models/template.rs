@@ -1370,6 +1370,16 @@ pub fn default_output_port(backend: ExecutionBackendType) -> Port {
             port_field("text", "Text", FieldKind::Textarea),
             port_field("metadata", "Metadata", FieldKind::Json),
         ],
+        // SMTP renders to a structured `outcome` envelope plus rendered
+        // subject + body previews. The instance-view renderer dispatches on
+        // `outcome.type`; the other fields are surfaced for downstream
+        // workflow logic (e.g. "did the welcome email actually go out?").
+        ExecutionBackendType::Smtp => vec![
+            port_field("outcome", "Outcome", FieldKind::Json),
+            port_field("subject", "Subject", FieldKind::Text),
+            port_field("body_text_preview", "Body (text)", FieldKind::Textarea),
+            port_field("body_html_preview", "Body (html)", FieldKind::Textarea),
+        ],
         // Matches the engine `catalogue_lookup` handler's result token.
         ExecutionBackendType::CatalogueQuery => vec![
             port_field("artifacts", "Artifacts", FieldKind::Json),
@@ -1639,7 +1649,7 @@ pub struct ExecutionSpecConfig {
 
 /// Discriminator selecting which executor backend handles an automated step.
 /// Snake-case wire values: `"python"`, `"process"`, `"docker"`, `"http"`,
-/// `"llm"`, `"file_ops"`, `"kreuzberg"`.
+/// `"llm"`, `"file_ops"`, `"kreuzberg"`, `"smtp"`, `"catalogue_query"`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecutionBackendType {
@@ -1650,6 +1660,10 @@ pub enum ExecutionBackendType {
     Llm,
     FileOps,
     Kreuzberg,
+    /// SMTP mailer with Tera-templated subject/body/recipients. Consumes an
+    /// `smtp` resource binding for host/port/auth and produces a structured
+    /// `outcome` envelope describing success or the precise failure mode.
+    Smtp,
     /// Point-in-time read of the data catalogue. Does NOT dispatch an executor
     /// job — the compiler lowers it to the engine's registered
     /// `catalogue_lookup` effect (input port `query`, output `results`).
@@ -1669,6 +1683,7 @@ impl ExecutionBackendType {
             Self::Llm => "llm",
             Self::FileOps => "file_ops",
             Self::Kreuzberg => "kreuzberg",
+            Self::Smtp => "smtp",
             Self::CatalogueQuery => "catalogue_query",
         }
     }
@@ -2097,7 +2112,7 @@ pub mod dsl {
                     )
                     .map_err(|_| {
                         format!(
-                            "automated_step '{}' has unknown backend '{}' (expected one of: python, process, docker, http, llm, file_ops, kreuzberg)",
+                            "automated_step '{}' has unknown backend '{}' (expected one of: python, process, docker, http, llm, file_ops, kreuzberg, smtp)",
                             key, exec.backend
                         )
                     })?;

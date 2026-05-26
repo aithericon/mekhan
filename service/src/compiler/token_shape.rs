@@ -2119,25 +2119,33 @@ pub(crate) fn automated_step_borrow_plan(
         let WorkflowNodeData::AutomatedStep { execution_spec, .. } = &node.data else {
             continue;
         };
-        if execution_spec.backend_type != ExecutionBackendType::Python {
-            continue;
-        }
-        // `entrypoint` lives at the top of `executionSpec` (wire-level),
-        // not nested under `config`. Fall back to `main.py` for legacy
-        // templates that omit it.
-        let entrypoint = execution_spec
-            .entrypoint
-            .clone()
-            .unwrap_or_else(|| "main.py".to_string());
-        let Some(node_files) = inline_sources.get(&node.id) else {
-            continue;
-        };
-        let Some(source) = node_files.get(&entrypoint) else {
-            continue;
+
+        // Per-backend ref discovery. Python scans the entrypoint file; SMTP
+        // scans inline Tera templates on the config. Both share the same
+        // `<head>.<attr>` shape, so the resolve loop below works uniformly.
+        let refs: Vec<(String, String)> = match execution_spec.backend_type {
+            ExecutionBackendType::Python => {
+                let entrypoint = execution_spec
+                    .entrypoint
+                    .clone()
+                    .unwrap_or_else(|| "main.py".to_string());
+                let Some(node_files) = inline_sources.get(&node.id) else {
+                    continue;
+                };
+                let Some(source) = node_files.get(&entrypoint) else {
+                    continue;
+                };
+                crate::compiler::python_refs::extract_python_refs(source)
+                    .into_iter()
+                    .map(|r| (r.head, r.attr))
+                    .collect()
+            }
+            ExecutionBackendType::Smtp => smtp_template_placeholder_refs(&execution_spec.config),
+            _ => continue,
         };
 
-        for r in crate::compiler::python_refs::extract_python_refs(source) {
-            let Some(prod_id) = slugs.node_for(&r.head).map(str::to_string) else {
+        for (head, _attr) in refs {
+            let Some(prod_id) = slugs.node_for(&head).map(str::to_string) else {
                 continue;
             };
             if prod_id == node.id {
@@ -2157,12 +2165,51 @@ pub(crate) fn automated_step_borrow_plan(
             }
             out.push(AutomatedStepDataBorrow {
                 consumer_node_id: node.id.clone(),
-                slug: r.head,
+                slug: head,
                 producer_node: prod_id,
             });
         }
     }
     Ok(out)
+}
+
+/// Pull every `{{ <head>.<attr> }}` placeholder out of an SMTP step's config.
+/// The template surfaces (`subject.source`, `body_text.source`,
+/// `body_html.source`, each entry of `to`/`cc`/`bcc`, optional `from`) are
+/// uniformly Tera; we hit them all so the borrow planner sees the union of
+/// references across the whole step.
+pub(crate) fn smtp_template_placeholder_refs(
+    config: &serde_json::Value,
+) -> Vec<(String, String)> {
+    use crate::compiler::placeholder_refs::scan_placeholders;
+    let mut out: Vec<(String, String)> = Vec::new();
+    let Some(obj) = config.as_object() else {
+        return out;
+    };
+    let mut texts: Vec<&str> = Vec::new();
+    for key in ["subject", "body_text", "body_html"] {
+        if let Some(s) = obj.get(key).and_then(|v| v.get("source")).and_then(|v| v.as_str()) {
+            texts.push(s);
+        }
+    }
+    for field in ["to", "cc", "bcc"] {
+        if let Some(arr) = obj.get(field).and_then(|v| v.as_array()) {
+            for el in arr {
+                if let Some(s) = el.as_str() {
+                    texts.push(s);
+                }
+            }
+        }
+    }
+    if let Some(from) = obj.get("from").and_then(|v| v.as_str()) {
+        texts.push(from);
+    }
+    for text in texts {
+        for r in scan_placeholders(text) {
+            out.push((r.head, r.attr));
+        }
+    }
+    out
 }
 
 /// One resolved Python `<name>.<attr>` access where `<name>` is a known
@@ -2225,31 +2272,76 @@ pub(crate) fn automated_step_resource_borrow_plan(
         let WorkflowNodeData::AutomatedStep { execution_spec, .. } = &node.data else {
             continue;
         };
-        if execution_spec.backend_type != ExecutionBackendType::Python {
-            continue;
-        }
-        let entrypoint = execution_spec
-            .entrypoint
-            .clone()
-            .unwrap_or_else(|| "main.py".to_string());
-        let Some(node_files) = inline_sources.get(&node.id) else {
-            continue;
-        };
-        let Some(source) = node_files.get(&entrypoint) else {
-            continue;
+
+        let heads: Vec<String> = match execution_spec.backend_type {
+            ExecutionBackendType::Python => {
+                let entrypoint = execution_spec
+                    .entrypoint
+                    .clone()
+                    .unwrap_or_else(|| "main.py".to_string());
+                let Some(node_files) = inline_sources.get(&node.id) else {
+                    continue;
+                };
+                let Some(source) = node_files.get(&entrypoint) else {
+                    continue;
+                };
+                crate::compiler::python_refs::extract_python_refs(source)
+                    .into_iter()
+                    .map(|r| r.head)
+                    .collect()
+            }
+            ExecutionBackendType::Smtp => {
+                // For SMTP we also pin the resource_alias declared on the
+                // config — even if the templates don't reference its public
+                // fields, the *transport* needs the resource binding. The
+                // launcher's ResourceResolver needs this hook to know which
+                // resource to splice for the alias name.
+                let mut heads: Vec<String> = smtp_template_placeholder_refs(&execution_spec.config)
+                    .into_iter()
+                    .map(|(head, _)| head)
+                    .collect();
+                if let Some(alias) = execution_spec
+                    .config
+                    .get("resource_alias")
+                    .and_then(|v| v.as_str())
+                {
+                    if !alias.is_empty() {
+                        heads.push(alias.to_string());
+                    }
+                }
+                heads
+            }
+            ExecutionBackendType::Llm => {
+                // LLM steps bind an OpenAI/Anthropic resource via
+                // `resource_alias`. Same envelope contract as SMTP — the
+                // backend's `prepare()` overlays api_key / base_url out of
+                // `<alias>.json`.
+                let mut heads: Vec<String> = Vec::new();
+                if let Some(alias) = execution_spec
+                    .config
+                    .get("resource_alias")
+                    .and_then(|v| v.as_str())
+                {
+                    if !alias.is_empty() {
+                        heads.push(alias.to_string());
+                    }
+                }
+                heads
+            }
+            _ => continue,
         };
 
-        for r in crate::compiler::python_refs::extract_python_refs(source) {
-            let Some(info) = known.get(&r.head) else {
+        for head in heads {
+            let Some(info) = known.get(&head) else {
                 continue;
             };
-            let key = (node.id.clone(), r.head.clone());
+            let key = (node.id.clone(), head.clone());
             if !seen.insert(key) {
                 continue;
             }
             out.push(AutomatedStepResourceBorrow {
                 consumer_node_id: node.id.clone(),
-                name: r.head,
+                name: head,
                 resource_id: info.id,
                 type_name: info.type_name.clone(),
                 latest_version: info.latest_version,

@@ -9,6 +9,7 @@ import HumanTaskEnvelope from './HumanTaskEnvelope.svelte';
 import AutomatedStepEnvelope from './AutomatedStepEnvelope.svelte';
 import LlmResponseEnvelope from './LlmResponseEnvelope.svelte';
 import KreuzbergExtractionEnvelope from './KreuzbergExtractionEnvelope.svelte';
+import SmtpEnvelope from './SmtpEnvelope.svelte';
 import EndTerminalEnvelope from './EndTerminalEnvelope.svelte';
 import ProcessTokenEnvelope from './ProcessTokenEnvelope.svelte';
 import FileReference from './FileReference.svelte';
@@ -116,6 +117,37 @@ function matchesLlmResponse(value: unknown): boolean {
 	return 'usage' in value || 'finish_reason' in value;
 }
 
+const SMTP_OUTCOME_TYPES = new Set([
+	'success',
+	'template_render',
+	'invalid_address',
+	'invalid_config',
+	'connect_failed',
+	'tls_failed',
+	'auth_failed',
+	'recipient_rejected',
+	'server_error',
+	'timeout',
+	'attachment_error'
+]);
+
+/** SMTP backend's outputs map — `{outcome: {type: <SMTP reason>}, subject:
+ *  string, body_text_preview?: string, body_html_preview?: string}`. The
+ *  distinguishing signature is the outcome.type drawn from `SMTP_OUTCOME_TYPES`
+ *  (wire-stable per `executor-smtp::outcome::SmtpOutcome::reason()`). The
+ *  generic AutomatedStep envelope still wraps this — the SMTP renderer
+ *  catches the leaf outputs map specifically. */
+function matchesSentEmail(value: unknown): boolean {
+	if (!isObj(value)) return false;
+	const outcome = value.outcome;
+	if (!isObj(outcome)) return false;
+	if (typeof outcome.type !== 'string') return false;
+	if (!SMTP_OUTCOME_TYPES.has(outcome.type)) return false;
+	// Subject preview is always present on SMTP output. Distinguishes from
+	// arbitrary tagged outcome objects from other backends.
+	return typeof value.subject === 'string';
+}
+
 /** Catalogue file reference — `{url, filename?, content_type?}`. */
 function matchesFileRef(value: unknown): boolean {
 	if (!isObj(value)) return false;
@@ -187,6 +219,12 @@ export const REGISTRY: OutputRenderer[] = [
 		label: 'Document extraction',
 		matches: matchesKreuzbergExtraction,
 		component: KreuzbergExtractionEnvelope
+	},
+	{
+		name: 'smtp-result',
+		label: 'Email send result',
+		matches: matchesSentEmail,
+		component: SmtpEnvelope
 	},
 	{
 		name: 'end-terminal',

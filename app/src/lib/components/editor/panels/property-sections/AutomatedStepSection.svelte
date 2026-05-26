@@ -12,6 +12,7 @@
 	import LlmConfigPanel from './automated/LlmConfigPanel.svelte';
 	import FileOpsConfigPanel from './automated/FileOpsConfigPanel.svelte';
 	import KreuzbergConfigPanel from './automated/KreuzbergConfigPanel.svelte';
+	import SmtpConfigPanel from './automated/SmtpConfigPanel.svelte';
 	import CatalogueQueryConfigPanel from './automated/CatalogueQueryConfigPanel.svelte';
 	import PortsSection from './PortsSection.svelte';
 	import { defaultOutputPort, emptyOutputPort } from '$lib/editor/automated-ports';
@@ -59,6 +60,17 @@
 		llm: { provider: 'openai', model: '', prompt: '' },
 		file_ops: { operation: 'stat', path: '', storage: { backend: 'local', endpoint: '' } },
 		kreuzberg: { mode: 'single' },
+		smtp: {
+			resource_alias: '',
+			to: [],
+			cc: [],
+			bcc: [],
+			subject: { label: 'subject.tera', source: 'Hello {{ intake.name }}' },
+			body_text: { label: 'body.txt.tera', source: 'Hi {{ intake.name }},\n\nThanks!\n' },
+			attachments: [],
+			dry_run: false,
+			vars: {}
+		},
 		catalogue_query: { category: '', limit: 50 }
 	};
 
@@ -70,6 +82,7 @@
 		llm: 'LLM (AI Model)',
 		file_ops: 'File Operations',
 		kreuzberg: 'Document Extraction',
+		smtp: 'SMTP (Email)',
 		catalogue_query: 'Catalogue Query'
 	};
 
@@ -147,6 +160,7 @@
 			<Select.Item value="llm" label="LLM (AI Model)" />
 			<Select.Item value="file_ops" label="File Operations" />
 			<Select.Item value="kreuzberg" label="Document Extraction" />
+			<Select.Item value="smtp" label="SMTP (Email)" />
 			<Select.Item value="catalogue_query" label="Catalogue Query" />
 		</Select.Content>
 	</Select.Root>
@@ -175,6 +189,8 @@
 	<FileOpsConfigPanel config={data.executionSpec.config as Record<string, unknown>} {readonly} onchange={handleConfigChange} />
 {:else if data.executionSpec.backendType === 'kreuzberg'}
 	<KreuzbergConfigPanel config={data.executionSpec.config as Record<string, unknown>} {readonly} onchange={handleConfigChange} {scope} />
+{:else if data.executionSpec.backendType === 'smtp'}
+	<SmtpConfigPanel config={data.executionSpec.config as Record<string, unknown>} {readonly} onchange={handleConfigChange} {scope} />
 {:else if data.executionSpec.backendType === 'catalogue_query'}
 	<CatalogueQueryConfigPanel config={data.executionSpec.config as Record<string, unknown>} {readonly} onchange={handleConfigChange} />
 {/if}

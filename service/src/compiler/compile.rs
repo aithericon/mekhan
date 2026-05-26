@@ -792,33 +792,80 @@ fn populate_borrowed_paths(
                         .insert(r.attr);
                 }
             }
-            WorkflowNodeData::AutomatedStep { execution_spec, .. } => {
-                if execution_spec.backend_type != ExecutionBackendType::Python {
-                    continue;
-                }
-                let entrypoint = execution_spec
-                    .entrypoint
-                    .clone()
-                    .unwrap_or_else(|| "main.py".to_string());
-                let Some(node_files) = inline_sources.get(&node.id) else {
-                    continue;
-                };
-                let Some(source) = node_files.get(&entrypoint) else {
-                    continue;
-                };
-                for r in extract_python_refs(source) {
-                    let Some(prod_id) = slugs.node_for(&r.head) else {
+            WorkflowNodeData::AutomatedStep { execution_spec, .. } => match execution_spec.backend_type {
+                ExecutionBackendType::Python => {
+                    let entrypoint = execution_spec
+                        .entrypoint
+                        .clone()
+                        .unwrap_or_else(|| "main.py".to_string());
+                    let Some(node_files) = inline_sources.get(&node.id) else {
                         continue;
                     };
-                    if prod_id == node.id {
+                    let Some(source) = node_files.get(&entrypoint) else {
                         continue;
+                    };
+                    for r in extract_python_refs(source) {
+                        let Some(prod_id) = slugs.node_for(&r.head) else {
+                            continue;
+                        };
+                        if prod_id == node.id {
+                            continue;
+                        }
+                        paths
+                            .entry(prod_id.to_string())
+                            .or_default()
+                            .insert(r.attr);
                     }
-                    paths
-                        .entry(prod_id.to_string())
-                        .or_default()
-                        .insert(r.attr);
                 }
-            }
+                ExecutionBackendType::Smtp => {
+                    // SMTP carries Tera template sources inline on
+                    // `execution_spec.config` (one TemplateSource per
+                    // subject / body_text / body_html plus per-recipient
+                    // strings + optional from). Scan each surface with the
+                    // shared `{{...}}` scanner — Tera and the platform's
+                    // other placeholder surfaces share the same grammar.
+                    use crate::compiler::placeholder_refs::scan_placeholders;
+                    let mut texts: Vec<String> = Vec::new();
+                    if let Some(cfg) = execution_spec.config.as_object() {
+                        if let Some(subj) = cfg.get("subject").and_then(|v| v.get("source")).and_then(|v| v.as_str()) {
+                            texts.push(subj.to_string());
+                        }
+                        if let Some(bt) = cfg.get("body_text").and_then(|v| v.get("source")).and_then(|v| v.as_str()) {
+                            texts.push(bt.to_string());
+                        }
+                        if let Some(bh) = cfg.get("body_html").and_then(|v| v.get("source")).and_then(|v| v.as_str()) {
+                            texts.push(bh.to_string());
+                        }
+                        for field in ["to", "cc", "bcc"] {
+                            if let Some(arr) = cfg.get(field).and_then(|v| v.as_array()) {
+                                for el in arr {
+                                    if let Some(s) = el.as_str() {
+                                        texts.push(s.to_string());
+                                    }
+                                }
+                            }
+                        }
+                        if let Some(from) = cfg.get("from").and_then(|v| v.as_str()) {
+                            texts.push(from.to_string());
+                        }
+                    }
+                    for text in &texts {
+                        for r in scan_placeholders(text) {
+                            let Some(prod_id) = slugs.node_for(&r.head) else {
+                                continue;
+                            };
+                            if prod_id == node.id {
+                                continue;
+                            }
+                            paths
+                                .entry(prod_id.to_string())
+                                .or_default()
+                                .insert(r.attr);
+                        }
+                    }
+                }
+                _ => continue,
+            },
             _ => continue,
         }
 
@@ -2475,6 +2522,234 @@ mod tests {
             }
             other => panic!("expected Rhai logic, got {other:?}"),
         }
+    }
+
+    /// SMTP AutomatedStep that references `{{ intake.email }}` /
+    /// `{{ intake.name }}` in its Tera templates emits a scenario with the
+    /// same `(read-arc, d_<producer>, job_inputs.push)` triplet Python uses
+    /// — proving the placeholder scanner is wired identically into the
+    /// borrow planner. The discriminator vs Python: SMTP's template
+    /// sources live inline on `execution_spec.config`, not in node files.
+    #[test]
+    fn smtp_step_with_template_refs_wires_into_scenario() {
+        use serde_json::json;
+        use std::collections::HashMap;
+        use aithericon_executor_domain::InputSource;
+
+        // Start → intake (HumanTask, slug "intake") → send (SMTP) → end.
+        let graph_json = json!({
+          "nodes": [
+            {"id":"start","type":"start","position":{"x":0,"y":0},
+             "data":{"type":"start","label":"Start"}},
+            {"id":"intake","type":"human_task","slug":"intake",
+             "position":{"x":0,"y":0},
+             "data":{"type":"human_task","label":"Intake","taskTitle":"Intake",
+                     "steps":[{"id":"s","title":"S","blocks":[
+                       {"type":"input","field":{"name":"name","label":"Name","kind":"text","required":true}},
+                       {"type":"input","field":{"name":"email","label":"Email","kind":"text","required":true}}
+                     ]}]}},
+            {"id":"send","type":"automated_step","slug":"send",
+             "position":{"x":0,"y":0},
+             "data":{"type":"automated_step","label":"Send",
+                     "executionSpec":{
+                       "backendType":"smtp",
+                       "config":{
+                         "to":["{{ intake.email }}"],
+                         "subject":{"label":"subject.tera","source":"Welcome, {{ intake.name }}!"},
+                         "body_text":{"label":"body.txt.tera","source":"Hi {{ intake.name }}.\n"},
+                         "resource_alias":"mail"
+                       }
+                     },
+                     "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
+                     "deploymentModel":{"mode":"inline"}}},
+            {"id":"end","type":"end","position":{"x":0,"y":0},
+             "data":{"type":"end","label":"End"}}
+          ],
+          "edges":[
+            {"id":"e1","source":"start","target":"intake","targetHandle":"in","type":"sequence"},
+            {"id":"e2","source":"intake","target":"send","targetHandle":"in","type":"sequence"},
+            {"id":"e3","source":"send","target":"end","targetHandle":"in","type":"sequence"}
+          ]
+        });
+        let graph: WorkflowGraph =
+            serde_json::from_value(graph_json).expect("graph deser");
+
+        // SMTP doesn't read node files for templates — they're inline on
+        // the config — but the compile API requires a `files` map. Empty
+        // works because there are no entrypoints to stage.
+        let files: HashMap<String, HashMap<String, InputSource>> = HashMap::new();
+
+        let scenario = crate::compiler::compile_to_scenario(
+            &graph,
+            "smtp-borrow-test",
+            "test",
+            &files,
+            &crate::compiler::SubWorkflowAir::new(),
+        )
+        .expect("compile smtp graph with template borrows");
+
+        let prepare = scenario
+            .transitions
+            .iter()
+            .find(|t| t.id == "send/prepare")
+            .expect("prepare transition for SMTP step");
+
+        // (1) The read-arc port + arc landed on the prepare transition.
+        assert!(
+            prepare.input_ports.iter().any(|p| p.name == "d_intake"),
+            "d_intake input port missing on prepare; got: {:?}",
+            prepare.input_ports
+        );
+        assert!(
+            prepare
+                .inputs
+                .iter()
+                .any(|a| a.place == "p_intake_data" && a.read),
+            "read-arc into p_intake_data missing; got: {:?}",
+            prepare.inputs
+        );
+
+        // (2) The prepare Rhai stages `intake.json` so the runner's Tera
+        // context picker sees it under the slug name. Same convention as
+        // Python's _AccessibleDict.
+        match &prepare.logic {
+            aithericon_sdk::scenario::TransitionLogic::Rhai { source } => {
+                assert!(
+                    !source.contains("__BORROWED_INPUTS__"),
+                    "marker should be substituted; source: {source}"
+                );
+                assert!(
+                    source.contains(r#""name": "intake.json""#),
+                    "prepare must stage intake.json; source: {source}"
+                );
+                assert!(
+                    source.contains("backend"),
+                    "spec must carry a backend discriminator; source: {source}"
+                );
+                assert!(
+                    source.contains(r#""smtp""#),
+                    "backend discriminator must be 'smtp'; source: {source}"
+                );
+            }
+            other => panic!("expected Rhai logic, got {other:?}"),
+        }
+    }
+
+    /// SMTP AutomatedStep with a resource binding (`resource_alias: "mail"`,
+    /// templates referencing `{{ mail.from_address }}`) compiles into an
+    /// AIR whose prepare transition stages `mail.json` from the
+    /// `__resources` map. Distinct from the upstream-producer-borrow test
+    /// above: this one uses the publish-path entry point that accepts
+    /// `KnownResources`, which is what the live `apply_template` calls.
+    /// Without this test the production failure mode
+    /// ("resource 'mail' not staged as <alias>.json") slipped past CI.
+    #[test]
+    fn smtp_step_with_resource_alias_stages_resource_envelope() {
+        use crate::compiler::resource_refs::{KnownResource, KnownResources};
+        use serde_json::json;
+        use std::collections::HashMap;
+        use uuid::Uuid;
+
+        // Same graph shape as the earlier SMTP test, with the template
+        // also referencing the resource's public field so the borrow
+        // plan has both `intake` (producer) and `mail` (resource) to hit.
+        let graph_json = json!({
+          "nodes": [
+            {"id":"start","type":"start","position":{"x":0,"y":0},
+             "data":{"type":"start","label":"Start"}},
+            {"id":"intake","type":"human_task","slug":"intake",
+             "position":{"x":0,"y":0},
+             "data":{"type":"human_task","label":"Intake","taskTitle":"Intake",
+                     "steps":[{"id":"s","title":"S","blocks":[
+                       {"type":"input","field":{"name":"name","label":"Name","kind":"text","required":true}},
+                       {"type":"input","field":{"name":"email","label":"Email","kind":"text","required":true}}
+                     ]}]}},
+            {"id":"send","type":"automated_step","slug":"send",
+             "position":{"x":0,"y":0},
+             "data":{"type":"automated_step","label":"Send",
+                     "executionSpec":{
+                       "backendType":"smtp",
+                       "config":{
+                         "to":["{{ intake.email }}"],
+                         "subject":{"label":"subject.tera","source":"Welcome, {{ intake.name }}!"},
+                         "body_text":{"label":"body.txt.tera","source":"From {{ mail.from_address }}\n"},
+                         "resource_alias":"mail"
+                       }
+                     },
+                     "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
+                     "deploymentModel":{"mode":"inline"}}},
+            {"id":"end","type":"end","position":{"x":0,"y":0},
+             "data":{"type":"end","label":"End"}}
+          ],
+          "edges":[
+            {"id":"e1","source":"start","target":"intake","targetHandle":"in","type":"sequence"},
+            {"id":"e2","source":"intake","target":"send","targetHandle":"in","type":"sequence"},
+            {"id":"e3","source":"send","target":"end","targetHandle":"in","type":"sequence"}
+          ]
+        });
+        let graph: WorkflowGraph =
+            serde_json::from_value(graph_json).expect("graph deser");
+
+        let files: HashMap<String, HashMap<String, InputSource>> = HashMap::new();
+        let inline_sources: HashMap<String, HashMap<String, String>> = HashMap::new();
+
+        // KnownResources is what the publish handler's
+        // `discover_known_resources` produces: head ID → workspace
+        // resource pin. Without `mail` in this map, the borrow plan
+        // silently emits nothing — exactly the production failure.
+        let mut known_resources = KnownResources::new();
+        known_resources.insert(
+            "mail".to_string(),
+            KnownResource {
+                id: Uuid::new_v4(),
+                type_name: "smtp".to_string(),
+                latest_version: 1,
+            },
+        );
+
+        let (air, _iface) = crate::compiler::compile_to_air_with_subworkflows_and_interfaces(
+            &graph,
+            "smtp-resource-test",
+            "test",
+            &files,
+            &inline_sources,
+            &crate::compiler::SubWorkflowAir::new(),
+            &known_resources,
+        )
+        .expect("compile must succeed with known_resources");
+
+        // Look at the send/prepare transition specifically. If the resource
+        // borrow was emitted, its Rhai source contains the `mail.json`
+        // job_inputs.push snippet.
+        let transitions = air.get("transitions").and_then(|t| t.as_array()).expect("transitions array");
+        let send_prepare = transitions
+            .iter()
+            .find(|t| t.get("id").and_then(|v| v.as_str()) == Some("send/prepare"))
+            .expect("send/prepare transition exists");
+        let logic_node = send_prepare.get("logic").expect("send/prepare has logic field");
+        // Two possible shapes: { "Rhai": {"source": "..."} } (utoipa-tagged)
+        // or { "type": "rhai", "source": "..." } (serde flat-tag). Match either.
+        let logic = logic_node
+            .get("Rhai")
+            .and_then(|l| l.get("source"))
+            .and_then(|s| s.as_str())
+            .or_else(|| logic_node.get("source").and_then(|s| s.as_str()))
+            .unwrap_or_else(|| {
+                panic!(
+                    "send/prepare logic source not findable; raw shape:\n{}",
+                    serde_json::to_string_pretty(logic_node).unwrap()
+                )
+            });
+
+        assert!(
+            logic.contains("mail.json"),
+            "send/prepare transition must stage mail.json from __resources;\n\
+             actual logic source:\n{logic}"
+        );
+        assert!(
+            logic.contains("__resources[\"mail\"]") || logic.contains("__resources['mail']"),
+            "send/prepare logic must read from __resources[\"mail\"]; got:\n{logic}"
+        );
     }
 
     /// Execute the rewritten prepare Rhai with a *production-shaped*

@@ -269,29 +269,69 @@ async fn discover_known_resources(
     use crate::compiler::python_refs::extract_python_refs;
     use std::collections::BTreeSet;
 
-    // Pass 1: collect every distinct `<head>` the graph's Python sources
-    // reference, scoped to Python AutomatedSteps only — the resource layer
-    // only models Python today.
+    // Pass 1: collect every distinct `<head>` the graph references in any
+    // surface that can name a workspace resource — Python source for the
+    // Python backend, Tera template surfaces + `resource_alias` for the SMTP
+    // backend. Other backends today don't reference resources by name.
     let mut heads: BTreeSet<String> = BTreeSet::new();
     for node in &graph.nodes {
         let WorkflowNodeData::AutomatedStep { execution_spec, .. } = &node.data else {
             continue;
         };
-        if execution_spec.backend_type != ExecutionBackendType::Python {
-            continue;
-        }
-        let entrypoint = execution_spec
-            .entrypoint
-            .clone()
-            .unwrap_or_else(|| "main.py".to_string());
-        let Some(node_files) = inline_sources.get(&node.id) else {
-            continue;
-        };
-        let Some(source) = node_files.get(&entrypoint) else {
-            continue;
-        };
-        for r in extract_python_refs(source) {
-            heads.insert(r.head);
+        match execution_spec.backend_type {
+            ExecutionBackendType::Python => {
+                let entrypoint = execution_spec
+                    .entrypoint
+                    .clone()
+                    .unwrap_or_else(|| "main.py".to_string());
+                let Some(node_files) = inline_sources.get(&node.id) else {
+                    continue;
+                };
+                let Some(source) = node_files.get(&entrypoint) else {
+                    continue;
+                };
+                for r in extract_python_refs(source) {
+                    heads.insert(r.head);
+                }
+            }
+            ExecutionBackendType::Smtp => {
+                for (head, _attr) in
+                    crate::compiler::token_shape::smtp_template_placeholder_refs(
+                        &execution_spec.config,
+                    )
+                {
+                    heads.insert(head);
+                }
+                if let Some(alias) = execution_spec
+                    .config
+                    .get("resource_alias")
+                    .and_then(|v| v.as_str())
+                {
+                    if !alias.is_empty() {
+                        heads.insert(alias.to_string());
+                    }
+                }
+            }
+            ExecutionBackendType::Llm => {
+                // LLM steps bind a workspace OpenAI/Anthropic resource via
+                // `resource_alias`. The compiler emits a ResourceEnvelope
+                // borrow so `<alias>.json` lands in the run dir's inputs;
+                // the backend overlays api_key / base_url from it at prepare
+                // time. Same discovery pattern as SMTP — only the alias is
+                // declared on the config, no template placeholder scan
+                // because LLM step authors don't reference resource fields
+                // by name in prompts (those flow through the LlmConfigPanel).
+                if let Some(alias) = execution_spec
+                    .config
+                    .get("resource_alias")
+                    .and_then(|v| v.as_str())
+                {
+                    if !alias.is_empty() {
+                        heads.insert(alias.to_string());
+                    }
+                }
+            }
+            _ => continue,
         }
     }
 

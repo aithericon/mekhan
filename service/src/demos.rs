@@ -875,6 +875,208 @@ mod tests {
         );
     }
 
+    /// `classify-and-group-v1` is the strict prefix of `document-pipeline-v1`
+    /// (OCR → vision-LLM classify; no extract / persist / verify). The demo
+    /// carries a strict `GroupedClassification` `$ref` response_format schema
+    /// — same code path the v1 demo's extractors use, so we exercise the
+    /// `$ref` expansion + side-channel parking in isolation, without the
+    /// full DAG noise. A break here means the schema-expansion bug from
+    /// `document_pipeline_v1_compiles_with_strict_schemas` regressed for
+    /// the single-node case.
+    #[test]
+    fn classify_and_group_v1_demo_loads_and_compiles() {
+        use crate::compiler::{
+            compile_to_air_with_subworkflows_interfaces_and_configs, node_files_inline,
+            resource_refs::KnownResources, ConfigStorage, SubWorkflowAir,
+        };
+
+        let demo = load_demo(&repo_root().join("demos/classify-and-group-v1"))
+            .expect("classify-and-group-v1 must load");
+        assert_eq!(demo.metadata.name, "Classify & Group v1");
+        assert_eq!(
+            demo.metadata.template_id,
+            "00000000-0000-0000-0000-000000000051"
+        );
+
+        let files = node_files_inline(&demo.files);
+        let (_air, _iface, node_configs) =
+            compile_to_air_with_subworkflows_interfaces_and_configs(
+                &demo.graph,
+                &demo.metadata.name,
+                demo.metadata.description.as_deref().unwrap_or(""),
+                &files,
+                &demo.files,
+                &SubWorkflowAir::new(),
+                &KnownResources::new(),
+                ConfigStorage::ephemeral(),
+            )
+            .expect("classify-and-group-v1 must compile");
+
+        // The vision-LLM `classify` step uses a strict response_format
+        // `$ref`. Its resolved config must land in the side-channel
+        // (would-be Rhai-complexity blow-up otherwise) and the `$ref`
+        // must be inlined before parking.
+        let classify_cfg = node_configs
+            .get("classify")
+            .expect("classify config must be parked")
+            .to_string();
+        assert!(
+            classify_cfg.contains("page_ids"),
+            "classify config must contain the expanded GroupedClassification schema: {classify_cfg}"
+        );
+        assert!(
+            !classify_cfg.contains("\"$ref\""),
+            "$ref must be inlined before parking: {classify_cfg}"
+        );
+
+        // OCR borrow: `{{ ocr.content }}` in the classify prompt becomes
+        // `{{input:__borrow_ocr__content}}` after the borrow rewrite.
+        // Mirrors the equivalent assertion in
+        // `ocr_classify_extract_demo_loads_and_compiles_with_borrows`.
+        assert!(
+            classify_cfg.contains("__borrow_ocr__content"),
+            "classify config must carry the OCR borrow rewrite: {classify_cfg}"
+        );
+    }
+
+    /// `di-extraction-canary` is the deliberately-degraded "single vision
+    /// call → coerce" demo. It pairs an LLM step with a strict
+    /// `RawExtraction` response_format `$ref` AND a Python `validate` node
+    /// — so it exercises the side-channel parking for $ref schemas alongside
+    /// the Python-staging path on the same demo. The Python `validate` step
+    /// borrows from the LLM via direct slug access (no template
+    /// placeholders), so we don't assert on borrow rewrites here; the
+    /// compile pass succeeding is the proof.
+    #[test]
+    fn di_extraction_canary_demo_loads_and_compiles() {
+        use crate::compiler::{
+            compile_to_air_with_subworkflows_interfaces_and_configs, node_files_inline,
+            resource_refs::KnownResources, ConfigStorage, SubWorkflowAir,
+        };
+
+        let demo = load_demo(&repo_root().join("demos/di-extraction-canary"))
+            .expect("di-extraction-canary must load");
+        assert_eq!(demo.metadata.name, "DI Extraction Canary");
+        assert_eq!(
+            demo.metadata.template_id,
+            "00000000-0000-0000-0000-000000000052"
+        );
+
+        // The Python validate node must ship with its main.py loaded.
+        let validate_files = demo
+            .files
+            .get("validate")
+            .expect("validate node must have files");
+        assert!(
+            validate_files
+                .get("main.py")
+                .is_some_and(|s| s.contains("set_output")),
+            "validate/main.py must be loaded with the SDK calls intact"
+        );
+
+        let files = node_files_inline(&demo.files);
+        let (_air, _iface, node_configs) =
+            compile_to_air_with_subworkflows_interfaces_and_configs(
+                &demo.graph,
+                &demo.metadata.name,
+                demo.metadata.description.as_deref().unwrap_or(""),
+                &files,
+                &demo.files,
+                &SubWorkflowAir::new(),
+                &KnownResources::new(),
+                ConfigStorage::ephemeral(),
+            )
+            .expect("di-extraction-canary must compile");
+
+        // The vision LLM `extract` step has a strict $ref response_format.
+        let extract_cfg = node_configs
+            .get("extract")
+            .expect("extract config must be parked")
+            .to_string();
+        assert!(
+            extract_cfg.contains("document_type"),
+            "extract config must contain the expanded RawExtraction schema: {extract_cfg}"
+        );
+        assert!(
+            !extract_cfg.contains("\"$ref\""),
+            "$ref must be inlined before parking: {extract_cfg}"
+        );
+    }
+
+    /// `output-safety-gate` is a SubWorkflow-shaped composable critic:
+    /// a low-temperature LLM critic step (with a strict `CriticFlags` `$ref`
+    /// response_format) followed by two Python steps (`verify`, `decide`)
+    /// that share the same `nodes/<id>/main.py` layout the other Python
+    /// demos use. This test pins down the three-node compile path on the
+    /// shipped fixture — the same code the parent SubWorkflow caller would
+    /// hit at publish time.
+    #[test]
+    fn output_safety_gate_demo_loads_and_compiles() {
+        use crate::compiler::{
+            compile_to_air_with_subworkflows_interfaces_and_configs, node_files_inline,
+            resource_refs::KnownResources, ConfigStorage, SubWorkflowAir,
+        };
+
+        let demo = load_demo(&repo_root().join("demos/output-safety-gate"))
+            .expect("output-safety-gate must load");
+        assert_eq!(demo.metadata.name, "Output Safety Gate");
+        assert_eq!(
+            demo.metadata.template_id,
+            "00000000-0000-0000-0000-000000000053"
+        );
+
+        // Both Python nodes must ship their main.py.
+        for node_id in ["verify", "decide"] {
+            let node_files = demo
+                .files
+                .get(node_id)
+                .unwrap_or_else(|| panic!("{node_id} node must have files"));
+            assert!(
+                node_files
+                    .get("main.py")
+                    .is_some_and(|s| s.contains("set_output")),
+                "{node_id}/main.py must be loaded with the SDK calls intact"
+            );
+        }
+
+        let files = node_files_inline(&demo.files);
+        let (_air, _iface, node_configs) =
+            compile_to_air_with_subworkflows_interfaces_and_configs(
+                &demo.graph,
+                &demo.metadata.name,
+                demo.metadata.description.as_deref().unwrap_or(""),
+                &files,
+                &demo.files,
+                &SubWorkflowAir::new(),
+                &KnownResources::new(),
+                ConfigStorage::ephemeral(),
+            )
+            .expect("output-safety-gate must compile");
+
+        // Critic config must have the expanded CriticFlags schema parked
+        // and the start.subject_text / start.evidence_text borrows wired.
+        let critic_cfg = node_configs
+            .get("critic")
+            .expect("critic config must be parked")
+            .to_string();
+        assert!(
+            critic_cfg.contains("supporting_text"),
+            "critic config must contain the expanded CriticFlags schema: {critic_cfg}"
+        );
+        assert!(
+            !critic_cfg.contains("\"$ref\""),
+            "$ref must be inlined before parking: {critic_cfg}"
+        );
+        assert!(
+            critic_cfg.contains("__borrow_start__subject_text"),
+            "critic config must carry the subject_text borrow rewrite: {critic_cfg}"
+        );
+        assert!(
+            critic_cfg.contains("__borrow_start__evidence_text"),
+            "critic config must carry the evidence_text borrow rewrite: {critic_cfg}"
+        );
+    }
+
     /// A task sidecar targeting a non-HumanTask node is a typo — fail at
     /// load time with a clear pointer, not at publish time with "engine
     /// rejected empty steps" three calls deep.
@@ -952,6 +1154,92 @@ mod tests {
         assert!(
             air.to_string().contains("\"transitions\""),
             "llm-smoke AIR must declare transitions"
+        );
+    }
+
+    /// The email-welcome demo (Start → HumanTask intake → SMTP send → End)
+    /// must parse + compile cleanly through the same AIR pipeline
+    /// `/api/templates/{id}/publish` uses. This is the canonical SMTP-backend
+    /// demo: it exercises the placeholder borrow scanner against an inline
+    /// Tera template (a path Python doesn't cover) and asserts the SMTP
+    /// backend dispatches without requiring a real mail server.
+    #[test]
+    fn email_welcome_demo_loads_and_compiles() {
+        use crate::compiler::compile_to_air_with_subworkflows_and_interfaces;
+        use crate::compiler::node_files_inline;
+        use crate::compiler::resource_refs::{KnownResource, KnownResources};
+        use crate::compiler::SubWorkflowAir;
+        use std::collections::HashMap;
+        use uuid::Uuid;
+
+        let root = repo_root().join("demos");
+        let demo = load_demo(&root.join("email-welcome")).expect("email-welcome must load");
+        assert_eq!(demo.metadata.name, "Email Welcome");
+        assert_eq!(
+            demo.metadata.template_id,
+            "00000000-0000-0000-0000-000000000030"
+        );
+
+        let files = node_files_inline(&demo.files);
+        // Mirror the publish-path call: `apply_template` passes
+        // `discover_known_resources` output (workspace-resolved map of
+        // resource heads → DB rows). For the demo we pre-populate `mail`
+        // since the demo declares `resource_alias: "mail"`.
+        let mut known = KnownResources::new();
+        known.insert(
+            "mail".to_string(),
+            KnownResource {
+                id: Uuid::new_v4(),
+                type_name: "smtp".to_string(),
+                latest_version: 1,
+            },
+        );
+        let inline: HashMap<String, HashMap<String, String>> = HashMap::new();
+        let (air, _iface) = compile_to_air_with_subworkflows_and_interfaces(
+            &demo.graph,
+            &demo.metadata.name,
+            demo.metadata.description.as_deref().unwrap_or(""),
+            &files,
+            &inline,
+            &SubWorkflowAir::new(),
+            &known,
+        )
+        .unwrap_or_else(|e| panic!("email-welcome must compile to AIR with known resources: {e:?}"));
+
+        let send_prepare = air
+            .get("transitions")
+            .and_then(|t| t.as_array())
+            .expect("transitions")
+            .iter()
+            .find(|t| t.get("id").and_then(|v| v.as_str()) == Some("send/prepare"))
+            .expect("send/prepare exists");
+        let logic_node = send_prepare.get("logic").expect("send/prepare logic");
+        let source = logic_node
+            .get("Rhai")
+            .and_then(|l| l.get("source"))
+            .and_then(|s| s.as_str())
+            .or_else(|| logic_node.get("source").and_then(|s| s.as_str()))
+            .expect("Rhai source");
+
+        // Upstream producer borrow (HumanTask → SMTP step).
+        assert!(
+            source.contains("intake.json"),
+            "compiled AIR must stage intake.json for the Tera template context"
+        );
+        // Resource envelope borrow — the bug this test guards against:
+        // upstream-borrow arm consumed BORROW_MARKER before the resource
+        // arm could splice, so `mail.json` never landed.
+        assert!(
+            source.contains("mail.json"),
+            "compiled AIR must stage mail.json (resource envelope); source:\n{source}"
+        );
+        assert!(
+            source.contains("__resources[\"mail\"]") || source.contains("__resources['mail']"),
+            "compiled AIR must read mail envelope from __resources map; source:\n{source}"
+        );
+        assert!(
+            source.contains("\"smtp\""),
+            "compiled AIR must carry the smtp backend discriminator"
         );
     }
 

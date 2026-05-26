@@ -17,6 +17,8 @@ use aithericon_executor_python::PythonBackend;
 use aithericon_executor_kreuzberg::KreuzbergBackend;
 #[cfg(feature = "llm")]
 use aithericon_executor_llm::LlmBackend;
+#[cfg(feature = "smtp")]
+use aithericon_executor_smtp::SmtpBackend;
 use aithericon_executor_domain::ExecutionJob;
 use aithericon_executor_logs::{
     CompositeLogSink, FileLogSink, LevelFilterSink, LogSink, LogSinkConfig, NatsLogSink,
@@ -567,6 +569,12 @@ fn build_executor(
     {
         registry = registry.register(KreuzbergBackend::new());
         info!("kreuzberg backend registered");
+    }
+
+    #[cfg(feature = "smtp")]
+    {
+        registry = registry.register(SmtpBackend::new());
+        info!("smtp backend registered");
     }
 
     let registry = Arc::new(registry);

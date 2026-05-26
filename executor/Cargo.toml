@@ -21,6 +21,7 @@ members = [
     "crates/executor-docker",
     "crates/executor-http",
     "crates/executor-python",
+    "crates/executor-smtp",
 ]
 
 [workspace.package]
@@ -52,6 +53,7 @@ aithericon-executor-process = { path = "crates/executor-process" }
 aithericon-executor-docker = { path = "crates/executor-docker" }
 aithericon-executor-http = { path = "crates/executor-http" }
 aithericon-executor-python = { path = "crates/executor-python" }
+aithericon-executor-smtp = { path = "crates/executor-smtp" }
 aithericon-secrets = { path = "../shared/secrets" }
 
 # Apalis (forked with NATS backend) — use local path for development, switch to git for CI/deploy

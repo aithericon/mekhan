@@ -472,7 +472,12 @@ fn apply_python_borrows(
             ));
         }
         if let TransitionLogic::Rhai { source } = &t.logic {
-            let new_source = source.replace(BORROW_MARKER, &pushes);
+            // Prepend pushes before the marker rather than consuming it.
+            // Other arms (resource, backend-field-stage) may also need to
+            // splice into the same node; `strip_borrow_markers` cleans
+            // up the residual marker at the end of the apply phase.
+            let replacement = format!("{pushes}{BORROW_MARKER}");
+            let new_source = source.replace(BORROW_MARKER, &replacement);
             t.logic = TransitionLogic::Rhai { source: new_source };
         }
     }
@@ -651,7 +656,10 @@ fn apply_backend_borrows(
 
         if let TransitionLogic::Rhai { source } = &t.logic {
             if source.contains(BORROW_MARKER) {
-                let new_source = source.replace(BORROW_MARKER, &pushes);
+                // Prepend pushes before the marker; subsequent arms can
+                // still splice. `strip_borrow_markers` cleans up later.
+                let replacement = format!("{pushes}{BORROW_MARKER}");
+                let new_source = source.replace(BORROW_MARKER, &replacement);
                 // Side-channel placeholder rewrite: the same
                 // `{{<slug>.<attr>}}` → `{{input:NAME}}` substitution that
                 // used to run against the inlined Rhai literal now runs
@@ -729,7 +737,13 @@ fn apply_resource_borrows(
         }
         if let TransitionLogic::Rhai { source } = &t.logic {
             if source.contains(BORROW_MARKER) {
-                let new_source = source.replace(BORROW_MARKER, &pushes);
+                // Prepend before the marker; `strip_borrow_markers` cleans
+                // up later. This keeps multi-arm composition working when
+                // the same node has both upstream-producer borrows AND
+                // resource borrows (e.g. SMTP step with `{{ intake.email }}`
+                // + `resource_alias: "mail"`).
+                let replacement = format!("{pushes}{BORROW_MARKER}");
+                let new_source = source.replace(BORROW_MARKER, &replacement);
                 t.logic = TransitionLogic::Rhai { source: new_source };
             }
         }
@@ -1046,6 +1060,12 @@ mod tests {
         );
 
         apply_resource_borrows(&mut scenario, "step", &resource_borrows);
+        // The final marker strip happens inside the full apply_borrows
+        // orchestrator; per-arm invocations leave the marker in place so
+        // multi-arm composition works (resource + python + backend-field-
+        // stage can all splice into one node). Replicate the cleanup here
+        // to keep this unit test asserting the final-AIR shape.
+        strip_borrow_markers(&mut scenario);
 
         let TransitionLogic::Rhai { source } = &scenario.transitions[0].logic else {
             panic!("prepare transition must remain Rhai")
@@ -1056,7 +1076,7 @@ mod tests {
         );
         assert!(
             !source.contains(BORROW_MARKER),
-            "BORROW_MARKER must be replaced; got: {source}"
+            "BORROW_MARKER must be stripped from final AIR; got: {source}"
         );
     }
 

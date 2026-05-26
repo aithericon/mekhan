@@ -33,6 +33,7 @@ aithericon-executor-python = { workspace = true, optional = true }
 aithericon-executor-llm = { workspace = true, optional = true }
 aithericon-executor-file-ops = { workspace = true, optional = true }
 aithericon-executor-kreuzberg = { workspace = true, optional = true }
+aithericon-executor-smtp = { workspace = true, optional = true }
 aithericon-secrets = { workspace = true }
 
 [features]
@@ -50,6 +51,7 @@ llm = ["dep:aithericon-executor-llm"]
 vault = ["aithericon-secrets/vault", "aithericon-executor-worker/vault"]
 file-ops = ["dep:aithericon-executor-file-ops", "opendal", "aithericon-executor-test-harness/file-ops"]
 kreuzberg = ["dep:aithericon-executor-kreuzberg", "aithericon-executor-kreuzberg/full"]
+smtp = ["dep:aithericon-executor-smtp"]
 
 [dev-dependencies]
 aithericon-executor-test-harness = { workspace = true }
@@ -59,12 +61,24 @@ aithericon-executor-storage = { workspace = true }
 aithericon-executor-ipc = { workspace = true }
 aithericon-executor-logs = { workspace = true, features = ["loki"] }
 aithericon-executor-metrics = { workspace = true, features = ["nats", "loki"] }
+aithericon-executor-smtp = { workspace = true }
+aithericon-executor-backend = { workspace = true }
+aithericon-executor-backend-configs = { workspace = true }
+serde = { workspace = true }
+lettre = { version = "0.11", default-features = false, features = [
+    "tokio1",
+    "smtp-transport",
+    "builder",
+] }
 uuid = { workspace = true }
 serde_json = { workspace = true }
 tracing-subscriber = { workspace = true }
 tokio = { workspace = true }
+tokio-util = { workspace = true }
 tempfile = "3"
 futures = { workspace = true }
 async-nats = { workspace = true }
 async-trait = { workspace = true }
 aithericon-secrets = { workspace = true }
+mailparse = "0.15"
+reqwest = { workspace = true }

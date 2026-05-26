@@ -6,3 +6,4 @@ pub mod llm;
 pub mod postgres;
 pub mod process;
 pub mod python;
+pub mod smtp;
