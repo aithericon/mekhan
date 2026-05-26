@@ -35,6 +35,8 @@ aithericon-executor-file-ops = { workspace = true, optional = true }
 aithericon-executor-kreuzberg = { workspace = true, optional = true }
 aithericon-executor-smtp = { workspace = true, optional = true }
 aithericon-secrets = { workspace = true }
+# Shared backend metadata — drives `build_executor`'s registration loop.
+aithericon-backends = { workspace = true }
 
 [features]
 default = []
