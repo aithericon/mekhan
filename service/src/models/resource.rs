@@ -64,6 +64,12 @@ pub struct ResourceSummary {
     pub latest_version: i32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// User-supplied key names for dynamic-fields resources (`kv`). The
+    /// picker uses this list to emit `<path>.<key>` entries; resolver
+    /// uses it to build the secret-template envelope. `None` for typed
+    /// resources whose fields are static on the descriptor.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dynamic_keys: Option<Vec<String>>,
 }
 
 impl From<ResourceRow> for ResourceSummary {
@@ -76,6 +82,7 @@ impl From<ResourceRow> for ResourceSummary {
             latest_version: r.latest_version,
             created_at: r.created_at,
             updated_at: r.updated_at,
+            dynamic_keys: None,
         }
     }
 }
@@ -115,6 +122,12 @@ pub struct ResourceTypeInfo {
     pub public_fields: Vec<String>,
     /// JSON Schema of the type. Cached at first request, then reused.
     pub schema: serde_json::Value,
+    /// `true` for the `kv` escape hatch: the field set is per-INSTANCE,
+    /// so `secret_fields` / `public_fields` are empty at the type level
+    /// and the picker drives off `ResourceSummary.dynamic_keys`. Types
+    /// derived via `#[derive(ResourceType)]` always set this to `false`.
+    #[serde(default)]
+    pub dynamic_fields: bool,
 }
 
 /// Request body for `POST /api/resources`. Carries every field needed to

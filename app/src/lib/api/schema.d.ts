@@ -2362,6 +2362,13 @@ export interface components {
                 /** Format: date-time */
                 created_at: string;
                 display_name: string;
+                /**
+                 * @description User-supplied key names for dynamic-fields resources (`kv`). The
+                 *     picker uses this list to emit `<path>.<key>` entries; resolver
+                 *     uses it to build the secret-template envelope. `None` for typed
+                 *     resources whose fields are static on the descriptor.
+                 */
+                dynamic_keys?: string[] | null;
                 /** Format: uuid */
                 id: string;
                 /** Format: int32 */
@@ -2682,6 +2689,13 @@ export interface components {
             /** Format: date-time */
             created_at: string;
             display_name: string;
+            /**
+             * @description User-supplied key names for dynamic-fields resources (`kv`). The
+             *     picker uses this list to emit `<path>.<key>` entries; resolver
+             *     uses it to build the secret-template envelope. `None` for typed
+             *     resources whose fields are static on the descriptor.
+             */
+            dynamic_keys?: string[] | null;
             /** Format: uuid */
             id: string;
             /** Format: int32 */
@@ -2699,6 +2713,13 @@ export interface components {
          */
         ResourceTypeInfo: {
             display_name: string;
+            /**
+             * @description `true` for the `kv` escape hatch: the field set is per-INSTANCE,
+             *     so `secret_fields` / `public_fields` are empty at the type level
+             *     and the picker drives off `ResourceSummary.dynamic_keys`. Types
+             *     derived via `#[derive(ResourceType)]` always set this to `false`.
+             */
+            dynamic_fields?: boolean;
             icon: string;
             name: string;
             oauth_provider?: string | null;

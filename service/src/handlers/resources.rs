@@ -79,9 +79,27 @@ fn descriptor_or_400(
     })
 }
 
+/// Internal marker key stored in `public_config` for `kv`-style resources.
+/// Lists the user-supplied field names so the picker + resolver can
+/// iterate without unwrapping the Vault bundle. Underscore-prefixed so it
+/// can't collide with a real key name (real keys must match the same
+/// `[a-z][a-z0-9_]*` shape as resource paths, see [`KV_KEY_REGEX`]).
+const KV_KEYS_FIELD: &str = "__kv_keys";
+
+/// Same shape as `PATH_REGEX` — key names must be valid identifiers
+/// because workflow code references them as `<path>.<key>`.
+static KV_KEY_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^[a-z][a-z0-9_]*$").expect("KV_KEY_REGEX must compile")
+});
+
 /// Split a raw config map into `(public, secret)` JsonMaps based on the
 /// descriptor's field lists. Strays (keys that match neither list) become
 /// a structured 400 so the picker can highlight the offending field.
+///
+/// `dynamic_fields` types (today: just `kv`) take a different path: every
+/// user-supplied key is treated as a secret, the field list is stashed in
+/// `public_config.__kv_keys`, and the strays / required-fields gates are
+/// replaced by a per-key identifier-safety check.
 fn split_config(
     descriptor: &aithericon_resources::ResourceTypeDescriptor,
     config: Value,
@@ -91,6 +109,47 @@ fn split_config(
             "config must be a JSON object keyed by field name",
         ));
     };
+
+    // Dynamic-fields fast path: every key is a user-supplied secret. Validate
+    // each key matches the identifier grammar (so `<path>.<key>` references
+    // are parseable downstream) and stash the key list as a `__kv_keys`
+    // sentinel in `public_config`. The Vault bundle still carries the
+    // values; only the names live in public_config so the picker can
+    // surface them without unwrapping secrets.
+    if descriptor.dynamic_fields {
+        let mut public = JsonMap::new();
+        let mut secret = JsonMap::new();
+        let mut keys: Vec<String> = Vec::with_capacity(map.len());
+        let mut bad_keys: Vec<String> = Vec::new();
+        for (k, v) in map {
+            if k == KV_KEYS_FIELD {
+                // Caller can't write the internal marker directly — would
+                // mask the real keys. Surface as 400 so a misuse from a
+                // hand-rolled client is loud.
+                return Err(ApiError::bad_request(format!(
+                    "key '{KV_KEYS_FIELD}' is reserved",
+                )));
+            }
+            if !KV_KEY_REGEX.is_match(&k) {
+                bad_keys.push(k);
+                continue;
+            }
+            secret.insert(k.clone(), v);
+            keys.push(k);
+        }
+        if !bad_keys.is_empty() {
+            bad_keys.sort();
+            return Err(ApiError::bad_request(format!(
+                "invalid kv key(s): {} — keys must be snake_case identifiers \
+                 (start with a lowercase letter, then letters / digits / underscores)",
+                bad_keys.join(", "),
+            )));
+        }
+        keys.sort();
+        public.insert(KV_KEYS_FIELD.to_string(), Value::Array(keys.into_iter().map(Value::String).collect()));
+        return Ok((public, secret));
+    }
+
     let mut public = JsonMap::new();
     let mut secret = JsonMap::new();
     let mut stray = Vec::new();
@@ -183,6 +242,77 @@ async fn write_audit(
     Ok(())
 }
 
+/// For each `kv`-style row, fetch the latest version's `public_config` and
+/// extract the user-supplied `__kv_keys` list. Returns a map keyed by
+/// `resource_id` so callers can populate `ResourceSummary.dynamic_keys`
+/// in one batched pass per page (avoids the N+1 query that a per-row
+/// fetch would create).
+///
+/// Non-dynamic rows are skipped — they have `dynamic_keys: None` and the
+/// picker drives off the descriptor's static field lists.
+async fn fetch_dynamic_keys(
+    db: &sqlx::PgPool,
+    rows: &[ResourceRow],
+) -> std::collections::HashMap<Uuid, Vec<String>> {
+    let dynamic_pairs: Vec<(Uuid, i32)> = rows
+        .iter()
+        .filter_map(|r| {
+            lookup(&r.resource_type)
+                .filter(|d| d.dynamic_fields)
+                .map(|_| (r.id, r.latest_version))
+        })
+        .collect();
+    if dynamic_pairs.is_empty() {
+        return std::collections::HashMap::new();
+    }
+    let ids: Vec<Uuid> = dynamic_pairs.iter().map(|(id, _)| *id).collect();
+    let versions: Vec<i32> = dynamic_pairs.iter().map(|(_, v)| *v).collect();
+    // One round-trip for every kv row on the page. UNNEST pairs each id
+    // with its latest version so we don't accidentally read a stale
+    // earlier version when a rotation is mid-flight.
+    let rows: Vec<(Uuid, Value)> = sqlx::query_as(
+        "SELECT resource_id, public_config FROM resource_versions \
+         WHERE (resource_id, version) IN \
+         (SELECT * FROM UNNEST($1::uuid[], $2::int4[]))",
+    )
+    .bind(&ids)
+    .bind(&versions)
+    .fetch_all(db)
+    .await
+    .unwrap_or_default();
+    let mut out = std::collections::HashMap::with_capacity(rows.len());
+    for (id, public_config) in rows {
+        let keys = public_config
+            .get("__kv_keys")
+            .and_then(Value::as_array)
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect::<Vec<String>>()
+            })
+            .unwrap_or_default();
+        out.insert(id, keys);
+    }
+    out
+}
+
+/// Build `ResourceSummary`s from raw rows + the dynamic-keys side-channel
+/// in one place so every list-style endpoint stays in lockstep.
+fn rows_to_summaries(
+    rows: Vec<ResourceRow>,
+    dyn_keys: &std::collections::HashMap<Uuid, Vec<String>>,
+) -> Vec<ResourceSummary> {
+    rows.into_iter()
+        .map(|r| {
+            let mut s = ResourceSummary::from(r);
+            if let Some(keys) = dyn_keys.get(&s.id) {
+                s.dynamic_keys = Some(keys.clone());
+            }
+            s
+        })
+        .collect()
+}
+
 /// `GET /api/resources` — paginated list, optionally filtered by type.
 #[utoipa::path(
     get,
@@ -246,8 +376,9 @@ pub async fn list_resources(
         (rows, total)
     };
 
+    let dyn_keys = fetch_dynamic_keys(&state.db, &rows).await;
     Json(PaginatedResponse {
-        items: rows.into_iter().map(ResourceSummary::from).collect(),
+        items: rows_to_summaries(rows, &dyn_keys),
         total,
         page: params.page,
         per_page: params.per_page,
@@ -275,6 +406,7 @@ pub async fn list_resource_types() -> Json<Vec<ResourceTypeInfo>> {
             secret_fields: d.secret_fields.iter().map(|s| (*s).to_string()).collect(),
             public_fields: d.public_fields.iter().map(|s| (*s).to_string()).collect(),
             schema: schema_json_cached(d).clone(),
+            dynamic_fields: d.dynamic_fields,
         })
         .collect();
     Json(infos)
@@ -405,6 +537,7 @@ pub async fn create_resource(
 
     write_audit(&state.db, resource_id, version, principal_id, AuditAction::Create).await?;
 
+    let dynamic_keys = extract_kv_keys(&public);
     let summary = ResourceSummary {
         id: resource_id,
         path: req.path,
@@ -413,8 +546,21 @@ pub async fn create_resource(
         latest_version: version,
         created_at: Utc::now(),
         updated_at: Utc::now(),
+        dynamic_keys,
     };
     Ok((StatusCode::CREATED, Json(summary)))
+}
+
+/// Pull the `__kv_keys` array out of a `public_config` blob. Returns
+/// `None` for typed resources (no sentinel present); `Some(...)` for
+/// `kv` resources. Shared by every handler that emits a fresh
+/// `ResourceSummary` after writing a version.
+fn extract_kv_keys(public: &JsonMap<String, Value>) -> Option<Vec<String>> {
+    public.get(KV_KEYS_FIELD)?.as_array().map(|arr| {
+        arr.iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect()
+    })
 }
 
 /// `GET /api/resources/{id}` — admin view. Secret fields are listed by
@@ -508,6 +654,7 @@ pub async fn update_resource(
     let principal_id = user.subject_as_uuid();
     let mut latest_version = row.latest_version;
     let mut display_name = row.display_name.clone();
+    let mut new_kv_keys: Option<Vec<String>> = None;
 
     if let Some(name) = req.display_name {
         let trimmed = name.trim().to_string();
@@ -569,7 +716,21 @@ pub async fn update_resource(
         .await?;
 
         write_audit(&state.db, row.id, latest_version, principal_id, AuditAction::Update).await?;
+        new_kv_keys = extract_kv_keys(&public);
     }
+
+    // Surface the kv keys even when the config wasn't touched — the picker
+    // expects the field to track current state, not just the delta on this
+    // request.
+    let dynamic_keys = if new_kv_keys.is_some() {
+        new_kv_keys
+    } else if lookup(&row.resource_type).map(|d| d.dynamic_fields).unwrap_or(false) {
+        fetch_dynamic_keys(&state.db, std::slice::from_ref(&row))
+            .await
+            .remove(&row.id)
+    } else {
+        None
+    };
 
     Ok(Json(ResourceSummary {
         id: row.id,
@@ -579,6 +740,7 @@ pub async fn update_resource(
         latest_version,
         created_at: row.created_at,
         updated_at: Utc::now(),
+        dynamic_keys,
     }))
 }
 
@@ -700,6 +862,7 @@ pub async fn rotate_resource(
 
     write_audit(&state.db, row.id, new_version, principal_id, AuditAction::Rotate).await?;
 
+    let dynamic_keys = extract_kv_keys(&public);
     Ok(Json(ResourceSummary {
         id: row.id,
         path: row.path,
@@ -708,6 +871,7 @@ pub async fn rotate_resource(
         latest_version: new_version,
         created_at: row.created_at,
         updated_at: Utc::now(),
+        dynamic_keys,
     }))
 }
 

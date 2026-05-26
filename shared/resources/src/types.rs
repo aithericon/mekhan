@@ -22,6 +22,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::ResourceType;
 
+// The `Kv` registration at the bottom of this file submits the descriptor
+// manually rather than via the derive (the type has no struct fields).
+// It uses `inventory::submit!` directly + builds the schema with
+// `serde_json::json!`.
+use crate::__macro_support::{inventory, serde_json};
+
 /// Postgres connection credentials. `password` is the only Vault-stored
 /// field. `sslmode` defaults to `None` so workflows that don't care about
 /// TLS verification don't have to set it.
@@ -110,4 +116,41 @@ pub struct GoogleOauth {
     pub expires_at: i64,
     /// Space-separated OAuth scopes granted at consent time.
     pub scopes: String,
+}
+
+// ─── Kv — the dynamic-fields escape hatch ────────────────────────────────────
+//
+// The 5 typed resources above cover the common credential surfaces. `kv`
+// fills the gap for everything else: opaque API keys, tokens, webhook URLs,
+// vendor-specific bundles where shipping a typed struct isn't worth a
+// service rebuild.
+//
+// All values are treated as secrets. User-supplied key names are stored in
+// `resource_versions.public_config.__kv_keys` so the picker + resolver can
+// iterate them at runtime — the descriptor's `dynamic_fields: true` flag
+// tells the rest of the stack to drive off that list rather than the
+// (empty) static `secret_fields` / `public_fields`. Registered manually
+// rather than via `#[derive(ResourceType)]` because the derive walks struct
+// fields, and Kv deliberately has none.
+inventory::submit! {
+    crate::registry::ResourceTypeDescriptor {
+        name: "kv",
+        display_name: "Key/Value",
+        icon: "lucide-key",
+        oauth_provider: None,
+        secret_fields: &[],
+        public_fields: &[],
+        schema_json: || {
+            // Open-ended string map — picks up `additionalProperties` and
+            // renders as a key/value editor in the modal. The constraint
+            // that key names match the workflow code's `<path>.<key>`
+            // grammar lives in the handler, not in the schema (validation
+            // happens at create time, not at form-input time).
+            serde_json::json!({
+                "type": "object",
+                "additionalProperties": { "type": "string" }
+            })
+        },
+        dynamic_fields: true,
+    }
 }

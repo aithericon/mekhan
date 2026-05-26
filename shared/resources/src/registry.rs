@@ -46,6 +46,13 @@ pub struct ResourceTypeDescriptor {
     /// picker render asks for the JSON Schema. Result is cached in
     /// [`schema_json_cached`].
     pub schema_json: fn() -> JsonValue,
+    /// `true` when the field set is per-INSTANCE rather than per-TYPE — the
+    /// `kv` escape hatch. With `dynamic_fields: true` the CRUD handler
+    /// accepts any string-keyed config map, treats every value as a secret,
+    /// and records the user-supplied key list in `public_config.__kv_keys`
+    /// so the picker + resolver can iterate them at runtime. Typed
+    /// resources (Postgres, OpenAI, etc.) set this to `false`.
+    pub dynamic_fields: bool,
 }
 
 inventory::collect!(ResourceTypeDescriptor);

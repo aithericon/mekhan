@@ -287,10 +287,6 @@ impl ResourceResolver {
         })?;
 
         // (5) Compose the subtree.
-        let mut subtree = JsonMap::with_capacity(
-            descriptor.public_fields.len() + descriptor.secret_fields.len(),
-        );
-
         let public_obj = version.public_config.as_object().ok_or_else(|| {
             // A non-object `public_config` is corruption — the type
             // descriptor's contract guarantees keyed fields. Surface as
@@ -301,6 +297,37 @@ impl ResourceResolver {
                 missing_field: "<entire public_config is not a JSON object>".to_string(),
             }
         })?;
+
+        // Dynamic-fields fast path: the descriptor has no static field
+        // lists; iterate the user-defined keys stashed in
+        // `public_config.__kv_keys` and emit a secret template for each.
+        // All values live in Vault — there is no public-side data to
+        // inline.
+        if descriptor.dynamic_fields {
+            let keys = public_obj
+                .get("__kv_keys")
+                .and_then(JsonValue::as_array)
+                .ok_or_else(|| ResolverError::IncompletePublicConfig {
+                    resource_id: pin.resource_id,
+                    missing_field: "__kv_keys".to_string(),
+                })?;
+            let mut subtree = JsonMap::with_capacity(keys.len());
+            for k in keys {
+                let Some(name) = k.as_str() else {
+                    return Err(ResolverError::IncompletePublicConfig {
+                        resource_id: pin.resource_id,
+                        missing_field: "<non-string entry in __kv_keys>".to_string(),
+                    });
+                };
+                let template = format!("{{{{secret:{}#{}}}}}", version.vault_path, name);
+                subtree.insert(name.to_string(), JsonValue::String(template));
+            }
+            return Ok(subtree);
+        }
+
+        let mut subtree = JsonMap::with_capacity(
+            descriptor.public_fields.len() + descriptor.secret_fields.len(),
+        );
 
         for field_name in descriptor.public_fields {
             if let Some(v) = public_obj.get(*field_name) {

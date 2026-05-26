@@ -7044,6 +7044,16 @@
                 "display_name": {
                   "type": "string"
                 },
+                "dynamic_keys": {
+                  "type": [
+                    "array",
+                    "null"
+                  ],
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "User-supplied key names for dynamic-fields resources (`kv`). The\npicker uses this list to emit `<path>.<key>` entries; resolver\nuses it to build the secret-template envelope. `None` for typed\nresources whose fields are static on the descriptor."
+                },
                 "id": {
                   "type": "string",
                   "format": "uuid"
@@ -7916,6 +7926,16 @@
           "display_name": {
             "type": "string"
           },
+          "dynamic_keys": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "User-supplied key names for dynamic-fields resources (`kv`). The\npicker uses this list to emit `<path>.<key>` entries; resolver\nuses it to build the secret-template envelope. `None` for typed\nresources whose fields are static on the descriptor."
+          },
           "id": {
             "type": "string",
             "format": "uuid"
@@ -7950,6 +7970,10 @@
         "properties": {
           "display_name": {
             "type": "string"
+          },
+          "dynamic_fields": {
+            "type": "boolean",
+            "description": "`true` for the `kv` escape hatch: the field set is per-INSTANCE,\nso `secret_fields` / `public_fields` are empty at the type level\nand the picker drives off `ResourceSummary.dynamic_keys`. Types\nderived via `#[derive(ResourceType)]` always set this to `false`."
           },
           "icon": {
             "type": "string"

@@ -142,6 +142,13 @@
 						values[f] = '';
 					}
 					fieldValues = values;
+					// For kv resources, surface the existing keys as editable
+					// rows with empty values (treated as "leave unchanged" on
+					// submit just like typed secret fields).
+					const dyn = types.find((t) => t.name === detail.resource_type)?.dynamic_fields;
+					if (dyn) {
+						seedKvPairsFromDetail(config, detail.redacted_secret_fields);
+					}
 				} catch (e) {
 					error = e instanceof Error ? e.message : 'Failed to load resource';
 				} finally {
@@ -153,6 +160,7 @@
 				path = '';
 				displayName = '';
 				fieldValues = {};
+				kvPairs = [];
 			}
 		})();
 	});
@@ -160,6 +168,67 @@
 	function setField(name: string, raw: string) {
 		fieldValues = { ...fieldValues, [name]: raw };
 	}
+
+	// --- kv (dynamic-fields) editor ----------------------------------------
+	// For `kv`-style resources the field set is user-defined. Track an
+	// ordered list of `{ key, value }` pairs so the user can add / rename /
+	// remove keys; submit converts them into the config object the backend
+	// expects (`{ key1: val1, ... }`).
+	type KvPair = { key: string; value: string; isNew: boolean };
+	let kvPairs = $state<KvPair[]>([]);
+
+	const isDynamic = $derived(descriptor?.dynamic_fields ?? false);
+
+	function seedKvPairsFromDetail(
+		publicConfig: Record<string, unknown> | undefined,
+		secretFields: string[]
+	) {
+		const keys: string[] = Array.isArray(publicConfig?.__kv_keys)
+			? (publicConfig.__kv_keys as string[]).filter((k) => typeof k === 'string')
+			: [...secretFields];
+		kvPairs = keys.map((k) => ({ key: k, value: '', isNew: false }));
+	}
+
+	function addKvPair() {
+		kvPairs = [...kvPairs, { key: '', value: '', isNew: true }];
+	}
+
+	function removeKvPair(index: number) {
+		kvPairs = kvPairs.filter((_, i) => i !== index);
+	}
+
+	function updateKvKey(index: number, key: string) {
+		kvPairs = kvPairs.map((p, i) => (i === index ? { ...p, key } : p));
+	}
+
+	function updateKvValue(index: number, value: string) {
+		kvPairs = kvPairs.map((p, i) => (i === index ? { ...p, value } : p));
+	}
+
+	// Same identifier grammar as `<path>` (backend KV_KEY_REGEX). Surfaced
+	// inline so the user sees the constraint before the 400 round-trip.
+	const KV_KEY_PATTERN = /^[a-z][a-z0-9_]*$/;
+	const kvErrors = $derived.by(() => {
+		if (!isDynamic) return [] as string[];
+		const errs: string[] = [];
+		const seen = new Set<string>();
+		for (const [i, p] of kvPairs.entries()) {
+			const k = p.key.trim();
+			if (!k) {
+				errs.push(`Row ${i + 1}: key is required.`);
+				continue;
+			}
+			if (!KV_KEY_PATTERN.test(k)) {
+				errs.push(`Row ${i + 1}: "${k}" is not a valid identifier.`);
+			}
+			if (seen.has(k)) errs.push(`Row ${i + 1}: duplicate key "${k}".`);
+			seen.add(k);
+		}
+		if (mode === 'create' && kvPairs.length === 0) {
+			errs.push('At least one key is required.');
+		}
+		return errs;
+	});
 
 	// Mirror the server-side regex (`service/src/handlers/resources.rs`).
 	// Workflow code references the resource as `<path>.<field>`, so the
@@ -177,6 +246,22 @@
 	});
 
 	function buildConfig(includeBlankSecrets: boolean): Record<string, unknown> {
+		// kv path: every row contributes a `<key>: <value>` entry. Edit
+		// mode skips blank values for existing keys (treated as "leave
+		// unchanged" — same shape contract as typed secret fields). New
+		// keys must supply a value; the server fails the create if any
+		// value is missing.
+		if (isDynamic) {
+			const out: Record<string, unknown> = {};
+			for (const p of kvPairs) {
+				const key = p.key.trim();
+				if (!key) continue;
+				const value = p.value;
+				if (!includeBlankSecrets && !p.isNew && value === '') continue;
+				out[key] = value;
+			}
+			return out;
+		}
 		const out: Record<string, unknown> = {};
 		for (const spec of fieldSpecs) {
 			const raw = fieldValues[spec.name] ?? '';
@@ -213,6 +298,10 @@
 				error = pathError;
 				return;
 			}
+		}
+		if (isDynamic && kvErrors.length > 0) {
+			error = kvErrors[0];
+			return;
 		}
 		loading = true;
 		error = null;
@@ -347,7 +436,67 @@
 						/>
 					</FormField>
 
-					{#if descriptor}
+					{#if descriptor && isDynamic}
+						<div class="space-y-3 rounded-md border border-border/60 p-3">
+							<div class="flex items-center justify-between">
+								<div class="text-sm font-medium text-muted-foreground">
+									Key/Value pairs (all values are secrets)
+								</div>
+								<Button variant="outline" size="sm" onclick={addKvPair}>
+									Add key
+								</Button>
+							</div>
+							{#if kvPairs.length === 0}
+								<p class="text-sm text-muted-foreground italic">
+									No keys yet. Add at least one before saving.
+								</p>
+							{/if}
+							{#each kvPairs as p, i (i)}
+								<div class="flex items-start gap-2">
+									<Input
+										type="text"
+										value={p.key}
+										placeholder="api_key"
+										oninput={(e) =>
+											updateKvKey(i, (e.currentTarget as HTMLInputElement).value)}
+										class="font-mono text-sm flex-1"
+										disabled={mode === 'edit' && !p.isNew}
+										data-testid="resource-modal-kv-key-{i}"
+									/>
+									<Input
+										type="password"
+										value={p.value}
+										placeholder={mode === 'edit' && !p.isNew
+											? '(leave blank to keep current)'
+											: 'secret value'}
+										oninput={(e) =>
+											updateKvValue(i, (e.currentTarget as HTMLInputElement).value)}
+										class="font-mono text-sm flex-1"
+										data-testid="resource-modal-kv-value-{i}"
+									/>
+									<Button
+										variant="ghost"
+										size="sm"
+										onclick={() => removeKvPair(i)}
+										aria-label="Remove key"
+									>
+										✕
+									</Button>
+								</div>
+							{/each}
+							{#if kvErrors.length > 0}
+								<ul class="text-sm text-destructive list-disc pl-5">
+									{#each kvErrors as e (e)}
+										<li>{e}</li>
+									{/each}
+								</ul>
+							{/if}
+							<p class="text-sm text-muted-foreground">
+								Key names must be snake_case identifiers — they're referenced in
+								workflow code as <code>{path || '&lt;path&gt;'}.&lt;key&gt;</code>.
+							</p>
+						</div>
+					{:else if descriptor}
 						<div class="space-y-3 rounded-md border border-border/60 p-3">
 							<div class="text-sm font-medium text-muted-foreground">
 								{descriptor.display_name} configuration

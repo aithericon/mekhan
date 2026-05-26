@@ -189,6 +189,10 @@ pub fn derive_resource_type(input: TokenStream) -> TokenStream {
                         ::aithericon_resources::__macro_support::serde_json::to_value(&schema)
                             .expect("JsonSchema derive output must serialize cleanly")
                     },
+                    // The derive is for typed resources only. The dynamic-field
+                    // escape hatch (`kv`) registers manually via
+                    // `inventory::submit!` in `types.rs`.
+                    dynamic_fields: false,
                 }
             }
         };

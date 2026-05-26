@@ -200,7 +200,14 @@ export function buildResourceScope(
 	for (const resource of sorted) {
 		const info = byType.get(resource.resource_type);
 		if (!info) continue;
-		const fields = [...(info.public_fields ?? []), ...(info.secret_fields ?? [])];
+		// Dynamic-fields (kv) resources surface the user-supplied key list
+		// in `dynamic_keys`. Typed resources use the descriptor's static
+		// `public_fields ∪ secret_fields`. Either way the picker emits
+		// `<path>.<field>` entries that match what the compiler resolves.
+		const fields = resource.dynamic_keys ?? [
+			...(info.public_fields ?? []),
+			...(info.secret_fields ?? [])
+		];
 		for (const field of fields) {
 			out.push({
 				nodeId: `resource:${resource.id}`,
