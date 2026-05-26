@@ -339,3 +339,80 @@ fn file_ops_default_editor_config_round_trips_through_registry() {
             .expect("file_ops default editor config must validate");
     assert!(inputs.is_empty());
 }
+
+// ─── CatalogueQuery (Phase 2.e) ─────────────────────────────────────────────
+//
+// First non-executor backend in the registry. `DispatchMode::EngineEffect
+// { handler: "catalogue_lookup" }` — the compiler lowers to a builtin
+// engine effect (see `lower::lower_engine_effect`), never to an executor
+// job. Validation re-serializes through `CatalogueQueryConfig` so any
+// `Option`s left unset (the default) are stripped from the canonical
+// query token the engine handler consumes.
+
+#[test]
+fn catalogue_query_minimal_config_compiles_through_registry() {
+    let cfg = json!({ "category": "invoice", "limit": 25 });
+    let (token, inputs) = validate_and_transform(
+        &ExecutionBackendType::CatalogueQuery,
+        &cfg,
+        &HashMap::new(),
+        "q",
+    )
+    .expect("catalogue_query minimal config must compile");
+    assert!(inputs.is_empty(), "engine effect — no executor inputs");
+    assert_eq!(token["category"], "invoice");
+    assert_eq!(token["limit"], 25);
+}
+
+#[test]
+fn catalogue_query_strips_none_options_via_registry() {
+    // CatalogueQueryConfig uses `skip_serializing_if = "Option::is_none"` —
+    // omitted fields shouldn't appear in the normalized token.
+    let cfg = json!({ "category": "doc" });
+    let (token, _) = validate_and_transform(
+        &ExecutionBackendType::CatalogueQuery,
+        &cfg,
+        &HashMap::new(),
+        "q",
+    )
+    .expect("must compile");
+    assert!(
+        token.get("limit").is_none(),
+        "limit not set → should not appear, got: {token}"
+    );
+    assert!(token.get("page").is_none());
+    assert!(token.get("filters").is_none());
+}
+
+#[test]
+fn catalogue_query_accepts_filters_via_registry() {
+    let cfg = json!({
+        "category": "doc",
+        "filters": { "amount": { "gt": 100 } },
+    });
+    let (token, _) = validate_and_transform(
+        &ExecutionBackendType::CatalogueQuery,
+        &cfg,
+        &HashMap::new(),
+        "q",
+    )
+    .expect("filters must compile");
+    assert_eq!(token["filters"]["amount"]["gt"], 100);
+}
+
+#[test]
+fn catalogue_query_rejects_garbage_via_registry() {
+    let cfg = json!({ "limit": "not a number" });
+    let err = validate_and_transform(
+        &ExecutionBackendType::CatalogueQuery,
+        &cfg,
+        &HashMap::new(),
+        "q",
+    )
+    .expect_err("limit must be numeric");
+    use mekhan_service::compiler::CompileError;
+    assert!(
+        matches!(err, CompileError::Validation(_)),
+        "expected CompileError::Validation, got {err:?}"
+    );
+}

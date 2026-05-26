@@ -29,6 +29,7 @@ use aithericon_executor_domain::{InputDeclaration, InputSource};
 use crate::compiler::CompileError;
 use crate::models::template::{ExecutionBackendType, FieldKind, Port, PortField};
 
+pub mod catalogue_query;
 pub mod docker;
 pub mod file_ops;
 pub mod http;
@@ -194,6 +195,7 @@ impl DefaultPortField {
 /// `template.rs` cover the other 8 backends and fall through when
 /// `lookup(bt)` returns `None`.
 pub static BACKENDS: &[&BackendDecl] = &[
+    &catalogue_query::CATALOGUE_QUERY_DECL,
     &docker::DOCKER_DECL,
     &file_ops::FILE_OPS_DECL,
     &http::HTTP_DECL,

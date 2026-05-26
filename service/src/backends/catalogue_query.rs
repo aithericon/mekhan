@@ -1,0 +1,96 @@
+//! CatalogueQuery backend declaration — Phase 2.e port.
+//!
+//! Point-in-time read of the data catalogue. **First non-executor backend**
+//! to migrate to the registry: instead of `DispatchMode::ExecutorJob`, it
+//! uses `DispatchMode::EngineEffect { handler: "catalogue_lookup" }`. The
+//! compiler skips executor lowering entirely and emits a direct
+//! engine-effect handler invocation inside the Petri transition (see
+//! `lower::lower_engine_effect`).
+//!
+//! The validate body is moved verbatim from
+//! `compiler/backend_configs.rs::validate_and_transform` CatalogueQuery arm:
+//! parses the editor config into [`CatalogueQueryConfig`] (defined in the
+//! sibling `backend_configs` module) and re-serializes to the normalized
+//! `query` token shape the engine's `catalogue_lookup` handler consumes
+//! (ADR-17 convenience format). Emits NO `InputDeclaration`s — engine
+//! effects don't stage executor inputs.
+//!
+//! `schedulable: false` — engine-effect backends are inherently inline,
+//! never schedulable. The editor's Scheduled toggle hides for this backend
+//! and the compiler rejects the combination.
+
+use serde_json::{json, Value};
+
+use aithericon_executor_domain::InputDeclaration;
+
+use crate::compiler::backend_configs::CatalogueQueryConfig;
+use crate::compiler::CompileError;
+use crate::models::template::{ExecutionBackendType, FieldKind};
+
+use super::{BackendDecl, DefaultPortField, DispatchMode, ResourceChannel, ValidationCtx};
+
+/// Mirrors the engine `catalogue_lookup` handler's result token shape.
+/// Kept in lockstep with the legacy `default_output_port` arm so the
+/// registry-first path produces byte-identical port fields.
+const DEFAULT_OUTPUT_FIELDS: &[DefaultPortField] = &[
+    DefaultPortField {
+        name: "artifacts",
+        label: "Artifacts",
+        kind: FieldKind::Json,
+    },
+    DefaultPortField {
+        name: "total_count",
+        label: "Total",
+        kind: FieldKind::Number,
+    },
+    DefaultPortField {
+        name: "source_process_ids",
+        label: "Source Process IDs",
+        kind: FieldKind::Json,
+    },
+];
+
+pub static CATALOGUE_QUERY_DECL: BackendDecl = BackendDecl {
+    backend_type: ExecutionBackendType::CatalogueQuery,
+    display_name: "Catalogue Query",
+    icon: "database-zap",
+    default_output_fields: DEFAULT_OUTPUT_FIELDS,
+    default_editor_config: default_editor_config,
+    validate: validate,
+    ref_scanner: None,
+    resource_alias_paths: &[],
+    resource_channel: ResourceChannel::None,
+    dispatch_mode: DispatchMode::EngineEffect {
+        handler: "catalogue_lookup",
+    },
+    consumes_declared_outputs: false,
+    pyi_introspection: false,
+    // Engine effects don't dispatch executor jobs — there's no scheduler
+    // path for them. The editor hides the Scheduled toggle (frontend
+    // collapse lands as a separate end-of-Phase-2 PR; this is metadata).
+    schedulable: false,
+    executor_wire_name: "catalogue_query",
+};
+
+/// Seed config the editor inserts when a step's backend is first set to
+/// CatalogueQuery. Mirrors `AutomatedStepSection.svelte::defaultConfigs.catalogue_query`.
+fn default_editor_config() -> Value {
+    json!({
+        "category": "",
+        "limit": 50,
+    })
+}
+
+fn validate(
+    config: &Value,
+    _ctx: &ValidationCtx<'_>,
+) -> Result<(Value, Vec<InputDeclaration>), CompileError> {
+    // Read-only catalogue lookup: no executor job, no staged inputs.
+    // Validate the shape and emit the normalized `query` token the
+    // `catalogue_lookup` effect handler consumes.
+    let parsed: CatalogueQueryConfig = serde_json::from_value(config.clone())
+        .map_err(|e| CompileError::Validation(format!("invalid catalogue_query config: {e}")))?;
+    let token = serde_json::to_value(&parsed)
+        .map_err(|e| CompileError::Validation(format!("catalogue_query serialize: {e}")))?;
+    Ok((token, vec![]))
+}

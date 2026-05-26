@@ -18,7 +18,7 @@
 
 use std::collections::HashMap;
 
-use mekhan_service::backends::{lookup, ResourceChannel, BACKENDS};
+use mekhan_service::backends::{lookup, DispatchMode, ResourceChannel, BACKENDS};
 
 #[test]
 fn registry_entries_are_well_formed() {
@@ -105,6 +105,32 @@ fn default_editor_config_round_trips_through_validate() {
                     decl.backend_type, other
                 );
             }
+        }
+    }
+}
+
+/// Engine-effect backends (e.g. CatalogueQuery → `catalogue_lookup`) are
+/// inherently inline — they execute as a single Petri builtin-effect
+/// transition fired by the engine itself, with no executor job to dispatch
+/// to a scheduler-net. The decl MUST therefore declare
+/// `schedulable: false`; otherwise the editor would expose a Scheduled
+/// deployment toggle the compiler has no path to honour.
+///
+/// Phase 2.e introduces the first `EngineEffect` decl (CatalogueQuery);
+/// this invariant locks in the contract for every future engine-effect
+/// backend that lands in the registry.
+#[test]
+fn engine_effect_decls_are_non_schedulable() {
+    for decl in BACKENDS {
+        if let DispatchMode::EngineEffect { handler } = decl.dispatch_mode {
+            assert!(
+                !decl.schedulable,
+                "{:?} declares DispatchMode::EngineEffect {{ handler: \"{handler}\" }} \
+                 but also schedulable: true — engine effects don't dispatch executor \
+                 jobs and have no scheduler-net path, so the Scheduled toggle would \
+                 be unsupported at compile time",
+                decl.backend_type
+            );
         }
     }
 }

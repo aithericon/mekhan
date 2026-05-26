@@ -96,7 +96,7 @@ fn default_entrypoint() -> String {
 /// Maps directly onto the service catalogue filter grammar
 /// (`service/src/catalogue/queries.rs::list_entries`).
 #[derive(Debug, Clone, Deserialize, serde::Serialize)]
-pub struct CatalogueQueryConfig {
+pub(crate) struct CatalogueQueryConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub category: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

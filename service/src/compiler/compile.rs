@@ -3049,6 +3049,120 @@ mod tests {
         );
     }
 
+    /// `lower_engine_effect` parity: a CatalogueQuery AutomatedStep
+    /// (Phase 2.e — first non-executor backend) must lower to a Petri
+    /// transition that fires the engine's `catalogue_lookup` builtin
+    /// effect, NOT an executor job. The registry-first dispatch in
+    /// `lower_automated_step` reads the handler ID from the backend
+    /// decl's `DispatchMode::EngineEffect { handler }` — this test
+    /// covers the legacy → registry refactor and serves as a guardrail
+    /// for future engine-effect backends. Asserts the AIR contains the
+    /// effect handler invocation and the canonical `q_build`/`lookup`
+    /// transition pair, with the query token re-serialized through
+    /// `CatalogueQueryConfig`.
+    #[test]
+    fn catalogue_query_lowers_via_engine_effect() {
+        let cq_node = WorkflowNode {
+            id: "q".to_string(),
+            node_type: "automated_step".to_string(),
+            slug: None,
+            position: Position { x: 0.0, y: 50.0 },
+            data: WorkflowNodeData::AutomatedStep {
+                label: "Lookup".to_string(),
+                description: None,
+                execution_spec: ExecutionSpecConfig {
+                    backend_type: ExecutionBackendType::CatalogueQuery,
+                    entrypoint: None,
+                    config: serde_json::json!({
+                        "category": "invoice",
+                        "limit": 10,
+                    }),
+                },
+                input: Port::empty_input(),
+                output: default_output_port(ExecutionBackendType::CatalogueQuery),
+                retry_policy: RetryPolicy::default(),
+                deployment_model: Default::default(),
+            },
+            parent_id: None,
+            width: None,
+            height: None,
+        };
+        let graph = WorkflowGraph {
+            nodes: vec![start_node("s"), cq_node, end_node("e")],
+            edges: vec![edge("e1", "s", "q"), edge("e2", "q", "e")],
+            viewport: None,
+            instance_concurrency: Default::default(),
+            definitions: Default::default(),
+        };
+
+        let air = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
+            .expect("catalogue_query graph compiles");
+        let transitions = air["transitions"].as_array().unwrap();
+
+        // The lookup transition fires the catalogue_lookup builtin effect.
+        let lookup = transitions
+            .iter()
+            .find(|t| t["id"] == "t_q_lookup")
+            .expect("t_q_lookup transition emitted by lower_engine_effect");
+        let blob = serde_json::to_string(lookup).unwrap();
+        assert!(
+            blob.contains("catalogue_lookup"),
+            "lookup transition must invoke the catalogue_lookup effect handler: {blob}"
+        );
+
+        // The q_build transition stages the validated query token. We
+        // re-serialize CatalogueQueryConfig in validate, which strips
+        // `None` options via `skip_serializing_if` — so neither `page`
+        // nor `filters` should appear in the inlined Rhai literal.
+        let q_build = transitions
+            .iter()
+            .find(|t| t["id"] == "t_q_q_build")
+            .expect("t_q_q_build transition emitted by lower_engine_effect");
+        let logic = q_build["logic"]["source"].as_str().unwrap_or_default();
+        assert!(
+            logic.contains("\"category\""),
+            "q_build logic must inline the category field: {logic}"
+        );
+        assert!(
+            logic.contains("\"limit\""),
+            "q_build logic must inline the limit field: {logic}"
+        );
+        assert!(
+            !logic.contains("\"page\""),
+            "stripped None options must not appear in the token literal: {logic}"
+        );
+
+        // Intermediate / output places use the descriptor's port names.
+        // (Input/output places may be alias-collapsed by the compile
+        // pipeline; the `p_q_query` intermediate sits between the two
+        // engine-effect transitions and is never collapsed.)
+        let places = air["places"].as_array().unwrap();
+        let place_ids: Vec<&str> = places
+            .iter()
+            .map(|p| p["id"].as_str().unwrap_or_default())
+            .collect();
+        assert!(
+            place_ids.iter().any(|p| *p == "p_q_query"),
+            "missing engine-effect intermediate place p_q_query (places: {place_ids:?})"
+        );
+
+        // CRITICAL: catalogue_query must NOT lower to an executor
+        // submit. The legacy executor lifecycle would emit `submitted`
+        // / `completed` / `failed` lifecycle places on a `q/`-prefixed
+        // scope; the engine-effect path emits none of them.
+        for tid in [
+            "t_q/submitted",
+            "t_q/completed",
+            "t_q/failed",
+            "t_q/exec_submit",
+        ] {
+            assert!(
+                !transitions.iter().any(|t| t["id"] == tid),
+                "engine-effect lowering must NOT emit executor lifecycle transition {tid}"
+            );
+        }
+    }
+
     fn start_node_with_slug_and_field(id: &str, slug: &str, field: &str) -> WorkflowNode {
         WorkflowNode {
             id: id.to_string(),

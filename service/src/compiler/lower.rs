@@ -1072,14 +1072,17 @@ fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileError> {
         return lower_automated_step_scheduled(cx);
     }
 
-    // Catalogue-query backend: no executor job — lower to the engine's
-    // registered `catalogue_lookup` effect instead of the executor lifecycle.
-    if matches!(
-        &cx.node.data,
-        WorkflowNodeData::AutomatedStep { execution_spec, .. }
-            if execution_spec.backend_type == ExecutionBackendType::CatalogueQuery
-    ) {
-        return lower_catalogue_query(cx);
+    // Engine-effect backends (e.g. CatalogueQuery → `catalogue_lookup`):
+    // no executor job, lower to the engine's registered builtin effect
+    // instead of the executor lifecycle. The handler ID is sourced from
+    // the backend decl's `DispatchMode::EngineEffect { handler }` so
+    // future engine-effect backends only need a new registry entry.
+    if let WorkflowNodeData::AutomatedStep { execution_spec, .. } = &cx.node.data {
+        if let Some(decl) = crate::backends::lookup(execution_spec.backend_type) {
+            if let crate::backends::DispatchMode::EngineEffect { handler } = decl.dispatch_mode {
+                return lower_engine_effect(cx, handler);
+            }
+        }
     }
 
     let id = &cx.node.id;
@@ -1389,12 +1392,25 @@ fn lower_automated_step_scheduled(cx: &mut LoweringCtx) -> Result<(), CompileErr
     Ok(())
 }
 
-/// `catalogue_query` backend: a point-in-time read of the data catalogue.
-/// No executor job / lifecycle / retry — we build the normalized `query`
-/// token from the editor config and fire the engine's already-registered
-/// `catalogue_lookup` builtin effect (input port `query`, output `results`),
-/// mirroring how `lower_start` emits `catalogue_register`.
-fn lower_catalogue_query(cx: &mut LoweringCtx) -> Result<(), CompileError> {
+/// Engine-effect backend lowering. Used by AutomatedSteps whose
+/// `DispatchMode` is `EngineEffect { handler }` (CatalogueQuery today;
+/// future engine-effect backends just register a new decl with a
+/// different handler string and reuse this path).
+///
+/// No executor job / lifecycle / retry — we build the normalized input
+/// token from the editor config (via `validate_and_transform`) and fire
+/// the named engine builtin effect against the descriptor's
+/// `default_input_port` / `default_output_port` (e.g. for
+/// `catalogue_lookup`: input port `query`, output `results`), mirroring
+/// how `lower_start` emits `catalogue_register`.
+///
+/// `handler` is the engine-side `EffectDescriptor::handler_id`. Resolved
+/// via `effects::builtin_by_id`; a missing handler is a compile-time
+/// (well, registry-time) bug — the decl declares a handler the engine
+/// doesn't expose. The catalogue_query parity test catches the only
+/// existing case end-to-end; future engine-effect backends ship with
+/// their own decl + parity assertion.
+fn lower_engine_effect(cx: &mut LoweringCtx, handler: &str) -> Result<(), CompileError> {
     let id = cx.node.id.clone();
     let WorkflowNodeData::AutomatedStep {
         label,
@@ -1402,10 +1418,18 @@ fn lower_catalogue_query(cx: &mut LoweringCtx) -> Result<(), CompileError> {
         ..
     } = &cx.node.data
     else {
-        unreachable!("lower_catalogue_query on non-AutomatedStep node")
+        unreachable!("lower_engine_effect on non-AutomatedStep node")
     };
     let label = label.clone();
     let backend_type = execution_spec.backend_type;
+
+    let descriptor = effects::builtin_by_id(handler).ok_or_else(|| {
+        CompileError::Compilation(format!(
+            "engine-effect lowering: handler '{handler}' (declared by {backend_type:?}) is not a registered builtin"
+        ))
+    })?;
+    let input_port = descriptor.default_input_port;
+    let output_port = descriptor.default_output_port;
 
     let (mut query_token, _no_inputs) =
         crate::compiler::backend_configs::validate_and_transform(
@@ -1432,27 +1456,29 @@ fn lower_catalogue_query(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     let p_error: PlaceHandle<DynamicToken> =
         ctx.state(format!("p_{id}_error"), format!("{label} - Error"));
 
-    // Build the query token from the (validated) editor config. The inbound
-    // workflow token is consumed but not used — the query is authored, not
-    // data-driven, in v1.
+    // Build the effect-input token from the (validated) editor config. The
+    // inbound workflow token is consumed but not used — engine-effect
+    // backends are authored, not data-driven, in v1.
     ctx.transition(
         format!("t_{id}_q_build"),
         format!("{label} - Build Query"),
     )
     .auto_input("input", &p_input)
-    .auto_output("query", &p_query)
+    .auto_output(input_port, &p_query)
     // The inbound token is consumed by the arc; the query is authored, not
     // data-driven (v1), so the logic ignores `input` and emits the token.
-    .logic(format!("#{{ query: {query_rhai} }}"));
+    .logic(format!("#{{ {input_port}: {query_rhai} }}"));
 
-    // Fire the registered catalogue_lookup effect (input "query" → "results").
+    // Fire the registered builtin effect (input `<input_port>` →
+    // `<output_port>`). For catalogue_query this is
+    // `catalogue_lookup` with `query` → `results`.
     ctx.transition(
         format!("t_{id}_lookup"),
         format!("{label} - Catalogue Lookup"),
     )
-    .auto_input("query", &p_query)
-    .auto_output("results", &p_output)
-    .builtin_effect(&effects::CATALOGUE_LOOKUP);
+    .auto_input(input_port, &p_query)
+    .auto_output(output_port, &p_output)
+    .builtin_effect(descriptor);
 
     let (data_place_id, p_ctrl) = split_outputs(ctx, &id, &label, &p_output);
     cx.ports.insert(
