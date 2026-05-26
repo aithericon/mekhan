@@ -53,11 +53,7 @@ resource "zitadel_application_oidc" "spa" {
   version  = "OIDC_VERSION_1_0"
   dev_mode = false
 
-  # mekhan's BFF JWT-verifies the access token in
-  # service/src/auth/bff/handlers.rs:167 using ZitadelTokenVerifier. That
-  # path requires a signed JWT — opaque (BEARER) tokens base64-fail the
-  # header decode. Keep this on _JWT unless you also rewrite the verifier
-  # to introspect opaque tokens via /oauth/v2/introspect.
+
   access_token_type = "OIDC_TOKEN_TYPE_JWT"
 
   id_token_role_assertion     = true
@@ -71,27 +67,7 @@ resource "zitadel_application_oidc" "spa" {
 # Mekhan's "Profile → Access tokens" UI mints machine-user PATs that CI clients
 # (`mekhan apply`, `MEKHAN_CLI_TOKEN`) present as `Authorization: Bearer …`.
 # Zitadel is the sole source of truth — Mekhan stores no token state itself.
-#
-# Two independently gated moving parts, both provisioned below:
-#
-#   1. Introspection app (zitadel_application_api below) — Mekhan calls
-#      Zitadel's RFC 7662 /oauth/v2/introspect endpoint to validate presented
-#      Bearer tokens, authenticated as this confidential API app via HTTP
-#      Basic. clientId/clientSecret flow into MEKHAN__AUTH__INTROSPECTION_*.
-#
-#   2. Token broker (machine user + ORG_OWNER + PAT below) — when a logged-in
-#      human clicks "Create token", Mekhan impersonates this service user to
-#      create one Zitadel machine user per token and mint a PAT on it.
-#      ORG_OWNER is required to create/delete machine users in the org.
-#      The PAT secret flows into MEKHAN__AUTH__BROKER_PAT.
-#
-# Both apps live inside the same `zitadel_project.mekhan` so role assertion
-# and project scope match the SPA's OIDC flow.
-#
-# Secret lifecycle — the two `*_secret` / `token` attributes are returned
-# ONCE by Zitadel at create-time and captured in tfstate. Re-applying never
-# re-derives them. To rotate either, `tofu taint` the resource and re-apply;
-# downstream consumers (the Nomad job) will roll on the new value.
+
 # =============================================================================
 
 # Confidential API app — credentials Mekhan uses to authenticate to Zitadel's

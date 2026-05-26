@@ -139,19 +139,10 @@ job "mekhan-service" {
         }
       }
 
-      # NATS user credentials, rendered from Vault at alloc-start. The bundle
-      # is provisioned by deploy/dev/scripts/generate-nats-user.sh (run once
-      # in CI before first apply, re-run to rotate) and lives at
-      # secret/nats/apps/mekhan/dev/worker.
-      # change_mode=restart so a creds rotation cycles the task automatically.
+
       template {
         destination = "secrets/nats.creds"
         change_mode = "restart"
-        # 0644 not 0600 — Nomad's template runs as root on the client; the
-        # container task user (UID 1000, per Dockerfile.service.prebuilt)
-        # can't read root-owned 0600 files. The alloc's secrets dir is
-        # already private (mounted only into this task's namespace) so
-        # world-readable inside the container is fine.
         perms       = "0644"
         data        = <<-EOH
 {{- with secret "secret/data/nats/apps/mekhan/dev/worker" -}}
@@ -176,24 +167,10 @@ EOH
         MEKHAN__AUTH__CLIENT_ID    = "${auth_client_id}"
         MEKHAN__AUTH__AUDIENCE     = "${auth_audience}"
         MEKHAN__AUTH__REDIRECT_URI = "${auth_redirect_uri}"
-        # Used by handlers.rs for both the post-login bounce AND the
-        # `post_logout_redirect_uri` mekhan hands to Zitadel's end_session
-        # endpoint. The latter requires an exact match with one of the
-        # post_logout_redirect_uris we registered (see zitadel.tf), and
-        # Zitadel only allows absolute URLs — so we override the default `/`.
         MEKHAN__AUTH__POST_LOGIN_REDIRECT = "${auth_post_login_redirect}"
-        # PAT feature credentials (provisioned by zitadel.tf). All three must
-        # be set together: without the introspection pair, Bearer PATs from
-        # `mekhan apply` 401; without broker_pat, /api/auth/tokens 503s and
-        # the SPA hides the Profile → Access tokens section.
         MEKHAN__AUTH__INTROSPECTION_CLIENT_ID     = "${auth_introspection_client_id}"
         MEKHAN__AUTH__INTROSPECTION_CLIENT_SECRET = "${auth_introspection_client_secret}"
         MEKHAN__AUTH__BROKER_PAT                  = "${auth_broker_pat}"
-        # Seed the built-in demo templates baked into the image at /app/demos
-        # (Dockerfile.service.prebuilt COPYs the demos/ folder + ENV sets
-        # MEKHAN__DEMOS__DIR=/app/demos). Seeder runs once on startup before
-        # the HTTP listener accepts requests; idempotent by templateId, so
-        # leaving this true across redeploys is safe.
         MEKHAN__DEMOS__SEED        = "true"
         # Vault — VaultResourceStore writes resource version secrets to
         # secret/data/aithericon/resources/{ws}/{rid}/v{n}. Nomad's `vault {}`
