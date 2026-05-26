@@ -2,20 +2,18 @@
 	import type { AutomatedStepNodeData, ExecutionBackendType } from '$lib/types/editor';
 	import type { components } from '$lib/api/schema';
 	import type { ScopeEntry } from '$lib/editor/guard-scope';
+	import { onMount } from 'svelte';
 	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
 	import RotateCcw from '@lucide/svelte/icons/rotate-ccw';
-	import PythonConfigPanel from './automated/PythonConfigPanel.svelte';
-	import DockerConfigPanel from './automated/DockerConfigPanel.svelte';
-	import ProcessConfigPanel from './automated/ProcessConfigPanel.svelte';
-	import HttpConfigPanel from './automated/HttpConfigPanel.svelte';
-	import LlmConfigPanel from './automated/LlmConfigPanel.svelte';
-	import FileOpsConfigPanel from './automated/FileOpsConfigPanel.svelte';
-	import KreuzbergConfigPanel from './automated/KreuzbergConfigPanel.svelte';
-	import SmtpConfigPanel from './automated/SmtpConfigPanel.svelte';
-	import CatalogueQueryConfigPanel from './automated/CatalogueQueryConfigPanel.svelte';
 	import PortsSection from './PortsSection.svelte';
 	import { defaultOutputPort, emptyOutputPort } from '$lib/editor/automated-ports';
+	import {
+		backendList,
+		getCachedBackend,
+		loadBackends
+	} from '$lib/editor/backend-registry.svelte';
+	import { BACKEND_PANELS } from '$lib/editor/backend-panels';
 	import { GPU_JOB_TEMPLATES } from '$lib/editor/deployment-targets';
 	import { FormField } from '$lib/components/ui/form-field';
 	import type { YjsGraphBinding } from '$lib/yjs/graph-binding.svelte';
@@ -42,7 +40,19 @@
 		scope = []
 	}: Props = $props();
 
+	// Registry is loaded once in +layout.svelte; this is a safety net for
+	// direct deep-links to editor routes that mount before the layout
+	// finishes its onMount.
+	onMount(() => {
+		loadBackends().catch(() => {
+			/* descriptors render empty; user sees a Loading… placeholder */
+		});
+	});
+
 	const outputPort = $derived<Port>(data.output ?? emptyOutputPort());
+	const backends = $derived(backendList());
+	const currentBackend = $derived(getCachedBackend(data.executionSpec.backendType));
+	const CurrentPanel = $derived(BACKEND_PANELS[data.executionSpec.backendType]);
 
 	function handleOutputPortChange(port: Port) {
 		onchange({ ...data, output: port });
@@ -52,51 +62,22 @@
 		onchange({ ...data, output: defaultOutputPort(data.executionSpec.backendType) });
 	}
 
-	const defaultConfigs: Record<ExecutionBackendType, Record<string, unknown>> = {
-		python: { python: 'python3', requirements: [], virtualenv: false, sdk: true, inherit_env: true, env: {} },
-		docker: { image: '', env: {} },
-		process: { command: '', args: [] },
-		http: { method: 'GET', url: '' },
-		llm: { provider: 'openai', model: '', prompt: '' },
-		file_ops: { operation: 'stat', path: '', storage: { backend: 'local', endpoint: '' } },
-		kreuzberg: { mode: 'single' },
-		smtp: {
-			resource_alias: '',
-			to: [],
-			cc: [],
-			bcc: [],
-			subject: { label: 'subject.tera', source: 'Hello {{ intake.name }}' },
-			body_text: { label: 'body.txt.tera', source: 'Hi {{ intake.name }},\n\nThanks!\n' },
-			attachments: [],
-			dry_run: false,
-			vars: {}
-		},
-		catalogue_query: { category: '', limit: 50 }
-	};
-
-	const backendLabels: Record<ExecutionBackendType, string> = {
-		python: 'Python',
-		process: 'Process',
-		docker: 'Docker',
-		http: 'HTTP Request',
-		llm: 'LLM (AI Model)',
-		file_ops: 'File Operations',
-		kreuzberg: 'Document Extraction',
-		smtp: 'SMTP (Email)',
-		catalogue_query: 'Catalogue Query'
-	};
-
-	function isExecutionBackendType(v: string): v is ExecutionBackendType {
-		return v in backendLabels;
-	}
-
 	function handleBackendTypeChange(backendType: ExecutionBackendType) {
+		const decl = getCachedBackend(backendType);
+		// Registry-supplied seed config. If the descriptor hasn't loaded
+		// yet (rare — see onMount), fall back to an empty object; the user
+		// can fill in fields manually until the panel renders.
+		const defaultConfig =
+			(decl?.defaultEditorConfig as Record<string, unknown> | undefined) ?? {};
 		onchange({
 			...data,
 			executionSpec: {
 				backendType,
-				entrypoint: backendType === 'python' ? (data.executionSpec.entrypoint ?? 'main.py') : data.executionSpec.entrypoint,
-				config: defaultConfigs[backendType]
+				entrypoint:
+					backendType === 'python'
+						? (data.executionSpec.entrypoint ?? 'main.py')
+						: data.executionSpec.entrypoint,
+				config: defaultConfig
 			}
 		});
 	}
@@ -115,6 +96,10 @@
 		});
 	}
 
+	function isExecutionBackendType(v: string): v is ExecutionBackendType {
+		return backends.some((b) => b.name === v);
+	}
+
 	// Deployment model — inline (executor lifecycle) vs scheduled (scheduler-net,
 	// Nomad/Slurm GPU). Optional-chained so legacy templates (no field) render
 	// as inline; Rust `#[serde(default)]` covers the wire side.
@@ -122,6 +107,9 @@
 	const jobTemplate = $derived(
 		data.deploymentModel?.mode === 'scheduled' ? data.deploymentModel.jobTemplate : ''
 	);
+	// Hide the Scheduled toggle for backends the registry marks
+	// non-schedulable (engine effects — catalogue_query today).
+	const allowScheduled = $derived(currentBackend?.schedulable ?? true);
 
 	function setDeploymentMode(mode: string) {
 		onchange({
@@ -146,28 +134,24 @@
 	<Select.Root
 		type="single"
 		value={data.executionSpec.backendType}
-		onValueChange={(v) => { if (v && isExecutionBackendType(v)) handleBackendTypeChange(v); }}
+		onValueChange={(v) => {
+			if (v && isExecutionBackendType(v)) handleBackendTypeChange(v);
+		}}
 		disabled={readonly}
 	>
 		<Select.Trigger disabled={readonly}>
-			{backendLabels[data.executionSpec.backendType] ?? data.executionSpec.backendType}
+			{currentBackend?.displayName ?? data.executionSpec.backendType}
 		</Select.Trigger>
 		<Select.Content>
-			<Select.Item value="python" label="Python" />
-			<Select.Item value="process" label="Process" />
-			<Select.Item value="docker" label="Docker" />
-			<Select.Item value="http" label="HTTP Request" />
-			<Select.Item value="llm" label="LLM (AI Model)" />
-			<Select.Item value="file_ops" label="File Operations" />
-			<Select.Item value="kreuzberg" label="Document Extraction" />
-			<Select.Item value="smtp" label="SMTP (Email)" />
-			<Select.Item value="catalogue_query" label="Catalogue Query" />
+			{#each backends as b (b.name)}
+				<Select.Item value={b.name} label={b.displayName} />
+			{/each}
 		</Select.Content>
 	</Select.Root>
 </div>
 
-{#if data.executionSpec.backendType === 'python'}
-	<PythonConfigPanel
+{#if CurrentPanel}
+	<CurrentPanel
 		config={data.executionSpec.config as Record<string, unknown>}
 		entrypoint={data.executionSpec.entrypoint ?? 'main.py'}
 		{readonly}
@@ -176,77 +160,60 @@
 		{binding}
 		{nodeId}
 		{templateId}
-	/>
-{:else if data.executionSpec.backendType === 'docker'}
-	<DockerConfigPanel config={data.executionSpec.config as Record<string, unknown>} {readonly} onchange={handleConfigChange} />
-{:else if data.executionSpec.backendType === 'process'}
-	<ProcessConfigPanel config={data.executionSpec.config as Record<string, unknown>} {readonly} onchange={handleConfigChange} />
-{:else if data.executionSpec.backendType === 'http'}
-	<HttpConfigPanel
-		config={data.executionSpec.config as Record<string, unknown>}
-		{readonly}
-		onchange={handleConfigChange}
-		{binding}
-		{nodeId}
-		{templateId}
 		{scope}
 	/>
-{:else if data.executionSpec.backendType === 'llm'}
-	<LlmConfigPanel config={data.executionSpec.config as Record<string, unknown>} {readonly} onchange={handleConfigChange} {scope} />
-{:else if data.executionSpec.backendType === 'file_ops'}
-	<FileOpsConfigPanel config={data.executionSpec.config as Record<string, unknown>} {readonly} onchange={handleConfigChange} />
-{:else if data.executionSpec.backendType === 'kreuzberg'}
-	<KreuzbergConfigPanel config={data.executionSpec.config as Record<string, unknown>} {readonly} onchange={handleConfigChange} {scope} />
-{:else if data.executionSpec.backendType === 'smtp'}
-	<SmtpConfigPanel config={data.executionSpec.config as Record<string, unknown>} {readonly} onchange={handleConfigChange} {scope} />
-{:else if data.executionSpec.backendType === 'catalogue_query'}
-	<CatalogueQueryConfigPanel config={data.executionSpec.config as Record<string, unknown>} {readonly} onchange={handleConfigChange} />
 {/if}
 
 <div class="space-y-2 pt-3 border-t border-border/40">
 	<span class="text-sm font-medium text-muted-foreground">Deployment</span>
-	<Select.Root
-		type="single"
-		value={deploymentMode}
-		onValueChange={(v) => {
-			if (v) setDeploymentMode(v);
-		}}
-		disabled={readonly}
-	>
-		<Select.Trigger disabled={readonly} data-testid="select-deployment-model">
-			{deploymentMode === 'scheduled'
-				? 'Scheduled (Nomad/Slurm, GPU)'
-				: 'Inline (immediate)'}
-		</Select.Trigger>
-		<Select.Content>
-			<Select.Item value="inline" label="Inline (immediate)" />
-			<Select.Item value="scheduled" label="Scheduled (Nomad/Slurm, GPU)" />
-		</Select.Content>
-	</Select.Root>
-	{#if deploymentMode === 'scheduled'}
-		<FormField label="Job template" for="deployment-job-template">
-			<Select.Root
-				type="single"
-				value={jobTemplate}
-				onValueChange={(v) => {
-					if (v) setJobTemplate(v);
-				}}
-				disabled={readonly}
-			>
-				<Select.Trigger disabled={readonly} data-testid="select-job-template">
-					{GPU_JOB_TEMPLATES.find((t) => t.value === jobTemplate)?.label ??
-						(jobTemplate || 'Select a job template…')}
-				</Select.Trigger>
-				<Select.Content>
-					{#each GPU_JOB_TEMPLATES as t (t.value)}
-						<Select.Item value={t.value} label={t.label} />
-					{/each}
-				</Select.Content>
-			</Select.Root>
-		</FormField>
+	{#if allowScheduled}
+		<Select.Root
+			type="single"
+			value={deploymentMode}
+			onValueChange={(v) => {
+				if (v) setDeploymentMode(v);
+			}}
+			disabled={readonly}
+		>
+			<Select.Trigger disabled={readonly} data-testid="select-deployment-model">
+				{deploymentMode === 'scheduled'
+					? 'Scheduled (Nomad/Slurm, GPU)'
+					: 'Inline (immediate)'}
+			</Select.Trigger>
+			<Select.Content>
+				<Select.Item value="inline" label="Inline (immediate)" />
+				<Select.Item value="scheduled" label="Scheduled (Nomad/Slurm, GPU)" />
+			</Select.Content>
+		</Select.Root>
+		{#if deploymentMode === 'scheduled'}
+			<FormField label="Job template" for="deployment-job-template">
+				<Select.Root
+					type="single"
+					value={jobTemplate}
+					onValueChange={(v) => {
+						if (v) setJobTemplate(v);
+					}}
+					disabled={readonly}
+				>
+					<Select.Trigger disabled={readonly} data-testid="select-job-template">
+						{GPU_JOB_TEMPLATES.find((t) => t.value === jobTemplate)?.label ??
+							(jobTemplate || 'Select a job template…')}
+					</Select.Trigger>
+					<Select.Content>
+						{#each GPU_JOB_TEMPLATES as t (t.value)}
+							<Select.Item value={t.value} label={t.label} />
+						{/each}
+					</Select.Content>
+				</Select.Root>
+			</FormField>
+			<p class="text-sm text-muted-foreground">
+				Submitted through the scheduler-net, which owns queueing, GPU
+				allocation and retry/backoff.
+			</p>
+		{/if}
+	{:else}
 		<p class="text-sm text-muted-foreground">
-			Submitted through the scheduler-net, which owns queueing, GPU
-			allocation and retry/backoff.
+			Inline only — this backend runs as an engine effect.
 		</p>
 	{/if}
 </div>
