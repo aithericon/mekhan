@@ -510,9 +510,16 @@ pub fn splice_resources_into_air(
 }
 
 /// Build `let __resources = #{ "name": #{ ... }, ... };` from the resolver's
-/// JSON envelope. Public fields are emitted as their literal JSON form;
-/// secret-template strings remain strings (the existing `extract_secret_keys`
-/// regex picks them up at executor stage time).
+/// JSON envelope. Public fields are emitted as Rhai literals; secret-template
+/// strings remain strings (the executor's `extract_secret_keys` regex picks
+/// them up at staging time).
+///
+/// Optional fields that the user didn't set arrive here as `JsonValue::Null`
+/// (the resolver inlines null for every declared `public_fields` slot — see
+/// `resolve_one`'s loop). Rhai has no `null` keyword, so we drop null
+/// **object fields** entirely (matches `Option::None` / serde
+/// `skip_serializing_if` semantics) and emit Rhai's unit `()` in array
+/// positions where null can't simply be removed without shifting indices.
 fn build_resources_decl(envelope: &JsonValue, names: &[&str]) -> String {
     let JsonValue::Object(top) = envelope else {
         return String::new();
@@ -527,8 +534,19 @@ fn build_resources_decl(envelope: &JsonValue, names: &[&str]) -> String {
         };
         let mut field_entries: Vec<String> = Vec::with_capacity(subtree_obj.len());
         for (k, v) in subtree_obj {
-            let v_lit = serde_json::to_string(v).unwrap_or_else(|_| "()".to_string());
-            field_entries.push(format!("\"{}\": {}", escape_rhai_key(k), v_lit));
+            if v.is_null() {
+                // Drop unset optional fields. Downstream readers (LLM
+                // overlay_resource, Python AccessibleDict) treat missing
+                // and null identically; emitting them as a Rhai literal
+                // would crash the prepare transition with "'null' is a
+                // reserved keyword" at parse time.
+                continue;
+            }
+            field_entries.push(format!(
+                "\"{}\": {}",
+                escape_rhai_key(k),
+                json_to_rhai_literal(v),
+            ));
         }
         entries.push(format!(
             "\"{name}\": #{{ {body} }}",
@@ -540,6 +558,38 @@ fn build_resources_decl(envelope: &JsonValue, names: &[&str]) -> String {
         return String::new();
     }
     format!("let __resources = #{{ {} }};", entries.join(", "))
+}
+
+/// Render a `JsonValue` as a Rhai-parseable literal.
+///
+/// JSON and Rhai share syntax for booleans, numbers, strings, and arrays —
+/// the only divergence is `null` (which Rhai spells `()`). For object fields
+/// `build_resources_decl` filters nulls before calling here; this function
+/// only sees nulls inside nested arrays / objects, where it emits `()` so the
+/// surrounding positions stay correct.
+fn json_to_rhai_literal(v: &JsonValue) -> String {
+    match v {
+        JsonValue::Null => "()".to_string(),
+        JsonValue::Bool(b) => b.to_string(),
+        JsonValue::Number(n) => n.to_string(),
+        JsonValue::String(s) => {
+            serde_json::to_string(s).unwrap_or_else(|_| "\"\"".to_string())
+        }
+        JsonValue::Array(items) => {
+            let parts: Vec<String> = items.iter().map(json_to_rhai_literal).collect();
+            format!("[{}]", parts.join(", "))
+        }
+        JsonValue::Object(obj) => {
+            let entries: Vec<String> = obj
+                .iter()
+                .filter(|(_, v)| !v.is_null())
+                .map(|(k, v)| {
+                    format!("\"{}\": {}", escape_rhai_key(k), json_to_rhai_literal(v))
+                })
+                .collect();
+            format!("#{{ {} }}", entries.join(", "))
+        }
+    }
 }
 
 fn escape_rhai_key(s: &str) -> String {
@@ -573,6 +623,49 @@ mod splice_tests {
     fn build_resources_decl_empty_envelope_is_empty() {
         let env = json!({});
         assert_eq!(build_resources_decl(&env, &["local_pg"]), "");
+    }
+
+    /// Optional public fields the user left blank arrive at the resolver as
+    /// `JsonValue::Null` (see `resolve_one`'s `else` branch). They MUST NOT
+    /// be emitted as the literal `null` — Rhai has no `null` keyword and
+    /// parsing the prepare transition would fail with
+    /// `'null' is a reserved keyword`. Real-world trigger: an `openai`
+    /// resource bound to an LLM step where `organization` is left blank.
+    #[test]
+    fn build_resources_decl_skips_null_object_fields() {
+        let env = json!({
+            "openai_prod": {
+                "api_key": "{{secret:aithericon/resources/x/v1#api_key}}",
+                "organization": null,
+                "base_url": null,
+            }
+        });
+        let decl = build_resources_decl(&env, &["openai_prod"]);
+        assert!(
+            !decl.contains("null"),
+            "no `null` literal must escape into the Rhai source: {decl}"
+        );
+        assert!(decl.contains("\"api_key\":"));
+        assert!(!decl.contains("\"organization\""));
+        assert!(!decl.contains("\"base_url\""));
+    }
+
+    /// Nested null elements inside arrays cannot be dropped without shifting
+    /// indices, so they round-trip as Rhai's unit `()`.
+    #[test]
+    fn json_to_rhai_literal_array_nulls_become_unit() {
+        let v = json!([1, null, "x", null]);
+        assert_eq!(json_to_rhai_literal(&v), "[1, (), \"x\", ()]");
+    }
+
+    /// Nested object nulls follow the same drop rule as top-level.
+    #[test]
+    fn json_to_rhai_literal_nested_object_nulls_dropped() {
+        let v = json!({"outer": {"set": "v", "unset": null}});
+        let s = json_to_rhai_literal(&v);
+        assert!(s.contains("\"set\": \"v\""));
+        assert!(!s.contains("\"unset\""));
+        assert!(!s.contains("null"));
     }
 
     #[test]
