@@ -22,6 +22,17 @@ pub struct WorkflowInstance {
     /// state, and stays NULL for workflows with no result binding.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result: Option<serde_json::Value>,
+    /// Categorizes the instance. `live` (default) is a production run.
+    /// `draft` is a user-initiated experimental run hidden from default
+    /// list views. `test_run` is spawned by the template-test runner.
+    pub mode: String,
+    /// Set when `mode = 'test_run'`: the test this instance is running.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub test_id: Option<Uuid>,
+    /// Set when a test was promoted from this instance — points back at the
+    /// instance whose event log seeded the test's fixture. Audit-only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_instance_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -67,6 +78,8 @@ pub struct InstanceListItem {
     pub current_step: Option<String>,
     pub metadata: serde_json::Value,
     pub template_name: String,
+    pub mode: String,
+    pub test_id: Option<Uuid>,
 }
 
 // --- API request/response types ---
@@ -99,6 +112,10 @@ pub struct CreateInstanceRequest {
     /// driven solely by `start_tokens`.
     #[serde(default)]
     pub metadata: Option<serde_json::Value>,
+    /// `live` (default) | `draft` | `test_run`. `test_run` is reserved for
+    /// the test runner — callers requesting it directly are rejected.
+    #[serde(default)]
+    pub mode: Option<String>,
 }
 
 #[derive(Debug, Deserialize, ToSchema, utoipa::IntoParams)]
@@ -109,6 +126,10 @@ pub struct ListInstancesQuery {
     pub per_page: i64,
     pub template_id: Option<Uuid>,
     pub status: Option<String>,
+    /// Filter by `mode`. Default behavior when omitted is to return only
+    /// `live` instances; pass `mode=any` to include drafts and test runs,
+    /// or `mode=draft` / `mode=test_run` to scope explicitly.
+    pub mode: Option<String>,
 }
 
 fn default_page() -> i64 {

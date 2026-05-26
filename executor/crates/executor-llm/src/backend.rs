@@ -228,13 +228,41 @@ impl ExecutionBackend for LlmBackend {
                             }
                         }
 
-                        // Fallback: any declared output that still wasn't filled
-                        // gets the whole response_value. Keeps single-output and
-                        // non-structured shapes (free-text completions) working
-                        // unchanged.
+                        // Two fallbacks for declared outputs the per-key
+                        // unpack didn't fill:
+                        //
+                        //   - REQUIRED outputs get the whole
+                        //     `response_value`. Keeps single-output and
+                        //     non-structured shapes (free-text
+                        //     completions) working — a `prompt:
+                        //     "summarize this"` step with one declared
+                        //     `response` field would otherwise emit
+                        //     `outputs = {}` and the required-output
+                        //     check would fail.
+                        //
+                        //   - OPTIONAL outputs get `null`. The LLM
+                        //     legitimately leaves them missing when the
+                        //     response_format schema marks them
+                        //     omittable (e.g. `document_date` on a
+                        //     doc-classifier when the doc doesn't carry
+                        //     one). Filling with the full response
+                        //     object produces a typed-port mismatch
+                        //     downstream; OMITTING them makes downstream
+                        //     Python code that reads `classify.field`
+                        //     raise `AttributeError`. `null` is the
+                        //     Python-idiomatic middle ground — the
+                        //     parked envelope keeps the key, slug.field
+                        //     access returns `None`, and the engine's
+                        //     scalar schemas (see `TokenShape::to_json_schema`)
+                        //     allow null on declared scalars.
                         for decl in &run_context.spec.outputs {
                             if !outputs.contains_key(&decl.name) {
-                                outputs.insert(decl.name.clone(), response_value.clone());
+                                let v = if decl.required {
+                                    response_value.clone()
+                                } else {
+                                    serde_json::Value::Null
+                                };
+                                outputs.insert(decl.name.clone(), v);
                             }
                         }
 

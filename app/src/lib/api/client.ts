@@ -58,6 +58,19 @@ export type CompileRequest = components['schemas']['CompileRequest'];
 export type PaginatedTemplateResponse =
 	components['schemas']['PaginatedResponse_WorkflowTemplate'];
 
+// ─── Template tests ─────────────────────────────────────────────────────────
+export type TemplateTest = components['schemas']['TemplateTest'];
+export type TemplateTestRun = components['schemas']['TemplateTestRun'];
+export type Assertion = components['schemas']['Assertion'];
+export type AssertOp = components['schemas']['AssertOp'];
+export type CreateTemplateTestRequest =
+	components['schemas']['CreateTemplateTestRequest'];
+export type UpdateTemplateTestRequest =
+	components['schemas']['UpdateTemplateTestRequest'];
+export type RunAllResponse = components['schemas']['RunAllResponse'];
+export type FailingTestInfo = components['schemas']['FailingTestInfo'];
+export type PromoteToTestRequest = components['schemas']['PromoteToTestRequest'];
+
 // ─── Workflow graph (saved template body) ───────────────────────────────────
 export type WorkflowGraph = components['schemas']['WorkflowGraph'];
 export type WorkflowNode = components['schemas']['WorkflowNode'];
@@ -209,18 +222,44 @@ export class CompileApiError extends Error {
 	}
 }
 
-export async function publishTemplate(id: string): Promise<Template> {
+/// Thrown when the publish gate (412) blocks a publish because tests are
+/// failing or stale. The editor catches this to render the gate modal with
+/// per-test detail.
+export class PublishGateError extends Error {
+	readonly failingTests: FailingTestInfo[];
+	constructor(message: string, failingTests: FailingTestInfo[]) {
+		super(message);
+		this.name = 'PublishGateError';
+		this.failingTests = failingTests;
+	}
+}
+
+export async function publishTemplate(id: string, force = false): Promise<Template> {
+	// Coerce explicitly: callers that wire this as a DOM event handler
+	// (e.g. `onclick={() => publishTemplate(id)}`) may accidentally let an
+	// Event object land here. openapi-fetch's default querySerializer
+	// rejects non-primitive query values with the unhelpful
+	// "Deeply-nested arrays/objects aren't supported".
+	const forceBool = force === true;
 	const res = await client.POST('/api/templates/{id}/publish', {
-		params: { path: { id } }
+		params: { path: { id }, query: { force: forceBool } }
 	});
 	const rawErr = res.error as unknown;
 	if (rawErr !== undefined) {
-		// Try to surface a structured compile failure so the editor can
-		// highlight inline. Fall back to a generic Error otherwise.
+		// Three failure modes to disentangle from the same `error` shape:
+		// 412 → test gate (has `failing_tests`); 400 with compile_errors → compiler;
+		// anything else → generic.
 		const body = rawErr as {
 			error?: string;
 			compile_errors?: CompileErrorView[] | null;
+			failing_tests?: FailingTestInfo[] | null;
 		};
+		if (res.response.status === 412 && Array.isArray(body.failing_tests)) {
+			throw new PublishGateError(
+				body.error ?? 'template tests failing',
+				body.failing_tests
+			);
+		}
 		if (body && Array.isArray(body.compile_errors) && body.compile_errors.length > 0) {
 			throw new CompileApiError(body.error ?? 'compilation failed', body.compile_errors);
 		}
@@ -228,6 +267,97 @@ export async function publishTemplate(id: string): Promise<Template> {
 		throw new Error(`API error ${res.response.status}: ${detail}`);
 	}
 	return res.data as Template;
+}
+
+// ── Template tests ──────────────────────────────────────────────────────────
+
+export async function listTemplateTests(templateId: string): Promise<TemplateTest[]> {
+	return unwrap(
+		await client.GET('/api/templates/{id}/tests', { params: { path: { id: templateId } } })
+	);
+}
+
+export async function createTemplateTest(
+	templateId: string,
+	body: CreateTemplateTestRequest
+): Promise<TemplateTest> {
+	return unwrap(
+		await client.POST('/api/templates/{id}/tests', {
+			params: { path: { id: templateId } },
+			body
+		})
+	);
+}
+
+export async function updateTemplateTest(
+	templateId: string,
+	testId: string,
+	body: UpdateTemplateTestRequest
+): Promise<TemplateTest> {
+	return unwrap(
+		await client.PATCH('/api/templates/{template_id}/tests/{test_id}', {
+			params: { path: { template_id: templateId, test_id: testId } },
+			body
+		})
+	);
+}
+
+export async function deleteTemplateTest(templateId: string, testId: string): Promise<void> {
+	const res = await client.DELETE('/api/templates/{template_id}/tests/{test_id}', {
+		params: { path: { template_id: templateId, test_id: testId } }
+	});
+	if (res.error !== undefined && res.response.status >= 400) {
+		throw new Error(`API error ${res.response.status}: ${JSON.stringify(res.error)}`);
+	}
+}
+
+export async function runTemplateTest(
+	templateId: string,
+	testId: string
+): Promise<TemplateTestRun> {
+	return unwrap(
+		await client.POST('/api/templates/{template_id}/tests/{test_id}/run', {
+			params: { path: { template_id: templateId, test_id: testId } }
+		})
+	);
+}
+
+export async function runAllTemplateTests(
+	templateId: string,
+	includeDisabled = false
+): Promise<RunAllResponse> {
+	return unwrap(
+		await client.POST('/api/templates/{id}/tests/run-all', {
+			params: { path: { id: templateId }, query: { include_disabled: includeDisabled } }
+		})
+	);
+}
+
+export async function listTestRuns(
+	templateId: string,
+	testId: string,
+	limit = 10
+): Promise<TemplateTestRun[]> {
+	return unwrap(
+		await client.GET('/api/templates/{template_id}/tests/{test_id}/runs', {
+			params: {
+				path: { template_id: templateId, test_id: testId },
+				query: { limit }
+			}
+		})
+	);
+}
+
+export async function promoteInstanceToTest(
+	instanceId: string,
+	body: PromoteToTestRequest
+): Promise<TemplateTest> {
+	return unwrap(
+		await client.POST('/api/instances/{id}/promote-to-test', {
+			params: { path: { id: instanceId } },
+			body
+		})
+	);
 }
 
 export async function createNewVersion(id: string): Promise<Template> {
@@ -321,6 +451,9 @@ export async function listInstances(opts?: {
 	perPage?: number;
 	templateId?: string;
 	status?: string;
+	/// `'live'` (the default), `'draft'`, `'test_run'`, or `'any'` to include
+	/// every mode. Omitting hides drafts and test runs.
+	mode?: string;
 }): Promise<components['schemas']['PaginatedResponse_InstanceListItem']> {
 	return unwrap(
 		await client.GET('/api/instances', {
@@ -329,7 +462,8 @@ export async function listInstances(opts?: {
 					page: opts?.page ?? 1,
 					per_page: opts?.perPage ?? 20,
 					template_id: opts?.templateId,
-					status: opts?.status
+					status: opts?.status,
+					mode: opts?.mode
 				}
 			}
 		})

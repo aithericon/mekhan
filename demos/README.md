@@ -54,7 +54,7 @@ capstone that ties them together.
 | 04 | `04-loop-counter/` | Loop with body wired through `body_in` / `body_out`. Stop condition lives in `loopCondition`. |
 | 05 | `05-parallel-fanout/` | ParallelSplit fans two AutomatedSteps; ParallelJoin merges them back. |
 | 06 | `06-subworkflow/` | Flow-in-flow: parent embeds `01-hello-world` via a `sub_workflow` node + `inputMapping`. |
-| 07 | `07-ocr-classify-extract/` | LLM + Kreuzberg consume upstream-producer fields via `{{ <slug>.<field> }}` placeholders — same convention HumanTask uses. Start uploads a PDF, Kreuzberg reads `{{ start.document }}`, LLM classifier reads `{{ extract_text.full_text }}`. |
+| 07 | `07-ocr-classify-extract/` | LLM + Kreuzberg consume upstream-producer fields via `{{ <slug>.<field> }}` placeholders — same convention HumanTask uses. Start uploads a PDF, Kreuzberg reads `{{ start.document }}`, LLM classifier reads `{{ extract_text.content }}` (kreuzberg's native ExtractionResult key — declarations match 1:1, no remap). |
 | ★ | `invoice-processing/` | Capstone: trigger → human review → Python extract → decision → scope[split + join] → end. Exercises every editor node type plus direct slug access in Python. |
 
 The seeder loads directories in lexical order, so `01-` … `06-` seed

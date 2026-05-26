@@ -2695,6 +2695,7 @@ dependencies = [
  "petri-application",
  "petri-domain",
  "rand 0.8.6",
+ "regex",
  "reqwest",
  "rhai",
  "schemars",

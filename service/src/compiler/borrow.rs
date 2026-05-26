@@ -225,6 +225,7 @@ pub(crate) fn apply_borrows(
     interfaces: &InterfaceRegistry,
     graph: &WorkflowGraph,
     borrows: Vec<Borrow>,
+    node_configs: &mut HashMap<String, serde_json::Value>,
 ) {
     let mut guards: Vec<Borrow> = Vec::new();
     let mut python: HashMap<String, Vec<Borrow>> = HashMap::new();
@@ -257,7 +258,7 @@ pub(crate) fn apply_borrows(
         apply_human_task_borrows(scenario, interfaces, consumer, group);
     }
     for (consumer, group) in &backend {
-        apply_backend_borrows(scenario, interfaces, graph, consumer, group);
+        apply_backend_borrows(scenario, interfaces, graph, consumer, group, node_configs);
     }
 
     strip_borrow_markers(scenario);
@@ -446,7 +447,32 @@ fn apply_human_task_borrows(
             let Some(var) = wire_read_arc(t, &b.producer_node, interfaces, true) else {
                 continue;
             };
-            let replacement = format!(r#"__pluck({var}, ["#);
+            // Producer-shape hoist: lowering emitted
+            // `__pluck(input, ["<slug>", "<attr>"])` — author wrote
+            // `{{<slug>.<attr>}}` — but the producer's parked envelope
+            // nests business data (AutomatedStep →
+            // `detail.outputs.<attr>`; HumanTask → `data.<attr>`; Start
+            // / Loop / SubWorkflow keep `<attr>` at top-level). Without
+            // prepending the hoist, the rewrite walks the wrong path
+            // and returns `()` — visible at the `t_<id>_request`
+            // handler as "Invalid human task request data: invalid
+            // type: map, expected a string" when title / instructions
+            // interpolation receives the missing-value sentinel
+            // instead of a string. Symmetric with the LLM/Kreuzberg
+            // arm's use of `producer_field_access_hoist`.
+            let hoist_segs: &[&str] = match interfaces
+                .get(&b.producer_node)
+                .map(|i| &i.kind)
+            {
+                Some(crate::compiler::interface::NodeKind::AutomatedStep) => &["detail", "outputs"],
+                Some(crate::compiler::interface::NodeKind::HumanTask) => &["data"],
+                _ => &[],
+            };
+            let hoist_prefix: String = hoist_segs
+                .iter()
+                .map(|seg| format!("\"{seg}\", "))
+                .collect();
+            let replacement = format!(r#"__pluck({var}, [{hoist_prefix}"#);
             t.logic = TransitionLogic::Rhai {
                 source: source.replace(&needle, &replacement),
             };
@@ -468,6 +494,7 @@ fn apply_backend_borrows(
     graph: &WorkflowGraph,
     consumer_id: &str,
     consumer_borrows: &[Borrow],
+    node_configs: &mut HashMap<String, serde_json::Value>,
 ) {
     let prepare_a = format!("{}/prepare", consumer_id);
     let prepare_b = format!("t_{}_prepare", consumer_id);
@@ -563,27 +590,70 @@ fn apply_backend_borrows(
 
         if let TransitionLogic::Rhai { source } = &t.logic {
             if source.contains(BORROW_MARKER) {
-                let mut new_source = source.replace(BORROW_MARKER, &pushes);
-                for b in &unique {
-                    let BorrowResolution::BackendFieldStage {
-                        attr, is_path_site, ..
-                    } = &b.resolution
-                    else {
-                        continue;
-                    };
-                    let input_name = borrow_input_name(&b.slug, attr);
-                    let resolver_prefix = if *is_path_site { "input_path" } else { "input" };
-                    let replacement = format!("{{{{{resolver_prefix}:{input_name}}}}}");
-                    new_source = rewrite_slug_attr_placeholders(
-                        &new_source,
-                        &b.slug,
-                        attr,
-                        &replacement,
-                    );
+                let new_source = source.replace(BORROW_MARKER, &pushes);
+                // Side-channel placeholder rewrite: the same
+                // `{{<slug>.<attr>}}` → `{{input:NAME}}` substitution that
+                // used to run against the inlined Rhai literal now runs
+                // against the parked JSON config blob. Walks every string
+                // value of the consumer's `node_configs[consumer_id]`
+                // entry. The Rhai source itself is left alone — it
+                // references the config by `config_ref { storage_path }`
+                // now, so there's no inline literal to rewrite.
+                if let Some(config_value) = node_configs.get_mut(consumer_id) {
+                    for b in &unique {
+                        let BorrowResolution::BackendFieldStage {
+                            attr, is_path_site, ..
+                        } = &b.resolution
+                        else {
+                            continue;
+                        };
+                        let input_name = borrow_input_name(&b.slug, attr);
+                        let resolver_prefix = if *is_path_site { "input_path" } else { "input" };
+                        let replacement =
+                            format!("{{{{{resolver_prefix}:{input_name}}}}}");
+                        rewrite_placeholders_in_value(
+                            config_value,
+                            &b.slug,
+                            attr,
+                            &replacement,
+                        );
+                    }
                 }
                 t.logic = TransitionLogic::Rhai { source: new_source };
             }
         }
+    }
+}
+
+/// Walk every string in `value` and apply
+/// [`rewrite_slug_attr_placeholders`]. Used to rewrite the parked
+/// side-channel config the publish layer uploads to S3 (since the prepare
+/// transition's Rhai no longer carries the inline literal). Mirrors the
+/// per-Rhai-source rewrite that used to run against the inlined `config`
+/// literal — so the executor-side `{{input:NAME}}` / `{{input_path:NAME}}`
+/// resolver finds the same form regardless of where the config travelled.
+fn rewrite_placeholders_in_value(
+    value: &mut serde_json::Value,
+    slug: &str,
+    attr: &str,
+    replacement: &str,
+) {
+    match value {
+        serde_json::Value::String(s) => {
+            let new_s = rewrite_slug_attr_placeholders(s, slug, attr, replacement);
+            *s = new_s;
+        }
+        serde_json::Value::Array(arr) => {
+            for v in arr {
+                rewrite_placeholders_in_value(v, slug, attr, replacement);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for (_k, v) in map.iter_mut() {
+                rewrite_placeholders_in_value(v, slug, attr, replacement);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -701,7 +771,8 @@ mod tests {
             other => panic!("Kreuzberg borrow must be BackendFieldStage, got {other:?}"),
         }
 
-        // LLM consumer 'classify' borrows extract_text.full_text (Text kind)
+        // LLM consumer 'classify' borrows extract_text.content (Text kind)
+        // — `content` is kreuzberg's native ExtractionResult key.
         let llm = borrows
             .iter()
             .find(|b| b.consumer_node_id == "classify")
@@ -712,7 +783,7 @@ mod tests {
                 is_path_site,
                 field_kind: _,
             } => {
-                assert_eq!(attr, "full_text");
+                assert_eq!(attr, "content");
                 assert!(!*is_path_site, "LLM prompt is a content site");
             }
             other => panic!("LLM borrow must be BackendFieldStage, got {other:?}"),

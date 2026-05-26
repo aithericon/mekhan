@@ -1,7 +1,6 @@
 <script lang="ts">
 	import type { TaskStep, TaskField } from '$lib/hpi/types';
 	import { BlockRenderer } from '$lib/hpi';
-	import BlockChart from '$lib/components/ui/block-chart/block-chart.svelte';
 	import * as Select from '$lib/components/ui/select';
 	import { Input } from '$lib/components/ui/input';
 	import { Textarea } from '$lib/components/ui/textarea';
@@ -361,8 +360,8 @@
 								{/if}
 							</Select.Trigger>
 							<Select.Content>
-								{#each field.options ?? [] as option (option)}
-									<Select.Item value={option} label={option} />
+								{#each field.options ?? [] as option (option.value)}
+									<Select.Item value={option.value} label={option.label} />
 								{/each}
 							</Select.Content>
 						</Select.Root>
@@ -425,11 +424,11 @@
 							class="flex flex-col gap-2 py-1"
 							data-testid={`field-${field.name}`}
 						>
-							{#each field.options ?? [] as option, i (option)}
+							{#each field.options ?? [] as option, i (option.value)}
 								{@const optionId = `${field.name}-${i}`}
 								<div class="flex items-center space-x-2 rounded-lg px-2 py-1.5 transition-colors hover:bg-muted/50">
-									<RadioGroup.Item value={option} id={optionId} />
-									<Label for={optionId} class="cursor-pointer font-normal">{option}</Label>
+									<RadioGroup.Item value={option.value} id={optionId} />
+									<Label for={optionId} class="cursor-pointer font-normal">{option.label}</Label>
 								</div>
 							{/each}
 						</RadioGroup.Root>
@@ -554,17 +553,6 @@
 						</p>
 					{/if}
 				</div>
-			{:else if block.type === 'chart'}
-				<BlockChart
-					chart_type={block.chart_type}
-					data={block.data}
-					x={block.x}
-					series={block.series}
-					caption={block.caption}
-					height={block.height}
-					x_label={block.x_label}
-					y_label={block.y_label}
-				/>
 			{:else}
 				<BlockRenderer {block} />
 			{/if}

@@ -2,7 +2,6 @@
 	import type { HumanTask, TaskStep } from '$lib/hpi/types';
 	import { BlockRenderer, FieldDisplay, ProcessBanner } from '$lib/hpi';
 	import type { ProcessState } from '$lib/hpi/types';
-	import BlockChart from '$lib/components/ui/block-chart/block-chart.svelte';
 	import { Badge } from '$lib/components/ui/badge';
 	import Clock from '@lucide/svelte/icons/clock';
 	import CheckCircle from '@lucide/svelte/icons/check-circle';
@@ -109,18 +108,7 @@
 					</div>
 				{/if}
 				{#each step.blocks as block}
-					{#if block.type === 'chart'}
-						<BlockChart
-							chart_type={block.chart_type}
-							data={block.data}
-							x={block.x}
-							series={block.series}
-							caption={block.caption}
-							height={block.height}
-							x_label={block.x_label}
-							y_label={block.y_label}
-						/>
-					{:else if block.type !== 'input'}
+					{#if block.type !== 'input'}
 						<BlockRenderer {block} />
 					{/if}
 				{/each}

@@ -46,6 +46,10 @@
 	let loadingTemplate = $state(false);
 	let submitting = $state(false);
 	let error = $state<string | null>(null);
+	/// When checked, the new instance is created with `mode = 'draft'` so it
+	/// stays out of production list views and can be promoted into a
+	/// template-test fixture afterward.
+	let asDraft = $state(false);
 
 	$effect(() => {
 		if (!open || !templateId) {
@@ -193,7 +197,8 @@
 		try {
 			const instance = await createInstance({
 				template_id: templateId,
-				start_tokens: buildStartTokens()
+				start_tokens: buildStartTokens(),
+				mode: asDraft ? 'draft' : undefined
 			});
 			oncreated(instance.id);
 		} catch (e) {
@@ -285,8 +290,8 @@
 														{selected || '— select —'}
 													</Select.Trigger>
 													<Select.Content>
-														{#each field.options ?? [] as opt (opt)}
-															<Select.Item value={opt} label={opt} />
+														{#each field.options ?? [] as opt (opt.value)}
+															<Select.Item value={opt.value} label={opt.label} />
 														{/each}
 													</Select.Content>
 												</Select.Root>
@@ -352,11 +357,23 @@
 			{/if}
 		</div>
 
-		<div class="flex items-center justify-end gap-2 border-t border-border px-5 py-3">
-			<Button variant="outline" onclick={close}>Cancel</Button>
-			<Button onclick={submit} disabled={submitting || loadingTemplate}>
-				{submitting ? 'Creating…' : 'Create instance'}
-			</Button>
+		<div class="flex items-center justify-between gap-2 border-t border-border px-5 py-3">
+			<label
+				class="flex cursor-pointer items-center gap-2 text-sm text-muted-foreground"
+				title="Draft runs are hidden from production dashboards and can be promoted into a template test."
+			>
+				<Checkbox
+					checked={asDraft}
+					onCheckedChange={(v) => (asDraft = v === true)}
+				/>
+				Start as draft
+			</label>
+			<div class="flex items-center gap-2">
+				<Button variant="outline" onclick={close}>Cancel</Button>
+				<Button onclick={submit} disabled={submitting || loadingTemplate}>
+					{submitting ? 'Creating…' : asDraft ? 'Create draft' : 'Create instance'}
+				</Button>
+			</div>
 		</div>
 	</SheetContent>
 </Sheet.Root>

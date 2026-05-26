@@ -113,7 +113,7 @@
 			case 'timestamp':
 				return '2026-01-01T00:00:00Z';
 			case 'select':
-				return f.options?.[0] ?? 'option';
+				return f.options?.[0]?.value ?? 'option';
 			case 'file':
 				return 'file-reference';
 			case 'signature':

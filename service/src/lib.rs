@@ -125,6 +125,19 @@ fn build_openapi_router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::templates::io_stubs))
         .routes(routes!(handlers::templates::compile_graph))
         .routes(routes!(handlers::templates::analyze_graph))
+        // Template tests
+        .routes(routes!(
+            handlers::template_tests::list_tests,
+            handlers::template_tests::create_test
+        ))
+        .routes(routes!(
+            handlers::template_tests::update_test,
+            handlers::template_tests::delete_test
+        ))
+        .routes(routes!(handlers::template_tests::run_one))
+        .routes(routes!(handlers::template_tests::run_all))
+        .routes(routes!(handlers::template_tests::list_runs))
+        .routes(routes!(handlers::template_tests::promote_instance_to_test))
         // Instances
         .routes(routes!(
             handlers::instances::list_instances,

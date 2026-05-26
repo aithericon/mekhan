@@ -10,6 +10,7 @@ use mekhan_service::models::template::WorkflowGraph;
 
 use crate::fs_ops;
 use crate::push;
+use crate::tests_fs;
 
 #[derive(Serialize)]
 struct ApplyBody<'a> {
@@ -92,6 +93,23 @@ pub async fn run(_server: &str, directory: &str) -> Result<()> {
         _ => {
             let msg = resp_body["error"].as_str().unwrap_or("unknown error");
             anyhow::bail!("Apply failed ({}): {}", status, msg);
+        }
+    }
+
+    // Sync tests after the apply succeeds. Tests are stored against the
+    // template family, so the just-published version inherits them. Note:
+    // unlike a UI publish, apply doesn't run the test gate against this
+    // freshly-published row — gitops authors who want CI-style coverage
+    // should run `mekhan test <dir>` after apply.
+    let local_tests = tests_fs::read_tests(&dir)?;
+    if !local_tests.is_empty() || dir.join("tests").exists() {
+        let (created, updated, deleted) =
+            tests_fs::sync_to_server(&server_url, template_id, &local_tests).await?;
+        if created + updated + deleted > 0 {
+            println!(
+                "  tests: {} created, {} updated, {} deleted",
+                created, updated, deleted
+            );
         }
     }
 

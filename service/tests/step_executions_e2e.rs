@@ -131,6 +131,7 @@ fn python_graph(step_id: &str) -> WorkflowGraph {
         ],
         viewport: None,
         instance_concurrency: Default::default(),
+        definitions: Default::default(),
     }
 }
 

@@ -4,9 +4,9 @@
 
 use crate::compiler::graph::{topo_order, WorkflowDiGraph};
 use crate::compiler::interface::InterfaceRegistry;
-use crate::compiler::lower::{expand_node, NodeFiles, NodePorts, PostProcess};
+use crate::compiler::lower::{expand_node, ConfigStorage, NodeFiles, NodePorts, PostProcess};
 use crate::compiler::validate::{
-    validate, validate_edges_typed, validate_guards, validate_triggers,
+    validate, validate_edges_typed, validate_guards, validate_schema_refs, validate_triggers,
 };
 use crate::compiler::wire::{apply_merges, resolve_aliases, wire_edge};
 use crate::compiler::CompileError;
@@ -282,19 +282,45 @@ pub fn compile_to_air_with_subworkflows_and_interfaces(
     inline_sources: &HashMap<String, HashMap<String, String>>,
     sub_air: &SubWorkflowAir,
 ) -> Result<(Value, Value), CompileError> {
-    let (scenario, interfaces) = compile_to_scenario_and_interfaces(
+    let (air, iface, _) = compile_to_air_with_subworkflows_interfaces_and_configs(
         graph,
         name,
         description,
         files,
         inline_sources,
         sub_air,
+        ConfigStorage::ephemeral(),
+    )?;
+    Ok((air, iface))
+}
+
+/// Publish-path entry that also returns the per-node static config blobs the
+/// caller uploads to S3 (keyed by node id, value is the resolved JSON the
+/// compiler would previously have inlined into the Rhai prepare-transition).
+/// Pass [`ConfigStorage::ephemeral`] for previews / tests that don't upload.
+pub fn compile_to_air_with_subworkflows_interfaces_and_configs(
+    graph: &WorkflowGraph,
+    name: &str,
+    description: &str,
+    files: &NodeFiles,
+    inline_sources: &HashMap<String, HashMap<String, String>>,
+    sub_air: &SubWorkflowAir,
+    config_storage: ConfigStorage<'_>,
+) -> Result<(Value, Value, HashMap<String, serde_json::Value>), CompileError> {
+    let (scenario, interfaces, node_configs) = compile_to_scenario_and_interfaces_with_configs(
+        graph,
+        name,
+        description,
+        files,
+        inline_sources,
+        sub_air,
+        config_storage,
     )?;
     let air = serde_json::to_value(&scenario)
         .map_err(|e| CompileError::Compilation(format!("failed to serialize scenario: {e}")))?;
     let iface = serde_json::to_value(&interfaces)
         .map_err(|e| CompileError::Compilation(format!("failed to serialize interfaces: {e}")))?;
-    Ok((air, iface))
+    Ok((air, iface, node_configs))
 }
 
 /// Run the full build/validate/lower/wire pipeline and return the typed
@@ -353,6 +379,41 @@ pub fn compile_to_scenario_and_interfaces(
     inline_sources: &HashMap<String, HashMap<String, String>>,
     sub_air: &SubWorkflowAir,
 ) -> Result<(ScenarioDefinition, InterfaceRegistry), CompileError> {
+    let (scenario, interfaces, _node_configs) = compile_to_scenario_and_interfaces_with_configs(
+        graph,
+        name,
+        description,
+        files,
+        inline_sources,
+        sub_air,
+        ConfigStorage::ephemeral(),
+    )?;
+    Ok((scenario, interfaces))
+}
+
+/// Like [`compile_to_scenario_and_interfaces`] but also returns the per-node
+/// static config blobs the publish layer uploads to S3 (keyed by node id).
+/// The publish entry point uses this variant; tests / preview that don't
+/// upload pass [`ConfigStorage::ephemeral`] and discard the third element.
+///
+/// `config_storage` controls the storage key the Rhai literal embeds — see
+/// [`ConfigStorage`].
+pub fn compile_to_scenario_and_interfaces_with_configs(
+    graph: &WorkflowGraph,
+    name: &str,
+    description: &str,
+    files: &NodeFiles,
+    inline_sources: &HashMap<String, HashMap<String, String>>,
+    sub_air: &SubWorkflowAir,
+    config_storage: ConfigStorage<'_>,
+) -> Result<
+    (
+        ScenarioDefinition,
+        InterfaceRegistry,
+        HashMap<String, serde_json::Value>,
+    ),
+    CompileError,
+> {
     // 1. Build directed graph
     let wg = WorkflowDiGraph::build(graph)?;
 
@@ -374,6 +435,15 @@ pub fn compile_to_scenario_and_interfaces(
     //     workflow via a single outgoing edge; payload_mapping entries must
     //     reference real target-port fields and parse as Rhai.
     validate_triggers(graph)?;
+
+    // 2e. Workflow-level `$ref` / `definitions` validation. Walk every
+    //     `automated_step`'s `executionSpec.config`; every
+    //     `{"$ref": "#/definitions/<name>"}` must resolve cleanly. Run
+    //     before lowering so unresolved/cyclic/unsupported refs surface as
+    //     a typed `SchemaRefUnresolved` with the offending node id + JSON
+    //     pointer to the `$ref` inside the config — the editor highlights
+    //     the node instead of getting a generic "lowering failed".
+    validate_schema_refs(graph)?;
 
     // 3. Topological sort (on DAG — loop_back edges excluded)
     let sorted = topo_order(&wg)?;
@@ -416,6 +486,7 @@ pub fn compile_to_scenario_and_interfaces(
 
     let empty_files: HashMap<String, InputSource> = HashMap::new();
     let empty_children: Vec<&WorkflowNode> = Vec::new();
+    let mut node_configs: HashMap<String, serde_json::Value> = HashMap::new();
     for ni in &sorted {
         let node = *wg.full.node_weight(*ni).unwrap();
         let outgoing = wg.outgoing(&node.id);
@@ -435,6 +506,9 @@ pub fn compile_to_scenario_and_interfaces(
             node_files,
             sub_air,
             &mut interfaces,
+            &graph.definitions,
+            &mut node_configs,
+            config_storage,
         )?;
     }
 
@@ -526,9 +600,15 @@ pub fn compile_to_scenario_and_interfaces(
     //     Decision/Loop guard physically `&`-borrows the parked data place
     //     that owns the field it references. Runs post-merge: place ids
     //     final. Reads exclusively from `interfaces.data_port`.
-    apply_control_data_foundation(graph, &mut scenario, &interfaces, inline_sources)?;
+    apply_control_data_foundation(
+        graph,
+        &mut scenario,
+        &interfaces,
+        inline_sources,
+        &mut node_configs,
+    )?;
 
-    Ok((scenario, interfaces))
+    Ok((scenario, interfaces, node_configs))
 }
 
 /// Walk the (pre-merge) scenario and credit every place to the owning node by
@@ -729,6 +809,7 @@ fn apply_control_data_foundation(
     scenario: &mut aithericon_sdk::scenario::ScenarioDefinition,
     interfaces: &InterfaceRegistry,
     inline_sources: &HashMap<String, HashMap<String, String>>,
+    node_configs: &mut HashMap<String, serde_json::Value>,
 ) -> Result<(), CompileError> {
     use crate::compiler::token_shape::{
         analyze, ctrl_def_name, data_def_name, def_ref, dynamic_token_definition,
@@ -870,8 +951,18 @@ fn apply_control_data_foundation(
 
     // Apply every borrow's rewrite + read-arc wiring. Handles guards,
     // Python envelope staging, HumanTask substring rewriting, and LLM /
-    // Kreuzberg per-field staging in one pass.
-    crate::compiler::borrow::apply_borrows(scenario, interfaces, graph, unified_borrows);
+    // Kreuzberg per-field staging in one pass. The backend arm also
+    // rewrites placeholders inside `node_configs` (the parked static
+    // config blobs) so the executor's `{{input:NAME}}` /
+    // `{{input_path:NAME}}` resolver finds the rewritten form when it
+    // downloads the blob and hands it to the backend.
+    crate::compiler::borrow::apply_borrows(
+        scenario,
+        interfaces,
+        graph,
+        unified_borrows,
+        node_configs,
+    );
 
     // (c-deadend) Decision deadend enabling-time alignment. The Decision
     //      lowering emits one transition per branch + a default + an unguarded
@@ -985,6 +1076,120 @@ fn apply_control_data_foundation(
                 .definitions
                 .entry(name.to_string())
                 .or_insert(serde_json::json!({}));
+        }
+    }
+
+    // (j) Join Any-mode data-pass-through. The `lower_join` Any branch
+    //     emits `#{ output: in_X, data: in_X }` so the parked data place
+    //     of the join carries the slim *control* token that arrived from
+    //     the upstream extractor — not the upstream's actual fields. A
+    //     downstream `<join_slug>.<field>` borrow (e.g.
+    //     `extraction.fields` in the doc-pipeline persist step) then
+    //     hits the Python runner with an envelope that has no `fields`
+    //     key → `AttributeError: '_AccessibleDict' object has no
+    //     attribute 'fields'`.
+    //
+    //     Fix here, post-merge: for every Join Any node, walk its
+    //     `t_<id>_join_<i>` branch transitions. For each, resolve the
+    //     upstream node id (the source of the edge that this branch
+    //     consumes via `p_<id>_in_<i>`), wire a read-arc into the
+    //     upstream's parked data place, and rewrite the Rhai to use
+    //     `data: <hoisted-upstream-data>`. Hoisting matches the borrow
+    //     planner's `producer_field_access_hoist` (AutomatedStep
+    //     parks under `detail.outputs`, HumanTask under `data`, others
+    //     flat), so the join's parked envelope mirrors the upstream
+    //     producer's flat field shape — exactly what
+    //     `<slug>.<field>` borrowers expect.
+    for node in &graph.nodes {
+        use crate::models::template::{JoinMode, WorkflowNodeData};
+        let WorkflowNodeData::Join { mode, .. } = &node.data else {
+            continue;
+        };
+        if !matches!(mode, JoinMode::Any) {
+            continue;
+        }
+        // Branch transitions are named t_{join_id}_join_{i}; each consumes
+        // exactly one input place. The join's `p_{join}_in_{i}` place was
+        // collapsed to the upstream's CTRL place by `apply_merges`, so
+        // post-merge the consume arc points directly at
+        // `p_<upstream>_ctrl`. We use that to identify the upstream
+        // producer per branch — no need to walk the original edge list.
+        let branch_prefix = format!("t_{}_join_", node.id);
+        let mut rewrites: Vec<(String, String)> = Vec::new();
+        let mut wires: Vec<(String, String)> = Vec::new(); // (transition_id, upstream_node)
+        for t in &scenario.transitions {
+            if !t.id.starts_with(&branch_prefix) {
+                continue;
+            }
+            // Branch index is the suffix after `_join_` — also the
+            // Rhai port name `in_<idx>`.
+            let i_suffix = &t.id[branch_prefix.len()..];
+            let Ok(idx) = i_suffix.parse::<usize>() else {
+                continue;
+            };
+            // Identify upstream from the consume arc's place id, which
+            // post-merge looks like `p_<upstream>_ctrl`. Falls through
+            // gracefully (no rewrite) if a branch doesn't match the
+            // expected shape — better to leave that branch as-is than
+            // to misattribute.
+            let Some(consume) = t
+                .inputs
+                .iter()
+                .find(|a| !a.read && a.place.starts_with("p_") && a.place.ends_with("_ctrl"))
+            else {
+                continue;
+            };
+            let upstream_id = &consume.place[2..consume.place.len() - "_ctrl".len()];
+            if interfaces
+                .get(upstream_id)
+                .and_then(|i| i.data_port.as_deref())
+                .is_none()
+            {
+                continue;
+            }
+            let var = format!("d_{}", upstream_id.replace('-', "_"));
+            // Hoist into the upstream's flat field namespace so a
+            // downstream borrow of `<join_slug>.<field>` resolves
+            // against `<field>` in the parked envelope (matches the
+            // standard producer hoist: AutomatedStep → detail.outputs).
+            let hoist = producer_field_access_hoist(graph, upstream_id);
+            let pluck_segs: Vec<String> = hoist.iter().map(|s| format!("\"{s}\"")).collect();
+            let data_expr = if pluck_segs.is_empty() {
+                var.clone()
+            } else {
+                format!("__pluck({var}, [{}])", pluck_segs.join(", "))
+            };
+            let port_name = format!("in_{idx}");
+            let new_logic = format!("#{{ output: {port_name}, data: {data_expr} }}");
+            rewrites.push((t.id.clone(), new_logic));
+            wires.push((t.id.clone(), upstream_id.to_string()));
+        }
+        // Apply: wire read-arcs and rewrite the logic. wire_read_arc
+        // returns the var name (already factored into `data_expr` above).
+        for (tid, upstream) in &wires {
+            for t in &mut scenario.transitions {
+                if &t.id != tid {
+                    continue;
+                }
+                let _ = wire_read_arc(t, upstream, interfaces, false);
+            }
+        }
+        for (tid, new_logic) in rewrites {
+            // Preserve __pluck helper if any of the rewritten data
+            // expressions reference it.
+            let final_src = if new_logic.contains("__pluck(") {
+                format!("{}{}", crate::compiler::rhai_gen::PLUCK_HELPER, new_logic)
+            } else {
+                new_logic
+            };
+            for t in &mut scenario.transitions {
+                if t.id != tid {
+                    continue;
+                }
+                t.logic = aithericon_sdk::scenario::TransitionLogic::Rhai {
+                    source: final_src.clone(),
+                };
+            }
         }
     }
 
@@ -1179,7 +1384,7 @@ mod tests {
         let graph = WorkflowGraph {
             nodes: vec![start_node("s"), end_node("e")],
             edges: vec![edge("e1", "s", "e")],
-            viewport: None, instance_concurrency: Default::default(),
+            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
         };
 
         let result = compile_to_air(&graph, "test", "desc", &std::collections::HashMap::new());
@@ -1219,7 +1424,7 @@ mod tests {
             nodes: vec![start_node("s"), end_node("e")],
             edges: vec![edge("e1", "s", "e")],
             viewport: None,
-            instance_concurrency: Default::default(),
+            instance_concurrency: Default::default(), definitions: Default::default(),
         };
         let files: NodeFiles = std::collections::HashMap::new();
         let inline: HashMap<String, HashMap<String, String>> = std::collections::HashMap::new();
@@ -1283,7 +1488,7 @@ mod tests {
         let graph = WorkflowGraph {
             nodes: vec![s, end_node("e")],
             edges: vec![edge("e1", "s", "e")],
-            viewport: None, instance_concurrency: Default::default(),
+            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
         };
 
         let air = compile_to_air(&graph, "test", "desc", &std::collections::HashMap::new())
@@ -1335,7 +1540,7 @@ mod tests {
         let graph = WorkflowGraph {
             nodes: vec![s, end_node("e")],
             edges: vec![edge("e1", "s", "e")],
-            viewport: None, instance_concurrency: Default::default(),
+            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
         };
 
         let air = compile_to_air(&graph, "test", "desc", &std::collections::HashMap::new())
@@ -1370,7 +1575,7 @@ mod tests {
         let graph = WorkflowGraph {
             nodes: vec![start_node("s"), end_node("e")],
             edges: vec![edge("e1", "s", "e")],
-            viewport: None, instance_concurrency: Default::default(),
+            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
         };
 
         let air = compile_to_air(&graph, "test", "desc", &std::collections::HashMap::new())
@@ -1393,7 +1598,7 @@ mod tests {
         let graph = WorkflowGraph {
             nodes: vec![start_node("s"), end_node("e")],
             edges: vec![edge_with_handle("e1", "s", "e", "in")],
-            viewport: None, instance_concurrency: Default::default(),
+            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
         };
         let result = compile_to_air(&graph, "test", "desc", &std::collections::HashMap::new());
         assert!(
@@ -1427,7 +1632,7 @@ mod tests {
                 end_node("e"),
             ],
             edges: vec![edge("e1", "s", "ht"), edge("e2", "ht", "e")],
-            viewport: None, instance_concurrency: Default::default(),
+            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
         };
 
         let result = compile_to_air(&graph, "test", "desc", &std::collections::HashMap::new());
@@ -1470,7 +1675,7 @@ mod tests {
                             // unqualified `input.X`, so we use `true` here.
                             guard: "true".to_string(),
                         }],
-                        default_branch: Some("default1".to_string()),
+                        default_branch: Some("default".to_string()),
                     },
                     parent_id: None,
                     width: None,
@@ -1482,9 +1687,9 @@ mod tests {
             edges: vec![
                 edge("e0", "s", "d"),
                 edge_with_handle("econd1", "d", "e1", "cond1"),
-                edge_with_handle("edefault", "d", "e2", "default1"),
+                edge_with_handle("edefault", "d", "e2", "default"),
             ],
-            viewport: None, instance_concurrency: Default::default(),
+            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
         };
 
         let result = compile_to_air(&graph, "test", "desc", &std::collections::HashMap::new());
@@ -1549,7 +1754,7 @@ mod tests {
                             label: "Yes".to_string(),
                             guard: "true".to_string(),
                         }],
-                        default_branch: Some("default1".to_string()),
+                        default_branch: Some("default".to_string()),
                     },
                     parent_id: None,
                     width: None,
@@ -1561,10 +1766,10 @@ mod tests {
             edges: vec![
                 edge("e0", "s", "d"),
                 edge_with_handle("econd1", "d", "e1", "cond1"),
-                edge_with_handle("edefault", "d", "e2", "default1"),
+                edge_with_handle("edefault", "d", "e2", "default"),
             ],
             viewport: None,
-            instance_concurrency: Default::default(),
+            instance_concurrency: Default::default(), definitions: Default::default(),
         };
         let files: NodeFiles = std::collections::HashMap::new();
         let inline: HashMap<String, HashMap<String, String>> = std::collections::HashMap::new();
@@ -1765,7 +1970,7 @@ mod tests {
                 edge("e_m_done", "merge", "done"),
             ],
             viewport: None,
-            instance_concurrency: Default::default(),
+            instance_concurrency: Default::default(), definitions: Default::default(),
         };
 
         let air = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
@@ -1864,7 +2069,7 @@ mod tests {
                 edge("e_j_e", "j", "e"),
             ],
             viewport: None,
-            instance_concurrency: Default::default(),
+            instance_concurrency: Default::default(), definitions: Default::default(),
         };
 
         let air = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
@@ -1914,7 +2119,7 @@ mod tests {
                 end_node("e"),
             ],
             edges: vec![edge("e1", "s", "a"), edge("e2", "a", "e")],
-            viewport: None, instance_concurrency: Default::default(),
+            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
         };
         let air = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
             .expect("retry graph should compile");
@@ -2091,7 +2296,7 @@ mod tests {
                 edge("esucc", "a", "e1"),
                 edge_with_handle("eerr", "a", "e2", "error"),
             ],
-            viewport: None, instance_concurrency: Default::default(),
+            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
         };
         let air = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
             .expect("error-handle edge should wire");
@@ -2503,7 +2708,7 @@ mod tests {
             ],
             edges: vec![edge("e0", "s", "a"), edge("e1", "a", "e")],
             viewport: None,
-            instance_concurrency: Default::default(),
+            instance_concurrency: Default::default(), definitions: Default::default(),
         };
         let scenario = crate::compiler::compile_to_scenario(
             &graph,
@@ -2538,7 +2743,7 @@ mod tests {
                 end_node("e"),
             ],
             edges: vec![edge("e0", "s", "a"), edge("e1", "a", "e")],
-            viewport: None, instance_concurrency: Default::default(),
+            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
         };
         assert!(
             compile_to_air(&graph, "t", "d", &std::collections::HashMap::new()).is_ok(),
@@ -2610,7 +2815,7 @@ mod tests {
             ],
             edges: vec![edge("e1", "s", "ht"), edge("e2", "ht", "e")],
             viewport: None,
-            instance_concurrency: Default::default(),
+            instance_concurrency: Default::default(), definitions: Default::default(),
         };
 
         let air = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
@@ -2676,7 +2881,7 @@ mod tests {
             ],
             edges: vec![edge("e1", "s", "ht"), edge("e2", "ht", "e")],
             viewport: None,
-            instance_concurrency: Default::default(),
+            instance_concurrency: Default::default(), definitions: Default::default(),
         };
 
         let air = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
@@ -2723,7 +2928,7 @@ mod tests {
             ],
             edges: vec![edge("e1", "s", "ht"), edge("e2", "ht", "e")],
             viewport: None,
-            instance_concurrency: Default::default(),
+            instance_concurrency: Default::default(), definitions: Default::default(),
         };
 
         let air = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
@@ -3001,14 +3206,17 @@ mod tests {
           ]
         }"#;
         let graph: WorkflowGraph = serde_json::from_str(json).expect("deser graph");
-        let scenario = crate::compiler::compile_to_scenario(
-            &graph,
-            "llm-borrow-test",
-            "",
-            &std::collections::HashMap::new(),
-            &crate::compiler::SubWorkflowAir::new(),
-        )
-        .expect("compile llm-borrow graph");
+        let (scenario, _interfaces, node_configs) =
+            crate::compiler::compile_to_scenario_and_interfaces_with_configs(
+                &graph,
+                "llm-borrow-test",
+                "",
+                &std::collections::HashMap::new(),
+                &std::collections::HashMap::new(),
+                &crate::compiler::SubWorkflowAir::new(),
+                ConfigStorage::ephemeral(),
+            )
+            .expect("compile llm-borrow graph");
 
         let prepare = scenario
             .transitions
@@ -3032,14 +3240,28 @@ mod tests {
         );
 
         // (2) The original placeholder `{{ review.vendor_name }}` in the
-        //     embedded config string got rewritten to the resolver-known form.
+        //     embedded config got rewritten in the side-channel blob the
+        //     publish layer uploads. The Rhai source now only carries the
+        //     `config_ref` — the actual rewritten string lives in
+        //     `node_configs["classify"]`.
+        let cfg = node_configs
+            .get("classify")
+            .expect("classify must have parked config");
+        let cfg_str = cfg.to_string();
         assert!(
-            source.contains("{{input:__borrow_review__vendor_name}}"),
-            "prompt placeholder must rewrite to {{input:__borrow_*}}; source: {source}"
+            cfg_str.contains("{{input:__borrow_review__vendor_name}}"),
+            "side-channel prompt must rewrite to {{input:__borrow_*}}; got: {cfg_str}"
         );
         assert!(
-            !source.contains("{{ review.vendor_name }}"),
-            "the original slug.field placeholder should be gone; source: {source}"
+            !cfg_str.contains("{{ review.vendor_name }}"),
+            "the original slug.field placeholder should be gone from side-channel; got: {cfg_str}"
+        );
+        // And the Rhai source must NOT carry the rewritten form either —
+        // the only inline placeholder left is the executor-resolver call
+        // against the staged file, which lives in the parked blob.
+        assert!(
+            !source.contains("{{input:__borrow_review__vendor_name}}"),
+            "rewritten placeholder must not appear in Rhai (it's in the side-channel now): {source}"
         );
 
         // (3) The read-arc port + arc landed on prepare.
@@ -3087,14 +3309,17 @@ mod tests {
           ]
         }"#;
         let graph: WorkflowGraph = serde_json::from_str(json).expect("deser graph");
-        let scenario = crate::compiler::compile_to_scenario(
-            &graph,
-            "kz-borrow-test",
-            "",
-            &std::collections::HashMap::new(),
-            &crate::compiler::SubWorkflowAir::new(),
-        )
-        .expect("compile kreuzberg-borrow graph");
+        let (scenario, _interfaces, node_configs) =
+            crate::compiler::compile_to_scenario_and_interfaces_with_configs(
+                &graph,
+                "kz-borrow-test",
+                "",
+                &std::collections::HashMap::new(),
+                &std::collections::HashMap::new(),
+                &crate::compiler::SubWorkflowAir::new(),
+                ConfigStorage::ephemeral(),
+            )
+            .expect("compile kreuzberg-borrow graph");
 
         let prepare = scenario
             .transitions
@@ -3116,14 +3341,20 @@ mod tests {
             "Kreuzberg must stage __borrow_uploader__pdf; source: {source}"
         );
 
-        // (2) Config rewrite: `{{ uploader.pdf }}` → `{{input_path:__borrow_uploader__pdf}}`.
+        // (2) Config rewrite: `{{ uploader.pdf }}` → `{{input_path:__borrow_uploader__pdf}}`
+        //     now lands in the parked side-channel blob (the publish
+        //     uploader writes it to S3) instead of the Rhai literal.
+        let cfg = node_configs
+            .get("ocr")
+            .expect("ocr must have parked config");
+        let cfg_str = cfg.to_string();
         assert!(
-            source.contains("{{input_path:__borrow_uploader__pdf}}"),
-            "Kreuzberg path-site must rewrite to {{input_path:...}}; source: {source}"
+            cfg_str.contains("{{input_path:__borrow_uploader__pdf}}"),
+            "side-channel `file:` must rewrite to {{input_path:...}}; got: {cfg_str}"
         );
         assert!(
-            !source.contains("{{ uploader.pdf }}"),
-            "the original placeholder should be gone; source: {source}"
+            !cfg_str.contains("{{ uploader.pdf }}"),
+            "the original placeholder should be gone from side-channel; got: {cfg_str}"
         );
 
         // (3) Read-arc landed.
@@ -3262,7 +3493,7 @@ mod tests {
             ],
             edges: vec![edge("e0", "s", "sub"), edge("e1", "sub", "e")],
             viewport: None,
-            instance_concurrency: Default::default(),
+            instance_concurrency: Default::default(), definitions: Default::default(),
         };
 
         // SubWorkflow lowering only needs an opaque AIR Value to embed in the
@@ -3561,7 +3792,7 @@ mod tests {
                             label: "High".to_string(),
                             guard: "start.score >= 50".to_string(),
                         }],
-                        default_branch: Some("lo".to_string()),
+                        default_branch: Some("default".to_string()),
                     },
                     parent_id: None,
                     width: None,
@@ -3585,14 +3816,14 @@ mod tests {
                     id: "e_lo".to_string(),
                     source: "dec".to_string(),
                     target: "e_lo".to_string(),
-                    source_handle: Some("lo".to_string()),
+                    source_handle: Some("default".to_string()),
                     target_handle: Some("in".to_string()),
                     label: None,
                     edge_type: "conditional".to_string(),
                 },
             ],
             viewport: None,
-            instance_concurrency: Default::default(),
+            instance_concurrency: Default::default(), definitions: Default::default(),
         };
         let air = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
             .expect("compile");
@@ -3631,6 +3862,298 @@ mod tests {
         assert!(
             deadend_ports.iter().any(|p| p["name"] == "d_s"),
             "deadend must declare the mirrored input_port: {deadend_ports:?}"
+        );
+    }
+
+    /// End-to-end proof that `WorkflowGraph.definitions` is inlined at
+    /// lowering: an `automated_step` whose LLM `response_format.schema` is a
+    /// `$ref` to a workflow-scoped definition is compiled to AIR that
+    /// contains the resolved schema and no surviving `"$ref"` token.
+    #[test]
+    fn lowering_inlines_workflow_definitions_into_llm_config() {
+        let mut definitions = std::collections::BTreeMap::new();
+        definitions.insert(
+            "ExtractionFields".to_string(),
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "fields": { "type": "array", "items": { "type": "object" } }
+                }
+            }),
+        );
+        let graph = WorkflowGraph {
+            nodes: vec![
+                start_node("s"),
+                WorkflowNode {
+                    id: "extract".to_string(),
+                    node_type: "automated_step".to_string(),
+                    slug: None,
+                    position: Position { x: 0.0, y: 0.0 },
+                    data: WorkflowNodeData::AutomatedStep {
+                        label: "Extract".to_string(),
+                        description: None,
+                        execution_spec: ExecutionSpecConfig {
+                            backend_type: ExecutionBackendType::Llm,
+                            entrypoint: None,
+                            config: serde_json::json!({
+                                "provider": "openai",
+                                "model": "mlx-community/Qwen3.5-9B-MLX-4bit",
+                                "base_url": "http://localhost:8000",
+                                "prompt": "extract",
+                                "response_format": {
+                                    "type": "json_schema",
+                                    "schema": { "$ref": "#/definitions/ExtractionFields" }
+                                }
+                            }),
+                        },
+                        input: Port::empty_input(),
+                        output: default_output_port(ExecutionBackendType::Llm),
+                        retry_policy: RetryPolicy::default(),
+                        deployment_model: Default::default(),
+                    },
+                    parent_id: None,
+                    width: None,
+                    height: None,
+                },
+                end_node("e"),
+            ],
+            edges: vec![edge("e1", "s", "extract"), edge("e2", "extract", "e")],
+            viewport: None,
+            instance_concurrency: Default::default(),
+            definitions,
+        };
+        let air = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
+            .expect("compile with schema ref should succeed");
+        let s = air.to_string();
+        // The AIR naturally contains many `$ref` tokens — every schemars-
+        // generated petri-domain type schema uses internal `#/definitions/...`
+        // refs for its type registry (Ctrl__, Data__, DynamicToken, …). Those
+        // are NOT what this test is about. What we care about: the *specific*
+        // workflow-level definition name we authored must not survive
+        // anywhere as a `$ref` payload — every consumer that referenced
+        // `ExtractionFields` should now carry the inlined object literal.
+        assert!(
+            !s.contains("#/definitions/ExtractionFields"),
+            "workflow-level $ref to ExtractionFields must be inlined; got: {s}"
+        );
+        assert!(
+            !s.contains("ExtractionFields"),
+            "definition name should not appear anywhere in lowered AIR; got: {s}"
+        );
+    }
+
+    /// Unknown `$ref` surfaces a `SchemaRefUnresolved` compile error tagged
+    /// with the offending node id.
+    #[test]
+    fn lowering_unknown_schema_ref_errors_with_node_id() {
+        let graph = WorkflowGraph {
+            nodes: vec![
+                start_node("s"),
+                WorkflowNode {
+                    id: "extract".to_string(),
+                    node_type: "automated_step".to_string(),
+                    slug: None,
+                    position: Position { x: 0.0, y: 0.0 },
+                    data: WorkflowNodeData::AutomatedStep {
+                        label: "Extract".to_string(),
+                        description: None,
+                        execution_spec: ExecutionSpecConfig {
+                            backend_type: ExecutionBackendType::Llm,
+                            entrypoint: None,
+                            config: serde_json::json!({
+                                "provider": "openai",
+                                "model": "x",
+                                "prompt": "p",
+                                "response_format": {
+                                    "type": "json_schema",
+                                    "schema": { "$ref": "#/definitions/Missing" }
+                                }
+                            }),
+                        },
+                        input: Port::empty_input(),
+                        output: default_output_port(ExecutionBackendType::Llm),
+                        retry_policy: RetryPolicy::default(),
+                        deployment_model: Default::default(),
+                    },
+                    parent_id: None,
+                    width: None,
+                    height: None,
+                },
+                end_node("e"),
+            ],
+            edges: vec![edge("e1", "s", "extract"), edge("e2", "extract", "e")],
+            viewport: None,
+            instance_concurrency: Default::default(),
+            definitions: std::collections::BTreeMap::new(),
+        };
+        let err = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
+            .expect_err("unknown $ref must fail compilation");
+        match err {
+            CompileError::SchemaRefUnresolved { node_id, message, .. } => {
+                assert_eq!(node_id, "extract");
+                assert!(
+                    message.contains("Missing"),
+                    "error message should mention the unknown definition name: {message}"
+                );
+            }
+            other => panic!("expected SchemaRefUnresolved, got {other:?}"),
+        }
+    }
+
+    /// Regression: an LLM `AutomatedStep` carrying a deeply-nested
+    /// `response_format.schema` used to blow Rhai's expression-complexity
+    /// limit when the compiler inlined the full schema into the prepare
+    /// transition's Rhai literal. The offload to `config_ref` + S3 means
+    /// the Rhai script is now a fixed-size envelope referencing the blob
+    /// by storage key — independent of schema depth.
+    ///
+    /// Asserts:
+    ///   1. compile succeeds (no Rhai panic);
+    ///   2. the lowered prepare-transition Rhai is small (well under the
+    ///      old multi-KB inline literal) and carries `config_ref` instead
+    ///      of `config`;
+    ///   3. the side-channel `node_configs` carries the resolved blob with
+    ///      the expanded schema (so publish actually has something to
+    ///      upload).
+    #[test]
+    fn deeply_nested_llm_config_lowers_via_config_ref_not_literal() {
+        let mut definitions = std::collections::BTreeMap::new();
+        // Deliberately deep + array-heavy — emulates the failing
+        // `demos/document-pipeline-v1` `ExtractionFields` shape that
+        // tripped the Rhai parser before this fix.
+        definitions.insert(
+            "ExtractionFields".to_string(),
+            serde_json::json!({
+                "type": "object",
+                "required": ["fields"],
+                "properties": {
+                    "fields": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "required": ["key", "value", "confidence", "citations"],
+                            "properties": {
+                                "key": { "type": "string" },
+                                "value": { "type": "string" },
+                                "unit": { "type": ["string", "null"] },
+                                "reference_range": { "type": ["string", "null"] },
+                                "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+                                "citations": {
+                                    "type": "array",
+                                    "minItems": 1,
+                                    "items": {
+                                        "type": "object",
+                                        "required": ["kind", "supporting_text"],
+                                        "properties": {
+                                            "kind": { "type": "string", "enum": ["ocr_span"] },
+                                            "supporting_text": { "type": "string" },
+                                            "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+                                        },
+                                        "additionalProperties": false
+                                    }
+                                }
+                            },
+                            "additionalProperties": false
+                        }
+                    }
+                },
+                "additionalProperties": false
+            }),
+        );
+        let graph = WorkflowGraph {
+            nodes: vec![
+                start_node("s"),
+                WorkflowNode {
+                    id: "extract".to_string(),
+                    node_type: "automated_step".to_string(),
+                    slug: None,
+                    position: Position { x: 0.0, y: 0.0 },
+                    data: WorkflowNodeData::AutomatedStep {
+                        label: "Extract".to_string(),
+                        description: None,
+                        execution_spec: ExecutionSpecConfig {
+                            backend_type: ExecutionBackendType::Llm,
+                            entrypoint: None,
+                            config: serde_json::json!({
+                                "provider": "openai",
+                                "model": "x",
+                                "prompt": "extract",
+                                "response_format": {
+                                    "type": "json_schema",
+                                    "schema": { "$ref": "#/definitions/ExtractionFields" }
+                                }
+                            }),
+                        },
+                        input: Port::empty_input(),
+                        output: default_output_port(ExecutionBackendType::Llm),
+                        retry_policy: RetryPolicy::default(),
+                        deployment_model: Default::default(),
+                    },
+                    parent_id: None,
+                    width: None,
+                    height: None,
+                },
+                end_node("e"),
+            ],
+            edges: vec![edge("e1", "s", "extract"), edge("e2", "extract", "e")],
+            viewport: None,
+            instance_concurrency: Default::default(),
+            definitions,
+        };
+        let template_id = uuid::Uuid::new_v4();
+        let config_storage = ConfigStorage { template_id, version: 1, key_fn: None };
+        let (scenario, _interfaces, node_configs) =
+            compile_to_scenario_and_interfaces_with_configs(
+                &graph,
+                "t",
+                "d",
+                &std::collections::HashMap::new(),
+                &std::collections::HashMap::new(),
+                &crate::compiler::SubWorkflowAir::new(),
+                config_storage,
+            )
+            .expect("compile must succeed even with deeply-nested response_format schema");
+
+        // 1. Side-channel carries the resolved (`$ref`-inlined) config.
+        let cfg = node_configs
+            .get("extract")
+            .expect("extract node config must be parked in side-channel");
+        let cfg_str = cfg.to_string();
+        assert!(
+            cfg_str.contains("ocr_span"),
+            "side-channel blob must carry the inlined schema details: {cfg_str}"
+        );
+        assert!(
+            !cfg_str.contains("\"$ref\""),
+            "$ref must have been inlined before parking: {cfg_str}"
+        );
+
+        // 2. The prepare-transition Rhai is now a tiny envelope.
+        let prepare = scenario
+            .transitions
+            .iter()
+            .find(|t| t.id == "extract/prepare")
+            .expect("extract/prepare transition must exist");
+        let logic = match &prepare.logic {
+            aithericon_sdk::scenario::TransitionLogic::Rhai { source } => source.clone(),
+            other => panic!("expected rhai logic, got {other:?}"),
+        };
+        assert!(
+            logic.contains("config_ref"),
+            "prepare Rhai must carry `config_ref`, got: {logic}"
+        );
+        assert!(
+            !logic.contains("ocr_span"),
+            "prepare Rhai must NOT inline the schema content; got: {logic}"
+        );
+        assert!(
+            logic.contains(&template_id.to_string()),
+            "prepare Rhai must embed the template_id-scoped storage key; got: {logic}"
+        );
+        assert!(
+            logic.len() < 4096,
+            "prepare Rhai must be small (< 4KB) after offload; got len={} script={logic}",
+            logic.len()
         );
     }
 }

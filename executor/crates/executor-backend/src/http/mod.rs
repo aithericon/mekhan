@@ -178,6 +178,7 @@ impl HttpConfig {
             inputs,
             outputs,
             config: serde_json::to_value(self).expect("HttpConfig serialization cannot fail"),
+            config_ref: None,
         }
     }
 

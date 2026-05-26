@@ -130,6 +130,47 @@ impl ArtifactStore {
         Ok(key)
     }
 
+    /// Upload a per-node static config blob and return the S3 key. Key format:
+    /// `templates/{template_id}/v{version}/{node_id}/node-config.json`.
+    ///
+    /// The compiler offloads each `AutomatedStep` node's resolved
+    /// (validated + `$ref`-inlined) config to S3 at publish time so the
+    /// per-job NATS token only carries a `config_ref`. The executor's
+    /// `FetchConfigHook` downloads the blob right before staging — see
+    /// `ExecutionSpec::config_ref` in `executor-domain`.
+    pub async fn upload_node_config(
+        &self,
+        template_id: Uuid,
+        version: i32,
+        node_id: &str,
+        content: &[u8],
+    ) -> Result<String, ArtifactStoreError> {
+        let key = format!("templates/{template_id}/v{version}/{node_id}/node-config.json");
+
+        self.client
+            .put_object()
+            .bucket(&self.bucket)
+            .key(&key)
+            .body(ByteStream::from(content.to_vec()))
+            .content_type("application/json")
+            .cache_control("immutable")
+            .send()
+            .await
+            .map_err(|e| ArtifactStoreError::S3(format!("upload node config {key}: {e}")))?;
+
+        tracing::debug!(key = %key, bytes = content.len(), "uploaded node config to S3");
+
+        Ok(key)
+    }
+
+    /// Compute the S3 key the compiler should emit for a node's static
+    /// config blob without performing an upload. Used at compile time so the
+    /// Rhai literal embeds the right key before publish actually writes the
+    /// blob — both sides agree on the format.
+    pub fn node_config_key(template_id: Uuid, version: i32, node_id: &str) -> String {
+        format!("templates/{template_id}/v{version}/{node_id}/node-config.json")
+    }
+
     /// Retrieve a file from S3 by key. Returns (bytes, content_type).
     pub async fn get_file(&self, key: &str) -> Result<(Vec<u8>, String), ArtifactStoreError> {
         let resp = self

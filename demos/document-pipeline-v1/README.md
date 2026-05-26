@@ -36,12 +36,12 @@ On the data side, `merge-extraction` re-parks the inbound payload under slug
 
 | Step | Backend | Model | Notes |
 |---|---|---|---|
-| `ocr` | kreuzberg | — | Tesseract `deu+eng`, table detection on. Reads `{{ start.document_file }}`. Emits `full_text`, `tables_text`, `page_count`. |
-| `classify` | llm (Ollama) | `qwen3.6:35b-a3b` | Vision MoE. Image = `{{ start.document_file }}`. OCR text injected via `{{ ocr.full_text }}`. JSON-schema response. |
-| `extract-bloodwork` / `extract-prescription` / `extract-clinical-note` / `extract-form-fields` / `extract-generic` | llm (Ollama) | `qwen3.5:9b` | Type-specific system prompts. JSON-schema response with mandatory `citations[]` per field. |
+| `ocr` | kreuzberg | — | Tesseract `deu+eng`, table detection on. Reads `{{ start.document_file }}`. Emits kreuzberg's native `ExtractionResult` shape 1:1 — `content`, `mime_type`, `metadata`, `tables`, `detected_languages` (no remap). |
+| `classify` | llm (Ollama, native `/api/chat` at `:11434`) | `qwen3.5:9b` | Vision-capable. Image = `{{ start.document_file }}`. OCR text injected via `{{ ocr.content }}`. JSON-schema response. Requires `just dev ollama-up`. |
+| `extract-bloodwork` / `extract-prescription` / `extract-clinical-note` / `extract-form-fields` / `extract-generic` | llm (Ollama, native `/api/chat` at `:11434`) | `qwen3.5:9b` | Type-specific system prompts. JSON-schema response with mandatory `citations[]` per field. Schema factored via top-level `definitions.ExtractionFields` (inlined by `compiler::schema_refs::inline_refs` at lowering). |
 | `merge-extraction` | join (`mode: "any"`) | — | Branches converge. Re-parks whichever branch's payload under slug `extraction`. |
 | `persist` | python | — | Single borrow `extraction.fields`. Stamps patient/class/date, emits a unified field list. |
-| `verify` | python | — | Citation matcher (mekhan analogue of online-clinic's `provenance` step kind). Normalized substring match of every `citations[].supporting_text` against `{{ ocr.full_text }}`. |
+| `verify` | python | — | Citation matcher (mekhan analogue of online-clinic's `provenance` step kind). Normalized substring match of every `citations[].supporting_text` against `{{ ocr.content }}`. |
 | `review` | human_task | — | Two-step form: shows the original doc image, asks for approve / edit / re-OCR / reject. Only triggered when `verify.any_unverified || classify.confidence < 0.85`. |
 
 ## Slug-ref usage
@@ -49,9 +49,9 @@ On the data side, `merge-extraction` re-parks the inbound payload under slug
 Every cross-step borrow uses the producer-namespaced `<slug>.<field>` model from
 `docs/10-control-data-token-model.md`. Examples in this graph:
 
-- LLM prompt: `prompt: "...\n{{ ocr.full_text }}\n..."`
+- LLM prompt: `prompt: "...\n{{ ocr.content }}\n..."` (kreuzberg's native key)
 - LLM image input: `images: [{ path: "{{ start.document_file }}" }]`
-- Kreuzberg target: `target_file: "{{ start.document_file }}"`
+- Kreuzberg target: `file: "{{ start.document_file }}"`
 - Decision guard: `classify.document_class in ["referral_letter", ...]`
 - HumanTask body: `"Classification confidence: **{{ classify.confidence }}**"`
 - End mapping: `{ targetField: "ma_decision", expression: "review.decision" }`
@@ -66,11 +66,11 @@ but they're the deltas vs. what currently ships.
    `images[].path` against `{{input:NAME}}` (staged-input pattern, executor-side).
    The compiler currently does **not** lower a slug-ref file field
    (`{{ start.document_file }}`) into a staged input for an `llm` step. The
-   `vllm-smoke` demo explicitly calls this out. **In flight.**
+   `llm-smoke` demo explicitly calls this out. **In flight.**
 
 2. **Backend-config string interpolation with `{{ slug.field }}`.** Mustache
    interpolation already works for HumanTask content blocks and `processName`.
-   We're writing the LLM `prompt`, `system_prompt`, and Kreuzberg `target_file`
+   We're writing the LLM `prompt`, `system_prompt`, and Kreuzberg `file`
    as if the same interpolation reaches into `executionSpec.config` strings.
    The natural extension of the existing slug system.
 
@@ -101,16 +101,6 @@ but they're the deltas vs. what currently ships.
    `text` (so the UI can render it as a table) but not strict per-field
    typing. Today the `TaskFieldKind` enum has `file/text/number/bool/...` —
    we're assuming `json` (or `object`) exists or gets added.
-
-5. **`output_schema` reuse via `definitions/`.** The graph has a top-level
-   `definitions.ExtractionFields` block; the five extractors all reference
-   it as `{ "$ref": "#/definitions/ExtractionFields" }` in their LLM
-   `response_format`. Mirrors the petri-runtime's `SchemaRegistry` /
-   `Data__{id}` model from §3 of `docs/10-control-data-token-model.md`.
-   The LLM backend's `ResponseFormat::JsonSchema` may not currently
-   resolve `$ref` against a workflow-level definitions table — if not,
-   inline each schema (verbose) or teach the compiler to expand refs at
-   lowering time.
 
 ## Out of scope (vs. online-clinic source)
 

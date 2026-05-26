@@ -108,7 +108,28 @@ impl ExecutionBackend for PythonBackend {
         // Determine Python binary
         let python_bin = if needs_venv {
             let venv_link = run_context.run_dir.root.join("venv");
-            let sdk_path = if config.sdk { Self::find_sdk_path() } else { None };
+            // When `sdk: true` is explicit, the SDK MUST be located. Silently
+            // continuing leaves the runner unable to `import aithericon`, which
+            // surfaces 100ms later as an opaque `NameError: log_info` (or
+            // similar) once user code calls into the SDK helpers — far away
+            // from the actual root cause. Fail at prepare-time with a clear,
+            // actionable message instead.
+            let sdk_path = if config.sdk {
+                match Self::find_sdk_path() {
+                    Some(p) => Some(p),
+                    None => {
+                        return Err(ExecutorError::Config(
+                            "aithericon SDK install requested (sdk: true) but the SDK source \
+                             could not be located. Set AITHERICON_SDK_PATH to the directory \
+                             containing the SDK's pyproject.toml, or set sdk: false in the \
+                             AutomatedStep config."
+                                .into(),
+                        ));
+                    }
+                }
+            } else {
+                None
+            };
 
             if let Some(cache) = self.venv_cache.as_ref() {
                 let req = BuildRequest {
@@ -141,8 +162,6 @@ impl ExecutionBackend for PythonBackend {
                 if let Some(sdk) = sdk_path {
                     info!(sdk_path = %sdk.display(), "installing aithericon SDK");
                     venv::install_local_package(&venv_link, &sdk).await?;
-                } else if config.sdk {
-                    debug!("SDK auto-install skipped: SDK path not found");
                 }
 
                 python_path.to_string_lossy().into_owned()

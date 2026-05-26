@@ -30,7 +30,21 @@
 		graph: WorkflowGraph;
 		readonly?: boolean;
 		onchange?: (graph: WorkflowGraph) => void;
+		/**
+		 * Fires whenever xyflow's selection set changes — including reactive
+		 * re-emits triggered by `store.nodes` being reassigned (e.g. when
+		 * `updateNodeInternals` updates dimensions during a runtime data
+		 * refresh). Suitable for the template editor's "selected node →
+		 * property panel" flow where keyboard selection should also count.
+		 * For "user clicked a node, open a drawer" flows, prefer
+		 * `onNodeClick` + `onPaneClick` — those fire only on real pointer
+		 * events and won't be re-emitted by dimension churn.
+		 */
 		onselect?: (nodeId: string | null) => void;
+		/** User-click on a node. Distinct from `onselect` — see above. */
+		onNodeClick?: (nodeId: string) => void;
+		/** User-click on the empty pane (i.e. outside any node/edge). */
+		onPaneClick?: () => void;
 		onAddNode?: (id: string, type: WorkflowNodeType, position: { x: number; y: number }, data: WorkflowNodeData, opts?: { parentId?: string; width?: number; height?: number }) => void;
 		onRemoveNodes?: (ids: string[]) => void;
 		onMoveNodes?: (moves: Array<{ id: string; position: { x: number; y: number } }>) => void;
@@ -61,7 +75,7 @@
 		) => void;
 	};
 
-	let { graph, readonly = false, onchange, onselect, onAddNode, onRemoveNodes, onMoveNodes, onReparentNodes, onAddEdge, onRemoveEdges, onResizeNodes }: Props = $props();
+	let { graph, readonly = false, onchange, onselect, onNodeClick, onPaneClick, onAddNode, onRemoveNodes, onMoveNodes, onReparentNodes, onAddEdge, onRemoveEdges, onResizeNodes }: Props = $props();
 
 	const useGranular = $derived(!!(onAddNode || onRemoveNodes || onMoveNodes || onReparentNodes || onAddEdge || onRemoveEdges || onResizeNodes));
 
@@ -529,6 +543,8 @@
 			bind:nodes
 			bind:edges
 			onconnect={onConnect}
+			onnodeclick={onNodeClick ? ({ node }) => onNodeClick!(node.id) : undefined}
+			onpaneclick={onPaneClick ? () => onPaneClick!() : undefined}
 			onselectionchange={handleSelectionChange}
 			ondelete={handleDelete}
 			onnodedragstop={handleNodeDragStop}

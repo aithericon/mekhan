@@ -183,6 +183,66 @@ pub(crate) struct LoweringCtx<'a, 'c> {
     /// `publish_interface()` exactly once (except Trigger). See
     /// `service/src/compiler/interface.rs` for the protocol.
     pub(crate) interfaces: &'c mut InterfaceRegistry,
+    /// Workflow-level reusable JSON-Schema fragments. `lower_automated_step`
+    /// passes its node's `executionSpec.config` through
+    /// `compiler::schema_refs::inline_refs` so backends never see a
+    /// `{"$ref": "#/definitions/<name>"}`.
+    pub(crate) definitions: &'a std::collections::BTreeMap<String, serde_json::Value>,
+    /// Side-channel for static per-node configs the publish layer uploads to
+    /// S3. Lower-paths that previously inlined a `{config: {…}}` Rhai
+    /// literal now register the resolved JSON here (keyed by node id) and
+    /// emit a tiny `{config_ref: {storage_path: …}}` Rhai literal instead.
+    /// The Petri token stays small and the Rhai parser's
+    /// expression-complexity limit no longer caps schema depth. See
+    /// `lower_automated_step` for the emission site,
+    /// `service/src/process/publish.rs` for the upload.
+    pub(crate) node_configs: &'c mut HashMap<String, serde_json::Value>,
+    /// Compile-time `(template_id, version)` used to mint the deterministic
+    /// S3 key for every `node_configs` entry. Mirrors the executor-side
+    /// `node-config.json` key the publish path uploads to (see
+    /// `mekhan_service::s3::ArtifactStore::node_config_key`).
+    pub(crate) config_storage: ConfigStorage<'a>,
+}
+
+/// Compile-time pointer set the lowering uses to mint the
+/// `templates/{template_id}/v{version}/{node_id}/node-config.json` key for
+/// every parked `node_configs` entry. The key has to be computable at
+/// compile time so the Rhai literal can reference it before publish writes
+/// the blob. Tests that don't care about real publish IDs pass
+/// [`ConfigStorage::ephemeral`].
+#[derive(Clone, Copy)]
+pub struct ConfigStorage<'a> {
+    pub template_id: uuid::Uuid,
+    pub version: i32,
+    /// Optional override for the key-computation function. None means use
+    /// the standard `templates/{tid}/v{ver}/{node_id}/node-config.json`
+    /// format. Reserved for future use (e.g., per-tenant prefixes).
+    pub key_fn: Option<&'a (dyn Fn(uuid::Uuid, i32, &str) -> String + Sync)>,
+}
+
+impl<'a> ConfigStorage<'a> {
+    /// Compute the S3 key for one node's static config blob.
+    pub fn key(&self, node_id: &str) -> String {
+        match self.key_fn {
+            Some(f) => f(self.template_id, self.version, node_id),
+            None => format!(
+                "templates/{}/v{}/{}/node-config.json",
+                self.template_id, self.version, node_id
+            ),
+        }
+    }
+
+    /// Compile-time-only storage tag with a synthetic template id. Right for
+    /// compiler unit tests and the previewer where no publish is on the
+    /// horizon — the lowered Rhai still embeds a `config_ref` (so the
+    /// emission path is exercised) but no S3 upload happens.
+    pub fn ephemeral() -> Self {
+        Self {
+            template_id: uuid::Uuid::nil(),
+            version: 0,
+            key_fn: None,
+        }
+    }
 }
 
 impl LoweringCtx<'_, '_> {
@@ -253,17 +313,21 @@ impl NodeLowering for WorkflowNode {
 }
 
 /// Thin dispatch retained as the lowering entry point used by the orchestrator.
-pub(crate) fn expand_node(
-    node: &WorkflowNode,
-    outgoing_edges: &[&WorkflowEdge],
-    incoming_edges: &[&WorkflowEdge],
-    children: &[&WorkflowNode],
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn expand_node<'a>(
+    node: &'a WorkflowNode,
+    outgoing_edges: &'a [&'a WorkflowEdge],
+    incoming_edges: &'a [&'a WorkflowEdge],
+    children: &'a [&'a WorkflowNode],
     ctx: &mut Context,
     ports: &mut HashMap<String, NodePorts>,
     fixups: &mut PostProcess,
-    node_files: &HashMap<String, InputSource>,
-    sub_air: &SubWorkflowAir,
+    node_files: &'a HashMap<String, InputSource>,
+    sub_air: &'a SubWorkflowAir,
     interfaces: &mut InterfaceRegistry,
+    definitions: &'a std::collections::BTreeMap<String, serde_json::Value>,
+    node_configs: &mut HashMap<String, serde_json::Value>,
+    config_storage: ConfigStorage<'a>,
 ) -> Result<(), CompileError> {
     let mut cx = LoweringCtx {
         node,
@@ -276,6 +340,9 @@ pub(crate) fn expand_node(
         node_files,
         sub_air,
         interfaces,
+        definitions,
+        node_configs,
+        config_storage,
     };
     node.lower(&mut cx)?;
     // Protocol enforcement: every non-Trigger lowering MUST call
@@ -942,11 +1009,11 @@ fn lower_human_task(cx: &mut LoweringCtx) -> Result<(), CompileError> {
 /// Enabled for the backends that consume declared outputs at runtime:
 /// - **Python**: the runner sweeps `globals()` by declared name + validates
 ///   each value against `kind` (executor-backend::python).
-/// - **Kreuzberg**: `build_single_outputs` writes its native keys
-///   (`content`, `mime_type`, `word_count`, …) then auto-fills any declared
-///   output absent from that set with the extracted text content
-///   (executor-kreuzberg::backend). Lets demo authors declare semantic
-///   names (`full_text`) on top of kreuzberg's native shape.
+/// - **Kreuzberg**: `build_single_outputs` emits kreuzberg's native
+///   `ExtractionResult` shape 1:1 — `content`, `mime_type`, `metadata`,
+///   `tables`, `detected_languages`, and optional `chunks`/`images`/`pages`/
+///   `elements`/`djot_content`. Declarations must match these names; the
+///   executor's required-output check fires on mismatch. No aliasing.
 /// - **LLM**: when the response has a structured-JSON payload, the backend
 ///   unpacks each declared output by matching it to a top-level key; any
 ///   unmatched declaration falls back to the whole response_value
@@ -1029,14 +1096,38 @@ fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileError> {
 
     // Validate and transform editor config → executor format (before closure)
     let backend_type = &execution_spec.backend_type;
-    let (validated_config, staged_inputs) =
+    let (mut validated_config, staged_inputs) =
         crate::compiler::backend_configs::validate_and_transform(
             backend_type,
             &execution_spec.config,
             cx.node_files,
             id,
         )?;
-    let config_rhai = json_to_rhai_literal(&validated_config);
+    // Inline `{"$ref": "#/definitions/<name>"}` against the workflow-level
+    // `definitions` map. After this, the value rhai-literal'd into the job
+    // spec is fully self-contained — backends never see a `$ref`. The
+    // pre-lowering `validate_schema_refs` pass already surfaced unresolved
+    // refs with node id + JSON path, so a failure here would be a logic
+    // bug (validation drifted from inlining); still propagate cleanly.
+    crate::compiler::schema_refs::inline_refs(&mut validated_config, cx.definitions)
+        .map_err(|e| CompileError::SchemaRefUnresolved {
+            node_id: id.clone(),
+            path: String::new(),
+            message: e.to_string(),
+        })?;
+    // Offload the static config to the per-node side-channel; the publish
+    // path uploads it to S3 (see `service::process::publish`), and the
+    // executor's `FetchConfigHook` materialises it back into `spec.config`
+    // before backend dispatch. The Rhai literal stays a tiny `config_ref`
+    // — no more Rhai expression-complexity panics on deeply-nested
+    // response_format schemas, and no more multi-KB tokens on every
+    // job-firing NATS message.
+    let storage_key = cx.config_storage.key(id);
+    cx.node_configs.insert(id.clone(), validated_config);
+    let config_ref_rhai = format!(
+        "#{{ \"storage_path\": \"{}\" }}",
+        rhai_str_escape(&storage_key)
+    );
     let inputs_rhai =
         json_to_rhai_literal(&serde_json::to_value(&staged_inputs).unwrap_or_default());
     let outputs_rhai = declared_outputs_rhai(*backend_type, output);
@@ -1083,7 +1174,7 @@ fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileError> {
             .auto_input("input", &p_input)
             .auto_output("job", &exec_inbox)
             .logic(format!(
-                r#"let d = input; d.job_id = "{id}"; d.run = 0; d.retries = 0; d.max_retries = {max_retries}; let job_inputs = {inputs_rhai}; job_inputs.push(#{{ "name": "input.json", "source": #{{ "type": "inline", "value": input }} }}); /*__BORROWED_INPUTS__*/ d.spec = #{{ "backend": "{backend_type}", "inputs": job_inputs, "outputs": {outputs_rhai}, "config": {config_rhai}, "stream_events": ["metric", "progress", "phase", "log"] }}; #{{ job: d }}"#
+                r#"let d = input; d.job_id = "{id}"; d.run = 0; d.retries = 0; d.max_retries = {max_retries}; let job_inputs = {inputs_rhai}; job_inputs.push(#{{ "name": "input.json", "source": #{{ "type": "inline", "value": input }} }}); /*__BORROWED_INPUTS__*/ d.spec = #{{ "backend": "{backend_type}", "inputs": job_inputs, "outputs": {outputs_rhai}, "config_ref": {config_ref_rhai}, "stream_events": ["metric", "progress", "phase", "log"] }}; #{{ job: d }}"#
             ));
 
         let lc = executor_lifecycle(
@@ -1194,14 +1285,27 @@ fn lower_automated_step_scheduled(cx: &mut LoweringCtx) -> Result<(), CompileErr
     let resources: Option<ResourceConfig> = resources.clone();
     let backend_type = execution_spec.backend_type;
 
-    let (validated_config, staged_inputs) =
+    let (mut validated_config, staged_inputs) =
         crate::compiler::backend_configs::validate_and_transform(
             &backend_type,
             &execution_spec.config,
             cx.node_files,
             &id,
         )?;
-    let config_rhai = json_to_rhai_literal(&validated_config);
+    crate::compiler::schema_refs::inline_refs(&mut validated_config, cx.definitions)
+        .map_err(|e| CompileError::SchemaRefUnresolved {
+            node_id: id.clone(),
+            path: String::new(),
+            message: e.to_string(),
+        })?;
+    // Side-channel the static config to the publish layer — see the
+    // parallel offload in `lower_automated_step` for the rationale.
+    let storage_key = cx.config_storage.key(&id);
+    cx.node_configs.insert(id.clone(), validated_config);
+    let config_ref_rhai = format!(
+        "#{{ \"storage_path\": \"{}\" }}",
+        rhai_str_escape(&storage_key)
+    );
     let inputs_rhai =
         json_to_rhai_literal(&serde_json::to_value(&staged_inputs).unwrap_or_default());
     let resources_rhai = json_to_rhai_literal(
@@ -1254,7 +1358,7 @@ fn lower_automated_step_scheduled(cx: &mut LoweringCtx) -> Result<(), CompileErr
         .auto_input("input", &p_input)
         .auto_output("job", &sched_out)
         .logic(format!(
-            r#"let d = #{{}}; d.job_id = "{id_lit}"; d.model_name = "{id_lit}"; d.run = 0; d.retries = 0; d.max_retries = 0; d.job_template_id = "{job_template_lit}"; let job_inputs = {inputs_rhai}; job_inputs.push(#{{ "name": "input.json", "source": #{{ "type": "inline", "value": input }} }}); /*__BORROWED_INPUTS__*/ d.spec = #{{ "backend": "{backend_wire}", "inputs": job_inputs, "outputs": {outputs_rhai}, "config": {config_rhai}, "resources": {resources_rhai}, "stream_events": ["metric", "progress", "phase", "log"] }}; #{{ job: d }}"#
+            r#"let d = #{{}}; d.job_id = "{id_lit}"; d.model_name = "{id_lit}"; d.run = 0; d.retries = 0; d.max_retries = 0; d.job_template_id = "{job_template_lit}"; let job_inputs = {inputs_rhai}; job_inputs.push(#{{ "name": "input.json", "source": #{{ "type": "inline", "value": input }} }}); /*__BORROWED_INPUTS__*/ d.spec = #{{ "backend": "{backend_wire}", "inputs": job_inputs, "outputs": {outputs_rhai}, "config_ref": {config_ref_rhai}, "resources": {resources_rhai}, "stream_events": ["metric", "progress", "phase", "log"] }}; #{{ job: d }}"#
         ));
 
     ctx.transition(format!("t_{id}_to_output"), format!("{label} - To Output"))
@@ -1303,13 +1407,19 @@ fn lower_catalogue_query(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     let label = label.clone();
     let backend_type = execution_spec.backend_type;
 
-    let (query_token, _no_inputs) =
+    let (mut query_token, _no_inputs) =
         crate::compiler::backend_configs::validate_and_transform(
             &backend_type,
             &execution_spec.config,
             cx.node_files,
             &id,
         )?;
+    crate::compiler::schema_refs::inline_refs(&mut query_token, cx.definitions)
+        .map_err(|e| CompileError::SchemaRefUnresolved {
+            node_id: id.clone(),
+            path: String::new(),
+            message: e.to_string(),
+        })?;
     let query_rhai = json_to_rhai_literal(&query_token);
 
     let ctx = &mut *cx.ctx;
