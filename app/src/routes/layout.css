@@ -168,6 +168,49 @@
 	}
 }
 
+/* xyflow theming. Specificity 0,3,0 (root + flow + dark) wins over xyflow's
+   own `.svelte-flow` / `.svelte-flow.dark` defaults so the canvas inherits
+   our theme tokens and flips with the rest of the UI. */
+:root .svelte-flow,
+:root .svelte-flow.dark {
+	--xy-edge-stroke-default: var(--border);
+	--xy-edge-stroke-selected-default: var(--primary);
+	--xy-connectionline-stroke-default: var(--ring);
+	--xy-attribution-background-color-default: transparent;
+	--xy-minimap-background-color-default: var(--card);
+	--xy-minimap-mask-background-color-default: color-mix(in oklch, var(--muted) 55%, transparent);
+	--xy-minimap-mask-stroke-color-default: var(--border);
+	--xy-minimap-node-background-color-default: var(--muted-foreground);
+	--xy-minimap-node-stroke-color-default: transparent;
+	--xy-controls-button-background-color-default: var(--card);
+	--xy-controls-button-background-color-hover-default: var(--accent);
+	--xy-controls-button-border-color-default: var(--border);
+	--xy-controls-button-color-default: var(--foreground);
+	--xy-controls-button-color-hover-default: var(--foreground);
+	--xy-controls-box-shadow-default: var(--shadow-sm);
+	--xy-handle-background-color-default: var(--primary);
+	--xy-handle-border-color-default: var(--card);
+	--xy-edge-label-background-color-default: var(--card);
+	--xy-edge-label-color-default: var(--foreground);
+	--xy-selection-background-color-default: color-mix(in oklch, var(--primary) 12%, transparent);
+	--xy-selection-border-default: 1px dotted var(--primary);
+	--xy-node-background-color-default: var(--card);
+	--xy-node-color-default: var(--foreground);
+	--xy-node-border-default: 1px solid var(--border);
+	--xy-node-boxshadow-hover-default: var(--shadow-sm);
+	--xy-node-boxshadow-selected-default: 0 0 0 2px var(--ring);
+}
+
+:root .svelte-flow {
+	--xy-background-pattern-dots-color-default: oklch(0.80 0.012 250);
+	--xy-background-pattern-lines-color-default: var(--border);
+	--xy-background-pattern-cross-color-default: var(--border);
+}
+
+:root .svelte-flow.dark {
+	--xy-background-pattern-dots-color-default: oklch(0.36 0.018 250);
+}
+
 @layer utilities {
 	@keyframes rise {
 		from {

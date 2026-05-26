@@ -10,6 +10,7 @@
 		type Connection
 	} from '@xyflow/svelte';
 	import '@xyflow/svelte/dist/style.css';
+	import { mode } from 'mode-watcher';
 
 	import { setContext } from 'svelte';
 	import { nodeTypes } from './nodes';
@@ -542,6 +543,7 @@
 			{edgeTypes}
 			bind:nodes
 			bind:edges
+			colorMode={mode.current ?? 'system'}
 			onconnect={onConnect}
 			onnodeclick={onNodeClick ? ({ node }) => onNodeClick!(node.id) : undefined}
 			onpaneclick={onPaneClick ? () => onPaneClick!() : undefined}
