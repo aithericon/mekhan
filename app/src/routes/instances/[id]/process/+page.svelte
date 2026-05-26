@@ -46,7 +46,7 @@
 					{/each}
 				</div>
 			{/if}
-			<ProcessView processId={selectedProcessId} />
+			<ProcessView processId={selectedProcessId} instance={ctx.instance} />
 		</div>
 	{:else}
 		<div

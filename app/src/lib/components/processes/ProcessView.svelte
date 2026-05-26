@@ -5,12 +5,15 @@
 		getProcessLogs,
 		getProcessTasks,
 		getProcessArtifacts,
+		listStepExecutions,
 		cancelTask,
 		type ProcessDetail,
 		type HpiTask,
 		type HpiMetricSummary,
 		type HpiLog,
-		type CatalogueEntry
+		type CatalogueEntry,
+		type StepExecution,
+		type WorkflowInstance
 	} from '$lib/api/client';
 	import type { ProcessTimelineEntry, Phase, Progress } from '$lib/types/process';
 	import { page } from '$app/state';
@@ -18,6 +21,7 @@
 	import { ArtifactCard } from '$lib/components/catalogue';
 	import { MetricsPanel, LogsPanel, ArtifactsPanel } from '$lib/components/process-live';
 	import { createProcessLiveStore } from '$lib/stores/process-live.svelte';
+	import { SmartValue } from '$lib/components/instances/output-renderers';
 	import { onDestroy, untrack } from 'svelte';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
@@ -27,6 +31,8 @@
 	import ScrollText from '@lucide/svelte/icons/scroll-text';
 	import ListChecks from '@lucide/svelte/icons/list-checks';
 	import LayoutDashboard from '@lucide/svelte/icons/layout-dashboard';
+	import LogIn from '@lucide/svelte/icons/log-in';
+	import Flag from '@lucide/svelte/icons/flag';
 	import X from '@lucide/svelte/icons/x';
 	import ChevronLeft from '@lucide/svelte/icons/chevron-left';
 	import ChevronRight from '@lucide/svelte/icons/chevron-right';
@@ -34,8 +40,16 @@
 
 	let {
 		processId,
-		detail = $bindable<ProcessDetail | null>(null)
-	}: { processId: string; detail?: ProcessDetail | null } = $props();
+		detail = $bindable<ProcessDetail | null>(null),
+		instance = null
+	}: {
+		processId: string;
+		detail?: ProcessDetail | null;
+		/** When set, the Overview tab also surfaces the workflow's Start inputs
+		 *  and End results (sourced from this instance's step_executions
+		 *  projection), so the run's I/O is visible alongside the HPI summary. */
+		instance?: WorkflowInstance | null;
+	} = $props();
 
 	// ── State ──────────────────────────────────────────────────────────────────
 	let loading = $state(true);
@@ -74,13 +88,48 @@
 	// visit, torn down when the process changes or this component unmounts.
 	let liveStore = $state<ReturnType<typeof createProcessLiveStore> | null>(null);
 
+	// Step executions feed the Overview tab's Inputs (Start node outputs) and
+	// Results (End node outputs) sections. Loaded only when an `instance` is
+	// supplied; polled while the run is live.
+	let stepExecutions = $state<StepExecution[]>([]);
+	const instanceIsTerminal = $derived(
+		instance
+			? instance.status === 'completed' ||
+				instance.status === 'failed' ||
+				instance.status === 'cancelled'
+			: false
+	);
+	const startSteps = $derived(
+		stepExecutions
+			.filter(
+				(s) => s.node_kind === 'start' && s.outputs !== null && s.outputs !== undefined
+			)
+			.sort(
+				(a, b) =>
+					a.node_id.localeCompare(b.node_id) || a.iteration_index - b.iteration_index
+			)
+	);
+	const endSteps = $derived(
+		stepExecutions
+			.filter(
+				(s) =>
+					(s.node_kind === 'end' || s.node_kind === 'failure') &&
+					s.outputs !== null &&
+					s.outputs !== undefined
+			)
+			.sort(
+				(a, b) =>
+					a.node_id.localeCompare(b.node_id) || a.iteration_index - b.iteration_index
+			)
+	);
+	const showInputs = $derived(!!instance && startSteps.length > 0);
+	const showResults = $derived(
+		!!instance &&
+			(endSteps.length > 0 ||
+				(instance.result !== null && instance.result !== undefined))
+	);
+
 	// ── Colours / formatters (body-only) ───────────────────────────────────────
-	const logLevelColors: Record<string, string> = {
-		info: 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200',
-		warn: 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200',
-		error: 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200',
-		debug: 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'
-	};
 	const taskStatusColors: Record<string, string> = {
 		pending: 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-300',
 		completed: 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950 dark:text-emerald-300',
@@ -112,9 +161,6 @@
 				return `Received ${relativeTime(t.created_at)}`;
 		}
 	}
-	function logLevelColor(l: string): string {
-		return logLevelColors[l.toLowerCase()] ?? logLevelColors.debug;
-	}
 	function taskStatusColor(s: string): string {
 		return taskStatusColors[s.toLowerCase()] ?? taskStatusColors.pending;
 	}
@@ -129,13 +175,6 @@
 		return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(
 			new Date(dateStr)
 		);
-	}
-	function formatTimestamp(s: string): string {
-		return new Intl.DateTimeFormat(undefined, {
-			hour: '2-digit',
-			minute: '2-digit',
-			second: '2-digit'
-		}).format(new Date(s));
 	}
 
 	// ── Timeline ──────────────────────────────────────────────────────────────
@@ -248,6 +287,14 @@
 		}
 	}
 
+	async function loadStepExecutions(instanceId: string) {
+		try {
+			stepExecutions = await listStepExecutions(instanceId);
+		} catch {
+			stepExecutions = [];
+		}
+	}
+
 	// After an inline action on the Overview "Open tasks" card, drop the task
 	// from the (detail-derived) open list so it doesn't linger as pending.
 	// Link to a task while remembering where we came from, so the task page's
@@ -284,6 +331,21 @@
 		loadDetail();
 	});
 
+	// Inputs/Results: fetch step executions when an instance is provided, and
+	// poll until the run terminates so the projection (eventually consistent)
+	// catches up while the user is watching.
+	$effect(() => {
+		const id = instance?.id;
+		if (!id) {
+			stepExecutions = [];
+			return;
+		}
+		loadStepExecutions(id);
+		if (instanceIsTerminal) return;
+		const t = setInterval(() => loadStepExecutions(id), 2000);
+		return () => clearInterval(t);
+	});
+
 	// One effect, tracking only tab + processId. Everything that reads/writes
 	// liveStore is untracked so it can't retrigger this effect.
 	let prevProcessId: string | null = null;
@@ -298,7 +360,15 @@
 			prevProcessId = tid;
 
 			if (tab === 'tasks') loadTasks();
-			else if (tab === 'artifacts' || tab === 'metrics' || tab === 'logs') {
+			else if (
+				tab === 'overview' ||
+				tab === 'artifacts' ||
+				tab === 'metrics' ||
+				tab === 'logs'
+			) {
+				// Overview embeds LogsPanel for its "Recent activity" section so
+				// the rendering matches the Logs tab — that means the live store
+				// must be available on overview too.
 				if (!liveStore) {
 					const store = createProcessLiveStore(tid);
 					liveStore = store;
@@ -372,6 +442,90 @@
 	<!-- ── Overview Tab ───────────────────────────────────────── -->
 	{#if activeTab === 'overview'}
 		<div class="space-y-4">
+			{#if showInputs}
+				<!-- The workflow's Start envelope(s) — what was fed into this run.
+				     One section per Start block; SmartValue picks ProcessTokenEnvelope
+				     (matches on `_instance_id`) so business fields surface above the
+				     `_*` metadata disclosure. -->
+				<div class="rounded-lg border border-border bg-card p-4">
+					<h3 class="mb-3 flex items-center gap-2 text-sm font-semibold text-foreground">
+						<LogIn class="size-4 text-muted-foreground" />
+						Inputs
+						{#if startSteps.length > 1}
+							<Badge variant="secondary">{startSteps.length}</Badge>
+						{/if}
+					</h3>
+					<div class="space-y-4">
+						{#each startSteps as step (step.node_id + '-' + step.iteration_index)}
+							{#if startSteps.length > 1}
+								<div class="mb-1 flex flex-wrap items-center gap-1.5 text-sm">
+									<span class="font-mono text-muted-foreground">from</span>
+									<span class="font-mono text-foreground">{step.node_id}</span>
+								</div>
+							{/if}
+							<SmartValue
+								value={step.outputs}
+								ctx={{
+									position: 'output',
+									nodeKind: step.node_kind,
+									instanceId: instance?.id,
+									stepStartedAt: step.started_at ?? undefined,
+									stepCompletedAt: step.completed_at ?? undefined
+								}}
+							/>
+						{/each}
+					</div>
+				</div>
+			{/if}
+
+			{#if showResults}
+				<!-- Workflow terminal(s). Prefer rendering each End-node step's
+				     output envelope directly — `EndTerminalEnvelope` matches the
+				     `{exit_code, name, status, process_id, task_id}` shape and
+				     leads with the declared result. Fall back to `instance.result`
+				     when the step projection hasn't caught up yet but the instance
+				     row already carries the structured result envelope. -->
+				<div class="rounded-lg border border-border bg-card p-4">
+					<h3 class="mb-3 flex items-center gap-2 text-sm font-semibold text-foreground">
+						<Flag class="size-4 text-muted-foreground" />
+						Results
+						{#if endSteps.length > 1}
+							<Badge variant="secondary">{endSteps.length}</Badge>
+						{/if}
+					</h3>
+					<div class="space-y-4">
+						{#if endSteps.length > 0}
+							{#each endSteps as step (step.node_id + '-' + step.iteration_index)}
+								{#if endSteps.length > 1}
+									<div class="mb-1 flex flex-wrap items-center gap-1.5 text-sm">
+										<span class="font-mono text-muted-foreground">from</span>
+										<span class="font-mono text-foreground">{step.node_id}</span>
+									</div>
+								{/if}
+								<SmartValue
+									value={step.outputs}
+									ctx={{
+										position: 'output',
+										nodeKind: step.node_kind,
+										instanceId: instance?.id,
+										stepStartedAt: step.started_at ?? undefined,
+										stepCompletedAt: step.completed_at ?? undefined
+									}}
+								/>
+							{/each}
+						{:else}
+							<SmartValue
+								value={instance?.result}
+								ctx={{
+									position: 'output',
+									instanceId: instance?.id
+								}}
+							/>
+						{/if}
+					</div>
+				</div>
+			{/if}
+
 			{#if progress}
 				<div class="rounded-lg border border-border bg-card p-4">
 					<div class="mb-2 flex items-baseline justify-between gap-3">
@@ -488,25 +642,14 @@
 				</div>
 			</div>
 
-			{#if detail.recent_logs.length > 0}
+			<!-- Recent activity uses the exact same LogsPanel as the Logs tab so
+			     row shape, level badges, expand toggles, and follow-tail behave
+			     identically — otherwise the two surfaces look like different
+			     systems for the same data. -->
+			{#if liveStore}
 				<div class="rounded-lg border border-border bg-card p-4">
-					<h3 class="mb-2 text-sm font-semibold text-foreground">Recent Activity</h3>
-					<div class="space-y-1">
-						{#each detail.recent_logs.slice(0, 5) as log}
-							<div class="flex items-start gap-2 text-sm">
-								<span class="shrink-0 tabular-nums text-muted-foreground">
-									{formatTimestamp(log.timestamp)}
-								</span>
-								<Badge class={logLevelColor(log.level)} variant="secondary">
-									{log.level}
-								</Badge>
-								{#if log.source}
-									<span class="shrink-0 font-mono text-muted-foreground">{log.source}</span>
-								{/if}
-								<span class="text-foreground">{log.message}</span>
-							</div>
-						{/each}
-					</div>
+					<h3 class="mb-3 text-sm font-semibold text-foreground">Recent activity</h3>
+					<LogsPanel store={liveStore} />
 				</div>
 			{/if}
 		</div>

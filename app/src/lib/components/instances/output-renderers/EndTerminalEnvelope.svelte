@@ -40,12 +40,29 @@
 		'task_id',
 		'status'
 	]);
+	// Bare-result extras must exclude the `ok`/`value`/`error` keys we already
+	// surfaced, otherwise the "Extra" panel would duplicate the headline result.
+	const BARE_RESULT_KEYS: ReadonlySet<string> = new Set(['ok', 'value', 'error']);
 
 	let { value, ctx }: RendererProps = $props();
 	const env = $derived(value as Terminal);
 
+	// The same component renders two shapes:
+	//   • Full terminal envelope — `{exit_code, name, status, process_id, task_id}`
+	//     parked at `workflow_terminals[*]` by End/Failure nodes.
+	//   • Bare result envelope — `{ok, value/error}` as stored on
+	//     `WorkflowInstance.result`. There, the top-level object *is* the
+	//     exit_code.
+	const isBareResult = $derived(
+		env.exit_code === undefined &&
+			typeof (env as { ok?: unknown }).ok === 'boolean'
+	);
 	const exit = $derived<ExitCode | undefined>(
-		env.exit_code && typeof env.exit_code === 'object' ? env.exit_code : undefined
+		env.exit_code && typeof env.exit_code === 'object'
+			? env.exit_code
+			: isBareResult
+				? (env as unknown as ExitCode)
+				: undefined
 	);
 	const isOk = $derived(exit !== undefined && (exit as { ok?: unknown }).ok === true);
 	const isErr = $derived(exit !== undefined && (exit as { ok?: unknown }).ok === false);
@@ -67,10 +84,13 @@
 	// Anything carried on the terminal token beyond the canonical workflow
 	// metadata is rare but possible (process bridge variants, custom forwarders).
 	// Preserve it under "Extra" so nothing is silently dropped from the UI.
+	// In bare-result mode the headline `{ok, value, error}` keys are surfaced
+	// above already, so exclude them here.
 	const extras = $derived.by<Record<string, unknown>>(() => {
+		const excluded = isBareResult ? BARE_RESULT_KEYS : KNOWN_META_KEYS;
 		const out: Record<string, unknown> = {};
 		for (const [k, v] of Object.entries(env)) {
-			if (!KNOWN_META_KEYS.has(k)) out[k] = v;
+			if (!excluded.has(k)) out[k] = v;
 		}
 		return out;
 	});

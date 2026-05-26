@@ -62,7 +62,9 @@ function matchesAutomatedStep(value: unknown, ctx: RenderContext): boolean {
  *  workflow-level `name` / `process_id` / `task_id` / `status` fields.
  *  Distinguishing signature: all four workflow-metadata strings present.
  *  `exit_code` is treated as optional so bare-End terminals (no result
- *  mapping) still match and render the metadata cleanly. */
+ *  mapping) still match and render the metadata cleanly. Accepts both `end`
+ *  and `failure` node kinds because `lower_failure` emits the identical
+ *  shape — only the `exit_code.ok` arm differs. */
 function matchesEndTerminal(value: unknown, ctx: RenderContext): boolean {
 	if (!isObj(value)) return false;
 	if (typeof value.process_id !== 'string') return false;
@@ -70,7 +72,21 @@ function matchesEndTerminal(value: unknown, ctx: RenderContext): boolean {
 	if (typeof value.status !== 'string') return false;
 	if (typeof value.name !== 'string') return false;
 	if ('exit_code' in value && value.exit_code !== null && !isObj(value.exit_code)) return false;
-	return ctx.nodeKind === undefined || ctx.nodeKind === 'end';
+	return ctx.nodeKind === undefined || ctx.nodeKind === 'end' || ctx.nodeKind === 'failure';
+}
+
+/** Bare result envelope — the `exit_code` payload on its own, as stored on
+ *  `WorkflowInstance.result` once the run terminates: `{ok: true, value}` or
+ *  `{ok: false, error}`. Same successful-path/failed-path UX as the full
+ *  End-terminal envelope, just without the workflow-metadata frame, so we
+ *  route it to the same component. */
+function matchesResultEnvelope(value: unknown): boolean {
+	if (!isObj(value)) return false;
+	if (typeof value.ok !== 'boolean') return false;
+	// Reject anything that already has the End-terminal frame; that goes
+	// through `matchesEndTerminal` for the richer metadata strip.
+	if (typeof value.name === 'string' && typeof value.process_id === 'string') return false;
+	return value.ok ? 'value' in value : 'error' in value;
 }
 
 /** Process-rooted token (carrying `_instance_id` stamped by Start, plus
@@ -230,6 +246,12 @@ export const REGISTRY: OutputRenderer[] = [
 		name: 'end-terminal',
 		label: 'Workflow result',
 		matches: matchesEndTerminal,
+		component: EndTerminalEnvelope
+	},
+	{
+		name: 'result-envelope',
+		label: 'Workflow result',
+		matches: matchesResultEnvelope,
 		component: EndTerminalEnvelope
 	},
 	{
