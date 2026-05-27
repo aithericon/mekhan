@@ -6,6 +6,7 @@
 	import { FormField } from '$lib/components/ui/form-field';
 	import InsertRefButton from '../InsertRefButton.svelte';
 	import ResourcePicker from '../shared/ResourcePicker.svelte';
+	import JsonSchemaBuilder, { detectShape } from './JsonSchemaBuilder.svelte';
 	import type { ScopeEntry } from '$lib/editor/guard-scope';
 	import { untrack } from 'svelte';
 
@@ -14,9 +15,17 @@
 		readonly?: boolean;
 		onchange: (config: Record<string, unknown>) => void;
 		scope?: ScopeEntry[];
+		nodeId?: string;
+		templateId?: string;
 	};
 
-	let { config, readonly = false, onchange, scope = [] }: Props = $props();
+	let { config, readonly = false, onchange, scope = [], nodeId, templateId }: Props = $props();
+
+	function ideHref(): string | null {
+		if (!templateId || !nodeId) return null;
+		const params = new URLSearchParams({ node: nodeId });
+		return `/templates/${templateId}/ide?${params.toString()}`;
+	}
 
 	// Per-provider resource type map — resource pickers are provider-scoped.
 	// Only `openai` has a workspace resource type today; `anthropic` / `ollama`
@@ -113,6 +122,31 @@
 		});
 	});
 
+	const schemaObj = $derived(
+		((config.response_format as Record<string, unknown>)?.schema as Record<string, unknown>) ?? {}
+	);
+	const schemaShape = $derived(detectShape(schemaObj));
+	const builderCompatible = $derived(schemaShape.kind !== 'raw_only');
+
+	// Builder vs raw JSON. Default to builder when the persisted schema is
+	// round-trippable (multi-field object or root scalar). When it isn't,
+	// fall back to raw + disable the Builder toggle so the user doesn't lose
+	// the bits the builder can't represent.
+	let schemaEditor = $state<'builder' | 'raw'>('builder');
+	$effect(() => {
+		const compatible = builderCompatible;
+		untrack(() => {
+			if (!compatible && schemaEditor === 'builder') schemaEditor = 'raw';
+		});
+	});
+
+	function handleBuilderChange(schema: Record<string, unknown>) {
+		onchange({
+			...config,
+			response_format: { type: 'json_schema', schema }
+		});
+	}
+
 	// Heuristic for "schema parses but has no usable shape" — the
 	// derive endpoint will fall back to a single text-mode `response`
 	// field, which often surprises authors who expected their schema
@@ -136,6 +170,17 @@
 		return t == null;
 	});
 </script>
+
+{#if ideHref()}
+	<a
+		href={ideHref()}
+		class="flex items-center justify-center gap-1.5 rounded-md border border-dashed border-border py-1.5 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+		title="Edit prompts and schema with more room"
+		data-testid="llm-open-in-ide"
+	>
+		Open in IDE
+	</a>
+{/if}
 
 <div class="space-y-1.5">
 	<span class="text-sm font-medium text-muted-foreground">Provider</span>
@@ -323,49 +368,83 @@
 </div>
 
 {#if responseFormatType === 'json_schema'}
-	<div class="space-y-1.5">
-		<span class="text-sm font-medium text-muted-foreground">JSON Schema</span>
-		<CodeEditor
-			value={schemaDraft}
-			language="json"
-			{readonly}
-			minHeight="80px"
-			maxHeight="200px"
-			onchange={(val) => {
-				schemaDraft = val;
-				try {
-					const parsed = JSON.parse(val);
-					schemaParseError = null;
-					onchange({
-						...config,
-						response_format: {
-							type: 'json_schema',
-							schema: parsed
-						}
-					});
-				} catch (e) {
-					// Hold the last good schema (don't propagate) but
-					// surface the parse error so the user knows the
-					// derived output port is frozen until they fix it.
-					schemaParseError = e instanceof Error ? e.message : String(e);
-				}
-			}}
-		/>
-		{#if schemaParseError}
-			<p class="text-sm text-destructive" data-testid="llm-schema-parse-error">
-				Invalid JSON — output fields won't update until this is fixed. ({schemaParseError})
-			</p>
-		{:else if schemaIsEffectivelyEmpty}
-			<p class="text-sm text-muted-foreground" data-testid="llm-schema-empty-hint">
-				Schema has no declared shape — output falls back to a single
-				<code class="rounded bg-muted px-1 py-0.5 font-mono text-sm">response</code> field. Add
-				<code class="rounded bg-muted px-1 py-0.5 font-mono text-sm">"type"</code> (e.g.
-				<code class="rounded bg-muted px-1 py-0.5 font-mono text-sm">"string"</code>) for a single
-				scalar output, or
-				<code class="rounded bg-muted px-1 py-0.5 font-mono text-sm">"type":"object"</code> +
-				<code class="rounded bg-muted px-1 py-0.5 font-mono text-sm">"properties"</code> to expand into
-				multiple fields.
-			</p>
+	<div class="space-y-2">
+		<div class="flex items-center justify-between">
+			<span class="text-sm font-medium text-muted-foreground">JSON Schema</span>
+			<div class="flex gap-1" data-testid="llm-schema-editor-toggle">
+				<button
+					type="button"
+					class="rounded-md border px-2 py-0.5 text-sm transition-colors {schemaEditor === 'builder'
+						? 'border-primary bg-primary/5 text-foreground'
+						: 'border-border text-muted-foreground hover:bg-accent/30'}"
+					disabled={readonly || !builderCompatible}
+					title={builderCompatible
+						? 'Visual property editor'
+						: 'Schema uses constructs the builder can’t represent — raw only.'}
+					onclick={() => (schemaEditor = 'builder')}
+					data-testid="llm-schema-mode-builder"
+				>
+					Builder
+				</button>
+				<button
+					type="button"
+					class="rounded-md border px-2 py-0.5 text-sm transition-colors {schemaEditor === 'raw'
+						? 'border-primary bg-primary/5 text-foreground'
+						: 'border-border text-muted-foreground hover:bg-accent/30'}"
+					disabled={readonly}
+					onclick={() => (schemaEditor = 'raw')}
+					data-testid="llm-schema-mode-raw"
+				>
+					Raw JSON
+				</button>
+			</div>
+		</div>
+
+		{#if schemaEditor === 'builder' && builderCompatible}
+			<JsonSchemaBuilder schema={schemaObj} {readonly} onchange={handleBuilderChange} />
+		{:else}
+			<CodeEditor
+				value={schemaDraft}
+				language="json"
+				{readonly}
+				minHeight="80px"
+				maxHeight="200px"
+				onchange={(val) => {
+					schemaDraft = val;
+					try {
+						const parsed = JSON.parse(val);
+						schemaParseError = null;
+						onchange({
+							...config,
+							response_format: {
+								type: 'json_schema',
+								schema: parsed
+							}
+						});
+					} catch (e) {
+						// Hold the last good schema (don't propagate) but
+						// surface the parse error so the user knows the
+						// derived output port is frozen until they fix it.
+						schemaParseError = e instanceof Error ? e.message : String(e);
+					}
+				}}
+			/>
+			{#if schemaParseError}
+				<p class="text-sm text-destructive" data-testid="llm-schema-parse-error">
+					Invalid JSON — output fields won't update until this is fixed. ({schemaParseError})
+				</p>
+			{:else if schemaIsEffectivelyEmpty}
+				<p class="text-sm text-muted-foreground" data-testid="llm-schema-empty-hint">
+					Schema has no declared shape — output falls back to a single
+					<code class="rounded bg-muted px-1 py-0.5 font-mono text-sm">response</code> field. Add
+					<code class="rounded bg-muted px-1 py-0.5 font-mono text-sm">"type"</code> (e.g.
+					<code class="rounded bg-muted px-1 py-0.5 font-mono text-sm">"string"</code>) for a single
+					scalar output, or
+					<code class="rounded bg-muted px-1 py-0.5 font-mono text-sm">"type":"object"</code> +
+					<code class="rounded bg-muted px-1 py-0.5 font-mono text-sm">"properties"</code> to expand into
+					multiple fields.
+				</p>
+			{/if}
 		{/if}
 	</div>
 {/if}

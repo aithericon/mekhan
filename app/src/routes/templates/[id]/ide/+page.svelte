@@ -8,6 +8,7 @@
 	import EditorTabs from '$lib/components/ide/EditorTabs.svelte';
 	import NodeConfigPanel from '$lib/components/ide/NodeConfigPanel.svelte';
 	import HumanTaskFormEditor from '$lib/components/ide/HumanTaskFormEditor.svelte';
+	import LlmStepIdeEditor from '$lib/components/ide/LlmStepIdeEditor.svelte';
 	import CreateInstanceDialog from '$lib/components/instances/CreateInstanceDialog.svelte';
 	import { getSession, releaseSession } from '$lib/yjs/session-store';
 	import { YjsGraphBinding } from '$lib/yjs/graph-binding.svelte';
@@ -79,6 +80,12 @@
 	);
 	const showHumanTaskEditor = $derived(
 		selectedNodeData?.type === 'human_task' && !activeTabKey
+	);
+	const showLlmStepEditor = $derived(
+		selectedNodeData?.type === 'automated_step' &&
+			(selectedNodeData as { executionSpec?: { backendType?: string } })?.executionSpec?.backendType ===
+				'llm' &&
+			!activeTabKey
 	);
 
 	function tabKey(nodeId: string, filename: string): string {
@@ -152,9 +159,13 @@
 	function handleSelectNode(nodeId: string) {
 		selectedNodeId = nodeId;
 		selectedFile = undefined;
-		// Clear active tab so center panel shows node-specific editor (e.g. human task form)
+		// Clear active tab so center panel shows node-specific editor (human task form / LLM step).
 		const nodeData = binding.graph.nodes.find((n) => n.id === nodeId)?.data;
-		if (nodeData?.type === 'human_task') {
+		const isLlmStep =
+			nodeData?.type === 'automated_step' &&
+			(nodeData as { executionSpec?: { backendType?: string } })?.executionSpec?.backendType ===
+				'llm';
+		if (nodeData?.type === 'human_task' || isLlmStep) {
 			activeTabKey = null;
 		}
 		syncUrlState();
@@ -245,9 +256,14 @@
 
 		if (nodeParam) {
 			selectedNodeId = nodeParam;
-			// If it's a human_task node and no file param, show form editor
+			// If it's a human_task or LLM step and no file param, show the
+			// node-specific center editor.
 			const nodeData = binding.graph.nodes.find((n) => n.id === nodeParam)?.data;
-			if (nodeData?.type === 'human_task' && !fileParam) {
+			const isLlmStep =
+				nodeData?.type === 'automated_step' &&
+				(nodeData as { executionSpec?: { backendType?: string } })?.executionSpec?.backendType ===
+					'llm';
+			if ((nodeData?.type === 'human_task' || isLlmStep) && !fileParam) {
 				activeTabKey = null;
 			}
 		}
@@ -370,6 +386,13 @@
 					{binding}
 					nodeId={selectedNodeId}
 					readonly={template?.published ?? false}
+				/>
+			{:else if showLlmStepEditor && selectedNodeId}
+				<LlmStepIdeEditor
+					{binding}
+					nodeId={selectedNodeId}
+					readonly={template?.published ?? false}
+					scope={nodeScopes.get(selectedNodeId) ?? []}
 				/>
 			{:else}
 				<EditorTabs
