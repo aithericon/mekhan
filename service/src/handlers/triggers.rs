@@ -292,8 +292,8 @@ pub async fn fire_trigger(
         // before any net event lands. If the fire didn't spawn (signal-kind
         // or dropped) the stream closes immediately after that event.
         ReplyMode::Sse => {
-            use axum::response::sse::{KeepAlive, Sse};
-            use futures::StreamExt;
+            use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
+            use futures::stream::{self, StreamExt};
             let result =
                 crate::triggers::sources::manual::fire(&state.triggers, &node_id, payload)
                     .await
@@ -304,26 +304,25 @@ pub async fn fire_trigger(
             };
             let fire_payload =
                 serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_string());
-            let nats = state.nats.clone();
 
-            let stream = async_stream::stream! {
-                yield Ok::<_, std::convert::Infallible>(
-                    axum::response::sse::Event::default()
-                        .event("fire")
-                        .data(fire_payload),
-                );
-                if let Some(iid) = instance_id {
-                    let mut inner = Box::pin(
-                        crate::handlers::instances::instance_jetstream_events(
-                            nats,
-                            iid.to_string(),
-                        ),
-                    );
-                    while let Some(ev) = inner.next().await {
-                        yield ev;
-                    }
-                }
+            // Compose: one-shot `fire` event + (jetstream events for the
+            // spawned instance | empty). Plain stream::chain rather than a
+            // nested async_stream! to avoid deeply-nested generator state
+            // machines (those blow the test thread's stack).
+            let prelude = stream::iter(vec![Ok::<_, std::convert::Infallible>(
+                SseEvent::default().event("fire").data(fire_payload),
+            )]);
+            let body: futures::stream::BoxStream<
+                'static,
+                Result<SseEvent, std::convert::Infallible>,
+            > = match instance_id {
+                Some(iid) => Box::pin(crate::handlers::instances::instance_jetstream_events(
+                    state.nats.clone(),
+                    iid.to_string(),
+                )),
+                None => Box::pin(stream::empty()),
             };
+            let stream = prelude.chain(body);
 
             Ok(Sse::new(stream)
                 .keep_alive(KeepAlive::new().interval(Duration::from_secs(10)))

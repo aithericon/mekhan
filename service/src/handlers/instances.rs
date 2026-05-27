@@ -8,8 +8,7 @@ use axum::{
     response::sse::{Event, KeepAlive, Sse},
     Json,
 };
-use futures::stream::Stream;
-use futures::StreamExt;
+use futures::stream::{self, Stream, StreamExt};
 use petri_domain::{DomainEvent, PersistedEvent};
 use serde_json::json;
 use uuid::Uuid;
@@ -286,24 +285,25 @@ pub async fn stream_instance(
         status.as_str(),
         "completed" | "cancelled" | "failed" | "archived"
     );
-    let nats = state.nats.clone();
 
-    let stream = async_stream::stream! {
-        yield Ok(Event::default().event("connected").data(net_id.clone()));
-
-        // Already finished (or events purged by the cleanup sweep): emit the
-        // persisted result envelope and close — no point replaying history.
+    // Compose with plain stream::chain instead of wrapping in another
+    // async_stream — nested generator state machines blow the test thread
+    // stack and aren't free in prod either.
+    let prelude = stream::iter(vec![Ok::<_, Infallible>(
+        Event::default().event("connected").data(net_id.clone()),
+    )]);
+    let body: futures::stream::BoxStream<'static, Result<Event, Infallible>> =
         if already_terminal {
+            // Already finished (or events purged by the cleanup sweep): emit
+            // the persisted result envelope and close — no point replaying.
             let payload = db_result.unwrap_or(serde_json::Value::Null);
-            yield Ok(Event::default().event("result").data(payload.to_string()));
-            return;
-        }
-
-        let mut inner = Box::pin(instance_jetstream_events(nats, net_id));
-        while let Some(ev) = inner.next().await {
-            yield ev;
-        }
-    };
+            Box::pin(stream::iter(vec![Ok(Event::default()
+                .event("result")
+                .data(payload.to_string()))]))
+        } else {
+            Box::pin(instance_jetstream_events(state.nats.clone(), net_id))
+        };
+    let stream = prelude.chain(body);
 
     Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(10))))
 }
