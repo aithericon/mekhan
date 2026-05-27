@@ -207,8 +207,8 @@ pub use effect_tokens::{
     ExecutorSubmitInput, ExecutorSubmitted, HumanCancelInput, HumanTaskAssigned,
     HumanTaskCancelled, HumanTaskResponse, ProcessMetadata, ProcessStartConfig, ProcessStarted,
     ProcessStepDef, ProcessUpdate, ProcessUpdateType, SchedulerCancelInput, SchedulerCancelled,
-    SchedulerStatusSignal, SchedulerSubmitInput, SchedulerSubmitted, TimerCancelInput,
-    TimerCancelled, TimerInput, TimerScheduled,
+    SchedulerStatusSignal, SchedulerSubmitInput, SchedulerSubmitted, SubWorkflowCancelInput,
+    SubWorkflowCancelled, TimerCancelInput, TimerCancelled, TimerInput, TimerScheduled,
 };
 
 // Re-export typed signal tokens for external signal sources

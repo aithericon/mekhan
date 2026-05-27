@@ -7,7 +7,7 @@
 
 use super::*;
 
-pub(super) fn lower_subworkflow(cx: &mut LoweringCtx) -> Result<(), CompileError> {
+pub(crate) fn lower_subworkflow(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     let id = &cx.node.id;
     let WorkflowNodeData::SubWorkflow {
         label,
@@ -184,7 +184,17 @@ pub(super) fn lower_subworkflow(cx: &mut LoweringCtx) -> Result<(), CompileError
     );
     // SubWorkflow is a parked producer: child's reply envelope is borrowable
     // as `<slug>.<field>` via the same read-arc machinery used for
-    // AutomatedStep.
-    cx.publish_interface().data_port = Some(data_place_id);
+    // AutomatedStep. It is ALSO cancellable: the spawn ack parked in
+    // `p_spawned` carries `child_net_id`, which a wrapping Timeout's
+    // post-pass uses to fire `subworkflow_cancel` and terminate the child
+    // net when the timer wins the race.
+    let iface = cx.publish_interface();
+    iface.data_port = Some(data_place_id);
+    iface.cancellable = Some(crate::compiler::interface::CancellableInFlight {
+        place_id: format!("p_{id}_spawned"),
+        kind: crate::compiler::interface::CancelKind::SubWorkflow,
+        correlation_field: "child_net_id".to_string(),
+        extra_field: None,
+    });
     Ok(())
 }

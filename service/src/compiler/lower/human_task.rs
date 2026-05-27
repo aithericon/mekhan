@@ -5,7 +5,7 @@
 
 use super::*;
 
-pub(super) fn lower_human_task(cx: &mut LoweringCtx) -> Result<(), CompileError> {
+pub(crate) fn lower_human_task(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     let id = &cx.node.id;
     let WorkflowNodeData::HumanTask { label, .. } = &cx.node.data else {
         unreachable!("lower_human_task on non-HumanTask node")
@@ -65,6 +65,20 @@ pub(super) fn lower_human_task(cx: &mut LoweringCtx) -> Result<(), CompileError>
     );
     // HumanTask is a parked producer: split_outputs forks into a data
     // envelope (borrowable via `<slug>.<field>`) + a slim control token.
-    cx.publish_interface().data_port = Some(data_place_id);
+    // It is ALSO cancellable: the HumanTaskAssigned token parked in
+    // p_active carries `task_id`, which a wrapping Timeout's post-pass
+    // uses to fire `human_cancel` when the timer wins.
+    let iface = cx.publish_interface();
+    iface.data_port = Some(data_place_id);
+    iface.cancellable = Some(crate::compiler::interface::CancellableInFlight {
+        place_id: format!("p_{id}_active"),
+        kind: crate::compiler::interface::CancelKind::Human,
+        correlation_field: "task_id".to_string(),
+        // human_cancel needs both task_id + place (the signal place where
+        // the response would have been delivered). HumanTaskAssigned tokens
+        // only carry task_id; the `place` field is derived from the node
+        // id by the cancellation post-pass since it's deterministic.
+        extra_field: None,
+    });
     Ok(())
 }

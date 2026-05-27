@@ -5,7 +5,7 @@
 
 use super::*;
 
-pub(super) fn lower_phase_update(cx: &mut LoweringCtx) -> Result<(), CompileError> {
+pub(crate) fn lower_phase_update(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     let id = &cx.node.id;
     let WorkflowNodeData::PhaseUpdate {
         label,

@@ -11,6 +11,7 @@ pub mod place;
 pub mod port;
 pub mod projection;
 pub mod scheduler;
+pub mod subworkflow;
 pub mod timer;
 pub mod token;
 pub mod transition;

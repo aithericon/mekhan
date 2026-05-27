@@ -511,7 +511,6 @@ async fn graph_topology_roundtrip() {
                 parent_id: None,
                 width: None,
                 height: None,
-                tool_meta: None,
             },
             WorkflowNode {
                 id: "process".to_string(),
@@ -536,7 +535,6 @@ async fn graph_topology_roundtrip() {
                 parent_id: None,
                 width: None,
                 height: None,
-                tool_meta: None,
             },
             WorkflowNode {
                 id: "end".to_string(),
@@ -552,7 +550,6 @@ async fn graph_topology_roundtrip() {
                 parent_id: None,
                 width: None,
                 height: None,
-                tool_meta: None,
             },
         ],
         edges: vec![
@@ -762,7 +759,6 @@ async fn yaml_format_roundtrip() {
                     parent_id: None,
                     width: None,
                     height: None,
-                    tool_meta: None,
                 },
                 WorkflowNode {
                     id: "process".to_string(),
@@ -787,7 +783,6 @@ async fn yaml_format_roundtrip() {
                     parent_id: None,
                     width: None,
                     height: None,
-                    tool_meta: None,
                 },
                 WorkflowNode {
                     id: "end".to_string(),
@@ -803,7 +798,6 @@ async fn yaml_format_roundtrip() {
                     parent_id: None,
                     width: None,
                     height: None,
-                    tool_meta: None,
                 },
             ],
             edges: vec![

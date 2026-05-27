@@ -402,6 +402,14 @@ async fn main() {
 
     let registry = Arc::new(registry);
 
+    // Install the subworkflow_cancel adapter — needs Arc<NetRegistry> so it
+    // can call `terminate` on its own registry. The Timeout node's body
+    // cancellation post-pass emits `subworkflow_cancel` effects which route
+    // through this adapter.
+    registry.set_subworkflow_cancellor(Arc::new(
+        petri_api::net_registry::RegistryCancellor::new(registry.clone()),
+    ));
+
     // Start HibernationMaster (watches activity KV, hibernates idle nets)
     if let Some(ref activity) = activity_tracker {
         let hibernator = RegistryHibernator {

@@ -48,8 +48,7 @@
     {
       "id": "lookup_order",
       "type": "automated_step",
-      "parentId": "agent",
-      "position": { "x": 60, "y": 200 },
+      "position": { "x": 820, "y": 460 },
       "toolMeta": {
         "toolName": "lookup_order",
         "toolDescription": "Look up an order's current shipping status by id. Pass the order id as a string."
@@ -108,6 +107,7 @@
   ],
   "edges": [
     { "id": "e_start_agent", "source": "start", "target": "agent", "targetHandle": "in", "type": "sequence" },
-    { "id": "e_agent_end",   "source": "agent", "target": "end",   "targetHandle": "in", "type": "sequence" }
+    { "id": "e_agent_end",   "source": "agent", "target": "end",   "targetHandle": "in", "type": "sequence" },
+    { "id": "e_agent_lookup_tool", "source": "agent", "sourceHandle": "tools", "target": "lookup_order", "targetHandle": "in", "type": "tools" }
   ]
 }

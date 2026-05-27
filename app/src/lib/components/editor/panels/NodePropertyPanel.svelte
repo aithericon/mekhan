@@ -21,7 +21,6 @@
 	import EndNodeSection from './property-sections/EndNodeSection.svelte';
 	import SubWorkflowSection from './property-sections/SubWorkflowSection.svelte';
 	import AgentNodeSection from './property-sections/AgentNodeSection.svelte';
-	import ToolMetaSection from './property-sections/ToolMetaSection.svelte';
 	import InScopeRefsSection from './property-sections/InScopeRefsSection.svelte';
 	import {
 		fetchNodeScopes,
@@ -325,15 +324,13 @@
 			<AgentNodeSection {data} {readonly} {onchange} {binding} {nodeId} {scope} />
 		{/if}
 
-		<!-- Tool tagging: any child of an Agent can be exposed as a tool
-		     (docs/12 § 2.2). The section self-gates on `parent.type === 'agent'`
-		     so it only renders for nodes whose parent is an Agent; for
-		     all others it's a no-op. Mounted here (not inside per-variant
-		     sections) so HumanTask, SubWorkflow, AutomatedStep, and Agent
-		     children all gain tool-tagging via the same surface. -->
-		{#if binding && nodeId}
-			<ToolMetaSection {binding} {nodeId} {readonly} />
-		{/if}
+		<!-- Tool tagging (deleted): there's no separate ToolMetaSection
+		     anymore. Any node wired to an Agent's `tools` source handle is
+		     exposed to the LLM by name; `tool_name` is derived from the
+		     node's own `label` (slugified) and `tool_description` from its
+		     `description`. Authors just edit the regular per-variant
+		     section. The agent's panel lists the wired tools + flags
+		     missing labels. -->
 
 		<!-- Phase 4: read-only derived port preview for variants whose outputs
 		     come from inner config rather than an editable PortsSection. Start

@@ -156,15 +156,16 @@ pub enum CompileError {
     #[error("loop '{node_id}' has no body — add at least one node inside the loop container")]
     LoopEmpty { node_id: String },
 
-    /// A node tagged as an agent tool (`tool_meta.is_some()`) has an
-    /// incoming `WorkflowEdge`. Tools are dispatched by the agent compiler
-    /// via `tool_meta.tool_name`, not via graph edges — wiring one into the
-    /// main flow would let it fire outside the agent's control. The editor
-    /// should keep tools sidebar-attached; this catches the case where an
-    /// author drags an edge into a tool by mistake.
+    /// A node wired as an agent tool (target of an edge with
+    /// `source_handle == "tools"`) has an incoming `WorkflowEdge` from
+    /// somewhere other than the agent's tools handle. Tools are dispatched
+    /// by the agent compiler via the tools-handle edge index — any other
+    /// incoming edge would let the tool fire outside the agent's control
+    /// loop. This catches the case where an author drags an extra sequence
+    /// edge into a tool node by mistake.
     #[error(
         "node '{child_id}' is a tool of agent '{agent_id}' and must not have incoming edges \
-         (offending edge: '{edge_id}')"
+         from anywhere except the agent's tools handle (offending edge: '{edge_id}')"
     )]
     ToolChildHasIncomingEdge {
         agent_id: String,

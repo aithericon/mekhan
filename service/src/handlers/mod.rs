@@ -3,6 +3,7 @@ pub mod backends;
 pub mod files;
 pub mod health;
 pub mod instances;
+pub mod node_types;
 pub mod observability;
 pub mod process_live;
 pub mod projects;

@@ -34,7 +34,6 @@ fn start_node(id: &str) -> WorkflowNode {
         parent_id: None,
         width: None,
         height: None,
-        tool_meta: None,
     }
 }
 
@@ -53,7 +52,6 @@ fn end_node(id: &str) -> WorkflowNode {
         parent_id: None,
         width: None,
         height: None,
-        tool_meta: None,
     }
 }
 
@@ -135,17 +133,22 @@ fn start_to_end_produces_terminal_place() {
     let air = compile_to_air(&graph, "test", "desc", &std::collections::HashMap::new()).expect("should compile");
 
     // Start forks (`park_outputs`): p_s_ready (seed) + p_s_data (write-once
-    // parked copy) + p_s_main (forwarded; End merges into it) = 3 places,
-    // 1 t_s_park transition.
+    // parked copy) + p_s_main (forwarded; End merges into it) plus End's
+    // own anchored terminal place p_e_terminal = 4 places, 2 transitions
+    // (t_s_park + t_e_complete forwarder).
     assert!(
         has_place_of_type(&air, "terminal"),
         "expected a terminal place"
     );
-    assert_eq!(places(&air).len(), 3, "expected 3 places (ready/data/main)");
+    assert_eq!(
+        places(&air).len(),
+        4,
+        "expected 4 places (ready/data/main + End's p_e_terminal)"
+    );
     assert_eq!(
         transitions(&air).len(),
-        1,
-        "expected the t_s_park transition"
+        2,
+        "expected t_s_park + t_e_complete"
     );
 }
 
@@ -196,15 +199,19 @@ fn start_to_end_has_correct_structure() {
     assert_eq!(air["name"], "my_workflow");
     assert_eq!(air["description"], "a test workflow");
 
-    // After merge: the forwarded place absorbs End's terminal type (End
-    // merges into p_start_main, not the seed place). The Start no longer
-    // carries initial_tokens at compile time (parameterize_air seeds them
-    // at instance creation).
-    let main_place = places(&air)
+    // After b25ca8c: bare End anchors the workflow terminal on its own
+    // `p_<end>_terminal` place (fed by `t_<end>_complete` forwarder), not
+    // on the post-merge survivor of the inbound `p_<end>_done` collapse.
+    // The Start's forwarded `p_start_main` survives the merge but is now
+    // a plain intermediate `state` place, not the terminal.
+    let terminal_place = places(&air)
         .iter()
-        .find(|p| p["id"] == "p_start_main")
-        .expect("missing start main place");
-    assert_eq!(main_place["type"], "terminal", "forwarded place should be terminal after merge");
+        .find(|p| p["id"] == "p_end_terminal")
+        .expect("missing End's anchored terminal place");
+    assert_eq!(
+        terminal_place["type"], "terminal",
+        "End-owned p_end_terminal should be the workflow terminal"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -246,7 +253,6 @@ fn human_task_produces_group_signal_and_transitions() {
                 parent_id: None,
                 width: None,
                 height: None,
-                tool_meta: None,
             },
             end_node("e"),
         ],
@@ -317,7 +323,6 @@ fn automated_step_produces_executor_lifecycle() {
                 parent_id: None,
                 width: None,
                 height: None,
-                tool_meta: None,
             },
             end_node("e"),
         ],
@@ -413,7 +418,6 @@ fn decision_produces_guard_transitions() {
                 parent_id: None,
                 width: None,
                 height: None,
-                tool_meta: None,
             },
             end_node("ea"),
             end_node("eb"),
@@ -494,7 +498,6 @@ fn parallel_split_join_produces_fork_and_join() {
                 parent_id: None,
                 width: None,
                 height: None,
-                tool_meta: None,
             },
             WorkflowNode {
                 id: "task_a".to_string(),
@@ -511,7 +514,6 @@ fn parallel_split_join_produces_fork_and_join() {
                 parent_id: None,
                 width: None,
                 height: None,
-                tool_meta: None,
             },
             WorkflowNode {
                 id: "task_b".to_string(),
@@ -528,7 +530,6 @@ fn parallel_split_join_produces_fork_and_join() {
                 parent_id: None,
                 width: None,
                 height: None,
-                tool_meta: None,
             },
             WorkflowNode {
                 id: "join".to_string(),
@@ -545,7 +546,6 @@ fn parallel_split_join_produces_fork_and_join() {
                 parent_id: None,
                 width: None,
                 height: None,
-                tool_meta: None,
             },
             end_node("e"),
         ],
@@ -636,7 +636,6 @@ fn loop_produces_enter_continue_exit() {
                 parent_id: None,
                 width: None,
                 height: None,
-                tool_meta: None,
             },
             WorkflowNode {
                 id: "body".to_string(),
@@ -653,7 +652,6 @@ fn loop_produces_enter_continue_exit() {
                 parent_id: Some("lp".to_string()),
                 width: None,
                 height: None,
-                tool_meta: None,
             },
             end_node("e"),
         ],
@@ -751,7 +749,6 @@ fn unreachable_node_fails() {
                 parent_id: None,
                 width: None,
                 height: None,
-                tool_meta: None,
             },
         ],
         edges: vec![edge("e1", "s", "e")],
@@ -785,7 +782,6 @@ fn loop_with_zero_iterations_fails() {
                 parent_id: None,
                 width: None,
                 height: None,
-                tool_meta: None,
             },
             end_node("e"),
         ],
@@ -820,7 +816,6 @@ fn loop_with_empty_condition_fails() {
                 parent_id: None,
                 width: None,
                 height: None,
-                tool_meta: None,
             },
             end_node("e"),
         ],
@@ -864,7 +859,6 @@ fn decision_with_default_branch() {
                 parent_id: None,
                 width: None,
                 height: None,
-                tool_meta: None,
             },
             end_node("e_yes"),
             end_node("e_no"),
@@ -949,7 +943,6 @@ fn decision_lowers_as_switch_cascade() {
                 parent_id: None,
                 width: None,
                 height: None,
-                tool_meta: None,
             },
             end_node("ea"),
             end_node("eb"),
@@ -1024,7 +1017,6 @@ fn cycle_in_non_loop_edges_fails() {
                 parent_id: None,
                 width: None,
                 height: None,
-                tool_meta: None,
             },
             WorkflowNode {
                 id: "b".to_string(),
@@ -1041,7 +1033,6 @@ fn cycle_in_non_loop_edges_fails() {
                 parent_id: None,
                 width: None,
                 height: None,
-                tool_meta: None,
             },
             end_node("e"),
         ],
@@ -1083,7 +1074,6 @@ fn parallel_split_with_one_branch_fails() {
                 parent_id: None,
                 width: None,
                 height: None,
-                tool_meta: None,
             },
             end_node("e"),
         ],
@@ -1134,7 +1124,6 @@ fn automated_step_has_scoped_effect_errors() {
                 parent_id: None,
                 width: None,
                 height: None,
-                tool_meta: None,
             },
             end_node("e"),
         ],
@@ -1179,7 +1168,6 @@ fn auto_node(id: &str, label: &str) -> WorkflowNode {
         parent_id: None,
         width: None,
         height: None,
-        tool_meta: None,
     }
 }
 
@@ -1336,15 +1324,26 @@ fn transitive_merge_chain_resolves_correctly() {
         "t_b_yield should consume p_b_output, got: {yield_inputs:?}"
     );
 
-    // The End's terminal designation resolves through the merge alias chain
-    // (p_e_done -> p_b_ctrl) onto the foundation's surviving control place.
+    // Post-b25ca8c: the bare End anchors the workflow terminal on its own
+    // `p_e_terminal` place (fed by `t_e_complete` forwarder), not on
+    // `p_b_ctrl`. `p_b_ctrl` is now a plain intermediate `state` place
+    // that feeds `t_e_complete` (via the still-valid merge alias chain
+    // p_e_done -> p_b_ctrl on the input side).
     let b_ctrl = places(&air)
         .iter()
         .find(|p| p["id"] == "p_b_ctrl")
-        .expect("p_b_ctrl should be the surviving terminal place after alias resolution");
+        .expect("p_b_ctrl should survive as an intermediate state place");
     assert_eq!(
-        b_ctrl["type"], "terminal",
-        "p_b_ctrl should be terminal after p_e_done merges into it"
+        b_ctrl["type"], "state",
+        "p_b_ctrl is now intermediate; End's terminal is anchored on p_e_terminal"
+    );
+    let e_terminal = places(&air)
+        .iter()
+        .find(|p| p["id"] == "p_e_terminal")
+        .expect("End-owned p_e_terminal should be the workflow terminal");
+    assert_eq!(
+        e_terminal["type"], "terminal",
+        "p_e_terminal should be terminal after b25ca8c's End-anchor change"
     );
 }
 
@@ -1375,7 +1374,6 @@ fn join_merges_per_edge_input_places() {
                 parent_id: None,
                 width: None,
                 height: None,
-                tool_meta: None,
             },
             auto_node("aa", "Auto A"),
             auto_node("ab", "Auto B"),
@@ -1394,7 +1392,6 @@ fn join_merges_per_edge_input_places() {
                 parent_id: None,
                 width: None,
                 height: None,
-                tool_meta: None,
             },
             end_node("e"),
         ],
@@ -1488,7 +1485,6 @@ fn multi_input_non_join_retains_pass_through_transitions() {
                 parent_id: None,
                 width: None,
                 height: None,
-                tool_meta: None,
             },
             auto_node("a", "Step A"),
             auto_node("b", "Step B"),
@@ -1510,7 +1506,6 @@ fn multi_input_non_join_retains_pass_through_transitions() {
                 parent_id: None,
                 width: None,
                 height: None,
-                tool_meta: None,
             },
             end_node("ey"),
             end_node("en"),
@@ -1572,7 +1567,6 @@ fn scope_creates_group_in_air() {
                 parent_id: None,
                 width: Some(500.0),
                 height: Some(400.0),
-                tool_meta: None,
             },
             WorkflowNode {
                 id: "ht".to_string(),
@@ -1589,7 +1583,6 @@ fn scope_creates_group_in_air() {
                 parent_id: Some("my_scope".to_string()),
                 width: None,
                 height: None,
-                tool_meta: None,
             },
             end_node("e"),
         ],
@@ -1650,7 +1643,6 @@ fn scope_without_children_compiles() {
                 parent_id: None,
                 width: Some(300.0),
                 height: Some(200.0),
-                tool_meta: None,
             },
             end_node("e"),
         ],
@@ -1731,7 +1723,6 @@ fn edge_type_mismatch_fails_when_target_port_has_required_fields() {
         parent_id: None,
         width: None,
         height: None,
-        tool_meta: None,
     };
 
     let graph = WorkflowGraph {
@@ -1781,7 +1772,6 @@ fn edge_empty_target_port_accepts_anything() {
         parent_id: None,
         width: None,
         height: None,
-        tool_meta: None,
     };
 
     let graph = WorkflowGraph {
@@ -1843,7 +1833,6 @@ fn start_node_with_bool_field(id: &str, field: &str) -> WorkflowNode {
         parent_id: None,
         width: None,
         height: None,
-        tool_meta: None,
     }
 }
 
@@ -1866,7 +1855,6 @@ fn decision_with_guard(id: &str, guard: &str) -> WorkflowNode {
         parent_id: None,
         width: None,
         height: None,
-        tool_meta: None,
     }
 }
 
@@ -2054,7 +2042,6 @@ fn guard_multi_hop_scope_walk() {
         parent_id: None,
         width: None,
         height: None,
-        tool_meta: None,
     };
 
     // Decision guard references the upstream automated step's parked output
@@ -2106,7 +2093,6 @@ fn loop_condition_can_reference_iteration_local() {
         parent_id: None,
         width: None,
         height: None,
-        tool_meta: None,
     };
 
     // Need a Start that flows into the loop and an End out the other side.
@@ -2124,7 +2110,6 @@ fn loop_condition_can_reference_iteration_local() {
         parent_id: None,
         width: None,
         height: None,
-        tool_meta: None,
     };
 
     let _ = (FieldKind::Number, PortField {
@@ -2155,7 +2140,6 @@ fn loop_condition_can_reference_iteration_local() {
         parent_id: Some("lp".to_string()),
         width: None,
         height: None,
-        tool_meta: None,
     };
     let body_in_edge = WorkflowEdge {
         id: "e_body_in".to_string(),
@@ -2267,7 +2251,6 @@ fn human_task_node_with_field(id: &str, field_name: &str, kind: TaskFieldKind) -
         parent_id: None,
         width: None,
         height: None,
-        tool_meta: None,
     }
 }
 
@@ -2356,7 +2339,6 @@ fn decision_output_ports_one_per_branch_plus_default() {
         parent_id: None,
         width: None,
         height: None,
-        tool_meta: None,
     };
 
     let ports = node.data.output_ports();
@@ -2432,7 +2414,6 @@ fn empty_loop_fails_with_loop_empty_error() {
                 parent_id: None,
                 width: None,
                 height: None,
-                tool_meta: None,
             },
             end_node("e"),
         ],
@@ -2500,7 +2481,6 @@ fn trigger_node(id: &str, source: mekhan_service::models::template::TriggerSourc
         parent_id: None,
         width: None,
         height: None,
-        tool_meta: None,
     }
 }
 
@@ -2941,7 +2921,6 @@ fn start_node_with_fields(
         parent_id: None,
         width: None,
         height: None,
-        tool_meta: None,
     }
 }
 
@@ -3107,8 +3086,18 @@ fn start_no_file_fields_leaves_compiled_output_unchanged() {
 
     assert!(!has_transition(&air, "t_s_cat_shape_0"), "unexpected catalogue chain");
     assert!(!has_place(&air, "p_s_cat_art_0"), "unexpected artifact place");
-    assert_eq!(places(&air).len(), 3, "ready/data/main only — no catalogue places");
-    assert_eq!(transitions(&air).len(), 1, "only the t_s_park transition");
+    // Post-b25ca8c: ready/data/main + End's anchored p_e_terminal = 4 places;
+    // t_s_park + t_e_complete = 2 transitions.
+    assert_eq!(
+        places(&air).len(),
+        4,
+        "ready/data/main + End's p_e_terminal — no catalogue places"
+    );
+    assert_eq!(
+        transitions(&air).len(),
+        2,
+        "t_s_park + t_e_complete"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -3136,7 +3125,6 @@ fn phase_update_node(
         parent_id: None,
         width: None,
         height: None,
-        tool_meta: None,
     }
 }
 
@@ -3163,7 +3151,6 @@ fn progress_update_node(
         parent_id: None,
         width: None,
         height: None,
-        tool_meta: None,
     }
 }
 
@@ -3441,7 +3428,6 @@ fn failure_node(id: &str, message: Option<&str>) -> WorkflowNode {
         parent_id: None,
         width: None,
         height: None,
-        tool_meta: None,
     }
 }
 
@@ -3668,7 +3654,6 @@ fn automated_node_with_deployment(id: &str, dm: DeploymentModel) -> WorkflowNode
         parent_id: None,
         width: None,
         height: None,
-        tool_meta: None,
     }
 }
 
@@ -3784,7 +3769,6 @@ fn catalogue_query_emits_lookup_effect_no_executor() {
                 parent_id: None,
                 width: None,
                 height: None,
-                tool_meta: None,
             },
             end_node("e"),
         ],
@@ -3823,4 +3807,231 @@ fn catalogue_query_emits_lookup_effect_no_executor() {
         qlogic.contains("category") && qlogic.contains("model"),
         "query token must carry the configured filters: {qlogic}"
     );
+}
+
+// ─── Delay / Timeout coverage ──────────────────────────────────────────────
+
+fn delay_node(id: &str, expr: &str) -> WorkflowNode {
+    WorkflowNode {
+        id: id.to_string(),
+        node_type: "delay".to_string(),
+        slug: None,
+        position: pos(),
+        data: WorkflowNodeData::Delay {
+            label: "Delay".to_string(),
+            description: None,
+            duration_ms_expr: expr.to_string(),
+        },
+        parent_id: None,
+        width: None,
+        height: None,
+    }
+}
+
+fn timeout_node(id: &str, expr: &str) -> WorkflowNode {
+    WorkflowNode {
+        id: id.to_string(),
+        node_type: "timeout".to_string(),
+        slug: None,
+        position: pos(),
+        data: WorkflowNodeData::Timeout {
+            label: "Timeout".to_string(),
+            description: None,
+            duration_ms_expr: expr.to_string(),
+        },
+        parent_id: None,
+        width: None,
+        height: None,
+    }
+}
+
+#[test]
+fn delay_node_compiles_to_prep_schedule_forward_shape() {
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            delay_node("d", "5000"),
+            end_node("e"),
+        ],
+        edges: vec![edge("e1", "s", "d"), edge("e2", "d", "e")],
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+    };
+    let air = compile_to_air(&graph, "delay_test", "", &std::collections::HashMap::new())
+        .expect("should compile");
+
+    // All three transitions emitted in the canonical order.
+    assert!(has_transition(&air, "t_d_prep"), "missing prep transition");
+    assert!(
+        has_transition(&air, "t_d_schedule"),
+        "missing schedule effect transition"
+    );
+    assert!(has_transition(&air, "t_d_forward"), "missing forward transition");
+
+    // Places: input is folded into Start's output by the merge pass (same
+    // as every other pass-through node), but the timer-internal places +
+    // output survive.
+    assert!(has_place(&air, "p_d_timer_data"));
+    assert!(has_place(&air, "p_d_scheduled"));
+    assert!(has_place(&air, "p_d_sig"));
+    assert!(has_place(&air, "p_d_output"));
+
+    // The schedule transition fires the timer_schedule effect.
+    let sched = get_transition(&air, "t_d_schedule").unwrap();
+    assert_eq!(sched["logic"]["handler_id"], "timer_schedule");
+
+    // The prep transition embeds the duration expression literally so it's
+    // Rhai-evaluated at firing time (not the static AIR-build literal).
+    let prep = get_transition(&air, "t_d_prep").unwrap();
+    let src = prep["logic"]["source"].as_str().unwrap();
+    assert!(src.contains("delay_ms: (5000)"), "embedded literal: {src}");
+    assert!(src.contains("target_place_id"), "embeds signal target: {src}");
+
+    // The signal place is kind=signal so the timer can inject into it.
+    let sig = places(&air)
+        .iter()
+        .find(|p| p["id"] == "p_d_sig")
+        .expect("signal place");
+    assert_eq!(sig["type"], "signal", "delay signal place is kind=signal");
+}
+
+#[test]
+fn timeout_node_compiles_with_body_in_body_out_race_and_drain() {
+    let mut human = WorkflowNode {
+        id: "h".to_string(),
+        node_type: "human_task".to_string(),
+        slug: None,
+        position: pos(),
+        data: WorkflowNodeData::HumanTask {
+            label: "Approve".to_string(),
+            description: None,
+            task_title: "Approve".to_string(),
+            instructions_mdsvex: None,
+            steps: vec![],
+        },
+        parent_id: None,
+        width: None,
+        height: None,
+    };
+    human.parent_id = Some("t".to_string());
+
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            timeout_node("t", "10000"),
+            human,
+            end_node("e_done"),
+            end_node("e_to"),
+        ],
+        edges: vec![
+            edge("e_in", "s", "t"),
+            // Body wiring: timeout body_in → human, human → timeout body_out.
+            edge_with_handle("e_body_in", "t", "h", "body_in"),
+            WorkflowEdge {
+                id: "e_body_out".to_string(),
+                source: "h".to_string(),
+                target: "t".to_string(),
+                source_handle: None,
+                target_handle: Some("body_out".to_string()),
+                label: None,
+                // loop_back so the DAG cycle check excludes this edge,
+                // matching Loop's convention for body completion edges.
+                edge_type: "loop_back".to_string(),
+            },
+            // Outer outputs: done + timeout.
+            edge("e_done", "t", "e_done"),
+            edge_with_handle("e_to", "t", "e_to", "timeout"),
+        ],
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+    };
+
+    let air = compile_to_air(&graph, "timeout_test", "", &std::collections::HashMap::new())
+        .expect("should compile");
+
+    // Body container + race transitions all present.
+    for t in [
+        "t_t_prep",
+        "t_t_schedule",
+        "t_t_body_done",
+        "t_t_cancel",
+        "t_t_timeout",
+    ] {
+        assert!(has_transition(&air, t), "missing transition: {t}");
+    }
+
+    // The schedule effect is timer_schedule; cancel is timer_cancel.
+    let sched = get_transition(&air, "t_t_schedule").unwrap();
+    assert_eq!(sched["logic"]["handler_id"], "timer_schedule");
+    let cancel = get_transition(&air, "t_t_cancel").unwrap();
+    assert_eq!(cancel["logic"]["handler_id"], "timer_cancel");
+
+    // The Timeout post-pass synthesizes a human_cancel drain for the
+    // HumanTask body child (its NodeInterface.cancellable is populated).
+    assert!(
+        has_transition(&air, "t_t_drain_h"),
+        "missing drain transition for cancellable body child"
+    );
+    let drain_effect = get_transition(&air, "t_t_drain_h_effect").unwrap();
+    assert_eq!(
+        drain_effect["logic"]["handler_id"], "human_cancel",
+        "drain fires human_cancel for HumanTask body children"
+    );
+
+    // The cancel_pulse signal place is minted (Timeout's fan-out gate).
+    assert!(has_place(&air, "p_t_cancel_pulse"));
+    let pulse = places(&air)
+        .iter()
+        .find(|p| p["id"] == "p_t_cancel_pulse")
+        .expect("cancel_pulse place");
+    assert_eq!(pulse["type"], "signal", "cancel_pulse is a Signal place");
+
+    // The timer signal target is the timeout's sig_timeout place.
+    let prep = get_transition(&air, "t_t_prep").unwrap();
+    let src = prep["logic"]["source"].as_str().unwrap();
+    assert!(
+        src.contains("p_t_sig_timeout"),
+        "prep wires timer to the timeout's signal place: {src}"
+    );
+    assert!(src.contains("delay_ms: (10000)"));
+}
+
+#[test]
+fn timeout_without_body_is_rejected_at_validate() {
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            timeout_node("t", "1000"),
+            end_node("e"),
+        ],
+        // No body_in / body_out edges — should fail validate.
+        edges: vec![edge("e1", "s", "t"), edge("e2", "t", "e")],
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+    };
+    let err = compile_to_air(&graph, "no_body", "", &std::collections::HashMap::new())
+        .expect_err("must reject body-less timeout");
+    let msg = format!("{err}");
+    assert!(msg.contains("body"), "validate error mentions body: {msg}");
+}
+
+#[test]
+fn delay_with_empty_duration_expr_is_rejected() {
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            delay_node("d", ""),
+            end_node("e"),
+        ],
+        edges: vec![edge("e1", "s", "d"), edge("e2", "d", "e")],
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+    };
+    let err = compile_to_air(&graph, "empty_dur", "", &std::collections::HashMap::new())
+        .expect_err("must reject empty durationMsExpr");
+    assert!(format!("{err}").contains("durationMsExpr"));
 }

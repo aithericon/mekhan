@@ -6,6 +6,8 @@
 	import AutomatedStepSection from '$lib/components/editor/panels/property-sections/AutomatedStepSection.svelte';
 	import DecisionNodeSection from '$lib/components/editor/panels/property-sections/DecisionNodeSection.svelte';
 	import LoopNodeSection from '$lib/components/editor/panels/property-sections/LoopNodeSection.svelte';
+	import DelayNodeSection from '$lib/components/editor/panels/property-sections/DelayNodeSection.svelte';
+	import TimeoutNodeSection from '$lib/components/editor/panels/property-sections/TimeoutNodeSection.svelte';
 	import InScopeRefsSection from '$lib/components/editor/panels/property-sections/InScopeRefsSection.svelte';
 	import {
 		loadResourceTypes,
@@ -158,6 +160,10 @@
 				<DecisionNodeSection data={nodeData} {readonly} onchange={handleChange} {scope} {resourceScope} />
 			{:else if nodeData.type === 'loop'}
 				<LoopNodeSection data={nodeData} {readonly} onchange={handleChange} {scope} {resourceScope} />
+			{:else if nodeData.type === 'delay'}
+				<DelayNodeSection data={nodeData} {readonly} onchange={handleChange} {scope} {resourceScope} />
+			{:else if nodeData.type === 'timeout'}
+				<TimeoutNodeSection data={nodeData} {readonly} onchange={handleChange} {scope} {resourceScope} />
 			{/if}
 		</div>
 	{:else}

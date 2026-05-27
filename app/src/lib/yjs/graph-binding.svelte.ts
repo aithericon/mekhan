@@ -350,6 +350,18 @@ export class YjsGraphBinding {
 					onToolError:
 						(config?.onToolError as AgentNodeData['onToolError']) ?? 'feedback'
 				};
+			case 'delay':
+				return {
+					...base,
+					type: 'delay',
+					durationMsExpr: (config?.durationMsExpr as string) ?? '5000'
+				};
+			case 'timeout':
+				return {
+					...base,
+					type: 'timeout',
+					durationMsExpr: (config?.durationMsExpr as string) ?? '60000'
+				};
 		}
 	}
 
@@ -547,29 +559,6 @@ export class YjsGraphBinding {
 			const trimmed = slug.trim();
 			if (trimmed) yNode.set('slug', trimmed);
 			else yNode.delete('slug');
-		});
-	}
-
-	/** Tag this node as a tool of its Agent parent. Stored as a nested
-	 *  Y.Map mirroring the wire shape (`toolName` + `toolDescription`). Both
-	 *  blank ⇒ delete the whole entry, untagging the child. */
-	updateNodeToolMeta(
-		nodeId: string,
-		meta: { toolName: string; toolDescription: string } | null
-	): void {
-		this.doc.transact(() => {
-			const yNode = this.yNodes.get(nodeId);
-			if (!yNode || !(yNode instanceof Y.Map)) return;
-			const name = meta?.toolName.trim() ?? '';
-			const desc = meta?.toolDescription.trim() ?? '';
-			if (!name && !desc) {
-				yNode.delete('toolMeta');
-				return;
-			}
-			const tm = new Y.Map<string>();
-			tm.set('toolName', name);
-			tm.set('toolDescription', desc);
-			yNode.set('toolMeta', tm);
 		});
 	}
 
@@ -829,6 +818,12 @@ export class YjsGraphBinding {
 				}
 				config.set('contextStrategy', data.contextStrategy ?? 'none');
 				config.set('onToolError', data.onToolError ?? 'feedback');
+				break;
+			case 'delay':
+				config.set('durationMsExpr', data.durationMsExpr ?? '5000');
+				break;
+			case 'timeout':
+				config.set('durationMsExpr', data.durationMsExpr ?? '60000');
 				break;
 		}
 	}

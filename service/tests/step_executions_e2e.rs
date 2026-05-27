@@ -53,7 +53,6 @@ fn start(id: &str) -> WorkflowNode {
         parent_id: None,
         width: None,
         height: None,
-        tool_meta: None,
     }
 }
 
@@ -72,7 +71,6 @@ fn end_node(id: &str) -> WorkflowNode {
         parent_id: None,
         width: None,
         height: None,
-        tool_meta: None,
     }
 }
 
@@ -108,7 +106,6 @@ fn python_graph(step_id: &str) -> WorkflowGraph {
                 parent_id: None,
                 width: None,
                 height: None,
-                tool_meta: None,
             },
             end_node("e"),
         ],

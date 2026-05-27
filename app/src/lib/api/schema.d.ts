@@ -510,6 +510,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/node-types": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/v1/node-types
+         * @description List every registered workflow node type with its display metadata,
+         *     runtime kind, and protocol flags. The frontend reads this once per
+         *     session (cached alongside the backends registry) and drives the
+         *     editor's palette + property-panel dispatch from it. The Svelte
+         *     component map (`lib/components/editor/nodes/index.ts`) and the Lucide
+         *     icon map stay hand-written — components and icon imports can't be
+         *     serialized through JSON — but the palette label, description, kind,
+         *     and protocol flags flow from here.
+         */
+        get: operations["list_node_types"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/observability/silent-drops": {
         parameters: {
             query?: never;
@@ -2755,6 +2782,29 @@ export interface components {
             total_bytes: number;
         };
         /**
+         * @description Frontend-visible metadata for one node type. Returned by
+         *     `GET /api/v1/node-types`.
+         *
+         *     Mirrors [`crate::backends::BackendDescriptor`]'s role for backends. The
+         *     Svelte component map, Lucide icon imports, and per-section property
+         *     panels stay frontend-only (they reference Svelte components that can't
+         *     be serialized through JSON); everything else flows from here.
+         */
+        NodeDescriptor: {
+            description?: string | null;
+            displayLabel: string;
+            isJoin: boolean;
+            /**
+             * @description Runtime kind as snake_case string. Differs from `wire_name` only for
+             *     `agent` (kind = `automated_step`).
+             */
+            kind: string;
+            lowersToAir: boolean;
+            parksDataEnvelope: boolean;
+            /** @description Snake-case wire tag — matches the variant's serde rename. */
+            wireName: string;
+        };
+        /**
          * @description Who owns the AutomatedStep's output port shape — the user (free
          *     authoring), the backend (fixed canonical shape), or the backend's
          *     config (derived from `response_format` / schema / similar).
@@ -4226,6 +4276,28 @@ export interface components {
             /** @enum {string} */
             type: "failure";
         } | {
+            description?: string | null;
+            /**
+             * @description Rhai expression evaluated against the inbound token at runtime.
+             *     Must return an integer number of milliseconds. Examples:
+             *     `"5000"`, `"order.sla_ms"`, `"input.timeout * 1000"`.
+             */
+            durationMsExpr: string;
+            label: string;
+            /** @enum {string} */
+            type: "delay";
+        } | {
+            description?: string | null;
+            /**
+             * @description Rhai expression evaluated against the inbound token at runtime.
+             *     Must return an integer number of milliseconds. Same shape as
+             *     `Delay.duration_ms_expr`.
+             */
+            durationMsExpr: string;
+            label: string;
+            /** @enum {string} */
+            type: "timeout";
+        } | {
             /** @description Concurrency / dedup policy applied by the dispatcher. */
             concurrency?: components["schemas"]["ConcurrencyPolicy"];
             description?: string | null;
@@ -5371,6 +5443,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_node_types: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Registered node types */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NodeDescriptor"][];
                 };
             };
         };

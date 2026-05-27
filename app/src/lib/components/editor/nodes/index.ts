@@ -11,6 +11,8 @@ import ScopeNode from './ScopeNode.svelte';
 import PhaseUpdateNode from './PhaseUpdateNode.svelte';
 import ProgressUpdateNode from './ProgressUpdateNode.svelte';
 import FailureNode from './FailureNode.svelte';
+import DelayNode from './DelayNode.svelte';
+import TimeoutNode from './TimeoutNode.svelte';
 import TriggerNode from './TriggerNode.svelte';
 import SubWorkflowNode from './SubWorkflowNode.svelte';
 import AgentNode from './AgentNode.svelte';
@@ -28,6 +30,8 @@ export const nodeTypes: NodeTypes = {
 	phase_update: PhaseUpdateNode as any,
 	progress_update: ProgressUpdateNode as any,
 	failure: FailureNode as any,
+	delay: DelayNode as any,
+	timeout: TimeoutNode as any,
 	trigger: TriggerNode as any,
 	sub_workflow: SubWorkflowNode as any,
 	agent: AgentNode as any

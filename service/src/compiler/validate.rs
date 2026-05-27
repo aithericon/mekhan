@@ -33,32 +33,35 @@ pub(crate) fn validate(graph: &WorkflowGraph, wg: &WorkflowDiGraph) -> Result<()
         ));
     }
 
-    // Tool children (`tool_meta.is_some()`) are dispatched by the agent
-    // compiler via `tool_meta.tool_name`, not via graph edges (docs/12 § 2.2).
-    // An incoming WorkflowEdge into a tool would let it fire outside the
-    // agent's control — reject at publish so the editor catches an
-    // accidental edge-drag instead of producing a silently-broken net.
-    // Identify each tool's owning agent so the error names both endpoints.
-    let parent_by_id: HashMap<&str, &str> = graph
-        .nodes
-        .iter()
-        .filter_map(|n| n.parent_id.as_deref().map(|p| (n.id.as_str(), p)))
-        .collect();
+    // Tool nodes are identified structurally: a node is a tool iff it's
+    // the target of an edge with `source_handle == "tools"` (docs/12
+    // § 2.2). The agent compiler dispatches to those targets by their
+    // (slugified) label. The only legitimate incoming edge into a tool
+    // node is the agent's `tools`-handle edge itself; any OTHER incoming
+    // edge (a stray sequence edge from somewhere else in the graph) would
+    // let the tool fire outside the agent's control loop — reject at
+    // publish so the editor catches an accidental edge-drag instead of
+    // producing a silently broken net. Identify each tool's owning agent
+    // (first source we see on a `tools`-handle edge into it) so the error
+    // names both endpoints.
+    let mut owning_agent_by_tool: HashMap<&str, &str> = HashMap::new();
     for edge in &graph.edges {
-        let target = graph.nodes.iter().find(|n| n.id == edge.target);
-        if let Some(target) = target {
-            if target.tool_meta.is_some() {
-                let agent_id = parent_by_id
-                    .get(target.id.as_str())
-                    .copied()
-                    .unwrap_or("<orphan>")
-                    .to_string();
-                return Err(CompileError::ToolChildHasIncomingEdge {
-                    agent_id,
-                    child_id: target.id.clone(),
-                    edge_id: edge.id.clone(),
-                });
-            }
+        if edge.source_handle.as_deref() == Some("tools") {
+            owning_agent_by_tool
+                .entry(edge.target.as_str())
+                .or_insert(edge.source.as_str());
+        }
+    }
+    for edge in &graph.edges {
+        if edge.source_handle.as_deref() == Some("tools") {
+            continue;
+        }
+        if let Some(&agent_id) = owning_agent_by_tool.get(edge.target.as_str()) {
+            return Err(CompileError::ToolChildHasIncomingEdge {
+                agent_id: agent_id.to_string(),
+                child_id: edge.target.clone(),
+                edge_id: edge.id.clone(),
+            });
         }
     }
 
@@ -69,24 +72,31 @@ pub(crate) fn validate(graph: &WorkflowGraph, wg: &WorkflowDiGraph) -> Result<()
         visited.insert(ni);
     }
 
+    let tool_target_ids: HashSet<&str> = graph
+        .edges
+        .iter()
+        .filter(|e| e.source_handle.as_deref() == Some("tools"))
+        .map(|e| e.target.as_str())
+        .collect();
     let unreachable: Vec<&str> = wg
         .indices
         .iter()
         .filter(|(_, &ni)| !visited.contains(&ni))
-        .filter(|(_, &ni)| {
+        .filter(|(&id, &ni)| {
             let node = wg.full.node_weight(ni).unwrap();
             // Scope nodes are containers — they have no edges and are not reachable via BFS.
             // Trigger nodes are inputs to the workflow, not part of it — they're never
             // reachable from Start either.
-            // Agent tool children (parent_id is an Agent, tool_meta.is_some()) are
-            // structurally referenced from their parent via tool_meta, not via
-            // edges — the agent compiler dispatches to them by name. Treating
-            // them as unreachable would force authors to draw a no-op edge into
-            // every tool just to satisfy the validator. (docs/12 § 2.2.)
+            // Tool nodes (target of an agent's `tools`-handle edge) are reached
+            // structurally, not via the normal flow — the agent compiler
+            // dispatches to them via the tools-edge index in compile.rs.
+            // Treating them as unreachable would force authors to draw a no-op
+            // sequence edge into every tool just to satisfy the validator.
+            // (docs/12 § 2.2.)
             !matches!(
                 node.data,
                 WorkflowNodeData::Scope { .. } | WorkflowNodeData::Trigger { .. }
-            ) && node.tool_meta.is_none()
+            ) && !tool_target_ids.contains(id)
         })
         .map(|(&id, _)| id)
         .collect();
@@ -124,6 +134,52 @@ pub(crate) fn validate(graph: &WorkflowGraph, wg: &WorkflowDiGraph) -> Result<()
                     node.id
                 )));
             }
+        }
+    }
+
+    // Validate Delay / Timeout duration expressions are non-empty (parse +
+    // ref-resolution happens in `validate_guards` below alongside other
+    // Rhai surfaces). For Timeout, also require a body: at least one
+    // outgoing edge with sourceHandle="body_in" AND at least one incoming
+    // edge with targetHandle="body_out" — same shape as Loop's body.
+    for node in &graph.nodes {
+        match &node.data {
+            WorkflowNodeData::Delay {
+                duration_ms_expr, ..
+            } => {
+                if duration_ms_expr.trim().is_empty() {
+                    return Err(CompileError::Validation(format!(
+                        "delay '{}' must have a non-empty durationMsExpr",
+                        node.id
+                    )));
+                }
+            }
+            WorkflowNodeData::Timeout {
+                duration_ms_expr, ..
+            } => {
+                if duration_ms_expr.trim().is_empty() {
+                    return Err(CompileError::Validation(format!(
+                        "timeout '{}' must have a non-empty durationMsExpr",
+                        node.id
+                    )));
+                }
+                let has_body_in = graph.edges.iter().any(|e| {
+                    e.source == node.id
+                        && e.source_handle.as_deref() == Some("body_in")
+                });
+                let has_body_out = graph.edges.iter().any(|e| {
+                    e.target == node.id
+                        && e.target_handle.as_deref() == Some("body_out")
+                });
+                if !has_body_in || !has_body_out {
+                    return Err(CompileError::Validation(format!(
+                        "timeout '{}' requires a body — wire its body_in output \
+                         and a body completion back to body_out",
+                        node.id
+                    )));
+                }
+            }
+            _ => {}
         }
     }
 
@@ -234,6 +290,20 @@ pub(crate) fn validate_edges_typed(graph: &WorkflowGraph) -> Result<(), CompileE
         //    Phase 4: every variant now returns at least one output port via
         //    `output_ports()`, so the "empty list = pass-through" branch only
         //    fires for `End` (which has no outgoing edges anyway).
+        //
+        //    Agent `tools` handle is special: it's a binding handle (the
+        //    compiler reads tools via `cx.agent_tools` and mints the
+        //    dispatch/collect transitions; `wire_edge` skips it), not a
+        //    data output port — so it carries no schema and doesn't appear
+        //    in `Agent::output_ports()`. Skip the source-port lookup +
+        //    type-check for `tools`-handle edges entirely; their semantics
+        //    are validated by the agent-loop lowering itself (missing
+        //    `tool_meta` → CompileError; duplicate tool_name → CompileError).
+        if edge.source_handle.as_deref() == Some("tools")
+            && matches!(src_node.data, WorkflowNodeData::Agent { .. })
+        {
+            continue;
+        }
         let src_ports = src_node.data.output_ports();
         let src_port: Option<Port> = match edge.source_handle.as_deref() {
             Some(h) => src_ports.iter().find(|p| p.id == h).cloned(),
@@ -446,6 +516,14 @@ pub(crate) fn validate_guards<'a>(
                 .map(|m| m.expression.as_str())
                 .filter(|s| !s.trim().is_empty())
                 .collect(),
+            WorkflowNodeData::Delay {
+                duration_ms_expr, ..
+            }
+            | WorkflowNodeData::Timeout {
+                duration_ms_expr, ..
+            } if !duration_ms_expr.trim().is_empty() => {
+                vec![duration_ms_expr.as_str()]
+            }
             _ => continue,
         };
         for src in sources {
@@ -543,7 +621,6 @@ mod tests {
             parent_id: None,
             width: None,
             height: None,
-            tool_meta: None,
         }
     }
 
