@@ -10,7 +10,8 @@ import type {
 	SubWorkflowNodeData,
 	AutomatedStepNodeData,
 	EndNodeData,
-	FailureNodeData
+	FailureNodeData,
+	AgentNodeData
 } from '$lib/types/editor';
 
 /**
@@ -335,6 +336,28 @@ export class YjsGraphBinding {
 							fields: []
 						}
 				};
+			case 'agent':
+				return {
+					...base,
+					type: 'agent',
+					model: (config?.model as AgentNodeData['model']) ?? {
+						provider: 'anthropic',
+						model: 'claude-haiku-4-5-20251001'
+					},
+					userPrompt: (config?.userPrompt as string) ?? '',
+					...(config?.systemPrompt
+						? { systemPrompt: config.systemPrompt as string }
+						: {}),
+					...(config?.responseFormat
+						? { responseFormat: config.responseFormat }
+						: {}),
+					maxTurns: (config?.maxTurns as number) ?? 1,
+					...(config?.stopWhen ? { stopWhen: config.stopWhen as string } : {}),
+					contextStrategy:
+						(config?.contextStrategy as AgentNodeData['contextStrategy']) ?? 'none',
+					onToolError:
+						(config?.onToolError as AgentNodeData['onToolError']) ?? 'feedback'
+				};
 		}
 	}
 
@@ -532,6 +555,29 @@ export class YjsGraphBinding {
 			const trimmed = slug.trim();
 			if (trimmed) yNode.set('slug', trimmed);
 			else yNode.delete('slug');
+		});
+	}
+
+	/** Tag this node as a tool of its Agent parent. Stored as a nested
+	 *  Y.Map mirroring the wire shape (`toolName` + `toolDescription`). Both
+	 *  blank ⇒ delete the whole entry, untagging the child. */
+	updateNodeToolMeta(
+		nodeId: string,
+		meta: { toolName: string; toolDescription: string } | null
+	): void {
+		this.doc.transact(() => {
+			const yNode = this.yNodes.get(nodeId);
+			if (!yNode || !(yNode instanceof Y.Map)) return;
+			const name = meta?.toolName.trim() ?? '';
+			const desc = meta?.toolDescription.trim() ?? '';
+			if (!name && !desc) {
+				yNode.delete('toolMeta');
+				return;
+			}
+			const tm = new Y.Map<string>();
+			tm.set('toolName', name);
+			tm.set('toolDescription', desc);
+			yNode.set('toolMeta', tm);
 		});
 	}
 
@@ -772,6 +818,28 @@ export class YjsGraphBinding {
 					'output',
 					data.output ?? { id: 'out', label: 'Result', fields: [] }
 				);
+				break;
+			case 'agent':
+				config.set('model', data.model);
+				config.set('userPrompt', data.userPrompt);
+				if (data.systemPrompt) {
+					config.set('systemPrompt', data.systemPrompt);
+				} else {
+					config.delete('systemPrompt');
+				}
+				if (data.responseFormat) {
+					config.set('responseFormat', data.responseFormat);
+				} else {
+					config.delete('responseFormat');
+				}
+				config.set('maxTurns', data.maxTurns ?? 1);
+				if (data.stopWhen) {
+					config.set('stopWhen', data.stopWhen);
+				} else {
+					config.delete('stopWhen');
+				}
+				config.set('contextStrategy', data.contextStrategy ?? 'none');
+				config.set('onToolError', data.onToolError ?? 'feedback');
 				break;
 		}
 	}

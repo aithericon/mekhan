@@ -40,6 +40,7 @@
 	--node-progress-update: oklch(0.70 0.15 320);
 	--node-failure: oklch(0.62 0.20 25);
 	--node-sub-workflow: oklch(0.70 0.13 185);
+	--node-agent: oklch(0.66 0.15 50);
 	--border: oklch(0.83 0.014 250);
 	--input: oklch(0.985 0.006 255);
 	--ring: oklch(0.55 0.13 248);
@@ -126,6 +127,7 @@
 	--color-node-progress-update: var(--node-progress-update);
 	--color-node-failure: var(--node-failure);
 	--color-node-sub-workflow: var(--node-sub-workflow);
+	--color-node-agent: var(--node-agent);
 	--color-border: var(--border);
 	--color-input: var(--input);
 	--color-ring: var(--ring);

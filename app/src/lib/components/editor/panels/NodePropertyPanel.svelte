@@ -21,6 +21,7 @@
 	import FailureNodeSection from './property-sections/FailureNodeSection.svelte';
 	import EndNodeSection from './property-sections/EndNodeSection.svelte';
 	import SubWorkflowSection from './property-sections/SubWorkflowSection.svelte';
+	import AgentNodeSection from './property-sections/AgentNodeSection.svelte';
 	import InScopeRefsSection from './property-sections/InScopeRefsSection.svelte';
 	import {
 		fetchNodeScopes,
@@ -142,7 +143,8 @@
 		'progress_update',
 		'failure',
 		'end',
-		'sub_workflow'
+		'sub_workflow',
+		'agent'
 	]);
 	const showScopePicker = $derived(SCOPE_BEARING_TYPES.has(data.type));
 
@@ -321,6 +323,8 @@
 			<EndNodeSection {data} {readonly} {onchange} {scope} />
 		{:else if data.type === 'sub_workflow'}
 			<SubWorkflowSection {data} {readonly} {onchange} {templateId} />
+		{:else if data.type === 'agent'}
+			<AgentNodeSection {data} {readonly} {onchange} {binding} {nodeId} {scope} />
 		{/if}
 
 		<!-- Phase 4: read-only derived port preview for variants whose outputs

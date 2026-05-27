@@ -53,6 +53,7 @@ export type ProgressUpdateNodeData = Extract<SchemaWorkflowNodeData, { type: 'pr
 export type FailureNodeData = Extract<SchemaWorkflowNodeData, { type: 'failure' }>;
 export type TriggerNodeData = Extract<SchemaWorkflowNodeData, { type: 'trigger' }>;
 export type SubWorkflowNodeData = Extract<SchemaWorkflowNodeData, { type: 'sub_workflow' }>;
+export type AgentNodeData = Extract<SchemaWorkflowNodeData, { type: 'agent' }>;
 
 // Convenience aliases for TaskBlockConfig variants used in editor pickers.
 export type InputBlock = Extract<SchemaTaskBlockConfig, { type: 'input' }>;
@@ -181,6 +182,13 @@ export const NODE_PALETTE: NodePaletteItem[] = [
 		description: 'Call another template and return its typed result',
 		icon: 'workflow',
 		color: '#14b8a6'
+	},
+	{
+		type: 'agent',
+		label: 'Agent',
+		description: 'LLM that calls tagged child tools and loops until a stop condition',
+		icon: 'bot',
+		color: '#f97316'
 	}
 ];
 
@@ -282,6 +290,16 @@ export function createDefaultNodeData(type: WorkflowNodeType): SchemaWorkflowNod
 				versionPin: { mode: 'latest' },
 				inputMapping: [],
 				output: { id: 'out', label: 'Result', fields: [] }
+			};
+		case 'agent':
+			return {
+				type: 'agent',
+				label: 'Agent',
+				model: { provider: 'anthropic', model: 'claude-haiku-4-5-20251001' },
+				userPrompt: '',
+				maxTurns: 1,
+				contextStrategy: 'none',
+				onToolError: 'feedback'
 			};
 	}
 }
