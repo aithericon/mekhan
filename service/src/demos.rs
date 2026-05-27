@@ -494,6 +494,13 @@ pub enum SeedOutcome {
 const DEMO_SEEDER_AUTHOR_ID: uuid::Uuid =
     uuid::uuid!("00000000-0000-0000-0000-000000000aaa");
 
+/// System-owned workspace that seeded demos belong to. Visibility=public on
+/// every row, so any authenticated user sees demos in `list_templates` via
+/// the cross-workspace public-read branch, without needing membership. Seeded
+/// in migration 20240123 alongside the default workspace.
+const DEMO_WORKSPACE_ID: uuid::Uuid =
+    uuid::uuid!("00000000-0000-0000-0000-0000000000de");
+
 /// Seed every demo under `root` into the running service. Idempotent:
 /// each demo's `demo.json::templateId` is the stable identifier — if
 /// a row with that id already exists, the seeder leaves it (logging
@@ -611,8 +618,8 @@ pub async fn seed_one(
         INSERT INTO workflow_templates
             (id, name, description, base_template_id, version,
              is_latest, published, published_at, graph, air_json,
-             interface_json, author_id)
-        VALUES ($1, $2, $3, $1, 1, TRUE, TRUE, NOW(), $4, $5, $6, $7)
+             interface_json, author_id, workspace_id, visibility)
+        VALUES ($1, $2, $3, $1, 1, TRUE, TRUE, NOW(), $4, $5, $6, $7, $8, 'public')
         RETURNING *
         "#,
     )
@@ -623,6 +630,7 @@ pub async fn seed_one(
     .bind(&air_json)
     .bind(&interface_json)
     .bind(DEMO_SEEDER_AUTHOR_ID)
+    .bind(DEMO_WORKSPACE_ID)
     .fetch_one(&state.db)
     .await?;
 
