@@ -1,0 +1,1493 @@
+{
+  "definitions": {
+    "Ctrl__ask": {
+      "additionalProperties": true,
+      "type": "object"
+    },
+    "Ctrl__start": {
+      "additionalProperties": true,
+      "type": "object"
+    },
+    "Data__ask": {
+      "additionalProperties": true,
+      "properties": {
+        "_instance_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "_process_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "completed_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "data": {
+          "additionalProperties": true,
+          "properties": {
+            "favorite_color": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "would_recommend": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
+        },
+        "instructions_mdsvex": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "net_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "place": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "response_subject": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "steps": {
+          "items": {},
+          "type": "array"
+        },
+        "task_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "Data__start": {
+      "additionalProperties": true,
+      "properties": {
+        "_instance_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "_process_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "DynamicToken": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Dynamic token - untyped JSON data.\n\nUse when you need flexibility and don't want compile-time type checking. Rhai scripts can manipulate these freely.",
+      "title": "DynamicToken"
+    },
+    "EffectError": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Error token produced by the engine when an effect handler fails.\n\nConstructed in `firing.rs` for every effect transition `_error` port. The `inputs` field contains the original port inputs (dynamic), enabling retry logic to re-queue the original job via `err.inputs.job`.",
+      "properties": {
+        "error": {
+          "description": "Error message from the handler.",
+          "type": "string"
+        },
+        "handler_id": {
+          "description": "Handler that failed (e.g., `\"executor_submit\"`).",
+          "type": "string"
+        },
+        "inputs": {
+          "description": "Original port inputs (dynamic — shape depends on the transition)."
+        },
+        "retryable": {
+          "description": "Whether the error is retryable.",
+          "type": "boolean"
+        },
+        "transition_id": {
+          "description": "Transition ID where the failure occurred.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "error",
+        "handler_id",
+        "inputs",
+        "retryable",
+        "transition_id"
+      ],
+      "title": "EffectError",
+      "type": "object"
+    },
+    "HumanTaskAssigned": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Minimal output from the `human_task` effect handler.\n\nThe handler merges all input fields into the output, so you can define a custom output type with extra fields (e.g., `invoice_number`). Use this type when you only need the `task_id` for downstream correlation.",
+      "properties": {
+        "task_id": {
+          "description": "Engine-assigned task ID for correlation with the response signal.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id"
+      ],
+      "title": "HumanTaskAssigned",
+      "type": "object"
+    },
+    "HumanTaskRequest": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "definitions": {
+        "CalloutSeverity": {
+          "description": "Severity level for callout blocks.",
+          "enum": [
+            "info",
+            "warning",
+            "error",
+            "success"
+          ],
+          "type": "string"
+        },
+        "ChartSeries": {
+          "description": "A series definition for chart rendering.",
+          "properties": {
+            "color": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "key": {
+              "type": "string"
+            },
+            "label": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "key"
+          ],
+          "type": "object"
+        },
+        "ChartType": {
+          "description": "Chart type for data visualization blocks.",
+          "enum": [
+            "area",
+            "bar",
+            "line",
+            "pie"
+          ],
+          "type": "string"
+        },
+        "DownloadItem": {
+          "description": "A downloadable file item.",
+          "properties": {
+            "description": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "filename": {
+              "type": "string"
+            },
+            "mime_type": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "size": {
+              "format": "uint64",
+              "minimum": 0.0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "thumbnail_url": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "url": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "filename",
+            "url"
+          ],
+          "type": "object"
+        },
+        "SelectOption": {
+          "description": "One choice in a `kind = \"select\"` (or `radio`) field. `value` is what the form submits / what downstream guards compare against; `label` is what the UI renders. Authors typically write `{value, label}`; the deserializer on `TaskField::options` also accepts a bare string and stretches it to `{value: s, label: s}`. Mirror of the same type in `service/src/models/template.rs` — the engine's HumanTask effect handler validates the wire payload against `TaskField`, so the shape must match what the service compiles into AIR.",
+          "properties": {
+            "label": {
+              "type": "string"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "label",
+            "value"
+          ],
+          "type": "object"
+        },
+        "TableAlignment": {
+          "description": "Column alignment for table blocks.",
+          "enum": [
+            "left",
+            "center",
+            "right"
+          ],
+          "type": "string"
+        },
+        "TaskBlock": {
+          "description": "A render block inside a task step.",
+          "oneOf": [
+            {
+              "properties": {
+                "field": {
+                  "$ref": "#/definitions/TaskField"
+                },
+                "type": {
+                  "enum": [
+                    "input"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "field",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "content": {
+                  "type": "string"
+                },
+                "type": {
+                  "enum": [
+                    "mdsvex"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "content",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "downloads": {
+                  "items": {
+                    "$ref": "#/definitions/DownloadItem"
+                  },
+                  "type": "array"
+                },
+                "type": {
+                  "enum": [
+                    "download"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "downloads",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "alignments": {
+                  "items": {
+                    "$ref": "#/definitions/TableAlignment"
+                  },
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                },
+                "caption": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "headers": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "rows": {
+                  "items": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "type": "array"
+                },
+                "type": {
+                  "enum": [
+                    "table"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "headers",
+                "rows",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "alt": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "caption": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "type": {
+                  "enum": [
+                    "image"
+                  ],
+                  "type": "string"
+                },
+                "url": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "url"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "content": {
+                  "type": "string"
+                },
+                "severity": {
+                  "$ref": "#/definitions/CalloutSeverity"
+                },
+                "title": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "type": {
+                  "enum": [
+                    "callout"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "content",
+                "severity",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "caption": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "filename": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "height": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "type": {
+                  "enum": [
+                    "pdf"
+                  ],
+                  "type": "string"
+                },
+                "url": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "url"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "caption": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "chart_type": {
+                  "$ref": "#/definitions/ChartType"
+                },
+                "data": {
+                  "items": true,
+                  "type": "array"
+                },
+                "height": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "series": {
+                  "items": {
+                    "$ref": "#/definitions/ChartSeries"
+                  },
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                },
+                "type": {
+                  "enum": [
+                    "chart"
+                  ],
+                  "type": "string"
+                },
+                "x": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "x_label": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "y_label": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "chart_type",
+                "data",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "type": {
+                  "enum": [
+                    "divider"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "TaskField": {
+          "description": "Definition of a single field in a human task form.",
+          "properties": {
+            "accept": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "description_mdsvex": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "include_time": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "kind": {
+              "$ref": "#/definitions/TaskFieldKind"
+            },
+            "label": {
+              "type": "string"
+            },
+            "max": {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "max_file_size": {
+              "format": "uint64",
+              "minimum": 0.0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "max_files": {
+              "format": "uint32",
+              "minimum": 0.0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "max_rating": {
+              "format": "uint32",
+              "minimum": 0.0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "min": {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "name": {
+              "type": "string"
+            },
+            "options": {
+              "description": "Choice list for `kind = \"select\"` / `\"radio\"`. Authored as `[{\"value\": \"approve\", \"label\": \"Approve\"}, …]`; the deserializer also accepts bare string shorthand (`[\"approve\", \"reject\"]`) and normalizes each entry to `{value, label}` where `label = value`. Keeps a uniform runtime representation regardless of which shape the author chose.",
+              "items": {
+                "$ref": "#/definitions/SelectOption"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "pen_color": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "placeholder": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "required": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "signature_mode": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "step": {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "label",
+            "name"
+          ],
+          "type": "object"
+        },
+        "TaskFieldKind": {
+          "description": "Types of form fields for human tasks.",
+          "enum": [
+            "text",
+            "textarea",
+            "number",
+            "select",
+            "checkbox",
+            "file",
+            "signature",
+            "radio",
+            "date",
+            "range",
+            "rating"
+          ],
+          "type": "string"
+        },
+        "TaskStep": {
+          "description": "One step in a multi-step human task.",
+          "properties": {
+            "blocks": {
+              "items": {
+                "$ref": "#/definitions/TaskBlock"
+              },
+              "type": "array"
+            },
+            "description_mdsvex": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "blocks",
+            "id",
+            "title"
+          ],
+          "type": "object"
+        }
+      },
+      "description": "Request to create a new human task. Published to `petri.human.request.{net_id}.{place}`.",
+      "properties": {
+        "corr_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "instructions_mdsvex": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "net_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "org_id": {
+          "description": "Organization ID for routing this task to the correct HPI org. Set from token data (dynamic) or engine config fallback (HUMAN_ORG_ID).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "payload": true,
+        "place": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "process_id": {
+          "description": "Links this task to a process (set automatically from read-arc process token).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "process_step": {
+          "description": "Identifies which step in the process this task represents.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "response_subject": {
+          "description": "NATS subject where the UI should publish outcome signals (ExternalSignal envelope). Set by the engine before publishing to `human.request.*`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "steps": {
+          "items": {
+            "$ref": "#/definitions/TaskStep"
+          },
+          "type": "array"
+        },
+        "task_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "steps",
+        "title"
+      ],
+      "title": "HumanTaskRequest",
+      "type": "object"
+    }
+  },
+  "description": "",
+  "groups": [
+    {
+      "id": "grp_ask",
+      "name": "Ask Operator"
+    }
+  ],
+  "name": "02 · Human Form",
+  "places": [
+    {
+      "id": "p_ask_active",
+      "name": "Ask Operator - Active",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_ask_ctrl",
+      "name": "Ask Operator - Control Token",
+      "token_schema": "#/definitions/Ctrl__ask",
+      "type": "state"
+    },
+    {
+      "id": "p_ask_data",
+      "name": "Ask Operator - Parked Data (write-once)",
+      "token_schema": "#/definitions/Data__ask",
+      "type": "state"
+    },
+    {
+      "id": "p_ask_errors",
+      "name": "Ask Operator - Errors",
+      "token_schema": "#/definitions/EffectError",
+      "type": "state"
+    },
+    {
+      "id": "p_ask_input",
+      "name": "Ask Operator - Input",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_ask_output",
+      "name": "Ask Operator - Output",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_ask_signal",
+      "name": "Ask Operator - Signal",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "signal"
+    },
+    {
+      "id": "p_end_completed",
+      "name": "Recorded - Completed",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "terminal"
+    },
+    {
+      "id": "p_end_result",
+      "name": "Recorded - Result",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_start_data",
+      "name": "Start - Parked Data (write-once)",
+      "token_schema": "#/definitions/Data__start",
+      "type": "state"
+    },
+    {
+      "id": "p_start_main",
+      "name": "Start - Output",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_start_named",
+      "name": "Start - Named",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_start_process",
+      "name": "Start - Process",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_start_ready",
+      "name": "Start",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_start_ready_out",
+      "name": "Start - Output",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    }
+  ],
+  "requirements": [
+    {
+      "category": "human",
+      "handler_ids": [
+        "human_task"
+      ]
+    },
+    {
+      "category": "orchestration",
+      "handler_ids": [
+        "process_complete",
+        "process_start"
+      ]
+    }
+  ],
+  "transitions": [
+    {
+      "guard": {
+        "source": "signal.task_id == state.task_id",
+        "type": "rhai"
+      },
+      "id": "t_ask_finalize",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "state",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "signal",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_ask_active",
+          "port": "state",
+          "weight": 1
+        },
+        {
+          "place": "p_ask_signal",
+          "port": "signal",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "let result = state; let keys = signal.keys(); for key in keys { result[key] = signal[key]; } #{ done: result }",
+        "type": "rhai"
+      },
+      "name": "Ask Operator - Finalize",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "done",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_ask_output",
+          "port": "done",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "caused_signals": [
+        "p_ask_signal"
+      ],
+      "effect_config": {
+        "place": "p_ask_signal"
+      },
+      "id": "t_ask_request",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "task",
+          "schema_ref": "#/definitions/HumanTaskRequest"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "HumanTaskRequest": {
+            "$ref": "#/definitions/HumanTaskRequest"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_ask_input",
+          "port": "task",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "config": {
+          "place": "p_ask_signal"
+        },
+        "handler_id": "human_task",
+        "type": "effect"
+      },
+      "name": "Ask Operator - Request Human Task",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "assigned",
+          "schema_ref": "#/definitions/HumanTaskAssigned"
+        },
+        {
+          "cardinality": "single",
+          "name": "_error",
+          "schema_ref": "#/definitions/EffectError"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "EffectError": {
+            "$ref": "#/definitions/EffectError"
+          },
+          "HumanTaskAssigned": {
+            "$ref": "#/definitions/HumanTaskAssigned"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_ask_active",
+          "port": "assigned",
+          "weight": 1
+        },
+        {
+          "place": "p_ask_errors",
+          "port": "_error",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "t_ask_yield",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "tok",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_ask_output",
+          "port": "tok",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "let d = tok; let c = #{}; for k in d.keys() { if k.starts_with(\"_\") || k == \"task_id\" || k == \"status\" { c[k] = d[k]; } } #{ data: d, ctrl: c }",
+        "type": "rhai"
+      },
+      "name": "Ask Operator - Yield (park data, forward control)",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "data",
+          "schema_ref": "#/definitions/Data__ask"
+        },
+        {
+          "cardinality": "single",
+          "name": "ctrl",
+          "schema_ref": "#/definitions/Ctrl__ask"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_ask_data",
+          "port": "data",
+          "weight": 1
+        },
+        {
+          "place": "p_ask_ctrl",
+          "port": "ctrl",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "t_edge_e_start_ask",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "input",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_start_main",
+          "port": "input",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "let d = input; d.title = \"Quick Survey\"; d.instructions_mdsvex = \"Tell us your favorite color and whether you'd recommend this demo. Steps render in order; required fields gate the **Complete** button.\"; d.steps = [#{\"blocks\": [#{\"field\": #{\"kind\": \"text\", \"label\": \"Favorite Color\", \"name\": \"favorite_color\", \"placeholder\": \"e.g. cerulean\", \"required\": true}, \"type\": \"input\"}], \"id\": \"step-pick\", \"title\": \"Pick Your Color\"}, #{\"blocks\": [#{\"field\": #{\"kind\": \"checkbox\", \"label\": \"Would you recommend this demo to a colleague?\", \"name\": \"would_recommend\", \"required\": false}, \"type\": \"input\"}], \"id\": \"step-recommend\", \"title\": \"Feedback\"}]; #{ output: d }",
+        "type": "rhai"
+      },
+      "name": "Start -> Ask Operator",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "output",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_ask_input",
+          "port": "output",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "t_end_proc_complete",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "process",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "done",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_start_process",
+          "port": "process",
+          "read": true,
+          "weight": 1
+        },
+        {
+          "place": "p_end_result",
+          "port": "done",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "handler_id": "process_complete",
+        "type": "effect"
+      },
+      "name": "Recorded - Complete Process",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "completed",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_end_completed",
+          "port": "completed",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "t_end_result_shape",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "input",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "d_ask",
+          "schema_ref": "#/definitions/Data__ask"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_ask_ctrl",
+          "port": "input",
+          "weight": 1
+        },
+        {
+          "place": "p_ask_data",
+          "port": "d_ask",
+          "read": true,
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "let __rv0 = (d_ask.data.favorite_color); let __rv1 = (d_ask.data.would_recommend); let __rv = #{ \"favorite_color\": __rv0, \"would_recommend\": __rv1 }; let __out = input; if \"exit_code\" in __out { } else { __out.exit_code = #{ ok: true, value: __rv }; } #{ result: __out }",
+        "type": "rhai"
+      },
+      "name": "Recorded - Result",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "result",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_end_result",
+          "port": "result",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "t_start_park",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "tok",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_start_ready_out",
+          "port": "tok",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "let d = tok; #{ data: d, main: d }",
+        "type": "rhai"
+      },
+      "name": "Start - Park Inputs (fork: park data, forward token)",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "data",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "main",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_start_data",
+          "port": "data",
+          "weight": 1
+        },
+        {
+          "place": "p_start_main",
+          "port": "main",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "t_start_proc_name",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "input",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_start_ready",
+          "port": "input",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "let d = input; d._process_name = \"Survey Response\"; #{ output: d }",
+        "type": "rhai"
+      },
+      "name": "Start - Derive Process Name",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "output",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_start_named",
+          "port": "output",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "effect_config": {
+        "forward_ports": [
+          "main"
+        ],
+        "name": "Start",
+        "name_field": "_process_name"
+      },
+      "id": "t_start_proc_start",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "trigger",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_start_named",
+          "port": "trigger",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "config": {
+          "forward_ports": [
+            "main"
+          ],
+          "name": "Start",
+          "name_field": "_process_name"
+        },
+        "handler_id": "process_start",
+        "type": "effect"
+      },
+      "name": "Start - Register Process",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "process",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "main",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_start_process",
+          "port": "process",
+          "weight": 1
+        },
+        {
+          "place": "p_start_ready_out",
+          "port": "main",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}
