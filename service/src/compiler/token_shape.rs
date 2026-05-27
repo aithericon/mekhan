@@ -1582,8 +1582,6 @@ pub(crate) use crate::compiler::borrow::planners::automated_step::{
 };
 #[cfg(test)]
 pub(crate) use crate::compiler::borrow::planners::human_task::human_task_borrow_plan;
-#[cfg(test)]
-pub(crate) use crate::compiler::borrow::planners::resource::automated_step_resource_borrow_plan;
 
 /// Per-node, per-slug field map — the picker model pivoted from a flat
 /// list to `slug → fields`. Drives the Python `.pyi` overlay's one
@@ -2095,8 +2093,6 @@ mod scope_reachability_tests {
     /// instead of Rhai.
     #[test]
     fn python_automated_step_review_field_emits_borrow() {
-        use crate::compiler::lower::NodeFiles;
-        use aithericon_executor_domain::InputSource;
         use std::collections::HashMap;
 
         // Start → review (HumanTask, slug "review", produces `invoice_amount`)
