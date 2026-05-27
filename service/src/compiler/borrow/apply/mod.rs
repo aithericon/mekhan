@@ -1,102 +1,70 @@
-//! Apply-phase dispatcher. Partitions borrows by [`super::shape::BorrowResolution`]
-//! variant and dispatches each group to its arm.
+//! Apply-phase dispatcher. Iterates [`strategy::STRATEGIES`], partitioning
+//! borrows by `ApplyStrategy::handles` and grouping the claimed borrows
+//! by consumer before dispatch. Each surface lives in its own strategy
+//! impl in `strategy.rs`; the per-arm bodies stay in the sibling modules
+//! for now (deferred body collapse — see commit message).
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use aithericon_sdk::scenario::{ScenarioDefinition, TransitionLogic};
 
-use crate::compiler::borrow::shape::{Borrow, BorrowResolution, BORROW_MARKER};
+use crate::compiler::borrow::shape::{Borrow, BORROW_MARKER};
 use crate::compiler::interface::InterfaceRegistry;
-use crate::models::template::WorkflowGraph;
 
 pub(crate) mod backend_field;
 pub(crate) mod guard;
 pub(crate) mod human_task;
 pub(crate) mod python_envelope;
 pub(crate) mod resource;
+pub(crate) mod strategy;
 
-/// Drive every borrow's apply step from the unified [`Borrow`] shape.
-/// Partitions on [`BorrowResolution`], dispatches each variant to its
-/// sub-routine, then strips any leftover `BORROW_MARKER` sentinels.
+use strategy::{ApplyCtx, STRATEGIES};
+
+/// Drive every borrow's apply step. Each strategy in [`STRATEGIES`]
+/// claims a subset of resolutions via `handles`; claimed borrows are
+/// grouped by consumer and the strategy is called once per
+/// `(strategy, consumer)`. Final pass strips leftover `BORROW_MARKER`
+/// sentinels on prepare transitions whose backend had no marker-splice
+/// arms fire.
 ///
-/// Apply contract:
-/// - `Guard` borrows: per-borrow, scan all transitions matching
-///   `t_<consumer>_*`; for each whose guard / logic source contains
-///   the dotted reference, wire a read-arc and word-boundary-rewrite.
-/// - `PythonEnvelope` borrows: per-consumer, find the prepare
-///   transition (`{id}/prepare` or `t_{id}_prepare`); for each
-///   borrow, wire a read-arc and emit a whole-envelope-stage push.
-/// - `HumanTaskInputRewrite` borrows: per-consumer, find the
-///   wire-edge transition (the one whose output writes to
-///   `p_<id>_input`); for each borrow, substring-rewrite the
-///   lowering-emitted `__pluck(input, ["<slug>", ` needle.
-/// - `BackendFieldStage` borrows: per-consumer, find the prepare
-///   transition; dedupe by `(slug, attr)`; for each unique key,
-///   wire a read-arc, emit a per-field push, and rewrite the
-///   `{{<slug>.<attr>}}` placeholder.
-///
-/// All four arms call the same shared `wire_read_arc` and
-/// `producer_field_access_hoist` helpers. Iteration order within
-/// each consumer's borrow group is preserved from `collect_borrows`
-/// (planner-defined); HashMap iteration order across consumers is
-/// non-deterministic but doesn't affect AIR since different consumers
-/// modify disjoint transitions.
+/// `BTreeMap` is used for the per-strategy consumer grouping so the
+/// per-consumer dispatch order is deterministic (insertion order of a
+/// `HashMap` is not). Today no two consumers' applies touch shared
+/// state, but the AIR golden snapshots will catch any future drift.
 pub(crate) fn apply_borrows(
     scenario: &mut ScenarioDefinition,
     interfaces: &InterfaceRegistry,
-    graph: &WorkflowGraph,
     borrows: Vec<Borrow>,
     node_configs: &mut HashMap<String, serde_json::Value>,
 ) {
-    let mut guards: Vec<Borrow> = Vec::new();
-    let mut python: HashMap<String, Vec<Borrow>> = HashMap::new();
-    let mut human_task: HashMap<String, Vec<Borrow>> = HashMap::new();
-    let mut backend: HashMap<String, Vec<Borrow>> = HashMap::new();
-    // Phase B.8 — resource-envelope borrows: keyed by consumer like Python
-    // borrows, but the per-borrow apply has no read-arc step.
-    let mut resources: HashMap<String, Vec<Borrow>> = HashMap::new();
-
+    // Single-pass partition: per strategy, group its claimed borrows by
+    // consumer. Each borrow is claimed by the first strategy whose
+    // `handles` returns true — invariant: every `BorrowResolution`
+    // variant has exactly one handler in `STRATEGIES`.
+    let mut buckets: Vec<BTreeMap<String, Vec<Borrow>>> =
+        (0..STRATEGIES.len()).map(|_| BTreeMap::new()).collect();
     for b in borrows {
-        match &b.resolution {
-            BorrowResolution::Guard { .. } => guards.push(b),
-            BorrowResolution::PythonEnvelope => python
-                .entry(b.consumer_node_id.clone())
-                .or_default()
-                .push(b),
-            BorrowResolution::HumanTaskInputRewrite => human_task
-                .entry(b.consumer_node_id.clone())
-                .or_default()
-                .push(b),
-            BorrowResolution::BackendFieldStage { .. } => backend
-                .entry(b.consumer_node_id.clone())
-                .or_default()
-                .push(b),
-            BorrowResolution::ResourceEnvelope { .. } => resources
-                .entry(b.consumer_node_id.clone())
-                .or_default()
-                .push(b),
-        }
+        let Some(idx) = STRATEGIES.iter().position(|s| s.handles(&b.resolution)) else {
+            // Unreachable: every variant has a strategy. A new variant
+            // added without a strategy would silently skip its apply
+            // and the AIR snapshots would diff loudly.
+            continue;
+        };
+        buckets[idx]
+            .entry(b.consumer_node_id.clone())
+            .or_default()
+            .push(b);
     }
 
-    guard::apply_guard_borrows(scenario, interfaces, &guards);
-    for (consumer, group) in &python {
-        python_envelope::apply_python_borrows(scenario, interfaces, graph, consumer, group);
-    }
-    for (consumer, group) in &human_task {
-        human_task::apply_human_task_borrows(scenario, interfaces, consumer, group);
-    }
-    for (consumer, group) in &backend {
-        backend_field::apply_backend_borrows(
+    for (strategy, by_consumer) in STRATEGIES.iter().zip(buckets.iter_mut()) {
+        let mut ctx = ApplyCtx {
             scenario,
             interfaces,
-            graph,
-            consumer,
-            group,
             node_configs,
-        );
-    }
-    for (consumer, group) in &resources {
-        resource::apply_resource_borrows(scenario, consumer, group);
+        };
+        for (consumer, group) in by_consumer.iter() {
+            strategy.apply(&mut ctx, consumer, group);
+        }
     }
 
     strip_borrow_markers(scenario);

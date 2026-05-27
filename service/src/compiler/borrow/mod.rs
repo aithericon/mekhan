@@ -28,115 +28,39 @@ pub(crate) mod apply;
 pub(crate) mod ctx;
 pub(crate) mod planners;
 pub(crate) mod shape;
+pub(crate) mod source;
 
 pub(crate) use apply::apply_borrows;
 pub(crate) use shape::{Borrow, BorrowResolution};
 #[cfg(test)]
 pub(crate) use shape::BORROW_MARKER;
 
-use crate::compiler::borrow::planners::automated_step::{
-    automated_step_borrow_plan, AutomatedStepDataBorrow,
-};
-use crate::compiler::borrow::planners::guard::guard_readarc_plan;
-use crate::compiler::borrow::planners::human_task::human_task_borrow_plan;
-use crate::compiler::borrow::planners::resource::automated_step_resource_borrow_plan;
 use crate::compiler::resource_refs::KnownResources;
 use crate::compiler::CompileError;
 use crate::models::template::WorkflowGraph;
 
-/// Chain every per-surface borrow planner into a single `Vec<Borrow>`.
-/// Order: guards → Python → HumanTask → LLM → Kreuzberg. Within each
-/// surface, the planner's existing order is preserved. The apply step
-/// (next commit) groups by consumer and dispatches on
-/// [`BorrowResolution`] — order matters only inside a group for staging
-/// determinism.
+use source::{PlanCtx, SOURCES};
+
+/// Drive every [`source::BorrowSource`] in [`SOURCES`] and flatten their
+/// emissions into a single `Vec<Borrow>`. Order matches the per-source
+/// declaration order in [`SOURCES`] (guard → automated_step → resource →
+/// human_task). The apply step groups by consumer and dispatches on
+/// [`BorrowResolution`]; this list's order only matters for staging
+/// determinism within a single consumer's group.
 pub(crate) fn collect_borrows(
     graph: &WorkflowGraph,
     inline_sources: &HashMap<String, HashMap<String, String>>,
     known_resources: &KnownResources,
 ) -> Result<Vec<Borrow>, CompileError> {
+    let ctx = PlanCtx {
+        graph,
+        inline_sources,
+        known_resources,
+    };
     let mut out = Vec::new();
-
-    for b in guard_readarc_plan(graph)? {
-        let slug = b
-            .referenced
-            .split('.')
-            .next()
-            .unwrap_or(&b.referenced)
-            .to_string();
-        out.push(Borrow {
-            consumer_node_id: b.consumer_node_id,
-            producer_node: b.producer_node,
-            slug,
-            resolution: BorrowResolution::Guard {
-                dotted: b.referenced,
-                producer_path: b.producer_path,
-            },
-        });
+    for src in SOURCES {
+        out.extend(src.scan(&ctx)?);
     }
-
-    // Unified AutomatedStep borrow planner — registry-driven; emits
-    // both Envelope (Python, SMTP) and PerField (LLM, Kreuzberg) borrows
-    // based on each backend decl's `borrow_shape`.
-    for b in automated_step_borrow_plan(graph, inline_sources)? {
-        match b {
-            AutomatedStepDataBorrow::Envelope {
-                consumer_node_id,
-                slug,
-                producer_node,
-            } => out.push(Borrow {
-                consumer_node_id,
-                producer_node,
-                slug,
-                resolution: BorrowResolution::PythonEnvelope,
-            }),
-            AutomatedStepDataBorrow::PerField {
-                consumer_node_id,
-                slug,
-                producer_node,
-                attr,
-                is_path_site,
-                producer_field_kind,
-            } => out.push(Borrow {
-                consumer_node_id,
-                producer_node,
-                slug,
-                resolution: BorrowResolution::BackendFieldStage {
-                    attr,
-                    is_path_site,
-                    field_kind: producer_field_kind,
-                },
-            }),
-        }
-    }
-
-    // Python `<name>.<attr>` references against workspace-level resources.
-    // `producer_node` is set to `__resources__/<name>` as a sentinel: it
-    // identifies the borrow source on inspection but is never consumed by
-    // `wire_read_arc` (the `ResourceEnvelope` arm skips it).
-    for b in automated_step_resource_borrow_plan(graph, inline_sources, known_resources)? {
-        out.push(Borrow {
-            consumer_node_id: b.consumer_node_id,
-            producer_node: format!("__resources__/{}", b.name),
-            slug: b.name.clone(),
-            resolution: BorrowResolution::ResourceEnvelope {
-                name: b.name,
-                resource_id: b.resource_id,
-                type_name: b.type_name,
-                latest_version: b.latest_version,
-            },
-        });
-    }
-
-    for b in human_task_borrow_plan(graph)? {
-        out.push(Borrow {
-            consumer_node_id: b.consumer_node_id,
-            producer_node: b.producer_node,
-            slug: b.slug,
-            resolution: BorrowResolution::HumanTaskInputRewrite,
-        });
-    }
-
     Ok(out)
 }
 

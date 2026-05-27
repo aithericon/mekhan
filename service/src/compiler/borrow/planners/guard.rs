@@ -502,3 +502,37 @@ pub(crate) fn guard_readarc_plan(
     Ok(binds)
 }
 
+// ─── BorrowSource impl ──────────────────────────────────────────────────────
+
+use crate::compiler::borrow::shape::{Borrow, BorrowResolution};
+use crate::compiler::borrow::source::{BorrowSource, PlanCtx};
+
+pub(crate) struct GuardSource;
+
+impl BorrowSource for GuardSource {
+    fn name(&self) -> &'static str {
+        "guard"
+    }
+    fn scan(&self, ctx: &PlanCtx<'_>) -> Result<Vec<Borrow>, CompileError> {
+        let mut out = Vec::new();
+        for b in guard_readarc_plan(ctx.graph)? {
+            let slug = b
+                .referenced
+                .split('.')
+                .next()
+                .unwrap_or(&b.referenced)
+                .to_string();
+            out.push(Borrow {
+                consumer_node_id: b.consumer_node_id,
+                producer_node: b.producer_node,
+                slug,
+                resolution: BorrowResolution::Guard {
+                    dotted: b.referenced,
+                    producer_path: b.producer_path,
+                },
+            });
+        }
+        Ok(out)
+    }
+}
+

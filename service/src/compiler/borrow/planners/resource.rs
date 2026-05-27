@@ -97,3 +97,41 @@ pub(crate) fn automated_step_resource_borrow_plan(
     }
     Ok(out)
 }
+
+// ─── BorrowSource impl ──────────────────────────────────────────────────────
+
+use crate::compiler::borrow::shape::{Borrow, BorrowResolution};
+use crate::compiler::borrow::source::{BorrowSource, PlanCtx};
+
+pub(crate) struct ResourceSource;
+
+impl BorrowSource for ResourceSource {
+    fn name(&self) -> &'static str {
+        "resource"
+    }
+    fn scan(&self, ctx: &PlanCtx<'_>) -> Result<Vec<Borrow>, CompileError> {
+        let mut out = Vec::new();
+        for b in automated_step_resource_borrow_plan(
+            ctx.graph,
+            ctx.inline_sources,
+            ctx.known_resources,
+        )? {
+            // `producer_node` is set to `__resources__/<name>` as a sentinel:
+            // it identifies the borrow source on inspection but is never
+            // consumed by `wire_read_arc` (the `ResourceEnvelope` apply arm
+            // skips it). Matches the legacy hand-chain in `collect_borrows`.
+            out.push(Borrow {
+                consumer_node_id: b.consumer_node_id,
+                producer_node: format!("__resources__/{}", b.name),
+                slug: b.name.clone(),
+                resolution: BorrowResolution::ResourceEnvelope {
+                    name: b.name,
+                    resource_id: b.resource_id,
+                    type_name: b.type_name,
+                    latest_version: b.latest_version,
+                },
+            });
+        }
+        Ok(out)
+    }
+}

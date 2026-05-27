@@ -9,9 +9,9 @@ use crate::compiler::borrow::apply::{
     borrow_input_name, rewrite_placeholders_in_value, sanitize_ident,
 };
 use crate::compiler::borrow::shape::{Borrow, BorrowResolution, BORROW_MARKER};
-use crate::compiler::compile::{producer_field_access_hoist, wire_read_arc};
+use crate::compiler::compile::wire_read_arc;
 use crate::compiler::interface::InterfaceRegistry;
-use crate::models::template::{FieldKind, WorkflowGraph};
+use crate::models::template::FieldKind;
 
 /// Apply the LLM / Kreuzberg arm. Per-consumer: dedupe by `(slug, attr)`
 /// (multiple placeholder occurrences for the same field stage a single
@@ -24,7 +24,6 @@ use crate::models::template::{FieldKind, WorkflowGraph};
 pub(crate) fn apply_backend_borrows(
     scenario: &mut ScenarioDefinition,
     interfaces: &InterfaceRegistry,
-    graph: &WorkflowGraph,
     consumer_id: &str,
     consumer_borrows: &[Borrow],
     node_configs: &mut HashMap<String, serde_json::Value>,
@@ -66,7 +65,10 @@ pub(crate) fn apply_backend_borrows(
             // other producer kinds (Start, Loop, SubWorkflow) keep the
             // field at top-level. Same hoist logic as the Python arm's
             // `__h_<producer>` walker, condensed via null-safe `__pluck`.
-            let mut path_segs: Vec<String> = producer_field_access_hoist(graph, &b.producer_node)
+            let mut path_segs: Vec<String> = interfaces
+                .get(&b.producer_node)
+                .map(|i| i.kind.hoist_path())
+                .unwrap_or(&[])
                 .iter()
                 .map(|seg| format!("\"{seg}\""))
                 .collect();

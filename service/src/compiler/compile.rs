@@ -154,24 +154,6 @@ pub(super) fn wire_read_arc(
     Some(var)
 }
 
-/// Unquoted hoist-path segments for a producer's parked-envelope shape.
-/// HumanTask's parked envelope nests business data under `data`;
-/// AutomatedStep nests under `detail.outputs`; Start / Loop / SubWorkflow
-/// keep fields at the top level. The borrow phases use this to bridge the
-/// user-visible flat shape (`<slug>.<field>`) to the nested engine shape.
-/// Returns `&[]` for kinds with no nesting and for unknown nodes.
-pub(super) fn producer_field_access_hoist(
-    graph: &crate::models::template::WorkflowGraph,
-    producer_node: &str,
-) -> &'static [&'static str] {
-    let producer = graph.nodes.iter().find(|n| n.id == producer_node);
-    match producer.map(|n| &n.data) {
-        Some(WorkflowNodeData::HumanTask { .. }) => &["data"],
-        Some(WorkflowNodeData::AutomatedStep { .. }) => &["detail", "outputs"],
-        _ => &[],
-    }
-}
-
 /// A child template, fully compiled + made spawn-callable, resolved at the
 /// *parent's* publish time and frozen into the parent. Keyed by the parent's
 /// `SubWorkflow` node id in [`SubWorkflowAir`]. `lower_subworkflow` embeds
@@ -1011,7 +993,6 @@ fn apply_control_data_foundation(
     crate::compiler::borrow::apply_borrows(
         scenario,
         interfaces,
-        graph,
         unified_borrows,
         node_configs,
     );
@@ -1204,7 +1185,10 @@ fn apply_control_data_foundation(
             // downstream borrow of `<join_slug>.<field>` resolves
             // against `<field>` in the parked envelope (matches the
             // standard producer hoist: AutomatedStep → detail.outputs).
-            let hoist = producer_field_access_hoist(graph, upstream_id);
+            let hoist: &[&str] = interfaces
+                .get(upstream_id)
+                .map(|i| i.kind.hoist_path())
+                .unwrap_or(&[]);
             let pluck_segs: Vec<String> = hoist.iter().map(|s| format!("\"{s}\"")).collect();
             let data_expr = if pluck_segs.is_empty() {
                 var.clone()
