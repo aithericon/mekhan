@@ -3,6 +3,7 @@
 
 use aithericon_sdk::scenario::{ScenarioDefinition, TransitionLogic};
 
+use crate::compiler::borrow::apply::find_prepare_transition_mut;
 use crate::compiler::borrow::shape::{Borrow, BorrowResolution, BORROW_MARKER};
 
 /// Apply step — Python AutomatedStep with resource borrows. Per-consumer:
@@ -25,38 +26,34 @@ pub(crate) fn apply_resource_borrows(
     consumer_id: &str,
     consumer_borrows: &[Borrow],
 ) {
-    let prepare_a = format!("{}/prepare", consumer_id);
-    let prepare_b = format!("t_{}_prepare", consumer_id);
-    for t in &mut scenario.transitions {
-        if t.id != prepare_a && t.id != prepare_b {
-            continue;
-        }
-        let mut pushes = String::new();
-        for b in consumer_borrows {
-            let BorrowResolution::ResourceEnvelope { name, .. } = &b.resolution else {
-                continue; // unreachable per partition
-            };
-            // The publish handler splices `let __resources = #{ ... };` at
-            // the top of this transition's logic. The expression below reads
-            // from it and stages the per-name subtree as a JSON sidecar that
-            // the Python runner picks up via its `<slug>.json` ->
-            // `AccessibleDict` auto-promotion path.
-            pushes.push_str(&format!(
-                r#"job_inputs.push(#{{ "name": "{name}.json", "source": #{{ "type": "inline", "value": __resources["{name}"] }} }}); "#,
-                name = name,
-            ));
-        }
-        if let TransitionLogic::Rhai { source } = &t.logic {
-            if source.contains(BORROW_MARKER) {
-                // Prepend before the marker; `strip_borrow_markers` cleans
-                // up later. This keeps multi-arm composition working when
-                // the same node has both upstream-producer borrows AND
-                // resource borrows (e.g. SMTP step with `{{ intake.email }}`
-                // + `resource_alias: "mail"`).
-                let replacement = format!("{pushes}{BORROW_MARKER}");
-                let new_source = source.replace(BORROW_MARKER, &replacement);
-                t.logic = TransitionLogic::Rhai { source: new_source };
-            }
+    let Some(t) = find_prepare_transition_mut(scenario, consumer_id) else {
+        return;
+    };
+    let mut pushes = String::new();
+    for b in consumer_borrows {
+        let BorrowResolution::ResourceEnvelope { name, .. } = &b.resolution else {
+            continue; // unreachable per partition
+        };
+        // The publish handler splices `let __resources = #{ ... };` at
+        // the top of this transition's logic. The expression below reads
+        // from it and stages the per-name subtree as a JSON sidecar that
+        // the Python runner picks up via its `<slug>.json` ->
+        // `AccessibleDict` auto-promotion path.
+        pushes.push_str(&format!(
+            r#"job_inputs.push(#{{ "name": "{name}.json", "source": #{{ "type": "inline", "value": __resources["{name}"] }} }}); "#,
+            name = name,
+        ));
+    }
+    if let TransitionLogic::Rhai { source } = &t.logic {
+        if source.contains(BORROW_MARKER) {
+            // Prepend before the marker; `strip_borrow_markers` cleans
+            // up later. This keeps multi-arm composition working when
+            // the same node has both upstream-producer borrows AND
+            // resource borrows (e.g. SMTP step with `{{ intake.email }}`
+            // + `resource_alias: "mail"`).
+            let replacement = format!("{pushes}{BORROW_MARKER}");
+            let new_source = source.replace(BORROW_MARKER, &replacement);
+            t.logic = TransitionLogic::Rhai { source: new_source };
         }
     }
 }
