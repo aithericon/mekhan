@@ -13,6 +13,7 @@ pub mod handlers;
 pub mod lifecycle;
 pub mod models;
 pub mod nats;
+pub mod nodes;
 pub mod observability;
 pub mod openapi;
 pub mod petri;
@@ -124,6 +125,10 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         // the read-only port section reflects the actual runtime envelope.
         .routes(routes!(handlers::backends::list_backends))
         .routes(routes!(handlers::backends::derive_backend_output))
+        // Node-type registry — drives the editor's palette + property-panel
+        // dispatch. Companion to `/api/v1/backends`; the Svelte component
+        // map and Lucide icons stay frontend-only.
+        .routes(routes!(handlers::node_types::list_node_types))
         // Auth tokens — embedded per-user PAT management. Cookie-only by
         // construction (the `AuthUser` arg re-runs the cookie authenticator,
         // so a Bearer PAT behind `require_auth_middleware` can't reach these

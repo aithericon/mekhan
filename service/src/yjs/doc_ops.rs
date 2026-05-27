@@ -418,6 +418,16 @@ pub fn write_node_config(
     config: &yrs::MapRef,
     data: &WorkflowNodeData,
 ) {
+    // Registry first — returns Some for every variant in
+    // `crate::nodes::NODES`. PR1 covers `PhaseUpdate` + `Trigger`; PR2
+    // fills in the rest.
+    if let Some(decl) = crate::nodes::lookup_by_variant(data) {
+        (decl.yjs_encode)(txn, config, data);
+        return;
+    }
+    // Legacy match for un-migrated variants. The two `unreachable!` arms
+    // are PhaseUpdate + Trigger — handled by the registry above; falling
+    // here would be a registry-coverage bug.
     match data {
         WorkflowNodeData::Start { initial, process_name, .. } => {
             let initial_val =
@@ -515,19 +525,6 @@ pub fn write_node_config(
             config.insert(txn, "maxIterations", *max_iterations as f64);
             config.insert(txn, "loopCondition", loop_condition.clone());
         }
-        WorkflowNodeData::PhaseUpdate {
-            phase_name,
-            status,
-            message,
-            ..
-        } => {
-            config.insert(txn, "phaseName", phase_name.clone());
-            let status_val = serde_json::to_value(status).unwrap_or_default();
-            config.insert(txn, "status", json_value_to_any(&status_val));
-            if let Some(m) = message {
-                config.insert(txn, "message", m.clone());
-            }
-        }
         WorkflowNodeData::ProgressUpdate {
             fraction,
             message,
@@ -559,27 +556,6 @@ pub fn write_node_config(
                     .unwrap_or(serde_json::Value::Array(vec![]));
                 config.insert(txn, "errorResultMapping", json_value_to_any(&erm_val));
             }
-        }
-        WorkflowNodeData::Trigger {
-            source,
-            concurrency,
-            payload_mapping,
-            reply_default,
-            enabled,
-            ..
-        } => {
-            let source_val = serde_json::to_value(source).unwrap_or_default();
-            config.insert(txn, "source", json_value_to_any(&source_val));
-            let concurrency_val = serde_json::to_value(concurrency).unwrap_or_default();
-            config.insert(txn, "concurrency", json_value_to_any(&concurrency_val));
-            let mapping_val =
-                serde_json::to_value(payload_mapping).unwrap_or(serde_json::Value::Array(vec![]));
-            config.insert(txn, "payloadMapping", json_value_to_any(&mapping_val));
-            if let Some(rd) = reply_default {
-                let rd_val = serde_json::to_value(rd).unwrap_or_default();
-                config.insert(txn, "replyDefault", json_value_to_any(&rd_val));
-            }
-            config.insert(txn, "enabled", *enabled);
         }
         WorkflowNodeData::SubWorkflow {
             template_id,
@@ -627,6 +603,9 @@ pub fn write_node_config(
             config.insert(txn, "contextStrategy", json_value_to_any(&cs_val));
             let te_val = serde_json::to_value(on_tool_error).unwrap_or_default();
             config.insert(txn, "onToolError", json_value_to_any(&te_val));
+        }
+        WorkflowNodeData::PhaseUpdate { .. } | WorkflowNodeData::Trigger { .. } => {
+            unreachable!("registered in `crate::nodes::NODES`; handled above")
         }
     }
 }

@@ -324,6 +324,24 @@ pub(crate) trait NodeLowering {
 
 impl NodeLowering for WorkflowNode {
     fn lower(&self, cx: &mut LoweringCtx) -> Result<(), CompileError> {
+        // Registry first — returns Some for every variant in
+        // `crate::nodes::NODES`. PR1 covers `PhaseUpdate` + `Trigger`; PR2
+        // fills in the rest. Trigger's `lower: None` + `lowers_to_air: false`
+        // pair encodes the "no AIR shape" protocol exception declaratively
+        // — replacing the old `matches!(Trigger)` carve-out.
+        if let Some(decl) = crate::nodes::lookup_by_variant(&self.data) {
+            return match decl.lower {
+                Some(lf) => lf(cx),
+                None if !decl.lowers_to_air => Ok(()),
+                None => Err(CompileError::Compilation(format!(
+                    "registry bug: variant `{}` declares lowers_to_air=true but has no `lower` fn",
+                    decl.wire_name
+                ))),
+            };
+        }
+        // Legacy match for un-migrated variants. The two `unreachable!` arms
+        // are PhaseUpdate + Trigger — registered above; falling here would
+        // be a registry-coverage bug.
         match &self.data {
             WorkflowNodeData::Start { .. } => start::lower_start(cx),
             WorkflowNodeData::End { .. } => end::lower_end(cx),
@@ -335,16 +353,11 @@ impl NodeLowering for WorkflowNode {
             WorkflowNodeData::Join { .. } => join::lower_join(cx),
             WorkflowNodeData::Loop { .. } => loop_::lower_loop(cx),
             WorkflowNodeData::Scope { .. } => scope::lower_scope(cx),
-            WorkflowNodeData::PhaseUpdate { .. } => phase_update::lower_phase_update(cx),
             WorkflowNodeData::ProgressUpdate { .. } => progress_update::lower_progress_update(cx),
             WorkflowNodeData::Failure { .. } => failure::lower_failure(cx),
             WorkflowNodeData::SubWorkflow { .. } => subworkflow::lower_subworkflow(cx),
-            WorkflowNodeData::Trigger { .. } => {
-                // Trigger nodes are NOT compiled into AIR — they are a
-                // pre-compile concern owned by the trigger dispatcher
-                // (`service::triggers`). The trigger's outgoing edge is also
-                // skipped during wire_edge.
-                Ok(())
+            WorkflowNodeData::PhaseUpdate { .. } | WorkflowNodeData::Trigger { .. } => {
+                unreachable!("registered in `crate::nodes::NODES`; handled above")
             }
         }
     }
@@ -383,13 +396,19 @@ pub(crate) fn expand_node<'a>(
         config_storage,
     };
     node.lower(&mut cx)?;
-    // Protocol enforcement: every non-Trigger lowering MUST call
-    // `cx.publish_interface()` exactly once. The dispatcher hard-errors
-    // if it didn't — there is no auto-derive fallback (by design; see
-    // `service/src/compiler/interface.rs` for the contract).
-    if !matches!(node.data, WorkflowNodeData::Trigger { .. })
-        && !cx.interfaces.contains_key(&node.id)
-    {
+    // Protocol enforcement: every lowering that participates in AIR MUST
+    // call `cx.publish_interface()` exactly once. The dispatcher
+    // hard-errors if it didn't — there is no auto-derive fallback (by
+    // design; see `service/src/compiler/interface.rs` for the contract).
+    //
+    // Whether the variant participates is declared on its `NodeDecl`
+    // (`lowers_to_air`). For un-migrated variants we fall back to the
+    // legacy `matches!(Trigger)` check — Trigger is currently the only
+    // non-participating variant.
+    let participates = crate::nodes::lookup_by_variant(&node.data)
+        .map(|d| d.lowers_to_air)
+        .unwrap_or(!matches!(node.data, WorkflowNodeData::Trigger { .. }));
+    if participates && !cx.interfaces.contains_key(&node.id) {
         return Err(CompileError::Compilation(format!(
             "internal: lower_* for node '{}' ({:?}) did not publish an interface — \
              every lowering must call `cx.publish_interface()` before returning",
@@ -400,6 +419,12 @@ pub(crate) fn expand_node<'a>(
 }
 
 fn node_kind_of(node: &WorkflowNode) -> NodeKind {
+    // Registry first — declares the kind mapping (including Agent →
+    // AutomatedStep when Agent migrates in PR2). PR1 covers
+    // PhaseUpdate + Trigger; the legacy match handles the rest.
+    if let Some(decl) = crate::nodes::lookup_by_variant(&node.data) {
+        return decl.kind;
+    }
     match &node.data {
         WorkflowNodeData::Start { .. } => NodeKind::Start,
         WorkflowNodeData::End { .. } => NodeKind::End,
@@ -407,8 +432,9 @@ fn node_kind_of(node: &WorkflowNode) -> NodeKind {
         WorkflowNodeData::AutomatedStep { .. } => NodeKind::AutomatedStep,
         // PR 1: Agent's degenerate path lowers byte-identically to
         // AutomatedStep(Llm); publish the same interface kind so downstream
-        // consumers don't have to special-case it. The follow-up loop
-        // lowering will switch to a dedicated `NodeKind::Agent`.
+        // consumers don't have to special-case it. When Agent migrates in
+        // PR2 the registry entry declares this mapping explicitly; the
+        // follow-up loop lowering will switch to a dedicated `NodeKind::Agent`.
         WorkflowNodeData::Agent { .. } => NodeKind::AutomatedStep,
         WorkflowNodeData::Decision { .. } => NodeKind::Decision,
         WorkflowNodeData::Loop { .. } => NodeKind::Loop,
@@ -416,10 +442,11 @@ fn node_kind_of(node: &WorkflowNode) -> NodeKind {
         WorkflowNodeData::Join { .. } => NodeKind::Join,
         WorkflowNodeData::Scope { .. } => NodeKind::Scope,
         WorkflowNodeData::SubWorkflow { .. } => NodeKind::SubWorkflow,
-        WorkflowNodeData::PhaseUpdate { .. } => NodeKind::PhaseUpdate,
         WorkflowNodeData::ProgressUpdate { .. } => NodeKind::ProgressUpdate,
         WorkflowNodeData::Failure { .. } => NodeKind::Failure,
-        WorkflowNodeData::Trigger { .. } => NodeKind::Trigger,
+        WorkflowNodeData::PhaseUpdate { .. } | WorkflowNodeData::Trigger { .. } => {
+            unreachable!("registered in `crate::nodes::NODES`; handled above")
+        }
     }
 }
 
@@ -441,7 +468,7 @@ pub(super) mod human_task;
 pub(super) mod join;
 pub(super) mod loop_;
 pub(super) mod parallel_split;
-pub(super) mod phase_update;
+pub(crate) mod phase_update;
 pub(super) mod progress_update;
 pub(super) mod scope;
 pub(super) mod start;
