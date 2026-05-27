@@ -190,6 +190,80 @@ fn repeater_output_surfaces_as_array_in_consumer_scope() {
     );
 }
 
+/// The HumanTask wire-edge transition (the one writing into
+/// `p_review_input`) must (1) carry a `d.payload = __set_path(...)`
+/// staging emission that targets the renderer-expected
+/// `[head, ...pre]` path, AND (2) have its inner `__pluck(input, [...]`
+/// rewritten to `__pluck(d_extract, [...])` after a read-arc on
+/// `p_extract_data` is wired. This is the full runtime path that the
+/// frontend's RepeaterBlock relies on — without it, the renderer never
+/// finds the upstream array and falls through to "No items to review."
+#[test]
+fn repeater_wire_edge_stages_payload_and_wires_read_arc() {
+    let g = graph(
+        "extract.tasks[*]",
+        Some("extract.tasks[*].title"),
+        "review_tasks",
+        REVIEW_FIELDS,
+    );
+    let air = compile_to_air(&g, "repeater_e2e", "", &python_files()).expect("compile ok");
+    let transitions = air["transitions"].as_array().expect("transitions array");
+
+    // Locate the wire-edge transition that writes into the HumanTask's
+    // input place — same lookup pattern as the existing
+    // `human_task_slug_borrow_rewrites_pluck_and_adds_read_arc` test.
+    let edge_t = transitions
+        .iter()
+        .find(|t| {
+            t["outputs"]
+                .as_array()
+                .map(|arr| arr.iter().any(|a| a["place"] == "p_review_input"))
+                .unwrap_or(false)
+        })
+        .expect("wire-edge transition writing to p_review_input must exist");
+
+    let logic_src = edge_t["logic"]["source"].as_str().unwrap_or("");
+
+    // (1) __set_path helper present + d.payload preamble emitted.
+    assert!(
+        logic_src.contains("fn __set_path("),
+        "expected __set_path helper in wire-edge Rhai: {logic_src}"
+    );
+    assert!(
+        logic_src.contains("if type_of(d.payload) != \"map\""),
+        "expected d.payload preamble: {logic_src}"
+    );
+
+    // (2) After apply_human_task_borrows, the staging __pluck must
+    //     target d_extract (not `input`) and walk the upstream
+    //     AutomatedStep's hoist path (`detail.outputs`) into `tasks`.
+    assert!(
+        logic_src.contains(
+            r#"d.payload = __set_path(d.payload, ["extract", "tasks"], 0, __pluck(d_extract, ["detail", "outputs", "tasks"]))"#
+        ),
+        "expected rewritten staging call against d_extract: {logic_src}"
+    );
+
+    // (3) The pre-rewrite needle must be gone — otherwise the renderer
+    //     would receive a `()` payload and no rows would render.
+    assert!(
+        !logic_src.contains(r#"__pluck(input, ["extract", "#),
+        "pre-rewrite `__pluck(input, [\"extract\", …])` must be gone: {logic_src}"
+    );
+
+    // (4) A read-arc on p_extract_data with port `d_extract` was wired —
+    //     the borrow's physical realization on the wire-edge transition.
+    let inputs = edge_t["inputs"].as_array().expect("inputs array");
+    let read_arc = inputs
+        .iter()
+        .find(|a| a["place"] == "p_extract_data")
+        .unwrap_or_else(|| {
+            panic!("expected read-arc on p_extract_data; inputs: {inputs:?}");
+        });
+    assert_eq!(read_arc["read"], serde_json::Value::Bool(true));
+    assert_eq!(read_arc["port"], "d_extract");
+}
+
 /// Repeater + label without `item_label_ref` also compiles — the picker
 /// falls back to `Item N` row labels at runtime.
 #[test]

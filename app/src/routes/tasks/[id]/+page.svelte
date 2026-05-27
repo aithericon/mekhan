@@ -132,6 +132,7 @@
 						<TaskForm
 							steps={task.steps}
 							taskId={task.task_id}
+							taskData={task.payload}
 							onsubmit={handleComplete}
 							oncancel={handleCancel}
 							{submitting}

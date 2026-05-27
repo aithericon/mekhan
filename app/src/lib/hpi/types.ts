@@ -139,6 +139,15 @@ export type HumanTask = {
 	completed_at?: string;
 	completed_by?: string;
 	data?: Record<string, unknown>;
+	/**
+	 * Feature B — resolved upstream data the compiler stages into the
+	 * `HumanTaskRequest` envelope for `TaskForm` to consume. Carries
+	 * `<head>.<...pre>` paths for every Repeater block's `items_ref` so
+	 * the renderer can resolve `getAtPath(payload, [head, ...pre])` to
+	 * the array it iterates. Empty / undefined when no Repeater is in
+	 * play.
+	 */
+	payload?: Record<string, unknown>;
 	cancelled_at?: string;
 	cancel_reason?: string;
 	failed_at?: string;

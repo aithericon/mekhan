@@ -3,7 +3,8 @@
 //! (retry, merge, join, human-task injection).
 
 use crate::models::template::{
-    BackoffKind, MergeStrategy, RetryPolicy, WorkflowNode, WorkflowNodeData,
+    BackoffKind, MergeStrategy, RetryPolicy, TaskBlockConfig, TaskStepConfig, WorkflowNode,
+    WorkflowNodeData,
 };
 use aithericon_sdk::{
     effects, Context, DynamicToken, EffectError, ExecutorSubmitInput, PlaceHandle, TimerInput,
@@ -73,6 +74,26 @@ if __t == \"map\" && type_of(__s) == \"string\" { __r = __r[__s]; continue; } \
 if __t == \"array\" && type_of(__s) == \"i64\" && __s >= 0 && __s < __r.len() { __r = __r[__s]; continue; } \
 return (); \
 } __r } ";
+
+/// Deep-set helper prepended to HumanTask injection logic when a step
+/// carries one or more Repeater blocks. Walks `segs` from `idx`, ensuring
+/// every intermediate is a map (rewriting non-map sentinels to `#{}`),
+/// then writes `value` at the leaf and returns the rewritten root. Pairs
+/// with `__pluck`: each Repeater emits
+/// `d.payload = __set_path(d.payload, [<head>, ...<pre>], 0, __pluck(input, [...]))`,
+/// which the borrow rewrite then retargets at `d_<producer>`.
+pub(crate) const SET_PATH_HELPER: &str = "fn __set_path(__m, __segs, __idx, __v) { \
+let __cur = if type_of(__m) == \"map\" { __m } else { #{} }; \
+if __idx >= __segs.len() { return __v; } \
+let __k = __segs[__idx]; \
+if __idx == __segs.len() - 1 { \
+__cur[__k] = __v; \
+} else { \
+let __child = if __cur.keys().contains(__k) && type_of(__cur[__k]) == \"map\" { __cur[__k] } else { #{} }; \
+__cur[__k] = __set_path(__child, __segs, __idx + 1, __v); \
+} \
+__cur \
+} ";
 
 /// Prepend [`PLUCK_HELPER`] to `logic` iff it actually calls `__pluck(`.
 ///
@@ -536,18 +557,110 @@ pub(crate) fn build_human_task_injection_logic(target_node: &WorkflowNode) -> St
             interpolate_to_rhai_expr(instructions_mdsvex.as_deref().unwrap_or(""));
         let title_expr = interpolate_to_rhai_expr(task_title);
 
+        // Feature B: stage every Repeater block's resolved upstream array
+        // into `d.payload[<head>][...<pre>]` so the renderer's
+        // `getAtPath(taskData, [head, ...pre])` resolves to the array at
+        // task-display time. Each emission carries one `__pluck(input,
+        // ["<head>", "<pre[0]>", ...])` whose `apply_human_task_borrows`
+        // substring-rewrite retargets to `d_<producer>` once the read-arc
+        // is wired. Placeholder-free, Repeater-free tasks stay byte-identical.
+        let payload_block = build_repeater_payload_block(steps);
+
         // Only prepend the helper when an interpolation actually emitted a
         // `__pluck(` call, so placeholder-free human tasks stay byte-identical.
-        with_pluck_prelude(&format!(
+        let body = format!(
             "let d = input; \
              d.title = {title_expr}; \
              d.instructions_mdsvex = {instructions_expr}; \
              d.steps = {steps_rhai}; \
+             {payload_block}\
              #{{ output: d }}"
-        ))
+        );
+        let with_pluck = with_pluck_prelude(&body);
+        // SET_PATH_HELPER only appears when a Repeater contributed an
+        // injection; keep it gated so non-Repeater tasks stay byte-identical.
+        if body.contains("__set_path(") {
+            format!("{SET_PATH_HELPER}{with_pluck}")
+        } else {
+            with_pluck
+        }
     } else {
         "#{ output: input }".to_string()
     }
+}
+
+/// Parse a Repeater `items_ref` into `(head, pre)` — the slug + the
+/// pre-`[*]` path segments. Mirrors the frontend's `parseRepeaterRef`
+/// (`app/src/lib/components/tasks/task-form-values.svelte.ts`) and the
+/// compiler-side validator's `parse_repeater_ref` (validate.rs); returns
+/// `None` for malformed inputs so the injection silently degrades — the
+/// validator surfaces a typed error before lowering reaches this point.
+fn parse_repeater_items_ref(raw: &str) -> Option<(String, Vec<String>)> {
+    let trimmed = raw.trim();
+    let star = trimmed.find("[*]")?;
+    let before = &trimmed[..star];
+    let dot = before.find('.')?;
+    let head = before[..dot].to_string();
+    if head.is_empty() {
+        return None;
+    }
+    let pre_str = &before[dot + 1..];
+    if pre_str.is_empty() {
+        return None;
+    }
+    let pre: Vec<String> = pre_str.split('.').map(str::to_string).collect();
+    if pre.iter().any(|s| s.is_empty()) {
+        return None;
+    }
+    Some((head, pre))
+}
+
+/// Walk every Repeater block in `steps` and emit one `d.payload = __set_path(...)`
+/// statement per unique `(head, pre)` `items_ref` path. Empty when there are no
+/// Repeater blocks, preserving the existing byte-identical output for legacy
+/// HumanTasks.
+fn build_repeater_payload_block(steps: &[TaskStepConfig]) -> String {
+    let mut seen: std::collections::BTreeSet<(String, Vec<String>)> =
+        std::collections::BTreeSet::new();
+    let mut emissions: Vec<String> = Vec::new();
+    for step in steps {
+        for block in &step.blocks {
+            let TaskBlockConfig::Repeater { items_ref, .. } = block else {
+                continue;
+            };
+            let Some((head, pre)) = parse_repeater_items_ref(items_ref) else {
+                continue;
+            };
+            if !seen.insert((head.clone(), pre.clone())) {
+                continue;
+            }
+            let mut segs: Vec<String> = Vec::with_capacity(1 + pre.len());
+            segs.push(head.clone());
+            segs.extend(pre.iter().cloned());
+            let segs_literal = segs
+                .iter()
+                .map(|s| format!("\"{}\"", rhai_str_escape(s)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let pluck_segs = segs_literal.clone();
+            emissions.push(format!(
+                "d.payload = __set_path(d.payload, [{segs_literal}], 0, __pluck(input, [{pluck_segs}])); ",
+            ));
+        }
+    }
+    if emissions.is_empty() {
+        return String::new();
+    }
+    // Ensure d.payload starts as a map even when the engine projection
+    // emitted `null` / `()` (Option<Value>::None at the wire). __set_path
+    // also defends against this internally, but a clean preamble keeps
+    // the generated Rhai readable when authors inspect compiled AIR.
+    let mut out =
+        String::from("if type_of(d.payload) != \"map\" { d.payload = #{}; } ");
+    for e in emissions {
+        out.push_str(&e);
+    }
+    out
 }
 
 #[cfg(test)]
@@ -826,6 +939,172 @@ mod tests {
             !script.contains(r#"__pluck(input.start"#)
                 && !script.contains(r#"__pluck(scopes,"#),
             "dotted-path lowering should still hit `input` at the root: {script}"
+        );
+    }
+
+    // ----- Repeater payload staging (Feature B) -----
+
+    #[test]
+    fn injection_without_repeater_emits_no_payload_block() {
+        // Byte-identity guard: a HumanTask with no Repeater blocks must
+        // not carry __set_path or a d.payload preamble. Existing static
+        // HumanTasks stay exactly as they were pre-Feature B.
+        let node = ht_node("Review the invoice", Some("Open the file"), vec![]);
+        let script = build_human_task_injection_logic(&node);
+        assert!(
+            !script.contains("__set_path("),
+            "no Repeater → no __set_path helper, got: {script}"
+        );
+        assert!(
+            !script.contains("d.payload"),
+            "no Repeater → no payload preamble, got: {script}"
+        );
+    }
+
+    #[test]
+    fn injection_with_repeater_stages_payload_via_pluck() {
+        // A single Repeater whose items_ref points at `extract.tasks[*]`
+        // must emit a __set_path call that writes
+        // `d.payload.extract.tasks = __pluck(input, ["extract", "tasks"])`.
+        // The borrow rewrite (apply_human_task_borrows) later retargets
+        // the inner __pluck to `d_extract` once the read-arc is wired.
+        let step = TaskStepConfig {
+            id: "s1".into(),
+            title: "Review".into(),
+            description_mdsvex: None,
+            blocks: vec![TaskBlockConfig::Repeater {
+                items_ref: "extract.tasks[*]".into(),
+                item_label_ref: Some("extract.tasks[*].title".into()),
+                fields: vec![],
+                output_slug: "review_tasks".into(),
+            }],
+        };
+        let node = ht_node("T", None, vec![step]);
+        let script = build_human_task_injection_logic(&node);
+        // Helper + preamble + single emission.
+        assert_eq!(
+            script.matches("fn __set_path(").count(),
+            1,
+            "expected exactly one __set_path helper: {script}"
+        );
+        assert!(
+            script.contains("if type_of(d.payload) != \"map\""),
+            "missing d.payload preamble: {script}"
+        );
+        assert!(
+            script.contains(
+                r#"d.payload = __set_path(d.payload, ["extract", "tasks"], 0, __pluck(input, ["extract", "tasks"]))"#
+            ),
+            "missing payload-staging emission: {script}"
+        );
+        // Pluck helper also present (this script contains __pluck).
+        assert_eq!(
+            script.matches("fn __pluck(").count(),
+            1,
+            "expected one __pluck helper, got: {script}"
+        );
+    }
+
+    #[test]
+    fn injection_repeaters_with_shared_head_dedupe_paths() {
+        // Two Repeaters pointing at the same items_ref produce a single
+        // payload-staging emission. Distinct items_refs produce distinct
+        // emissions even when the head is shared.
+        let step = TaskStepConfig {
+            id: "s1".into(),
+            title: "Review".into(),
+            description_mdsvex: None,
+            blocks: vec![
+                TaskBlockConfig::Repeater {
+                    items_ref: "extract.tasks[*]".into(),
+                    item_label_ref: None,
+                    fields: vec![],
+                    output_slug: "review_a".into(),
+                },
+                // Same items_ref — dedupes.
+                TaskBlockConfig::Repeater {
+                    items_ref: "extract.tasks[*]".into(),
+                    item_label_ref: None,
+                    fields: vec![],
+                    output_slug: "review_b".into(),
+                },
+                // Distinct items_ref — separate emission.
+                TaskBlockConfig::Repeater {
+                    items_ref: "extract.subtasks[*]".into(),
+                    item_label_ref: None,
+                    fields: vec![],
+                    output_slug: "review_c".into(),
+                },
+            ],
+        };
+        let node = ht_node("T", None, vec![step]);
+        let script = build_human_task_injection_logic(&node);
+        assert_eq!(
+            script
+                .matches(r#"d.payload = __set_path(d.payload, ["extract", "tasks"]"#)
+                .count(),
+            1,
+            "same items_ref must produce exactly one staging call: {script}"
+        );
+        assert_eq!(
+            script
+                .matches(r#"d.payload = __set_path(d.payload, ["extract", "subtasks"]"#)
+                .count(),
+            1,
+            "distinct items_ref must produce its own staging call: {script}"
+        );
+    }
+
+    #[test]
+    fn injection_repeater_with_deep_pre_path_emits_full_segments() {
+        // items_ref = "foo.bar.baz[*]" → head=foo, pre=["bar","baz"].
+        // The emitted segments must include every pre segment so
+        // __set_path drills the full path before writing the leaf.
+        let step = TaskStepConfig {
+            id: "s1".into(),
+            title: "Review".into(),
+            description_mdsvex: None,
+            blocks: vec![TaskBlockConfig::Repeater {
+                items_ref: "foo.bar.baz[*]".into(),
+                item_label_ref: None,
+                fields: vec![],
+                output_slug: "deep".into(),
+            }],
+        };
+        let node = ht_node("T", None, vec![step]);
+        let script = build_human_task_injection_logic(&node);
+        assert!(
+            script.contains(
+                r#"d.payload = __set_path(d.payload, ["foo", "bar", "baz"], 0, __pluck(input, ["foo", "bar", "baz"]))"#
+            ),
+            "deep pre-path not emitted in full: {script}"
+        );
+    }
+
+    #[test]
+    fn injection_repeater_emits_pluck_borrow_needle_for_rewrite() {
+        // The whole point of staging via __pluck(input, ["<slug>", "<attr>"…])
+        // is that `apply_human_task_borrows` rewrites that prefix to
+        // `__pluck(d_<producer>, [<hoist>, "<attr>"…])` after wiring a
+        // read-arc on the upstream parked data. This guards the
+        // contract: the emitted needle must match the rewrite pattern
+        // (slug + trailing `", `).
+        let step = TaskStepConfig {
+            id: "s1".into(),
+            title: "Review".into(),
+            description_mdsvex: None,
+            blocks: vec![TaskBlockConfig::Repeater {
+                items_ref: "extract.tasks[*]".into(),
+                item_label_ref: None,
+                fields: vec![],
+                output_slug: "review_tasks".into(),
+            }],
+        };
+        let node = ht_node("T", None, vec![step]);
+        let script = build_human_task_injection_logic(&node);
+        assert!(
+            script.contains(r#"__pluck(input, ["extract", "tasks"]"#),
+            "rewrite needle `__pluck(input, [\"extract\", ` missing: {script}"
         );
     }
 
