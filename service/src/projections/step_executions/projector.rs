@@ -714,7 +714,7 @@ fn token_color_to_json(color: &TokenColor) -> serde_json::Value {
 /// tokens in unit tests stay shape-stable).
 fn canonical_output_payload(kind: NodeKind, raw: serde_json::Value) -> serde_json::Value {
     let path: &[&str] = match kind {
-        NodeKind::AutomatedStep => &["detail", "outputs"],
+        NodeKind::AutomatedStep | NodeKind::Agent => &["detail", "outputs"],
         NodeKind::HumanTask => &["data"],
         _ => return raw,
     };

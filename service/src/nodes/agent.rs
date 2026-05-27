@@ -34,13 +34,14 @@ pub(crate) static AGENT_DECL: NodeDecl = NodeDecl {
          loop. Degenerate path (max_turns == 1, no stop_when, no tools) \
          lowers byte-identically to AutomatedStep(Llm).",
     ),
-    // Agent reuses `NodeKind::AutomatedStep` — declared, not a separate
-    // variant — to preserve the byte-identical contract pinned by
-    // `agent_degenerate_lowers_byte_identical_to_llm_automated_step`. The
-    // loop path's envelope nesting matches AutomatedStep's
-    // (`detail.outputs.*`), so AutomatedStep's `hoist_path()` is the
-    // right answer for the borrow apply phases.
-    kind: NodeKind::AutomatedStep,
+    // Loop-path kind. The degenerate path delegates via a virtual
+    // `WorkflowNodeData::AutomatedStep` node, so `publish_interface`
+    // reads kind from the *virtual* variant and stays AutomatedStep — the
+    // byte-identical contract (`agent_degenerate_lowers_byte_identical_to_llm_automated_step`)
+    // continues to hold. The loop path's envelope nesting matches
+    // AutomatedStep's (`detail.outputs.*`), so `NodeKind::Agent::hoist_path()`
+    // returns the same segments.
+    kind: NodeKind::Agent,
     lowers_to_air: true,
     is_join: false,
     // Agent's loop path parks state in `p_<id>_data` (see
