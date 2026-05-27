@@ -155,7 +155,7 @@ pub async fn register_all(dispatcher: Arc<TriggerDispatcher>, kv: Option<Store>)
     for rec in dispatcher.list_all() {
         if let TriggerSource::Cron(ref c) = rec.source {
             if rec.enabled {
-                let _ = spawn_loop(dispatcher.clone(), kv.clone(), rec.clone(), c.clone());
+                let _handle = spawn_loop(dispatcher.clone(), kv.clone(), rec.clone(), c.clone());
                 spawned += 1;
             }
         }

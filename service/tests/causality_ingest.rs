@@ -61,22 +61,6 @@ async fn publish_event(
         .expect("event ACK");
 }
 
-/// Publish a CrossNetTokenTransfer to the bridge subject.
-async fn publish_bridge_transfer(
-    js: &jetstream::Context,
-    target_net_id: &str,
-    place: &str,
-    payload: &serde_json::Value,
-) {
-    let subject = format!("petri.bridge.{target_net_id}.{place}");
-    let bytes = serde_json::to_vec(payload).unwrap();
-    js.publish(subject, bytes.into())
-        .await
-        .expect("publish bridge transfer")
-        .await
-        .expect("bridge transfer ACK");
-}
-
 /// Wait for a causality_events row to appear.
 async fn wait_for_causality_event(
     db: &sqlx::PgPool,

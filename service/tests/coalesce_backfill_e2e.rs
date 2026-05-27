@@ -81,11 +81,6 @@ async fn engine_available() -> bool {
     )
 }
 
-async fn body_json(body: Body) -> Value {
-    let bytes = body.collect().await.unwrap().to_bytes();
-    serde_json::from_slice(&bytes).unwrap()
-}
-
 struct TaskHandle(tokio::task::AbortHandle);
 impl Drop for TaskHandle {
     fn drop(&mut self) {

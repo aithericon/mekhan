@@ -8,11 +8,9 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
-use std::collections::HashMap;
-use std::sync::Arc;
 use tower::ServiceExt;
 use uuid::Uuid;
-use yrs::{Any, Array, Map, ReadTxn, StateVector, Transact, WriteTxn};
+use yrs::{Map, ReadTxn, StateVector, Transact, WriteTxn};
 
 async fn body_json(body: Body) -> Value {
     let bytes = body.collect().await.unwrap().to_bytes();
