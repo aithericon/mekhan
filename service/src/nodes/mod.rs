@@ -1,26 +1,20 @@
 //! Declarative node-type registry — one `NodeDecl` per `WorkflowNodeData`
 //! variant, stored in a static `&[NodeDecl]` slice.
 //!
-//! Mirrors [`crate::backends`] for `ExecutionBackendType`. Replaces the
-//! per-variant `match` arms scattered through `models/template.rs`,
-//! `compiler/lower/mod.rs`, `compiler/wire.rs`, `compiler/token_shape/analyze.rs`,
-//! `projections/step_executions/consumer.rs`, and `yjs/doc_ops.rs`.
+//! Mirrors [`crate::backends`] for `ExecutionBackendType`. The single
+//! source of truth for per-variant dispatch — `compiler/lower/mod.rs` and
+//! `yjs/doc_ops.rs::write_node_config` both look up the decl and call
+//! through its fn pointers; there are no legacy per-variant `match` arms
+//! at dispatch sites.
 //!
 //! Adding a new node type is one entry in [`NODES`] plus the variant-specific
-//! module (e.g. `nodes/phase_update.rs`). Dispatch sites do
-//! [`lookup_by_variant`] and call into the decl's fn pointers.
+//! module (e.g. `nodes/phase_update.rs`) plus the `WorkflowNodeData::*` arm
+//! in [`lookup_by_variant`] that maps the new variant to its wire tag. The
+//! registry-coverage tests at the bottom of this file make a forgotten
+//! entry a build-time failure.
 //!
 //! [`WorkflowNodeData`] stays the wire / serde-rename tag (OpenAPI
-//! discriminator, Y.Doc-stored string); the registry replaces the variant's
-//! role as a dispatch source-of-truth.
-//!
-//! ## PR1 status
-//!
-//! PR1 lands the registry skeleton + endpoint + two migrated variants
-//! ([`phase_update`], [`trigger`]) as proof. The dispatcher in
-//! `compiler/lower/mod.rs::NodeLowering` and `yjs/doc_ops.rs::write_node_config`
-//! consult the registry first and fall back to legacy `match` arms for
-//! un-migrated variants. PR2 migrates the remaining 13.
+//! discriminator, Y.Doc-stored string); the registry owns dispatch.
 
 use serde::Serialize;
 use utoipa::ToSchema;
@@ -50,9 +44,6 @@ pub mod trigger;
 /// Per-variant declaration. Stored in a `&'static` slice so the registry has
 /// zero runtime cost and trivially serializes the metadata subset for
 /// `GET /api/v1/node-types`.
-///
-/// Only the fields the duplication sites actually need. Future fields land
-/// when a duplication site is collapsed in PR2; see `humble-inventing-rose.md`.
 ///
 /// `pub(crate)` because the `lower` fn pointer references the crate-internal
 /// [`LoweringCtx`]. The public-facing wire shape is [`NodeDescriptor`] —
@@ -126,9 +117,11 @@ pub(crate) type YjsEncodeFn = fn(
 
 // ─── Registry ───────────────────────────────────────────────────────────────
 
-/// Static slice of every registered node type. PR1 covers `PhaseUpdate` +
-/// `Trigger`; PR2 fills in the remaining 13 variants. The conformance test
-/// (`lookup_by_variant_finds_registered`) is the gate.
+/// Static slice of every registered node type. Covers all
+/// `WorkflowNodeData` variants; the registry-coverage tests below
+/// (one `lookup_by_variant_finds_<variant>` per variant +
+/// `lookup_by_wire_finds_registered` + `descriptors_emit_camel_case_fields`)
+/// make a forgotten entry a build-time failure.
 pub(crate) static NODES: &[&NodeDecl] = &[
     &agent::AGENT_DECL,
     &automated_step::AUTOMATED_STEP_DECL,
@@ -180,8 +173,9 @@ pub(crate) fn lookup_by_variant(data: &WorkflowNodeData) -> Option<&'static Node
 }
 
 /// Look up by wire name (snake_case tag). Symmetric to `backends::lookup` —
-/// reserved for future endpoints (PR2 may add `POST /api/v1/node-types/{name}/derive-ports`
-/// mirroring the backends `derive-output` pattern).
+/// reserved for future endpoints (e.g. a `POST /api/v1/node-types/{name}/derive-ports`
+/// mirror of the backends `derive-output` pattern, if a node ever needs
+/// server-side port derivation from its config).
 #[allow(dead_code)]
 pub(crate) fn lookup_by_wire(name: &str) -> Option<&'static NodeDecl> {
     NODES.iter().copied().find(|d| d.wire_name == name)
@@ -540,30 +534,37 @@ mod tests {
 
     #[test]
     fn lookup_by_wire_finds_registered() {
-        // All 15 variants registered after PR2.
-        assert!(lookup_by_wire("phase_update").is_some());
-        assert!(lookup_by_wire("trigger").is_some());
-        assert!(lookup_by_wire("start").is_some());
-        assert!(lookup_by_wire("end").is_some());
-        assert!(lookup_by_wire("progress_update").is_some());
-        assert!(lookup_by_wire("failure").is_some());
-        assert!(lookup_by_wire("agent").is_some());
-        assert!(lookup_by_wire("parallel_split").is_some());
-        assert!(lookup_by_wire("join").is_some());
-        assert!(lookup_by_wire("loop").is_some());
-        assert!(lookup_by_wire("sub_workflow").is_some());
-        assert!(lookup_by_wire("human_task").is_some());
-        assert!(lookup_by_wire("automated_step").is_some());
-        assert!(lookup_by_wire("decision").is_some());
-        assert!(lookup_by_wire("scope").is_some());
+        // Every wire tag in `NODES` must be reachable via wire-name lookup.
+        // Keep this list in sync with `WorkflowNodeData` variants.
+        for wire in [
+            "agent",
+            "automated_step",
+            "decision",
+            "delay",
+            "end",
+            "failure",
+            "human_task",
+            "join",
+            "loop",
+            "parallel_split",
+            "phase_update",
+            "progress_update",
+            "scope",
+            "start",
+            "sub_workflow",
+            "timeout",
+            "trigger",
+        ] {
+            assert!(lookup_by_wire(wire).is_some(), "missing decl for {wire}");
+        }
         assert!(lookup_by_wire("nonexistent").is_none());
     }
 
     #[test]
     fn descriptors_emit_camel_case_fields() {
         let all = descriptors();
-        // 15 PR2 variants + Delay + Timeout = 17.
-        assert_eq!(all.len(), 17);
+        // One descriptor per registered variant.
+        assert_eq!(all.len(), NODES.len());
         let pu = all.iter().find(|d| d.wire_name == "phase_update").unwrap();
         assert_eq!(pu.kind, "phase_update");
         assert!(pu.lowers_to_air);
