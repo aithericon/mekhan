@@ -3,9 +3,6 @@ name = "petri-application"
 version.workspace = true
 edition.workspace = true
 
-[features]
-human = ["petri-domain/human"]
-
 [dependencies]
 petri-domain.workspace = true
 

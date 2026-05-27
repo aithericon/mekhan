@@ -1180,6 +1180,36 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/templates/{id}/latest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/v1/templates/{id}/latest
+         * @description Resolve any id in a template's version chain to the row currently flagged
+         *     `is_latest`. Accepts the chain root (`base_template_id`) — the stable
+         *     identifier the CLI's `mekhan.lock.json` pins — or any historical version
+         *     id; both resolve through the same `base_template_id` column.
+         *
+         *     CLI commands that need "the chain head right now" (`run`, `test`, the
+         *     post-pull bundle fetch) call this first, then operate on the returned id.
+         *     The split keeps `/bundle`, `/instances`, `/tests/...` semantics
+         *     strictly version-id-scoped (you can still pull a historical version by
+         *     passing its concrete id) — the resolver layer is the only place that
+         *     follows the chain.
+         */
+        get: operations["get_latest"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/templates/{id}/new-version": {
         parameters: {
             query?: never;
@@ -6546,6 +6576,47 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Template not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    get_latest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Any template id in the version chain (base or a specific version) */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The latest version in the template's chain */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowTemplate"];
                 };
             };
             /** @description Template not found */

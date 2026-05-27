@@ -4,7 +4,7 @@
 //! otherwise so CI can gate merges with `mekhan test`.
 //!
 //! Resolves the template id from either the positional argument (a UUID) or
-//! the directory's `.mekhan.json` metadata when a path is supplied.
+//! the directory's `mekhan.lock.json` metadata when a path is supplied.
 
 use std::path::Path;
 
@@ -167,7 +167,10 @@ fn format_line(name: &str, run: &TemplateTestRun) -> String {
     format!("  {symbol}  {name:<40}  [{}]{duration}{suffix}", run.status)
 }
 
-/// Accept either a raw UUID or a path to a `.mekhan.json`-bearing directory.
+/// Accept either a raw UUID or a path to a `mekhan.lock.json`-bearing directory.
+/// Returns any id in the chain — call sites resolve to the chain head via
+/// `crate::http::resolve_latest` because the template-tests endpoints are
+/// version-id-scoped, not chain-tolerant.
 fn resolve_template_id(arg: &str) -> Result<String> {
     if uuid::Uuid::parse_str(arg).is_ok() {
         return Ok(arg.to_string());
@@ -175,5 +178,5 @@ fn resolve_template_id(arg: &str) -> Result<String> {
     let dir = Path::new(arg);
     let (meta, _graph, _files) = fs_ops::import_from_dir(dir)
         .with_context(|| format!("could not resolve '{arg}' as a UUID or template directory"))?;
-    Ok(meta.template_id)
+    Ok(meta.base_template_id)
 }

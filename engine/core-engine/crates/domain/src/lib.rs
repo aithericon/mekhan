@@ -4,7 +4,6 @@ pub mod catalogue;
 pub mod effects;
 pub mod events;
 pub mod executor;
-#[cfg(feature = "human")]
 pub mod human;
 pub mod ids;
 pub mod net;

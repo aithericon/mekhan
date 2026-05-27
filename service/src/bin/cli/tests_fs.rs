@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! dir/
-//!   .mekhan.json
+//!   mekhan.lock.json
 //!   workflow.yaml | workflow.hcl | graph.json
 //!   nodes/...
 //!   tests/

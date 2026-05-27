@@ -7,7 +7,7 @@ use serde_json::{json, Map, Value};
 use crate::fs_ops;
 
 /// `template_arg` is either a UUID (use `cli_server` directly) or a path
-/// to a directory holding `.mekhan.json` (use the pinned `server_url`).
+/// to a directory holding `mekhan.lock.json` (use the pinned `server_url`).
 ///
 /// `inputs` is a list of `<start_block_id>.<field>=<value>` pairs grouped
 /// per Start block into one `StartToken` each. `start_tokens_file` is a
@@ -19,7 +19,15 @@ pub async fn run(
     inputs: &[String],
     start_tokens_file: Option<&str>,
 ) -> Result<()> {
-    let (server_url, template_id): (String, String) =
+    // Two-step resolution:
+    //   1. Settle on (server, any-chain-id) — either the bare UUID + the
+    //      `--server` flag, or pull the pair out of the lock file.
+    //   2. Resolve the chain head: `/instances` needs a specific *version*
+    //      id (it fetches the published row by primary key), but the lock
+    //      pins `baseTemplateId` — stable across `mekhan apply` bumps —
+    //      so we ask the server which version is currently live before
+    //      enqueueing the run.
+    let (server_url, chain_id): (String, String) =
         if uuid::Uuid::parse_str(template_arg).is_ok() {
             (cli_server.to_string(), template_arg.to_string())
         } else {
@@ -27,8 +35,10 @@ pub async fn run(
                 .with_context(|| {
                     format!("could not resolve '{template_arg}' as a UUID or template directory")
                 })?;
-            (meta.server_url, meta.template_id)
+            (meta.server_url, meta.base_template_id)
         };
+    let latest = crate::http::resolve_latest(&server_url, &chain_id).await?;
+    let template_id = latest.id;
 
     let start_tokens: Value = match start_tokens_file {
         Some(path) => {

@@ -9,7 +9,6 @@ pub(crate) mod evaluation;
 pub mod executor;
 pub mod executor_handlers;
 pub(crate) mod firing;
-#[cfg(feature = "human")]
 pub mod human_handlers;
 pub(crate) mod idempotency_index;
 pub mod ports;
@@ -41,7 +40,6 @@ pub use evaluation::{
 };
 pub use executor::*;
 pub use executor_handlers::*;
-#[cfg(feature = "human")]
 pub use human_handlers::*;
 pub use petri_domain::{apply_event_to_marking, project_marking};
 pub use ports::*;

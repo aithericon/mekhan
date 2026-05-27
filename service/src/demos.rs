@@ -17,12 +17,12 @@
 //! `data.steps` and skips it from the regular text-file reader so it
 //! doesn't double as a Y.Doc file.
 //!
-//! `demo.json` is intentionally *not* a dotfile — the demo descriptor is
-//! a public, documented contract that humans need to read (you read the
-//! templateId off it; you set the name + description). The CLI's
-//! `.mekhan.json` is a separate, internal bookkeeping artifact for
-//! pulled templates (server URL, last-pull timestamp, format choice)
-//! and is irrelevant to seeded demos.
+//! `demo.json` is the demo descriptor — a public, documented contract that
+//! humans read (you read the templateId off it; you set the name +
+//! description). The CLI's `mekhan.lock.json` is a separate, lockfile-style
+//! bookkeeping artifact for pulled templates (server URL, last-pull
+//! timestamp, format choice) — machine-managed and irrelevant to seeded
+//! demos.
 //!
 //! Two halves:
 //! - **Reader** ([`load_demo`], [`list_demo_dirs`]): turn a directory on
@@ -37,7 +37,7 @@
 //!
 //! `graph.json` + `nodes/<id>/<file>` mirror the layout `cli::fs_ops`
 //! writes for the GitOps `pull` flow — a demo directory is, modulo the
-//! descriptor filename, identical to a pulled template. (CLI: `.mekhan.json`;
+//! descriptor filename, identical to a pulled template. (CLI: `mekhan.lock.json`;
 //! demo: `demo.json`.)
 //!
 //! Trigger-node id stability: the showcase used to mint a fresh trigger id
@@ -56,7 +56,7 @@ use crate::models::template::WorkflowGraph;
 /// `demo.json` shape — the public demo descriptor. Only the three fields
 /// the seeder actually needs (stable id, name, description); the CLI's
 /// per-checkout bookkeeping (server URL, last pull, format) lives in
-/// `.mekhan.json` and is not modeled here.
+/// `mekhan.lock.json` and is not modeled here.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DemoMetadata {
@@ -178,7 +178,7 @@ pub fn load_demo(dir: &Path) -> Result<LoadedDemo, DemoLoadError> {
     })?;
     // `serde(deny_unknown_fields)` would help catch leftover CLI keys
     // (`serverUrl`, `lastPull`, `format`) but we keep it permissive so an
-    // accidentally-pulled `.mekhan.json` renamed to `demo.json` still loads.
+    // accidentally-pulled `mekhan.lock.json` renamed to `demo.json` still loads.
     let metadata: DemoMetadata =
         serde_json::from_str(&meta_str).map_err(|e| DemoLoadError::MetadataParse {
             path: meta_path.clone(),

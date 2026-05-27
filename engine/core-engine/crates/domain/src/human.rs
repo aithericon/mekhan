@@ -297,6 +297,21 @@ pub enum TaskBlock {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         y_label: Option<String>,
     },
+    /// Feature B — array-iteration sub-form. Renders one copy of
+    /// `fields` per element of the upstream array referenced by
+    /// `items_ref` (which carries exactly one `[*]` boundary, e.g.
+    /// `extract.tasks[*]`). The engine treats this as a pass-through
+    /// — the structural fields are statically declared at compile
+    /// time, the *count* of rows comes from runtime data the
+    /// compiler stages into `HumanTaskRequest.payload`. Renderer-only;
+    /// no engine-side semantics beyond accepting and forwarding it.
+    Repeater {
+        items_ref: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        item_label_ref: Option<String>,
+        fields: Vec<TaskField>,
+        output_slug: String,
+    },
     Divider,
 }
 
@@ -559,5 +574,132 @@ mod tests {
         let raw = json!({"name": "x", "label": "X", "kind": "text"});
         let field: TaskField = serde_json::from_value(raw).expect("parse");
         assert!(field.options.is_none());
+    }
+
+    // ── Feature B: Repeater block variant ─────────────────────────────
+    //
+    // The Repeater block is the renderer-side leg of array iteration —
+    // mekhan-service's compiler emits it inside `HumanTaskRequest.steps`
+    // and the engine's effect handler must accept + forward it as-is.
+    // These tests pin the wire shape so a regression in either side's
+    // serde tagging or field naming fails here, not at runtime with
+    // "unknown variant `repeater`" surfaced from a wedged net.
+
+    /// The exact JSON the compiler emits for a well-formed Repeater
+    /// (taken from a live invoice-processing demo run) must round-trip
+    /// through `TaskBlock` without dropping or renaming fields. The
+    /// fixture mirrors the snake_case wire format the compiler emits.
+    #[test]
+    fn repeater_block_round_trips_through_serde() {
+        let raw = json!({
+            "type": "repeater",
+            "items_ref": "extract.line_items[*]",
+            "item_label_ref": "extract.line_items[*].description",
+            "output_slug": "line_approvals",
+            "fields": [
+                {"name": "approved", "label": "Approved", "kind": "checkbox", "required": true},
+                {"name": "notes", "label": "Notes", "kind": "textarea", "required": false}
+            ]
+        });
+        let block: TaskBlock = serde_json::from_value(raw.clone()).expect("parse repeater block");
+        match &block {
+            TaskBlock::Repeater {
+                items_ref,
+                item_label_ref,
+                fields,
+                output_slug,
+            } => {
+                assert_eq!(items_ref, "extract.line_items[*]");
+                assert_eq!(
+                    item_label_ref.as_deref(),
+                    Some("extract.line_items[*].description"),
+                );
+                assert_eq!(output_slug, "line_approvals");
+                assert_eq!(fields.len(), 2);
+                assert_eq!(fields[0].name, "approved");
+                assert_eq!(fields[0].kind, TaskFieldKind::Checkbox);
+                assert_eq!(fields[1].name, "notes");
+                assert_eq!(fields[1].kind, TaskFieldKind::Textarea);
+            }
+            other => panic!("expected TaskBlock::Repeater, got {other:?}"),
+        }
+        // Round-trip: re-serialize and confirm the wire shape is stable.
+        let back = serde_json::to_value(&block).expect("serialize");
+        assert_eq!(back["type"], "repeater");
+        assert_eq!(back["items_ref"], "extract.line_items[*]");
+        assert_eq!(back["item_label_ref"], "extract.line_items[*].description");
+        assert_eq!(back["output_slug"], "line_approvals");
+    }
+
+    /// `item_label_ref` is the only optional Repeater field — the
+    /// renderer falls back to "Item N" when absent. The compiler skips
+    /// the key entirely when not set; deserialization must accept that.
+    #[test]
+    fn repeater_block_without_item_label_ref_parses() {
+        let raw = json!({
+            "type": "repeater",
+            "items_ref": "extract.line_items[*]",
+            "output_slug": "line_approvals",
+            "fields": []
+        });
+        let block: TaskBlock = serde_json::from_value(raw).expect("parse minimal repeater");
+        match block {
+            TaskBlock::Repeater {
+                item_label_ref,
+                fields,
+                ..
+            } => {
+                assert!(item_label_ref.is_none(), "item_label_ref must be None when omitted");
+                assert!(fields.is_empty());
+            }
+            other => panic!("expected TaskBlock::Repeater, got {other:?}"),
+        }
+    }
+
+    /// Repeater is just one variant in `TaskBlock` — the dispatch tag
+    /// must still discriminate cleanly between Repeater and the other
+    /// block types. Guards against an accidental flat-variant rename
+    /// (e.g. dropping `#[serde(tag = "type", rename_all = "snake_case")]`)
+    /// that would let `{"type": "repeater"}` match the wrong arm.
+    #[test]
+    fn repeater_block_tag_does_not_collide_with_other_variants() {
+        // Each block type must dispatch to its own variant under the
+        // shared `#[serde(tag = "type", rename_all = "snake_case")]`.
+        let cases = [
+            (
+                json!({"type": "divider"}),
+                matches!(
+                    serde_json::from_value::<TaskBlock>(json!({"type": "divider"})).unwrap(),
+                    TaskBlock::Divider
+                ),
+            ),
+            (
+                json!({"type": "mdsvex", "content": "hello"}),
+                matches!(
+                    serde_json::from_value::<TaskBlock>(json!({"type": "mdsvex", "content": "hello"})).unwrap(),
+                    TaskBlock::Mdsvex { .. }
+                ),
+            ),
+            (
+                json!({
+                    "type": "repeater",
+                    "items_ref": "x.y[*]",
+                    "output_slug": "z",
+                    "fields": []
+                }),
+                matches!(
+                    serde_json::from_value::<TaskBlock>(json!({
+                        "type": "repeater",
+                        "items_ref": "x.y[*]",
+                        "output_slug": "z",
+                        "fields": []
+                    })).unwrap(),
+                    TaskBlock::Repeater { .. }
+                ),
+            ),
+        ];
+        for (raw, ok) in cases {
+            assert!(ok, "variant tag dispatch failed for {raw}");
+        }
     }
 }

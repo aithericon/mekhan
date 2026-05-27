@@ -6,9 +6,6 @@ license.workspace = true
 authors.workspace = true
 description = "NATS JetStream integration for Petri-Lab workflow engine"
 
-[features]
-human = ["petri-domain/human", "petri-application/human"]
-
 [dependencies]
 # NATS client
 async-nats = { workspace = true }

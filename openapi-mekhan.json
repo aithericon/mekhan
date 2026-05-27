@@ -3687,6 +3687,60 @@
         }
       }
     },
+    "/api/v1/templates/{id}/latest": {
+      "get": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "GET /api/v1/templates/{id}/latest",
+        "description": "Resolve any id in a template's version chain to the row currently flagged\n`is_latest`. Accepts the chain root (`base_template_id`) — the stable\nidentifier the CLI's `mekhan.lock.json` pins — or any historical version\nid; both resolve through the same `base_template_id` column.\n\nCLI commands that need \"the chain head right now\" (`run`, `test`, the\npost-pull bundle fetch) call this first, then operate on the returned id.\nThe split keeps `/bundle`, `/instances`, `/tests/...` semantics\nstrictly version-id-scoped (you can still pull a historical version by\npassing its concrete id) — the resolver layer is the only place that\nfollows the chain.",
+        "operationId": "get_latest",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Any template id in the version chain (base or a specific version)",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The latest version in the template's chain",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowTemplate"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Template not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/templates/{id}/new-version": {
       "post": {
         "tags": [

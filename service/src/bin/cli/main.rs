@@ -101,7 +101,7 @@ enum Commands {
     /// Create a new workflow instance from a published template.
     ///
     /// Argument is either a template UUID (instantiates that template on
-    /// `--server`) or a path to a `.mekhan.json`-bearing directory (uses
+    /// `--server`) or a path to a `mekhan.lock.json`-bearing directory (uses
     /// the directory's pinned `server_url` + `template_id`). Defaults to
     /// the current directory.
     Run {
@@ -152,7 +152,7 @@ enum Commands {
     /// Run template tests against the latest published version of a
     /// template family. Exit code 0 only when every enabled test passes.
     Test {
-        /// Either a template UUID or a directory holding `.mekhan.json`.
+        /// Either a template UUID or a directory holding `mekhan.lock.json`.
         template: String,
 
         /// Run only the test with this name (otherwise runs every enabled
