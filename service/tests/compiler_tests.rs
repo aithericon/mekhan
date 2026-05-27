@@ -237,6 +237,7 @@ fn human_task_produces_group_signal_and_transitions() {
                                 required: Some(true),
                                 placeholder: None,
                                 options: None,
+                                ..Default::default()
                             },
                         }],
                     }],
@@ -2253,6 +2254,7 @@ fn human_task_node_with_field(id: &str, field_name: &str, kind: TaskFieldKind) -
                         required: Some(true),
                         placeholder: None,
                         options: None,
+                        ..Default::default()
                     },
                 }],
             }],
@@ -2293,6 +2295,7 @@ fn human_task_output_dedupes_duplicate_field_names() {
                 required: Some(false),
                 placeholder: None,
                 options: None,
+                ..Default::default()
             },
         });
     }
