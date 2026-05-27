@@ -144,6 +144,7 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::templates::new_version))
         .routes(routes!(handlers::templates::apply_template))
         .routes(routes!(handlers::templates::list_versions))
+        .routes(routes!(handlers::templates::get_latest))
         .routes(routes!(handlers::templates::get_air))
         .routes(routes!(handlers::templates::compile_preview))
         .routes(routes!(handlers::templates::io_stubs))

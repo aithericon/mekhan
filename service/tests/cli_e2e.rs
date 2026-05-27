@@ -155,12 +155,12 @@ async fn cli_workflow_roundtrip() {
     std::fs::create_dir_all(&pull_dir).unwrap();
 
     let meta = json!({
-        "templateId": template_id.to_string(),
+        "baseTemplateId": template_id.to_string(),
         "serverUrl": server,
         "lastPull": "2026-01-01T00:00:00Z"
     });
     std::fs::write(
-        pull_dir.join(".mekhan.json"),
+        pull_dir.join("mekhan.lock.json"),
         serde_json::to_string_pretty(&meta).unwrap(),
     )
     .unwrap();
@@ -185,7 +185,7 @@ async fn cli_workflow_roundtrip() {
     }
 
     // Verify directory layout
-    assert!(pull_dir.join(".mekhan.json").exists());
+    assert!(pull_dir.join("mekhan.lock.json").exists());
     assert!(pull_dir.join("graph.json").exists());
     assert_eq!(graph.nodes.len(), 2, "default graph has Start + End nodes");
 

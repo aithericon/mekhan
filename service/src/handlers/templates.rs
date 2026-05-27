@@ -1176,6 +1176,48 @@ pub async fn list_versions(
     Ok(Json(versions))
 }
 
+/// GET /api/v1/templates/{id}/latest
+///
+/// Resolve any id in a template's version chain to the row currently flagged
+/// `is_latest`. Accepts the chain root (`base_template_id`) — the stable
+/// identifier the CLI's `mekhan.lock.json` pins — or any historical version
+/// id; both resolve through the same `base_template_id` column.
+///
+/// CLI commands that need "the chain head right now" (`run`, `test`, the
+/// post-pull bundle fetch) call this first, then operate on the returned id.
+/// The split keeps `/bundle`, `/instances`, `/tests/...` semantics
+/// strictly version-id-scoped (you can still pull a historical version by
+/// passing its concrete id) — the resolver layer is the only place that
+/// follows the chain.
+#[utoipa::path(
+    get,
+    path = "/api/v1/templates/{id}/latest",
+    params(("id" = Uuid, Path, description = "Any template id in the version chain (base or a specific version)")),
+    responses(
+        (status = 200, description = "The latest version in the template's chain", body = WorkflowTemplate),
+        (status = 404, description = "Template not found", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse),
+    ),
+    tag = "templates",
+)]
+pub async fn get_latest(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<WorkflowTemplate>, ApiError> {
+    let existing = sqlx::query_as::<_, WorkflowTemplate>(
+        "SELECT * FROM workflow_templates WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .ok_or_else(|| ApiError::not_found("template not found"))?;
+
+    let base_id = existing.base_template_id.unwrap_or(existing.id);
+    let latest = latest_in_chain(&state.db, base_id).await?;
+    Ok(Json(latest))
+}
+
 /// GET /api/v1/templates/{id}/air
 #[utoipa::path(
     get,

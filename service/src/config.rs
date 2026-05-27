@@ -45,7 +45,7 @@ pub struct DemosConfig {
     /// `just dev::up` flips it on via `MEKHAN__DEMOS__SEED=true`.
     #[serde(default)]
     pub seed: bool,
-    /// Where to look for `<name>/.mekhan.json` directories. Default
+    /// Where to look for `<name>/demo.json` directories. Default
     /// `./demos` — relative to the service binary's cwd, which `just dev`
     /// sets to the repo root.
     #[serde(default = "default_demos_dir")]

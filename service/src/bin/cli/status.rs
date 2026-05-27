@@ -14,14 +14,22 @@ pub async fn run(_server: &str, directory: &str) -> Result<()> {
     // Import local state
     let (meta, local_graph, local_files) = fs_ops::import_from_dir(&dir)?;
 
-    // Use server from .mekhan.json (ignore --server flag for push/status)
+    // Use server from the lock file (ignore --server flag for push/status)
     let server_url = &meta.server_url;
-    let template_id = &meta.template_id;
+    let base_id = &meta.base_template_id;
 
-    println!("Comparing local with remote (template {})", template_id);
+    // Resolve chain head — push/status target the latest row's Y.Doc, not
+    // a stale historical version pinned in the lock.
+    let latest = crate::http::resolve_latest(server_url, base_id).await?;
+    let version_id = &latest.id;
+
+    println!(
+        "Comparing local with remote (template {} v{})",
+        version_id, latest.version
+    );
 
     // Connect and get remote state
-    let handle = ws_client::connect_and_sync(server_url, template_id).await?;
+    let handle = ws_client::connect_and_sync(server_url, version_id).await?;
     let (remote_graph, remote_files) = doc_ops::read_doc(&handle.doc)?;
     handle.disconnect().await?;
 

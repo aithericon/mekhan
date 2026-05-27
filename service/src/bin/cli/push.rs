@@ -24,11 +24,17 @@ pub async fn run(_server: &str, directory: &str, dry_run: bool) -> Result<()> {
     // Read binary assets
     let local_assets = fs_ops::read_node_assets(&dir)?;
 
-    // Use server from .mekhan.json
+    // Use server from the lock file
     let server_url = &meta.server_url;
-    let template_id = &meta.template_id;
+    let base_id = &meta.base_template_id;
 
-    println!("Connecting to template {}...", template_id);
+    // Resolve chain head — push targets the latest row's Y.Doc. (If that row
+    // is already published the eventual asset/test sync calls will fail
+    // cleanly; published rows are immutable.)
+    let latest = crate::http::resolve_latest(server_url, base_id).await?;
+    let template_id = latest.id.as_str();
+
+    println!("Connecting to template {} (v{})...", template_id, latest.version);
 
     // Connect and get remote state
     let mut handle = ws_client::connect_and_sync(server_url, template_id).await?;
