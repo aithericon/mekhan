@@ -252,7 +252,7 @@ fn out_shape(node: &WorkflowNode, in_shape: &TokenShape) -> TokenShape {
                 for block in &step.blocks {
                     if let TaskBlockConfig::Repeater {
                         output_slug,
-                        fields,
+                        blocks: repeater_blocks,
                         ..
                     } = block
                     {
@@ -260,7 +260,7 @@ fn out_shape(node: &WorkflowNode, in_shape: &TokenShape) -> TokenShape {
                         if key.is_empty() {
                             continue;
                         }
-                        let elem = repeater_element_to_shape(fields, node);
+                        let elem = repeater_element_to_shape(repeater_blocks, node);
                         form.insert(
                             key,
                             TokenShape::Array(Box::new(elem)),

@@ -851,11 +851,25 @@ pub(crate) fn validate_repeaters(graph: &WorkflowGraph) -> Result<(), CompileErr
                     items_ref,
                     item_label_ref,
                     output_slug,
-                    ..
+                    blocks: inner_blocks,
                 } = block
                 else {
                     continue;
                 };
+
+                // 0. nested Repeater — explicitly rejected in v1. The typed
+                //    array output schema only describes one level of `[*]`,
+                //    and the runtime renderer assumes a single row-iteration
+                //    scope per Repeater.
+                if inner_blocks
+                    .iter()
+                    .any(|b| matches!(b, crate::models::template::TaskBlockConfig::Repeater { .. }))
+                {
+                    return Err(CompileError::RepeaterNested {
+                        node_id: node.id.clone(),
+                        output_slug: output_slug.clone(),
+                    });
+                }
 
                 // 1. output_slug — non-empty, Rhai-safe.
                 let slug_trim = output_slug.trim();
@@ -1017,7 +1031,7 @@ mod repeater_tests {
                  "data":{{"type":"human_task","label":"Review","taskTitle":"R",
                          "steps":[{{"id":"s1","title":"S","blocks":[
                            {{"type":"repeater","items_ref":"{items_ref}"{label_json},
-                             "fields":[{{"name":"done","label":"Done","kind":"checkbox","required":true}}],
+                             "blocks":[{{"type":"input","field":{{"name":"done","label":"Done","kind":"checkbox","required":true}}}}],
                              "output_slug":"{output_slug}"}}
                          ]}}]}}}},
                 {{"id":"end","type":"end","position":{{"x":0,"y":0}},
@@ -1149,5 +1163,53 @@ mod repeater_tests {
         );
         let err = validate_repeaters(&g).unwrap_err();
         assert!(matches!(err, CompileError::RepeaterRefMalformed { .. }));
+    }
+
+    #[test]
+    fn rejects_nested_repeater() {
+        // A Repeater whose `blocks` contain another Repeater is a hard
+        // reject in v1 — the typed array output schema can only describe
+        // one level of `[*]` and the runtime renderer assumes a single
+        // row-iteration scope.
+        let json = r#"{
+              "nodes": [
+                {"id":"s","type":"start","slug":"start","position":{"x":0,"y":0},
+                 "data":{"type":"start","label":"Start",
+                          "initial":{"id":"init","label":"init","fields":[]}}},
+                {"id":"extract","type":"automated_step","slug":"extract","position":{"x":0,"y":0},
+                 "data":{"type":"automated_step","label":"Extract",
+                         "executionSpec":{"backendType":"python","config":{"source":""}},
+                         "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
+                         "deploymentModel":{"mode":"inline"},
+                         "output":{"id":"out","label":"out","fields":[
+                           {"name":"tasks","label":"Tasks","kind":"json","required":true}
+                         ]}}},
+                {"id":"review","type":"human_task","slug":"review","position":{"x":0,"y":0},
+                 "data":{"type":"human_task","label":"Review","taskTitle":"R",
+                         "steps":[{"id":"s1","title":"S","blocks":[
+                           {"type":"repeater","items_ref":"extract.tasks[*]",
+                             "blocks":[
+                               {"type":"repeater","items_ref":"extract.tasks[*]",
+                                "blocks":[],"output_slug":"inner"}
+                             ],
+                             "output_slug":"outer"}
+                         ]}]}},
+                {"id":"end","type":"end","position":{"x":0,"y":0},
+                 "data":{"type":"end","label":"End"}}
+              ],
+              "edges":[
+                {"id":"e1","source":"s","target":"extract","type":"sequence","targetHandle":"init"},
+                {"id":"e2","source":"extract","target":"review","type":"sequence"},
+                {"id":"e3","source":"review","target":"end","type":"sequence"}
+              ]
+            }"#;
+        let g: WorkflowGraph = serde_json::from_str(json).expect("deser");
+        let err = validate_repeaters(&g).unwrap_err();
+        match err {
+            CompileError::RepeaterNested { output_slug, .. } => {
+                assert_eq!(output_slug, "outer")
+            }
+            other => panic!("expected RepeaterNested, got {other:?}"),
+        }
     }
 }

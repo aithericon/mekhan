@@ -960,19 +960,23 @@ pub enum TaskBlockConfig {
     /// typically `{{ <slug>.<field> }}`-interpolated to an uploaded file.
     #[serde(rename = "download")]
     Download { downloads: Vec<DownloadItemConfig> },
-    /// Feature B — render N copies of a sub-form, one per element of an
+    /// Feature B — render N copies of a sub-task body, one per element of an
     /// upstream array. `items_ref` is a Feature-B `<slug>.<field>[*]`
     /// reference; the compiler synthesizes a read-arc on the parked array
     /// and the frontend renderer iterates `task.data[<items_ref>]`,
-    /// instantiating the sub-`fields` per element. The block's typed
-    /// output is `<output_slug>.results: array<{<sub_fields>}>` — visible
-    /// to downstream pickers via the standard `TyDescriptor::Array`
-    /// machinery.
+    /// instantiating the sub-`blocks` per element. The block's typed
+    /// output is `<output_slug>.results: array<{<inputs>}>`, where
+    /// `<inputs>` is the union of every `Input` child block's field —
+    /// visible to downstream pickers via the standard `TyDescriptor::Array`
+    /// machinery. Non-Input children (Mdsvex, Callout, Divider, Image,
+    /// Pdf, File, Download) are render-only and contribute nothing to the
+    /// per-row schema.
     ///
     /// `item_label_ref`, when set, names a `<slug>.<field>[*].<label>`
     /// ref whose per-element string is used as the row header (e.g. the
     /// task title from an LLM-extracted task list). Static-only: B v1
-    /// rejects `[*]` chained twice (`NestedIterationUnsupported`).
+    /// rejects `[*]` chained twice (`NestedIterationUnsupported`) and
+    /// rejects a Repeater nested inside another Repeater.
     #[serde(rename = "repeater")]
     Repeater {
         /// Producer-namespaced ref carrying exactly one `[*]` boundary,
@@ -984,11 +988,18 @@ pub enum TaskBlockConfig {
         /// as `items_ref`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         item_label_ref: Option<String>,
-        /// The sub-form schema rendered per element. Static — only the
-        /// *count* of repetitions is runtime; the shape is declared so
-        /// the compiler can borrow-check downstream consumers of the
-        /// Repeater's typed array output.
-        fields: Vec<TaskFieldConfig>,
+        /// The sub-task body rendered per element. Any TaskBlockConfig
+        /// variant except a nested Repeater. `Input` children declare the
+        /// per-row form schema and contribute to `<output_slug>.results`
+        /// element shape; display blocks (Mdsvex/Callout/Image/Pdf/File/
+        /// Download/Divider) are rendered per row with placeholders
+        /// resolved against the current row's element.
+        ///
+        /// `no_recursion` breaks the recursive schema cycle for
+        /// utoipa — the wire schema still references `TaskBlockConfig`
+        /// via `$ref`, but the generator stops descending here.
+        #[schema(no_recursion)]
+        blocks: Vec<TaskBlockConfig>,
         /// Rhai-safe slug under which the Repeater's typed output is
         /// addressable downstream as `<output_slug>.results`. Defaults to
         /// the parent HumanTask's slug when empty; must be unique within

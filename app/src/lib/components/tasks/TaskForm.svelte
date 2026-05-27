@@ -244,9 +244,15 @@
 			if (!parsed) continue;
 			const items = asItemsArray(getAtPath(taskData ?? {}, [parsed.head, ...parsed.pre]));
 			const rows = repeaterRows(block.output_slug);
+			// Only Input children contribute to the per-row schema —
+			// display blocks (Mdsvex/Callout/Image/...) render but
+			// have nothing to validate.
+			const inputFields = block.blocks
+				.filter((b): b is Extract<typeof b, { type: 'input' }> => b.type === 'input')
+				.map((b) => b.field);
 			for (let i = 0; i < items.length; i++) {
 				const row = (rows[i] ?? {}) as Record<string, unknown>;
-				for (const subField of block.fields) {
+				for (const subField of inputFields) {
 					const message = validateField(subField, row);
 					const key = `${block.output_slug}.${i}.${subField.name}`;
 					if (message) {
@@ -649,7 +655,7 @@
 				<RepeaterBlock
 					items_ref={block.items_ref}
 					item_label_ref={block.item_label_ref}
-					fields={block.fields}
+					blocks={block.blocks}
 					output_slug={block.output_slug}
 					{taskData}
 					getText={getRepeaterFieldText}

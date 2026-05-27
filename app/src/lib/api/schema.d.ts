@@ -3249,12 +3249,18 @@ export interface components {
             type: "download";
         } | {
             /**
-             * @description The sub-form schema rendered per element. Static — only the
-             *     *count* of repetitions is runtime; the shape is declared so
-             *     the compiler can borrow-check downstream consumers of the
-             *     Repeater's typed array output.
+             * @description The sub-task body rendered per element. Any TaskBlockConfig
+             *     variant except a nested Repeater. `Input` children declare the
+             *     per-row form schema and contribute to `<output_slug>.results`
+             *     element shape; display blocks (Mdsvex/Callout/Image/Pdf/File/
+             *     Download/Divider) are rendered per row with placeholders
+             *     resolved against the current row's element.
+             *
+             *     `no_recursion` breaks the recursive schema cycle for
+             *     utoipa — the wire schema still references `TaskBlockConfig`
+             *     via `$ref`, but the generator stops descending here.
              */
-            fields: components["schemas"]["TaskFieldConfig"][];
+            blocks: components["schemas"]["TaskBlockConfig"][];
             /**
              * @description Optional per-element row label ref, e.g.
              *     `extract.tasks[*].title`. Must share the same iteration prefix
@@ -3848,8 +3854,8 @@ export interface components {
              *     direct executor-lifecycle path. `Scheduled` = submit through the
              *     long-lived scheduler-net (Nomad/Slurm) for queued / GPU execution,
              *     optionally pinning a job template + resources. `#[serde(default)]`
-             *     + `Inline` default ⇒ every existing template round-trips unchanged
-             *     (same precedent as `retry_policy`).
+             *     together with the `Inline` default ⇒ every existing template
+             *     round-trips unchanged (same precedent as `retry_policy`).
              */
             deploymentModel?: components["schemas"]["DeploymentModel"];
             description?: string | null;

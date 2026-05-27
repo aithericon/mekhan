@@ -45,13 +45,13 @@ fn python_files() -> HashMap<String, HashMap<String, InputSource>> {
 ///   Start → extract(Python, declares `tasks: json`) → review(HumanTask
 ///   with Repeater on `extract.tasks[*]`) → consumer(Python) → End
 ///
-/// `items_ref`, `output_slug`, and sub-`fields` are parameters so the
+/// `items_ref`, `output_slug`, and sub-`blocks` are parameters so the
 /// individual tests can probe edge cases without copying the boilerplate.
 fn graph(
     items_ref: &str,
     item_label_ref: Option<&str>,
     output_slug: &str,
-    sub_fields_json: &str,
+    sub_blocks_json: &str,
 ) -> WorkflowGraph {
     let label = match item_label_ref {
         Some(v) => format!(r#","item_label_ref":"{v}""#),
@@ -75,7 +75,7 @@ fn graph(
              "data":{{"type":"human_task","label":"Review","taskTitle":"R",
                      "steps":[{{"id":"s1","title":"S","blocks":[
                        {{"type":"repeater","items_ref":"{items_ref}"{label},
-                         "fields":{sub_fields_json},
+                         "blocks":{sub_blocks_json},
                          "output_slug":"{output_slug}"}}
                      ]}}]}}}},
             {{"id":"consumer","type":"automated_step","slug":"consumer","position":{{"x":0,"y":0}},
@@ -96,15 +96,15 @@ fn graph(
         }}"#,
         items_ref = items_ref,
         label = label,
-        sub_fields_json = sub_fields_json,
+        sub_blocks_json = sub_blocks_json,
         output_slug = output_slug,
     );
     serde_json::from_str(&json).unwrap_or_else(|e| panic!("deser repeater fixture: {e}"))
 }
 
 const REVIEW_FIELDS: &str = r#"[
-    {"name":"done","label":"Done","kind":"checkbox","required":true},
-    {"name":"notes","label":"Notes","kind":"textarea","required":false}
+    {"type":"input","field":{"name":"done","label":"Done","kind":"checkbox","required":true}},
+    {"type":"input","field":{"name":"notes","label":"Notes","kind":"textarea","required":false}}
 ]"#;
 
 // ──────────────────────────────────────────────────────────────────────
@@ -272,7 +272,7 @@ fn repeater_without_label_ref_compiles() {
         "extract.tasks[*]",
         None,
         "review_tasks",
-        r#"[{"name":"done","label":"Done","kind":"checkbox","required":true}]"#,
+        r#"[{"type":"input","field":{"name":"done","label":"Done","kind":"checkbox","required":true}}]"#,
     );
     compile_to_air(&g, "repeater_e2e", "", &python_files()).expect("compile ok");
 }

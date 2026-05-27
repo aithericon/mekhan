@@ -297,19 +297,22 @@ pub enum TaskBlock {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         y_label: Option<String>,
     },
-    /// Feature B — array-iteration sub-form. Renders one copy of
-    /// `fields` per element of the upstream array referenced by
+    /// Feature B — array-iteration sub-task body. Renders one copy of
+    /// `blocks` per element of the upstream array referenced by
     /// `items_ref` (which carries exactly one `[*]` boundary, e.g.
-    /// `extract.tasks[*]`). The engine treats this as a pass-through
-    /// — the structural fields are statically declared at compile
-    /// time, the *count* of rows comes from runtime data the
-    /// compiler stages into `HumanTaskRequest.payload`. Renderer-only;
-    /// no engine-side semantics beyond accepting and forwarding it.
+    /// `extract.tasks[*]`). Inner `blocks` are any TaskBlock variant
+    /// except a nested Repeater — Input children declare the per-row
+    /// form schema, display children render with placeholders resolved
+    /// per row. The engine treats this as a pass-through — the
+    /// structural shape is statically declared at compile time, the
+    /// *count* of rows comes from runtime data the compiler stages
+    /// into `HumanTaskRequest.payload`. Renderer-only; no engine-side
+    /// semantics beyond accepting and forwarding it.
     Repeater {
         items_ref: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         item_label_ref: Option<String>,
-        fields: Vec<TaskField>,
+        blocks: Vec<TaskBlock>,
         output_slug: String,
     },
     Divider,
@@ -596,9 +599,9 @@ mod tests {
             "items_ref": "extract.line_items[*]",
             "item_label_ref": "extract.line_items[*].description",
             "output_slug": "line_approvals",
-            "fields": [
-                {"name": "approved", "label": "Approved", "kind": "checkbox", "required": true},
-                {"name": "notes", "label": "Notes", "kind": "textarea", "required": false}
+            "blocks": [
+                {"type": "input", "field": {"name": "approved", "label": "Approved", "kind": "checkbox", "required": true}},
+                {"type": "input", "field": {"name": "notes", "label": "Notes", "kind": "textarea", "required": false}}
             ]
         });
         let block: TaskBlock = serde_json::from_value(raw.clone()).expect("parse repeater block");
@@ -606,7 +609,7 @@ mod tests {
             TaskBlock::Repeater {
                 items_ref,
                 item_label_ref,
-                fields,
+                blocks,
                 output_slug,
             } => {
                 assert_eq!(items_ref, "extract.line_items[*]");
@@ -615,11 +618,17 @@ mod tests {
                     Some("extract.line_items[*].description"),
                 );
                 assert_eq!(output_slug, "line_approvals");
-                assert_eq!(fields.len(), 2);
-                assert_eq!(fields[0].name, "approved");
-                assert_eq!(fields[0].kind, TaskFieldKind::Checkbox);
-                assert_eq!(fields[1].name, "notes");
-                assert_eq!(fields[1].kind, TaskFieldKind::Textarea);
+                assert_eq!(blocks.len(), 2);
+                let TaskBlock::Input { field: f0 } = &blocks[0] else {
+                    panic!("expected Input child[0], got {:?}", blocks[0]);
+                };
+                assert_eq!(f0.name, "approved");
+                assert_eq!(f0.kind, TaskFieldKind::Checkbox);
+                let TaskBlock::Input { field: f1 } = &blocks[1] else {
+                    panic!("expected Input child[1], got {:?}", blocks[1]);
+                };
+                assert_eq!(f1.name, "notes");
+                assert_eq!(f1.kind, TaskFieldKind::Textarea);
             }
             other => panic!("expected TaskBlock::Repeater, got {other:?}"),
         }
@@ -640,17 +649,17 @@ mod tests {
             "type": "repeater",
             "items_ref": "extract.line_items[*]",
             "output_slug": "line_approvals",
-            "fields": []
+            "blocks": []
         });
         let block: TaskBlock = serde_json::from_value(raw).expect("parse minimal repeater");
         match block {
             TaskBlock::Repeater {
                 item_label_ref,
-                fields,
+                blocks,
                 ..
             } => {
                 assert!(item_label_ref.is_none(), "item_label_ref must be None when omitted");
-                assert!(fields.is_empty());
+                assert!(blocks.is_empty());
             }
             other => panic!("expected TaskBlock::Repeater, got {other:?}"),
         }
@@ -685,14 +694,14 @@ mod tests {
                     "type": "repeater",
                     "items_ref": "x.y[*]",
                     "output_slug": "z",
-                    "fields": []
+                    "blocks": []
                 }),
                 matches!(
                     serde_json::from_value::<TaskBlock>(json!({
                         "type": "repeater",
                         "items_ref": "x.y[*]",
                         "output_slug": "z",
-                        "fields": []
+                        "blocks": []
                     })).unwrap(),
                     TaskBlock::Repeater { .. }
                 ),

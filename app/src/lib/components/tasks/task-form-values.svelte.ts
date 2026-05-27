@@ -260,6 +260,38 @@ export function asItemsArray(value: unknown): unknown[] {
 	return [];
 }
 
+/**
+ * Substitute every `{{ <head>.<...pre>[*].<...rest> }}` placeholder in
+ * `source` whose `head + pre` matches the parsed Repeater ref with the
+ * value at `getAtPath(item, rest)` (stringified). Non-matching
+ * placeholders pass through unchanged so the task-level staging can
+ * still resolve them. Used by the Repeater renderer to scope display
+ * blocks (Mdsvex, Callout, Image, …) to the current row.
+ */
+export function interpolateRowPlaceholders(
+	source: string,
+	parsed: { head: string; pre: string[] },
+	item: unknown
+): string {
+	if (!source.includes('{{')) return source;
+	const expectedPrefix = [parsed.head, ...parsed.pre].join('.');
+	return source.replace(/\{\{\s*([^}]+?)\s*\}\}/g, (full, raw: string) => {
+		const ref = raw.trim();
+		const star = ref.indexOf('[*]');
+		if (star < 0) return full;
+		const before = ref.slice(0, star);
+		if (before !== expectedPrefix) return full;
+		const afterRaw = ref.slice(star + 3);
+		const after = afterRaw.startsWith('.') ? afterRaw.slice(1) : afterRaw;
+		const rest = after.length === 0 ? [] : after.split('.');
+		const value = rest.length === 0 ? item : getAtPath(item, rest);
+		if (value == null) return '';
+		if (typeof value === 'string') return value;
+		if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+		return JSON.stringify(value);
+	});
+}
+
 export function validateFields(
 	fields: TaskField[],
 	formData: Record<string, unknown>,

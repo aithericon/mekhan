@@ -3,31 +3,36 @@
 	//
 	// Authors point `items_ref` at an upstream array (RefPicker with
 	// `allowArrayBoundary=true` so the synthetic `[*]` row is offered),
-	// optionally pick a per-element label, declare the sub-form fields
-	// users will fill per row, and assign a Rhai-safe `output_slug` for
-	// the typed array output downstream.
-	import type { TaskFieldConfig } from '$lib/types/editor';
+	// optionally pick a per-element label, declare a sub-task body
+	// (any block type except a nested Repeater) that renders per row,
+	// and assign a Rhai-safe `output_slug` for the typed array output
+	// downstream. The element schema of `<output_slug>.results` is
+	// derived server-side from the Input child blocks only — display
+	// children render but contribute nothing to the typed shape.
+	import type { TaskBlockConfig } from '$lib/types/editor';
+	import type { YjsGraphBinding } from '$lib/yjs/graph-binding.svelte';
 	import type { ScopeEntry } from '$lib/editor/guard-scope';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
-	import Plus from '@lucide/svelte/icons/plus';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
 	import ChevronRight from '@lucide/svelte/icons/chevron-right';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
 	import RefPicker from '../RefPicker.svelte';
-	import InputBlockEditor from './InputBlockEditor.svelte';
+	import BlockListEditor from './BlockListEditor.svelte';
 
 	type Props = {
 		items_ref: string;
 		item_label_ref?: string;
-		fields: TaskFieldConfig[];
+		blocks: TaskBlockConfig[];
 		output_slug: string;
 		readonly?: boolean;
+		binding?: YjsGraphBinding;
+		nodeId?: string;
 		scope?: ScopeEntry[];
 		onchange: (next: {
 			items_ref: string;
 			item_label_ref: string | undefined;
-			fields: TaskFieldConfig[];
+			blocks: TaskBlockConfig[];
 			output_slug: string;
 		}) => void;
 		onremove: () => void;
@@ -36,9 +41,11 @@
 	let {
 		items_ref,
 		item_label_ref,
-		fields,
+		blocks,
 		output_slug,
 		readonly = false,
+		binding,
+		nodeId,
 		scope = [],
 		onchange,
 		onremove
@@ -50,33 +57,9 @@
 		onchange({
 			items_ref: patch.items_ref ?? items_ref,
 			item_label_ref: patch.item_label_ref ?? item_label_ref,
-			fields: patch.fields ?? fields,
+			blocks: patch.blocks ?? blocks,
 			output_slug: patch.output_slug ?? output_slug
 		});
-	}
-
-	function addField() {
-		emit({
-			fields: [
-				...fields,
-				{
-					name: `field_${fields.length + 1}`,
-					label: 'New field',
-					kind: 'text',
-					required: false
-				}
-			]
-		});
-	}
-
-	function updateField(index: number, field: TaskFieldConfig) {
-		const next = [...fields];
-		next[index] = field;
-		emit({ fields: next });
-	}
-
-	function removeField(index: number) {
-		emit({ fields: fields.filter((_, i) => i !== index) });
 	}
 </script>
 
@@ -182,37 +165,24 @@
 				</p>
 			</div>
 
-			<!-- Sub-form fields -->
+			<!-- Per-row body — any block type EXCEPT a nested Repeater. -->
 			<div class="space-y-1.5">
-				<div class="flex items-center justify-between">
-					<Label class="text-sm text-muted-foreground">Per-row form fields</Label>
-					{#if !readonly}
-						<button
-							type="button"
-							class="inline-flex items-center gap-1 rounded px-2 py-0.5 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-							onclick={addField}
-						>
-							<Plus class="size-3.5" />
-							Add field
-						</button>
-					{/if}
-				</div>
-				{#if fields.length === 0}
+				<Label class="text-sm text-muted-foreground">Per-row body</Label>
+				{#if blocks.length === 0}
 					<div class="rounded-md border border-dashed border-border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
-						No sub-fields yet. Add at least one — each row renders one form per upstream element.
-					</div>
-				{:else}
-					<div class="space-y-2">
-						{#each fields as field, fieldIdx (fieldIdx)}
-							<InputBlockEditor
-								{field}
-								{readonly}
-								onchange={(updated) => updateField(fieldIdx, updated)}
-								onremove={() => removeField(fieldIdx)}
-							/>
-						{/each}
+						No blocks yet. Add one — every block renders once per upstream
+						element. Input blocks become the typed per-row output schema.
 					</div>
 				{/if}
+				<BlockListEditor
+					{blocks}
+					{readonly}
+					{binding}
+					{nodeId}
+					{scope}
+					excludeRepeater={true}
+					onchange={(next) => emit({ blocks: next })}
+				/>
 			</div>
 		</div>
 	{/if}

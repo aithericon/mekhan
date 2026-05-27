@@ -98,18 +98,20 @@ export type TaskBlock =
 	| { type: 'chart'; chart_type: ChartType; data: Record<string, unknown>[]; x?: string; series?: ChartSeries[]; caption?: string; height?: string; x_label?: string; y_label?: string }
 	| { type: 'divider' }
 	/**
-	 * Feature B — render N copies of a sub-form, one per element of an
-	 * upstream array. `items_ref` carries exactly one `[*]` iteration
-	 * boundary (e.g. `extract.tasks[*]`); the renderer reads
+	 * Feature B — render N copies of a sub-task body, one per element
+	 * of an upstream array. `items_ref` carries exactly one `[*]`
+	 * iteration boundary (e.g. `extract.tasks[*]`); the renderer reads
 	 * `taskData[<pre-[*]-path>]` for the resolved array and instantiates
-	 * `fields` once per element. The submitted form value is collected
-	 * under `output_slug` as a `{ name: value }[]` array.
+	 * `blocks` once per element. Input children build the per-row form
+	 * (collected under `output_slug` as `{ name: value }[]`); display
+	 * children render per row with placeholders resolved against the
+	 * current element.
 	 */
 	| {
 		type: 'repeater';
 		items_ref: string;
 		item_label_ref?: string;
-		fields: TaskField[];
+		blocks: TaskBlock[];
 		output_slug: string;
 	};
 

@@ -1,21 +1,27 @@
 use serde_json::Value;
 
-use crate::models::template::{FieldKind, Port, TaskFieldConfig, WorkflowNode};
+use crate::models::template::{FieldKind, Port, TaskBlockConfig, WorkflowNode};
 
 use super::*;
 
 /// One Repeater sub-form element's shape — `TokenShape::Object` whose fields
-/// are the typed Repeater `fields`, modeled the same way `port_to_shape`
-/// models declared port fields (File expands to the `{url, filename,
-/// content_type}` envelope with a `FileRef` anchor; everything else is a
-/// scalar). Used by [`out_shape`]'s HumanTask arm to synthesize the typed
-/// array output `<output_slug>: Array<{<sub_fields>}>`.
+/// are derived from the Repeater's `Input` child blocks, modeled the same way
+/// `port_to_shape` models declared port fields (File expands to the
+/// `{url, filename, content_type}` envelope with a `FileRef` anchor;
+/// everything else is a scalar). Display-only children (Mdsvex/Callout/
+/// Image/Pdf/File/Download/Divider) are intentionally skipped: they render
+/// per row but contribute nothing to the typed array element schema. Used
+/// by [`out_shape`]'s HumanTask arm to synthesize the typed array output
+/// `<output_slug>: Array<{<sub_inputs>}>`.
 pub(crate) fn repeater_element_to_shape(
-    fields: &[TaskFieldConfig],
+    blocks: &[TaskBlockConfig],
     node: &WorkflowNode,
 ) -> TokenShape {
     let mut o = TokenShape::object();
-    for f in fields {
+    for b in blocks {
+        let TaskBlockConfig::Input { field: f } = b else {
+            continue;
+        };
         let kind = FieldKind::from(f.kind);
         let (shape, prov) = match kind {
             FieldKind::File => {

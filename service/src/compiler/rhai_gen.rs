@@ -975,7 +975,7 @@ mod tests {
             blocks: vec![TaskBlockConfig::Repeater {
                 items_ref: "extract.tasks[*]".into(),
                 item_label_ref: Some("extract.tasks[*].title".into()),
-                fields: vec![],
+                blocks: vec![],
                 output_slug: "review_tasks".into(),
             }],
         };
@@ -1018,21 +1018,21 @@ mod tests {
                 TaskBlockConfig::Repeater {
                     items_ref: "extract.tasks[*]".into(),
                     item_label_ref: None,
-                    fields: vec![],
+                    blocks: vec![],
                     output_slug: "review_a".into(),
                 },
                 // Same items_ref — dedupes.
                 TaskBlockConfig::Repeater {
                     items_ref: "extract.tasks[*]".into(),
                     item_label_ref: None,
-                    fields: vec![],
+                    blocks: vec![],
                     output_slug: "review_b".into(),
                 },
                 // Distinct items_ref — separate emission.
                 TaskBlockConfig::Repeater {
                     items_ref: "extract.subtasks[*]".into(),
                     item_label_ref: None,
-                    fields: vec![],
+                    blocks: vec![],
                     output_slug: "review_c".into(),
                 },
             ],
@@ -1067,7 +1067,7 @@ mod tests {
             blocks: vec![TaskBlockConfig::Repeater {
                 items_ref: "foo.bar.baz[*]".into(),
                 item_label_ref: None,
-                fields: vec![],
+                blocks: vec![],
                 output_slug: "deep".into(),
             }],
         };
@@ -1096,7 +1096,7 @@ mod tests {
             blocks: vec![TaskBlockConfig::Repeater {
                 items_ref: "extract.tasks[*]".into(),
                 item_label_ref: None,
-                fields: vec![],
+                blocks: vec![],
                 output_slug: "review_tasks".into(),
             }],
         };

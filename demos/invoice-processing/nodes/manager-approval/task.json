@@ -18,23 +18,29 @@
         "items_ref": "extract.line_items[*]",
         "item_label_ref": "extract.line_items[*].description",
         "output_slug": "line_approvals",
-        "fields": [
+        "blocks": [
           {
-            "name": "decision",
-            "label": "Decision",
-            "kind": "select",
-            "required": true,
-            "options": [
-              {"value": "approve", "label": "Approve"},
-              {"value": "reject", "label": "Reject"}
-            ]
+            "type": "input",
+            "field": {
+              "name": "decision",
+              "label": "Decision",
+              "kind": "select",
+              "required": true,
+              "options": [
+                {"value": "approve", "label": "Approve"},
+                {"value": "reject", "label": "Reject"}
+              ]
+            }
           },
           {
-            "name": "notes",
-            "label": "Notes",
-            "kind": "textarea",
-            "required": false,
-            "placeholder": "Optional notes for this line item"
+            "type": "input",
+            "field": {
+              "name": "notes",
+              "label": "Notes",
+              "kind": "textarea",
+              "required": false,
+              "placeholder": "Optional notes for this line item"
+            }
           }
         ]
       },

@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { asItemsArray, getAtPath, parseRepeaterRef } from './task-form-values.svelte';
+import {
+	asItemsArray,
+	getAtPath,
+	interpolateRowPlaceholders,
+	parseRepeaterRef
+} from './task-form-values.svelte';
 
 describe('parseRepeaterRef', () => {
 	it('parses a bare iteration ref', () => {
@@ -86,5 +91,50 @@ describe('asItemsArray', () => {
 		expect(asItemsArray(null)).toEqual([]);
 		expect(asItemsArray({ a: 1 })).toEqual([]);
 		expect(asItemsArray('hello')).toEqual([]);
+	});
+});
+
+describe('interpolateRowPlaceholders', () => {
+	const parsed = { head: 'extract', pre: ['tasks'] };
+	const item = { title: 'Buy widgets', amount: 42, meta: { vendor: 'Acme' } };
+
+	it('substitutes a matching scalar leaf', () => {
+		expect(
+			interpolateRowPlaceholders('Review: {{ extract.tasks[*].title }}', parsed, item)
+		).toBe('Review: Buy widgets');
+	});
+
+	it('substitutes a matching nested leaf', () => {
+		expect(
+			interpolateRowPlaceholders('Vendor {{ extract.tasks[*].meta.vendor }}', parsed, item)
+		).toBe('Vendor Acme');
+	});
+
+	it('stringifies numeric leaves', () => {
+		expect(
+			interpolateRowPlaceholders('${{ extract.tasks[*].amount }}', parsed, item)
+		).toBe('$42');
+	});
+
+	it('passes non-matching placeholders through unchanged', () => {
+		expect(
+			interpolateRowPlaceholders('Hello {{ start.user }}', parsed, item)
+		).toBe('Hello {{ start.user }}');
+	});
+
+	it('passes placeholders without [*] through unchanged', () => {
+		expect(
+			interpolateRowPlaceholders('Static {{ extract.foo }}', parsed, item)
+		).toBe('Static {{ extract.foo }}');
+	});
+
+	it('emits empty string for missing leaves', () => {
+		expect(
+			interpolateRowPlaceholders('Missing: {{ extract.tasks[*].nope }}', parsed, item)
+		).toBe('Missing: ');
+	});
+
+	it('returns the source unchanged when no placeholders', () => {
+		expect(interpolateRowPlaceholders('just text', parsed, item)).toBe('just text');
 	});
 });

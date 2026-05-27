@@ -102,9 +102,17 @@ fn scan_block(block: &TaskBlockConfig, out: &mut Vec<HumanTaskRef>) {
         // can synthesize a read-arc on the upstream parked array;
         // `scan_placeholders` skips wildcards (text interpolation
         // contract), so we extract the (head, attr) pair directly.
+        //
+        // Inner `blocks` may carry their own `{{ … }}` placeholders
+        // (e.g. an Mdsvex block authored as
+        // `"Review: {{ extract.tasks[*].title }}"`). The compiler's
+        // borrow planner still needs the outer slug; per-row resolution
+        // happens consumer-side. Recurse so the planner sees every
+        // referenced producer.
         TaskBlockConfig::Repeater {
             items_ref,
             item_label_ref,
+            blocks,
             ..
         } => {
             if let Some(p) = parse_repeater_ref_head_attr(items_ref) {
@@ -114,6 +122,9 @@ fn scan_block(block: &TaskBlockConfig, out: &mut Vec<HumanTaskRef>) {
                 if let Some(p) = parse_repeater_ref_head_attr(label_ref) {
                     out.push(p);
                 }
+            }
+            for inner in blocks {
+                scan_block(inner, out);
             }
         }
     }
@@ -382,7 +393,7 @@ mod tests {
             blocks: vec![TaskBlockConfig::Repeater {
                 items_ref: "extract.tasks[*]".into(),
                 item_label_ref: Some("extract.tasks[*].title".into()),
-                fields: vec![],
+                blocks: vec![],
                 output_slug: "review_tasks".into(),
             }],
         };
@@ -392,5 +403,38 @@ mod tests {
         // borrow planner dedupes downstream. `item_label_ref` carries the
         // same (head, attr) so we see it twice.
         assert_eq!(pairs.iter().filter(|p| p.0 == "extract" && p.1 == "tasks").count(), 2);
+    }
+
+    #[test]
+    fn repeater_inner_mdsvex_emits_referenced_borrows() {
+        // Display blocks inside a Repeater can carry their own
+        // `{{ <slug>.<field> }}` placeholders. The borrow planner needs
+        // to see those refs so it can synthesize read-arcs on every
+        // referenced producer — not just the items_ref head.
+        let step = TaskStepConfig {
+            id: "s1".into(),
+            title: "Review".into(),
+            description_mdsvex: None,
+            blocks: vec![TaskBlockConfig::Repeater {
+                items_ref: "extract.tasks[*]".into(),
+                item_label_ref: None,
+                blocks: vec![
+                    TaskBlockConfig::Mdsvex {
+                        content: "Title: {{ extract.tasks[*].title }} for {{ start.vendor }}"
+                            .into(),
+                    },
+                ],
+                output_slug: "review_tasks".into(),
+            }],
+        };
+        let n = ht("T", None, vec![step]);
+        let p = pairs(&n);
+        // items_ref → (extract, tasks)
+        assert!(p.contains(&("extract".into(), "tasks".into())));
+        // inner mdsvex `{{ start.vendor }}` → (start, vendor)
+        assert!(
+            p.contains(&("start".into(), "vendor".into())),
+            "expected (start, vendor) from inner Mdsvex, got {p:?}"
+        );
     }
 }

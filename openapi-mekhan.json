@@ -8919,20 +8919,20 @@
           },
           {
             "type": "object",
-            "description": "Feature B — render N copies of a sub-form, one per element of an\nupstream array. `items_ref` is a Feature-B `<slug>.<field>[*]`\nreference; the compiler synthesizes a read-arc on the parked array\nand the frontend renderer iterates `task.data[<items_ref>]`,\ninstantiating the sub-`fields` per element. The block's typed\noutput is `<output_slug>.results: array<{<sub_fields>}>` — visible\nto downstream pickers via the standard `TyDescriptor::Array`\nmachinery.\n\n`item_label_ref`, when set, names a `<slug>.<field>[*].<label>`\nref whose per-element string is used as the row header (e.g. the\ntask title from an LLM-extracted task list). Static-only: B v1\nrejects `[*]` chained twice (`NestedIterationUnsupported`).",
+            "description": "Feature B — render N copies of a sub-task body, one per element of an\nupstream array. `items_ref` is a Feature-B `<slug>.<field>[*]`\nreference; the compiler synthesizes a read-arc on the parked array\nand the frontend renderer iterates `task.data[<items_ref>]`,\ninstantiating the sub-`blocks` per element. The block's typed\noutput is `<output_slug>.results: array<{<inputs>}>`, where\n`<inputs>` is the union of every `Input` child block's field —\nvisible to downstream pickers via the standard `TyDescriptor::Array`\nmachinery. Non-Input children (Mdsvex, Callout, Divider, Image,\nPdf, File, Download) are render-only and contribute nothing to the\nper-row schema.\n\n`item_label_ref`, when set, names a `<slug>.<field>[*].<label>`\nref whose per-element string is used as the row header (e.g. the\ntask title from an LLM-extracted task list). Static-only: B v1\nrejects `[*]` chained twice (`NestedIterationUnsupported`) and\nrejects a Repeater nested inside another Repeater.",
             "required": [
               "items_ref",
-              "fields",
+              "blocks",
               "output_slug",
               "type"
             ],
             "properties": {
-              "fields": {
+              "blocks": {
                 "type": "array",
                 "items": {
-                  "$ref": "#/components/schemas/TaskFieldConfig"
+                  "$ref": "#/components/schemas/TaskBlockConfig"
                 },
-                "description": "The sub-form schema rendered per element. Static — only the\n*count* of repetitions is runtime; the shape is declared so\nthe compiler can borrow-check downstream consumers of the\nRepeater's typed array output."
+                "description": "The sub-task body rendered per element. Any TaskBlockConfig\nvariant except a nested Repeater. `Input` children declare the\nper-row form schema and contribute to `<output_slug>.results`\nelement shape; display blocks (Mdsvex/Callout/Image/Pdf/File/\nDownload/Divider) are rendered per row with placeholders\nresolved against the current row's element.\n\n`no_recursion` breaks the recursive schema cycle for\nutoipa — the wire schema still references `TaskBlockConfig`\nvia `$ref`, but the generator stops descending here."
               },
               "item_label_ref": {
                 "type": [
@@ -10377,7 +10377,7 @@
             "properties": {
               "deploymentModel": {
                 "$ref": "#/components/schemas/DeploymentModel",
-                "description": "Where/how the job is dispatched. `Inline` (default) = the current\ndirect executor-lifecycle path. `Scheduled` = submit through the\nlong-lived scheduler-net (Nomad/Slurm) for queued / GPU execution,\noptionally pinning a job template + resources. `#[serde(default)]`\n+ `Inline` default ⇒ every existing template round-trips unchanged\n(same precedent as `retry_policy`)."
+                "description": "Where/how the job is dispatched. `Inline` (default) = the current\ndirect executor-lifecycle path. `Scheduled` = submit through the\nlong-lived scheduler-net (Nomad/Slurm) for queued / GPU execution,\noptionally pinning a job template + resources. `#[serde(default)]`\ntogether with the `Inline` default ⇒ every existing template\nround-trips unchanged (same precedent as `retry_policy`)."
               },
               "description": {
                 "type": [

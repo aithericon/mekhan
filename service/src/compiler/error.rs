@@ -393,6 +393,18 @@ pub enum CompileError {
         node_id: String,
         output_slug: String,
     },
+
+    /// A `Repeater` block was found inside another Repeater's `blocks`.
+    /// v1 forbids nested iteration — the typed array output schema can
+    /// only describe one level of `[*]`, and the runtime renderer assumes
+    /// a single row-iteration scope per Repeater.
+    #[error(
+        "human task '{node_id}': Repeater '{output_slug}' nests another Repeater — nested iteration is not supported"
+    )]
+    RepeaterNested {
+        node_id: String,
+        output_slug: String,
+    },
 }
 
 impl CompileError {
@@ -438,6 +450,7 @@ impl CompileError {
             Self::RepeaterRefUnresolved { .. } => "repeater_ref_unresolved",
             Self::RepeaterItemsRefNotArray { .. } => "repeater_items_ref_not_array",
             Self::RepeaterOutputSlugInvalid { .. } => "repeater_output_slug_invalid",
+            Self::RepeaterNested { .. } => "repeater_nested",
         }
     }
 
@@ -486,6 +499,7 @@ impl CompileError {
             | Self::RepeaterRefUnresolved { node_id, .. }
             | Self::RepeaterItemsRefNotArray { node_id, .. }
             | Self::RepeaterOutputSlugInvalid { node_id, .. }
+            | Self::RepeaterNested { node_id, .. }
             | Self::WorkspaceResourceUnknown { node_id, .. } => Some(node_id),
             _ => None,
         }
