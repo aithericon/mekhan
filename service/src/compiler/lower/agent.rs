@@ -386,8 +386,11 @@ fn lower_agent_loop(
     .auto_input("state", &p_state)
     .auto_output("job", &exec_inbox)
     .auto_output("state_in_flight", &p_state_in_flight)
+    // Rhai variables are mutable by default — no `mut` keyword exists,
+    // so `let mut d = ...` would parse `mut` as a fresh variable name
+    // and then fail at the next token. Plain `let d` is mutable.
     .logic_rhai(format!(
-        r#"let s = state; let mut d = #{{ }}; d.job_id = "{id}"; d.run = s.turn; d.retries = 0; d.max_retries = 0; let job_inputs = []; d.spec = #{{ "backend": "llm", "inputs": job_inputs, "outputs": [], "config_ref": {config_ref_rhai}, "stream_events": ["agent_turn", "metric", "log"] }}; d.metadata = #{{ "agent_node_id": "{id}" }}; #{{ job: d, state_in_flight: s }}"#
+        r#"let s = state; let d = #{{ }}; d.job_id = "{id}"; d.run = s.turn; d.retries = 0; d.max_retries = 0; let job_inputs = []; d.spec = #{{ "backend": "llm", "inputs": job_inputs, "outputs": [], "config_ref": {config_ref_rhai}, "stream_events": ["agent_turn", "metric", "log"] }}; d.metadata = #{{ "agent_node_id": "{id}" }}; #{{ job: d, state_in_flight: s }}"#
     ))
     .done();
 
@@ -405,9 +408,13 @@ fn lower_agent_loop(
     );
 
     // ----- t_to_response: lc.completed + p_state_in_flight → p_response -----
-    // Re-unites state with the LLM response. Output token carries both:
-    // `{state: ..., response: done}` so the route transitions can consume a
-    // single token + see everything they need.
+    // Re-unites state with the LLM response and accumulates this turn's
+    // token usage into the parked state envelope. Output token carries
+    // both: `{state: ..., response: done}` so the route transitions can
+    // consume a single token + see everything they need. The defensive
+    // `type_of(...)` chain tolerates an absent / non-map `usage` field
+    // (some adapters emit `null` until tokens land — never trust the
+    // wire shape unconditionally).
     ctx.transition(
         format!("t_{id}_to_response"),
         format!("{label} - To Response"),
@@ -415,7 +422,10 @@ fn lower_agent_loop(
     .auto_input("done", &lc.completed)
     .auto_input("state", &p_state_in_flight)
     .auto_output("response", &p_response)
-    .logic_rhai("#{ response: #{ state: state, response: done } }".to_string())
+    .logic_rhai(
+        r#"let outs = if type_of(done.detail) == "map" && type_of(done.detail.outputs) == "map" { done.detail.outputs } else { #{} }; let usage = if type_of(outs.usage) == "map" { outs.usage } else { #{} }; let in_tok = if type_of(usage.input_tokens) == "i64" { usage.input_tokens } else { 0 }; let out_tok = if type_of(usage.output_tokens) == "i64" { usage.output_tokens } else { 0 }; state.total_tokens_in = state.total_tokens_in + in_tok; state.total_tokens_out = state.total_tokens_out + out_tok; state.message_count = state.message_count + 1; #{ response: #{ state: state, response: done } }"#
+            .to_string(),
+    )
     .done();
 
     // Executor-side failure paths drain state out of `p_state_in_flight`
@@ -449,13 +459,28 @@ fn lower_agent_loop(
     // script — each route's effect is one path.
     //
     // The Rhai `turn_result` extractor below tolerates either shape the
-    // LLM backend may emit: `outputs.turn_result` (multi-turn path) or
-    // `outputs.response` (degenerate single-shot path that this loop
-    // re-uses when the model returns text without tool_calls).
-    let extract_tr: &str = r#"let r = response.response; let outs = r.detail.outputs; let tr = outs.turn_result; if type_of(tr) == "()" { tr = outs.response; }"#;
+    // LLM backend may emit: `outputs.turn_result` (multi-turn / tool-call
+    // path) or the canonical `{response, usage, finish_reason, model}`
+    // single-shot fields. Whichever the backend gave us, `tr` ends up as
+    // a map with `{content, tool_calls, stop_reason}` so the route guards
+    // below can blindly index `tr.tool_calls`, `tr.content`, etc. Without
+    // this normalisation, `tr.tool_calls` on a bare string would silently
+    // fail every guard and stall the net.
+    let extract_tr: &str = r#"let r = response.response; let outs = r.detail.outputs; let tr_raw = outs.turn_result; let tr = if type_of(tr_raw) == "map" { tr_raw } else { #{ content: if type_of(outs.response) == "string" { outs.response } else { () }, tool_calls: [], stop_reason: if type_of(outs.finish_reason) == "string" { outs.finish_reason } else { "end_turn" } } };"#;
 
     // t_route_final: terminate — tool_calls empty OR max_turns reached
     // OR stop_when satisfied. Produces the final envelope on p_final.
+    //
+    // The deposited token mirrors the executor envelope an
+    // `AutomatedStep(Llm)` would produce — `{execution_id, job_id, run,
+    // status, source, detail: {outputs, exit_code}}` — so the
+    // `NodeKind::AutomatedStep` hoist path (`detail.outputs`) the borrow
+    // planner uses resolves `<agent>.response`, `<agent>.usage`, etc.
+    // exactly the way a plain LLM step's borrows resolve. Agent-specific
+    // extras (turn, history, final_response, input) ride along under
+    // `detail.outputs` so an author who walks the picker can still see
+    // them.
+    let model_lit = rhai_str_escape(&model.model);
     ctx.transition(
         format!("t_{id}_route_final"),
         format!("{label} - Route: Final"),
@@ -466,7 +491,7 @@ fn lower_agent_loop(
         r#"let s = response.state; {extract_tr} let tc = if type_of(tr.tool_calls) == "array" {{ tr.tool_calls }} else {{ [] }}; tc.len() == 0 || s.turn + 1 >= {max_turns} || {stop_when_expr}"#
     ))
     .logic_rhai(format!(
-        r#"let s = response.state; {extract_tr} let content = if type_of(tr.content) == "string" {{ tr.content }} else {{ () }}; let final = #{{ content: content, turn: s.turn, history: s.history, total_tokens_in: s.total_tokens_in, total_tokens_out: s.total_tokens_out, final_response: tr, input: s.input }}; #{{ final: final }}"#
+        r#"let s = response.state; {extract_tr} let content = if type_of(tr.content) == "string" {{ tr.content }} else {{ () }}; let finish_reason = if type_of(tr.stop_reason) == "string" {{ tr.stop_reason }} else {{ "end_turn" }}; let usage = #{{ input_tokens: s.total_tokens_in, output_tokens: s.total_tokens_out }}; let outputs = #{{ response: content, usage: usage, finish_reason: finish_reason, model: "{model_lit}", turn: s.turn, history: s.history, final_response: tr, input: s.input }}; let env = #{{ execution_id: "agent-{id}", job_id: "{id}", run: s.turn, status: "succeeded", source: "agent_loop", detail: #{{ outputs: outputs, exit_code: 0 }} }}; #{{ final: env }}"#
     ))
     .done();
 
@@ -486,8 +511,10 @@ fn lower_agent_loop(
         .guard_rhai(format!(
             r#"let s = response.state; {extract_tr} let tc = if type_of(tr.tool_calls) == "array" {{ tr.tool_calls }} else {{ [] }}; tc.len() > 0 && tc[0].name == "{tn}" && s.turn + 1 < {max_turns} && !({stop_when_expr})"#
         ))
+        // `call` is a Rhai reserved keyword (it's the indirect-call syntax
+        // marker). Use `tcall` for the tool_calls[0] binding.
         .logic_rhai(format!(
-            r#"let s = response.state; {extract_tr} let call = tr.tool_calls[0]; let assistant_content = if type_of(tr.content) == "string" {{ tr.content }} else {{ "" }}; s.history.push(#{{ role: "assistant", content: assistant_content, tool_call_id: call.id, tool_name: "{tn}", tool_args: call.arguments }}); s.turn = s.turn + 1; s.message_count = s.message_count + 1; #{{ dispatch: #{{ call_id: call.id, tool_name: "{tn}", args: call.arguments }}, state_in_tool: s }}"#
+            r#"let s = response.state; {extract_tr} let tcall = tr.tool_calls[0]; let assistant_content = if type_of(tr.content) == "string" {{ tr.content }} else {{ "" }}; s.history.push(#{{ role: "assistant", content: assistant_content, tool_call_id: tcall.id, tool_name: "{tn}", tool_args: tcall.arguments }}); s.turn = s.turn + 1; s.message_count = s.message_count + 1; #{{ dispatch: #{{ call_id: tcall.id, tool_name: "{tn}", args: tcall.arguments }}, state_in_tool: s }}"#
         ))
         .done();
     }
@@ -511,7 +538,7 @@ fn lower_agent_loop(
             r#"let s = response.state; {extract_tr} let tc = if type_of(tr.tool_calls) == "array" {{ tr.tool_calls }} else {{ [] }}; let known = {known_names_rhai}; tc.len() > 0 && !(known.contains(tc[0].name)) && s.turn + 1 < {max_turns} && !({stop_when_expr})"#
         ))
         .logic_rhai(format!(
-            r#"let s = response.state; {extract_tr} let call = tr.tool_calls[0]; s.history.push(#{{ role: "tool", tool_name: call.name, tool_call_id: call.id, content: "tool '" + call.name + "' not found — pick one of: " + {known_names_rhai} }}); s.turn = s.turn + 1; s.message_count = s.message_count + 1; #{{ state: s }}"#
+            r#"let s = response.state; {extract_tr} let tcall = tr.tool_calls[0]; s.history.push(#{{ role: "tool", tool_name: tcall.name, tool_call_id: tcall.id, content: "tool '" + tcall.name + "' not found — pick one of: " + {known_names_rhai} }}); s.turn = s.turn + 1; s.message_count = s.message_count + 1; #{{ state: s }}"#
         ))
         .done();
     }

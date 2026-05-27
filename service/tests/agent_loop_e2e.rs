@@ -445,6 +445,76 @@ fn incoming_edge_to_tool_child_is_validation_error() {
     );
 }
 
+/// Every Rhai script (`logic` + `guard`) the agent compiler emits must
+/// PARSE as valid Rhai. The runtime engine compiles them lazily — a
+/// syntax error means a "permanent transition failure" at the FIRST
+/// firing rather than at template publish, which is a brutal feedback
+/// loop. This test catches them at compile-test time by feeding every
+/// emitted source through a vanilla `rhai::Engine` (we don't need any
+/// platform-registered helpers to validate syntax — those are runtime
+/// resolution concerns, not parse-time).
+///
+/// History: the agent-loop's `t_prepare_call` initially used `let mut d`
+/// which is Rust syntax, not Rhai (Rhai vars are mutable by default and
+/// `mut` parses as a fresh identifier, then the parser fails at the next
+/// token). This test would have caught it at PR-time instead of in
+/// live-dev.
+#[test]
+fn every_emitted_rhai_script_parses() {
+    let mut node = agent_node("a");
+    if let WorkflowNodeData::Agent { stop_when, .. } = &mut node.data {
+        *stop_when = Some("state.message_count >= 3".to_string());
+    } else {
+        unreachable!()
+    }
+    let air = compile(
+        vec![
+            start_node("s"),
+            node,
+            tool_child("lookup_node", "a", "lookup"),
+            end_node("e"),
+        ],
+        vec![edge("e1", "s", "a"), edge("e2", "a", "e")],
+    );
+
+    let engine = rhai::Engine::new_raw();
+    let transitions = air
+        .get("transitions")
+        .and_then(Value::as_array)
+        .expect("transitions array");
+
+    let mut failures: Vec<String> = Vec::new();
+    for tr in transitions {
+        let tid = tr.get("id").and_then(Value::as_str).unwrap_or("<no-id>");
+        // Logic — for Rhai transitions the source lives at .logic.source.
+        if let Some(source) = tr
+            .get("logic")
+            .and_then(|l| l.get("source"))
+            .and_then(Value::as_str)
+        {
+            if let Err(e) = engine.compile(source) {
+                failures.push(format!("[{tid}.logic] {e}\n    source: {source}"));
+            }
+        }
+        // Guard — same wire shape on the `guard` field.
+        if let Some(source) = tr
+            .get("guard")
+            .and_then(|g| g.get("source"))
+            .and_then(Value::as_str)
+        {
+            if let Err(e) = engine.compile(source) {
+                failures.push(format!("[{tid}.guard] {e}\n    source: {source}"));
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "every emitted Rhai script must parse; got {} failure(s):\n{}",
+        failures.len(),
+        failures.join("\n\n")
+    );
+}
+
 /// Two tool children with the same `tool_meta.tool_name` are a hard
 /// compile error — same shape as `SlugConflict`.
 #[test]
