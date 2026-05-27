@@ -1,8 +1,8 @@
 <script lang="ts">
 	// Join: unified converge node. `mode` is the explicit knob — `all` waits
-	// for every incoming branch and merges payloads (the parallel_join
-	// behaviour); `any` fires per arriving token (XOR-join, dual of decision).
-	// `mergeStrategy` is only meaningful for `mode === 'all'`.
+	// for every incoming branch and merges payloads (AND-join); `any` fires
+	// per arriving token (XOR-join, dual of decision). `mergeStrategy` is
+	// only meaningful for `mode === 'all'`.
 	import type { JoinNodeData } from '$lib/types/editor';
 	import type { YjsGraphBinding } from '$lib/yjs/graph-binding.svelte';
 	import { FormField } from '$lib/components/ui/form-field';

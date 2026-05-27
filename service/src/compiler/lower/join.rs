@@ -1,11 +1,11 @@
-//! Unified `WorkflowNodeData::Join` lowering. `mode == All` mirrors the
-//! `ParallelJoin` AND-join (one transition consuming every input place,
-//! payloads merged per `merge_strategy`). `mode == Any` is the canonical
-//! petri-net XOR-join: N transitions, one per incoming branch, each
-//! consuming a single input place and depositing into a *shared* output
-//! place (and a shared parked data place). For both modes each branch's
-//! inbound payload lands at the parked `p_<id>_data` so downstream
-//! `<slug>.<field>` borrows resolve via the standard read-arc pipeline.
+//! `WorkflowNodeData::Join` lowering. `mode == All` is the AND-join (one
+//! transition consuming every input place, payloads merged per
+//! `merge_strategy`). `mode == Any` is the canonical petri-net XOR-join: N
+//! transitions, one per incoming branch, each consuming a single input
+//! place and depositing into a *shared* output place (and a shared parked
+//! data place). For both modes each branch's inbound payload lands at the
+//! parked `p_<id>_data` so downstream `<slug>.<field>` borrows resolve via
+//! the standard read-arc pipeline.
 
 use super::*;
 
@@ -84,8 +84,7 @@ pub(super) fn lower_join(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     }
 
     // Build edge_id -> input_place mapping so wire.rs can resolve each
-    // inbound edge to its dedicated input place (same shape used by
-    // ParallelJoin).
+    // inbound edge to its dedicated input place.
     let join_input_map: HashMap<String, PlaceHandle<DynamicToken>> = input_place_ids
         .iter()
         .filter_map(|(edge_id, place)| edge_id.as_ref().map(|eid| (eid.clone(), place.clone())))

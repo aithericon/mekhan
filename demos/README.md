@@ -52,7 +52,7 @@ capstone that ties them together.
 | 02 | `02-human-form/` | HumanTask with a `task.json` sidecar. End reads a HumanTask form field. |
 | 03 | `03-decision-routing/` | AutomatedStep produces a derived field; Decision branches on it via a `<slug>.<field>` guard. |
 | 04 | `04-loop-counter/` | Loop with body wired through `body_in` / `body_out`. Stop condition lives in `loopCondition`. |
-| 05 | `05-parallel-fanout/` | ParallelSplit fans two AutomatedSteps; ParallelJoin merges them back. |
+| 05 | `05-parallel-fanout/` | ParallelSplit fans two AutomatedSteps; Join (`mode: all`) merges them back. |
 | 06 | `06-subworkflow/` | Flow-in-flow: parent embeds `01-hello-world` via a `sub_workflow` node + `inputMapping`. |
 | 07 | `07-ocr-classify-extract/` | LLM + Kreuzberg consume upstream-producer fields via `{{ <slug>.<field> }}` placeholders — same convention HumanTask uses. Start uploads a PDF, Kreuzberg reads `{{ start.document }}`, LLM classifier reads `{{ extract_text.content }}` (kreuzberg's native ExtractionResult key — declarations match 1:1, no remap). |
 | 08 | `08-failure-handling/` | AutomatedStep's red `error` handle: a Python `raise` (or `sys.exit(<nonzero>)`) routes out the error port once `retryPolicy.maxRetries` is exhausted. Wired to a Failure node + dedicated End so the run completes with a structured `{ ok: false, error: { reason, value } }` envelope. |

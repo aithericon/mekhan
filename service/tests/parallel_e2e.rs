@@ -136,7 +136,7 @@ async fn wait_for_completion(db: &sqlx::PgPool, id: Uuid, timeout: Duration) {
     }
 }
 
-/// `Start → ParallelSplit → (taskA, taskB) → ParallelJoin → End`.
+/// `Start → ParallelSplit → (taskA, taskB) → Join (mode: all) → End`.
 /// Branch nodes are HumanTasks whose `task_id` and place are picked up from
 /// the spawned hpi_tasks row and completed via `POST /api/v1/tasks/{id}/complete`.
 fn parallel_graph() -> Value {
@@ -169,8 +169,8 @@ fn parallel_graph() -> Value {
                                 "name": "ok", "label": "OK",
                                 "kind": "checkbox", "required": true } }]
                         }] } },
-            { "id": "join", "type": "parallel_join", "position": { "x": 600, "y": 0 },
-              "data": { "type": "parallel_join", "label": "Join" } },
+            { "id": "join", "type": "join", "position": { "x": 600, "y": 0 },
+              "data": { "type": "join", "label": "Join", "mode": "all" } },
             { "id": "e", "type": "end", "position": { "x": 800, "y": 0 },
               "data": { "type": "end", "label": "Done",
                         "resultMapping": [

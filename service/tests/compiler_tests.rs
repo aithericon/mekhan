@@ -4,9 +4,10 @@
 
 use mekhan_service::compiler::compile_to_air;
 use mekhan_service::models::template::{
-    BranchCondition, DeploymentModel, ExecutionBackendType, ExecutionSpecConfig,
-    PhaseUpdateStatus, Port, Position, TaskBlockConfig, TaskFieldConfig, TaskFieldKind,
-    TaskStepConfig, WorkflowEdge, WorkflowGraph, WorkflowNode, WorkflowNodeData,
+    default_join_output_port, BranchCondition, DeploymentModel, ExecutionBackendType,
+    ExecutionSpecConfig, JoinMode, MergeStrategy, PhaseUpdateStatus, Port, Position,
+    TaskBlockConfig, TaskFieldConfig, TaskFieldKind, TaskStepConfig, WorkflowEdge, WorkflowGraph,
+    WorkflowNode, WorkflowNodeData,
 };
 use serde_json::{json, Value};
 
@@ -473,7 +474,7 @@ fn decision_produces_guard_transitions() {
 }
 
 // ---------------------------------------------------------------------------
-// Start -> ParallelSplit -> (A, B) -> ParallelJoin -> End
+// Start -> ParallelSplit -> (A, B) -> Join (mode: all) -> End
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -531,13 +532,15 @@ fn parallel_split_join_produces_fork_and_join() {
             },
             WorkflowNode {
                 id: "join".to_string(),
-                node_type: "parallel_join".to_string(),
+                node_type: "join".to_string(),
                 slug: None,
                 position: pos(),
-                data: WorkflowNodeData::ParallelJoin {
+                data: WorkflowNodeData::Join {
                     label: "Join".to_string(),
                     description: None,
-                    merge_strategy: Default::default(),
+                    mode: JoinMode::All,
+                    merge_strategy: Some(MergeStrategy::default()),
+                    output: default_join_output_port(),
                 },
                 parent_id: None,
                 width: None,
@@ -1346,7 +1349,7 @@ fn transitive_merge_chain_resolves_correctly() {
 }
 
 // ---------------------------------------------------------------------------
-// Merge optimization: ParallelJoin per-edge input places merge
+// Merge optimization: Join per-edge input places merge
 // ---------------------------------------------------------------------------
 
 /// S -> Split -> (AutoA, AutoB) -> Join -> E
@@ -1356,7 +1359,7 @@ fn transitive_merge_chain_resolves_correctly() {
 /// forwarded control token (`p_aa_ctrl` / `p_ab_ctrl`) — `split_outputs`
 /// parks the executor envelope in `p_*_data` and threads only `p_*_ctrl`.
 #[test]
-fn parallel_join_merges_per_edge_input_places() {
+fn join_merges_per_edge_input_places() {
     let graph = WorkflowGraph {
         nodes: vec![
             start_node("s"),
@@ -1378,13 +1381,15 @@ fn parallel_join_merges_per_edge_input_places() {
             auto_node("ab", "Auto B"),
             WorkflowNode {
                 id: "join".to_string(),
-                node_type: "parallel_join".to_string(),
+                node_type: "join".to_string(),
                 slug: None,
                 position: pos(),
-                data: WorkflowNodeData::ParallelJoin {
+                data: WorkflowNodeData::Join {
                     label: "Join".to_string(),
                     description: None,
-                    merge_strategy: Default::default(),
+                    mode: JoinMode::All,
+                    merge_strategy: Some(MergeStrategy::default()),
+                    output: default_join_output_port(),
                 },
                 parent_id: None,
                 width: None,
@@ -1462,12 +1467,12 @@ fn parallel_join_merges_per_edge_input_places() {
 // ---------------------------------------------------------------------------
 
 /// Two edges converge on the same non-join node (Decision). Since it has
-/// multiple incoming edges and is not a ParallelJoin, the pass-through
-/// transitions must be RETAINED (not merged).
+/// multiple incoming edges and is not a Join, the pass-through transitions
+/// must be RETAINED (not merged).
 #[test]
 fn multi_input_non_join_retains_pass_through_transitions() {
     // S -> Split -> (A, B) with both A and B targeting the same Decision node.
-    // Decision has 2 incoming edges and is not a ParallelJoin, so pass-throughs stay.
+    // Decision has 2 incoming edges and is not a Join, so pass-throughs stay.
     let graph = WorkflowGraph {
         nodes: vec![
             start_node("s"),
@@ -2370,7 +2375,6 @@ fn parallel_split_join_scope_have_single_pass_through_output() {
 
     for data in [
         WorkflowNodeData::ParallelSplit { label: "x".into(), description: None },
-        WorkflowNodeData::ParallelJoin { label: "x".into(), description: None, merge_strategy: Default::default() },
         WorkflowNodeData::Scope { label: "x".into(), description: None },
     ] {
         let ports = data.output_ports();

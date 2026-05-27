@@ -227,14 +227,6 @@ export class YjsGraphBinding {
 				};
 			case 'parallel_split':
 				return { ...base, type: 'parallel_split' };
-			case 'parallel_join':
-				return {
-					...base,
-					type: 'parallel_join',
-					mergeStrategy:
-						(config?.mergeStrategy as 'shallow_last_wins' | 'deep_merge') ??
-						'shallow_last_wins'
-				};
 			case 'join': {
 				type JoinDataT = Extract<WorkflowNodeData, { type: 'join' }>;
 				const mode = (config?.mode as 'all' | 'any') ?? 'all';
@@ -738,9 +730,6 @@ export class YjsGraphBinding {
 				if (data.defaultBranch) config.set('defaultBranch', data.defaultBranch);
 				break;
 			case 'parallel_split':
-				break;
-			case 'parallel_join':
-				config.set('mergeStrategy', data.mergeStrategy ?? 'shallow_last_wins');
 				break;
 			case 'join':
 				config.set('mode', data.mode ?? 'all');

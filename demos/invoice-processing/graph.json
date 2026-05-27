@@ -246,15 +246,16 @@
     },
     {
       "id": "join",
-      "type": "parallel_join",
+      "type": "join",
       "parentId": "scope-parallel",
       "position": {
         "x": 560,
         "y": 110
       },
       "data": {
-        "type": "parallel_join",
-        "label": "Merge Results"
+        "type": "join",
+        "label": "Merge Results",
+        "mode": "all"
       }
     },
     {

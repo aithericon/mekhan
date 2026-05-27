@@ -319,35 +319,20 @@ pub enum WorkflowNodeData {
         #[serde(skip_serializing_if = "Option::is_none")]
         description: Option<String>,
     },
-    #[serde(rename = "parallel_join")]
-    ParallelJoin {
-        label: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        description: Option<String>,
-        /// How tokens arriving on the joined branches are merged into the
-        /// single output token. `ShallowLastWins` (default) preserves the
-        /// historical behaviour; `DeepMerge` recursively merges nested maps.
-        #[serde(rename = "mergeStrategy", default)]
-        merge_strategy: MergeStrategy,
-    },
-    /// Unified converge primitive — superset of `ParallelJoin` (AND-join) plus
-    /// the previously-missing XOR-join. `mode == All` waits for every incoming
-    /// branch and merges payloads per `merge_strategy` (the same semantics as
-    /// `parallel_join`). `mode == Any` fires per arriving token — the
-    /// canonical petri-net XOR-join, dual of `Decision`'s XOR-split. Both
-    /// modes park each branch's inbound token in `p_<id>_data` so downstream
-    /// `<slug>.<field>` borrows resolve through the standard read-arc
-    /// pipeline (the `output` Port declares the addressable shape).
-    ///
-    /// `ParallelJoin` is kept as a back-compat variant; the editor's default
-    /// factory emits `Join { mode: All }`.
+    /// Unified converge primitive. `mode == All` is the AND-join: waits for
+    /// every incoming branch and merges payloads per `merge_strategy`.
+    /// `mode == Any` is the canonical petri-net XOR-join (dual of `Decision`'s
+    /// XOR-split) — fires per arriving token. Both modes park each branch's
+    /// inbound token in `p_<id>_data` so downstream `<slug>.<field>` borrows
+    /// resolve through the standard read-arc pipeline (the `output` Port
+    /// declares the addressable shape).
     #[serde(rename = "join")]
     Join {
         label: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         description: Option<String>,
-        /// `All` (AND-join, the parallel_join semantics) waits for every
-        /// incoming branch. `Any` (XOR-join) fires per arriving token.
+        /// `All` (AND-join) waits for every incoming branch. `Any` (XOR-join)
+        /// fires per arriving token.
         #[serde(default)]
         mode: JoinMode,
         /// Honoured only when `mode == All`. For `Any` only one payload ever
@@ -597,7 +582,6 @@ impl WorkflowNodeData {
             | Self::Agent { label, .. }
             | Self::Decision { label, .. }
             | Self::ParallelSplit { label, .. }
-            | Self::ParallelJoin { label, .. }
             | Self::Join { label, .. }
             | Self::Loop { label, .. }
             | Self::Scope { label, .. }
@@ -618,7 +602,6 @@ impl WorkflowNodeData {
             Self::Agent { .. } => "agent",
             Self::Decision { .. } => "decision",
             Self::ParallelSplit { .. } => "parallel_split",
-            Self::ParallelJoin { .. } => "parallel_join",
             Self::Join { .. } => "join",
             Self::Loop { .. } => "loop",
             Self::Scope { .. } => "scope",
@@ -639,7 +622,6 @@ impl WorkflowNodeData {
             | Self::Agent { description, .. }
             | Self::Decision { description, .. }
             | Self::ParallelSplit { description, .. }
-            | Self::ParallelJoin { description, .. }
             | Self::Join { description, .. }
             | Self::Loop { description, .. }
             | Self::Scope { description, .. }
@@ -673,7 +655,6 @@ impl WorkflowNodeData {
             Self::HumanTask { .. }
             | Self::Decision { .. }
             | Self::ParallelSplit { .. }
-            | Self::ParallelJoin { .. }
             | Self::Join { .. }
             | Self::Scope { .. }
             | Self::PhaseUpdate { .. }
@@ -718,8 +699,8 @@ impl WorkflowNodeData {
     ///   label = branch label) plus a `default` port for the catch-all.
     ///   Phase 4 stub: each branch port has empty fields (pass-through), so
     ///   downstream type-checking flows through unchanged.
-    /// - `ParallelSplit` / `ParallelJoin` / `Loop` → single `out` port,
-    ///   empty fields (pass-through).
+    /// - `ParallelSplit` / `Loop` → single `out` port, empty fields
+    ///   (pass-through).
     /// - `Scope` → single `out` port, empty fields (pass-through). The
     ///   scope's *boundary* port editor lands separately.
     pub fn output_ports(&self) -> Vec<Port> {
@@ -823,7 +804,6 @@ impl WorkflowNodeData {
             }
 
             Self::ParallelSplit { .. }
-            | Self::ParallelJoin { .. }
             | Self::Scope { .. }
             | Self::PhaseUpdate { .. }
             | Self::ProgressUpdate { .. }
@@ -1086,8 +1066,8 @@ pub enum ImageDisplay {
     Gallery,
 }
 
-/// How a `ParallelJoin`/`Join { mode: All }` merges the tokens arriving on
-/// its joined branches.
+/// How a `Join { mode: All }` merges the tokens arriving on its joined
+/// branches.
 ///
 /// `ShallowLastWins` is the historical behaviour (top-level keys overwrite,
 /// last branch to arrive wins on a key collision). `DeepMerge` recursively
@@ -1100,10 +1080,9 @@ pub enum MergeStrategy {
     DeepMerge,
 }
 
-/// Firing rule for a `Join` node. `All` (the default) waits for every
-/// incoming branch — the AND-join semantics inherited from `ParallelJoin`.
-/// `Any` fires per arriving token — the canonical petri-net XOR-join, dual
-/// of `Decision`'s XOR-split.
+/// Firing rule for a `Join` node. `All` (the default) is the AND-join —
+/// waits for every incoming branch. `Any` fires per arriving token — the
+/// canonical petri-net XOR-join, dual of `Decision`'s XOR-split.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum JoinMode {
@@ -2556,11 +2535,6 @@ pub mod dsl {
                     label: label.to_string(),
                     description: step.description.clone(),
                 }),
-                "parallel_join" => Ok(WorkflowNodeData::ParallelJoin {
-                    label: label.to_string(),
-                    description: step.description.clone(),
-                    merge_strategy: Default::default(),
-                }),
                 "join" => Ok(WorkflowNodeData::Join {
                     label: label.to_string(),
                     description: step.description.clone(),
@@ -2737,7 +2711,6 @@ pub mod dsl {
                     }
                 }
                 WorkflowNodeData::ParallelSplit { .. } => {}
-                WorkflowNodeData::ParallelJoin { .. } => {}
                 WorkflowNodeData::Join { .. } => {
                     // Join's mode/merge_strategy/output are GUI-only for now —
                     // the DSL has no schema for them. Round-trip through DSL

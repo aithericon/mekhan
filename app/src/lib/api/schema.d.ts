@@ -2337,10 +2337,9 @@ export interface components {
             status: string;
         };
         /**
-         * @description Firing rule for a `Join` node. `All` (the default) waits for every
-         *     incoming branch — the AND-join semantics inherited from `ParallelJoin`.
-         *     `Any` fires per arriving token — the canonical petri-net XOR-join, dual
-         *     of `Decision`'s XOR-split.
+         * @description Firing rule for a `Join` node. `All` (the default) is the AND-join —
+         *     waits for every incoming branch. `Any` fires per arriving token — the
+         *     canonical petri-net XOR-join, dual of `Decision`'s XOR-split.
          * @enum {string}
          */
         JoinMode: "all" | "any";
@@ -2438,8 +2437,8 @@ export interface components {
             form?: components["schemas"]["TaskFieldConfig"][];
         };
         /**
-         * @description How a `ParallelJoin`/`Join { mode: All }` merges the tokens arriving on
-         *     its joined branches.
+         * @description How a `Join { mode: All }` merges the tokens arriving on its joined
+         *     branches.
          *
          *     `ShallowLastWins` is the historical behaviour (top-level keys overwrite,
          *     last branch to arrive wins on a key collision). `DeepMerge` recursively
@@ -3907,21 +3906,10 @@ export interface components {
         } | {
             description?: string | null;
             label: string;
-            /**
-             * @description How tokens arriving on the joined branches are merged into the
-             *     single output token. `ShallowLastWins` (default) preserves the
-             *     historical behaviour; `DeepMerge` recursively merges nested maps.
-             */
-            mergeStrategy?: components["schemas"]["MergeStrategy"];
-            /** @enum {string} */
-            type: "parallel_join";
-        } | {
-            description?: string | null;
-            label: string;
             mergeStrategy?: null | components["schemas"]["MergeStrategy"];
             /**
-             * @description `All` (AND-join, the parallel_join semantics) waits for every
-             *     incoming branch. `Any` (XOR-join) fires per arriving token.
+             * @description `All` (AND-join) waits for every incoming branch. `Any` (XOR-join)
+             *     fires per arriving token.
              */
             mode?: components["schemas"]["JoinMode"];
             /**

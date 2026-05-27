@@ -47,10 +47,7 @@ pub(crate) fn wire_edge(
     let source_place = find_output_place(source_ports, edge)?;
 
     // Determine target input place
-    let actual_target = if matches!(
-        target_node.data,
-        WorkflowNodeData::ParallelJoin { .. } | WorkflowNodeData::Join { .. }
-    ) {
+    let actual_target = if matches!(target_node.data, WorkflowNodeData::Join { .. }) {
         target_ports
             .input_places
             .get(&edge.id)
@@ -95,10 +92,7 @@ pub(crate) fn wire_edge(
             .done();
     } else {
         // Pure pass-through — try to merge places instead of creating a transition
-        let is_join = matches!(
-            target_node.data,
-            WorkflowNodeData::ParallelJoin { .. } | WorkflowNodeData::Join { .. }
-        );
+        let is_join = matches!(target_node.data, WorkflowNodeData::Join { .. });
         let can_merge = is_join || wg.incoming(&edge.target).len() == 1;
 
         if can_merge {

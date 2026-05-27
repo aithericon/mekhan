@@ -83,11 +83,12 @@
     },
     {
       "id": "join",
-      "type": "parallel_join",
+      "type": "join",
       "position": { "x": 700, "y": 160 },
       "data": {
-        "type": "parallel_join",
+        "type": "join",
         "label": "Join",
+        "mode": "all",
         "mergeStrategy": "shallow_last_wins"
       }
     },

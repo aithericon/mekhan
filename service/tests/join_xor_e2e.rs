@@ -1,9 +1,9 @@
 //! End-to-end proof of `Join { mode: any }` — the unified Join's XOR-join
 //! mode lowered as N transitions sharing one output place. A Decision
 //! XOR-splits to two pass-through branches; the join fires on the first
-//! arrival and the net completes. With the old `parallel_join` shape
-//! (single AND-fire transition consuming every input place) this graph
-//! would deadlock — only one branch ever populates a token per run.
+//! arrival and the net completes. With an AND-fire shape (single transition
+//! consuming every input place) this graph would deadlock — only one branch
+//! ever populates a token per run.
 //!
 //! Tests both branches end-to-end against the live engine, so:
 //!   - High branch (amount=250) → cond_high → Join → End { route: "high" }
@@ -106,7 +106,7 @@ async fn wait_for_completion(db: &sqlx::PgPool, id: Uuid, timeout: Duration) {
             panic!(
                 "instance {id} did not complete within {timeout:?} (last: {st}) — \
                  likely the Join {{ mode: any }} deadlocked (would mean lowering \
-                 regressed to ParallelJoin's AND-fire shape)",
+                 regressed to an AND-fire shape)",
             );
         }
         tokio::time::sleep(Duration::from_millis(300)).await;
@@ -272,8 +272,8 @@ async fn join_any_completes_on_single_branch_arrival() {
     let _lifecycle = spawn_lifecycle(nats, db.clone()).await;
 
     // High branch: amount=250 routes through cond_high → join → end.
-    // The join is XOR — only one input place is ever populated. With
-    // ParallelJoin's AND-fire semantics this would block forever.
+    // The join is XOR — only one input place is ever populated. With an
+    // AND-fire semantics this would block forever.
     let id_high = publish_and_start(&app, join_any_graph(), json!({ "amount": 250 })).await;
     wait_for_completion(&db, id_high, Duration::from_secs(30)).await;
     let result = fetch_result(&db, id_high).await;

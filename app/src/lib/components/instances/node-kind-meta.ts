@@ -40,7 +40,6 @@ const KIND_META: Record<string, NodeKindMeta> = {
 	decision: { icon: GitBranch, label: 'Decision',      iconClass: 'text-white', chipClass: 'bg-node-decision' },
 	loop: { icon: Repeat,      label: 'Loop',            iconClass: 'text-white', chipClass: 'bg-node-loop' },
 	parallel_split: { icon: GitFork, label: 'Parallel split', iconClass: 'text-white', chipClass: 'bg-node-parallel' },
-	parallel_join: { icon: GitMerge, label: 'Parallel join', iconClass: 'text-white', chipClass: 'bg-node-parallel' },
 	join: { icon: GitMerge, label: 'Join', iconClass: 'text-white', chipClass: 'bg-node-parallel' },
 	sub_workflow: { icon: Workflow, label: 'Sub-workflow', iconClass: 'text-white', chipClass: 'bg-node-sub-workflow' },
 	failure: { icon: OctagonX, label: 'Failure',         iconClass: 'text-white', chipClass: 'bg-node-failure' },

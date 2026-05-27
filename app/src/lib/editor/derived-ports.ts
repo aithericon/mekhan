@@ -35,7 +35,6 @@ export function outputPortsFor(data: WorkflowNodeData): Port[] {
 		case 'decision':
 			return deriveDecisionOutputPorts(data);
 		case 'parallel_split':
-		case 'parallel_join':
 		case 'loop':
 		case 'scope':
 		case 'phase_update':
@@ -66,7 +65,6 @@ export function inputPortsFor(data: WorkflowNodeData): Port[] {
 		case 'human_task':
 		case 'decision':
 		case 'parallel_split':
-		case 'parallel_join':
 		case 'join':
 		case 'loop':
 		case 'scope':

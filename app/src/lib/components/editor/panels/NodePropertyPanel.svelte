@@ -13,7 +13,6 @@
 	import TriggerNodeSection from './property-sections/TriggerNodeSection.svelte';
 	import RetryPolicySection from './property-sections/RetryPolicySection.svelte';
 	import ParallelSplitSection from './property-sections/ParallelSplitSection.svelte';
-	import ParallelJoinSection from './property-sections/ParallelJoinSection.svelte';
 	import JoinSection from './property-sections/JoinSection.svelte';
 	import ScopeSection from './property-sections/ScopeSection.svelte';
 	import PhaseUpdateNodeSection from './property-sections/PhaseUpdateNodeSection.svelte';
@@ -308,8 +307,6 @@
 			<TriggerNodeSection {data} {readonly} {onchange} {nodeId} {binding} />
 		{:else if data.type === 'parallel_split'}
 			<ParallelSplitSection {data} {binding} {nodeId} />
-		{:else if data.type === 'parallel_join'}
-			<ParallelJoinSection {data} {readonly} {onchange} {binding} {nodeId} />
 		{:else if data.type === 'join'}
 			<JoinSection {data} {readonly} {onchange} {binding} {nodeId} />
 		{:else if data.type === 'scope'}
@@ -343,7 +340,7 @@
 		     and AutomatedStep already render an editable PortsSection inside
 		     their own section. End/Scope have no derived outputs to show
 		     until a port editor lands for them. -->
-		{#if data.type === 'human_task' || data.type === 'decision' || data.type === 'loop' || data.type === 'parallel_split' || data.type === 'parallel_join' || data.type === 'join' || data.type === 'scope' || data.type === 'phase_update' || data.type === 'progress_update' || data.type === 'failure' || data.type === 'agent'}
+		{#if data.type === 'human_task' || data.type === 'decision' || data.type === 'loop' || data.type === 'parallel_split' || data.type === 'join' || data.type === 'scope' || data.type === 'phase_update' || data.type === 'progress_update' || data.type === 'failure' || data.type === 'agent'}
 			<DerivedPortsSection
 				ports={outputPortsFor(data)}
 				title="Outputs"

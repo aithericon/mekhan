@@ -457,10 +457,10 @@ impl State {
         let owner = owner.clone();
         let iter = forced_iter
             .or_else(|| self.active_iter.get(&owner).copied())
-            // Nodes with no `entry` (ParallelJoin) or nodes whose only entry
-            // arrival is via control-flow (the rare case where a node's first
-            // fire precedes any TokenCreated/TransitionFired into its entry):
-            // open row at iteration 0 implicitly.
+            // Nodes whose only entry arrival is via control-flow (the rare case
+            // where a node's first fire precedes any TokenCreated/
+            // TransitionFired into its entry): open row at iteration 0
+            // implicitly.
             .unwrap_or(0);
 
         if let std::collections::btree_map::Entry::Vacant(e) =
@@ -493,9 +493,8 @@ impl State {
 
         // 3. First fire for this iteration: transition Pending→Running.
         // `started_at` was set when the entry token arrived (T0); only
-        // backfill from the firing timestamp (T2) for nodes with no entry —
-        // ParallelJoin, or any future control-flow node whose first fire
-        // precedes any token deposit into its boundary.
+        // backfill from the firing timestamp (T2) for any future control-flow
+        // node whose first fire precedes any token deposit into its boundary.
         if row.status == StepStatus::Pending {
             row.status = StepStatus::Running;
             if row.started_at.is_none() {

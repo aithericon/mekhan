@@ -300,7 +300,6 @@ describe('YjsGraphBinding', () => {
 			'automated_step',
 			'decision',
 			'parallel_split',
-			'parallel_join',
 			'join',
 			'loop',
 			'scope',

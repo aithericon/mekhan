@@ -1321,7 +1321,7 @@ mod tests {
     use super::*;
     use crate::compiler::pyio::generate_py_io_files;
     use crate::compiler::rhai_gen::{
-        build_human_task_injection_logic, build_join_merge_logic, interpolate_to_rhai_expr,
+        build_human_task_injection_logic, build_join_merge_logic_full, interpolate_to_rhai_expr,
         json_to_rhai_literal, placeholder_to_accessor, PLUCK_HELPER,
     };
     use crate::models::template::*;
@@ -1983,8 +1983,8 @@ mod tests {
     #[test]
     fn test_join_merge_single_input_is_passthrough() {
         let ports = vec!["in_0".to_string()];
-        let shallow = build_join_merge_logic(&ports, MergeStrategy::ShallowLastWins);
-        let deep = build_join_merge_logic(&ports, MergeStrategy::DeepMerge);
+        let shallow = build_join_merge_logic_full(&ports, MergeStrategy::ShallowLastWins, false);
+        let deep = build_join_merge_logic_full(&ports, MergeStrategy::DeepMerge, false);
         // One branch never merges — both strategies collapse to pass-through.
         assert_eq!(shallow, "#{ output: in_0 }");
         assert_eq!(deep, "#{ output: in_0 }");
@@ -1993,8 +1993,8 @@ mod tests {
     #[test]
     fn test_join_merge_strategies_differ() {
         let ports = vec!["in_0".to_string(), "in_1".to_string()];
-        let shallow = build_join_merge_logic(&ports, MergeStrategy::ShallowLastWins);
-        let deep = build_join_merge_logic(&ports, MergeStrategy::DeepMerge);
+        let shallow = build_join_merge_logic_full(&ports, MergeStrategy::ShallowLastWins, false);
+        let deep = build_join_merge_logic_full(&ports, MergeStrategy::DeepMerge, false);
 
         assert_ne!(shallow, deep, "strategies must emit different Rhai");
 
@@ -2014,7 +2014,7 @@ mod tests {
     #[test]
     fn test_join_merge_three_inputs_fold_left() {
         let ports = vec!["in_0".to_string(), "in_1".to_string(), "in_2".to_string()];
-        let deep = build_join_merge_logic(&ports, MergeStrategy::DeepMerge);
+        let deep = build_join_merge_logic_full(&ports, MergeStrategy::DeepMerge, false);
         // Folds in arrival order so the last branch wins on scalar collisions.
         let i1 = deep.find("__deep_merge(result, in_1)").unwrap();
         let i2 = deep.find("__deep_merge(result, in_2)").unwrap();
@@ -2132,8 +2132,7 @@ mod tests {
     }
 
     /// `Join { mode: All }` with two branches must lower into a single AND-fire
-    /// transition consuming both input places, mirroring the historical
-    /// `parallel_join` behaviour but additionally staging the merged token in
+    /// transition consuming both input places and staging the merged token in
     /// the parked `p_<id>_data` place so downstream `<slug>.<field>` borrows
     /// resolve.
     #[test]

@@ -177,7 +177,6 @@ fn output_place_ids(node: &WorkflowNode) -> Vec<String> {
             // ids are simply skipped by `annotate_air`.
             (0..8).map(|i| format!("p_{id}_out_{i}")).collect()
         }
-        WorkflowNodeData::ParallelJoin { .. } => vec![format!("p_{id}_output")],
         WorkflowNodeData::Join { .. } => vec![format!("p_{id}_output")],
         WorkflowNodeData::Loop { .. } => vec![
             format!("p_{id}_body_in"),
@@ -413,7 +412,6 @@ fn out_shape(node: &WorkflowNode, in_shape: &TokenShape) -> TokenShape {
         // Pure routing / pass-through patterns: token shape unchanged.
         WorkflowNodeData::Decision { .. }
         | WorkflowNodeData::ParallelSplit { .. }
-        | WorkflowNodeData::ParallelJoin { .. }
         | WorkflowNodeData::Join { .. }
         | WorkflowNodeData::Scope { .. }
         | WorkflowNodeData::PhaseUpdate { .. }
@@ -444,14 +442,8 @@ pub fn analyze(graph: &WorkflowGraph) -> Result<ShapeReport, CompileError> {
         let node = *wg.dag.node_weight(*ni).unwrap();
 
         // Inbound = shallow-merge of every DAG predecessor's outbound shape.
-        // (ParallelJoin / Join's strategy can be DeepMerge; honour it.)
+        // (Join's strategy can be DeepMerge; honour it.)
         let deep = matches!(
-            &node.data,
-            WorkflowNodeData::ParallelJoin {
-                merge_strategy: MergeStrategy::DeepMerge,
-                ..
-            }
-        ) || matches!(
             &node.data,
             WorkflowNodeData::Join {
                 mode: JoinMode::All,

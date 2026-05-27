@@ -469,17 +469,14 @@ pub(crate) fn build_join_passthrough_logic(port_name: &str) -> String {
     format!("#{{ output: {port_name}, data: {port_name} }}")
 }
 
-/// Rhai for a `Join { mode: All }` (and `ParallelJoin`'s back-compat path)
-/// that folds the tokens arriving on `port_names` (`in_0`, `in_1`, …) into a
-/// single `output` token plus a mirror `data` token deposited at the parked
-/// `p_<id>_data` place. When `also_stage_data` is false the `data` output is
-/// omitted (back-compat `ParallelJoin` path, which has no parked place).
+/// Rhai for a `Join { mode: All }` that folds the tokens arriving on
+/// `port_names` (`in_0`, `in_1`, …) into a single `output` token plus a
+/// mirror `data` token deposited at the parked `p_<id>_data` place. When
+/// `also_stage_data` is false the `data` output is omitted.
 ///
 /// One input → straight pass-through. `ShallowLastWins` copies top-level keys
-/// left-to-right so the last branch wins on a collision (the historical
-/// intent — the old code emitted an unregistered `merge_maps`, so this also
-/// fixes a latent runtime bug). `DeepMerge` recursively merges nested object
-/// values via a script-local helper.
+/// left-to-right so the last branch wins on a collision. `DeepMerge`
+/// recursively merges nested object values via a script-local helper.
 pub(crate) fn build_join_merge_logic_full(
     port_names: &[String],
     strategy: MergeStrategy,
@@ -534,13 +531,6 @@ pub(crate) fn build_join_merge_logic_full(
             s
         }
     }
-}
-
-/// Back-compat wrapper preserving the `ParallelJoin` byte-identical output —
-/// no parked-data mirror, original `#{ output: result }` tail. Defers to
-/// `build_join_merge_logic_full` so the merge algorithm stays single-sourced.
-pub(crate) fn build_join_merge_logic(port_names: &[String], strategy: MergeStrategy) -> String {
-    build_join_merge_logic_full(port_names, strategy, false)
 }
 
 pub(crate) fn build_human_task_injection_logic(target_node: &WorkflowNode) -> String {

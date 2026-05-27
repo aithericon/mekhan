@@ -19,15 +19,14 @@ trigger ─► start ─► ocr ─► classify ─► route-by-class (decision)
 
 `merge-extraction` is a `join` node with **`mode: "any"`** — it fires on the
 first incoming control token (XOR-join, dual of decision). The same node type
-with **`mode: "all"`** is what today's `parallel_join` does (wait for every
-branch, merge payloads). One node type, one knob — the user picks "wait for
-all" or "fire on any" in config; the type name doesn't pretend they're
-different things.
+with **`mode: "all"`** is the AND-join (wait for every branch, merge payloads).
+One node type, one knob — the user picks "wait for all" or "fire on any" in
+config; the type name doesn't pretend they're different things.
 
 Lowering is structural either way: incoming edges feed a shared input place.
 For `mode: "all"` the transition only fires when every input place has a
-token (current `parallel_join` semantics). For `mode: "any"` the transition
-fires per arriving token (each branch's deposit is independently sufficient).
+token. For `mode: "any"` the transition fires per arriving token (each
+branch's deposit is independently sufficient).
 On the data side, `merge-extraction` re-parks the inbound payload under slug
 `extraction`, so downstream `persist` does a single clean borrow
 `extraction.fields`.
@@ -74,27 +73,23 @@ but they're the deltas vs. what currently ships.
    as if the same interpolation reaches into `executionSpec.config` strings.
    The natural extension of the existing slug system.
 
-3. **Unified `join` node with explicit `mode`.** Today's
-   `WorkflowNodeData` has `decision` (XOR-split), `parallel_split`
-   (AND-split), and `parallel_join` (AND-join) — but no XOR-join. The
-   easy fix is "add a `merge` type"; the better fix is to recognize
-   that `parallel_join` and the missing XOR-join are the same primitive
-   ("branches converge") with one knob ("wait for all" vs "fire on
-   any"). Proposed shape:
+3. **Unified `join` node with explicit `mode`.** `WorkflowNodeData::Join`
+   subsumes both the AND-join (`mode: "all"`) and the XOR-join
+   (`mode: "any"`, dual of decision). One node type, one knob — the user
+   picks "wait for all" or "fire on any" in config; the type name doesn't
+   encode the semantics. Shape:
 
    ```
    type: "join"
    mode: "all" | "any"
    // when mode == "all":
-   mergeStrategy: "shallow_last_wins" | "deep_merge"   // already on parallel_join
+   mergeStrategy: "shallow_last_wins" | "deep_merge"
    ```
 
-   `parallel_join` becomes a back-compat alias for `join { mode: "all" }`.
    Lowering is structural in both modes: incoming control edges feed a
    shared input place. For `mode: "all"` the transition fires when
    *every* input place has a token; for `mode: "any"` per arriving
-   token. No new borrow semantics, no opposite-meaning-similar-name
-   pair in the node-type enum.
+   token.
 
 4. **`output.kind = "json"`.** Each extractor emits a `fields: [...]`
    array. The output port kind we'd want is something richer than

@@ -48,7 +48,7 @@
 //! |-----------------------|---------------------------------------------------------------------------|
 //! | `node_id`             | always                                                                    |
 //! | `kind`                | always (mirrors `WorkflowNodeData` variant)                               |
-//! | `entry`               | `Some` for nodes with an inbound boundary; `None` only for `ParallelJoin` |
+//! | `entry`               | `Some` for nodes with an inbound boundary                                 |
 //! | `named_inputs`        | every named inbound port (Loop `body_out`, Join per-edge inputs)         |
 //! | `outputs`             | every outbound port keyed by [`OutputKey`]                                |
 //! | `data_port`           | `Some` iff the node parks a borrow-reachable envelope (Start/HumanTask/AutomatedStep) |
@@ -112,7 +112,6 @@ pub enum NodeKind {
     Decision,
     Loop,
     ParallelSplit,
-    ParallelJoin,
     Join,
     Scope,
     SubWorkflow,
@@ -152,8 +151,8 @@ pub enum OutputKey {
     /// Single-output nodes: Start.main, HumanTask.out, AutomatedStep.success,
     /// End/Failure (no outputs — never present), CatalogueQuery.out, ...
     Default,
-    /// ParallelSplit per-edge fanout, ParallelJoin (per-edge input is recorded
-    /// in `named_inputs`, not here).
+    /// ParallelSplit per-edge fanout. (Join per-edge inputs are recorded in
+    /// `named_inputs`, not here.)
     Edge(String),
     /// Decision branches, Loop body/exit, AutomatedStep success/error pair.
     Named(String),
@@ -210,7 +209,7 @@ pub struct NodeInterface {
     /// Trigger (pre-compile dispatcher concern; no AIR shape).
     pub entry: Option<String>,
     /// Named inbound ports: Loop's `body_out` (where the body's outgoing
-    /// edge lands), ParallelJoin per-edge inputs (keyed by edge id), ...
+    /// edge lands), Join per-edge inputs (keyed by edge id), ...
     pub named_inputs: BTreeMap<String, String>,
     /// Outbound places keyed by their port semantics. See `OutputKey`.
     pub outputs: BTreeMap<OutputKey, String>,

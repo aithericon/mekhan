@@ -40,7 +40,7 @@ test.describe('Editor Interaction', () => {
 		await expect(page.getByTestId('palette-item-automated_step')).toBeVisible();
 		await expect(page.getByTestId('palette-item-decision')).toBeVisible();
 		await expect(page.getByTestId('palette-item-parallel_split')).toBeVisible();
-		await expect(page.getByTestId('palette-item-parallel_join')).toBeVisible();
+		await expect(page.getByTestId('palette-item-join')).toBeVisible();
 		await expect(page.getByTestId('palette-item-loop')).toBeVisible();
 	});
 

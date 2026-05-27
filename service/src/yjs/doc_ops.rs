@@ -491,7 +491,6 @@ pub fn write_node_config(
             }
         }
         WorkflowNodeData::ParallelSplit { .. }
-        | WorkflowNodeData::ParallelJoin { .. }
         | WorkflowNodeData::Scope { .. } => {}
         WorkflowNodeData::Join {
             mode,

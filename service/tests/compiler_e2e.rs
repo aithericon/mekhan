@@ -310,7 +310,7 @@ fn ui_invoice_processing_deserializes_and_compiles() {
         "Compliance submit"
     );
 
-    // --- ParallelJoin: Merge Results ---
+    // --- Join (mode: all): Merge Results ---
     assert!(has_transition(&air, "t_join_join"), "Join transition");
 
     // --- Loop: Auto-Validate ---

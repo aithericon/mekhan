@@ -503,7 +503,7 @@
       "data": {
         "type": "join",
         "label": "Merge branches",
-        "description": "Branches converge. `mode: \"any\"` \u2014 fires on the first incoming control token (XOR-join, dual of decision). The other mode, `\"all\"`, waits for every incoming branch and merges their payloads (what `parallel_join` does today). One node type, one knob \u2014 the wait-vs-fire-immediately semantics are explicit in the config, not encoded in the type name.",
+        "description": "Branches converge. `mode: \"any\"` \u2014 fires on the first incoming control token (XOR-join, dual of decision). The other mode, `\"all\"`, waits for every incoming branch and merges their payloads (AND-join). One node type, one knob \u2014 the wait-vs-fire-immediately semantics are explicit in the config, not encoded in the type name.",
         "mode": "any",
         "output": {
           "id": "out",

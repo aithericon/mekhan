@@ -249,7 +249,6 @@ fn node_kind_to_str(kind: crate::compiler::NodeKind) -> &'static str {
         crate::compiler::NodeKind::Decision => "decision",
         crate::compiler::NodeKind::Loop => "loop",
         crate::compiler::NodeKind::ParallelSplit => "parallel_split",
-        crate::compiler::NodeKind::ParallelJoin => "parallel_join",
         crate::compiler::NodeKind::Join => "join",
         crate::compiler::NodeKind::Scope => "scope",
         crate::compiler::NodeKind::SubWorkflow => "sub_workflow",

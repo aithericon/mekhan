@@ -56,7 +56,7 @@ pub(super) fn lower_start(cx: &mut LoweringCtx) -> Result<(), CompileError> {
             // `.logic_rhai` (not `.logic`): the builder's inline
             // validator doesn't model `fn` parameters, so the
             // `__pluck` helper's params read as undefined. Same path
-            // `wire_edge`/ParallelJoin already use for helper-fn
+            // `wire_edge`/Join already use for helper-fn
             // scripts; the engine still parses it at scenario load.
             .logic_rhai(with_pluck_prelude(&format!(
                 "let d = input; d._process_name = {name_expr}; #{{ output: d }}"

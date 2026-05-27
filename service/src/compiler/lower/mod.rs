@@ -11,9 +11,9 @@ pub(super) use crate::compiler::error::CompileError;
 pub(super) use crate::compiler::interface::{InterfaceRegistry, NodeInterface, NodeKind, OutputKey};
 pub(super) use crate::compiler::well_known;
 pub(super) use crate::compiler::rhai_gen::{
-    build_join_merge_logic, build_join_merge_logic_full, build_join_passthrough_logic,
-    build_merge_logic, build_retry_topology, interpolate_to_rhai_expr, json_to_rhai_literal,
-    rhai_str_escape, with_pluck_prelude,
+    build_join_merge_logic_full, build_join_passthrough_logic, build_merge_logic,
+    build_retry_topology, interpolate_to_rhai_expr, json_to_rhai_literal, rhai_str_escape,
+    with_pluck_prelude,
 };
 pub(super) use crate::compiler::token_shape::YIELD_LOGIC;
 pub(super) use crate::models::template::ToolErrorPolicy;
@@ -186,7 +186,7 @@ pub(crate) struct NodePorts {
     /// The place(s) where tokens leave this node block.
     /// For decision nodes, there are multiple outputs keyed by edge_id.
     pub(crate) output_places: Vec<(Option<String>, PlaceHandle<DynamicToken>)>,
-    /// For ParallelJoin nodes: maps incoming edge_id -> input place.
+    /// For Join nodes: maps incoming edge_id -> input place.
     /// Empty for all other node types.
     pub(crate) input_places: HashMap<String, PlaceHandle<DynamicToken>>,
     /// Named inbound ports keyed by `target_handle`. wire.rs checks this before
@@ -332,7 +332,6 @@ impl NodeLowering for WorkflowNode {
             WorkflowNodeData::Agent { .. } => agent::lower_agent(cx),
             WorkflowNodeData::Decision { .. } => decision::lower_decision(cx),
             WorkflowNodeData::ParallelSplit { .. } => parallel_split::lower_parallel_split(cx),
-            WorkflowNodeData::ParallelJoin { .. } => parallel_join::lower_parallel_join(cx),
             WorkflowNodeData::Join { .. } => join::lower_join(cx),
             WorkflowNodeData::Loop { .. } => loop_::lower_loop(cx),
             WorkflowNodeData::Scope { .. } => scope::lower_scope(cx),
@@ -414,7 +413,6 @@ fn node_kind_of(node: &WorkflowNode) -> NodeKind {
         WorkflowNodeData::Decision { .. } => NodeKind::Decision,
         WorkflowNodeData::Loop { .. } => NodeKind::Loop,
         WorkflowNodeData::ParallelSplit { .. } => NodeKind::ParallelSplit,
-        WorkflowNodeData::ParallelJoin { .. } => NodeKind::ParallelJoin,
         WorkflowNodeData::Join { .. } => NodeKind::Join,
         WorkflowNodeData::Scope { .. } => NodeKind::Scope,
         WorkflowNodeData::SubWorkflow { .. } => NodeKind::SubWorkflow,
@@ -442,7 +440,6 @@ pub(super) mod failure;
 pub(super) mod human_task;
 pub(super) mod join;
 pub(super) mod loop_;
-pub(super) mod parallel_join;
 pub(super) mod parallel_split;
 pub(super) mod phase_update;
 pub(super) mod progress_update;

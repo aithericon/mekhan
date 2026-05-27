@@ -5,7 +5,6 @@ import HumanTaskNode from './HumanTaskNode.svelte';
 import AutomatedStepNode from './AutomatedStepNode.svelte';
 import DecisionNode from './DecisionNode.svelte';
 import ParallelSplitNode from './ParallelSplitNode.svelte';
-import ParallelJoinNode from './ParallelJoinNode.svelte';
 import JoinNode from './JoinNode.svelte';
 import LoopNode from './LoopNode.svelte';
 import ScopeNode from './ScopeNode.svelte';
@@ -23,7 +22,6 @@ export const nodeTypes: NodeTypes = {
 	automated_step: AutomatedStepNode as any,
 	decision: DecisionNode as any,
 	parallel_split: ParallelSplitNode as any,
-	parallel_join: ParallelJoinNode as any,
 	join: JoinNode as any,
 	loop: LoopNode as any,
 	scope: ScopeNode as any,
