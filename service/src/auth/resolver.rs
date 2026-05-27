@@ -87,6 +87,13 @@ impl PrincipalResolver for DbPrincipalResolver {
         let mut user = self.inner.resolve(claims).await?;
         let user_id = user.subject_as_uuid();
 
+        // Auto-membership in every system workspace (currently just `demos`).
+        // The platform wants every authenticated principal to *be* a member
+        // of demos — not merely to see demo templates via `visibility='public'`
+        // — so the demos workspace appears in their workspace picker and
+        // project listings without an admin step. Viewer role: read-only.
+        ensure_system_workspace_membership(&self.db, user_id).await?;
+
         // Path 1: known Zitadel org → look up the bound workspace, auto-
         // provision membership idempotently, return that workspace.
         if let Some(ref zitadel_org_id) = user.org_id {
@@ -100,10 +107,27 @@ impl PrincipalResolver for DbPrincipalResolver {
         // Path 2: no org claim or no binding — fall back to the default
         // workspace, but only if the user is already a member there
         // (dev-noop user is seeded as such; arbitrary Zitadel principals
-        // are not).
+        // are not). Prefer a non-system workspace so the picker doesn't
+        // land on `demos` for users who *also* belong to a real tenant.
         user.workspace_id = membership_workspace(&self.db, user_id).await?;
         Ok(user)
     }
+}
+
+/// Idempotently upsert the caller as a viewer in every `is_system = TRUE`
+/// workspace. Today that's just `demos`, but the loop is correct for any
+/// future system workspace (e.g. a `samples` or `tutorial` namespace).
+async fn ensure_system_workspace_membership(db: &PgPool, user_id: Uuid) -> Result<(), AuthError> {
+    let rows: Vec<(Uuid,)> = sqlx::query_as(
+        "SELECT id FROM workspaces WHERE is_system = TRUE",
+    )
+    .fetch_all(db)
+    .await
+    .map_err(|e| AuthError::Internal(format!("system workspace lookup: {e}")))?;
+    for (ws_id,) in rows {
+        upsert_member(db, ws_id, user_id, "viewer").await?;
+    }
+    Ok(())
 }
 
 async fn lookup_workspace_by_zitadel_org(
@@ -133,17 +157,20 @@ async fn upsert_member(db: &PgPool, workspace_id: Uuid, user_id: Uuid, role: &st
     Ok(())
 }
 
-/// Returns the first workspace the user is a member of, preferring
-/// `slug='default'`. v1 doesn't expose a workspace switcher — the session
-/// is pinned to one workspace at resolve time; multi-workspace flow is
-/// future work.
+/// Returns the user's default "active" workspace. Preference order:
+///   1. `slug='default'` (the seeded tenant for dev-noop + unbound principals)
+///   2. any non-system workspace (real tenants outrank `demos`)
+///   3. the oldest system workspace (worst case: user is only in `demos`)
+///
+/// The picker in Phase B exposes the full membership list and lets the
+/// user override this default per session via a cookie.
 async fn membership_workspace(db: &PgPool, user_id: Uuid) -> Result<Option<Uuid>, AuthError> {
     let row: Option<(Uuid,)> = sqlx::query_as(
         "SELECT w.id \
            FROM workspaces w \
            JOIN workspace_members m ON m.workspace_id = w.id \
           WHERE m.user_id = $1 \
-          ORDER BY (w.slug = 'default') DESC, w.created_at ASC \
+          ORDER BY (w.slug = 'default') DESC, w.is_system ASC, w.created_at ASC \
           LIMIT 1",
     )
     .bind(user_id)
