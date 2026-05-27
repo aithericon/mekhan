@@ -25,6 +25,38 @@ use crate::AppState;
 const VISIBILITY_WORKSPACE: &str = "workspace";
 const VISIBILITY_PUBLIC: &str = "public";
 
+/// GET /api/v1/workspaces/{id}/tags
+///
+/// Distinct tags across every template in the workspace. Drives the tag
+/// filter chips in the templates list — one round trip, no per-template
+/// fan-out.
+#[utoipa::path(
+    get,
+    path = "/api/v1/workspaces/{id}/tags",
+    params(("id" = Uuid, Path, description = "Workspace id")),
+    responses(
+        (status = 200, description = "Distinct workspace tags", body = Vec<String>),
+        (status = 403, description = "Not a member", body = ErrorResponse),
+    ),
+    tag = "projects",
+)]
+pub async fn list_workspace_tags(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(workspace_id): Path<Uuid>,
+) -> Result<Json<Vec<String>>, ApiError> {
+    require_role(&state.db, &user, workspace_id, Role::Viewer)
+        .await
+        .map_err(map_to_api_error)?;
+    let rows: Vec<(String,)> = sqlx::query_as(
+        "SELECT DISTINCT tag FROM template_tags WHERE workspace_id = $1 ORDER BY tag",
+    )
+    .bind(workspace_id)
+    .fetch_all(&state.db)
+    .await?;
+    Ok(Json(rows.into_iter().map(|(t,)| t).collect()))
+}
+
 /// GET /api/v1/workspaces/{id}/projects
 #[utoipa::path(
     get,
