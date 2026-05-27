@@ -316,9 +316,13 @@ pub async fn fire_trigger(
                 'static,
                 Result<SseEvent, std::convert::Infallible>,
             > = match instance_id {
+                // JetStream subjects are keyed by net_id, which prefixes the
+                // raw instance uuid with "mekhan-" (see instances::create_instance
+                // and triggers::dispatcher). Without the prefix the consumer
+                // filter never matches and the stream hangs forever.
                 Some(iid) => Box::pin(crate::handlers::instances::instance_jetstream_events(
                     state.nats.clone(),
-                    iid.to_string(),
+                    format!("mekhan-{iid}"),
                 )),
                 None => Box::pin(stream::empty()),
             };
