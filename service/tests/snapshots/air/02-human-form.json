@@ -545,6 +545,42 @@
               "type": "object"
             },
             {
+              "description": "Feature B — array-iteration sub-form. Renders one copy of `fields` per element of the upstream array referenced by `items_ref` (which carries exactly one `[*]` boundary, e.g. `extract.tasks[*]`). The engine treats this as a pass-through — the structural fields are statically declared at compile time, the *count* of rows comes from runtime data the compiler stages into `HumanTaskRequest.payload`. Renderer-only; no engine-side semantics beyond accepting and forwarding it.",
+              "properties": {
+                "fields": {
+                  "items": {
+                    "$ref": "#/definitions/TaskField"
+                  },
+                  "type": "array"
+                },
+                "item_label_ref": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "items_ref": {
+                  "type": "string"
+                },
+                "output_slug": {
+                  "type": "string"
+                },
+                "type": {
+                  "enum": [
+                    "repeater"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "fields",
+                "items_ref",
+                "output_slug",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
               "properties": {
                 "type": {
                   "enum": [
