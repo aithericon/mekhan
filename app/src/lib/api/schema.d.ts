@@ -3793,16 +3793,6 @@ export interface components {
          * @enum {string}
          */
         ToolErrorPolicy: "feedback" | "bubble";
-        /** @description Marks a child of an Agent as a callable tool. */
-        ToolMeta: {
-            /** @description Shown to the LLM in the tool listing. */
-            toolDescription: string;
-            /**
-             * @description Rhai-identifier-safe; unique within the parent agent. The agent
-             *     compiler emits a hard `CompileError` on collision.
-             */
-            toolName: string;
-        };
         TriggerHistoryResponse: {
             history: components["schemas"]["FireResult"][];
         };
@@ -4083,7 +4073,6 @@ export interface components {
              *     templates to migrate). See [`WorkflowNode::slug`].
              */
             slug?: string | null;
-            toolMeta?: null | components["schemas"]["ToolMeta"];
             type: string;
             /**
              * Format: double

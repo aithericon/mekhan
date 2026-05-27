@@ -10275,24 +10275,6 @@
           "bubble"
         ]
       },
-      "ToolMeta": {
-        "type": "object",
-        "description": "Marks a child of an Agent as a callable tool.",
-        "required": [
-          "toolName",
-          "toolDescription"
-        ],
-        "properties": {
-          "toolDescription": {
-            "type": "string",
-            "description": "Shown to the LLM in the tool listing."
-          },
-          "toolName": {
-            "type": "string",
-            "description": "Rhai-identifier-safe; unique within the parent agent. The agent\ncompiler emits a hard `CompileError` on collision."
-          }
-        }
-      },
       "TriggerHistoryResponse": {
         "type": "object",
         "required": [
@@ -11093,17 +11075,6 @@
               "null"
             ],
             "description": "Stable, author-facing namespace for guard references to this node's\nproduced fields: a guard writes `<slug>.<field>` and the compiler\nrebinds it to this node's parked data place. Rhai-identifier-safe and\nunique within a graph. Optional on the wire — when absent the compiler\nderives a deterministic fallback from `id` (clean-cut: no stored\ntemplates to migrate). See [`WorkflowNode::slug`]."
-          },
-          "toolMeta": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/ToolMeta",
-                "description": "When this node is a child of an Agent container and should be\nexposed to the LLM as a callable tool, this carries the tool's\n`name` (Rhai-identifier-safe, unique within the parent agent) and\n`description` (shown to the LLM). Any node kind can be a tool;\nits input port becomes the tool's argument schema. Absent on\nnon-tool children and on top-level nodes."
-              }
-            ]
           },
           "type": {
             "type": "string"
