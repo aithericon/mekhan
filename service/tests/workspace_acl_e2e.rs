@@ -402,8 +402,8 @@ async fn petri_proxy_rejects_cross_workspace_instance() {
     // resolve net_id → workspace.
     let net_id = format!("mekhan-{}", Uuid::new_v4().simple());
     sqlx::query(
-        "INSERT INTO workflow_instances (id, net_id, template_id, status, created_by) \
-              VALUES ($1, $2, $3, 'running', $4)",
+        "INSERT INTO workflow_instances (id, net_id, template_id, template_version, status, created_by) \
+              VALUES ($1, $2, $3, 1, 'running', $4)",
     )
     .bind(Uuid::new_v4())
     .bind(&net_id)
@@ -496,36 +496,47 @@ async fn test_app_with_authenticator_and_petri_url(
 // ---------------------------------------------------------------------------
 #[tokio::test]
 async fn yjs_ws_rejects_cross_workspace() {
-    // The yjs handler authenticates via the same cookie; with header_driven
-    // mock + an explicit X-Test-Workspace, we get the same gate exercised
-    // without spinning up a full WS server.
-    let (app, db) = header_driven_app().await;
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+
+    // Real TCP server + real WS handshake — synthetic `oneshot()` requests
+    // can't drive HTTP/1.1 upgrade through Tower, so the `WebSocketUpgrade`
+    // extractor 426s before the gate ever runs.
+    let (addr, db) = common::start_test_server_with_authenticator(Arc::new(
+        MockAuthenticator::header_driven(),
+    ))
+    .await;
+
     let ws_a = seed_workspace(&db, &format!("ws-a-{}", Uuid::new_v4().simple())).await;
     let ws_b = seed_workspace(&db, &format!("ws-b-{}", Uuid::new_v4().simple())).await;
     seed_member(&db, ws_a, "alice", "owner").await;
     seed_member(&db, ws_b, "bob", "owner").await;
-
     let tpl = seed_template_in_workspace(&db, ws_a, "alice-only", "workspace").await;
 
-    // Bob attempts WS upgrade (we just send the GET — the gate runs before
-    // the upgrade handshake completes).
-    let resp = app
-        .oneshot(
-            req_as("bob", Some(ws_b))
-                .method("GET")
-                .uri(format!("/api/yjs/{tpl}"))
-                .header("connection", "upgrade")
-                .header("upgrade", "websocket")
-                .header("sec-websocket-version", "13")
-                .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(
-        resp.status(),
-        StatusCode::FORBIDDEN,
-        "cross-workspace yjs upgrade should 403 before WS handshake"
+    let url = format!("ws://{addr}/api/yjs/{tpl}");
+    let mut req = url.into_client_request().expect("ws request");
+    req.headers_mut().insert(
+        "x-test-subject",
+        http::HeaderValue::from_static("bob"),
     );
+    req.headers_mut().insert(
+        "x-test-workspace",
+        http::HeaderValue::from_str(&ws_b.to_string()).unwrap(),
+    );
+    // The Yjs auth path requires the session cookie just to be present
+    // (the cookie value is ignored by the header-driven mock).
+    req.headers_mut().insert(
+        "cookie",
+        http::HeaderValue::from_static("mekhan_session=valid"),
+    );
+
+    let result = tokio_tungstenite::connect_async(req).await;
+    let err = result.expect_err("cross-workspace WS upgrade should be rejected");
+    // tokio-tungstenite surfaces HTTP rejection as `Http(response)` with the
+    // server's status. Anything in the 4xx range proves the upgrade was
+    // refused before WS framing started; we assert specifically 403.
+    let status = match err {
+        tokio_tungstenite::tungstenite::Error::Http(resp) => resp.status(),
+        other => panic!("expected HTTP rejection, got {other:?}"),
+    };
+    assert_eq!(status.as_u16(), 403, "cross-workspace yjs should be 403");
 }

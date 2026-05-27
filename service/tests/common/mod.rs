@@ -538,3 +538,16 @@ pub async fn start_test_server() -> (SocketAddr, PgPool) {
     tokio::spawn(axum::serve(listener, app).into_future());
     (addr, db)
 }
+
+/// Like `start_test_server` but with a caller-supplied `Authenticator` —
+/// lets a WS test exercise the per-request gate (e.g. workspace
+/// membership) with the header-driven mock from `mock_auth.rs`.
+pub async fn start_test_server_with_authenticator(
+    authenticator: Arc<dyn Authenticator>,
+) -> (SocketAddr, PgPool) {
+    let (app, db) = test_app_with_authenticator(authenticator).await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(axum::serve(listener, app).into_future());
+    (addr, db)
+}

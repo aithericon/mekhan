@@ -15,6 +15,7 @@ use axum::{
     routing::any,
     Router,
 };
+use axum_extra::extract::cookie::CookieJar;
 use futures::TryStreamExt;
 use reqwest::Client;
 
@@ -81,14 +82,21 @@ async fn proxy(State(state): State<AppState>, req: Request) -> Result<Response, 
 
     // Workspace ACL: only paths that scope an engine net (`/api/nets/{id}/...`)
     // are per-instance gated. Engine health / root pings don't enumerate
-    // instance state, so they ride through inside the auth gate the same way
-    // every other `/api/v1/*` route does.
+    // instance state, so they ride through un-gated — the proxy is still
+    // only reachable inside the SPA's same-origin posture.
+    //
+    // Auth is done inline (rather than via `require_auth_middleware`'s
+    // injected extension) because `Router::merge` doesn't propagate the
+    // middleware from the protected router to merged sub-routers, so the
+    // extension isn't actually populated on /petri requests. Inlining the
+    // call keeps the proxy correct regardless of how it gets mounted.
     if let Some(net_id) = extract_net_id(rest) {
-        let user = req
-            .extensions()
-            .get::<AuthUser>()
-            .cloned()
-            .ok_or(ProxyError::NoAuthUser)?;
+        let jar = CookieJar::from_headers(req.headers());
+        let user = state
+            .authenticator
+            .authenticate(req.headers(), &jar)
+            .await
+            .map_err(|_| ProxyError::Unauthenticated)?;
         gate_petri_instance(&state, &user, net_id, req.method()).await?;
     }
 
@@ -207,8 +215,8 @@ enum ProxyError {
     NotFound,
     #[error("forbidden")]
     Forbidden,
-    #[error("auth user not in request extensions")]
-    NoAuthUser,
+    #[error("unauthenticated")]
+    Unauthenticated,
     #[error("db error: {0}")]
     Db(String),
 }
@@ -223,7 +231,7 @@ impl IntoResponse for ProxyError {
                 StatusCode::FORBIDDEN,
                 "not a member of this instance's workspace",
             ),
-            ProxyError::NoAuthUser => (StatusCode::UNAUTHORIZED, "unauthenticated"),
+            ProxyError::Unauthenticated => (StatusCode::UNAUTHORIZED, "unauthenticated"),
             ProxyError::Db(_) => (StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
         };
         (status, msg).into_response()
