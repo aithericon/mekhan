@@ -16,6 +16,7 @@ use crate::models::template::{WorkflowGraph, WorkflowNode, WorkflowNodeData};
 use aithericon_executor_domain::InputSource;
 use aithericon_sdk::scenario::{ScenarioDefinition, ScenarioGroup};
 use aithericon_sdk::Context;
+use petgraph::graph::NodeIndex;
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -403,117 +404,35 @@ pub(crate) fn compile_to_scenario_and_interfaces_with_configs(
     // 1. Build directed graph
     let wg = WorkflowDiGraph::build(graph)?;
 
-    // 2. Validate
-    validate(graph, &wg)?;
-
-    // 2b. Typed-ports edge validation (Phase 2). Every edge must carry an
-    //     explicit `target_handle` (Phase 2 hard-require) and the resolved
-    //     source/target ports must type-match (empty target port = Json
-    //     pass-through, otherwise exact field-name + kind match).
-    validate_edges_typed(graph)?;
-
-    // 2c. Typed-ports guard validation (Phase 3). Every Decision/Loop guard
-    //     parses as Rhai and every `<upstream>.<field>` reference resolves
-    //     against the topological scope at that node.
-    validate_guards(graph, &wg)?;
-
-    // 2d. Trigger node validation (Phase 5a). Trigger nodes connect to the
-    //     workflow via a single outgoing edge; payload_mapping entries must
-    //     reference real target-port fields and parse as Rhai.
-    validate_triggers(graph)?;
-
-    // 2e. Resource ref validation. Every workspace-known resource handed
-    //     in by the caller must reference a registered ResourceType, and
-    //     its name must be unique against step slugs and the reserved
-    //     control-token vocabulary. Empty map (tests, analyze, preview)
-    //     short-circuits — only the publish path scans the workspace.
-    crate::compiler::resource_refs::validate_resource_refs(known_resources, graph)?;
-
-    // 2f. Workflow-level `$ref` / `definitions` validation. Walk every
-    //     `automated_step`'s `executionSpec.config`; every
-    //     `{"$ref": "#/definitions/<name>"}` must resolve cleanly. Run
-    //     before lowering so unresolved/cyclic/unsupported refs surface as
-    //     a typed `SchemaRefUnresolved` with the offending node id + JSON
-    //     pointer to the `$ref` inside the config — the editor highlights
-    //     the node instead of getting a generic "lowering failed".
-    validate_schema_refs(graph)?;
-
-    // 2g. Repeater block validation (Feature B). Each HumanTask
-    //     `TaskBlockConfig::Repeater` carries a structured
-    //     `<slug>.<field>[*]…` reference into an upstream array — validate
-    //     the ref syntax, slug resolution, array shape on the producer,
-    //     and the Repeater's own `output_slug`. Runs AFTER
-    //     `validate_guards` so the analyze pass has already established
-    //     per-node shapes; runs BEFORE lowering so malformed Repeaters
-    //     surface with a typed `RepeaterRef*` error.
-    validate_repeaters(graph)?;
+    // 2. Pre-lowering validations (edges, guards, triggers, resources,
+    //    schema refs, repeaters). See `run_validations` for the per-phase
+    //    rationale.
+    run_validations(graph, &wg, known_resources)?;
 
     // 3. Topological sort (on DAG — loop_back edges excluded)
     let sorted = topo_order(&wg)?;
 
-    // 4. Expand nodes
+    // 4. Lower every node in topological order. Owns the per-node state
+    //    (`ctx`, `node_ports`, `fixups`, `interfaces`, `node_configs`)
+    //    that subsequent phases read from.
     let mut ctx = Context::new(name).description(description);
     let mut node_ports: HashMap<String, NodePorts> = HashMap::new();
     let mut fixups = PostProcess::default();
     let mut interfaces: InterfaceRegistry = HashMap::new();
-
-    // Pre-populate scope_groups: map child node_id → parent scope's group_id
-    for node in &graph.nodes {
-        if let Some(ref pid) = node.parent_id {
-            // Only map if the parent is actually a scope node
-            if graph
-                .nodes
-                .iter()
-                .any(|n| n.id == *pid && matches!(n.data, WorkflowNodeData::Scope { .. }))
-            {
-                fixups
-                    .scope_groups
-                    .insert(node.id.clone(), format!("grp_{}", pid));
-            }
-        }
-    }
-
-    // Pre-index container children: node_id -> [child nodes]. Cheap O(n)
-    // pass; consumed by `lower_loop` to reject empty Loops, ignored by other
-    // lowerings today. Keyed by parent id (not every node lives in a
-    // container, so most lookups return an empty slice).
-    let mut children_by_parent: HashMap<&str, Vec<&WorkflowNode>> = HashMap::new();
-    for node in &graph.nodes {
-        if let Some(ref pid) = node.parent_id {
-            children_by_parent
-                .entry(pid.as_str())
-                .or_default()
-                .push(node);
-        }
-    }
-
-    let empty_files: HashMap<String, InputSource> = HashMap::new();
-    let empty_children: Vec<&WorkflowNode> = Vec::new();
     let mut node_configs: HashMap<String, serde_json::Value> = HashMap::new();
-    for ni in &sorted {
-        let node = *wg.full.node_weight(*ni).unwrap();
-        let outgoing = wg.outgoing(&node.id);
-        let incoming = wg.incoming(&node.id);
-        let node_files = files.get(&node.id).unwrap_or(&empty_files);
-        let children = children_by_parent
-            .get(node.id.as_str())
-            .unwrap_or(&empty_children);
-        expand_node(
-            node,
-            &outgoing,
-            &incoming,
-            children,
-            &mut ctx,
-            &mut node_ports,
-            &mut fixups,
-            node_files,
-            sub_air,
-            &mut interfaces,
-            &graph.definitions,
-            &mut node_configs,
-            config_storage,
-        )?;
-    }
+    lower_nodes_topologically(
+        graph,
+        &wg,
+        &sorted,
+        files,
+        sub_air,
+        config_storage,
+        &mut ctx,
+        &mut node_ports,
+        &mut fixups,
+        &mut interfaces,
+        &mut node_configs,
+    )?;
 
     // 5. Wire edges (may record merges instead of creating transitions)
     for edge in &graph.edges {
@@ -547,52 +466,11 @@ pub(crate) fn compile_to_scenario_and_interfaces_with_configs(
         iface.rewrite_places(&alias);
     }
 
-    // 7. Terminal place_type fixup. Reads exclusively from the registry's
-    //    `workflow_terminals` (already post-alias-rewrite). Per the
-    //    interface contract (see `interface.rs`), `lower_end` is the only
-    //    lowering that populates this field — there is no other path.
-    let resolved_terminal_ids: std::collections::HashSet<&str> = interfaces
-        .values()
-        .flat_map(|i| i.workflow_terminals.iter().map(String::as_str))
-        .collect();
-    for place in &mut scenario.places {
-        if resolved_terminal_ids.contains(place.id.as_str()) {
-            place.place_type = "terminal".to_string();
-        }
-    }
+    // 7. Terminal place_type fixup (reads `interfaces.workflow_terminals`).
+    apply_terminal_place_types(&mut scenario, &interfaces);
 
-    // 8. Apply group fixups
-    for (group_id, group_name, parent_id) in &fixups.groups {
-        scenario.groups.push(ScenarioGroup {
-            id: group_id.clone(),
-            name: group_name.clone(),
-            parent_id: parent_id.clone(),
-            metadata: None,
-        });
-    }
-
-    // 8b. Tag places/transitions of scope children with their group_id —
-    //     via interface ownership, not prefix match. Robust to nested
-    //     scopes + any future naming change inside `lower_*`.
-    for (node_id, group_id) in &fixups.scope_groups {
-        let Some(iface) = interfaces.get(node_id) else {
-            continue;
-        };
-        let owned_p: std::collections::HashSet<&str> =
-            iface.owned_places.iter().map(String::as_str).collect();
-        let owned_t: std::collections::HashSet<&str> =
-            iface.owned_transitions.iter().map(String::as_str).collect();
-        for place in &mut scenario.places {
-            if owned_p.contains(place.id.as_str()) && place.group_id.is_none() {
-                place.group_id = Some(group_id.clone());
-            }
-        }
-        for transition in &mut scenario.transitions {
-            if owned_t.contains(transition.id.as_str()) && transition.group_id.is_none() {
-                transition.group_id = Some(group_id.clone());
-            }
-        }
-    }
+    // 8. Apply group fixups (declared groups + scope-child group tagging).
+    apply_group_fixups(&mut scenario, &fixups, &interfaces);
 
     // 9. Apply place merges (rewrite arcs, remove dead places)
     apply_merges(&mut scenario, &alias);
@@ -613,6 +491,185 @@ pub(crate) fn compile_to_scenario_and_interfaces_with_configs(
     )?;
 
     Ok((scenario, interfaces, node_configs))
+}
+
+/// Pre-lowering validation pipeline. Runs the seven typed validators in
+/// the order downstream phases depend on:
+///
+/// - `validate` — structural sanity (nodes, edges, parent_id references).
+/// - `validate_edges_typed` (Phase 2) — every edge carries an explicit
+///   `target_handle`, and source/target ports type-match (empty target =
+///   Json pass-through, otherwise exact field-name + kind match).
+/// - `validate_guards` (Phase 3) — every Decision/Loop guard parses as
+///   Rhai and every `<upstream>.<field>` ref resolves against the
+///   topological scope at that node.
+/// - `validate_triggers` (Phase 5a) — Trigger nodes connect via a single
+///   outgoing edge; `payload_mapping` entries reference real target-port
+///   fields and parse as Rhai.
+/// - `validate_resource_refs` — every workspace-known resource references
+///   a registered ResourceType; the name is unique against step slugs +
+///   reserved control-token vocabulary. Empty `known_resources` (tests,
+///   analyze, preview) short-circuits; only the publish path scans the
+///   workspace.
+/// - `validate_schema_refs` — every `{"$ref": "#/definitions/<name>"}` in
+///   any `executionSpec.config` resolves cleanly. Surfaces as
+///   `SchemaRefUnresolved` with offending node id + JSON pointer.
+/// - `validate_repeaters` (Feature B) — each HumanTask Repeater's
+///   `<slug>.<field>[*]…` ref is well-formed, the producer's array shape
+///   matches, and the `output_slug` is valid. MUST run after
+///   `validate_guards` (relies on per-node shapes) and before lowering.
+fn run_validations(
+    graph: &WorkflowGraph,
+    wg: &WorkflowDiGraph<'_>,
+    known_resources: &KnownResources,
+) -> Result<(), CompileError> {
+    validate(graph, wg)?;
+    validate_edges_typed(graph)?;
+    validate_guards(graph, wg)?;
+    validate_triggers(graph)?;
+    crate::compiler::resource_refs::validate_resource_refs(known_resources, graph)?;
+    validate_schema_refs(graph)?;
+    validate_repeaters(graph)?;
+    Ok(())
+}
+
+/// Lower every workflow node in topological order. Pre-indexes
+/// `scope_groups` (child → parent-scope group_id) and `children_by_parent`
+/// (container → child nodes) once, then dispatches to `expand_node` for
+/// each topologically-sorted node. Side-effects flow through the `&mut`
+/// params; downstream phases (wire / merge / control-data) read from
+/// `interfaces` + `fixups` + `node_configs`.
+#[allow(clippy::too_many_arguments)]
+fn lower_nodes_topologically<'a>(
+    graph: &'a WorkflowGraph,
+    wg: &WorkflowDiGraph<'a>,
+    sorted: &[NodeIndex],
+    files: &'a NodeFiles,
+    sub_air: &'a SubWorkflowAir,
+    config_storage: ConfigStorage<'a>,
+    ctx: &mut Context,
+    node_ports: &mut HashMap<String, NodePorts>,
+    fixups: &mut PostProcess,
+    interfaces: &mut InterfaceRegistry,
+    node_configs: &mut HashMap<String, serde_json::Value>,
+) -> Result<(), CompileError> {
+    // Pre-populate scope_groups: map child node_id → parent scope's group_id.
+    for node in &graph.nodes {
+        if let Some(ref pid) = node.parent_id {
+            if graph
+                .nodes
+                .iter()
+                .any(|n| n.id == *pid && matches!(n.data, WorkflowNodeData::Scope { .. }))
+            {
+                fixups
+                    .scope_groups
+                    .insert(node.id.clone(), format!("grp_{}", pid));
+            }
+        }
+    }
+
+    // Pre-index container children: parent_id → [child nodes]. Cheap O(n)
+    // pass consumed by `lower_loop` (to reject empty Loops); ignored by
+    // other lowerings today. Most lookups return an empty slice.
+    let mut children_by_parent: HashMap<&str, Vec<&WorkflowNode>> = HashMap::new();
+    for node in &graph.nodes {
+        if let Some(ref pid) = node.parent_id {
+            children_by_parent
+                .entry(pid.as_str())
+                .or_default()
+                .push(node);
+        }
+    }
+
+    let empty_files: HashMap<String, InputSource> = HashMap::new();
+    let empty_children: Vec<&WorkflowNode> = Vec::new();
+    for ni in sorted {
+        let node = *wg.full.node_weight(*ni).unwrap();
+        let outgoing = wg.outgoing(&node.id);
+        let incoming = wg.incoming(&node.id);
+        let node_files = files.get(&node.id).unwrap_or(&empty_files);
+        let children = children_by_parent
+            .get(node.id.as_str())
+            .unwrap_or(&empty_children);
+        expand_node(
+            node,
+            &outgoing,
+            &incoming,
+            children,
+            ctx,
+            node_ports,
+            fixups,
+            node_files,
+            sub_air,
+            interfaces,
+            &graph.definitions,
+            node_configs,
+            config_storage,
+        )?;
+    }
+    Ok(())
+}
+
+/// Tag every place whose id is in `interfaces.workflow_terminals` as a
+/// terminal. Per the interface contract (see `interface.rs`), `lower_end`
+/// is the only lowering that populates `workflow_terminals` — there is no
+/// other path. Runs after `iface.rewrite_places` so the place ids are
+/// already post-alias-rewrite.
+fn apply_terminal_place_types(
+    scenario: &mut ScenarioDefinition,
+    interfaces: &InterfaceRegistry,
+) {
+    let resolved_terminal_ids: std::collections::HashSet<&str> = interfaces
+        .values()
+        .flat_map(|i| i.workflow_terminals.iter().map(String::as_str))
+        .collect();
+    for place in &mut scenario.places {
+        if resolved_terminal_ids.contains(place.id.as_str()) {
+            place.place_type = "terminal".to_string();
+        }
+    }
+}
+
+/// Apply group-related post-processing: (a) push every declared
+/// `ScenarioGroup` from `fixups.groups` into the scenario, then (b) tag
+/// every place/transition owned by a scope-child node with its parent
+/// scope's `group_id`. Step (b) walks `interfaces.owned_*` instead of
+/// matching `p_{id}_*` / `t_{id}_*` prefixes — robust to nested scopes +
+/// future renames inside `lower_*`. Skips places/transitions already
+/// tagged so explicit per-lowering groups win.
+fn apply_group_fixups(
+    scenario: &mut ScenarioDefinition,
+    fixups: &PostProcess,
+    interfaces: &InterfaceRegistry,
+) {
+    for (group_id, group_name, parent_id) in &fixups.groups {
+        scenario.groups.push(ScenarioGroup {
+            id: group_id.clone(),
+            name: group_name.clone(),
+            parent_id: parent_id.clone(),
+            metadata: None,
+        });
+    }
+
+    for (node_id, group_id) in &fixups.scope_groups {
+        let Some(iface) = interfaces.get(node_id) else {
+            continue;
+        };
+        let owned_p: std::collections::HashSet<&str> =
+            iface.owned_places.iter().map(String::as_str).collect();
+        let owned_t: std::collections::HashSet<&str> =
+            iface.owned_transitions.iter().map(String::as_str).collect();
+        for place in &mut scenario.places {
+            if owned_p.contains(place.id.as_str()) && place.group_id.is_none() {
+                place.group_id = Some(group_id.clone());
+            }
+        }
+        for transition in &mut scenario.transitions {
+            if owned_t.contains(transition.id.as_str()) && transition.group_id.is_none() {
+                transition.group_id = Some(group_id.clone());
+            }
+        }
+    }
 }
 
 /// Walk the (pre-merge) scenario and credit every place to the owning node by
