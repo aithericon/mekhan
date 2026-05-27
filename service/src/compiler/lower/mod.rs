@@ -254,6 +254,7 @@ pub struct ConfigStorage<'a> {
     /// Optional override for the key-computation function. None means use
     /// the standard `templates/{tid}/v{ver}/{node_id}/node-config.json`
     /// format. Reserved for future use (e.g., per-tenant prefixes).
+    #[allow(clippy::type_complexity)]
     pub key_fn: Option<&'a (dyn Fn(uuid::Uuid, i32, &str) -> String + Sync)>,
 }
 

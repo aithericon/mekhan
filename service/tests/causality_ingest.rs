@@ -423,7 +423,7 @@ async fn bridge_transfer_links_cross_net() {
     let ev2 = persisted_event(2, transition_fired_event(
         "send_to_other_net",
         &[(&place_start, &token_seed)],
-        &[(&place_out, &token_bridge, json!({
+        &[(place_out, &token_bridge, json!({
             "id": &token_bridge,
             "color": { "type": "Unit" },
             "created_at": "2026-04-04T12:00:00Z",

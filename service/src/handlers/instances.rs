@@ -554,6 +554,7 @@ pub async fn get_instance_events(
     ),
     tag = "instances",
 )]
+#[allow(clippy::type_complexity)]
 pub async fn list_step_executions(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,

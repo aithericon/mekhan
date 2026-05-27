@@ -375,7 +375,7 @@ fn get_attr_string_array(body: &hcl::Body, key: &str) -> Option<Vec<String>> {
                 if let hcl::Expression::Array(arr) = attr.expr() {
                     let strings: Vec<String> = arr
                         .iter()
-                        .filter_map(|e| expr_to_string(e))
+                        .filter_map(expr_to_string)
                         .collect();
                     if strings.is_empty() {
                         None
@@ -452,7 +452,7 @@ fn expr_to_json(expr: &hcl::Expression) -> Option<serde_json::Value> {
         hcl::Expression::Array(arr) => {
             let items: Vec<serde_json::Value> = arr
                 .iter()
-                .filter_map(|e| expr_to_json(e))
+                .filter_map(expr_to_json)
                 .collect();
             Some(serde_json::Value::Array(items))
         }

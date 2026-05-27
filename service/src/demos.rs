@@ -1557,7 +1557,7 @@ mod tests {
         // construction.
         let d_start: Dynamic = engine
             .parse_json(
-                &json!({ "document": {
+                json!({ "document": {
                     "key": "templates/abc/blobs/start/uploaded.pdf",
                     "url": "/api/v1/files/templates/abc/blobs/start/uploaded.pdf",
                     "filename": "uploaded.pdf",
@@ -1695,7 +1695,7 @@ mod tests {
         // AutomatedStep envelope shape: `detail.outputs.<field>`.
         let d_extract_text: Dynamic = engine
             .parse_json(
-                &json!({ "detail": { "outputs": {
+                json!({ "detail": { "outputs": {
                     "content": "Invoice #INV-001 Amount: $1,234.56 Vendor: ACME"
                 } } })
                 .to_string(),

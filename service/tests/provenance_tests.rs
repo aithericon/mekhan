@@ -108,7 +108,7 @@ async fn token_provenance_returns_ancestry() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri(&format!("/api/v1/provenance/{net}/{token_b}?depth=5"))
+                .uri(format!("/api/v1/provenance/{net}/{token_b}?depth=5"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -163,7 +163,7 @@ async fn provenance_respects_depth_limit() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri(&format!("/api/v1/provenance/{net}/{d}?depth=2"))
+                .uri(format!("/api/v1/provenance/{net}/{d}?depth=2"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -188,7 +188,7 @@ async fn cross_link_lookup() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri(&format!("/api/v1/provenance/link/{corr_id}"))
+                .uri(format!("/api/v1/provenance/link/{corr_id}"))
                 .body(Body::empty())
                 .unwrap(),
         )

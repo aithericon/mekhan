@@ -209,10 +209,10 @@ async fn cli_workflow_roundtrip() {
 
     // Local has a file, remote doesn't
     assert!(
-        !remote_files
+        remote_files
             .get("start")
             .and_then(|f| f.get("main.py"))
-            .is_some(),
+            .is_none(),
         "remote should not have the file yet"
     );
 
@@ -238,7 +238,7 @@ async fn cli_workflow_roundtrip() {
     let mut update_msg = Vec::with_capacity(1 + diff.len());
     update_msg.push(MSG_SYNC_UPDATE);
     update_msg.extend_from_slice(&diff);
-    ws3.send(Message::Binary(update_msg.into())).await.unwrap();
+    ws3.send(Message::Binary(update_msg)).await.unwrap();
 
     // Small delay to let the server persist
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -598,7 +598,7 @@ async fn graph_topology_roundtrip() {
     let mut update_msg = Vec::with_capacity(1 + diff.len());
     update_msg.push(MSG_SYNC_UPDATE);
     update_msg.extend_from_slice(&diff);
-    ws2.send(Message::Binary(update_msg.into())).await.unwrap();
+    ws2.send(Message::Binary(update_msg)).await.unwrap();
 
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     ws2.close(None).await.ok();
@@ -684,7 +684,7 @@ async fn graph_topology_roundtrip() {
     let mut update_msg = Vec::with_capacity(1 + diff.len());
     update_msg.push(MSG_SYNC_UPDATE);
     update_msg.extend_from_slice(&diff);
-    ws4.send(Message::Binary(update_msg.into())).await.unwrap();
+    ws4.send(Message::Binary(update_msg)).await.unwrap();
 
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     ws4.close(None).await.ok();
@@ -853,7 +853,7 @@ async fn yaml_format_roundtrip() {
     let mut update_msg = Vec::with_capacity(1 + diff.len());
     update_msg.push(MSG_SYNC_UPDATE);
     update_msg.extend_from_slice(&diff);
-    ws2.send(Message::Binary(update_msg.into())).await.unwrap();
+    ws2.send(Message::Binary(update_msg)).await.unwrap();
 
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     ws2.close(None).await.ok();

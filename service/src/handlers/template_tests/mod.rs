@@ -187,13 +187,13 @@ pub async fn update_test(
     let start_tokens_val = req
         .start_tokens
         .as_ref()
-        .map(|v| serde_json::to_value(v))
+        .map(serde_json::to_value)
         .transpose()
         .map_err(|e| ApiError::internal(e.to_string()))?;
     let assertions_val = req
         .assertions
         .as_ref()
-        .map(|v| serde_json::to_value(v))
+        .map(serde_json::to_value)
         .transpose()
         .map_err(|e| ApiError::internal(e.to_string()))?;
 

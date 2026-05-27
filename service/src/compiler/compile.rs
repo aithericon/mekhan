@@ -691,7 +691,7 @@ fn derive_node_ownership(
     interfaces: &mut InterfaceRegistry,
 ) {
     let mut by_len: Vec<String> = interfaces.keys().cloned().collect();
-    by_len.sort_by(|a, b| b.len().cmp(&a.len()));
+    by_len.sort_by_key(|b| std::cmp::Reverse(b.len()));
 
     // Match a Petri id back to its owning workflow node. Two naming
     // conventions are in play:
@@ -2893,7 +2893,7 @@ mod tests {
             }
         });
         let d_review: rhai::Dynamic = engine
-            .parse_json(&d_review_json.to_string(), true)
+            .parse_json(d_review_json.to_string(), true)
             .expect("d_review parse")
             .into();
         scope.push_dynamic("d_review", d_review);

@@ -292,8 +292,8 @@ pub enum WorkflowNodeData {
         /// direct executor-lifecycle path. `Scheduled` = submit through the
         /// long-lived scheduler-net (Nomad/Slurm) for queued / GPU execution,
         /// optionally pinning a job template + resources. `#[serde(default)]`
-        /// + `Inline` default ⇒ every existing template round-trips unchanged
-        /// (same precedent as `retry_policy`).
+        /// together with the `Inline` default ⇒ every existing template
+        /// round-trips unchanged (same precedent as `retry_policy`).
         #[serde(rename = "deploymentModel", default)]
         deployment_model: DeploymentModel,
     },
@@ -1133,19 +1133,14 @@ impl Default for RetryPolicy {
 /// version at the parent's publish time and the resolved AIR is frozen into
 /// the parent, so runtime is always deterministic / replay-safe. Keep the
 /// `mode` strings in lockstep with the `snake_case` derive.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema, Default)]
 #[serde(tag = "mode", rename_all = "snake_case")]
 pub enum VersionPin {
     /// Resolve the family's `is_latest` row at parent publish time.
+    #[default]
     Latest,
     /// Freeze an explicit child version.
     Pinned { version: i32 },
-}
-
-impl Default for VersionPin {
-    fn default() -> Self {
-        Self::Latest
-    }
 }
 
 /// Deserialization default for `SubWorkflow.output` — an empty `out` port
@@ -1174,10 +1169,11 @@ pub fn default_join_output_port() -> Port {
 /// `{"mode":"inline"}` or `{"mode":"scheduled","jobTemplate":"...",
 /// "resources":{...}}`. Keep the `mode` strings in lockstep with the
 /// `snake_case` derive.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema, Default)]
 #[serde(tag = "mode", rename_all = "snake_case")]
 pub enum DeploymentModel {
     /// Current behaviour: direct executor-lifecycle dispatch (NATS).
+    #[default]
     Inline,
     /// Submit through the long-lived scheduler-net (Nomad/Slurm) — queued /
     /// GPU execution. `job_template` selects the scheduler's parameterized
@@ -1188,12 +1184,6 @@ pub enum DeploymentModel {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         resources: Option<ResourceConfig>,
     },
-}
-
-impl Default for DeploymentModel {
-    fn default() -> Self {
-        Self::Inline
-    }
 }
 
 /// Optional resource hints forwarded to the scheduler for a `Scheduled` step.
@@ -3110,7 +3100,7 @@ mod tests {
     #[test]
     fn all_block_types_deserialize() {
         // Verify all block types roundtrip through JSON
-        let blocks = vec![
+        let blocks = [
             serde_json::json!({"type": "input", "field": {"name": "f", "label": "F", "kind": "text"}}),
             serde_json::json!({"type": "mdsvex", "content": "# Hello"}),
             serde_json::json!({"type": "callout", "severity": "warning", "content": "Watch out"}),

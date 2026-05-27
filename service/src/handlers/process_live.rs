@@ -251,11 +251,11 @@ pub async fn metrics_stream(
         .into_iter()
         .filter(|e| e.seq > since_seq)
         .filter(|e| e.process_id == pid)
-        .filter(|e| sig_for_backfill.as_deref().map_or(true, |s| e.signal_key.as_deref() == Some(s)))
+        .filter(|e| sig_for_backfill.as_deref().is_none_or(|s| e.signal_key.as_deref() == Some(s)))
         .filter(|e| {
             keys_for_backfill
                 .as_ref()
-                .map_or(true, |set| set.contains(&e.key))
+                .is_none_or(|set| set.contains(&e.key))
         })
         .map(|e| Ok(metric_event_to_sse(&e)))
         .collect();
@@ -457,12 +457,12 @@ pub async fn logs_stream(
         .into_iter()
         .filter(|e| e.seq > since_seq)
         .filter(|e| e.process_id == pid)
-        .filter(|e| sig_bf.as_deref().map_or(true, |s| e.signal_key.as_deref() == Some(s)))
-        .filter(|e| lvl_bf.as_deref().map_or(true, |l| e.level == l))
+        .filter(|e| sig_bf.as_deref().is_none_or(|s| e.signal_key.as_deref() == Some(s)))
+        .filter(|e| lvl_bf.as_deref().is_none_or(|l| e.level == l))
         .filter(|e| {
             txt_bf
                 .as_deref()
-                .map_or(true, |t| e.message.to_lowercase().contains(t))
+                .is_none_or(|t| e.message.to_lowercase().contains(t))
         })
         .map(|e| Ok(log_event_to_sse(&e)))
         .collect();

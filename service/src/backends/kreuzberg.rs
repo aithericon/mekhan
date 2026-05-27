@@ -19,6 +19,7 @@
 //!     mime_type, metadata, tables, detected_languages).
 //!   - `batch`  → aggregate (results, total_files, successful, failed,
 //!     errors).
+//!
 //! The deriver branches on `config.mode` so the editor port mirrors the
 //! actual runtime envelope.
 

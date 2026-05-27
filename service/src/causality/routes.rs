@@ -79,7 +79,7 @@ pub async fn token_provenance(
     Path((net_id, token_id)): Path<(String, String)>,
     Query(params): Query<ProvenanceParams>,
 ) -> Result<Json<ProvenanceResponse>, ApiError> {
-    let depth = params.depth.min(50).max(1);
+    let depth = params.depth.clamp(1, 50);
 
     let resp = run_provenance_cte(&state.db, &net_id, &token_id, depth)
         .await
@@ -159,7 +159,7 @@ pub async fn provenance_from_artifact(
     Path((execution_id, artifact_id)): Path<(String, String)>,
     Query(params): Query<ProvenanceParams>,
 ) -> Result<Json<ProvenanceResponse>, ApiError> {
-    let depth = params.depth.min(50).max(1);
+    let depth = params.depth.clamp(1, 50);
 
     // Look up the catalogue entry by (execution_id, id) — unique key
     let entry: Option<(Option<String>, Option<String>, Option<i64>)> = sqlx::query_as(

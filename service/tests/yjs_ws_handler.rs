@@ -196,7 +196,7 @@ async fn two_clients_exchange_updates() {
     let mut msg = Vec::with_capacity(1 + update.len());
     msg.push(MSG_SYNC_UPDATE);
     msg.extend_from_slice(&update);
-    ws_a.send(Message::Binary(msg.into())).await.unwrap();
+    ws_a.send(Message::Binary(msg)).await.unwrap();
 
     // Client B should receive the broadcast
     let broadcast = tokio::time::timeout(
@@ -241,7 +241,7 @@ async fn update_persisted_to_db() {
     let mut msg = Vec::with_capacity(1 + update.len());
     msg.push(MSG_SYNC_UPDATE);
     msg.extend_from_slice(&update);
-    ws.send(Message::Binary(msg.into())).await.unwrap();
+    ws.send(Message::Binary(msg)).await.unwrap();
 
     // Small delay to let the server persist
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;

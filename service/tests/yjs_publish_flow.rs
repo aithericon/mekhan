@@ -83,7 +83,7 @@ async fn publish_reads_from_ydoc() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(&format!("/api/v1/templates/{template_id}/publish"))
+                .uri(format!("/api/v1/templates/{template_id}/publish"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -149,7 +149,7 @@ async fn publish_falls_back_to_db_graph() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(&format!("/api/v1/templates/{template_id}/publish"))
+                .uri(format!("/api/v1/templates/{template_id}/publish"))
                 .body(Body::empty())
                 .unwrap(),
         )

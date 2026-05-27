@@ -145,7 +145,7 @@ impl MekhanNats {
         let stream = self.jetstream.get_stream("PETRI_GLOBAL").await?;
         let resp = stream
             .purge()
-            .filter(&format!("petri.events.{net_id}.>"))
+            .filter(format!("petri.events.{net_id}.>"))
             .await?;
         Ok(resp)
     }
@@ -158,7 +158,7 @@ impl MekhanNats {
         let stream = self.jetstream.get_stream("PETRI_GLOBAL").await?;
         let resp = stream
             .purge()
-            .filter(&format!("petri.signal.{net_id}.>"))
+            .filter(format!("petri.signal.{net_id}.>"))
             .await?;
         Ok(resp)
     }

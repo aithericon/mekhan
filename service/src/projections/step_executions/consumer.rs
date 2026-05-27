@@ -32,7 +32,7 @@ use crate::petri::events::fetch_events;
 use super::projector::{project_step_executions, StepExecutionRow};
 
 /// Start the step-executions ingest consumer. Spawned alongside the lifecycle
-/// + causality consumers in `main.rs`. Runs until the message stream ends or
+/// and causality consumers in `main.rs`. Runs until the message stream ends or
 /// the consumer is dropped (process shutdown).
 pub async fn start_step_executions_ingest(nats: MekhanNats, db: PgPool) {
     let consumer = match nats.step_executions_consumer().await {

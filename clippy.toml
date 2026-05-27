@@ -4,3 +4,10 @@
 # CompileError>` less ergonomic. Threshold lifted just past CompileError's
 # size so the lint still flags genuinely-runaway enums.
 large-error-threshold = 256
+
+# Compiler / projector / handler signatures routinely take 8–11 collaborators
+# (ScenarioDefinition + InterfaceRegistry + KnownResources + per-node ctx,
+# etc.); the call sites are domain-shaped and have no natural grouping into
+# a single struct. Threshold lifted above the existing max so the lint
+# still flags pathological growth.
+too-many-arguments-threshold = 12

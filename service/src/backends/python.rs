@@ -19,6 +19,7 @@
 //! live in their existing call sites because they're cross-cutting):
 //! - Python-reserved-globals check (`compile.rs::PY_RESERVED_GLOBALS`)
 //! - `__BORROWED_INPUTS__` Rhai marker emission
+//!
 //! Both fire later in the compile pipeline and aren't a per-backend
 //! validate concern.
 
