@@ -434,6 +434,16 @@ pub(crate) fn compile_to_scenario_and_interfaces_with_configs(
         &mut node_configs,
     )?;
 
+    // 4b. Drain queued agent → tool-child wiring. Runs after every
+    //     `expand_node` so each tool child's NodePorts is in `node_ports`
+    //     but before edge wiring so the new invoke/collect transitions
+    //     participate in any downstream merges.
+    crate::compiler::lower::apply_agent_tool_wirings(
+        &mut ctx,
+        &node_ports,
+        &fixups.agent_tool_wirings,
+    )?;
+
     // 5. Wire edges (may record merges instead of creating transitions)
     for edge in &graph.edges {
         wire_edge(edge, &node_ports, &wg, &mut ctx, &mut fixups)?;

@@ -199,9 +199,14 @@ fn multi_turn_agent_with_one_tool_compiles_to_agent_loop_shape() {
     // into the upstream Start's output place via the pass-through-edge
     // merge pass — that's the AutomatedStep pattern too — so it's not in
     // the assertion set. The surviving structural places are the
-    // agent-loop-specific ones.
+    // agent-loop-specific ones. State migrates through phase-named
+    // places (`_in_flight` during the LLM call, `_in_tool` during a
+    // tool dispatch) so only one route transition can be enabled at a
+    // time — no engine-level mutex needed.
     for expected in &[
         "p_a_state",
+        "p_a_state_in_flight",
+        "p_a_state_in_tool",
         "p_a_response",
         "p_a_final",
         "p_a_output",
@@ -213,12 +218,21 @@ fn multi_turn_agent_with_one_tool_compiles_to_agent_loop_shape() {
             "agent loop must emit {expected}; have: {places:?}"
         );
     }
+    // Core lifecycle transitions + the new per-branch route family.
+    // `t_a_route_final` always; `t_a_route_dispatch_<tn>` per tool;
+    // `t_a_route_unknown` when ToolErrorPolicy::Feedback (default).
     for expected in &[
         "t_a_enter",
         "t_a_prepare_call",
         "t_a_to_response",
-        "t_a_route",
+        "t_a_route_final",
+        "t_a_route_dispatch_lookup",
+        "t_a_route_unknown",
         "t_a_exit",
+        // Tool-wiring fixup transitions (mint after the topological pass):
+        "t_a_invoke_lookup",
+        "t_a_collect_lookup",
+        "t_a_collect_lookup_error",
     ] {
         assert!(
             transitions.iter().any(|t| t == expected),
@@ -227,8 +241,8 @@ fn multi_turn_agent_with_one_tool_compiles_to_agent_loop_shape() {
     }
 
     // The tool child gets its own lowering — its scoped prefix is
-    // `<child_id>/...` (lower_automated_step:1153 wraps the lifecycle in
-    // `scoped_prefix`). Confirms the tool child's subnet was emitted.
+    // `<child_id>/...` (lower_automated_step's `scoped_prefix`).
+    // Confirms the tool child's subnet was emitted.
     assert!(
         transitions
             .iter()
@@ -237,35 +251,197 @@ fn multi_turn_agent_with_one_tool_compiles_to_agent_loop_shape() {
     );
 }
 
-/// `t_a_route` is a pure Rhai transition (no effect_handler_id). The
-/// agent-loop's branching decision is data-driven from the LLM response;
-/// no engine effect.
+/// Every route-family transition (`t_a_route_final`, `t_a_route_dispatch_<tn>`,
+/// `t_a_route_unknown`) is pure Rhai. The agent-loop's branching decision is
+/// data-driven from the LLM response shape; no engine effect handler.
 #[test]
-fn route_transition_has_no_effect_handler() {
+fn route_transitions_have_no_effect_handler() {
     let air = compile(
-        vec![start_node("s"), agent_node("a"), end_node("e")],
+        vec![
+            start_node("s"),
+            agent_node("a"),
+            tool_child("lookup_node", "a", "lookup"),
+            end_node("e"),
+        ],
         vec![edge("e1", "s", "a"), edge("e2", "a", "e")],
     );
 
-    let route = air
+    let transitions = air
+        .get("transitions")
+        .and_then(Value::as_array)
+        .expect("transitions array");
+
+    let route_ids = ["t_a_route_final", "t_a_route_dispatch_lookup", "t_a_route_unknown"];
+    for rid in &route_ids {
+        let route = transitions
+            .iter()
+            .find(|t| t.get("id").and_then(Value::as_str) == Some(*rid))
+            .unwrap_or_else(|| panic!("{rid} present"));
+        // The transition exposes its logic kind as either an embedded
+        // `effect_handler_id` (None for Rhai) or a top-level `logic.type`
+        // discriminator. Pin both shapes.
+        let no_effect = matches!(route.get("effect_handler_id"), Some(Value::Null) | None);
+        assert!(
+            no_effect,
+            "{rid} must be Rhai-only (no effect handler); got: {route:?}"
+        );
+    }
+}
+
+/// The dispatch route's guard literal must bake in the agent's
+/// `max_turns` so model misbehaviour (always-tool-use) terminates at the
+/// declared bound. Inspect the guard source for the literal.
+#[test]
+fn route_dispatch_guard_bakes_in_max_turns() {
+    let mut node = agent_node("a");
+    if let WorkflowNodeData::Agent { max_turns, .. } = &mut node.data {
+        *max_turns = 7;
+    } else {
+        unreachable!()
+    }
+    let air = compile(
+        vec![
+            start_node("s"),
+            node,
+            tool_child("lookup_node", "a", "lookup"),
+            end_node("e"),
+        ],
+        vec![edge("e1", "s", "a"), edge("e2", "a", "e")],
+    );
+    let dispatch = air
         .get("transitions")
         .and_then(Value::as_array)
         .unwrap()
         .iter()
-        .find(|t| t.get("id").and_then(Value::as_str) == Some("t_a_route"))
-        .expect("t_a_route present");
-
-    // The transition object exposes its logic kind as either an embedded
-    // `effect_handler_id` (None for Rhai) or a top-level `logic.type`
-    // discriminator. Whichever the engine emits, the route must NOT
-    // carry an effect handler — pin both possible shapes.
-    let no_effect = match route.get("effect_handler_id") {
-        Some(Value::Null) | None => true,
-        _ => false,
-    };
+        .find(|t| t.get("id").and_then(Value::as_str) == Some("t_a_route_dispatch_lookup"))
+        .expect("dispatch transition present");
+    let guard = dispatch
+        .get("guard")
+        .and_then(|g| g.get("source"))
+        .and_then(Value::as_str)
+        .expect("dispatch transition carries a Rhai guard");
     assert!(
-        no_effect,
-        "t_a_route must be Rhai-only (no effect handler); got: {route:?}"
+        guard.contains("< 7"),
+        "dispatch guard must compare turn against max_turns=7; got: {guard}"
+    );
+}
+
+/// `stop_when` author-Rhai is baked into every route guard (final +
+/// dispatch + unknown) so any turn that satisfies the condition routes
+/// to final.
+#[test]
+fn route_guards_bake_in_stop_when() {
+    let mut node = agent_node("a");
+    if let WorkflowNodeData::Agent {
+        max_turns,
+        stop_when,
+        ..
+    } = &mut node.data
+    {
+        *max_turns = 5;
+        *stop_when = Some("state.message_count >= 3".to_string());
+    } else {
+        unreachable!()
+    }
+    let air = compile(
+        vec![
+            start_node("s"),
+            node,
+            tool_child("lookup_node", "a", "lookup"),
+            end_node("e"),
+        ],
+        vec![edge("e1", "s", "a"), edge("e2", "a", "e")],
+    );
+    let transitions = air.get("transitions").and_then(Value::as_array).unwrap();
+    for id in ["t_a_route_final", "t_a_route_dispatch_lookup", "t_a_route_unknown"] {
+        let tr = transitions
+            .iter()
+            .find(|t| t.get("id").and_then(Value::as_str) == Some(id))
+            .unwrap_or_else(|| panic!("{id} present"));
+        let guard = tr
+            .get("guard")
+            .and_then(|g| g.get("source"))
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| panic!("{id} carries a Rhai guard"));
+        assert!(
+            guard.contains("state.message_count >= 3"),
+            "{id} guard must contain the stop_when expression; got: {guard}"
+        );
+    }
+}
+
+/// `ToolErrorPolicy::Bubble`: per-tool error transitions are minted as
+/// `_bubble` (drain state, propagate child error to agent's p_error)
+/// instead of `_error` (re-feed loop). The route_unknown branch is
+/// suppressed so unknown-tool misbehaviour stalls the net rather than
+/// silently looping — the explicit "noisy failure" semantics.
+#[test]
+fn bubble_policy_omits_unknown_route_and_mints_bubble_collectors() {
+    let mut node = agent_node("a");
+    if let WorkflowNodeData::Agent { on_tool_error, .. } = &mut node.data {
+        *on_tool_error = ToolErrorPolicy::Bubble;
+    } else {
+        unreachable!()
+    }
+    let air = compile(
+        vec![
+            start_node("s"),
+            node,
+            tool_child("lookup_node", "a", "lookup"),
+            end_node("e"),
+        ],
+        vec![edge("e1", "s", "a"), edge("e2", "a", "e")],
+    );
+    let transitions = transition_ids(&air);
+    assert!(
+        !transitions.iter().any(|t| t == "t_a_route_unknown"),
+        "Bubble policy must NOT emit t_a_route_unknown; have: {transitions:?}"
+    );
+    assert!(
+        transitions.iter().any(|t| t == "t_a_collect_lookup_bubble"),
+        "Bubble policy must emit t_a_collect_lookup_bubble; have: {transitions:?}"
+    );
+    assert!(
+        !transitions.iter().any(|t| t == "t_a_collect_lookup_error"),
+        "Bubble policy must NOT emit t_a_collect_lookup_error (that's the Feedback variant); have: {transitions:?}"
+    );
+}
+
+/// A `WorkflowEdge` whose target is a tool-meta'd node must be rejected
+/// at validate-time — tools are dispatched by name, not by graph edges,
+/// so a manual edge would let the tool fire outside the agent's
+/// control. The error names both endpoints + the edge_id so the editor
+/// can ring all three.
+#[test]
+fn incoming_edge_to_tool_child_is_validation_error() {
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            agent_node("a"),
+            tool_child("lookup_node", "a", "lookup"),
+            end_node("e"),
+        ],
+        // The accidental edge: Start → tool child directly. The author
+        // probably meant to drop the tool inside the agent's sidebar
+        // and accidentally connected it instead.
+        edges: vec![
+            edge("e1", "s", "a"),
+            edge("e_bad", "s", "lookup_node"),
+            edge("e2", "a", "e"),
+        ],
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+    };
+    let err = compile_to_air(&graph, "t", "", &std::collections::HashMap::new())
+        .expect_err("edge into tool child must reject");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("lookup_node")
+            && msg.contains("'a'")
+            && msg.contains("incoming")
+            && msg.contains("e_bad"),
+        "expected ToolChildHasIncomingEdge naming agent + child + edge; got: {msg}"
     );
 }
 

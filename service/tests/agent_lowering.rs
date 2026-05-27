@@ -284,7 +284,7 @@ fn agent_multi_turn_lowers_to_agent_loop() {
             "missing expected place {expected}: have {place_ids:?}"
         );
     }
-    for expected in &["t_x_enter", "t_x_route", "t_x_exit", "t_x_to_response"] {
+    for expected in &["t_x_enter", "t_x_route_final", "t_x_exit", "t_x_to_response"] {
         assert!(
             transition_ids.contains(expected),
             "missing expected transition {expected}: have {transition_ids:?}"

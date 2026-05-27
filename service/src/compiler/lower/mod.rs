@@ -16,6 +16,7 @@ pub(super) use crate::compiler::rhai_gen::{
     rhai_str_escape, with_pluck_prelude,
 };
 pub(super) use crate::compiler::token_shape::YIELD_LOGIC;
+pub(super) use crate::models::template::ToolErrorPolicy;
 pub(super) use crate::models::template::{
     ContextStrategy, DeploymentModel, ExecutionBackendType, FieldMapping, JoinMode,
     PhaseUpdateStatus, Port, ResourceConfig, WorkflowEdge, WorkflowNode, WorkflowNodeData,
@@ -121,6 +122,34 @@ pub(crate) struct PlaceMerge {
     pub(crate) survivor: String,
 }
 
+/// One agent's tool wiring deferred to the post-traversal fixup phase.
+///
+/// `lower_agent_loop` knows the agent's own places (state-in-tool, error,
+/// per-tool dispatch) but tool children are lowered after the agent
+/// itself in topological order — their `NodePorts` aren't in
+/// `node_ports` yet when the agent runs. Queue this struct during
+/// `lower_agent_loop`; `apply_agent_tool_wirings` drains it after the
+/// topological loop, when every child's input/output places are minted.
+pub(crate) struct AgentToolWiring {
+    pub(crate) agent_id: String,
+    pub(crate) agent_label: String,
+    pub(crate) p_state: PlaceHandle<DynamicToken>,
+    pub(crate) p_state_in_tool: PlaceHandle<DynamicToken>,
+    pub(crate) p_error: PlaceHandle<DynamicToken>,
+    pub(crate) tools: Vec<AgentToolEntry>,
+}
+
+/// Per-tool wiring data: the dispatch place the agent's route deposits
+/// to, the child node id whose input/output places get bridged in, and
+/// the error-policy that decides whether tool failures feed back into
+/// the loop or bubble to the agent's error path.
+pub(crate) struct AgentToolEntry {
+    pub(crate) tool_name: String,
+    pub(crate) child_id: String,
+    pub(crate) dispatch_place: PlaceHandle<DynamicToken>,
+    pub(crate) on_tool_error: ToolErrorPolicy,
+}
+
 /// Side-channel state that builds during lowering and is consumed by the
 /// post-merge orchestration passes in `compile.rs`. Distinct from the
 /// per-node interface registry (`InterfaceRegistry`): this holds *non*-
@@ -144,6 +173,10 @@ pub(crate) struct PostProcess {
     /// before their terminal place, so the process is marked complete. `None`
     /// = no process registered → End stays a bare terminal (unchanged).
     pub(crate) process_token_place: Option<PlaceHandle<DynamicToken>>,
+    /// Agent → tool-child wiring deferred to after the topological pass
+    /// (every tool child's NodePorts must be present in node_ports
+    /// before the invoke/collect transitions can reference them).
+    pub(crate) agent_tool_wirings: Vec<AgentToolWiring>,
 }
 
 /// Tracks which places are the input/output interface of each expanded node.
@@ -502,6 +535,117 @@ pub(super) fn park_outputs(
     .auto_output("main", &p_main)
     .logic("let d = tok; #{ data: d, main: d }");
     (format!("p_{id}_data"), p_main)
+}
+
+/// Apply every queued [`AgentToolWiring`]: mint the per-tool invoke +
+/// collect (+ optional collect_error / bubble) transitions that bridge
+/// each agent's `p_dispatch_<tn>` and `p_state_in_tool` places to its
+/// tool children's already-lowered input/output places. Runs once after
+/// the topological lowering pass so every tool child's `NodePorts` is in
+/// `node_ports`. Errors when a referenced child is missing — that's an
+/// internal invariant break (the child wasn't lowered) rather than user
+/// input, so the message names the agent + child for debugging.
+pub(crate) fn apply_agent_tool_wirings(
+    ctx: &mut Context,
+    node_ports: &HashMap<String, NodePorts>,
+    wirings: &[AgentToolWiring],
+) -> Result<(), CompileError> {
+    for wiring in wirings {
+        for entry in &wiring.tools {
+            let child_ports = node_ports.get(&entry.child_id).ok_or_else(|| {
+                CompileError::Compilation(format!(
+                    "agent '{}': tool child '{}' has no NodePorts (was it lowered?)",
+                    wiring.agent_id, entry.child_id
+                ))
+            })?;
+            let agent_id = &wiring.agent_id;
+            let agent_label = &wiring.agent_label;
+            let tn = &entry.tool_name;
+
+            // t_invoke_<tn>: consume dispatch → child input. The token
+            // we deposit is the tool call's args map (the LLM's
+            // argument object). Children that expect a richer envelope
+            // (e.g. HTTP backend's `{url, body}`) can be authored by
+            // having the model emit those keys directly — v1 keeps the
+            // shape literal.
+            ctx.transition(
+                format!("t_{agent_id}_invoke_{tn}"),
+                format!("{agent_label} - Invoke {tn}"),
+            )
+            .auto_input("dispatch", &entry.dispatch_place)
+            .auto_output("input", &child_ports.input_place)
+            .logic_rhai("#{ input: dispatch.args }".to_string())
+            .done();
+
+            // Tool child's primary (default-keyed) output is the
+            // success path; the `Some("error")` keyed output is the
+            // failure path. Either may be absent depending on the
+            // child's lowering — pass-through nodes with no error edge
+            // skip the failure transitions entirely.
+            let child_default_out = child_ports
+                .output_places
+                .iter()
+                .find(|(k, _)| k.is_none())
+                .map(|(_, p)| p.clone());
+            let child_error_out = child_ports
+                .output_places
+                .iter()
+                .find(|(k, _)| k.as_deref() == Some("error"))
+                .map(|(_, p)| p.clone());
+
+            // t_collect_<tn>: child success + state_in_tool → state.
+            // Appends a `role: tool` message to history with the
+            // child's output payload. State stays inside the agent —
+            // the workflow token (which the child may have stripped)
+            // is irrelevant once we have the tool result.
+            if let Some(child_out) = child_default_out {
+                ctx.transition(
+                    format!("t_{agent_id}_collect_{tn}"),
+                    format!("{agent_label} - Collect {tn}"),
+                )
+                .auto_input("result", &child_out)
+                .auto_input("state", &wiring.p_state_in_tool)
+                .auto_output("state", &wiring.p_state)
+                .logic_rhai(format!(
+                    r#"let s = state; s.history.push(#{{ role: "tool", tool_name: "{tn}", content: result }}); s.message_count = s.message_count + 1; #{{ state: s }}"#
+                ))
+                .done();
+            }
+
+            // Error path: Feedback re-enters the loop with a
+            // synthesized failure message; Bubble drains state and
+            // surfaces the failure on the agent's error output.
+            if let Some(child_err) = child_error_out {
+                match entry.on_tool_error {
+                    ToolErrorPolicy::Feedback => {
+                        ctx.transition(
+                            format!("t_{agent_id}_collect_{tn}_error"),
+                            format!("{agent_label} - Collect {tn} (error → feedback)"),
+                        )
+                        .auto_input("err", &child_err)
+                        .auto_input("state", &wiring.p_state_in_tool)
+                        .auto_output("state", &wiring.p_state)
+                        .logic_rhai(format!(
+                            r#"let s = state; let msg = if type_of(err) == "map" && "message" in err {{ err.message }} else {{ "tool error" }}; s.history.push(#{{ role: "tool", tool_name: "{tn}", content: "tool '{tn}' failed: " + msg, is_error: true }}); s.message_count = s.message_count + 1; #{{ state: s }}"#
+                        ))
+                        .done();
+                    }
+                    ToolErrorPolicy::Bubble => {
+                        ctx.transition(
+                            format!("t_{agent_id}_collect_{tn}_bubble"),
+                            format!("{agent_label} - Collect {tn} (error → bubble)"),
+                        )
+                        .auto_input("err", &child_err)
+                        .auto_input("state", &wiring.p_state_in_tool)
+                        .auto_output("error", &wiring.p_error)
+                        .logic_rhai("#{ error: err }".to_string())
+                        .done();
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Serialize the declared `output.fields` as a Rhai array literal carrying

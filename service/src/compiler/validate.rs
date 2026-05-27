@@ -33,6 +33,35 @@ pub(crate) fn validate(graph: &WorkflowGraph, wg: &WorkflowDiGraph) -> Result<()
         ));
     }
 
+    // Tool children (`tool_meta.is_some()`) are dispatched by the agent
+    // compiler via `tool_meta.tool_name`, not via graph edges (docs/12 § 2.2).
+    // An incoming WorkflowEdge into a tool would let it fire outside the
+    // agent's control — reject at publish so the editor catches an
+    // accidental edge-drag instead of producing a silently-broken net.
+    // Identify each tool's owning agent so the error names both endpoints.
+    let parent_by_id: HashMap<&str, &str> = graph
+        .nodes
+        .iter()
+        .filter_map(|n| n.parent_id.as_deref().map(|p| (n.id.as_str(), p)))
+        .collect();
+    for edge in &graph.edges {
+        let target = graph.nodes.iter().find(|n| n.id == edge.target);
+        if let Some(target) = target {
+            if target.tool_meta.is_some() {
+                let agent_id = parent_by_id
+                    .get(target.id.as_str())
+                    .copied()
+                    .unwrap_or("<orphan>")
+                    .to_string();
+                return Err(CompileError::ToolChildHasIncomingEdge {
+                    agent_id,
+                    child_id: target.id.clone(),
+                    edge_id: edge.id.clone(),
+                });
+            }
+        }
+    }
+
     // Reachability: BFS on full graph (includes loop_back edges)
     let mut bfs = Bfs::new(&wg.full, wg.start);
     let mut visited = HashSet::new();

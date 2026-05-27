@@ -3,9 +3,12 @@
 //! - Degenerate path (`max_turns == 1` + no `stop_when` + no tool children)
 //!   synthesizes the equivalent `AutomatedStep(Llm)` and delegates so the
 //!   compiled net is byte-identical to a hand-authored single-shot LLM step.
-//! - Full agent loop emits the parked-state + LLM call + route topology
-//!   described in `docs/12` § 3 (v1: ContextStrategy::None only, tool
-//!   subnets are pinned as scaffolding without yet being wired).
+//! - Full agent loop emits the parked-state + LLM call + multi-transition
+//!   route topology described in `docs/12` § 3. State migrates through
+//!   discrete "phase" places (`p_state` between turns, `p_state_in_flight`
+//!   during the LLM call, `p_state_in_tool` during a tool dispatch) so
+//!   exactly one transition is enabled at any cycle point — no double-fire
+//!   races and no need for the engine to enforce mutual exclusion.
 
 use super::*;
 
@@ -166,22 +169,46 @@ fn build_llm_config_value(
     serde_json::Value::Object(config)
 }
 
-/// Full agent-loop lowering — docs/12 § 3. Emits:
+/// Full agent-loop lowering (docs/12 § 3). State is the single token
+/// migrating through phase-named places — exactly one of {p_state,
+/// p_state_in_flight, p_state_in_tool} holds it at any cycle point:
 ///
-///   p_input ─► t_enter ─► p_state ─► t_call_llm ─► p_response ─► t_route ┬─► p_dispatch_<tool> (per tool)
-///                            ▲                                           └─► p_final ─► t_exit ─► p_output
+/// ```text
+///   p_input ─► t_enter ─► p_state
 ///                            │
-///                            └── (re-entered on tool collect — wiring in
-///                                 a follow-up PR; v1 routes to p_final)
+///                t_prepare_call (consume p_state)
+///                            ├─► exec_inbox
+///                            └─► p_state_in_flight
+///                                  │
+///                       (LLM call via executor lifecycle)
+///                                  ▼
+///                          t_to_response (lc.completed + p_state_in_flight)
+///                                  │
+///                                  ▼
+///                              p_response
+///                                  │
+///                                  ├── t_route_final ──► p_final ─► t_exit ─► p_output
+///                                  │     (tool_calls empty OR turn+1>=max OR stop_when)
+///                                  │
+///                                  ├── t_route_dispatch_<tn>  (per tool)
+///                                  │     ├─► p_dispatch_<tn>  ─► t_invoke_<tn> ─► child input
+///                                  │     │                                          (child runs)
+///                                  │     │                                          child output
+///                                  │     │                                              ▼
+///                                  │     │                                       t_collect_<tn>
+///                                  │     └─► p_state_in_tool ──────────────────────────┘
+///                                  │                                                    │
+///                                  │                                                    ▼
+///                                  │                                                p_state (loop)
+///                                  │
+///                                  └── t_route_unknown ─► p_state (Feedback only;
+///                                                        Bubble pre-rejected at
+///                                                        compile via tool-name set)
+/// ```
 ///
-/// v1 scope cut (per the PR plan): both `ToolErrorPolicy` variants compile
-/// to the same structural shape (the policy lives in `t_route`'s Rhai
-/// branch logic at runtime); `ContextStrategy::None` only; per-tool
-/// `t_collect_<tn>` transitions are emitted as compile-time scaffolding
-/// but their child-output wiring is delegated to a follow-up PR. The
-/// route currently always deposits on `p_final` — once the tool subnet
-/// wiring lands, the route gets the data-driven branch on
-/// `response.tool_calls[0].name`.
+/// v1 scope: serial tool calls only (`tool_calls[0]`); both ToolErrorPolicy
+/// variants; `ContextStrategy::None` only; history kept in-token (Vec<Map>),
+/// S3-backed history deferred.
 fn lower_agent_loop(
     cx: &mut LoweringCtx,
     tool_children: &[&WorkflowNode],
@@ -192,16 +219,21 @@ fn lower_agent_loop(
         system_prompt,
         user_prompt,
         response_format,
+        max_turns,
+        stop_when,
+        on_tool_error,
         ..
     } = &cx.node.data
     else {
         unreachable!("lower_agent_loop on non-Agent node")
     };
     let id = cx.node.id.clone();
+    let max_turns = *max_turns;
+    let on_tool_error = *on_tool_error;
 
-    // Tool-name uniqueness — analog of `SlugConflict` (error.rs:54). A
-    // duplicate would make the `t_route` branch guard ambiguous; reject
-    // at compile so the editor can ring the offending children.
+    // Tool-name uniqueness — analog of `SlugConflict`. A duplicate would
+    // make the per-tool dispatch route guards ambiguous; reject at
+    // compile so the editor can ring the offending children.
     let mut seen_names: std::collections::HashSet<&str> = std::collections::HashSet::new();
     for child in tool_children {
         let tm = child.tool_meta.as_ref().expect("filtered to tool children");
@@ -238,15 +270,40 @@ fn lower_agent_loop(
         &tool_schemas,
     );
 
-    // Side-channel the static config via `config_ref` (same as
-    // `lower_automated_step:1124`). The Petri token stays slim; the
-    // executor's `FetchConfigHook` materialises it.
+    // Side-channel the static config via `config_ref`. The Petri token
+    // stays slim; the executor's `FetchConfigHook` materialises it.
     let storage_key = cx.config_storage.key(&id);
     cx.node_configs.insert(id.clone(), llm_config);
     let config_ref_rhai = format!(
         "#{{ \"storage_path\": \"{}\" }}",
         rhai_str_escape(&storage_key)
     );
+
+    // Quote the optional stop_when as a Rhai sub-expression. Empty/None
+    // canonicalises to `false` so the route guards can blindly OR it in
+    // without a branch in the codegen.
+    let stop_when_expr: String = stop_when
+        .as_ref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .map(|s| format!("({s})"))
+        .unwrap_or_else(|| "false".to_string());
+
+    // Known tool names — baked into the route_unknown guard so the
+    // compiler decides at publish what counts as "known" rather than
+    // shipping the set to runtime. List literal in Rhai map-key form.
+    let known_names_rhai: String = if tool_children.is_empty() {
+        "[]".to_string()
+    } else {
+        let inner: Vec<String> = tool_children
+            .iter()
+            .map(|c| {
+                let tm = c.tool_meta.as_ref().unwrap();
+                format!("\"{}\"", rhai_str_escape(&tm.tool_name))
+            })
+            .collect();
+        format!("[{}]", inner.join(", "))
+    };
 
     let ctx = &mut *cx.ctx;
 
@@ -255,10 +312,20 @@ fn lower_agent_loop(
         ctx.state(format!("p_{id}_input"), format!("{label} - Input"));
     let p_state: PlaceHandle<DynamicToken> = ctx.state(
         format!("p_{id}_state"),
-        format!("{label} - Agent State (parked)"),
+        format!("{label} - Agent State (between turns)"),
     );
-    let p_response: PlaceHandle<DynamicToken> =
-        ctx.state(format!("p_{id}_response"), format!("{label} - LLM Response"));
+    let p_state_in_flight: PlaceHandle<DynamicToken> = ctx.state(
+        format!("p_{id}_state_in_flight"),
+        format!("{label} - State (parked during LLM call)"),
+    );
+    let p_state_in_tool: PlaceHandle<DynamicToken> = ctx.state(
+        format!("p_{id}_state_in_tool"),
+        format!("{label} - State (parked during tool call)"),
+    );
+    let p_response: PlaceHandle<DynamicToken> = ctx.state(
+        format!("p_{id}_response"),
+        format!("{label} - LLM Response (state + turn_result merged)"),
+    );
     let p_final: PlaceHandle<DynamicToken> =
         ctx.state(format!("p_{id}_final"), format!("{label} - Final"));
     let p_output: PlaceHandle<DynamicToken> =
@@ -266,11 +333,12 @@ fn lower_agent_loop(
     let p_error: PlaceHandle<DynamicToken> =
         ctx.state(format!("p_{id}_error"), format!("{label} - Error"));
 
-    // One dispatch place per declared tool (sources for t_route's tool
-    // branches). v1 has no consumer for these — the route always picks
-    // p_final — but minting them now pins the AIR shape so the follow-up
-    // PR that wires tool subnets doesn't have to renumber places.
+    // One dispatch place per declared tool. Stage the tool wiring data
+    // here; the post-traversal `apply_agent_tool_wirings` fixup mints
+    // the invoke + collect transitions once each child's NodePorts is in
+    // node_ports.
     let mut dispatch_places: Vec<(String, PlaceHandle<DynamicToken>)> = Vec::new();
+    let mut tool_entries: Vec<AgentToolEntry> = Vec::new();
     for child in tool_children {
         let tm = child.tool_meta.as_ref().unwrap();
         let tn = crate::models::template::sanitize_slug(&tm.tool_name);
@@ -278,31 +346,34 @@ fn lower_agent_loop(
             format!("p_{id}_dispatch_{tn}"),
             format!("{label} - Dispatch {tn}"),
         );
-        dispatch_places.push((tn, pd));
+        dispatch_places.push((tn.clone(), pd.clone()));
+        tool_entries.push(AgentToolEntry {
+            tool_name: tn,
+            child_id: child.id.clone(),
+            dispatch_place: pd,
+            on_tool_error,
+        });
     }
 
-    // ----- t_enter: initialize parked state, hand off to call_llm -----
+    // ----- t_enter: initialise state, hand to p_state -----
     // The parked envelope keeps the slim agent state: turn counter,
-    // accumulating token totals, and `final_response` (set on the
-    // terminal turn). The user's inbound token rides through as the
-    // initial conversation input under `state.input`.
+    // accumulating token totals, conversation history (in-token Vec for
+    // v1), and `final_response` (set on the terminal turn). The user's
+    // inbound token rides through as `state.input`.
     ctx.transition(format!("t_{id}_enter"), format!("{label} - Enter Agent"))
         .auto_input("input", &p_input)
         .auto_output("state", &p_state)
         .logic_rhai(
-            r#"#{ state: #{ turn: 0, message_count: 0, total_tokens_in: 0, total_tokens_out: 0, input: input, final_response: () } }"#
+            r#"#{ state: #{ turn: 0, message_count: 0, total_tokens_in: 0, total_tokens_out: 0, history: [], input: input, final_response: () } }"#
                 .to_string(),
         )
         .done();
 
-    // ----- t_call_llm: executor lifecycle for one LLM turn -----
-    // Consumes the parked state, submits an LLM job, returns the
-    // response envelope on lc.completed (or routes to lc.failed for
-    // executor-side errors). `stream_events` includes `agent_turn` so
-    // the executor emits per-turn observability events on the
-    // `executor.events.{exec_id}.agent_turn` subject (docs/12 § 5).
-    // `metadata.agent_node_id` flags the LLM job as part of an agent
-    // context so the executor side gates the AgentTurn emission.
+    // ----- t_prepare_call: state → exec_inbox + p_state_in_flight -----
+    // Consumes `p_state`, produces the executor job AND parks state on
+    // `p_state_in_flight` for the LLM call's duration. Consumption gates
+    // re-entry: t_prepare_call cannot fire again until t_collect_<tn>
+    // (or t_route_unknown) re-deposits on `p_state`.
     let exec_inbox = ctx.state::<ExecutorSubmitInput>(
         format!("p_{id}_call_inbox"),
         format!("{label} - Call Inbox"),
@@ -314,9 +385,9 @@ fn lower_agent_loop(
     )
     .auto_input("state", &p_state)
     .auto_output("job", &exec_inbox)
-    .auto_output("state", &p_state)
+    .auto_output("state_in_flight", &p_state_in_flight)
     .logic_rhai(format!(
-        r#"let s = state; let mut d = #{{ }}; d.job_id = "{id}"; d.run = s.turn; d.retries = 0; d.max_retries = 0; let job_inputs = []; d.spec = #{{ "backend": "llm", "inputs": job_inputs, "outputs": [], "config_ref": {config_ref_rhai}, "stream_events": ["agent_turn", "metric", "log"] }}; d.metadata = #{{ "agent_node_id": "{id}" }}; #{{ job: d, state: s }}"#
+        r#"let s = state; let mut d = #{{ }}; d.job_id = "{id}"; d.run = s.turn; d.retries = 0; d.max_retries = 0; let job_inputs = []; d.spec = #{{ "backend": "llm", "inputs": job_inputs, "outputs": [], "config_ref": {config_ref_rhai}, "stream_events": ["agent_turn", "metric", "log"] }}; d.metadata = #{{ "agent_node_id": "{id}" }}; #{{ job: d, state_in_flight: s }}"#
     ))
     .done();
 
@@ -333,55 +404,117 @@ fn lower_agent_loop(
         },
     );
 
-    // Bridge lifecycle outputs to the route's input.
+    // ----- t_to_response: lc.completed + p_state_in_flight → p_response -----
+    // Re-unites state with the LLM response. Output token carries both:
+    // `{state: ..., response: done}` so the route transitions can consume a
+    // single token + see everything they need.
     ctx.transition(
         format!("t_{id}_to_response"),
         format!("{label} - To Response"),
     )
     .auto_input("done", &lc.completed)
+    .auto_input("state", &p_state_in_flight)
     .auto_output("response", &p_response)
-    .logic_rhai("#{ response: done }".to_string())
+    .logic_rhai("#{ response: #{ state: state, response: done } }".to_string())
     .done();
 
-    // Executor-side failure paths drain to the agent's error output —
-    // there's no per-turn retry in v1 (the LLM call has its own provider
-    // retries inside the adapter; agent-level retry composes via the
-    // standard error edge user pattern).
+    // Executor-side failure paths drain state out of `p_state_in_flight`
+    // too — otherwise it'd stay parked forever and block any retry path
+    // a wrapping workflow might author. State is discarded on hard
+    // executor failure (no good way to surface partial state).
     ctx.transition(format!("t_{id}_call_failed"), format!("{label} - LLM Call Failed"))
         .auto_input("dead", &lc.failed)
+        .auto_input("state", &p_state_in_flight)
         .auto_output("error", &p_error)
         .logic_rhai("#{ error: dead }".to_string())
         .done();
     ctx.transition(format!("t_{id}_call_timed_out"), format!("{label} - LLM Call Timed Out"))
         .auto_input("dead", &lc.timed_out)
+        .auto_input("state", &p_state_in_flight)
         .auto_output("error", &p_error)
         .logic_rhai("#{ error: dead }".to_string())
         .done();
     ctx.transition(format!("t_{id}_call_dead"), format!("{label} - LLM Call Dead Letter"))
         .auto_input("dead", &lc.dead_letter)
+        .auto_input("state", &p_state_in_flight)
         .auto_output("error", &p_error)
         .logic_rhai("#{ error: dead }".to_string())
         .done();
 
-    // ----- t_route: branch on LlmTurnResult shape -----
-    // v1: always routes to p_final. The follow-up PR adds the
-    // tool-branching script — once `p_dispatch_<tn>` has a consumer, the
-    // route's Rhai picks which port to populate by inspecting
-    // `response.detail.outputs.turn_result.tool_calls[0].name`. Until
-    // then the dispatch places exist as named outputs but receive no
-    // tokens.
-    let mut route = ctx.transition(format!("t_{id}_route"), format!("{label} - Route"))
-        .auto_input("response", &p_response)
-        .auto_output("final", &p_final);
+    // ----- Route transitions: one per branch, each guarded -----
+    //
+    // Mirror lower_loop's t_continue / t_exit pattern: multiple
+    // transitions on the same input place with complementary guards
+    // (engine picks whichever is enabled). No single multi-output Rhai
+    // script — each route's effect is one path.
+    //
+    // The Rhai `turn_result` extractor below tolerates either shape the
+    // LLM backend may emit: `outputs.turn_result` (multi-turn path) or
+    // `outputs.response` (degenerate single-shot path that this loop
+    // re-uses when the model returns text without tool_calls).
+    let extract_tr: &str = r#"let r = response.response; let outs = r.detail.outputs; let tr = outs.turn_result; if type_of(tr) == "()" { tr = outs.response; }"#;
+
+    // t_route_final: terminate — tool_calls empty OR max_turns reached
+    // OR stop_when satisfied. Produces the final envelope on p_final.
+    ctx.transition(
+        format!("t_{id}_route_final"),
+        format!("{label} - Route: Final"),
+    )
+    .auto_input("response", &p_response)
+    .auto_output("final", &p_final)
+    .guard_rhai(format!(
+        r#"let s = response.state; {extract_tr} let tc = if type_of(tr.tool_calls) == "array" {{ tr.tool_calls }} else {{ [] }}; tc.len() == 0 || s.turn + 1 >= {max_turns} || {stop_when_expr}"#
+    ))
+    .logic_rhai(format!(
+        r#"let s = response.state; {extract_tr} let content = if type_of(tr.content) == "string" {{ tr.content }} else {{ () }}; let final = #{{ content: content, turn: s.turn, history: s.history, total_tokens_in: s.total_tokens_in, total_tokens_out: s.total_tokens_out, final_response: tr, input: s.input }}; #{{ final: final }}"#
+    ))
+    .done();
+
+    // t_route_dispatch_<tn>: one per declared tool. Guard fires only
+    // when model picked this specific tool, max_turns isn't exhausted,
+    // and stop_when is false. State migrates to p_state_in_tool (with
+    // assistant turn appended to history, turn += 1); call args go to
+    // p_dispatch_<tn>.
     for (tn, pd) in &dispatch_places {
-        route = route.auto_output(format!("dispatch_{tn}"), pd);
-    }
-    route
-        .logic_rhai(
-            r#"let resp = response; let outs = resp.detail.outputs; let tr = outs.turn_result ?? outs.response; #{ final: #{ content: tr, turn: 1, final_response: tr } }"#
-                .to_string(),
+        ctx.transition(
+            format!("t_{id}_route_dispatch_{tn}"),
+            format!("{label} - Route: Dispatch {tn}"),
         )
+        .auto_input("response", &p_response)
+        .auto_output("dispatch", pd)
+        .auto_output("state_in_tool", &p_state_in_tool)
+        .guard_rhai(format!(
+            r#"let s = response.state; {extract_tr} let tc = if type_of(tr.tool_calls) == "array" {{ tr.tool_calls }} else {{ [] }}; tc.len() > 0 && tc[0].name == "{tn}" && s.turn + 1 < {max_turns} && !({stop_when_expr})"#
+        ))
+        .logic_rhai(format!(
+            r#"let s = response.state; {extract_tr} let call = tr.tool_calls[0]; let assistant_content = if type_of(tr.content) == "string" {{ tr.content }} else {{ "" }}; s.history.push(#{{ role: "assistant", content: assistant_content, tool_call_id: call.id, tool_name: "{tn}", tool_args: call.arguments }}); s.turn = s.turn + 1; s.message_count = s.message_count + 1; #{{ dispatch: #{{ call_id: call.id, tool_name: "{tn}", args: call.arguments }}, state_in_tool: s }}"#
+        ))
         .done();
+    }
+
+    // t_route_unknown: ToolErrorPolicy::Feedback only. Fires when the
+    // model picked a tool not in the known set, turn budget remains.
+    // No dispatch — append a failure message and re-deposit state so
+    // the next turn can correct the model. For Bubble policy this
+    // transition is omitted; an unknown tool with no fallback then
+    // can't satisfy any route guard and the net stalls — which is the
+    // explicit "the model misbehaved and we want a noisy failure"
+    // semantics of Bubble.
+    if matches!(on_tool_error, ToolErrorPolicy::Feedback) && !tool_children.is_empty() {
+        ctx.transition(
+            format!("t_{id}_route_unknown"),
+            format!("{label} - Route: Unknown Tool (feedback)"),
+        )
+        .auto_input("response", &p_response)
+        .auto_output("state", &p_state)
+        .guard_rhai(format!(
+            r#"let s = response.state; {extract_tr} let tc = if type_of(tr.tool_calls) == "array" {{ tr.tool_calls }} else {{ [] }}; let known = {known_names_rhai}; tc.len() > 0 && !(known.contains(tc[0].name)) && s.turn + 1 < {max_turns} && !({stop_when_expr})"#
+        ))
+        .logic_rhai(format!(
+            r#"let s = response.state; {extract_tr} let call = tr.tool_calls[0]; s.history.push(#{{ role: "tool", tool_name: call.name, tool_call_id: call.id, content: "tool '" + call.name + "' not found — pick one of: " + {known_names_rhai} }}); s.turn = s.turn + 1; s.message_count = s.message_count + 1; #{{ state: s }}"#
+        ))
+        .done();
+    }
 
     // ----- t_exit -----
     ctx.transition(format!("t_{id}_exit"), format!("{label} - Exit"))
@@ -394,6 +527,21 @@ fn lower_agent_loop(
     // `<agent_slug>.final_response` / `<agent_slug>.turn` reads resolve
     // via the read-arc synthesis pass.
     let (data_place_id, p_ctrl) = split_outputs(ctx, &id, label, &p_output);
+
+    // Queue the agent → tool-child wiring fixup. Tool children's
+    // NodePorts aren't populated yet — they'll be lowered later in the
+    // topological pass. `apply_agent_tool_wirings` drains this after
+    // the loop so every child's input/output places are addressable.
+    if !tool_entries.is_empty() {
+        cx.fixups.agent_tool_wirings.push(AgentToolWiring {
+            agent_id: id.clone(),
+            agent_label: label.clone(),
+            p_state: p_state.clone(),
+            p_state_in_tool: p_state_in_tool.clone(),
+            p_error: p_error.clone(),
+            tools: tool_entries,
+        });
+    }
 
     cx.ports.insert(
         id.clone(),

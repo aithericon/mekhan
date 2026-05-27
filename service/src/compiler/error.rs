@@ -156,6 +156,22 @@ pub enum CompileError {
     #[error("loop '{node_id}' has no body — add at least one node inside the loop container")]
     LoopEmpty { node_id: String },
 
+    /// A node tagged as an agent tool (`tool_meta.is_some()`) has an
+    /// incoming `WorkflowEdge`. Tools are dispatched by the agent compiler
+    /// via `tool_meta.tool_name`, not via graph edges — wiring one into the
+    /// main flow would let it fire outside the agent's control. The editor
+    /// should keep tools sidebar-attached; this catches the case where an
+    /// author drags an edge into a tool by mistake.
+    #[error(
+        "node '{child_id}' is a tool of agent '{agent_id}' and must not have incoming edges \
+         (offending edge: '{edge_id}')"
+    )]
+    ToolChildHasIncomingEdge {
+        agent_id: String,
+        child_id: String,
+        edge_id: String,
+    },
+
     // --- Python AutomatedStep output-field guards (sibling of the
     //     direct-slug-access input borrows). Declared output.fields[].name is
     //     swept from Python globals after exec() — if the name collides with a
@@ -393,6 +409,7 @@ impl CompileError {
             Self::SubWorkflowCycle { .. } => "subworkflow_cycle",
             Self::SubWorkflowDepthExceeded { .. } => "subworkflow_depth_exceeded",
             Self::LoopEmpty { .. } => "loop_empty",
+            Self::ToolChildHasIncomingEdge { .. } => "tool_child_has_incoming_edge",
             Self::OutputFieldShadowsReserved { .. } => "output_field_shadows_reserved",
             Self::OutputFieldShadowsInput { .. } => "output_field_shadows_input",
             Self::BackendRefUnresolved { .. } => "backend_ref_unresolved",
@@ -417,6 +434,7 @@ impl CompileError {
             | Self::UnknownTargetPort { edge_id, .. }
             | Self::EdgeTypeMismatch { edge_id, .. } => Some(edge_id),
             Self::TriggerIsEdgeTarget { edge_id, .. } => Some(edge_id),
+            Self::ToolChildHasIncomingEdge { edge_id, .. } => Some(edge_id),
             _ => None,
         }
     }
@@ -440,6 +458,9 @@ impl CompileError {
             | Self::SubWorkflowUnresolved { node_id, .. }
             | Self::SubWorkflowDepthExceeded { node_id, .. }
             | Self::LoopEmpty { node_id }
+            | Self::ToolChildHasIncomingEdge {
+                child_id: node_id, ..
+            }
             | Self::OutputFieldShadowsReserved { node_id, .. }
             | Self::OutputFieldShadowsInput { node_id, .. }
             | Self::BackendRefUnresolved { node_id, .. }
