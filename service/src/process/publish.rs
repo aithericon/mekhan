@@ -255,26 +255,36 @@ fn default_workspace() -> Uuid {
 /// the values carry the stable `resource_id` and the `latest_version` to
 /// pin at publish time.
 ///
-/// A head identifier that doesn't match any workspace resource is silently
-/// dropped — that ref might be a slug (handled by the slug index in the
-/// borrow planner) or genuinely unknown (Python is forgiving on dotted
-/// accesses; the runtime will raise its own NameError). Discrimination
-/// happens later in the compiler against the slug set + control-token
-/// vocabulary.
+/// A head identifier picked up by a backend's `ref_scanner` and not present
+/// in the workspace is silently dropped — that ref might be a slug
+/// (handled by the slug index in the borrow planner), a control-token
+/// leaf, or a real Python typo (the runtime will raise its own NameError).
+///
+/// A head declared via `resource_alias_paths` (e.g. `resource_alias: "mail"`
+/// on an SMTP step) is treated as an *unambiguous* binding: if the
+/// workspace has no matching resource, publish fails with
+/// [`CompileError::WorkspaceResourceUnknown`]. Without that hard fail the
+/// AIR builds without the borrow and the backend later crashes at run
+/// time with "compiler must emit a ResourceEnvelope borrow", which sends
+/// the operator chasing the compiler instead of the missing resource row.
 async fn discover_known_resources(
     state: &AppState,
     graph: &WorkflowGraph,
     inline_sources: &HashMap<String, HashMap<String, String>>,
 ) -> Result<KnownResources, ApiError> {
     use crate::backends::ScanCtx;
-    use crate::compiler::resource_binding::collect_resource_heads;
+    use crate::compiler::resource_binding::{
+        collect_declared_resource_aliases, collect_resource_heads,
+    };
+    use crate::compiler::CompileError;
     use std::collections::BTreeSet;
 
     // Pass 1: collect every distinct `<head>` the graph references in any
-    // surface that can name a workspace resource. Per-backend rules live
-    // in `compiler::resource_binding::BINDINGS`; we just walk the graph
-    // and merge results.
+    // surface that can name a workspace resource, plus a separate map of
+    // *declared* aliases (the strict subset) so we can fail-fast on
+    // unresolved ones below.
     let mut heads: BTreeSet<String> = BTreeSet::new();
+    let mut declared: Vec<(String, String)> = Vec::new(); // (node_id, alias)
     for node in &graph.nodes {
         let WorkflowNodeData::AutomatedStep { execution_spec, .. } = &node.data else {
             continue;
@@ -287,6 +297,9 @@ async fn discover_known_resources(
         };
         for head in collect_resource_heads(&ctx, execution_spec.backend_type) {
             heads.insert(head);
+        }
+        for alias in collect_declared_resource_aliases(&ctx, execution_spec.backend_type) {
+            declared.push((node.id.clone(), alias));
         }
     }
 
@@ -321,6 +334,32 @@ async fn discover_known_resources(
             },
         );
     }
+
+    // Hard-fail on declared aliases that didn't resolve. Emit one
+    // CompileError per (node_id, alias) so the editor can highlight every
+    // offending node — even though they all share the same root cause,
+    // the user sometimes references the same alias from multiple steps
+    // and needs to know that creating one resource will satisfy all of
+    // them at once.
+    let mut missing: Vec<CompileError> = Vec::new();
+    for (node_id, alias) in declared {
+        if !known.contains_key(&alias) {
+            missing.push(CompileError::WorkspaceResourceUnknown { node_id, alias });
+        }
+    }
+    if !missing.is_empty() {
+        let summary = missing
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join("; ");
+        let views: Vec<_> = missing.iter().map(|e| e.to_view()).collect();
+        return Err(ApiError::compile(
+            format!("workspace resources missing: {summary}"),
+            views,
+        ));
+    }
+
     Ok(known)
 }
 

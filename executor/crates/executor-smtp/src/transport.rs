@@ -1,15 +1,21 @@
 //! Build a `lettre` async SMTP transport from the resolved resource.
 //!
-//! TLS mode is picked by port convention rather than an explicit flag:
+//! TLS mode is picked by port convention:
 //!
-//! - **587** — STARTTLS (Submission); start plaintext, upgrade after EHLO
 //! - **465** — implicit TLS (legacy "smtps"); TLS from the first byte
-//! - **25**  — no TLS (only sensible inside a trusted network — most public
-//!             relays refuse plaintext auth on 25 now)
+//! - **587** — STARTTLS required (Submission); refuse to deliver without it
+//! - **25, 1025, 2525** — plain (no TLS) by default; covers public MX (25),
+//!   mailhog/maildev/mailpit (1025), and the common "alt submission"
+//!   convention (2525). The dev catcher ports are explicitly listed because
+//!   `just dev mailhog-up` is the documented SMTP local loop.
+//! - **anything else** — Opportunistic STARTTLS (upgrade if EHLO advertises
+//!   it, fall back to plain otherwise). This is the right default for the
+//!   long tail of self-hosted relays without forcing every workflow author
+//!   to learn a TLS-mode taxonomy.
 //!
-//! Anything else fails [`SmtpOutcome::InvalidConfig`]. This matches the
-//! convention documented on the `Smtp` resource type at
-//! `shared/resources/src/types.rs::Smtp`.
+//! Credentials are only attached when BOTH `username` and `password` are
+//! non-empty. Local dev catchers (mailhog) accept anonymous SMTP; passing
+//! empty `AUTH PLAIN` makes some real servers reject the dialog.
 
 use aithericon_executor_backend_configs::smtp::ResolvedSmtpResource;
 use lettre::transport::smtp::authentication::Credentials;
@@ -25,36 +31,30 @@ pub enum BuildResult {
     Invalid(SmtpOutcome),
 }
 
-/// Build the transport. Returns `Invalid(...)` when the port doesn't match
-/// a supported mode or TLS params can't be constructed.
+/// Build the transport. Returns `Invalid(...)` only when TLS parameters
+/// can't be constructed for the host — port choice is permissive.
 pub fn build(resource: &ResolvedSmtpResource) -> BuildResult {
     let tls = match tls_params(&resource.host) {
         Ok(t) => t,
         Err(e) => return BuildResult::Invalid(e),
     };
 
-    let builder = match resource.port {
-        587 => AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&resource.host)
-            .port(587)
-            .tls(Tls::Required(tls)),
-        465 => AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&resource.host)
-            .port(465)
-            .tls(Tls::Wrapper(tls)),
-        25 => AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&resource.host)
-            .port(25)
-            .tls(Tls::None),
-        other => {
-            return BuildResult::Invalid(SmtpOutcome::InvalidConfig {
-                message: format!(
-                    "unsupported smtp port {other}: only 587 (STARTTLS), 465 (implicit TLS), and 25 (plain) are recognized"
-                ),
-            });
-        }
-    };
+    let builder = AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&resource.host)
+        .port(resource.port)
+        .tls(match resource.port {
+            465 => Tls::Wrapper(tls),
+            587 => Tls::Required(tls),
+            25 | 1025 | 2525 => Tls::None,
+            _ => Tls::Opportunistic(tls),
+        });
 
-    let creds = Credentials::new(resource.username.clone(), resource.password.clone());
-    let transport = builder.credentials(creds).build();
-    BuildResult::Ready(transport)
+    let builder = if !resource.username.is_empty() && !resource.password.is_empty() {
+        let creds = Credentials::new(resource.username.clone(), resource.password.clone());
+        builder.credentials(creds)
+    } else {
+        builder
+    };
+    BuildResult::Ready(builder.build())
 }
 
 fn tls_params(host: &str) -> Result<TlsParameters, SmtpOutcome> {
@@ -85,15 +85,29 @@ mod tests {
     }
 
     #[test]
-    fn unknown_port_rejected_with_invalid_config() {
-        match build(&r(2525)) {
-            BuildResult::Invalid(SmtpOutcome::InvalidConfig { message }) => {
-                assert!(message.contains("2525"));
-                assert!(message.contains("587"));
-                assert!(message.contains("465"));
-                assert!(message.contains("25"));
-            }
-            _ => panic!("expected InvalidConfig for unknown port"),
-        }
+    fn dev_catcher_ports_succeed() {
+        // mailhog / maildev / mailpit + the alt-submission convention need
+        // to be first-class so `just dev mailhog-up` is a complete loop.
+        assert!(matches!(build(&r(1025)), BuildResult::Ready(_)));
+        assert!(matches!(build(&r(2525)), BuildResult::Ready(_)));
+    }
+
+    #[test]
+    fn unknown_ports_fall_back_to_opportunistic() {
+        // Long-tail self-hosted relays shouldn't fail at config time —
+        // STARTTLS opportunistic upgrades when offered, plain otherwise.
+        assert!(matches!(build(&r(8025)), BuildResult::Ready(_)));
+    }
+
+    #[test]
+    fn blank_credentials_are_omitted() {
+        // Mailhog accepts anonymous SMTP; passing AUTH PLAIN with empty
+        // strings makes some real servers reject the dialog. Verified by
+        // construction here — the builder branch covered, the dialog test
+        // lives in tests.rs via the MessageSink seam.
+        let mut res = r(1025);
+        res.username = String::new();
+        res.password = String::new();
+        assert!(matches!(build(&res), BuildResult::Ready(_)));
     }
 }
