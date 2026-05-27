@@ -5,7 +5,7 @@
 
 use super::*;
 
-pub(super) fn lower_start(cx: &mut LoweringCtx) -> Result<(), CompileError> {
+pub(crate) fn lower_start(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     let id = &cx.node.id;
     let WorkflowNodeData::Start {
         label,

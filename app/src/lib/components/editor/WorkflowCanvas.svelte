@@ -304,6 +304,12 @@
 	function onConnect(connection: Connection) {
 		if (readonly) return;
 		const edgeId = `e-${connection.source}-${connection.target}-${Date.now()}`;
+		// Tools-handle source → agent-binding edge (not a sequence arc):
+		// the compiler discovers tools via these edges and mints the
+		// dispatch/collect transitions itself. Stamp the on-wire `type`
+		// accordingly so the engine + visualisation can render it
+		// distinctly from a regular data flow.
+		const isToolsEdge = connection.sourceHandle === 'tools';
 		const newEdge: Edge = {
 			id: edgeId,
 			source: connection.source!,
@@ -324,7 +330,7 @@
 				// wire. Fall back to "in" when xyflow returns null (user dropped
 				// on the node body without a specific handle).
 				targetHandle: connection.targetHandle ?? 'in',
-				type: 'sequence'
+				type: isToolsEdge ? 'tools' : 'sequence'
 			});
 		} else {
 			serializeAndEmit();

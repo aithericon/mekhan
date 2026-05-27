@@ -1307,6 +1307,31 @@
         }
       }
     },
+    "/api/v1/node-types": {
+      "get": {
+        "tags": [
+          "node-types"
+        ],
+        "summary": "GET /api/v1/node-types",
+        "description": "List every registered workflow node type with its display metadata,\nruntime kind, and protocol flags. The frontend reads this once per\nsession (cached alongside the backends registry) and drives the\neditor's palette + property-panel dispatch from it. The Svelte\ncomponent map (`lib/components/editor/nodes/index.ts`) and the Lucide\nicon map stay hand-written — components and icon imports can't be\nserialized through JSON — but the palette label, description, kind,\nand protocol flags flow from here.",
+        "operationId": "list_node_types",
+        "responses": {
+          "200": {
+            "description": "Registered node types",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/NodeDescriptor"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/observability/silent-drops": {
       "get": {
         "tags": [
@@ -7180,6 +7205,46 @@
           }
         }
       },
+      "NodeDescriptor": {
+        "type": "object",
+        "description": "Frontend-visible metadata for one node type. Returned by\n`GET /api/v1/node-types`.\n\nMirrors [`crate::backends::BackendDescriptor`]'s role for backends. The\nSvelte component map, Lucide icon imports, and per-section property\npanels stay frontend-only (they reference Svelte components that can't\nbe serialized through JSON); everything else flows from here.",
+        "required": [
+          "wireName",
+          "displayLabel",
+          "kind",
+          "lowersToAir",
+          "isJoin",
+          "parksDataEnvelope"
+        ],
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "displayLabel": {
+            "type": "string"
+          },
+          "isJoin": {
+            "type": "boolean"
+          },
+          "kind": {
+            "type": "string",
+            "description": "Runtime kind as snake_case string. Differs from `wire_name` only for\n`agent` (kind = `automated_step`)."
+          },
+          "lowersToAir": {
+            "type": "boolean"
+          },
+          "parksDataEnvelope": {
+            "type": "boolean"
+          },
+          "wireName": {
+            "type": "string",
+            "description": "Snake-case wire tag — matches the variant's serde rename."
+          }
+        }
+      },
       "OutputAuthoring": {
         "type": "string",
         "description": "Who owns the AutomatedStep's output port shape — the user (free\nauthoring), the backend (fixed canonical shape), or the backend's\nconfig (derived from `response_format` / schema / similar).\n\nFrontend reads this off `BackendDescriptor` and either renders the\ngeneric editable `PortsSection` (Free) or a read-only one whose fields\ncome from the registry (Fixed) or from a per-config server-side derive\ncall (Derived). The compiler still validates the persisted `output`\nagainst the canonical shape on publish — the authoring flag is a UX\ncontract, not a security boundary.",
@@ -11067,6 +11132,10 @@
     {
       "name": "backends",
       "description": "AutomatedStep backend registry — display metadata, default config, default output port, dispatch mode."
+    },
+    {
+      "name": "node-types",
+      "description": "Workflow node-type registry — per-variant display metadata, runtime kind, and protocol flags."
     },
     {
       "name": "health",

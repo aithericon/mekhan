@@ -225,7 +225,7 @@ async fn upsert_rows(
         .bind(row.iteration_index)
         .bind(ctx.template_id)
         .bind(ctx.template_version)
-        .bind(node_kind_to_str(row.node_kind))
+        .bind(row.node_kind.wire_str())
         .bind(row.status.as_str())
         .bind(row.inputs.as_ref())
         .bind(row.outputs.as_ref())
@@ -240,23 +240,3 @@ async fn upsert_rows(
     Ok(())
 }
 
-fn node_kind_to_str(kind: crate::compiler::NodeKind) -> &'static str {
-    match kind {
-        crate::compiler::NodeKind::Start => "start",
-        crate::compiler::NodeKind::End => "end",
-        crate::compiler::NodeKind::HumanTask => "human_task",
-        crate::compiler::NodeKind::AutomatedStep => "automated_step",
-        crate::compiler::NodeKind::Decision => "decision",
-        crate::compiler::NodeKind::Loop => "loop",
-        crate::compiler::NodeKind::ParallelSplit => "parallel_split",
-        crate::compiler::NodeKind::Join => "join",
-        crate::compiler::NodeKind::Scope => "scope",
-        crate::compiler::NodeKind::SubWorkflow => "sub_workflow",
-        crate::compiler::NodeKind::PhaseUpdate => "phase_update",
-        crate::compiler::NodeKind::ProgressUpdate => "progress_update",
-        crate::compiler::NodeKind::Failure => "failure",
-        crate::compiler::NodeKind::Delay => "delay",
-        crate::compiler::NodeKind::Timeout => "timeout",
-        crate::compiler::NodeKind::Trigger => "trigger",
-    }
-}

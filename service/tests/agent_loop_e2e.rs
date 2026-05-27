@@ -111,11 +111,11 @@ fn agent_node(id: &str) -> WorkflowNode {
     }
 }
 
-/// One tool-tagged HTTP child. Parent_id = the agent's id so the
-/// compiler discovers it via `children_by_parent` and the agent's tool
-/// loop emits a `dispatch_<tool_name>` place. HTTP is the lightest
-/// AutomatedStep backend to wire — no staged files needed.
-fn tool_child(id: &str, agent_id: &str, tool_name: &str) -> WorkflowNode {
+/// One tool-tagged HTTP child. The agent compiler discovers tools via
+/// outgoing edges with `source_handle == "tools"` (see `tools_edge`
+/// below) — `parent_id` is no longer a tool-binding mechanism. HTTP is
+/// the lightest AutomatedStep backend to wire — no staged files needed.
+fn tool_child(id: &str, _agent_id: &str, tool_name: &str) -> WorkflowNode {
     WorkflowNode {
         id: id.to_string(),
         node_type: "automated_step".to_string(),
@@ -139,13 +139,28 @@ fn tool_child(id: &str, agent_id: &str, tool_name: &str) -> WorkflowNode {
             retry_policy: RetryPolicy::default(),
             deployment_model: DeploymentModel::default(),
         },
-        parent_id: Some(agent_id.to_string()),
+        parent_id: None,
         width: None,
         height: None,
         tool_meta: Some(ToolMeta {
             tool_name: tool_name.to_string(),
             tool_description: "Look up information on a topic.".to_string(),
         }),
+    }
+}
+
+/// Edge from an agent's `tools` source handle to a tool node's input.
+/// This is how the compiler discovers tool children; without one, the
+/// agent has zero tools (degenerate path if also single-shot).
+fn tools_edge(id: &str, agent_id: &str, tool_id: &str) -> WorkflowEdge {
+    WorkflowEdge {
+        id: id.to_string(),
+        source: agent_id.to_string(),
+        target: tool_id.to_string(),
+        source_handle: Some("tools".to_string()),
+        target_handle: Some("in".to_string()),
+        label: None,
+        edge_type: "tools".to_string(),
     }
 }
 
@@ -189,7 +204,11 @@ fn multi_turn_agent_with_one_tool_compiles_to_agent_loop_shape() {
             tool_child("lookup_node", "a", "lookup"),
             end_node("e"),
         ],
-        vec![edge("e1", "s", "a"), edge("e2", "a", "e")],
+        vec![
+            edge("e1", "s", "a"),
+            edge("e2", "a", "e"),
+            tools_edge("et_lookup", "a", "lookup_node"),
+        ],
     );
 
     let places = place_ids(&air);
@@ -263,7 +282,11 @@ fn route_transitions_have_no_effect_handler() {
             tool_child("lookup_node", "a", "lookup"),
             end_node("e"),
         ],
-        vec![edge("e1", "s", "a"), edge("e2", "a", "e")],
+        vec![
+            edge("e1", "s", "a"),
+            edge("e2", "a", "e"),
+            tools_edge("et_lookup", "a", "lookup_node"),
+        ],
     );
 
     let transitions = air
@@ -306,7 +329,11 @@ fn route_dispatch_guard_bakes_in_max_turns() {
             tool_child("lookup_node", "a", "lookup"),
             end_node("e"),
         ],
-        vec![edge("e1", "s", "a"), edge("e2", "a", "e")],
+        vec![
+            edge("e1", "s", "a"),
+            edge("e2", "a", "e"),
+            tools_edge("et_lookup", "a", "lookup_node"),
+        ],
     );
     let dispatch = air
         .get("transitions")
@@ -350,7 +377,11 @@ fn route_guards_bake_in_stop_when() {
             tool_child("lookup_node", "a", "lookup"),
             end_node("e"),
         ],
-        vec![edge("e1", "s", "a"), edge("e2", "a", "e")],
+        vec![
+            edge("e1", "s", "a"),
+            edge("e2", "a", "e"),
+            tools_edge("et_lookup", "a", "lookup_node"),
+        ],
     );
     let transitions = air.get("transitions").and_then(Value::as_array).unwrap();
     for id in ["t_a_route_final", "t_a_route_dispatch_lookup", "t_a_route_unknown"] {
@@ -395,7 +426,11 @@ fn bubble_policy_routes_unknown_to_error_and_mints_bubble_collectors() {
             tool_child("lookup_node", "a", "lookup"),
             end_node("e"),
         ],
-        vec![edge("e1", "s", "a"), edge("e2", "a", "e")],
+        vec![
+            edge("e1", "s", "a"),
+            edge("e2", "a", "e"),
+            tools_edge("et_lookup", "a", "lookup_node"),
+        ],
     );
     let transitions = transition_ids(&air);
     assert!(
@@ -431,11 +466,13 @@ fn bubble_policy_routes_unknown_to_error_and_mints_bubble_collectors() {
     );
 }
 
-/// A `WorkflowEdge` whose target is a tool-meta'd node must be rejected
-/// at validate-time — tools are dispatched by name, not by graph edges,
-/// so a manual edge would let the tool fire outside the agent's
-/// control. The error names both endpoints + the edge_id so the editor
-/// can ring all three.
+/// A non-tools-handle `WorkflowEdge` whose target is a tool-meta'd node
+/// must be rejected at validate-time. The agent dispatches tools via the
+/// `tools` source handle (the validated kind of incoming edge); any
+/// OTHER incoming edge (a stray sequence edge from elsewhere in the
+/// graph) would let the tool fire outside the agent's control loop. The
+/// error names both endpoints + the edge_id so the editor can ring all
+/// three.
 #[test]
 fn incoming_edge_to_tool_child_is_validation_error() {
     let graph = WorkflowGraph {
@@ -445,20 +482,22 @@ fn incoming_edge_to_tool_child_is_validation_error() {
             tool_child("lookup_node", "a", "lookup"),
             end_node("e"),
         ],
-        // The accidental edge: Start → tool child directly. The author
-        // probably meant to drop the tool inside the agent's sidebar
-        // and accidentally connected it instead.
+        // The accidental edge: Start → tool child as a plain sequence
+        // edge (not a tools-handle edge from the agent). The author
+        // probably meant to connect Start → Agent and tug-dropped onto
+        // the wrong node.
         edges: vec![
             edge("e1", "s", "a"),
             edge("e_bad", "s", "lookup_node"),
             edge("e2", "a", "e"),
+            tools_edge("et_lookup", "a", "lookup_node"),
         ],
         viewport: None,
         instance_concurrency: Default::default(),
         definitions: Default::default(),
     };
     let err = compile_to_air(&graph, "t", "", &std::collections::HashMap::new())
-        .expect_err("edge into tool child must reject");
+        .expect_err("non-tools-handle edge into tool child must reject");
     let msg = err.to_string();
     assert!(
         msg.contains("lookup_node")
@@ -498,7 +537,11 @@ fn every_emitted_rhai_script_parses() {
             tool_child("lookup_node", "a", "lookup"),
             end_node("e"),
         ],
-        vec![edge("e1", "s", "a"), edge("e2", "a", "e")],
+        vec![
+            edge("e1", "s", "a"),
+            edge("e2", "a", "e"),
+            tools_edge("et_lookup", "a", "lookup_node"),
+        ],
     );
 
     let engine = rhai::Engine::new_raw();
@@ -539,6 +582,111 @@ fn every_emitted_rhai_script_parses() {
     );
 }
 
+/// Every terminal place the agent's lowering emits must be node-scoped
+/// (`{id}/...` or `p_{id}_*`). Without the `scoped_prefix` wrap around
+/// `executor_lifecycle`, the lifecycle's `completed`, `dead_letter`,
+/// and `cancelled` terminals escape into the top-level namespace —
+/// they collide if any other node calls `executor_lifecycle`, and the
+/// petri-net visualisation renders them as free-floating workflow
+/// terminals. Pins the wrap so a future refactor that drops it would
+/// fail here, not in production graphs.
+#[test]
+fn agent_terminals_must_be_node_scoped() {
+    let air = compile(
+        vec![start_node("s"), agent_node("a"), end_node("e")],
+        vec![edge("e1", "s", "a"), edge("e2", "a", "e")],
+    );
+    let places = air
+        .get("places")
+        .and_then(Value::as_array)
+        .expect("places array");
+    let stray: Vec<&str> = places
+        .iter()
+        .filter(|p| p.get("type").and_then(Value::as_str) == Some("terminal"))
+        .filter_map(|p| p.get("id").and_then(Value::as_str))
+        // p_*_ctrl is the workflow-exit terminal the End node's
+        // `workflow_terminals` aliases onto the upstream's split_outputs
+        // ctrl place — that's correct workflow-terminal semantics, not
+        // a lifecycle leak.
+        .filter(|id| !id.starts_with("a/") && !id.starts_with("p_") && !id.contains("/"))
+        .collect();
+    assert!(
+        stray.is_empty(),
+        "agent terminals must be node-scoped under `a/...`; found unscoped: {stray:?}"
+    );
+}
+
+/// Agent → bare End (no Start processName, no End resultMapping) must NOT
+/// promote the agent's slim `p_<agent>_ctrl` place to a workflow terminal.
+///
+/// Cause of the previously-observed bug: End's `p_<end>_done` is the dead
+/// side of a pass-through edge merge; the survivor is the upstream's
+/// `p_<agent>_ctrl`. The interface registry's `workflow_terminals` is
+/// alias-rewritten through the merge map, so a bare End's `terminal_id =
+/// p_<end>_done` collapsed onto `p_<agent>_ctrl` and `apply_terminal_place_types`
+/// tagged the agent's transient slim control place as a workflow exit.
+/// Effect: the engine marked the instance `completed` the instant the
+/// agent's `t_<agent>_yield` deposited a `{status: succeeded}` token, before
+/// any End-side projection ran. End stayed `pending` in the UI; the
+/// instance result was the slim envelope, not the agent's actual outputs.
+///
+/// Fix: `lower_end` now mints its own `p_<end>_terminal` place plus a
+/// `t_<end>_complete` forwarder for the no-process branch, anchoring the
+/// terminal on a place End emits. The agent's `p_<agent>_ctrl` survives the
+/// merge but remains a normal intermediate.
+#[test]
+fn bare_end_after_agent_does_not_tag_upstream_ctrl_terminal() {
+    let air = compile(
+        vec![start_node("s"), agent_node("a"), end_node("e")],
+        vec![edge("e1", "s", "a"), edge("e2", "a", "e")],
+    );
+    let places = air
+        .get("places")
+        .and_then(Value::as_array)
+        .expect("places array");
+
+    let ctrl = places
+        .iter()
+        .find(|p| p.get("id").and_then(Value::as_str) == Some("p_a_ctrl"))
+        .expect("agent ctrl place present");
+    let ctrl_ty = ctrl
+        .get("type")
+        .and_then(Value::as_str)
+        .or_else(|| ctrl.get("place_type").and_then(Value::as_str));
+    assert_ne!(
+        ctrl_ty,
+        Some("terminal"),
+        "p_a_ctrl is the agent's transient slim-control place; tagging it \
+         terminal makes the engine complete the workflow before End fires"
+    );
+
+    let end_term = places
+        .iter()
+        .find(|p| p.get("id").and_then(Value::as_str) == Some("p_e_terminal"))
+        .expect("End must mint its own p_e_terminal place");
+    let end_term_ty = end_term
+        .get("type")
+        .and_then(Value::as_str)
+        .or_else(|| end_term.get("place_type").and_then(Value::as_str));
+    assert_eq!(
+        end_term_ty,
+        Some("terminal"),
+        "End's own terminal place must carry the workflow-exit tag"
+    );
+
+    let transitions = air
+        .get("transitions")
+        .and_then(Value::as_array)
+        .expect("transitions array");
+    assert!(
+        transitions
+            .iter()
+            .any(|t| t.get("id").and_then(Value::as_str) == Some("t_e_complete")),
+        "End must emit a t_e_complete forwarder so a transition actually \
+         fires at workflow exit (so the UI/projector sees End execute)"
+    );
+}
+
 /// Two tool children with the same `tool_meta.tool_name` are a hard
 /// compile error — same shape as `SlugConflict`.
 #[test]
@@ -551,7 +699,12 @@ fn duplicate_tool_name_is_compile_error() {
             tool_child("c2", "a", "lookup"),
             end_node("e"),
         ],
-        edges: vec![edge("e1", "s", "a"), edge("e2", "a", "e")],
+        edges: vec![
+            edge("e1", "s", "a"),
+            edge("e2", "a", "e"),
+            tools_edge("et_c1", "a", "c1"),
+            tools_edge("et_c2", "a", "c2"),
+        ],
         viewport: None,
         instance_concurrency: Default::default(),
         definitions: Default::default(),

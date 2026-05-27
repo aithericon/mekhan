@@ -37,6 +37,9 @@ use utoipa::OpenApi;
             crate::backends::DispatchMode,
             crate::backends::ResourceChannel,
             crate::backends::OutputAuthoring,
+            // Node-type registry DTO — referenced via Vec<_> in the
+            // GET /api/v1/node-types handler.
+            crate::nodes::NodeDescriptor,
             // Phase B.9 — Resource CRUD DTOs. The handler bodies refer to
             // these directly but utoipa's auto-discovery only walks the
             // handler signature; nested types (e.g. ResourceTypeInfo
@@ -64,6 +67,7 @@ use utoipa::OpenApi;
         (name = "auth-tokens", description = "Embedded per-user automation tokens (Zitadel-backed PATs)."),
         (name = "resources", description = "Typed credential CRUD (`postgres`, `openai`, `s3`, `slack`, `google_oauth`). Workflows bind aliases to resources at launch; secrets live in Vault."),
         (name = "backends", description = "AutomatedStep backend registry — display metadata, default config, default output port, dispatch mode."),
+        (name = "node-types", description = "Workflow node-type registry — per-variant display metadata, runtime kind, and protocol flags."),
         (name = "health", description = "Liveness probe."),
     ),
 )]

@@ -135,17 +135,22 @@ fn start_to_end_produces_terminal_place() {
     let air = compile_to_air(&graph, "test", "desc", &std::collections::HashMap::new()).expect("should compile");
 
     // Start forks (`park_outputs`): p_s_ready (seed) + p_s_data (write-once
-    // parked copy) + p_s_main (forwarded; End merges into it) = 3 places,
-    // 1 t_s_park transition.
+    // parked copy) + p_s_main (forwarded; End merges into it) plus End's
+    // own anchored terminal place p_e_terminal = 4 places, 2 transitions
+    // (t_s_park + t_e_complete forwarder).
     assert!(
         has_place_of_type(&air, "terminal"),
         "expected a terminal place"
     );
-    assert_eq!(places(&air).len(), 3, "expected 3 places (ready/data/main)");
+    assert_eq!(
+        places(&air).len(),
+        4,
+        "expected 4 places (ready/data/main + End's p_e_terminal)"
+    );
     assert_eq!(
         transitions(&air).len(),
-        1,
-        "expected the t_s_park transition"
+        2,
+        "expected t_s_park + t_e_complete"
     );
 }
 
@@ -196,15 +201,19 @@ fn start_to_end_has_correct_structure() {
     assert_eq!(air["name"], "my_workflow");
     assert_eq!(air["description"], "a test workflow");
 
-    // After merge: the forwarded place absorbs End's terminal type (End
-    // merges into p_start_main, not the seed place). The Start no longer
-    // carries initial_tokens at compile time (parameterize_air seeds them
-    // at instance creation).
-    let main_place = places(&air)
+    // After b25ca8c: bare End anchors the workflow terminal on its own
+    // `p_<end>_terminal` place (fed by `t_<end>_complete` forwarder), not
+    // on the post-merge survivor of the inbound `p_<end>_done` collapse.
+    // The Start's forwarded `p_start_main` survives the merge but is now
+    // a plain intermediate `state` place, not the terminal.
+    let terminal_place = places(&air)
         .iter()
-        .find(|p| p["id"] == "p_start_main")
-        .expect("missing start main place");
-    assert_eq!(main_place["type"], "terminal", "forwarded place should be terminal after merge");
+        .find(|p| p["id"] == "p_end_terminal")
+        .expect("missing End's anchored terminal place");
+    assert_eq!(
+        terminal_place["type"], "terminal",
+        "End-owned p_end_terminal should be the workflow terminal"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1336,15 +1345,26 @@ fn transitive_merge_chain_resolves_correctly() {
         "t_b_yield should consume p_b_output, got: {yield_inputs:?}"
     );
 
-    // The End's terminal designation resolves through the merge alias chain
-    // (p_e_done -> p_b_ctrl) onto the foundation's surviving control place.
+    // Post-b25ca8c: the bare End anchors the workflow terminal on its own
+    // `p_e_terminal` place (fed by `t_e_complete` forwarder), not on
+    // `p_b_ctrl`. `p_b_ctrl` is now a plain intermediate `state` place
+    // that feeds `t_e_complete` (via the still-valid merge alias chain
+    // p_e_done -> p_b_ctrl on the input side).
     let b_ctrl = places(&air)
         .iter()
         .find(|p| p["id"] == "p_b_ctrl")
-        .expect("p_b_ctrl should be the surviving terminal place after alias resolution");
+        .expect("p_b_ctrl should survive as an intermediate state place");
     assert_eq!(
-        b_ctrl["type"], "terminal",
-        "p_b_ctrl should be terminal after p_e_done merges into it"
+        b_ctrl["type"], "state",
+        "p_b_ctrl is now intermediate; End's terminal is anchored on p_e_terminal"
+    );
+    let e_terminal = places(&air)
+        .iter()
+        .find(|p| p["id"] == "p_e_terminal")
+        .expect("End-owned p_e_terminal should be the workflow terminal");
+    assert_eq!(
+        e_terminal["type"], "terminal",
+        "p_e_terminal should be terminal after b25ca8c's End-anchor change"
     );
 }
 
@@ -3107,8 +3127,18 @@ fn start_no_file_fields_leaves_compiled_output_unchanged() {
 
     assert!(!has_transition(&air, "t_s_cat_shape_0"), "unexpected catalogue chain");
     assert!(!has_place(&air, "p_s_cat_art_0"), "unexpected artifact place");
-    assert_eq!(places(&air).len(), 3, "ready/data/main only — no catalogue places");
-    assert_eq!(transitions(&air).len(), 1, "only the t_s_park transition");
+    // Post-b25ca8c: ready/data/main + End's anchored p_e_terminal = 4 places;
+    // t_s_park + t_e_complete = 2 transitions.
+    assert_eq!(
+        places(&air).len(),
+        4,
+        "ready/data/main + End's p_e_terminal — no catalogue places"
+    );
+    assert_eq!(
+        transitions(&air).len(),
+        2,
+        "t_s_park + t_e_complete"
+    );
 }
 
 // ---------------------------------------------------------------------------

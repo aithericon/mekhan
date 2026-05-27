@@ -5,7 +5,7 @@
 
 use super::*;
 
-pub(super) fn lower_human_task(cx: &mut LoweringCtx) -> Result<(), CompileError> {
+pub(crate) fn lower_human_task(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     let id = &cx.node.id;
     let WorkflowNodeData::HumanTask { label, .. } = &cx.node.data else {
         unreachable!("lower_human_task on non-HumanTask node")

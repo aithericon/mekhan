@@ -33,22 +33,30 @@ pub(crate) fn validate(graph: &WorkflowGraph, wg: &WorkflowDiGraph) -> Result<()
         ));
     }
 
-    // Tool children (`tool_meta.is_some()`) are dispatched by the agent
-    // compiler via `tool_meta.tool_name`, not via graph edges (docs/12 § 2.2).
-    // An incoming WorkflowEdge into a tool would let it fire outside the
-    // agent's control — reject at publish so the editor catches an
-    // accidental edge-drag instead of producing a silently-broken net.
-    // Identify each tool's owning agent so the error names both endpoints.
-    let parent_by_id: HashMap<&str, &str> = graph
-        .nodes
-        .iter()
-        .filter_map(|n| n.parent_id.as_deref().map(|p| (n.id.as_str(), p)))
-        .collect();
+    // Tool nodes (`tool_meta.is_some()`) are dispatched by the agent
+    // compiler via the agent's `tools` source handle (docs/12 § 2.2). The
+    // only legitimate incoming edge into a tool node is the agent's
+    // tools-handle edge itself; any OTHER incoming edge (a stray sequence
+    // edge from somewhere else in the graph) would let the tool fire
+    // outside the agent's control loop — reject at publish so the editor
+    // catches an accidental edge-drag instead of producing a silently
+    // broken net. Identify each tool's owning agent (first source we see
+    // on a `tools`-handle edge into it) so the error names both endpoints.
+    let mut owning_agent_by_tool: HashMap<&str, &str> = HashMap::new();
+    for edge in &graph.edges {
+        if edge.source_handle.as_deref() == Some("tools") {
+            owning_agent_by_tool
+                .entry(edge.target.as_str())
+                .or_insert(edge.source.as_str());
+        }
+    }
     for edge in &graph.edges {
         let target = graph.nodes.iter().find(|n| n.id == edge.target);
         if let Some(target) = target {
-            if target.tool_meta.is_some() {
-                let agent_id = parent_by_id
+            if target.tool_meta.is_some()
+                && edge.source_handle.as_deref() != Some("tools")
+            {
+                let agent_id = owning_agent_by_tool
                     .get(target.id.as_str())
                     .copied()
                     .unwrap_or("<orphan>")
@@ -280,6 +288,20 @@ pub(crate) fn validate_edges_typed(graph: &WorkflowGraph) -> Result<(), CompileE
         //    Phase 4: every variant now returns at least one output port via
         //    `output_ports()`, so the "empty list = pass-through" branch only
         //    fires for `End` (which has no outgoing edges anyway).
+        //
+        //    Agent `tools` handle is special: it's a binding handle (the
+        //    compiler reads tools via `cx.agent_tools` and mints the
+        //    dispatch/collect transitions; `wire_edge` skips it), not a
+        //    data output port — so it carries no schema and doesn't appear
+        //    in `Agent::output_ports()`. Skip the source-port lookup +
+        //    type-check for `tools`-handle edges entirely; their semantics
+        //    are validated by the agent-loop lowering itself (missing
+        //    `tool_meta` → CompileError; duplicate tool_name → CompileError).
+        if edge.source_handle.as_deref() == Some("tools")
+            && matches!(src_node.data, WorkflowNodeData::Agent { .. })
+        {
+            continue;
+        }
         let src_ports = src_node.data.output_ports();
         let src_port: Option<Port> = match edge.source_handle.as_deref() {
             Some(h) => src_ports.iter().find(|p| p.id == h).cloned(),

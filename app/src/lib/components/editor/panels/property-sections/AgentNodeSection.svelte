@@ -98,19 +98,33 @@
 		});
 	});
 
-	// Tool children: nodes in the same graph whose parent_id points here and
-	// which carry `tool_meta`. Shown read-only — to edit a tool's name /
-	// description the author opens that child node's panel. Compile rejects
-	// duplicates on publish, so we surface that warning inline too.
+	// Tool children: every node reachable from this agent via a
+	// `tools`-handle edge — even ones not yet tagged with `toolMeta`. We
+	// list untagged tools too so the author can see them and is prompted
+	// to name them (otherwise the compiler rejects at publish with no
+	// canvas-side hint as to which node needs attention). The agent's
+	// `tools` source handle is the binding mechanism — drag from it onto
+	// any node you want the LLM to be able to call. To edit a tool's
+	// name / description, open that target node's panel. Compile rejects
+	// duplicates + untagged tools on publish, so we surface both
+	// warnings inline.
 	const toolChildren = $derived.by(() => {
 		if (!binding || !nodeId) return [];
-		return binding.graph.nodes.filter((n) => n.parentId === nodeId && n.toolMeta);
+		const nodeById = new Map(binding.graph.nodes.map((n) => [n.id, n]));
+		const targets: typeof binding.graph.nodes = [];
+		for (const e of binding.graph.edges) {
+			if (e.source !== nodeId) continue;
+			if (e.sourceHandle !== 'tools') continue;
+			const t = nodeById.get(e.target);
+			if (t) targets.push(t);
+		}
+		return targets;
 	});
 	const duplicateToolNames = $derived.by(() => {
 		const seen = new Set<string>();
 		const dups = new Set<string>();
 		for (const child of toolChildren) {
-			const name = child.toolMeta?.toolName ?? '';
+			const name = child.toolMeta?.toolName?.trim() ?? '';
 			if (!name) continue;
 			if (seen.has(name)) dups.add(name);
 			seen.add(name);
@@ -329,21 +343,41 @@
 		</p>
 	{:else if toolChildren.length === 0}
 		<p class="text-sm text-muted-foreground">
-			No tool children yet. Drag an Automated Step (or any node type) onto this agent on the
-			canvas, then tag it with a tool name in its panel.
+			No tools connected yet. Drag from the agent's <code>tools</code> handle (top of the node)
+			to any Automated Step or SubWorkflow you want the LLM to be able to call — the model picks
+			tools by name from this list each turn.
 		</p>
 	{:else}
+		<p class="text-sm text-muted-foreground">
+			The model picks one of these by name each turn. Click a tool below to open its panel and
+			set its name + description.
+		</p>
 		<ul class="space-y-1" data-testid="agent-tool-list">
 			{#each toolChildren as child (child.id)}
+				{@const isTagged = !!child.toolMeta?.toolName?.trim()}
+				{@const isDup = isTagged && duplicateToolNames.has(child.toolMeta?.toolName?.trim() ?? '')}
 				<li class="flex items-start justify-between gap-2 rounded-md border border-border/60 px-2 py-1.5">
 					<div class="min-w-0 flex-1">
 						<div class="flex items-center gap-1.5">
-							<code class="truncate font-mono text-sm font-medium text-foreground">
-								{child.toolMeta?.toolName || '<unnamed>'}
-							</code>
-							{#if duplicateToolNames.has(child.toolMeta?.toolName ?? '')}
+							{#if isTagged}
+								<code class="truncate font-mono text-sm font-medium text-foreground">
+									{child.toolMeta?.toolName}
+								</code>
+							{:else}
+								<span class="truncate text-sm text-muted-foreground italic">
+									{child.data?.label ?? child.id}
+								</span>
 								<span
-									class="rounded bg-destructive/10 px-1.5 py-0.5 text-sm font-medium text-destructive"
+									class="shrink-0 rounded bg-amber-500/15 px-1.5 py-0.5 text-sm font-medium text-amber-700 dark:text-amber-400"
+									title="The LLM addresses tools by name. Untagged tools are invisible to it and will be rejected at publish."
+									data-testid="agent-tool-needs-name"
+								>
+									needs tool name
+								</span>
+							{/if}
+							{#if isDup}
+								<span
+									class="shrink-0 rounded bg-destructive/10 px-1.5 py-0.5 text-sm font-medium text-destructive"
 									data-testid="agent-tool-duplicate"
 								>
 									duplicate
@@ -353,6 +387,10 @@
 						{#if child.toolMeta?.toolDescription}
 							<p class="truncate text-sm text-muted-foreground" title={child.toolMeta.toolDescription}>
 								{child.toolMeta.toolDescription}
+							</p>
+						{:else if isTagged}
+							<p class="truncate text-sm text-muted-foreground italic">
+								(no description — the model has nothing to decide when to call this tool)
 							</p>
 						{/if}
 					</div>

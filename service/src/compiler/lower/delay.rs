@@ -10,7 +10,7 @@
 use super::*;
 use crate::compiler::interface::{CancelKind, CancellableInFlight};
 
-pub(super) fn lower_delay(cx: &mut LoweringCtx) -> Result<(), CompileError> {
+pub(crate) fn lower_delay(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     let id = &cx.node.id;
     let WorkflowNodeData::Delay {
         label,

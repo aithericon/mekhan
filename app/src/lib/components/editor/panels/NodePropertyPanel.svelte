@@ -325,12 +325,13 @@
 			<AgentNodeSection {data} {readonly} {onchange} {binding} {nodeId} {scope} />
 		{/if}
 
-		<!-- Tool tagging: any child of an Agent can be exposed as a tool
-		     (docs/12 § 2.2). The section self-gates on `parent.type === 'agent'`
-		     so it only renders for nodes whose parent is an Agent; for
-		     all others it's a no-op. Mounted here (not inside per-variant
-		     sections) so HumanTask, SubWorkflow, AutomatedStep, and Agent
-		     children all gain tool-tagging via the same surface. -->
+		<!-- Tool tagging: any node wired to an Agent's `tools` source handle
+		     can be exposed as a tool (docs/12 § 2.2). The section self-gates
+		     on "is this node the target of a `tools`-handle edge from an
+		     Agent" so it only renders for nodes the user has connected as
+		     tools; for all others it's a no-op. Mounted here (not inside
+		     per-variant sections) so HumanTask, SubWorkflow, AutomatedStep,
+		     etc. all gain tool-tagging via the same surface. -->
 		{#if binding && nodeId}
 			<ToolMetaSection {binding} {nodeId} {readonly} />
 		{/if}

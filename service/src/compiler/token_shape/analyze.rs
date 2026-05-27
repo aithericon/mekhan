@@ -597,16 +597,23 @@ pub(crate) fn collect_leaves(
 
 /// A node is a *parked producer* (its business output gets a write-once
 /// `p_{id}_data` place that read-arcs can borrow) iff it is a HumanTask,
-/// AutomatedStep, or SubWorkflow (`lower.rs::split_outputs`) **or a Start**
-/// (`lower.rs::park_outputs`). Start forks rather than splits — it parks a
-/// write-once copy of its declared inputs to `p_{id}_data` while still
-/// forwarding the full token — so `start.<field>` is borrow-reachable
+/// AutomatedStep, Agent, or SubWorkflow (`lower.rs::split_outputs`) **or a
+/// Start** (`lower.rs::park_outputs`). Start forks rather than splits — it
+/// parks a write-once copy of its declared inputs to `p_{id}_data` while
+/// still forwarding the full token — so `start.<field>` is borrow-reachable
 /// downstream exactly like `review.<field>`, and the immediately-following
 /// task can still interpolate Start fields off the control token.
 ///
 /// SubWorkflow uses the same split_outputs tail as AutomatedStep, so its
 /// declared output fields ride the parked `p_{id}_data` place after the
 /// join — `<sub_slug>.<field>` is the only addressable form downstream.
+///
+/// Agent lowering (loop path) also tails into `split_outputs` for its
+/// `p_output` and publishes a `data_port`, so `<agent>.response` /
+/// `.turn` / `.final_response` borrows resolve via the same hoist path
+/// as AutomatedStep. The degenerate single-shot path is already
+/// AutomatedStep-shaped (it virtualises into one), so Agent gets full
+/// parked-producer semantics regardless of which lowering branch fires.
 pub(crate) fn is_parked_producer(graph: &WorkflowGraph, id: &str) -> bool {
     graph.nodes.iter().any(|n| {
         n.id == id
@@ -614,6 +621,7 @@ pub(crate) fn is_parked_producer(graph: &WorkflowGraph, id: &str) -> bool {
                 n.data,
                 WorkflowNodeData::HumanTask { .. }
                     | WorkflowNodeData::AutomatedStep { .. }
+                    | WorkflowNodeData::Agent { .. }
                     | WorkflowNodeData::SubWorkflow { .. }
                     | WorkflowNodeData::Start { .. }
                     | WorkflowNodeData::Loop { .. }

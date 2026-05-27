@@ -12,7 +12,7 @@
 
 use super::*;
 
-pub(super) fn lower_agent(cx: &mut LoweringCtx) -> Result<(), CompileError> {
+pub(crate) fn lower_agent(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     let WorkflowNodeData::Agent {
         max_turns,
         stop_when,
@@ -23,15 +23,24 @@ pub(super) fn lower_agent(cx: &mut LoweringCtx) -> Result<(), CompileError> {
         unreachable!("lower_agent on non-Agent node")
     };
 
-    // Tool detection is structural — any child whose `tool_meta` is set
-    // (docs/12 § 2.2). The picker / wire layer treats them like any other
-    // child for layout; only the agent compiler reads `tool_meta`.
-    let tool_children: Vec<&WorkflowNode> = cx
-        .children
-        .iter()
-        .filter(|c| c.tool_meta.is_some())
-        .copied()
-        .collect();
+    // Tool detection: nodes the agent reaches via outgoing edges keyed by
+    // `source_handle == "tools"` (orchestrator pre-indexes these into
+    // `cx.agent_tools`). Each tool target must declare its own `tool_meta`
+    // (the name + description the LLM sees); a tools-edge to a node without
+    // `tool_meta` is a hard compile error so authoring mistakes surface at
+    // publish, not silently at the first tool-use turn.
+    let mut tool_children: Vec<&WorkflowNode> = Vec::with_capacity(cx.agent_tools.len());
+    for &child in cx.agent_tools.iter() {
+        if child.tool_meta.is_none() {
+            return Err(CompileError::Compilation(format!(
+                "agent node '{}': tool edge targets node '{}' which has no \
+                 tool_meta declared (set tool_name + tool_description on the \
+                 target node, or remove the tools-handle edge)",
+                cx.node.id, child.id
+            )));
+        }
+        tool_children.push(child);
+    }
     let has_tool_children = !tool_children.is_empty();
 
     // Degenerate fast path: when the agent has zero tool children AND
@@ -115,6 +124,7 @@ fn lower_agent_degenerate(cx: &mut LoweringCtx) -> Result<(), CompileError> {
         outgoing_edges: cx.outgoing_edges,
         incoming_edges: cx.incoming_edges,
         children: cx.children,
+        agent_tools: cx.agent_tools,
         ctx: &mut *cx.ctx,
         ports: &mut *cx.ports,
         fixups: &mut *cx.fixups,
@@ -367,18 +377,28 @@ fn lower_agent_loop(
     ))
     .done();
 
-    let lc = executor_lifecycle(
-        ctx,
-        ExecutorBridges {
-            inbox: exec_inbox_for_lc,
-            result_out: None,
-            failure_out: None,
-            process_id: None,
-            process_step: None,
-            catalogue: false,
-            process: false,
-        },
-    );
+    // Scoped-prefix wrap mirrors `lower_automated_step`. Without it the
+    // lifecycle's terminal places (`completed`, `dead_letter`,
+    // `cancelled`) leak into the top-level namespace and (1) collide if
+    // any other node calls `executor_lifecycle`, (2) clutter the
+    // petri-net visualisation with free-floating terminals that look
+    // like workflow exits. Inside the prefix they become
+    // `{id}/completed`, `{id}/dead_letter`, etc. — same shape an LLM
+    // AutomatedStep produces.
+    let lc = ctx.scoped_prefix(id.as_str(), label.as_str(), |ctx| {
+        executor_lifecycle(
+            ctx,
+            ExecutorBridges {
+                inbox: exec_inbox_for_lc,
+                result_out: None,
+                failure_out: None,
+                process_id: None,
+                process_step: None,
+                catalogue: false,
+                process: false,
+            },
+        )
+    });
 
     // ----- t_to_response: lc.completed + p_state_in_flight → p_response -----
     // Re-unites state with the LLM response and accumulates this turn's
