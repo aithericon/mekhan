@@ -980,32 +980,48 @@ mod scope_reachability_tests {
         let g: WorkflowGraph = serde_json::from_str(json).expect("deser file-envelope graph");
         let report = analyze(&g).expect("analyze");
         let scope = report.scopes.get("ocr").expect("ocr scope");
-        let by_path: std::collections::BTreeMap<&str, String> =
-            scope.iter().map(|e| (e.path.as_str(), e.ty.kind_label())).collect();
+        let by_path: std::collections::BTreeMap<&str, &ScopeEntry> =
+            scope.iter().map(|e| (e.path.as_str(), e)).collect();
 
-        assert_eq!(
-            by_path.get("start.document").map(String::as_str),
-            Some("FileRef"),
-            "container leaf must be a pickable FileRef; offered: {:?}",
-            by_path
-        );
-        assert_eq!(
-            by_path.get("start.document.url").map(String::as_str),
-            Some("String"),
-            "metadata subkey `url` must be nested under the file field, not flat at `start.url`; offered: {:?}",
-            by_path
-        );
-        assert_eq!(by_path.get("start.document.filename").map(String::as_str), Some("String"));
-        assert_eq!(by_path.get("start.document.content_type").map(String::as_str), Some("String"));
+        // Feature A tree DTO: File envelopes emit ONE root entry
+        // (`start.document`) whose `ty` is an anchored `Object` carrying
+        // the nested `{url, filename, content_type}` subtree. The
+        // container is `selectable: true` so the picker keeps offering
+        // it as a pickable FileRef alongside the per-key drill-down via
+        // `ty.fields`.
+        let doc = by_path
+            .get("start.document")
+            .unwrap_or_else(|| panic!("start.document missing; offered: {by_path:?}"));
+        let TyDescriptor::Object {
+            ref fields,
+            selectable,
+        } = doc.ty
+        else {
+            panic!(
+                "start.document must be an anchored Object, got {}",
+                doc.ty.kind_label()
+            );
+        };
+        assert!(selectable, "file-anchored container must be selectable");
+        assert!(matches!(
+            fields.get("url"),
+            Some(TyDescriptor::Scalar { name }) if name == "String"
+        ));
+        assert!(matches!(
+            fields.get("filename"),
+            Some(TyDescriptor::Scalar { name }) if name == "String"
+        ));
+        assert!(matches!(
+            fields.get("content_type"),
+            Some(TyDescriptor::Scalar { name }) if name == "String"
+        ));
 
-        // The pre-fix flat form (the bug from the screenshot) must be gone:
-        // `start.url` would imply Start declared a top-level `url` field.
-        assert!(
-            !by_path.contains_key("start.url"),
-            "flat `start.url` must not be offered — that path lives under `document`: {:?}",
-            by_path
-        );
+        // Nested paths live inside `ty.fields` and are NOT emitted as
+        // separate roots — neither the historical-bug flat form
+        // (`start.url`) nor the tree-DTO duplicate (`start.document.url`).
+        assert!(!by_path.contains_key("start.url"));
         assert!(!by_path.contains_key("start.filename"));
         assert!(!by_path.contains_key("start.content_type"));
+        assert!(!by_path.contains_key("start.document.url"));
     }
 }

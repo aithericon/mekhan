@@ -15,9 +15,9 @@ use crate::compiler::borrow::ctx::BorrowContext;
 use crate::compiler::error::CompileError;
 use crate::compiler::graph::WorkflowDiGraph;
 use crate::compiler::token_shape::{
-    analyze, collect_leaves, is_control_leaf, is_loop_node, is_parked_producer, scalar_satisfies,
-    scan_dotted_refs, topo_pos, LitTy, ScopeEntry, ShapeDiagnostic, SlugIndex, TokenShape,
-    TyDescriptor,
+    analyze, collect_scope_roots, is_control_leaf, is_loop_node, is_parked_producer,
+    scalar_satisfies, scan_dotted_refs, topo_pos, LitTy, ScopeEntry, ShapeDiagnostic, SlugIndex,
+    TokenShape,
 };
 use crate::models::template::{WorkflowGraph, WorkflowNode, WorkflowNodeData};
 
@@ -250,9 +250,9 @@ pub(crate) fn reachable_scope(
     //     phase (2), per spec §2 ("the picker emits the qualified form for
     //     everything borrowed").
     if let Some(in_shape) = node_in.get(&node.id) {
-        let mut leaves = Vec::new();
-        collect_leaves(in_shape, "", None, &mut leaves);
-        for (dotted, ty, prov) in leaves {
+        let mut roots = Vec::new();
+        collect_scope_roots(in_shape, "", None, &mut roots);
+        for (dotted, ty, prov) in roots {
             // Classify by the *top-level* key — what `is_control_leaf` and
             // `is_parked_producer` reason about — not the deepest segment.
             let head = dotted.split('.').next().unwrap_or(&dotted);
@@ -274,7 +274,7 @@ pub(crate) fn reachable_scope(
                 .entry(format!("input.{dotted}"))
                 .or_insert(ScopeEntry {
                     path: format!("input.{dotted}"),
-                    ty: TyDescriptor::Scalar { name: ty },
+                    ty,
                     producer_node,
                     producer_label,
                     note: prov.note,
@@ -297,20 +297,18 @@ pub(crate) fn reachable_scope(
             let Some(shape) = node_out.get(&up.id) else {
                 continue;
             };
-            let mut leaves = Vec::new();
-            collect_leaves(shape, "", None, &mut leaves);
-            for (dotted, ty, prov) in leaves {
+            let mut roots = Vec::new();
+            collect_scope_roots(shape, "", None, &mut roots);
+            for (dotted, ty, prov) in roots {
                 let owner = prov.node_id.clone();
                 if owner == node.id || !is_parked_producer(graph, &owner) {
                     continue;
                 }
-                // Preserve the *full* dotted path — anchored containers (File
-                // envelopes) emit both the container leaf (`document`) and
-                // nested subkey leaves (`document.url`, `.filename`, …), and
-                // truncating to the last segment would (a) drop the container
-                // leaf entirely and (b) misattribute `document.url` to a
-                // nonexistent `start.url`. `is_control_leaf` is already
-                // head-aware, so it does the right thing on multi-segment input.
+                // `collect_scope_roots` emits one entry per top-level
+                // user-meaningful field (anchored containers and arrays
+                // collapse to a single root carrying the nested tree in
+                // `ty`). `is_control_leaf` is head-aware, so it does the
+                // right thing on multi-segment input.
                 if is_control_leaf(&format!("input.{dotted}")) {
                     continue; // identity/routing — slim control token
                 }
@@ -318,7 +316,7 @@ pub(crate) fn reachable_scope(
                 let path = format!("{slug}.{dotted}");
                 by_path.entry(path.clone()).or_insert(ScopeEntry {
                     path,
-                    ty: TyDescriptor::Scalar { name: ty },
+                    ty,
                     producer_node: owner,
                     producer_label: prov.node_label,
                     note: prov.note,

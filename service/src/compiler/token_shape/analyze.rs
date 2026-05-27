@@ -762,3 +762,59 @@ pub fn collect_scope_tree(shape: &TokenShape, prov_anchor: Option<&ScalarTy>) ->
         TokenShape::Opaque(n) => TyDescriptor::Opaque { name: n.clone() },
     }
 }
+
+/// Every `(dotted_path, TyDescriptor, provenance)` *root* of a shape — the
+/// tree-DTO sibling of [`collect_leaves`]. Mirrors the same "flatten plain
+/// Object containers" rule (HumanTask/AutomatedStep runtime envelopes like
+/// `data`, `detail` are not part of the addressable surface), but instead
+/// of fanning anchored containers and arrays into per-leaf entries it emits
+/// **one entry per top-level user-meaningful field**, carrying the entire
+/// nested subtree in [`TyDescriptor`]. The picker walks that subtree to
+/// offer drill-down without needing additional calls.
+///
+/// Concretely: a File envelope `document: { url, filename, content_type }`
+/// emits **one** root entry `document` whose `ty` is the nested object
+/// (with `selectable: true`); an array of objects `tasks: Array<Object>`
+/// emits one root entry `tasks` whose `ty` is `Array{ element: Object }`.
+pub(crate) fn collect_scope_roots(
+    shape: &TokenShape,
+    prefix: &str,
+    prov: Option<&Provenance>,
+    out: &mut Vec<(String, TyDescriptor, Provenance)>,
+) {
+    match shape {
+        TokenShape::Object(map) if !map.is_empty() => {
+            // Anchored container (currently: File envelopes) — emit one rich
+            // root carrying the full nested tree; do NOT recurse into
+            // children at root level. Per-leaf addressability is preserved by
+            // the picker walking `ty.fields` instead of by fan-out.
+            if prov.and_then(|p| p.anchor.as_ref()).is_some() {
+                if let Some(p) = prov {
+                    out.push((
+                        prefix.to_string(),
+                        collect_scope_tree(shape, p.anchor.as_ref()),
+                        p.clone(),
+                    ));
+                }
+            } else {
+                // Plain Object — runtime envelope. Descend, RESETTING the
+                // prefix to the bare child key (matches `collect_leaves`'s
+                // long-standing rule: `data.amount` → `amount`).
+                for (k, f) in map {
+                    collect_scope_roots(&f.shape, k, Some(&f.prov), out);
+                }
+            }
+        }
+        // Scalar / Array / Any / Opaque / empty Object — each is a single
+        // pickable root entry.
+        _ => {
+            if let Some(p) = prov {
+                out.push((
+                    prefix.to_string(),
+                    collect_scope_tree(shape, p.anchor.as_ref()),
+                    p.clone(),
+                ));
+            }
+        }
+    }
+}
