@@ -771,6 +771,59 @@ mod tests {
         }
     }
 
+    /// The bundled invoice-processing demo carries a Feature-B Repeater
+    /// block on `manager-approval` that iterates `extract.line_items[*]`.
+    /// This pins the demo's full compile path — load + sidecar merge +
+    /// validate (including Repeater's typed-error gates) + lower — so a
+    /// regression in any of those layers fails here instead of at
+    /// `MEKHAN__DEMOS__SEED=true` startup time on a developer's machine.
+    #[test]
+    fn invoice_processing_demo_compiles_with_repeater() {
+        use crate::compiler::{
+            compile_to_air, node_files_inline,
+        };
+        use crate::models::template::{TaskBlockConfig, WorkflowNodeData};
+
+        let demo = load_demo(&repo_root().join("demos/invoice-processing"))
+            .expect("invoice-processing demo must load");
+
+        // Sidecar overlay: `nodes/manager-approval/task.json` must have
+        // merged a Repeater block into manager-approval's steps. Without
+        // the overlay we'd skip the most interesting compile path below.
+        let manager = demo
+            .graph
+            .nodes
+            .iter()
+            .find(|n| n.id == "manager-approval")
+            .expect("manager-approval node");
+        match &manager.data {
+            WorkflowNodeData::HumanTask { steps, .. } => {
+                let has_repeater = steps
+                    .iter()
+                    .flat_map(|s| s.blocks.iter())
+                    .any(|b| matches!(b, TaskBlockConfig::Repeater { .. }));
+                assert!(
+                    has_repeater,
+                    "manager-approval must carry a Repeater block from \
+                     nodes/manager-approval/task.json — found steps: {steps:?}",
+                );
+            }
+            other => panic!("manager-approval must be a HumanTask, got {other:?}"),
+        }
+
+        // Full compile through the same path mekhan-service uses at
+        // publish time — surfaces RepeaterRef* errors as a hard fail
+        // here rather than a runtime engine wedge.
+        let files = node_files_inline(&demo.files);
+        let _air = compile_to_air(
+            &demo.graph,
+            &demo.metadata.name,
+            demo.metadata.description.as_deref().unwrap_or(""),
+            &files,
+        )
+        .expect("invoice-processing must compile (Repeater + sidecar overlays)");
+    }
+
     /// The bundled document-pipeline-v1 demo's graph.json must parse and the
     /// merge-extraction node must deserialize as a `Join { mode: Any }`
     /// (XOR-join — the primitive introduced alongside this test). Then

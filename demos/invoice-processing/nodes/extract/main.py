@@ -22,7 +22,7 @@
 import time
 
 # Process layout / definition surfaced to the user for this step.
-define_phases(["Load document", "OCR scan", "NLP extraction", "Validate", "Emit"])
+define_phases(["Load document", "OCR scan", "NLP extraction", "Line items", "Validate", "Emit"])
 
 update_phase("Load document", "running")
 log_info("loading invoice", vendor=review.vendor_name, amount=review.invoice_amount)
@@ -43,6 +43,23 @@ log_info("extracting structured fields: vendor, amount, line items")
 update_progress(0.6, "NLP field extraction")
 time.sleep(0.6)
 update_phase("NLP extraction", "completed")
+
+# ── Mocked OCR line items (Feature B demo input) ──
+# Real OCR would emit one entry per detected row. Hard-coded here so the
+# Repeater downstream renders a stable, demo-able set of rows without
+# needing a real document. The shape is what `manager-approval`'s
+# Repeater iterates: each element is rendered as one form row with a
+# `description`-labelled header + per-row `approved` + `notes` fields.
+update_phase("Line items", "running")
+log_info("emitting mocked OCR line items for downstream Repeater review")
+update_progress(0.75, "Line items")
+line_items = [
+    {"description": "Consulting services — Q4", "amount": 3200.00, "category": "services"},
+    {"description": "Cloud infrastructure (Nov)", "amount": 1450.50, "category": "infra"},
+    {"description": "License renewal — analytics suite", "amount": 850.00, "category": "software"},
+]
+log_metric("line_items_count", float(len(line_items)))
+update_phase("Line items", "completed")
 
 update_phase("Validate", "running")
 if (review.invoice_amount or 0) <= 0:
