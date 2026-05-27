@@ -10,7 +10,7 @@
 use axum::{
     body::Body,
     extract::{Request, State},
-    http::{HeaderMap, HeaderName, HeaderValue, StatusCode},
+    http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode},
     response::{IntoResponse, Response},
     routing::any,
     Router,
@@ -18,9 +18,29 @@ use axum::{
 use futures::TryStreamExt;
 use reqwest::Client;
 
+use crate::auth::{instance_workspace, member_role, AuthUser, MembershipError};
 use crate::AppState;
 
 const STRIP_PREFIX: &str = "/petri";
+
+/// Extract the engine `net_id` from a post-strip proxy path.
+///
+/// After `STRIP_PREFIX` is removed, engine paths look like
+/// `/api/nets/{id}/...`. Anything that doesn't match that shape (engine
+/// health probes, root pings) returns `None` — those stay un-gated because
+/// they don't enumerate per-instance state.
+fn extract_net_id(path: &str) -> Option<&str> {
+    let stripped = path.strip_prefix("/api/nets/")?;
+    let end = stripped
+        .find(|c: char| c == '/' || c == '?')
+        .unwrap_or(stripped.len());
+    let id = &stripped[..end];
+    if id.is_empty() {
+        None
+    } else {
+        Some(id)
+    }
+}
 
 /// Hop-by-hop headers that must NOT be forwarded (RFC 7230 §6.1).
 fn is_hop_by_hop(name: &HeaderName) -> bool {
@@ -60,6 +80,19 @@ async fn proxy(State(state): State<AppState>, req: Request) -> Result<Response, 
         .strip_prefix(STRIP_PREFIX)
         .unwrap_or(path_and_query);
     let rest = if rest.is_empty() { "/" } else { rest };
+
+    // Workspace ACL: only paths that scope an engine net (`/api/nets/{id}/...`)
+    // are per-instance gated. Engine health / root pings don't enumerate
+    // instance state, so they ride through inside the auth gate the same way
+    // every other `/api/v1/*` route does.
+    if let Some(net_id) = extract_net_id(rest) {
+        let user = req
+            .extensions()
+            .get::<AuthUser>()
+            .cloned()
+            .ok_or(ProxyError::NoAuthUser)?;
+        gate_petri_instance(&state, &user, net_id, req.method()).await?;
+    }
 
     let target = format!(
         "{}{}",
@@ -132,12 +165,54 @@ fn reqwest_client() -> Client {
         .clone()
 }
 
+/// Per-instance ACL: read = `safe method on public template OR member`,
+/// write = `member`. `safe` follows RFC 7231 (GET/HEAD/OPTIONS/TRACE); the
+/// engine treats anything else as state-changing (run-mode flips, command
+/// fires, scenario loads), so public-write is never allowed even for a
+/// publicly visible template.
+async fn gate_petri_instance(
+    state: &AppState,
+    user: &AuthUser,
+    net_id: &str,
+    method: &Method,
+) -> Result<(), ProxyError> {
+    let (workspace_id, visibility) = instance_workspace(&state.db, net_id)
+        .await
+        .map_err(|err| match err {
+            MembershipError::TemplateNotFound(_) => ProxyError::NotFound,
+            MembershipError::Db(e) => ProxyError::Db(e.to_string()),
+            // `instance_workspace` never returns NotMember /
+            // InsufficientRole; collapse to Db for completeness.
+            other => ProxyError::Db(other.to_string()),
+        })?;
+
+    let is_safe = method.is_safe();
+    if is_safe && visibility == "public" {
+        return Ok(());
+    }
+
+    match member_role(&state.db, user, workspace_id).await {
+        Ok(_) => Ok(()),
+        Err(MembershipError::NotMember(_)) => Err(ProxyError::Forbidden),
+        Err(MembershipError::Db(e)) => Err(ProxyError::Db(e.to_string())),
+        Err(other) => Err(ProxyError::Db(other.to_string())),
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 enum ProxyError {
     #[error("bad method")]
     BadMethod,
     #[error("engine upstream: {0}")]
     Upstream(reqwest::Error),
+    #[error("instance not found")]
+    NotFound,
+    #[error("forbidden")]
+    Forbidden,
+    #[error("auth user not in request extensions")]
+    NoAuthUser,
+    #[error("db error: {0}")]
+    Db(String),
 }
 
 impl IntoResponse for ProxyError {
@@ -145,6 +220,13 @@ impl IntoResponse for ProxyError {
         let (status, msg) = match self {
             ProxyError::BadMethod => (StatusCode::BAD_REQUEST, "bad method"),
             ProxyError::Upstream(_) => (StatusCode::BAD_GATEWAY, "engine unreachable"),
+            ProxyError::NotFound => (StatusCode::NOT_FOUND, "instance not found"),
+            ProxyError::Forbidden => (
+                StatusCode::FORBIDDEN,
+                "not a member of this instance's workspace",
+            ),
+            ProxyError::NoAuthUser => (StatusCode::UNAUTHORIZED, "unauthenticated"),
+            ProxyError::Db(_) => (StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
         };
         (status, msg).into_response()
     }
@@ -157,5 +239,31 @@ pub fn router(state: AppState) -> Router {
         .route("/petri", any(proxy))
         .route("/petri/{*rest}", any(proxy))
         .with_state(state)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::extract_net_id;
+
+    #[test]
+    fn extracts_net_id_from_well_formed_engine_path() {
+        assert_eq!(
+            extract_net_id("/api/nets/mekhan-abc/state"),
+            Some("mekhan-abc")
+        );
+        assert_eq!(
+            extract_net_id("/api/nets/abc-123/events?from_sequence=10"),
+            Some("abc-123")
+        );
+        assert_eq!(extract_net_id("/api/nets/only-id"), Some("only-id"));
+    }
+
+    #[test]
+    fn no_net_id_for_engine_root_or_health() {
+        assert_eq!(extract_net_id("/"), None);
+        assert_eq!(extract_net_id("/healthz"), None);
+        assert_eq!(extract_net_id("/api/nets/"), None);
+        assert_eq!(extract_net_id("/api/something-else"), None);
+    }
 }
 
