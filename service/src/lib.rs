@@ -259,6 +259,18 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
             handlers::workspaces::add_member
         ))
         .routes(routes!(handlers::workspaces::remove_member))
+        // Projects (Phase A2) — M:N grouping of templates within a
+        // workspace. Not an ACL boundary.
+        .routes(routes!(
+            handlers::projects::list_projects,
+            handlers::projects::create_project
+        ))
+        .routes(routes!(handlers::projects::delete_project))
+        .routes(routes!(handlers::projects::attach_template))
+        .routes(routes!(handlers::projects::detach_template))
+        // Template tags + visibility (Phase A2).
+        .routes(routes!(handlers::projects::set_template_tags))
+        .routes(routes!(handlers::projects::set_template_visibility))
 }
 
 pub fn build_router(state: AppState) -> Router {

@@ -5,6 +5,7 @@ pub mod health;
 pub mod instances;
 pub mod observability;
 pub mod process_live;
+pub mod projects;
 pub mod resources;
 pub mod task_stream;
 pub mod template_tests;
