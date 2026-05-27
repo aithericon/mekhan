@@ -138,6 +138,47 @@ logs name:
 psql:
     psql "{{database_url}}"
 
+# Configure this worktree to share cargo target dirs with all other worktrees
+# on this machine (via direnv .envrc + $HOME/.cache/cargo-targets/...). Saves
+# 100s of GB across many worktrees. Pass --migrate to mv existing target/
+# into the shared dir (preserves build cache); --clean to delete it.
+# Safe to re-run. Normally only needed if .envrc files are missing — fresh
+# worktrees created via `just dev::worktree-add` already have them.
+setup-shared-target *args:
+    just/scripts/setup-shared-target.sh {{args}}
+
+# Create a worktree at .claude/worktrees/<name> with shared cargo targets
+# pre-allowed. Trailing args pass through to `git worktree add` (e.g. a
+# start-point, or `-b <new-branch>`). The tracked .envrc files come with the
+# checkout; this recipe runs `direnv allow` for the three workspaces so the
+# first `cargo` invocation already points at the shared target dirs.
+#
+# Examples:
+#   just dev::worktree-add foo                       # branch off HEAD, name `foo`
+#   just dev::worktree-add foo main                  # start at main
+#   just dev::worktree-add foo -b refactor/bar main  # new branch `refactor/bar` from main
+worktree-add name *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    wt=".claude/worktrees/{{name}}"
+    if [[ -e "$wt" ]]; then
+        echo "✗ $wt already exists" >&2
+        exit 1
+    fi
+    # Capture script path BEFORE creating the worktree — if the script
+    # isn't yet committed, the new worktree won't contain it, so we invoke
+    # the main repo's copy by absolute path.
+    setup_script="$(pwd)/just/scripts/setup-shared-target.sh"
+    git worktree add "$wt" {{args}}
+    # Run the setup script inside the new worktree. Idempotent: if .envrc
+    # files are already tracked + checked out, it just direnv-allows them;
+    # if they're missing (e.g. not yet committed), it writes them. Either
+    # way the new worktree picks up CARGO_TARGET_DIR on first cd.
+    (cd "$wt" && "$setup_script")
+    echo
+    echo "✓ worktree ready: $wt"
+    echo "  cd $wt   # direnv loads CARGO_TARGET_DIR automatically"
+
 # Regenerate openapi-mekhan.json (from the mekhan-service binary, no infra
 # needed) and refresh the SvelteKit app's typed schema from it. Run this
 # after any change to a #[utoipa::path] annotation or ToSchema-derived DTO.
