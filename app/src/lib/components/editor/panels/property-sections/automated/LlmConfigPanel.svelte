@@ -7,6 +7,7 @@
 	import InsertRefButton from '../InsertRefButton.svelte';
 	import ResourcePicker from '../shared/ResourcePicker.svelte';
 	import type { ScopeEntry } from '$lib/editor/guard-scope';
+	import { untrack } from 'svelte';
 
 	type Props = {
 		config: Record<string, unknown>;
@@ -66,22 +67,50 @@
 	let schemaDraft = $state('');
 	let schemaParseError = $state<string | null>(null);
 
-	// Seed + resync the draft + error from the underlying config (initial
-	// mount, response-format toggle, Yjs round-trip from a remote peer).
-	// Avoids ghost parse errors that survived a format switch, and keeps
-	// the editor's first paint aligned with persisted state. Reads `config`
-	// inside the effect (not in `$state`'s init expression) so Svelte
-	// tracks the prop reactively.
+	// Seed + resync the draft from the underlying config. We MUST only
+	// react to config changes (response-format toggle, Yjs round-trip
+	// from a remote peer, initial mount) — never to the user's own
+	// keystrokes. Two guards:
+	//
+	// 1. `untrack` the schemaDraft read/write so the effect doesn't
+	//    self-trigger every keystroke (which would reset the draft to
+	//    the last *persisted* schema, making mid-edit JSON impossible
+	//    to type one character at a time).
+	// 2. Inside untrack: if the current draft already parses to the
+	//    same content as `config.response_format.schema`, the change
+	//    must be self-inflicted (the user just typed valid JSON, we
+	//    propagated it, and it round-tripped back through Yjs). Skip
+	//    the resync so the user's literal formatting + cursor position
+	//    are preserved.
 	$effect(() => {
-		const next = JSON.stringify(
-			(config.response_format as Record<string, unknown>)?.schema ?? {},
-			null,
-			2
-		);
-		if (next !== schemaDraft) {
-			schemaDraft = next;
+		const schema =
+			(config.response_format as Record<string, unknown>)?.schema ?? {};
+		untrack(() => {
+			// Empty draft (initial mount) → seed from config.
+			if (schemaDraft === '') {
+				schemaDraft = JSON.stringify(schema, null, 2);
+				schemaParseError = null;
+				return;
+			}
+			// Draft is mid-edit (doesn't parse) → don't overwrite the user's
+			// in-flight typing with the last persisted shape.
+			let draftParsed: unknown;
+			try {
+				draftParsed = JSON.parse(schemaDraft);
+			} catch {
+				return;
+			}
+			// Draft parses to the same content as the persisted schema →
+			// self-inflicted round-trip; leave the draft alone to preserve
+			// user formatting / cursor.
+			if (JSON.stringify(draftParsed) === JSON.stringify(schema)) {
+				schemaParseError = null;
+				return;
+			}
+			// Real external change (format toggle, remote peer) → resync.
+			schemaDraft = JSON.stringify(schema, null, 2);
 			schemaParseError = null;
-		}
+		});
 	});
 
 	// Heuristic for "schema parses but has no usable shape" — the
