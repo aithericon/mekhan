@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use aithericon_executor_domain::{LlmStopReason, LlmUsage};
+use aithericon_executor_domain::{LlmStopReason, LlmToolCall, LlmUsage};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
@@ -66,6 +66,25 @@ struct OllamaChatRequest<'a> {
     format: Option<&'a serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     options: Option<OllamaOptions>,
+    /// Tool declarations in Ollama's native shape — `{type:"function",
+    /// function:{name,description,parameters}}` — which mirrors OpenAI's
+    /// chat-completions tool format. Omitted entirely when empty so plain
+    /// non-agent chats stay byte-identical to the pre-tool request body.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<Vec<OllamaToolDecl<'a>>>,
+}
+
+#[derive(Serialize)]
+struct OllamaToolDecl<'a> {
+    r#type: &'a str,
+    function: OllamaFunctionDecl<'a>,
+}
+
+#[derive(Serialize)]
+struct OllamaFunctionDecl<'a> {
+    name: &'a str,
+    description: &'a str,
+    parameters: &'a serde_json::Value,
 }
 
 #[derive(Serialize)]
@@ -106,6 +125,25 @@ struct OllamaResponseMessage {
     /// reasoning) this is the only place output shows up.
     #[serde(default)]
     thinking: Option<String>,
+    /// Native tool-call payload (Ollama 0.3+). One entry per tool the
+    /// model decided to invoke this turn. Empty / absent for plain text
+    /// responses or models that don't support tool calling.
+    #[serde(default)]
+    tool_calls: Vec<OllamaToolCallResp>,
+}
+
+#[derive(Deserialize)]
+struct OllamaToolCallResp {
+    function: OllamaToolCallFn,
+}
+
+#[derive(Deserialize)]
+struct OllamaToolCallFn {
+    name: String,
+    /// Ollama returns `arguments` as a real JSON object (unlike OpenAI,
+    /// which sends a JSON-encoded string). Pass through verbatim.
+    #[serde(default)]
+    arguments: serde_json::Value,
 }
 
 fn role_str(role: &Role) -> &'static str {
@@ -161,12 +199,36 @@ async fn ollama_complete(
         None
     };
 
+    // Build tool declarations from the agent compiler's ToolSchema list.
+    // `None` (not empty array) when the caller declared no tools — keeps
+    // the wire shape byte-identical to pre-tool behaviour for single-shot
+    // LLM calls.
+    let tools = if request.tools.is_empty() {
+        None
+    } else {
+        Some(
+            request
+                .tools
+                .iter()
+                .map(|t| OllamaToolDecl {
+                    r#type: "function",
+                    function: OllamaFunctionDecl {
+                        name: &t.name,
+                        description: &t.description,
+                        parameters: &t.input_schema,
+                    },
+                })
+                .collect(),
+        )
+    };
+
     let body = OllamaChatRequest {
         model: &request.model,
         messages,
         stream: false,
         format,
         options,
+        tools,
     };
 
     let url = format!("{}/api/chat", base_url.trim_end_matches('/'));
@@ -195,21 +257,40 @@ async fn ollama_complete(
         .await
         .map_err(|e| LlmError::Api(format!("failed to parse Ollama response: {e}")))?;
 
-    let stop_reason = parse_done_reason(resp.done_reason.as_deref());
-
     let usage = LlmUsage {
         input_tokens: resp.prompt_eval_count,
         output_tokens: resp.eval_count,
         total_tokens: resp.prompt_eval_count + resp.eval_count,
     };
 
-    // Ollama's `/api/chat` does not surface tool calls in a normalized
-    // form — model-specific JSON-in-content patterns vary too widely to
-    // bake an extractor in here. Agent paths using Ollama models compile
-    // but always route through the text/final branch (empty tool_calls).
-    // Adding tool support later is a per-model concern, not a port-level
-    // contract change.
-    let tool_calls = Vec::new();
+    // Ollama 0.3+ surfaces tool invocations in `message.tool_calls` when
+    // the model decided to call one of the declared tools. Each entry
+    // carries `function: {name, arguments}` — arguments is a real JSON
+    // object (not a JSON-encoded string like OpenAI), so we pass it
+    // straight through. Ollama does NOT assign tool-call IDs the way
+    // Anthropic/OpenAI do, so synthesize one per call with a stable
+    // turn-local prefix.
+    let tool_calls: Vec<LlmToolCall> = resp
+        .message
+        .tool_calls
+        .iter()
+        .enumerate()
+        .map(|(idx, c)| LlmToolCall {
+            id: format!("ollama_tc_{idx}"),
+            name: c.function.name.clone(),
+            arguments: c.function.arguments.clone(),
+        })
+        .collect();
+
+    // Override the model's reported stop reason when we observed at least
+    // one tool call. Older Ollama builds report `done_reason: "stop"` even
+    // for tool-use turns; routing depends on this being ToolUse so the
+    // agent's `t_route_dispatch_<tool>` guard fires.
+    let stop_reason = if !tool_calls.is_empty() {
+        LlmStopReason::ToolUse
+    } else {
+        parse_done_reason(resp.done_reason.as_deref())
+    };
 
     // Parse structured output when using json_schema format.
     // Reasoning is hoisted to `message.thinking` by Ollama in this mode
@@ -249,4 +330,139 @@ async fn ollama_complete(
         structured_output,
         tool_calls,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aithericon_executor_domain::ToolSchema;
+    use serde_json::json;
+
+    #[test]
+    fn request_omits_tools_field_when_no_tools_declared() {
+        let req = CompletionRequest {
+            model: "qwen2.5:3b".into(),
+            messages: vec![],
+            temperature: None,
+            max_tokens: None,
+            response_format: ResponseFormat::Text,
+            tools: vec![],
+        };
+        let body = OllamaChatRequest {
+            model: &req.model,
+            messages: vec![],
+            stream: false,
+            format: None,
+            options: None,
+            tools: None,
+        };
+        let wire = serde_json::to_value(&body).unwrap();
+        assert!(
+            !wire.as_object().unwrap().contains_key("tools"),
+            "wire body must elide `tools` when none declared so single-shot \
+             llm calls stay byte-identical to pre-tool behaviour: {wire}"
+        );
+        let _ = req;
+    }
+
+    #[test]
+    fn request_serializes_tools_in_ollama_native_shape() {
+        let tool = ToolSchema {
+            name: "lookup_order".into(),
+            description: "Look up an order's status by its id.".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {"order_id": {"type": "string"}},
+                "required": ["order_id"]
+            }),
+        };
+        let decl = OllamaToolDecl {
+            r#type: "function",
+            function: OllamaFunctionDecl {
+                name: &tool.name,
+                description: &tool.description,
+                parameters: &tool.input_schema,
+            },
+        };
+        let body = OllamaChatRequest {
+            model: "qwen2.5:3b",
+            messages: vec![],
+            stream: false,
+            format: None,
+            options: None,
+            tools: Some(vec![decl]),
+        };
+        let wire = serde_json::to_value(&body).unwrap();
+        let tools = wire.get("tools").expect("tools serialized");
+        assert_eq!(tools[0]["type"], "function");
+        assert_eq!(tools[0]["function"]["name"], "lookup_order");
+        assert_eq!(tools[0]["function"]["parameters"]["type"], "object");
+    }
+
+    #[test]
+    fn response_parses_tool_calls_and_overrides_stop_reason() {
+        let raw = json!({
+            "model": "qwen2.5:3b",
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{
+                    "function": {
+                        "name": "lookup_order",
+                        "arguments": {"order_id": "abc123"}
+                    }
+                }]
+            },
+            // Older Ollama: reports "stop" even when tool_calls present.
+            "done_reason": "stop",
+            "prompt_eval_count": 42,
+            "eval_count": 8
+        });
+        let resp: OllamaChatResponse = serde_json::from_value(raw).unwrap();
+        assert_eq!(resp.message.tool_calls.len(), 1);
+        assert_eq!(resp.message.tool_calls[0].function.name, "lookup_order");
+        assert_eq!(
+            resp.message.tool_calls[0].function.arguments,
+            json!({"order_id": "abc123"})
+        );
+
+        // Mirror the override the adapter performs end-to-end.
+        let tcs: Vec<LlmToolCall> = resp
+            .message
+            .tool_calls
+            .iter()
+            .enumerate()
+            .map(|(i, c)| LlmToolCall {
+                id: format!("ollama_tc_{i}"),
+                name: c.function.name.clone(),
+                arguments: c.function.arguments.clone(),
+            })
+            .collect();
+        let stop = if !tcs.is_empty() {
+            LlmStopReason::ToolUse
+        } else {
+            parse_done_reason(resp.done_reason.as_deref())
+        };
+        assert_eq!(stop, LlmStopReason::ToolUse);
+        assert_eq!(tcs[0].id, "ollama_tc_0");
+    }
+
+    #[test]
+    fn response_with_no_tool_calls_keeps_done_reason() {
+        let raw = json!({
+            "model": "qwen2.5:3b",
+            "message": {"role": "assistant", "content": "hi"},
+            "done_reason": "stop",
+            "prompt_eval_count": 5,
+            "eval_count": 1
+        });
+        let resp: OllamaChatResponse = serde_json::from_value(raw).unwrap();
+        assert!(resp.message.tool_calls.is_empty());
+        let stop = if !resp.message.tool_calls.is_empty() {
+            LlmStopReason::ToolUse
+        } else {
+            parse_done_reason(resp.done_reason.as_deref())
+        };
+        assert_eq!(stop, LlmStopReason::EndTurn);
+    }
 }
