@@ -117,6 +117,12 @@ impl InMemoryResourceStore {
     pub async fn len(&self) -> usize {
         self.inner.read().await.len()
     }
+
+    /// `true` when the store holds no secret records. Pairs with
+    /// [`len`](Self::len) per clippy's `len_without_is_empty` convention.
+    pub async fn is_empty(&self) -> bool {
+        self.inner.read().await.is_empty()
+    }
 }
 
 #[async_trait]

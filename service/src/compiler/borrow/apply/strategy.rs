@@ -128,9 +128,9 @@ impl ApplyStrategy for BackendFieldStrategy {
 
 /// Static dispatch list. Order matches the pre-collapse inline dispatch
 /// (guard → envelope → human_task → backend) so apply-side side-effects
-/// on multi-arm-co-located transitions land in the same sequence.
-/// `EnvelopeStageStrategy` slot subsumes the previous python_envelope
-/// + resource_envelope entries — they shared the splice site. AIR
+/// on multi-arm-co-located transitions land in the same sequence. The
+/// `EnvelopeStageStrategy` slot subsumes the previous `python_envelope`
+/// and `resource_envelope` entries — they shared the splice site. AIR
 /// snapshots verify this is byte-identical.
 pub(crate) const STRATEGIES: &[&(dyn ApplyStrategy + Sync)] = &[
     &GuardRewriteStrategy,
