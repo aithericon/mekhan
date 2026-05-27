@@ -182,13 +182,19 @@ worktree-add name *args:
 # Regenerate openapi-mekhan.json (from the mekhan-service binary, no infra
 # needed) and refresh the SvelteKit app's typed schema from it. Run this
 # after any change to a #[utoipa::path] annotation or ToSchema-derived DTO.
+#
+# Uses `cargo run` rather than a hardcoded `./target/debug/mekhan` so the
+# target dir resolves through cargo's normal chain (CARGO_TARGET_DIR env →
+# .cargo/config.toml → ./target). Worktrees with shared CARGO_TARGET_DIR
+# (see CLAUDE.md "Worktrees share cargo target dirs by default") would
+# otherwise either fail (no such file) or — worse — invoke a stale local
+# ./target/debug/mekhan from a prior non-shared build. Cargo's `Compiling
+# …` / `Finished` lines go to stderr, so the stdout redirect stays clean.
 openapi:
     #!/usr/bin/env bash
     set -euo pipefail
-    echo "▶ building mekhan CLI…"
-    cargo build --bin mekhan
-    echo "▶ dumping spec → openapi-mekhan.json"
-    ./target/debug/mekhan openapi > openapi-mekhan.json
+    echo "▶ dumping spec → openapi-mekhan.json (cargo run --bin mekhan)"
+    cargo run --quiet --bin mekhan -- openapi > openapi-mekhan.json
     echo "▶ regenerating app/src/lib/api/schema.d.ts"
     (cd app && pnpm run openapi:generate)
     echo "✓ openapi spec + schema regenerated"
