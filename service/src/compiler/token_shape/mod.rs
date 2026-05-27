@@ -57,6 +57,6 @@ mod tests;
 pub use analyze::*;
 pub use annotate::*;
 pub use port::*;
-pub use refs::*;
+pub(crate) use refs::*;
 pub use surface::*;
 pub use types::*;
