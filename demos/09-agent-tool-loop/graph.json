@@ -1,0 +1,113 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "position": { "x": 40, "y": 200 },
+      "data": {
+        "type": "start",
+        "label": "Start",
+        "processName": "Customer triage",
+        "initial": {
+          "id": "in",
+          "label": "Customer message",
+          "fields": [
+            {
+              "name": "customer_message",
+              "label": "Customer message",
+              "kind": "textarea",
+              "required": true,
+              "placeholder": "e.g. \"Where is my order ORD-42?\""
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "agent",
+      "type": "agent",
+      "position": { "x": 320, "y": 80 },
+      "width": 440,
+      "height": 360,
+      "data": {
+        "type": "agent",
+        "label": "Triage Agent",
+        "description": "Reads the customer's message and decides whether to look up an order. The system prompt tells the LLM that the `lookup_order` tool exists; the agent loop's compiler emits the per-tool dispatch transitions automatically from this node's children with `toolMeta` set.",
+        "model": {
+          "provider": "ollama",
+          "model": "qwen3.5:9b",
+          "baseUrl": "http://localhost:11434",
+          "temperature": 0
+        },
+        "systemPrompt": "You are a concise customer-service agent. When the customer mentions an order id (e.g. ORD-42), call the lookup_order tool with that id to fetch the current shipping status, then reply in one sentence. If no order id is mentioned, reply directly without calling any tools.",
+        "userPrompt": "{{ start.customer_message }}",
+        "maxTurns": 4,
+        "onToolError": "feedback"
+      }
+    },
+    {
+      "id": "lookup_order",
+      "type": "automated_step",
+      "parentId": "agent",
+      "position": { "x": 60, "y": 200 },
+      "toolMeta": {
+        "toolName": "lookup_order",
+        "toolDescription": "Look up an order's current shipping status by id. Pass the order id as a string."
+      },
+      "data": {
+        "type": "automated_step",
+        "label": "lookup_order tool",
+        "description": "Python tool the agent can call. Reads `input.order_id` (the argument the LLM emitted in its tool call) and returns a mock status. Real implementations would query a database / external API here.",
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": [],
+            "virtualenv": false,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "input": {
+          "id": "in",
+          "label": "Tool args",
+          "fields": [
+            {
+              "name": "order_id",
+              "label": "Order ID",
+              "kind": "text",
+              "required": true
+            }
+          ]
+        },
+        "output": {
+          "id": "out",
+          "label": "Status",
+          "fields": [
+            { "name": "status", "label": "Shipping status", "kind": "text", "required": true },
+            { "name": "eta",    "label": "Estimated arrival", "kind": "text", "required": false }
+          ]
+        }
+      }
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "position": { "x": 820, "y": 200 },
+      "data": {
+        "type": "end",
+        "label": "Done",
+        "resultMapping": [
+          { "targetField": "reply", "expression": "agent.response" },
+          { "targetField": "turns_used", "expression": "agent.turn" }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    { "id": "e_start_agent", "source": "start", "target": "agent", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_agent_end",   "source": "agent", "target": "end",   "targetHandle": "in", "type": "sequence" }
+  ]
+}

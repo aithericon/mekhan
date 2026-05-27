@@ -1,0 +1,5 @@
+{
+  "templateId": "00000000-0000-0000-0000-000000000019",
+  "name": "09 · Agent + Tool Loop",
+  "description": "Step 9 of the learning path — the Agent node. A multi-turn LLM (Ollama qwen3.5:9b, the `up-ollama` default) reads a customer message, decides whether to call the `lookup_order` Python tool, then composes a final reply. Exercises the agent's full loop topology (parked state, dispatch/collect per tool, route guards) AND the Ollama adapter's native tool-call path (`message.tool_calls` in `/api/chat`, since Ollama 0.3+). Requires `just dev::up-ollama` with a tool-capable model — any qwen2.5+/qwen3+ or llama3.1+. Change `data.model.model` here if you've overridden `OLLAMA_MODEL`."
+}
