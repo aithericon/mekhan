@@ -334,11 +334,18 @@ async fn agent_tool_loop_demo_completes_with_tool_call() {
         serde_json::to_string_pretty(&result).unwrap_or_default()
     );
 
+    // End wraps the result_mapping output in a success envelope:
+    // `{ok: true, value: {reply, turns_used}}`. Pre-envelope the
+    // mappings sat at the top level; navigate through `value` now.
+    // Fall back to top-level lookup so the test stays correct if a
+    // future change inverts the envelope direction.
+    let payload = result.get("value").unwrap_or(&result);
+
     // Strongest pin: at least 2 turns means the LLM emitted a tool
     // call on turn 1, the tool ran, the result was fed back, and the
     // LLM emitted a final response on turn 2+. Anything less and we
     // never exercised the dispatch/collect plumbing — regression.
-    let turns_used = result
+    let turns_used = payload
         .get("turns_used")
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
@@ -355,7 +362,7 @@ async fn agent_tool_loop_demo_completes_with_tool_call() {
     // wording is LLM-dependent so we don't grep for "transit" — but a
     // blank reply means the agent exited through an unintended path
     // (e.g. an error envelope leaking onto the success port).
-    let reply = result
+    let reply = payload
         .get("reply")
         .and_then(|v| v.as_str())
         .unwrap_or("");
