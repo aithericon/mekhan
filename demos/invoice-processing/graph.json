@@ -133,6 +133,12 @@
               "label": "Extracted",
               "kind": "bool",
               "required": true
+            },
+            {
+              "name": "line_items",
+              "label": "Line Items",
+              "kind": "json",
+              "required": true
             }
           ]
         }
