@@ -206,6 +206,60 @@ export function fieldsForStep(step: TaskStep): TaskField[] {
 	return fields;
 }
 
+// ── Repeater helpers (Feature B) ───────────────────────────────────
+
+/**
+ * Parse a Repeater `items_ref` / `item_label_ref` of the form
+ * `<head>.<seg>[.<seg>...]+[*]+[.<seg>...]*`. Mirrors the compiler's
+ * `parse_repeater_ref` (service/src/compiler/validate.rs) — returns
+ * `null` for malformed inputs so the renderer can degrade gracefully
+ * (an empty Repeater + a row count of 0).
+ */
+export function parseRepeaterRef(
+	raw: string
+): { head: string; pre: string[]; post: string[] } | null {
+	const trimmed = raw.trim();
+	if (!trimmed) return null;
+	const first = trimmed.indexOf('[*]');
+	if (first < 0) return null;
+	if (trimmed.slice(first + 3).includes('[*]')) return null;
+	const before = trimmed.slice(0, first);
+	const afterRaw = trimmed.slice(first + 3);
+	const after = afterRaw.startsWith('.') ? afterRaw.slice(1) : afterRaw;
+	const dot = before.indexOf('.');
+	if (dot < 0) return null;
+	const head = before.slice(0, dot);
+	if (!head) return null;
+	const preStr = before.slice(dot + 1);
+	if (!preStr) return null;
+	const pre = preStr.split('.');
+	if (pre.some((s) => s.length === 0)) return null;
+	const post = after.length === 0 ? [] : after.split('.');
+	if (post.some((s) => s.length === 0)) return null;
+	return { head, pre, post };
+}
+
+/**
+ * Walk `data` following `path` (dotted segments) and return whatever
+ * sits there, or undefined if any hop is missing / non-objectish.
+ * Used by the Repeater renderer to resolve the upstream array AND
+ * per-element label values.
+ */
+export function getAtPath(data: unknown, path: string[]): unknown {
+	let cur: unknown = data;
+	for (const seg of path) {
+		if (cur == null || typeof cur !== 'object') return undefined;
+		cur = (cur as Record<string, unknown>)[seg];
+	}
+	return cur;
+}
+
+/** Coerce the resolved items value to a plain array. */
+export function asItemsArray(value: unknown): unknown[] {
+	if (Array.isArray(value)) return value;
+	return [];
+}
+
 export function validateFields(
 	fields: TaskField[],
 	formData: Record<string, unknown>,

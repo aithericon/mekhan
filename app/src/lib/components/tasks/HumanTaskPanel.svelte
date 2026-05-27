@@ -108,7 +108,7 @@
 					</div>
 				{/if}
 				{#each step.blocks as block}
-					{#if block.type !== 'input'}
+					{#if block.type !== 'input' && block.type !== 'repeater'}
 						<BlockRenderer {block} />
 					{/if}
 				{/each}
