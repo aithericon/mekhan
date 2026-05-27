@@ -9,7 +9,7 @@
 //! dispatch arms for Inline / Scheduled / EngineEffect).
 
 use crate::compiler::interface::NodeKind;
-use crate::models::template::{Port, WorkflowNode, WorkflowNodeData};
+use crate::models::template::{Port, WorkflowNodeData};
 use crate::nodes::{NodeDecl, YjsEncodeFn};
 use crate::yjs::persistence::json_value_to_any;
 
@@ -29,27 +29,28 @@ pub(crate) static AUTOMATED_STEP_DECL: NodeDecl = NodeDecl {
     lower: Some(crate::compiler::lower::automated_step::lower_automated_step),
     input_ports: input_ports,
     output_ports: output_ports,
+    wiring_logic: None,
     yjs_encode: yjs_encode as YjsEncodeFn,
 };
 
-fn input_ports(node: &WorkflowNode) -> Vec<Port> {
+fn input_ports(data: &WorkflowNodeData) -> Vec<Port> {
     // AutomatedStep carries its declared input Port verbatim — `default_*`
     // serde defaults give an empty pass-through for templates that never
     // authored an input shape. Matches the central
     // `WorkflowNodeData::input_ports` arm.
-    let WorkflowNodeData::AutomatedStep { input, .. } = &node.data else {
+    let WorkflowNodeData::AutomatedStep { input, .. } = data else {
         unreachable!("automated_step::input_ports on non-AutomatedStep variant");
     };
     vec![input.clone()]
 }
 
-fn output_ports(node: &WorkflowNode) -> Vec<Port> {
+fn output_ports(data: &WorkflowNodeData) -> Vec<Port> {
     // Declared success output + an always-present `error` output (retries
     // exhausted / infra failure). Empty fields ⇒ pass-through so wiring it
     // to any handler/End type-checks. The compiler maps `error` to
     // `p_{id}_error`. Matches the central `WorkflowNodeData::output_ports`
     // arm.
-    let WorkflowNodeData::AutomatedStep { output, .. } = &node.data else {
+    let WorkflowNodeData::AutomatedStep { output, .. } = data else {
         unreachable!("automated_step::output_ports on non-AutomatedStep variant");
     };
     vec![

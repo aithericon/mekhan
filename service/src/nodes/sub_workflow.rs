@@ -11,7 +11,7 @@
 //! not a full re-export hub.
 
 use crate::compiler::interface::NodeKind;
-use crate::models::template::{Port, WorkflowNode, WorkflowNodeData};
+use crate::models::template::{Port, WorkflowNodeData};
 use crate::nodes::{NodeDecl, YjsEncodeFn};
 use crate::yjs::persistence::json_value_to_any;
 
@@ -36,21 +36,22 @@ pub(crate) static SUB_WORKFLOW_DECL: NodeDecl = NodeDecl {
     lower: Some(crate::compiler::lower::subworkflow::lower_subworkflow),
     input_ports: input_ports,
     output_ports: output_ports,
+    wiring_logic: None,
     yjs_encode: yjs_encode as YjsEncodeFn,
 };
 
-fn input_ports(_node: &WorkflowNode) -> Vec<Port> {
+fn input_ports(_data: &WorkflowNodeData) -> Vec<Port> {
     // SubWorkflow accepts the single anonymous upstream token; its
     // `input_mapping` shapes it into the child Start input at compile
     // time, so the parent-side input port is a Json pass-through.
     vec![Port::empty_input()]
 }
 
-fn output_ports(node: &WorkflowNode) -> Vec<Port> {
+fn output_ports(data: &WorkflowNodeData) -> Vec<Port> {
     // Declared child-result success output + an always-present "error"
     // output (child failure / spawn failure). Mirrors AutomatedStep; the
     // compiler maps "error" to `p_{id}_error`.
-    let WorkflowNodeData::SubWorkflow { output, .. } = &node.data else {
+    let WorkflowNodeData::SubWorkflow { output, .. } = data else {
         unreachable!("sub_workflow::output_ports on non-SubWorkflow variant");
     };
     vec![

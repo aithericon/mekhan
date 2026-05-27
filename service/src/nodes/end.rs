@@ -3,7 +3,7 @@
 //! envelope onto the terminal token's `exit_code`.
 
 use crate::compiler::interface::NodeKind;
-use crate::models::template::{Port, WorkflowNode, WorkflowNodeData};
+use crate::models::template::{Port, WorkflowNodeData};
 use crate::nodes::{NodeDecl, YjsEncodeFn};
 use crate::yjs::persistence::json_value_to_any;
 
@@ -21,20 +21,21 @@ pub(crate) static END_DECL: NodeDecl = NodeDecl {
     lower: Some(crate::compiler::lower::end::lower_end),
     input_ports: input_ports,
     output_ports: output_ports,
+    wiring_logic: None,
     yjs_encode: yjs_encode as YjsEncodeFn,
 };
 
-fn input_ports(node: &WorkflowNode) -> Vec<Port> {
+fn input_ports(data: &WorkflowNodeData) -> Vec<Port> {
     // Single declared `terminal` port describing the expected terminal-token
     // shape. Empty `fields` (the default) accepts any incoming token,
     // preserving back-compat for pre-typed-ports templates.
-    let WorkflowNodeData::End { terminal, .. } = &node.data else {
+    let WorkflowNodeData::End { terminal, .. } = data else {
         unreachable!("end::input_ports on non-End variant");
     };
     vec![terminal.clone()]
 }
 
-fn output_ports(_node: &WorkflowNode) -> Vec<Port> {
+fn output_ports(_data: &WorkflowNodeData) -> Vec<Port> {
     // End has no output port — tokens terminate here.
     vec![]
 }

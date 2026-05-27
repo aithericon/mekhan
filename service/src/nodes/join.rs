@@ -11,7 +11,7 @@
 //! `wire.rs` to `decl.is_join` in one shot.
 
 use crate::compiler::interface::NodeKind;
-use crate::models::template::{Port, WorkflowNode, WorkflowNodeData};
+use crate::models::template::{Port, WorkflowNodeData};
 use crate::nodes::{NodeDecl, YjsEncodeFn};
 use crate::yjs::persistence::json_value_to_any;
 
@@ -41,10 +41,11 @@ pub(crate) static JOIN_DECL: NodeDecl = NodeDecl {
     lower: Some(crate::compiler::lower::join::lower_join),
     input_ports: input_ports,
     output_ports: output_ports,
+    wiring_logic: None,
     yjs_encode: yjs_encode as YjsEncodeFn,
 };
 
-fn input_ports(_node: &WorkflowNode) -> Vec<Port> {
+fn input_ports(_data: &WorkflowNodeData) -> Vec<Port> {
     // Single anonymous Json pass-through input — matches the central
     // `WorkflowNodeData::input_ports` arm for control-flow blocks. The
     // actual per-edge named inbound places are minted by `wire.rs` (the
@@ -52,10 +53,10 @@ fn input_ports(_node: &WorkflowNode) -> Vec<Port> {
     vec![Port::empty_input()]
 }
 
-fn output_ports(node: &WorkflowNode) -> Vec<Port> {
+fn output_ports(data: &WorkflowNodeData) -> Vec<Port> {
     // Join carries an explicit output Port describing the parked
     // `<slug>.<field>` shape downstream borrows can read.
-    let WorkflowNodeData::Join { output, .. } = &node.data else {
+    let WorkflowNodeData::Join { output, .. } = data else {
         unreachable!("join::output_ports on non-Join variant");
     };
     vec![output.clone()]

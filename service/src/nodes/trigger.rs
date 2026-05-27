@@ -8,7 +8,7 @@
 //! `output_ports` and the descriptor on `GET /api/v1/node-types`.
 
 use crate::compiler::interface::NodeKind;
-use crate::models::template::{Port, WorkflowNode, WorkflowNodeData};
+use crate::models::template::{Port, WorkflowNodeData};
 use crate::nodes::{NodeDecl, YjsEncodeFn};
 use crate::yjs::persistence::json_value_to_any;
 
@@ -26,17 +26,18 @@ pub(crate) static TRIGGER_DECL: NodeDecl = NodeDecl {
     lower: None,
     input_ports: input_ports,
     output_ports: output_ports,
+    wiring_logic: None,
     yjs_encode: yjs_encode as YjsEncodeFn,
 };
 
-fn input_ports(_node: &WorkflowNode) -> Vec<Port> {
+fn input_ports(_data: &WorkflowNodeData) -> Vec<Port> {
     // Triggers are never edge targets. The editor refuses to draw an edge
     // into a Trigger node; returning `[]` makes any malformed graph that
     // does attempt it surface as `UnknownTargetPort` in `validate_edges_typed`.
     vec![]
 }
 
-fn output_ports(_node: &WorkflowNode) -> Vec<Port> {
+fn output_ports(_data: &WorkflowNodeData) -> Vec<Port> {
     // Cosmetic single `out` port — `validate_edges_typed` skips
     // type-checking when the source is a Trigger, and payload-mapping
     // validation handles the field-level contract.

@@ -8,7 +8,7 @@
 // for the whole `lower/` module tree.
 pub(super) use crate::compiler::compile::SubWorkflowAir;
 pub(super) use crate::compiler::error::CompileError;
-pub(super) use crate::compiler::interface::{InterfaceRegistry, NodeInterface, NodeKind, OutputKey};
+pub(super) use crate::compiler::interface::{InterfaceRegistry, NodeInterface, OutputKey};
 pub(super) use crate::compiler::well_known;
 pub(super) use crate::compiler::rhai_gen::{
     build_join_merge_logic_full, build_join_passthrough_logic, build_merge_logic,
@@ -294,7 +294,9 @@ impl LoweringCtx<'_, '_> {
     /// hard-errors if no entry is published.
     pub(crate) fn publish_interface(&mut self) -> &mut NodeInterface {
         let id = self.node.id.clone();
-        let kind = node_kind_of(self.node);
+        let kind = crate::nodes::lookup_by_variant(&self.node.data)
+            .expect("every WorkflowNodeData variant is registered in crate::nodes::NODES")
+            .kind;
         let mut iface = NodeInterface::new(id.clone(), kind);
         if let Some(ports) = self.ports.get(&id) {
             iface.entry = Some(ports.input_place.id().to_string());
@@ -314,52 +316,6 @@ impl LoweringCtx<'_, '_> {
         }
         self.interfaces.insert(id.clone(), iface);
         self.interfaces.get_mut(&id).expect("just inserted")
-    }
-}
-
-/// Expand one workflow node into Petri structure.
-pub(crate) trait NodeLowering {
-    fn lower(&self, cx: &mut LoweringCtx) -> Result<(), CompileError>;
-}
-
-impl NodeLowering for WorkflowNode {
-    fn lower(&self, cx: &mut LoweringCtx) -> Result<(), CompileError> {
-        // Registry first — returns Some for every variant in
-        // `crate::nodes::NODES`. PR1 covers `PhaseUpdate` + `Trigger`; PR2
-        // fills in the rest. Trigger's `lower: None` + `lowers_to_air: false`
-        // pair encodes the "no AIR shape" protocol exception declaratively
-        // — replacing the old `matches!(Trigger)` carve-out.
-        if let Some(decl) = crate::nodes::lookup_by_variant(&self.data) {
-            return match decl.lower {
-                Some(lf) => lf(cx),
-                None if !decl.lowers_to_air => Ok(()),
-                None => Err(CompileError::Compilation(format!(
-                    "registry bug: variant `{}` declares lowers_to_air=true but has no `lower` fn",
-                    decl.wire_name
-                ))),
-            };
-        }
-        // Legacy match for un-migrated variants. The two `unreachable!` arms
-        // are PhaseUpdate + Trigger — registered above; falling here would
-        // be a registry-coverage bug.
-        match &self.data {
-            WorkflowNodeData::Start { .. } => start::lower_start(cx),
-            WorkflowNodeData::End { .. } => end::lower_end(cx),
-            WorkflowNodeData::HumanTask { .. } => human_task::lower_human_task(cx),
-            WorkflowNodeData::AutomatedStep { .. } => automated_step::lower_automated_step(cx),
-            WorkflowNodeData::Agent { .. } => agent::lower_agent(cx),
-            WorkflowNodeData::Decision { .. } => decision::lower_decision(cx),
-            WorkflowNodeData::ParallelSplit { .. } => parallel_split::lower_parallel_split(cx),
-            WorkflowNodeData::Join { .. } => join::lower_join(cx),
-            WorkflowNodeData::Loop { .. } => loop_::lower_loop(cx),
-            WorkflowNodeData::Scope { .. } => scope::lower_scope(cx),
-            WorkflowNodeData::ProgressUpdate { .. } => progress_update::lower_progress_update(cx),
-            WorkflowNodeData::Failure { .. } => failure::lower_failure(cx),
-            WorkflowNodeData::SubWorkflow { .. } => subworkflow::lower_subworkflow(cx),
-            WorkflowNodeData::PhaseUpdate { .. } | WorkflowNodeData::Trigger { .. } => {
-                unreachable!("registered in `crate::nodes::NODES`; handled above")
-            }
-        }
     }
 }
 
@@ -395,20 +351,23 @@ pub(crate) fn expand_node<'a>(
         node_configs,
         config_storage,
     };
-    node.lower(&mut cx)?;
+    let decl = crate::nodes::lookup_by_variant(&node.data)
+        .expect("every WorkflowNodeData variant is registered in crate::nodes::NODES");
+    match decl.lower {
+        Some(lf) => lf(&mut cx)?,
+        None if !decl.lowers_to_air => {}
+        None => {
+            return Err(CompileError::Compilation(format!(
+                "registry bug: variant `{}` declares lowers_to_air=true but has no `lower` fn",
+                decl.wire_name
+            )));
+        }
+    }
     // Protocol enforcement: every lowering that participates in AIR MUST
-    // call `cx.publish_interface()` exactly once. The dispatcher
-    // hard-errors if it didn't — there is no auto-derive fallback (by
-    // design; see `service/src/compiler/interface.rs` for the contract).
-    //
-    // Whether the variant participates is declared on its `NodeDecl`
-    // (`lowers_to_air`). For un-migrated variants we fall back to the
-    // legacy `matches!(Trigger)` check — Trigger is currently the only
-    // non-participating variant.
-    let participates = crate::nodes::lookup_by_variant(&node.data)
-        .map(|d| d.lowers_to_air)
-        .unwrap_or(!matches!(node.data, WorkflowNodeData::Trigger { .. }));
-    if participates && !cx.interfaces.contains_key(&node.id) {
+    // call `cx.publish_interface()` exactly once. The dispatcher hard-errors
+    // if it didn't — there is no auto-derive fallback (by design; see
+    // `service/src/compiler/interface.rs`).
+    if decl.lowers_to_air && !cx.interfaces.contains_key(&node.id) {
         return Err(CompileError::Compilation(format!(
             "internal: lower_* for node '{}' ({:?}) did not publish an interface — \
              every lowering must call `cx.publish_interface()` before returning",
@@ -416,38 +375,6 @@ pub(crate) fn expand_node<'a>(
         )));
     }
     Ok(())
-}
-
-fn node_kind_of(node: &WorkflowNode) -> NodeKind {
-    // Registry first — declares the kind mapping (including Agent →
-    // AutomatedStep when Agent migrates in PR2). PR1 covers
-    // PhaseUpdate + Trigger; the legacy match handles the rest.
-    if let Some(decl) = crate::nodes::lookup_by_variant(&node.data) {
-        return decl.kind;
-    }
-    match &node.data {
-        WorkflowNodeData::Start { .. } => NodeKind::Start,
-        WorkflowNodeData::End { .. } => NodeKind::End,
-        WorkflowNodeData::HumanTask { .. } => NodeKind::HumanTask,
-        WorkflowNodeData::AutomatedStep { .. } => NodeKind::AutomatedStep,
-        // PR 1: Agent's degenerate path lowers byte-identically to
-        // AutomatedStep(Llm); publish the same interface kind so downstream
-        // consumers don't have to special-case it. When Agent migrates in
-        // PR2 the registry entry declares this mapping explicitly; the
-        // follow-up loop lowering will switch to a dedicated `NodeKind::Agent`.
-        WorkflowNodeData::Agent { .. } => NodeKind::AutomatedStep,
-        WorkflowNodeData::Decision { .. } => NodeKind::Decision,
-        WorkflowNodeData::Loop { .. } => NodeKind::Loop,
-        WorkflowNodeData::ParallelSplit { .. } => NodeKind::ParallelSplit,
-        WorkflowNodeData::Join { .. } => NodeKind::Join,
-        WorkflowNodeData::Scope { .. } => NodeKind::Scope,
-        WorkflowNodeData::SubWorkflow { .. } => NodeKind::SubWorkflow,
-        WorkflowNodeData::ProgressUpdate { .. } => NodeKind::ProgressUpdate,
-        WorkflowNodeData::Failure { .. } => NodeKind::Failure,
-        WorkflowNodeData::PhaseUpdate { .. } | WorkflowNodeData::Trigger { .. } => {
-            unreachable!("registered in `crate::nodes::NODES`; handled above")
-        }
-    }
 }
 
 // ── Per-variant lowerings ───────────────────────────────────────────────

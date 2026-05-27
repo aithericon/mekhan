@@ -135,6 +135,30 @@ impl NodeKind {
             _ => &[],
         }
     }
+
+    /// Snake-case wire string for this kind. Used by the step-executions
+    /// projection writer and `NodeDescriptor` serialization (consumed by
+    /// `GET /api/v1/node-types`). The only consumer that *isn't*
+    /// `WorkflowNodeData::type_name()` — Agent serializes as kind
+    /// `automated_step` because it shares AutomatedStep's runtime shape.
+    pub fn wire_str(&self) -> &'static str {
+        match self {
+            NodeKind::Start => "start",
+            NodeKind::End => "end",
+            NodeKind::HumanTask => "human_task",
+            NodeKind::AutomatedStep => "automated_step",
+            NodeKind::Decision => "decision",
+            NodeKind::Loop => "loop",
+            NodeKind::ParallelSplit => "parallel_split",
+            NodeKind::Join => "join",
+            NodeKind::Scope => "scope",
+            NodeKind::SubWorkflow => "sub_workflow",
+            NodeKind::PhaseUpdate => "phase_update",
+            NodeKind::ProgressUpdate => "progress_update",
+            NodeKind::Failure => "failure",
+            NodeKind::Trigger => "trigger",
+        }
+    }
 }
 
 /// How an output port is keyed. Mirrors `NodePorts.output_places` (which uses

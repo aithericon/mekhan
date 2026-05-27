@@ -2,7 +2,7 @@
 //! ports, no derived shape, simple Y.Doc encode, single lower fn.
 
 use crate::compiler::interface::NodeKind;
-use crate::models::template::{Port, WorkflowNode, WorkflowNodeData};
+use crate::models::template::{Port, WorkflowNodeData};
 use crate::nodes::{NodeDecl, YjsEncodeFn};
 use crate::yjs::persistence::json_value_to_any;
 
@@ -20,17 +20,18 @@ pub(crate) static PHASE_UPDATE_DECL: NodeDecl = NodeDecl {
     lower: Some(crate::compiler::lower::phase_update::lower_phase_update),
     input_ports: input_ports,
     output_ports: output_ports,
+    wiring_logic: None,
     yjs_encode: yjs_encode as YjsEncodeFn,
 };
 
-fn input_ports(_node: &WorkflowNode) -> Vec<Port> {
+fn input_ports(_data: &WorkflowNodeData) -> Vec<Port> {
     // Single anonymous Json pass-through input — matches the central
     // `WorkflowNodeData::input_ports` arm. The variant carries no
     // node-specific input shape.
     vec![Port::empty_input()]
 }
 
-fn output_ports(_node: &WorkflowNode) -> Vec<Port> {
+fn output_ports(_data: &WorkflowNodeData) -> Vec<Port> {
     vec![Port {
         id: "out".to_string(),
         label: "Output".to_string(),

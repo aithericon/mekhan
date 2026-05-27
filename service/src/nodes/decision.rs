@@ -5,7 +5,7 @@
 //! flows through unchanged.
 
 use crate::compiler::interface::NodeKind;
-use crate::models::template::{Port, WorkflowNode, WorkflowNodeData};
+use crate::models::template::{Port, WorkflowNodeData};
 use crate::nodes::{NodeDecl, YjsEncodeFn};
 use crate::yjs::persistence::json_value_to_any;
 
@@ -29,16 +29,17 @@ pub(crate) static DECISION_DECL: NodeDecl = NodeDecl {
     lower: Some(crate::compiler::lower::decision::lower_decision),
     input_ports: input_ports,
     output_ports: output_ports,
+    wiring_logic: None,
     yjs_encode: yjs_encode as YjsEncodeFn,
 };
 
-fn input_ports(_node: &WorkflowNode) -> Vec<Port> {
+fn input_ports(_data: &WorkflowNodeData) -> Vec<Port> {
     // Single anonymous Json pass-through input — Decision routes the inbound
     // token unchanged down one branch.
     vec![Port::empty_input()]
 }
 
-fn output_ports(node: &WorkflowNode) -> Vec<Port> {
+fn output_ports(data: &WorkflowNodeData) -> Vec<Port> {
     // Derived: one port per condition (id = edge_id, label = branch label),
     // plus a `default` port when `default_branch` is set. Branch ports have
     // empty `fields` (Phase 4 pass-through), so downstream type-checking
@@ -47,7 +48,7 @@ fn output_ports(node: &WorkflowNode) -> Vec<Port> {
         conditions,
         default_branch,
         ..
-    } = &node.data
+    } = data
     else {
         unreachable!("decision::output_ports on non-Decision variant");
     };

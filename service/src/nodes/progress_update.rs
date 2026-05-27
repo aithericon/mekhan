@@ -3,7 +3,7 @@
 //! Compiles to a shape transition + `process_progress` builtin effect.
 
 use crate::compiler::interface::NodeKind;
-use crate::models::template::{Port, WorkflowNode, WorkflowNodeData};
+use crate::models::template::{Port, WorkflowNodeData};
 use crate::nodes::{NodeDecl, YjsEncodeFn};
 
 pub(crate) static PROGRESS_UPDATE_DECL: NodeDecl = NodeDecl {
@@ -20,17 +20,18 @@ pub(crate) static PROGRESS_UPDATE_DECL: NodeDecl = NodeDecl {
     lower: Some(crate::compiler::lower::progress_update::lower_progress_update),
     input_ports: input_ports,
     output_ports: output_ports,
+    wiring_logic: None,
     yjs_encode: yjs_encode as YjsEncodeFn,
 };
 
-fn input_ports(_node: &WorkflowNode) -> Vec<Port> {
+fn input_ports(_data: &WorkflowNodeData) -> Vec<Port> {
     // Single anonymous Json pass-through input — the variant carries no
     // node-specific input shape; matches the central
     // `WorkflowNodeData::input_ports` arm.
     vec![Port::empty_input()]
 }
 
-fn output_ports(_node: &WorkflowNode) -> Vec<Port> {
+fn output_ports(_data: &WorkflowNodeData) -> Vec<Port> {
     vec![Port {
         id: "out".to_string(),
         label: "Output".to_string(),

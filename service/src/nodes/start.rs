@@ -4,7 +4,7 @@
 //! `start.<field>`.
 
 use crate::compiler::interface::NodeKind;
-use crate::models::template::{Port, WorkflowNode, WorkflowNodeData};
+use crate::models::template::{Port, WorkflowNodeData};
 use crate::nodes::{NodeDecl, YjsEncodeFn};
 use crate::yjs::persistence::json_value_to_any;
 
@@ -24,21 +24,22 @@ pub(crate) static START_DECL: NodeDecl = NodeDecl {
     lower: Some(crate::compiler::lower::start::lower_start),
     input_ports: input_ports,
     output_ports: output_ports,
+    wiring_logic: None,
     yjs_encode: yjs_encode as YjsEncodeFn,
 };
 
-fn input_ports(_node: &WorkflowNode) -> Vec<Port> {
+fn input_ports(_data: &WorkflowNodeData) -> Vec<Port> {
     // Start has no inbound edges — the editor refuses to draw edges into a
     // Start node. Empty list surfaces any malformed graph that does so as
     // `UnknownTargetPort` in `validate_edges_typed`.
     vec![]
 }
 
-fn output_ports(node: &WorkflowNode) -> Vec<Port> {
+fn output_ports(data: &WorkflowNodeData) -> Vec<Port> {
     // Single declared `initial` port — the shape of the seed token this
     // Start emits. The runtime schema layer enforces tokens entering the
     // graph match this port's `fields`.
-    let WorkflowNodeData::Start { initial, .. } = &node.data else {
+    let WorkflowNodeData::Start { initial, .. } = data else {
         unreachable!("start::output_ports on non-Start variant");
     };
     vec![initial.clone()]

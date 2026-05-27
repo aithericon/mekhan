@@ -11,7 +11,7 @@
 //! refactor; the registry layer doesn't change that contract.
 
 use crate::compiler::interface::NodeKind;
-use crate::models::template::{Port, WorkflowNode, WorkflowNodeData};
+use crate::models::template::{Port, WorkflowNodeData};
 use crate::nodes::{NodeDecl, YjsEncodeFn};
 
 pub(crate) static LOOP_DECL: NodeDecl = NodeDecl {
@@ -33,10 +33,11 @@ pub(crate) static LOOP_DECL: NodeDecl = NodeDecl {
     lower: Some(crate::compiler::lower::loop_::lower_loop),
     input_ports: input_ports,
     output_ports: output_ports,
+    wiring_logic: None,
     yjs_encode: yjs_encode as YjsEncodeFn,
 };
 
-fn input_ports(_node: &WorkflowNode) -> Vec<Port> {
+fn input_ports(_data: &WorkflowNodeData) -> Vec<Port> {
     // Loop accepts the outer `in` and a `body_out` handle from its body
     // children. Both are Json pass-throughs. Mirrors the existing arm in
     // `models/template.rs::input_ports`.
@@ -50,7 +51,7 @@ fn input_ports(_node: &WorkflowNode) -> Vec<Port> {
     ]
 }
 
-fn output_ports(_node: &WorkflowNode) -> Vec<Port> {
+fn output_ports(_data: &WorkflowNodeData) -> Vec<Port> {
     // Loop exposes its outer `out` plus a `body_in` handle that feeds body
     // children. Body children's outgoing edges back into the loop carry
     // `targetHandle: "body_out"` (declared in `input_ports`).

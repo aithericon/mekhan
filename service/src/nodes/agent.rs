@@ -17,7 +17,7 @@
 use crate::compiler::interface::NodeKind;
 use crate::models::template::{
     agent_extra_output_fields, agent_to_llm_config, default_output_port, ExecutionBackendType,
-    Port, WorkflowNode, WorkflowNodeData,
+    Port, WorkflowNodeData,
 };
 use crate::nodes::{NodeDecl, YjsEncodeFn};
 use crate::yjs::persistence::json_value_to_any;
@@ -43,10 +43,11 @@ pub(crate) static AGENT_DECL: NodeDecl = NodeDecl {
     lower: Some(crate::compiler::lower::agent::lower_agent),
     input_ports: input_ports,
     output_ports: output_ports,
+    wiring_logic: None,
     yjs_encode: yjs_encode as YjsEncodeFn,
 };
 
-fn input_ports(_node: &WorkflowNode) -> Vec<Port> {
+fn input_ports(_data: &WorkflowNodeData) -> Vec<Port> {
     // Agent accepts the single anonymous upstream token. The
     // user/system prompt templates `{{<slug>.<field>}}`-interpolate
     // against the parked-data envelopes of upstream producers, not
@@ -54,7 +55,7 @@ fn input_ports(_node: &WorkflowNode) -> Vec<Port> {
     vec![Port::empty_input()]
 }
 
-fn output_ports(node: &WorkflowNode) -> Vec<Port> {
+fn output_ports(data: &WorkflowNodeData) -> Vec<Port> {
     // Agent's success output starts with the canonical LLM fields
     // (`response`, `usage`, `finish_reason`, `model`) — same shape
     // a plain `AutomatedStep(Llm)` declares, so the degenerate
@@ -71,7 +72,7 @@ fn output_ports(node: &WorkflowNode) -> Vec<Port> {
         max_turns,
         stop_when,
         ..
-    } = &node.data
+    } = data
     else {
         unreachable!("agent::output_ports on non-Agent variant");
     };

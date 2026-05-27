@@ -87,13 +87,19 @@ pub(crate) struct NodeDecl {
     // ── Variant-specific dispatch (fn pointers, mirror BackendDecl) ───
     /// Per-variant lowering. `None` iff `lowers_to_air == false` (Trigger).
     pub lower: Option<LowerFn>,
-    /// Compute the per-node typed input ports. Argument is `&WorkflowNode`
-    /// because some variants derive ports from config (Loop has the fixed
-    /// `body_out` handle, End reads `terminal`).
-    pub input_ports: fn(&WorkflowNode) -> Vec<Port>,
-    /// Per-node typed output ports. Some variants derive (HumanTask unions
-    /// step inputs; Decision yields one per branch).
-    pub output_ports: fn(&WorkflowNode) -> Vec<Port>,
+    /// Compute typed input ports from this variant's data. Some variants
+    /// derive ports from config (Loop has the fixed `body_out` handle, End
+    /// reads `terminal`).
+    pub input_ports: fn(&WorkflowNodeData) -> Vec<Port>,
+    /// Compute typed output ports from this variant's data. Some variants
+    /// derive (HumanTask unions step inputs; Decision yields one per branch).
+    pub output_ports: fn(&WorkflowNodeData) -> Vec<Port>,
+    /// Wiring-time Rhai injected on the inbound edge transition. `Some` only
+    /// for HumanTask (which injects step-input bindings). Every other variant
+    /// uses the pure pass-through merge path in `compiler/wire.rs`. Takes
+    /// `&WorkflowNode` because the injection script names step ids derived
+    /// from the node identity.
+    pub wiring_logic: Option<fn(&WorkflowNode) -> String>,
     /// Encode this variant's config fields into a Y.Map. Replaces the
     /// per-variant arm in `yjs/doc_ops.rs::write_node_config`. The decoder
     /// path uses unified serde over a flat-merged JSON object, so no
@@ -137,11 +143,31 @@ pub(crate) static NODES: &[&NodeDecl] = &[
     &trigger::TRIGGER_DECL,
 ];
 
-/// Look up the decl for a variant's data. Returns `None` if the variant is
-/// not yet registered (PR1 returns `None` for 13 of 15 variants — the
-/// dispatcher falls back to its legacy match for those).
+/// Look up the decl for a variant's data. Returns `Some` for every variant —
+/// the conformance test `descriptors_emit_camel_case_fields` pins that
+/// invariant. Returns `Option` rather than panicking so callers can decide
+/// whether a missing entry is a bug or a downstream-recoverable miss.
+///
+/// Matches `data` directly (not via `data.type_name()`) because `type_name`
+/// itself routes through this lookup — calling it here would recurse.
 pub(crate) fn lookup_by_variant(data: &WorkflowNodeData) -> Option<&'static NodeDecl> {
-    let tag = data.type_name();
+    let tag: &'static str = match data {
+        WorkflowNodeData::Start { .. } => "start",
+        WorkflowNodeData::End { .. } => "end",
+        WorkflowNodeData::HumanTask { .. } => "human_task",
+        WorkflowNodeData::AutomatedStep { .. } => "automated_step",
+        WorkflowNodeData::Agent { .. } => "agent",
+        WorkflowNodeData::Decision { .. } => "decision",
+        WorkflowNodeData::ParallelSplit { .. } => "parallel_split",
+        WorkflowNodeData::Join { .. } => "join",
+        WorkflowNodeData::Loop { .. } => "loop",
+        WorkflowNodeData::Scope { .. } => "scope",
+        WorkflowNodeData::PhaseUpdate { .. } => "phase_update",
+        WorkflowNodeData::ProgressUpdate { .. } => "progress_update",
+        WorkflowNodeData::Failure { .. } => "failure",
+        WorkflowNodeData::Trigger { .. } => "trigger",
+        WorkflowNodeData::SubWorkflow { .. } => "sub_workflow",
+    };
     NODES.iter().copied().find(|d| d.wire_name == tag)
 }
 
@@ -183,7 +209,7 @@ impl NodeDecl {
             wire_name: self.wire_name.to_string(),
             display_label: self.display_label.to_string(),
             description: self.description.map(str::to_string),
-            kind: node_kind_wire_str(self.kind).to_string(),
+            kind: self.kind.wire_str().to_string(),
             lowers_to_air: self.lowers_to_air,
             is_join: self.is_join,
             parks_data_envelope: self.parks_data_envelope,
@@ -194,28 +220,6 @@ impl NodeDecl {
 /// Serialize every registered node type for `GET /api/v1/node-types`.
 pub fn descriptors() -> Vec<NodeDescriptor> {
     NODES.iter().map(|d| d.to_descriptor()).collect()
-}
-
-/// Snake-case wire string for a [`NodeKind`]. Duplicates the table in
-/// `projections/step_executions/consumer.rs::node_kind_to_str` — PR2
-/// centralizes it on `impl NodeKind` and rewires both callers.
-fn node_kind_wire_str(k: NodeKind) -> &'static str {
-    match k {
-        NodeKind::Start => "start",
-        NodeKind::End => "end",
-        NodeKind::HumanTask => "human_task",
-        NodeKind::AutomatedStep => "automated_step",
-        NodeKind::Decision => "decision",
-        NodeKind::Loop => "loop",
-        NodeKind::ParallelSplit => "parallel_split",
-        NodeKind::Join => "join",
-        NodeKind::Scope => "scope",
-        NodeKind::SubWorkflow => "sub_workflow",
-        NodeKind::PhaseUpdate => "phase_update",
-        NodeKind::ProgressUpdate => "progress_update",
-        NodeKind::Failure => "failure",
-        NodeKind::Trigger => "trigger",
-    }
 }
 
 #[cfg(test)]
@@ -503,18 +507,7 @@ mod tests {
         // Decision is control flow only — no parked envelope.
         assert!(!decl.parks_data_envelope);
         // Derived output ports: one per condition + the default catch-all.
-        let node = WorkflowNode {
-            id: "n".to_string(),
-            node_type: "decision".to_string(),
-            slug: None,
-            position: crate::models::template::Position { x: 0.0, y: 0.0 },
-            data,
-            parent_id: None,
-            width: None,
-            height: None,
-            tool_meta: None,
-        };
-        let outs = (decl.output_ports)(&node);
+        let outs = (decl.output_ports)(&data);
         assert_eq!(outs.len(), 2);
         assert_eq!(outs[0].id, "branch_1");
         assert_eq!(outs[0].label, "Yes");

@@ -9,7 +9,7 @@
 //! ParallelSplit under `{}`.
 
 use crate::compiler::interface::NodeKind;
-use crate::models::template::{Port, WorkflowNode, WorkflowNodeData};
+use crate::models::template::{Port, WorkflowNodeData};
 use crate::nodes::{NodeDecl, YjsEncodeFn};
 
 pub(crate) static SCOPE_DECL: NodeDecl = NodeDecl {
@@ -30,16 +30,17 @@ pub(crate) static SCOPE_DECL: NodeDecl = NodeDecl {
     lower: Some(crate::compiler::lower::scope::lower_scope),
     input_ports: input_ports,
     output_ports: output_ports,
+    wiring_logic: None,
     yjs_encode: yjs_encode as YjsEncodeFn,
 };
 
-fn input_ports(_node: &WorkflowNode) -> Vec<Port> {
+fn input_ports(_data: &WorkflowNodeData) -> Vec<Port> {
     // Single anonymous Json pass-through input — Scope routes the token to
     // its children unchanged.
     vec![Port::empty_input()]
 }
 
-fn output_ports(_node: &WorkflowNode) -> Vec<Port> {
+fn output_ports(_data: &WorkflowNodeData) -> Vec<Port> {
     // Single `out` port, empty fields (pass-through). The scope's *boundary*
     // port editor lands separately.
     vec![Port {

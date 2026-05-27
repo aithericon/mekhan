@@ -10,7 +10,7 @@
 //! that pattern here verbatim — changing it is a separate concern.
 
 use crate::compiler::interface::NodeKind;
-use crate::models::template::{Port, WorkflowNode, WorkflowNodeData};
+use crate::models::template::{Port, WorkflowNodeData};
 use crate::nodes::{NodeDecl, YjsEncodeFn};
 
 pub(crate) static PARALLEL_SPLIT_DECL: NodeDecl = NodeDecl {
@@ -30,16 +30,17 @@ pub(crate) static PARALLEL_SPLIT_DECL: NodeDecl = NodeDecl {
     lower: Some(crate::compiler::lower::parallel_split::lower_parallel_split),
     input_ports: input_ports,
     output_ports: output_ports,
+    wiring_logic: None,
     yjs_encode: yjs_encode as YjsEncodeFn,
 };
 
-fn input_ports(_node: &WorkflowNode) -> Vec<Port> {
+fn input_ports(_data: &WorkflowNodeData) -> Vec<Port> {
     // Single anonymous Json pass-through input — matches the central
     // `WorkflowNodeData::input_ports` arm for control-flow blocks.
     vec![Port::empty_input()]
 }
 
-fn output_ports(_node: &WorkflowNode) -> Vec<Port> {
+fn output_ports(_data: &WorkflowNodeData) -> Vec<Port> {
     // Mirrors the existing `output_ports` arm in `models/template.rs`:
     // ParallelSplit declares a single cosmetic "out" port (empty fields,
     // pass-through). The actual fan-out — one Petri output place per
