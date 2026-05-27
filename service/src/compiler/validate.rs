@@ -127,6 +127,52 @@ pub(crate) fn validate(graph: &WorkflowGraph, wg: &WorkflowDiGraph) -> Result<()
         }
     }
 
+    // Validate Delay / Timeout duration expressions are non-empty (parse +
+    // ref-resolution happens in `validate_guards` below alongside other
+    // Rhai surfaces). For Timeout, also require a body: at least one
+    // outgoing edge with sourceHandle="body_in" AND at least one incoming
+    // edge with targetHandle="body_out" — same shape as Loop's body.
+    for node in &graph.nodes {
+        match &node.data {
+            WorkflowNodeData::Delay {
+                duration_ms_expr, ..
+            } => {
+                if duration_ms_expr.trim().is_empty() {
+                    return Err(CompileError::Validation(format!(
+                        "delay '{}' must have a non-empty durationMsExpr",
+                        node.id
+                    )));
+                }
+            }
+            WorkflowNodeData::Timeout {
+                duration_ms_expr, ..
+            } => {
+                if duration_ms_expr.trim().is_empty() {
+                    return Err(CompileError::Validation(format!(
+                        "timeout '{}' must have a non-empty durationMsExpr",
+                        node.id
+                    )));
+                }
+                let has_body_in = graph.edges.iter().any(|e| {
+                    e.source == node.id
+                        && e.source_handle.as_deref() == Some("body_in")
+                });
+                let has_body_out = graph.edges.iter().any(|e| {
+                    e.target == node.id
+                        && e.target_handle.as_deref() == Some("body_out")
+                });
+                if !has_body_in || !has_body_out {
+                    return Err(CompileError::Validation(format!(
+                        "timeout '{}' requires a body — wire its body_in output \
+                         and a body completion back to body_out",
+                        node.id
+                    )));
+                }
+            }
+            _ => {}
+        }
+    }
+
     // Decision.defaultBranch is a free string on the wire (forward-compat
     // for future multi-default decisions), but today the editor's
     // `DecisionNode.svelte` hardcodes the Otherwise xyflow Handle id to
@@ -446,6 +492,14 @@ pub(crate) fn validate_guards<'a>(
                 .map(|m| m.expression.as_str())
                 .filter(|s| !s.trim().is_empty())
                 .collect(),
+            WorkflowNodeData::Delay {
+                duration_ms_expr, ..
+            }
+            | WorkflowNodeData::Timeout {
+                duration_ms_expr, ..
+            } if !duration_ms_expr.trim().is_empty() => {
+                vec![duration_ms_expr.as_str()]
+            }
             _ => continue,
         };
         for src in sources {

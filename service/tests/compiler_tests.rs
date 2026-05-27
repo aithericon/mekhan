@@ -3824,3 +3824,231 @@ fn catalogue_query_emits_lookup_effect_no_executor() {
         "query token must carry the configured filters: {qlogic}"
     );
 }
+
+// ─── Delay / Timeout coverage ──────────────────────────────────────────────
+
+fn delay_node(id: &str, expr: &str) -> WorkflowNode {
+    WorkflowNode {
+        id: id.to_string(),
+        node_type: "delay".to_string(),
+        slug: None,
+        position: pos(),
+        data: WorkflowNodeData::Delay {
+            label: "Delay".to_string(),
+            description: None,
+            duration_ms_expr: expr.to_string(),
+        },
+        parent_id: None,
+        width: None,
+        height: None,
+        tool_meta: None,
+    }
+}
+
+fn timeout_node(id: &str, expr: &str) -> WorkflowNode {
+    WorkflowNode {
+        id: id.to_string(),
+        node_type: "timeout".to_string(),
+        slug: None,
+        position: pos(),
+        data: WorkflowNodeData::Timeout {
+            label: "Timeout".to_string(),
+            description: None,
+            duration_ms_expr: expr.to_string(),
+        },
+        parent_id: None,
+        width: None,
+        height: None,
+        tool_meta: None,
+    }
+}
+
+#[test]
+fn delay_node_compiles_to_prep_schedule_forward_shape() {
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            delay_node("d", "5000"),
+            end_node("e"),
+        ],
+        edges: vec![edge("e1", "s", "d"), edge("e2", "d", "e")],
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+    };
+    let air = compile_to_air(&graph, "delay_test", "", &std::collections::HashMap::new())
+        .expect("should compile");
+
+    // All three transitions emitted in the canonical order.
+    assert!(has_transition(&air, "t_d_prep"), "missing prep transition");
+    assert!(
+        has_transition(&air, "t_d_schedule"),
+        "missing schedule effect transition"
+    );
+    assert!(has_transition(&air, "t_d_forward"), "missing forward transition");
+
+    // Places: input is folded into Start's output by the merge pass (same
+    // as every other pass-through node), but the timer-internal places +
+    // output survive.
+    assert!(has_place(&air, "p_d_timer_data"));
+    assert!(has_place(&air, "p_d_scheduled"));
+    assert!(has_place(&air, "p_d_sig"));
+    assert!(has_place(&air, "p_d_output"));
+
+    // The schedule transition fires the timer_schedule effect.
+    let sched = get_transition(&air, "t_d_schedule").unwrap();
+    assert_eq!(sched["logic"]["handler_id"], "timer_schedule");
+
+    // The prep transition embeds the duration expression literally so it's
+    // Rhai-evaluated at firing time (not the static AIR-build literal).
+    let prep = get_transition(&air, "t_d_prep").unwrap();
+    let src = prep["logic"]["source"].as_str().unwrap();
+    assert!(src.contains("delay_ms: (5000)"), "embedded literal: {src}");
+    assert!(src.contains("target_place_id"), "embeds signal target: {src}");
+
+    // The signal place is kind=signal so the timer can inject into it.
+    let sig = places(&air)
+        .iter()
+        .find(|p| p["id"] == "p_d_sig")
+        .expect("signal place");
+    assert_eq!(sig["type"], "signal", "delay signal place is kind=signal");
+}
+
+#[test]
+fn timeout_node_compiles_with_body_in_body_out_race_and_drain() {
+    let mut human = WorkflowNode {
+        id: "h".to_string(),
+        node_type: "human_task".to_string(),
+        slug: None,
+        position: pos(),
+        data: WorkflowNodeData::HumanTask {
+            label: "Approve".to_string(),
+            description: None,
+            task_title: "Approve".to_string(),
+            instructions_mdsvex: None,
+            steps: vec![],
+        },
+        parent_id: None,
+        width: None,
+        height: None,
+        tool_meta: None,
+    };
+    human.parent_id = Some("t".to_string());
+
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            timeout_node("t", "10000"),
+            human,
+            end_node("e_done"),
+            end_node("e_to"),
+        ],
+        edges: vec![
+            edge("e_in", "s", "t"),
+            // Body wiring: timeout body_in → human, human → timeout body_out.
+            edge_with_handle("e_body_in", "t", "h", "body_in"),
+            WorkflowEdge {
+                id: "e_body_out".to_string(),
+                source: "h".to_string(),
+                target: "t".to_string(),
+                source_handle: None,
+                target_handle: Some("body_out".to_string()),
+                label: None,
+                edge_type: "sequence".to_string(),
+            },
+            // Outer outputs: done + timeout.
+            edge("e_done", "t", "e_done"),
+            edge_with_handle("e_to", "t", "e_to", "timeout"),
+        ],
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+    };
+
+    let air = compile_to_air(&graph, "timeout_test", "", &std::collections::HashMap::new())
+        .expect("should compile");
+
+    // Body container + race transitions all present.
+    for t in [
+        "t_t_prep",
+        "t_t_schedule",
+        "t_t_body_done",
+        "t_t_cancel",
+        "t_t_timeout",
+    ] {
+        assert!(has_transition(&air, t), "missing transition: {t}");
+    }
+
+    // The schedule effect is timer_schedule; cancel is timer_cancel.
+    let sched = get_transition(&air, "t_t_schedule").unwrap();
+    assert_eq!(sched["logic"]["handler_id"], "timer_schedule");
+    let cancel = get_transition(&air, "t_t_cancel").unwrap();
+    assert_eq!(cancel["logic"]["handler_id"], "timer_cancel");
+
+    // The Timeout post-pass synthesizes a human_cancel drain for the
+    // HumanTask body child (its NodeInterface.cancellable is populated).
+    assert!(
+        has_transition(&air, "t_t_drain_h"),
+        "missing drain transition for cancellable body child"
+    );
+    let drain_effect = get_transition(&air, "t_t_drain_h_effect").unwrap();
+    assert_eq!(
+        drain_effect["logic"]["handler_id"], "human_cancel",
+        "drain fires human_cancel for HumanTask body children"
+    );
+
+    // The cancel_pulse signal place is minted (Timeout's fan-out gate).
+    assert!(has_place(&air, "p_t_cancel_pulse"));
+    let pulse = places(&air)
+        .iter()
+        .find(|p| p["id"] == "p_t_cancel_pulse")
+        .expect("cancel_pulse place");
+    assert_eq!(pulse["type"], "signal", "cancel_pulse is a Signal place");
+
+    // The timer signal target is the timeout's sig_timeout place.
+    let prep = get_transition(&air, "t_t_prep").unwrap();
+    let src = prep["logic"]["source"].as_str().unwrap();
+    assert!(
+        src.contains("p_t_sig_timeout"),
+        "prep wires timer to the timeout's signal place: {src}"
+    );
+    assert!(src.contains("delay_ms: (10000)"));
+}
+
+#[test]
+fn timeout_without_body_is_rejected_at_validate() {
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            timeout_node("t", "1000"),
+            end_node("e"),
+        ],
+        // No body_in / body_out edges — should fail validate.
+        edges: vec![edge("e1", "s", "t"), edge("e2", "t", "e")],
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+    };
+    let err = compile_to_air(&graph, "no_body", "", &std::collections::HashMap::new())
+        .expect_err("must reject body-less timeout");
+    let msg = format!("{err}");
+    assert!(msg.contains("body"), "validate error mentions body: {msg}");
+}
+
+#[test]
+fn delay_with_empty_duration_expr_is_rejected() {
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            delay_node("d", ""),
+            end_node("e"),
+        ],
+        edges: vec![edge("e1", "s", "d"), edge("e2", "d", "e")],
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+    };
+    let err = compile_to_air(&graph, "empty_dur", "", &std::collections::HashMap::new())
+        .expect_err("must reject empty durationMsExpr");
+    assert!(format!("{err}").contains("durationMsExpr"));
+}

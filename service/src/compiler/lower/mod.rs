@@ -177,6 +177,12 @@ pub(crate) struct PostProcess {
     /// (every tool child's NodePorts must be present in node_ports
     /// before the invoke/collect transitions can reference them).
     pub(crate) agent_tool_wirings: Vec<AgentToolWiring>,
+    /// Per-Timeout body-cancellation fan-outs deferred to a post-pass.
+    /// `apply_timeout_cancel_fanouts` walks each entry's body_child_ids,
+    /// reads their `NodeInterface.cancellable` slot, and synthesizes a
+    /// drain transition + matching `<kind>_cancel` effect for every
+    /// cancellable child.
+    pub(crate) timeout_cancel_fanouts: Vec<crate::compiler::lower::timeout::TimeoutCancelFanout>,
 }
 
 /// Tracks which places are the input/output interface of each expanded node.
@@ -338,6 +344,8 @@ impl NodeLowering for WorkflowNode {
             WorkflowNodeData::PhaseUpdate { .. } => phase_update::lower_phase_update(cx),
             WorkflowNodeData::ProgressUpdate { .. } => progress_update::lower_progress_update(cx),
             WorkflowNodeData::Failure { .. } => failure::lower_failure(cx),
+            WorkflowNodeData::Delay { .. } => delay::lower_delay(cx),
+            WorkflowNodeData::Timeout { .. } => timeout::lower_timeout(cx),
             WorkflowNodeData::SubWorkflow { .. } => subworkflow::lower_subworkflow(cx),
             WorkflowNodeData::Trigger { .. } => {
                 // Trigger nodes are NOT compiled into AIR — they are a
@@ -419,6 +427,8 @@ fn node_kind_of(node: &WorkflowNode) -> NodeKind {
         WorkflowNodeData::PhaseUpdate { .. } => NodeKind::PhaseUpdate,
         WorkflowNodeData::ProgressUpdate { .. } => NodeKind::ProgressUpdate,
         WorkflowNodeData::Failure { .. } => NodeKind::Failure,
+        WorkflowNodeData::Delay { .. } => NodeKind::Delay,
+        WorkflowNodeData::Timeout { .. } => NodeKind::Timeout,
         WorkflowNodeData::Trigger { .. } => NodeKind::Trigger,
     }
 }
@@ -435,6 +445,7 @@ fn node_kind_of(node: &WorkflowNode) -> NodeKind {
 pub(super) mod agent;
 pub(super) mod automated_step;
 pub(super) mod decision;
+pub(super) mod delay;
 pub(super) mod end;
 pub(super) mod failure;
 pub(super) mod human_task;
@@ -446,6 +457,7 @@ pub(super) mod progress_update;
 pub(super) mod scope;
 pub(super) mod start;
 pub(super) mod subworkflow;
+pub(super) mod timeout;
 /// Build `(let-bindings, value-expr)` Rhai for a result-mapping list, mirroring
 /// the PhaseUpdate "bind interpolations to shallow locals" recipe so the
 /// envelope map literal stays within the debug-build Rhai expr-depth limit.
@@ -641,6 +653,139 @@ pub(crate) fn apply_agent_tool_wirings(
                     }
                 }
             }
+        }
+    }
+    Ok(())
+}
+
+/// Drain queued Timeout body-cancellation fan-outs. For each Timeout, walk
+/// its `body_child_ids` and consult `interfaces[child].cancellable` — if
+/// populated, synthesize a per-child drain transition + matching
+/// `<kind>_cancel` effect transition so the in-flight resource is reclaimed
+/// when the Timeout's timer wins the race.
+///
+/// Race correctness: each drain reads the cancel_pulse (non-consuming) and
+/// consumes the child's in-flight token. Two consumers race for that token
+/// — the child's normal "complete" path AND this drain. Whichever wins
+/// blocks the other.
+///
+/// Non-cancellable body children (Decision, ParallelSplit, Failure, ...
+/// nodes whose `cancellable` field is `None`) are silently skipped — the
+/// race-winner transitions on the Timeout still cut their downstream paths.
+pub(crate) fn apply_timeout_cancel_fanouts(
+    ctx: &mut Context,
+    interfaces: &InterfaceRegistry,
+    fanouts: &[crate::compiler::lower::timeout::TimeoutCancelFanout],
+) -> Result<(), CompileError> {
+    use crate::compiler::interface::CancelKind;
+
+    for fan in fanouts {
+        for child_id in &fan.body_child_ids {
+            let iface = match interfaces.get(child_id) {
+                Some(i) => i,
+                None => continue, // child wasn't lowered (e.g. Trigger) — skip
+            };
+            let Some(spec) = iface.cancellable.as_ref() else {
+                continue;
+            };
+
+            let timeout_id = &fan.timeout_id;
+            let timeout_label = &fan.timeout_label;
+            let cancel_pulse = &fan.cancel_pulse;
+            let effect_errors = &fan.effect_errors;
+            let corr = &spec.correlation_field;
+
+            // The drain places: one per body child. These hold the cancel
+            // effect's input token (a typed `<Kind>CancelInput`-shaped map
+            // synthesized by the drain transition's Rhai).
+            let p_drain_input: PlaceHandle<DynamicToken> = ctx.state(
+                format!("p_{timeout_id}_drain_{child_id}_input"),
+                format!("{timeout_label} - Cancel {child_id} (request)"),
+            );
+            let p_drain_done: PlaceHandle<DynamicToken> = ctx.state(
+                format!("p_{timeout_id}_drain_{child_id}_done"),
+                format!("{timeout_label} - Cancel {child_id} (acked)"),
+            );
+
+            // The in-flight place we're draining lives elsewhere in the net —
+            // synthesize a typed handle here by id alone. Use DynamicToken so
+            // the consume arc accepts whatever shape the child parked.
+            let in_flight: PlaceHandle<DynamicToken> =
+                PlaceHandle::external(spec.place_id.clone());
+
+            // Build the per-kind cancel-input shape AND pick the engine
+            // effect descriptor to fire afterwards.
+            let (cancel_shape_rhai, descriptor) = match spec.kind {
+                CancelKind::Human => {
+                    // human_cancel needs task_id + place. The place defaults
+                    // to the child's signal place (`p_{child}_signal`),
+                    // which is where the child's response would have been
+                    // delivered.
+                    let signal_place = format!("p_{child_id}_signal");
+                    (
+                        format!(
+                            "#{{ task: #{{ task_id: token.{corr}, place: \"{signal_place}\" }} }}"
+                        ),
+                        &petri_domain::effects::HUMAN_CANCEL,
+                    )
+                }
+                CancelKind::Executor => (
+                    format!("#{{ job: #{{ execution_id: token.{corr} }} }}"),
+                    &petri_domain::effects::EXECUTOR_CANCEL,
+                ),
+                CancelKind::Scheduler => (
+                    format!("#{{ job: #{{ scheduler_job_id: token.{corr} }} }}"),
+                    &petri_domain::effects::SCHEDULER_CANCEL,
+                ),
+                CancelKind::Timer => {
+                    // timer_cancel takes both correlation_id + target_place_id.
+                    let extra = spec
+                        .extra_field
+                        .as_deref()
+                        .unwrap_or("target_place_id");
+                    (
+                        format!(
+                            "#{{ timer: #{{ timer_correlation_id: token.{corr}, target_place_id: token.{extra} }} }}"
+                        ),
+                        &petri_domain::effects::TIMER_CANCEL,
+                    )
+                }
+                CancelKind::SubWorkflow => (
+                    format!(
+                        "#{{ cancel: #{{ child_net_id: token.{corr}, reason: \"parent_timeout\" }} }}"
+                    ),
+                    &petri_domain::effects::SUBWORKFLOW_CANCEL,
+                ),
+            };
+
+            // Drain transition: read-arc the cancel_pulse (non-consuming
+            // gate so the pulse can fan out to many drains), consume the
+            // child's in-flight token (racing with the child's own
+            // success transition — only one wins), emit the cancel
+            // effect input. The Rhai output port name matches the effect
+            // descriptor's default_input_port: "task" for human_cancel,
+            // "job" for executor/scheduler, "timer" for timer_cancel,
+            // "cancel" for subworkflow_cancel.
+            ctx.transition(
+                format!("t_{timeout_id}_drain_{child_id}"),
+                format!("{timeout_label} - Drain {child_id} on timeout"),
+            )
+            .auto_input("token", &in_flight)
+            .read_input("pulse", cancel_pulse)
+            .auto_output(descriptor.default_input_port, &p_drain_input)
+            .logic_rhai(cancel_shape_rhai)
+            .done();
+
+            // Cancel effect transition: fire the matching <kind>_cancel
+            // handler. Errors drain to the Timeout's effect_errors place.
+            ctx.transition(
+                format!("t_{timeout_id}_drain_{child_id}_effect"),
+                format!("{timeout_label} - Cancel Effect {child_id}"),
+            )
+            .auto_input(descriptor.default_input_port, &p_drain_input)
+            .auto_output(descriptor.default_output_port, &p_drain_done)
+            .error_output(effect_errors)
+            .builtin_effect(descriptor);
         }
     }
     Ok(())

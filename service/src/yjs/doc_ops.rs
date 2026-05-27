@@ -560,6 +560,14 @@ pub fn write_node_config(
                 config.insert(txn, "errorResultMapping", json_value_to_any(&erm_val));
             }
         }
+        WorkflowNodeData::Delay {
+            duration_ms_expr, ..
+        }
+        | WorkflowNodeData::Timeout {
+            duration_ms_expr, ..
+        } => {
+            config.insert(txn, "durationMsExpr", duration_ms_expr.clone());
+        }
         WorkflowNodeData::Trigger {
             source,
             concurrency,

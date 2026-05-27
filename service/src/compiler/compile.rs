@@ -444,6 +444,16 @@ pub(crate) fn compile_to_scenario_and_interfaces_with_configs(
         &fixups.agent_tool_wirings,
     )?;
 
+    // 4c. Drain queued Timeout body-cancellation fan-outs. Runs after every
+    //     `expand_node` so each body child's `NodeInterface.cancellable`
+    //     slot is populated, and before edge wiring so the synthesized
+    //     drain transitions participate in any downstream merges.
+    crate::compiler::lower::apply_timeout_cancel_fanouts(
+        &mut ctx,
+        &interfaces,
+        &fixups.timeout_cancel_fanouts,
+    )?;
+
     // 5. Wire edges (may record merges instead of creating transitions)
     for edge in &graph.edges {
         wire_edge(edge, &node_ports, &wg, &mut ctx, &mut fixups)?;

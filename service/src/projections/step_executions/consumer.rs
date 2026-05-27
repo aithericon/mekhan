@@ -255,6 +255,8 @@ fn node_kind_to_str(kind: crate::compiler::NodeKind) -> &'static str {
         crate::compiler::NodeKind::PhaseUpdate => "phase_update",
         crate::compiler::NodeKind::ProgressUpdate => "progress_update",
         crate::compiler::NodeKind::Failure => "failure",
+        crate::compiler::NodeKind::Delay => "delay",
+        crate::compiler::NodeKind::Timeout => "timeout",
         crate::compiler::NodeKind::Trigger => "trigger",
     }
 }

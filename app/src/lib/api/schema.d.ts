@@ -3982,6 +3982,28 @@ export interface components {
             /** @enum {string} */
             type: "failure";
         } | {
+            description?: string | null;
+            /**
+             * @description Rhai expression evaluated against the inbound token at runtime.
+             *     Must return an integer number of milliseconds. Examples:
+             *     `"5000"`, `"order.sla_ms"`, `"input.timeout * 1000"`.
+             */
+            durationMsExpr: string;
+            label: string;
+            /** @enum {string} */
+            type: "delay";
+        } | {
+            description?: string | null;
+            /**
+             * @description Rhai expression evaluated against the inbound token at runtime.
+             *     Must return an integer number of milliseconds. Same shape as
+             *     `Delay.duration_ms_expr`.
+             */
+            durationMsExpr: string;
+            label: string;
+            /** @enum {string} */
+            type: "timeout";
+        } | {
             /** @description Concurrency / dedup policy applied by the dispatcher. */
             concurrency?: components["schemas"]["ConcurrencyPolicy"];
             description?: string | null;

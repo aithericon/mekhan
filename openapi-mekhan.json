@@ -10708,6 +10708,66 @@
           },
           {
             "type": "object",
+            "description": "Fire-and-forget delay. Waits `durationMsExpr` milliseconds then\nforwards the input token on its single output. Compiles to the engine's\n`timer_schedule` effect (see `ctx.delay()` in\n`engine/sdk/src/context.rs`). `durationMsExpr` is a Rhai expression so\nthe delay can be data-driven from upstream refs (`<slug>.<field>`).",
+            "required": [
+              "label",
+              "durationMsExpr",
+              "type"
+            ],
+            "properties": {
+              "description": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "durationMsExpr": {
+                "type": "string",
+                "description": "Rhai expression evaluated against the inbound token at runtime.\nMust return an integer number of milliseconds. Examples:\n`\"5000\"`, `\"order.sla_ms\"`, `\"input.timeout * 1000\"`."
+              },
+              "label": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "delay"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Body-container that races a wrapped subgraph against a deadline.\nBody work flows out the `body_in` source handle; the body's terminal\nedge targets `body_out`. Two outputs: `default` (the \"done\" path —\nbody completed in time, timer cancelled) and `timeout` (timer fired\nfirst; in-flight body work in cancellable children is also drained\nvia per-kind cancel effects).",
+            "required": [
+              "label",
+              "durationMsExpr",
+              "type"
+            ],
+            "properties": {
+              "description": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "durationMsExpr": {
+                "type": "string",
+                "description": "Rhai expression evaluated against the inbound token at runtime.\nMust return an integer number of milliseconds. Same shape as\n`Delay.duration_ms_expr`."
+              },
+              "label": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "timeout"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
             "description": "Trigger node (Phase 5). Lives at the template level and connects to a\ntarget input port via a single outgoing edge. Triggers are never edge\ntargets; they are *inputs to the workflow*, not part of it. AIR\ncompilation skips trigger nodes — they are a pre-compile concern owned\nby the dispatcher (`service::triggers`).",
             "required": [
               "label",

@@ -50,6 +50,8 @@ export type ScopeNodeData = Extract<SchemaWorkflowNodeData, { type: 'scope' }>;
 export type PhaseUpdateNodeData = Extract<SchemaWorkflowNodeData, { type: 'phase_update' }>;
 export type ProgressUpdateNodeData = Extract<SchemaWorkflowNodeData, { type: 'progress_update' }>;
 export type FailureNodeData = Extract<SchemaWorkflowNodeData, { type: 'failure' }>;
+export type DelayNodeData = Extract<SchemaWorkflowNodeData, { type: 'delay' }>;
+export type TimeoutNodeData = Extract<SchemaWorkflowNodeData, { type: 'timeout' }>;
 export type TriggerNodeData = Extract<SchemaWorkflowNodeData, { type: 'trigger' }>;
 export type SubWorkflowNodeData = Extract<SchemaWorkflowNodeData, { type: 'sub_workflow' }>;
 export type AgentNodeData = Extract<SchemaWorkflowNodeData, { type: 'agent' }>;
@@ -162,6 +164,20 @@ export const NODE_PALETTE: NodePaletteItem[] = [
 		color: '#dc2626'
 	},
 	{
+		type: 'delay',
+		label: 'Delay',
+		description: 'Pause for a Rhai-evaluated number of ms, then forward the token',
+		icon: 'timer',
+		color: '#0891b2'
+	},
+	{
+		type: 'timeout',
+		label: 'Timeout',
+		description: 'Race a body branch against a deadline; cancel body on timer-win',
+		icon: 'timer-off',
+		color: '#0e7490'
+	},
+	{
 		type: 'trigger',
 		label: 'Trigger',
 		description: 'Fires the workflow on cron, catalog, webhook, etc.',
@@ -262,6 +278,18 @@ export function createDefaultNodeData(type: WorkflowNodeType): SchemaWorkflowNod
 			return {
 				type: 'failure',
 				label: 'Failure'
+			};
+		case 'delay':
+			return {
+				type: 'delay',
+				label: 'Delay',
+				durationMsExpr: '5000'
+			};
+		case 'timeout':
+			return {
+				type: 'timeout',
+				label: 'Timeout',
+				durationMsExpr: '60000'
 			};
 		case 'trigger':
 			return {

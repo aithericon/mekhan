@@ -431,6 +431,39 @@ pub enum WorkflowNodeData {
         )]
         error_result_mapping: Vec<FieldMapping>,
     },
+    /// Fire-and-forget delay. Waits `durationMsExpr` milliseconds then
+    /// forwards the input token on its single output. Compiles to the engine's
+    /// `timer_schedule` effect (see `ctx.delay()` in
+    /// `engine/sdk/src/context.rs`). `durationMsExpr` is a Rhai expression so
+    /// the delay can be data-driven from upstream refs (`<slug>.<field>`).
+    #[serde(rename = "delay")]
+    Delay {
+        label: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+        /// Rhai expression evaluated against the inbound token at runtime.
+        /// Must return an integer number of milliseconds. Examples:
+        /// `"5000"`, `"order.sla_ms"`, `"input.timeout * 1000"`.
+        #[serde(rename = "durationMsExpr")]
+        duration_ms_expr: String,
+    },
+    /// Body-container that races a wrapped subgraph against a deadline.
+    /// Body work flows out the `body_in` source handle; the body's terminal
+    /// edge targets `body_out`. Two outputs: `default` (the "done" path —
+    /// body completed in time, timer cancelled) and `timeout` (timer fired
+    /// first; in-flight body work in cancellable children is also drained
+    /// via per-kind cancel effects).
+    #[serde(rename = "timeout")]
+    Timeout {
+        label: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+        /// Rhai expression evaluated against the inbound token at runtime.
+        /// Must return an integer number of milliseconds. Same shape as
+        /// `Delay.duration_ms_expr`.
+        #[serde(rename = "durationMsExpr")]
+        duration_ms_expr: String,
+    },
     /// Trigger node (Phase 5). Lives at the template level and connects to a
     /// target input port via a single outgoing edge. Triggers are never edge
     /// targets; they are *inputs to the workflow*, not part of it. AIR
@@ -588,6 +621,8 @@ impl WorkflowNodeData {
             | Self::PhaseUpdate { label, .. }
             | Self::ProgressUpdate { label, .. }
             | Self::Failure { label, .. }
+            | Self::Delay { label, .. }
+            | Self::Timeout { label, .. }
             | Self::Trigger { label, .. }
             | Self::SubWorkflow { label, .. } => label,
         }
@@ -608,6 +643,8 @@ impl WorkflowNodeData {
             Self::PhaseUpdate { .. } => "phase_update",
             Self::ProgressUpdate { .. } => "progress_update",
             Self::Failure { .. } => "failure",
+            Self::Delay { .. } => "delay",
+            Self::Timeout { .. } => "timeout",
             Self::Trigger { .. } => "trigger",
             Self::SubWorkflow { .. } => "sub_workflow",
         }
@@ -628,6 +665,8 @@ impl WorkflowNodeData {
             | Self::PhaseUpdate { description, .. }
             | Self::ProgressUpdate { description, .. }
             | Self::Failure { description, .. }
+            | Self::Delay { description, .. }
+            | Self::Timeout { description, .. }
             | Self::Trigger { description, .. }
             | Self::SubWorkflow { description, .. } => description.as_deref(),
         }
@@ -660,6 +699,9 @@ impl WorkflowNodeData {
             | Self::PhaseUpdate { .. }
             | Self::ProgressUpdate { .. }
             | Self::Failure { .. }
+            // Delay accepts a single anonymous upstream token and forwards
+            // it. Json pass-through.
+            | Self::Delay { .. }
             // Agent accepts the single anonymous upstream token. The
             // user/system prompt templates `{{<slug>.<field>}}`-interpolate
             // against the parked-data envelopes of upstream producers, not
@@ -673,6 +715,18 @@ impl WorkflowNodeData {
             // Loop accepts the outer `in` and a `body_out` handle from its
             // body children. Both are Json pass-throughs.
             Self::Loop { .. } => vec![
+                Port::empty_input(),
+                Port {
+                    id: "body_out".to_string(),
+                    label: "Body Out".to_string(),
+                    fields: vec![],
+                },
+            ],
+
+            // Timeout matches Loop's shape: the outer `in` plus a `body_out`
+            // handle that carries the body's completion back into the race
+            // join. Both are Json pass-throughs.
+            Self::Timeout { .. } => vec![
                 Port::empty_input(),
                 Port {
                     id: "body_out".to_string(),
@@ -807,11 +861,36 @@ impl WorkflowNodeData {
             | Self::Scope { .. }
             | Self::PhaseUpdate { .. }
             | Self::ProgressUpdate { .. }
-            | Self::Failure { .. } => vec![Port {
+            | Self::Failure { .. }
+            // Delay forwards its single input on a single default output.
+            | Self::Delay { .. } => vec![Port {
                 id: "out".to_string(),
                 label: "Output".to_string(),
                 fields: vec![],
             }],
+
+            // Timeout exposes the body branch + done + timeout outputs.
+            // `body_in` is the source handle that fans the input into the
+            // wrapped subgraph; `default` (done) fires when the body wins
+            // the race against the deadline; `timeout` fires when the
+            // timer wins. All three are Json pass-throughs.
+            Self::Timeout { .. } => vec![
+                Port {
+                    id: "out".to_string(),
+                    label: "Done".to_string(),
+                    fields: vec![],
+                },
+                Port {
+                    id: "timeout".to_string(),
+                    label: "On timeout".to_string(),
+                    fields: vec![],
+                },
+                Port {
+                    id: "body_in".to_string(),
+                    label: "Body In".to_string(),
+                    fields: vec![],
+                },
+            ],
 
             // Join carries an explicit output Port describing the parked
             // `<slug>.<field>` shape downstream borrows can read.
@@ -2567,7 +2646,8 @@ pub mod dsl {
                 // They previously fell into the generic catch-all error; keep
                 // that behaviour but make it explicit per kind so the
                 // round-trip asymmetry is greppable rather than silent.
-                "phase_update" | "progress_update" | "failure" | "trigger" => Err(format!(
+                "phase_update" | "progress_update" | "failure" | "trigger" | "delay"
+                | "timeout" => Err(format!(
                     "step '{}' has GUI-only type '{}' which the DSL format does not model",
                     key, step.step_type
                 )),
@@ -2731,7 +2811,9 @@ pub mod dsl {
                 }
                 WorkflowNodeData::PhaseUpdate { .. }
                 | WorkflowNodeData::ProgressUpdate { .. }
-                | WorkflowNodeData::Failure { .. } => {
+                | WorkflowNodeData::Failure { .. }
+                | WorkflowNodeData::Delay { .. }
+                | WorkflowNodeData::Timeout { .. } => {
                     // DSL doesn't model the process-control nodes — GUI-authored
                     // for now. Same lossy-drop behaviour as triggers.
                 }

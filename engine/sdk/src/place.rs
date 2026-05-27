@@ -56,8 +56,10 @@ impl<T: Token> PlaceHandle<T> {
     /// Create a handle to an externally-defined place (by ID).
     ///
     /// Used by components to reference places that exist outside their scope
-    /// (e.g., the user's job queue).
-    pub(crate) fn external(id: String) -> Self {
+    /// (e.g., the user's job queue) and by service-side compiler post-passes
+    /// that need to arc into places minted by other lower_* modules without
+    /// re-declaring them.
+    pub fn external(id: String) -> Self {
         Self {
             id,
             _marker: PhantomData,

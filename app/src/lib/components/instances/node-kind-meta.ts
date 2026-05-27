@@ -19,6 +19,8 @@ import OctagonX from '@lucide/svelte/icons/octagon-x';
 import Flag from '@lucide/svelte/icons/flag';
 import Gauge from '@lucide/svelte/icons/gauge';
 import Zap from '@lucide/svelte/icons/zap';
+import Timer from '@lucide/svelte/icons/timer';
+import TimerOff from '@lucide/svelte/icons/timer-off';
 import Box from '@lucide/svelte/icons/box';
 
 export type NodeKindMeta = {
@@ -43,6 +45,8 @@ const KIND_META: Record<string, NodeKindMeta> = {
 	join: { icon: GitMerge, label: 'Join', iconClass: 'text-white', chipClass: 'bg-node-parallel' },
 	sub_workflow: { icon: Workflow, label: 'Sub-workflow', iconClass: 'text-white', chipClass: 'bg-node-sub-workflow' },
 	failure: { icon: OctagonX, label: 'Failure',         iconClass: 'text-white', chipClass: 'bg-node-failure' },
+	delay: { icon: Timer,      label: 'Delay',           iconClass: 'text-white', chipClass: 'bg-node-delay' },
+	timeout: { icon: TimerOff, label: 'Timeout',         iconClass: 'text-white', chipClass: 'bg-node-timeout' },
 	phase_update: { icon: Flag, label: 'Phase update',   iconClass: 'text-white', chipClass: 'bg-node-phase-update' },
 	progress_update: { icon: Gauge, label: 'Progress update', iconClass: 'text-white', chipClass: 'bg-node-progress-update' },
 	trigger: { icon: Zap,      label: 'Trigger',         iconClass: 'text-white', chipClass: 'bg-node-trigger' },

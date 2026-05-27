@@ -417,6 +417,8 @@ fn out_shape(node: &WorkflowNode, in_shape: &TokenShape) -> TokenShape {
         | WorkflowNodeData::PhaseUpdate { .. }
         | WorkflowNodeData::ProgressUpdate { .. }
         | WorkflowNodeData::Failure { .. }
+        | WorkflowNodeData::Delay { .. }
+        | WorkflowNodeData::Timeout { .. }
         | WorkflowNodeData::Trigger { .. } => in_shape.clone(),
 
         WorkflowNodeData::End { .. } => in_shape.clone(),

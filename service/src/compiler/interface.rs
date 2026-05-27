@@ -118,6 +118,8 @@ pub enum NodeKind {
     PhaseUpdate,
     ProgressUpdate,
     Failure,
+    Delay,
+    Timeout,
     Trigger,
 }
 
@@ -245,6 +247,58 @@ pub struct NodeInterface {
     /// full upstream envelope handed over the edge.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub borrowed_paths: BTreeMap<String, Vec<String>>,
+
+    // ── Cancellable in-flight state ─────────────────────────────────────────
+    /// Populated by `lower_*` for nodes whose lowering parks a long-running
+    /// correlation token in a known place (HumanTask, Executor-backed
+    /// AutomatedStep, SubWorkflow, Delay). When the node ends up inside a
+    /// Timeout body, the Timeout's post-pass reads this and synthesizes a
+    /// drain transition + matching `<kind>_cancel` effect transition so the
+    /// in-flight resource is reclaimed when the timer wins.
+    ///
+    /// Non-cancellable kinds (Decision, ParallelSplit, Join, Scope,
+    /// PhaseUpdate, ProgressUpdate, Failure, Start, End, Trigger, Timeout)
+    /// leave this `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cancellable: Option<CancellableInFlight>,
+}
+
+/// Kind tag for a cancellable in-flight resource — drives Timeout's drain
+/// post-pass to fire the matching `<kind>_cancel` engine effect.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CancelKind {
+    /// HumanTask: drains via `human_cancel` (`task_id` + `place`).
+    Human,
+    /// AutomatedStep (executor backend): drains via `executor_cancel`
+    /// (`execution_id`).
+    Executor,
+    /// AutomatedStep (scheduler backend): drains via `scheduler_cancel`
+    /// (`scheduler_job_id`).
+    Scheduler,
+    /// Delay / nested Timeout's timer: drains via `timer_cancel`
+    /// (`timer_correlation_id` + `target_place_id`).
+    Timer,
+    /// SubWorkflow: drains via `subworkflow_cancel` (`child_net_id`).
+    SubWorkflow,
+}
+
+/// Where a node's "currently in-flight" correlation token lives, what kind
+/// of cancel effect drains it, and which token field carries the id the
+/// cancel handler expects. The Timeout post-pass synthesizes one drain
+/// transition per cancellable body child using this metadata.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CancellableInFlight {
+    /// Place id where the node parks its in-flight correlation token.
+    pub place_id: String,
+    pub kind: CancelKind,
+    /// Field name on the in-flight token carrying the cancel correlation
+    /// id (`task_id`, `execution_id`, `scheduler_job_id`,
+    /// `timer_correlation_id`, `child_net_id`).
+    pub correlation_field: String,
+    /// Additional field the cancel handler requires beyond the correlation
+    /// id. Today only `Timer` uses this (carries `target_place_id`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extra_field: Option<String>,
 }
 
 impl NodeInterface {
@@ -260,6 +314,7 @@ impl NodeInterface {
             owned_places: Vec::new(),
             owned_transitions: Vec::new(),
             borrowed_paths: BTreeMap::new(),
+            cancellable: None,
         }
     }
 

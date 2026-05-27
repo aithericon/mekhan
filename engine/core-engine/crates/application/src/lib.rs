@@ -23,6 +23,7 @@ pub mod scheduler_client;
 pub mod scheduler_handlers;
 pub mod schema_registry;
 pub mod service;
+pub mod subworkflow_handlers;
 pub mod timer_handlers;
 pub(crate) mod token_manager;
 
