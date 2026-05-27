@@ -22,6 +22,7 @@ pub mod bff;
 pub mod dev;
 pub mod extractor;
 pub mod introspection;
+pub mod membership;
 pub mod mgmt;
 pub mod model;
 pub mod port;
@@ -30,6 +31,7 @@ pub mod zitadel;
 
 pub use authenticator::{Authenticator, SESSION_COOKIE};
 pub use introspection::IntrospectionVerifier;
+pub use membership::{can_read_template, member_role, require_member, require_role, MembershipError, Role};
 pub use mgmt::ZitadelMgmt;
 pub use model::{AuthError, AuthUser, VerifiedClaims};
 pub use port::{PrincipalResolver, TokenVerifier};
