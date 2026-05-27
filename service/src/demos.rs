@@ -1374,6 +1374,7 @@ mod tests {
             ("06-subworkflow",      "00000000-0000-0000-0000-000000000016", "06 · SubWorkflow (Flow-in-Flow)"),
             ("07-ocr-classify-extract", "00000000-0000-0000-0000-000000000017", "07 · OCR Classify & Extract"),
             ("08-failure-handling",     "00000000-0000-0000-0000-000000000018", "08 · Failure Handling"),
+            ("10-delay-timeout",        "00000000-0000-0000-0000-000000000021", "10 · Delay & Timeout"),
         ] {
             let demo = load_demo(&root.join(dir_name))
                 .unwrap_or_else(|e| panic!("{dir_name} must load: {e}"));
@@ -1401,6 +1402,7 @@ mod tests {
             "04-loop-counter",
             "05-parallel-fanout",
             "08-failure-handling",
+            "10-delay-timeout",
         ] {
             let demo = load_demo(&root.join(dir_name))
                 .unwrap_or_else(|e| panic!("{dir_name} must load: {e}"));

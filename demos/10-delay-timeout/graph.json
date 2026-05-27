@@ -1,0 +1,143 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "position": { "x": 40, "y": 200 },
+      "data": {
+        "type": "start",
+        "label": "Start",
+        "processName": "Review with SLA",
+        "initial": {
+          "id": "in",
+          "label": "Run Config",
+          "fields": [
+            {
+              "name": "request_id",
+              "label": "Request ID",
+              "kind": "text",
+              "required": true,
+              "placeholder": "e.g. REQ-1042"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "sla",
+      "type": "timeout",
+      "position": { "x": 320, "y": 200 },
+      "width": 360,
+      "height": 300,
+      "data": {
+        "type": "timeout",
+        "label": "Review SLA",
+        "description": "Races the body (a HumanTask) against a 30s deadline. If the reviewer responds in time, the token flows out the default `done` handle. If the timer wins, the engine fires `human_cancel` on the in-flight task (drained automatically) and the token flows out the `timeout` handle. Body wiring: `sla --body_in--> review` and `review --body_out--> sla`.",
+        "durationMsExpr": "30000"
+      }
+    },
+    {
+      "id": "review",
+      "type": "human_task",
+      "slug": "review",
+      "position": { "x": 440, "y": 320 },
+      "parentId": "sla",
+      "data": {
+        "type": "human_task",
+        "label": "Reviewer Decision",
+        "taskTitle": "Review {{ start.request_id }}",
+        "steps": [
+          {
+            "id": "step1",
+            "title": "Approve / Reject",
+            "blocks": [
+              {
+                "type": "input",
+                "field": {
+                  "name": "approved",
+                  "label": "Approved",
+                  "kind": "checkbox",
+                  "required": true
+                }
+              },
+              {
+                "type": "input",
+                "field": {
+                  "name": "comment",
+                  "label": "Comment",
+                  "kind": "textarea",
+                  "required": false
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "end_done",
+      "type": "end",
+      "position": { "x": 820, "y": 120 },
+      "data": {
+        "type": "end",
+        "label": "Done (in SLA)",
+        "resultMapping": [
+          { "targetField": "outcome", "expression": "\"reviewed\"" },
+          { "targetField": "request_id", "expression": "start.request_id" }
+        ]
+      }
+    },
+    {
+      "id": "end_timeout",
+      "type": "end",
+      "position": { "x": 820, "y": 320 },
+      "data": {
+        "type": "end",
+        "label": "Done (SLA expired)",
+        "resultMapping": [
+          { "targetField": "outcome", "expression": "\"sla_expired\"" },
+          { "targetField": "request_id", "expression": "start.request_id" }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e_start_sla",
+      "source": "start",
+      "target": "sla",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e_body_in",
+      "source": "sla",
+      "target": "review",
+      "sourceHandle": "body_in",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e_body_out",
+      "source": "review",
+      "target": "sla",
+      "targetHandle": "body_out",
+      "type": "loop_back"
+    },
+    {
+      "id": "e_done",
+      "source": "sla",
+      "target": "end_done",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e_timeout",
+      "source": "sla",
+      "target": "end_timeout",
+      "sourceHandle": "timeout",
+      "targetHandle": "in",
+      "type": "sequence"
+    }
+  ]
+}
