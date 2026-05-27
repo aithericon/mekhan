@@ -4,7 +4,7 @@
 
 use super::*;
 
-pub(super) fn lower_parallel_split(cx: &mut LoweringCtx) -> Result<(), CompileError> {
+pub(crate) fn lower_parallel_split(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     let id = &cx.node.id;
     let WorkflowNodeData::ParallelSplit { label, .. } = &cx.node.data else {
         unreachable!("lower_parallel_split on non-ParallelSplit node")

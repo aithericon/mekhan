@@ -5,7 +5,7 @@
 
 use super::*;
 
-pub(super) fn lower_failure(cx: &mut LoweringCtx) -> Result<(), CompileError> {
+pub(crate) fn lower_failure(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     let id = &cx.node.id;
     let WorkflowNodeData::Failure {
         label,

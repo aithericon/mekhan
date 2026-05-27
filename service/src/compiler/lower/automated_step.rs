@@ -11,7 +11,7 @@
 
 use super::*;
 
-pub(super) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileError> {
+pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     // Scheduled steps dispatch through the long-lived scheduler-net instead of
     // the inline executor lifecycle. Delegated early so the inline path below
     // is byte-identical to pre-feature behaviour (guarded by

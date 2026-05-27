@@ -459,20 +459,20 @@ fn node_kind_of(node: &WorkflowNode) -> NodeKind {
 // (`split_outputs`, `park_outputs`, `result_mapping_rhai`,
 // `declared_outputs_rhai`) live below as `pub(super)` so every child can
 // `use super::*` and pick them up uniformly.
-pub(super) mod agent;
-pub(super) mod automated_step;
-pub(super) mod decision;
-pub(super) mod end;
-pub(super) mod failure;
-pub(super) mod human_task;
-pub(super) mod join;
-pub(super) mod loop_;
-pub(super) mod parallel_split;
+pub(crate) mod agent;
+pub(crate) mod automated_step;
+pub(crate) mod decision;
+pub(crate) mod end;
+pub(crate) mod failure;
+pub(crate) mod human_task;
+pub(crate) mod join;
+pub(crate) mod loop_;
+pub(crate) mod parallel_split;
 pub(crate) mod phase_update;
-pub(super) mod progress_update;
-pub(super) mod scope;
-pub(super) mod start;
-pub(super) mod subworkflow;
+pub(crate) mod progress_update;
+pub(crate) mod scope;
+pub(crate) mod start;
+pub(crate) mod subworkflow;
 /// Build `(let-bindings, value-expr)` Rhai for a result-mapping list, mirroring
 /// the PhaseUpdate "bind interpolations to shallow locals" recipe so the
 /// envelope map literal stays within the debug-build Rhai expr-depth limit.

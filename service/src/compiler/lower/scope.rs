@@ -5,7 +5,7 @@
 
 use super::*;
 
-pub(super) fn lower_scope(cx: &mut LoweringCtx) -> Result<(), CompileError> {
+pub(crate) fn lower_scope(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     let id = &cx.node.id;
     let WorkflowNodeData::Scope { label, .. } = &cx.node.data else {
         unreachable!("lower_scope on non-Scope node")

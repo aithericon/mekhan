@@ -12,7 +12,7 @@
 
 use super::*;
 
-pub(super) fn lower_agent(cx: &mut LoweringCtx) -> Result<(), CompileError> {
+pub(crate) fn lower_agent(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     let WorkflowNodeData::Agent {
         max_turns,
         stop_when,
