@@ -122,6 +122,22 @@ pub enum NodeKind {
     Trigger,
 }
 
+impl NodeKind {
+    /// Unquoted hoist-path segments for this kind's parked-envelope shape.
+    /// HumanTask nests business data under `data`; AutomatedStep (which
+    /// every backend lowering shares) nests under `detail.outputs`; every
+    /// other kind keeps fields at the top level. The borrow apply phases
+    /// use this to bridge the user-visible flat shape (`<slug>.<field>`)
+    /// to the nested engine shape.
+    pub fn hoist_path(&self) -> &'static [&'static str] {
+        match self {
+            NodeKind::HumanTask => &["data"],
+            NodeKind::AutomatedStep => &["detail", "outputs"],
+            _ => &[],
+        }
+    }
+}
+
 /// How an output port is keyed. Mirrors `NodePorts.output_places` (which uses
 /// `Vec<(Option<String>, PlaceHandle)>`) but lifts the meaning into named
 /// variants so consumers don't have to guess what `Some("branch_1")` means

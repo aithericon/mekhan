@@ -20,7 +20,6 @@ use serde_json::Value;
 
 use crate::compiler::borrow::shape::{Borrow, BorrowResolution};
 use crate::compiler::interface::InterfaceRegistry;
-use crate::models::template::WorkflowGraph;
 
 /// Mutable context every strategy receives. Bundles all sinks the apply
 /// phase writes into. Individual strategies ignore what they don't need
@@ -30,7 +29,6 @@ use crate::models::template::WorkflowGraph;
 pub(crate) struct ApplyCtx<'a> {
     pub scenario: &'a mut ScenarioDefinition,
     pub interfaces: &'a InterfaceRegistry,
-    pub graph: &'a WorkflowGraph,
     pub node_configs: &'a mut HashMap<String, Value>,
 }
 
@@ -84,7 +82,6 @@ impl ApplyStrategy for PythonEnvelopeStrategy {
         super::python_envelope::apply_python_borrows(
             ctx.scenario,
             ctx.interfaces,
-            ctx.graph,
             consumer,
             group,
         );
@@ -121,7 +118,6 @@ impl ApplyStrategy for BackendFieldStrategy {
         super::backend_field::apply_backend_borrows(
             ctx.scenario,
             ctx.interfaces,
-            ctx.graph,
             consumer,
             group,
             ctx.node_configs,

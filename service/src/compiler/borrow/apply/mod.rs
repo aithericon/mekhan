@@ -10,7 +10,6 @@ use aithericon_sdk::scenario::{ScenarioDefinition, TransitionLogic};
 
 use crate::compiler::borrow::shape::{Borrow, BORROW_MARKER};
 use crate::compiler::interface::InterfaceRegistry;
-use crate::models::template::WorkflowGraph;
 
 pub(crate) mod backend_field;
 pub(crate) mod guard;
@@ -35,7 +34,6 @@ use strategy::{ApplyCtx, STRATEGIES};
 pub(crate) fn apply_borrows(
     scenario: &mut ScenarioDefinition,
     interfaces: &InterfaceRegistry,
-    graph: &WorkflowGraph,
     borrows: Vec<Borrow>,
     node_configs: &mut HashMap<String, serde_json::Value>,
 ) {
@@ -62,7 +60,6 @@ pub(crate) fn apply_borrows(
         let mut ctx = ApplyCtx {
             scenario,
             interfaces,
-            graph,
             node_configs,
         };
         for (consumer, group) in by_consumer.iter() {

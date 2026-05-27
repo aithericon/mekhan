@@ -50,14 +50,10 @@ pub(crate) fn apply_human_task_borrows(
             // interpolation receives the missing-value sentinel
             // instead of a string. Symmetric with the LLM/Kreuzberg
             // arm's use of `producer_field_access_hoist`.
-            let hoist_segs: &[&str] = match interfaces
+            let hoist_segs: &[&str] = interfaces
                 .get(&b.producer_node)
-                .map(|i| &i.kind)
-            {
-                Some(crate::compiler::interface::NodeKind::AutomatedStep) => &["detail", "outputs"],
-                Some(crate::compiler::interface::NodeKind::HumanTask) => &["data"],
-                _ => &[],
-            };
+                .map(|i| i.kind.hoist_path())
+                .unwrap_or(&[]);
             let hoist_prefix: String = hoist_segs
                 .iter()
                 .map(|seg| format!("\"{seg}\", "))

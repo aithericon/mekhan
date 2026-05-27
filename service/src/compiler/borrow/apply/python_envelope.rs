@@ -4,9 +4,8 @@
 use aithericon_sdk::scenario::{ScenarioDefinition, TransitionLogic};
 
 use crate::compiler::borrow::shape::{Borrow, BORROW_MARKER};
-use crate::compiler::compile::{producer_field_access_hoist, wire_read_arc};
+use crate::compiler::compile::wire_read_arc;
 use crate::compiler::interface::InterfaceRegistry;
-use crate::models::template::WorkflowGraph;
 
 /// Apply the Python AutomatedStep arm. Per-consumer: find the prepare
 /// transition; for each borrow, wire the read-arc and emit a
@@ -18,7 +17,6 @@ use crate::models::template::WorkflowGraph;
 pub(crate) fn apply_python_borrows(
     scenario: &mut ScenarioDefinition,
     interfaces: &InterfaceRegistry,
-    graph: &WorkflowGraph,
     consumer_id: &str,
     consumer_borrows: &[Borrow],
 ) {
@@ -45,7 +43,10 @@ pub(crate) fn apply_python_borrows(
             // Spread is "envelope first, business overlay second", so
             // business fields win on any collision with envelope meta
             // (e.g. a form field literally named `task_id`).
-            let hoist_path: &[&str] = producer_field_access_hoist(graph, &b.producer_node);
+            let hoist_path: &[&str] = interfaces
+                .get(&b.producer_node)
+                .map(|i| i.kind.hoist_path())
+                .unwrap_or(&[]);
             let value_expr = if hoist_path.is_empty() {
                 var.clone()
             } else {
