@@ -22,6 +22,7 @@
 	import EndNodeSection from './property-sections/EndNodeSection.svelte';
 	import SubWorkflowSection from './property-sections/SubWorkflowSection.svelte';
 	import AgentNodeSection from './property-sections/AgentNodeSection.svelte';
+	import ToolMetaSection from './property-sections/ToolMetaSection.svelte';
 	import InScopeRefsSection from './property-sections/InScopeRefsSection.svelte';
 	import {
 		fetchNodeScopes,
@@ -325,6 +326,16 @@
 			<SubWorkflowSection {data} {readonly} {onchange} {templateId} />
 		{:else if data.type === 'agent'}
 			<AgentNodeSection {data} {readonly} {onchange} {binding} {nodeId} {scope} />
+		{/if}
+
+		<!-- Tool tagging: any child of an Agent can be exposed as a tool
+		     (docs/12 § 2.2). The section self-gates on `parent.type === 'agent'`
+		     so it only renders for nodes whose parent is an Agent; for
+		     all others it's a no-op. Mounted here (not inside per-variant
+		     sections) so HumanTask, SubWorkflow, AutomatedStep, and Agent
+		     children all gain tool-tagging via the same surface. -->
+		{#if binding && nodeId}
+			<ToolMetaSection {binding} {nodeId} {readonly} />
 		{/if}
 
 		<!-- Phase 4: read-only derived port preview for variants whose outputs

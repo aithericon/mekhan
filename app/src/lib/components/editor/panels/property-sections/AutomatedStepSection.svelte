@@ -7,7 +7,6 @@
 	import { Button } from '$lib/components/ui/button';
 	import RotateCcw from '@lucide/svelte/icons/rotate-ccw';
 	import PortsSection from './PortsSection.svelte';
-	import ToolMetaSection from './ToolMetaSection.svelte';
 	import { defaultOutputPort, emptyOutputPort } from '$lib/editor/automated-ports';
 	import {
 		backendList,
@@ -337,7 +336,3 @@
 		onchange={handleOutputPortChange}
 	/>
 </div>
-
-{#if binding && nodeId}
-	<ToolMetaSection {binding} {nodeId} {readonly} />
-{/if}
