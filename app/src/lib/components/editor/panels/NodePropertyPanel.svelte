@@ -332,7 +332,7 @@
 		     and AutomatedStep already render an editable PortsSection inside
 		     their own section. End/Scope have no derived outputs to show
 		     until a port editor lands for them. -->
-		{#if data.type === 'human_task' || data.type === 'decision' || data.type === 'loop' || data.type === 'parallel_split' || data.type === 'parallel_join' || data.type === 'join' || data.type === 'scope' || data.type === 'phase_update' || data.type === 'progress_update' || data.type === 'failure'}
+		{#if data.type === 'human_task' || data.type === 'decision' || data.type === 'loop' || data.type === 'parallel_split' || data.type === 'parallel_join' || data.type === 'join' || data.type === 'scope' || data.type === 'phase_update' || data.type === 'progress_update' || data.type === 'failure' || data.type === 'agent'}
 			<DerivedPortsSection
 				ports={outputPortsFor(data)}
 				title="Outputs"
@@ -341,7 +341,9 @@
 						? 'from task fields'
 						: data.type === 'decision'
 							? 'from branches'
-							: 'pass-through'
+							: data.type === 'agent'
+								? 'from agent loop'
+								: 'pass-through'
 				}
 			/>
 		{/if}

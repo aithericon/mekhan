@@ -458,13 +458,21 @@ pub fn splice_resources_into_air(
             continue;
         };
 
-        // Heuristic: target the prepare transition by id suffix. The two
-        // shapes in use today are `<node_id>/prepare` and `t_<node_id>_prepare`;
-        // either matches.
+        // Heuristic: target the prepare transition by id suffix. Shapes
+        // in use today: `<node_id>/prepare` (executor lifecycle),
+        // `t_<node_id>_prepare` (AutomatedStep), and
+        // `t_<node_id>_prepare_call` (Agent — the LLM call's job-prep
+        // happens in a transition named for what it prepares for, not
+        // generically `prepare`, because the agent mints multiple
+        // distinct prep-shaped transitions across the loop).
         let is_prepare = t_obj
             .get("id")
             .and_then(JsonValue::as_str)
-            .map(|id| id.ends_with("/prepare") || id.ends_with("_prepare"))
+            .map(|id| {
+                id.ends_with("/prepare")
+                    || id.ends_with("_prepare")
+                    || id.ends_with("_prepare_call")
+            })
             .unwrap_or(false);
         if !is_prepare {
             continue;

@@ -23,6 +23,13 @@ export function outputPortsFor(data: WorkflowNodeData): Port[] {
 				...(data.output ? [data.output] : []),
 				{ id: 'error', label: 'On error', fields: [] }
 			];
+		case 'agent':
+			// Derived — TS twin of `Self::Agent::output_ports`. The
+			// canonical four LLM fields always; agent-loop extras (turn /
+			// history / final_response / input) only when the agent will
+			// take the loop path (`max_turns > 1 || stop_when set`). Read-
+			// only in the panel; the compiler is the source of truth.
+			return deriveAgentOutputPorts(data);
 		case 'human_task':
 			return [deriveHumanTaskOutputPort(data)];
 		case 'decision':
@@ -77,6 +84,52 @@ export function inputPortsFor(data: WorkflowNodeData): Port[] {
 
 type HumanTaskNodeData = Extract<WorkflowNodeData, { type: 'human_task' }>;
 type DecisionNodeData = Extract<WorkflowNodeData, { type: 'decision' }>;
+type AgentNodeData = Extract<WorkflowNodeData, { type: 'agent' }>;
+
+const LLM_BASE_FIELDS: PortField[] = [
+	{ name: 'response', label: 'Response', kind: 'textarea' },
+	{ name: 'usage', label: 'Token usage', kind: 'json' },
+	{ name: 'finish_reason', label: 'Finish reason', kind: 'text' },
+	{ name: 'model', label: 'Model', kind: 'text' }
+];
+
+const AGENT_LOOP_EXTRAS: PortField[] = [
+	{
+		name: 'turn',
+		label: 'Final turn count',
+		kind: 'number',
+		description: 'Number of LLM round-trips before the agent exited.'
+	},
+	{
+		name: 'history',
+		label: 'Conversation history',
+		kind: 'json',
+		description: 'Array of `{role, content, …}` entries the agent sent + received.'
+	},
+	{
+		name: 'final_response',
+		label: 'Full LLM turn result',
+		kind: 'json',
+		description: 'The last `LlmTurnResult` (content, tool_calls, stop_reason, usage).'
+	},
+	{
+		name: 'input',
+		label: 'Original input',
+		kind: 'json',
+		description: 'The inbound token the agent received.'
+	}
+];
+
+function deriveAgentOutputPorts(data: AgentNodeData): Port[] {
+	const takesLoopPath = (data.maxTurns ?? 1) > 1 || !!data.stopWhen;
+	const fields = takesLoopPath
+		? [...LLM_BASE_FIELDS, ...AGENT_LOOP_EXTRAS]
+		: [...LLM_BASE_FIELDS];
+	return [
+		{ id: 'out', label: 'Output', fields },
+		{ id: 'error', label: 'On error', fields: [] }
+	];
+}
 
 function deriveHumanTaskOutputPort(data: HumanTaskNodeData): Port {
 	const seen = new Set<string>();

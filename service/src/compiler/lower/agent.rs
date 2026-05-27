@@ -389,8 +389,17 @@ fn lower_agent_loop(
     // Rhai variables are mutable by default — no `mut` keyword exists,
     // so `let mut d = ...` would parse `mut` as a fresh variable name
     // and then fail at the next token. Plain `let d` is mutable.
+    //
+    // The `/*__BORROWED_INPUTS__*/` marker is a Rhai block comment the
+    // borrow apply phase splices ResourceEnvelope staging snippets into
+    // (e.g. `job_inputs.push(#{ "name": "openai.json", ... })`). Without
+    // it, an agent with `model.resource_alias` set deploys to staging,
+    // which then fails with "resource '<alias>' not staged as
+    // <alias>.json — compiler must emit a ResourceEnvelope borrow for
+    // this step". Mirrors the marker site in
+    // `lower_automated_step::t_<id>_prepare`.
     .logic_rhai(format!(
-        r#"let s = state; let d = #{{ }}; d.job_id = "{id}"; d.run = s.turn; d.retries = 0; d.max_retries = 0; let job_inputs = []; d.spec = #{{ "backend": "llm", "inputs": job_inputs, "outputs": [], "config_ref": {config_ref_rhai}, "stream_events": ["agent_turn", "metric", "log"] }}; d.metadata = #{{ "agent_node_id": "{id}" }}; #{{ job: d, state_in_flight: s }}"#
+        r#"let s = state; let d = #{{ }}; d.job_id = "{id}"; d.run = s.turn; d.retries = 0; d.max_retries = 0; let job_inputs = []; /*__BORROWED_INPUTS__*/ d.spec = #{{ "backend": "llm", "inputs": job_inputs, "outputs": [], "config_ref": {config_ref_rhai}, "stream_events": ["agent_turn", "metric", "log"] }}; d.metadata = #{{ "agent_node_id": "{id}" }}; #{{ job: d, state_in_flight: s }}"#
     ))
     .done();
 

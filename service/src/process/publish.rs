@@ -286,19 +286,48 @@ async fn discover_known_resources(
     let mut heads: BTreeSet<String> = BTreeSet::new();
     let mut declared: Vec<(String, String)> = Vec::new(); // (node_id, alias)
     for node in &graph.nodes {
-        let WorkflowNodeData::AutomatedStep { execution_spec, .. } = &node.data else {
-            continue;
+        // AutomatedStep reads its config directly; Agent synthesises an
+        // equivalent LLM config containing just the resource_alias (the
+        // only field the scanner cares about). Matches the parallel
+        // path in `borrow::planners::resource`.
+        let (backend_type, config_owned, config_ref, entrypoint): (
+            crate::models::template::ExecutionBackendType,
+            Option<serde_json::Value>,
+            Option<&serde_json::Value>,
+            Option<&str>,
+        ) = match &node.data {
+            WorkflowNodeData::AutomatedStep { execution_spec, .. } => (
+                execution_spec.backend_type,
+                None,
+                Some(&execution_spec.config),
+                execution_spec.entrypoint.as_deref(),
+            ),
+            WorkflowNodeData::Agent { model, .. } => {
+                let mut cfg = serde_json::Map::new();
+                if let Some(a) = &model.resource_alias {
+                    cfg.insert("resource_alias".to_string(), serde_json::json!(a));
+                }
+                (
+                    crate::models::template::ExecutionBackendType::Llm,
+                    Some(serde_json::Value::Object(cfg)),
+                    None,
+                    None,
+                )
+            }
+            _ => continue,
         };
+        let config: &serde_json::Value =
+            config_ref.unwrap_or_else(|| config_owned.as_ref().unwrap());
         let ctx = ScanCtx {
-            config: &execution_spec.config,
+            config,
             node_id: &node.id,
             inline_sources,
-            entrypoint: execution_spec.entrypoint.as_deref(),
+            entrypoint,
         };
-        for head in collect_resource_heads(&ctx, execution_spec.backend_type) {
+        for head in collect_resource_heads(&ctx, backend_type) {
             heads.insert(head);
         }
-        for alias in collect_declared_resource_aliases(&ctx, execution_spec.backend_type) {
+        for alias in collect_declared_resource_aliases(&ctx, backend_type) {
             declared.push((node.id.clone(), alias));
         }
     }

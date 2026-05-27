@@ -86,20 +86,24 @@ pub(crate) fn strip_borrow_markers(scenario: &mut ScenarioDefinition) {
 /// Locate the prepare transition for `consumer_id`. Compiler lowering
 /// emits exactly one prepare transition per AutomatedStep / HumanTask /
 /// LLM / Kreuzberg consumer, named either `{consumer_id}/prepare` (the
-/// newer convention) or `t_{consumer_id}_prepare` (legacy lowering). The
-/// `Option` return makes the "no prepare here" path explicit (the
-/// borrow-source surfaces don't emit borrows for nodes without a prepare
-/// transition, but defensive code should still bail rather than panic).
+/// newer convention), `t_{consumer_id}_prepare` (legacy lowering), or
+/// `t_{consumer_id}_prepare_call` (Agent — its lowering mints multiple
+/// prep-shaped transitions across the loop, so the LLM-call prep
+/// carries the more specific name). The `Option` return makes the "no
+/// prepare here" path explicit (the borrow-source surfaces don't emit
+/// borrows for nodes without a prepare transition, but defensive code
+/// should still bail rather than panic).
 pub(crate) fn find_prepare_transition_mut<'a>(
     scenario: &'a mut ScenarioDefinition,
     consumer_id: &str,
 ) -> Option<&'a mut ScenarioTransition> {
     let prepare_a = format!("{consumer_id}/prepare");
     let prepare_b = format!("t_{consumer_id}_prepare");
+    let prepare_c = format!("t_{consumer_id}_prepare_call");
     scenario
         .transitions
         .iter_mut()
-        .find(|t| t.id == prepare_a || t.id == prepare_b)
+        .find(|t| t.id == prepare_a || t.id == prepare_b || t.id == prepare_c)
 }
 
 /// Stable input-declaration name for a given `(slug, attr)` borrow. Used

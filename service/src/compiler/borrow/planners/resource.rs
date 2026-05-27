@@ -6,7 +6,7 @@
 //! resource envelope, not an upstream parked producer.
 
 use crate::compiler::error::CompileError;
-use crate::models::template::{WorkflowGraph, WorkflowNodeData};
+use crate::models::template::{ExecutionBackendType, WorkflowGraph, WorkflowNodeData};
 
 /// One resolved Python `<name>.<attr>` access where `<name>` is a known
 /// workspace resource. Direct sibling of `AutomatedStepDataBorrow` — same
@@ -66,17 +66,38 @@ pub(crate) fn automated_step_resource_borrow_plan(
     let mut seen: std::collections::BTreeSet<(String, String)> = std::collections::BTreeSet::new();
 
     for node in &graph.nodes {
-        let WorkflowNodeData::AutomatedStep { execution_spec, .. } = &node.data else {
-            continue;
+        // Build the (backend_type, config) pair the scanner reads. Agents
+        // synthesize an equivalent LLM config at compile (see
+        // `lower::agent::build_llm_config_value`) — replicating just the
+        // resource_alias field is enough for `collect_resource_heads` to
+        // discover it, because the LLM backend's `resource_alias_paths`
+        // is `[["resource_alias"]]`.
+        let (backend_type, config_owned, config_ref): (
+            ExecutionBackendType,
+            Option<serde_json::Value>,
+            Option<&serde_json::Value>,
+        ) = match &node.data {
+            WorkflowNodeData::AutomatedStep { execution_spec, .. } => {
+                (execution_spec.backend_type, None, Some(&execution_spec.config))
+            }
+            WorkflowNodeData::Agent { model, .. } => {
+                let mut cfg = serde_json::Map::new();
+                if let Some(a) = &model.resource_alias {
+                    cfg.insert("resource_alias".to_string(), serde_json::json!(a));
+                }
+                (ExecutionBackendType::Llm, Some(serde_json::Value::Object(cfg)), None)
+            }
+            _ => continue,
         };
+        let config: &serde_json::Value = config_ref.unwrap_or_else(|| config_owned.as_ref().unwrap());
 
         let ctx = ScanCtx {
-            config: &execution_spec.config,
+            config,
             node_id: &node.id,
             inline_sources,
-            entrypoint: execution_spec.entrypoint.as_deref(),
+            entrypoint: None,
         };
-        let heads = collect_resource_heads(&ctx, execution_spec.backend_type);
+        let heads = collect_resource_heads(&ctx, backend_type);
 
         for head in heads {
             let Some(info) = known.get(&head) else {

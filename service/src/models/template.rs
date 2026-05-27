@@ -738,18 +738,38 @@ impl WorkflowNodeData {
                 },
             ],
 
-            // Agent's success output mirrors the LLM AutomatedStep
-            // (`text` + `usage`); the equivalence test relies on this so the
-            // degenerate path's editor wiring matches an Llm step's.
-            // `error` mirrors AutomatedStep's error port.
-            Self::Agent { .. } => vec![
-                default_output_port(ExecutionBackendType::Llm),
-                Port {
-                    id: "error".to_string(),
-                    label: "On error".to_string(),
-                    fields: vec![],
-                },
-            ],
+            // Agent's success output starts with the canonical LLM fields
+            // (`response`, `usage`, `finish_reason`, `model`) — same shape
+            // a plain `AutomatedStep(Llm)` declares, so the degenerate
+            // path's editor wiring matches an Llm step's. The loop path
+            // additionally packs four agent-specific fields (`turn`,
+            // `history`, `final_response`, `input`) under
+            // `detail.outputs`; declared here only when the agent will
+            // actually take the loop path so the degenerate-path
+            // byte-identical contract with `AutomatedStep(Llm)` holds.
+            //
+            // We can only inspect `self` here — tool_children live in the
+            // graph, not on the variant — so an agent that has tool
+            // children but `max_turns == 1 && stop_when.is_none()` will
+            // declare just the four canonical fields and under-promise vs.
+            // the actually-emitted token (which carries the extras). Not
+            // ideal, but the editor never silently shows fields that the
+            // runtime might drop. `error` mirrors AutomatedStep's error.
+            Self::Agent { max_turns, stop_when, .. } => {
+                let mut success = default_output_port(ExecutionBackendType::Llm);
+                let takes_loop_path = *max_turns > 1 || stop_when.is_some();
+                if takes_loop_path {
+                    success.fields.extend(agent_extra_output_fields());
+                }
+                vec![
+                    success,
+                    Port {
+                        id: "error".to_string(),
+                        label: "On error".to_string(),
+                        fields: vec![],
+                    },
+                ]
+            }
 
             // Declared child-result success output + an always-present
             // "error" output (child failure / spawn failure). Mirrors
@@ -1632,6 +1652,58 @@ pub fn default_output_port(backend: ExecutionBackendType) -> Port {
             .map(|f| f.into_port_field())
             .collect(),
     }
+}
+
+/// Agent-specific fields the loop path packs under `detail.outputs`
+/// alongside the canonical Llm four. Declared so the picker surfaces
+/// `<agent_slug>.turn`, `<agent_slug>.history`, etc. without the author
+/// having to know they exist. Source of truth for what `t_*_route_final`
+/// emits in `service/src/compiler/lower/agent.rs`.
+pub(crate) fn agent_extra_output_fields() -> Vec<PortField> {
+    vec![
+        PortField {
+            name: "turn".to_string(),
+            label: "Final turn count".to_string(),
+            kind: FieldKind::Number,
+            required: false,
+            options: None,
+            description: Some(
+                "Number of LLM round-trips before the agent exited.".to_string(),
+            ),
+            accept: None,
+        },
+        PortField {
+            name: "history".to_string(),
+            label: "Conversation history".to_string(),
+            kind: FieldKind::Json,
+            required: false,
+            options: None,
+            description: Some(
+                "Array of `{role, content, …}` entries the agent sent + received.".to_string(),
+            ),
+            accept: None,
+        },
+        PortField {
+            name: "final_response".to_string(),
+            label: "Full LLM turn result".to_string(),
+            kind: FieldKind::Json,
+            required: false,
+            options: None,
+            description: Some(
+                "The last `LlmTurnResult` (content, tool_calls, stop_reason, usage).".to_string(),
+            ),
+            accept: None,
+        },
+        PortField {
+            name: "input".to_string(),
+            label: "Original input".to_string(),
+            kind: FieldKind::Json,
+            required: false,
+            options: None,
+            description: Some("The inbound token the agent received.".to_string()),
+            accept: None,
+        },
+    ]
 }
 
 pub fn default_automated_output_port() -> Port {

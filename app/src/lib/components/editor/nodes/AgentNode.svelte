@@ -3,6 +3,7 @@
 	import type { AgentNodeData } from '$lib/types/editor';
 	import Bot from '@lucide/svelte/icons/bot';
 	import WorkflowNodeCard, { workflowNodeHandleClass } from './WorkflowNodeCard.svelte';
+	import { outputPortsFor } from '$lib/editor/derived-ports';
 
 	let { id, data, selected }: { id: string; data: AgentNodeData; selected?: boolean } = $props();
 
@@ -12,6 +13,26 @@
 	const stopWhen = $derived(data.stopWhen ?? null);
 	const policy = $derived(data.onToolError ?? 'feedback');
 	const isSingleShot = $derived(maxTurns <= 1 && !stopWhen);
+
+	// Derived output port — same source the panel reads. Always shows the
+	// canonical four LLM fields; loop-path agents (max_turns > 1 OR
+	// stop_when set) show the four extras too. Compiler is the source of
+	// truth; this just renders.
+	const successPort = $derived(outputPortsFor(data)[0]);
+	const fields = $derived(successPort?.fields ?? []);
+	const hasFields = $derived(fields.length > 0);
+
+	const kindBadge: Record<string, string> = {
+		text: 'Txt',
+		textarea: 'Txt',
+		number: 'Num',
+		bool: 'Bool',
+		select: 'Sel',
+		file: 'File',
+		signature: 'Sig',
+		timestamp: 'Time',
+		json: 'JSON'
+	};
 </script>
 
 <Handle id="in" type="target" position={Position.Left} class={workflowNodeHandleClass('agent')} />
@@ -46,6 +67,32 @@
 				<span class="rounded bg-node-agent/10 px-1.5 py-0.5 text-sm font-medium text-node-agent">
 					{policy}
 				</span>
+			</div>
+		{/if}
+		{#if hasFields}
+			<div class="space-y-0.5 border-t border-border/40 pt-1.5">
+				<div class="flex items-center justify-between">
+					<span class="text-sm uppercase tracking-wider text-muted-foreground/70">
+						{successPort?.label ?? 'Output'}
+					</span>
+					<span class="text-sm text-muted-foreground/70">
+						{fields.length} field{fields.length === 1 ? '' : 's'}
+					</span>
+				</div>
+				<ul class="space-y-0.5">
+					{#each fields as field (field.name)}
+						<li class="flex items-center justify-between gap-2">
+							<span class="truncate font-mono text-sm text-foreground">
+								{field.name || '—'}{field.required ? '*' : ''}
+							</span>
+							<span
+								class="rounded bg-node-agent/15 px-1.5 py-0.5 text-sm font-medium uppercase text-node-agent"
+							>
+								{kindBadge[field.kind] ?? field.kind}
+							</span>
+						</li>
+					{/each}
+				</ul>
 			</div>
 		{/if}
 	</div>
