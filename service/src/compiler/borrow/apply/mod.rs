@@ -12,10 +12,9 @@ use crate::compiler::borrow::shape::{Borrow, BORROW_MARKER};
 use crate::compiler::interface::InterfaceRegistry;
 
 pub(crate) mod backend_field;
+pub(crate) mod envelope;
 pub(crate) mod guard;
 pub(crate) mod human_task;
-pub(crate) mod python_envelope;
-pub(crate) mod resource;
 pub(crate) mod strategy;
 
 use strategy::{ApplyCtx, STRATEGIES};

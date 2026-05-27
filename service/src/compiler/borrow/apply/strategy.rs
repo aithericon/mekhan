@@ -6,12 +6,10 @@
 //! per-consumer group; new variants plug in by adding one impl + one
 //! entry in `STRATEGIES`.
 //!
-//! Today each strategy is a thin wrapper around an existing per-arm
-//! `apply_*_borrows` function — the bodies aren't yet collapsed. The
-//! deferred work (e.g. unifying Python + Resource envelope strategies
-//! behind a single splice-at-marker helper, parameterized by value-expr)
-//! is intentionally a follow-up commit so this one stays a verifiable
-//! no-op against the AIR golden snapshots.
+//! Most strategies are thin wrappers around the per-arm `apply_*_borrows`
+//! functions. [`EnvelopeStageStrategy`] is the exception — it claims
+//! both `PythonEnvelope` and `ResourceEnvelope` and routes them through
+//! one unified body in [`super::envelope`].
 
 use std::collections::HashMap;
 
@@ -70,16 +68,19 @@ impl ApplyStrategy for GuardRewriteStrategy {
     }
 }
 
-pub(crate) struct PythonEnvelopeStrategy;
-impl ApplyStrategy for PythonEnvelopeStrategy {
+pub(crate) struct EnvelopeStageStrategy;
+impl ApplyStrategy for EnvelopeStageStrategy {
     fn name(&self) -> &'static str {
-        "python_envelope"
+        "envelope_stage"
     }
     fn handles(&self, r: &BorrowResolution) -> bool {
-        matches!(r, BorrowResolution::PythonEnvelope)
+        matches!(
+            r,
+            BorrowResolution::PythonEnvelope | BorrowResolution::ResourceEnvelope { .. }
+        )
     }
     fn apply(&self, ctx: &mut ApplyCtx<'_>, consumer: &str, group: &[Borrow]) {
-        super::python_envelope::apply_python_borrows(
+        super::envelope::apply_envelope_borrows(
             ctx.scenario,
             ctx.interfaces,
             consumer,
@@ -125,27 +126,15 @@ impl ApplyStrategy for BackendFieldStrategy {
     }
 }
 
-pub(crate) struct ResourceEnvelopeStrategy;
-impl ApplyStrategy for ResourceEnvelopeStrategy {
-    fn name(&self) -> &'static str {
-        "resource_envelope"
-    }
-    fn handles(&self, r: &BorrowResolution) -> bool {
-        matches!(r, BorrowResolution::ResourceEnvelope { .. })
-    }
-    fn apply(&self, ctx: &mut ApplyCtx<'_>, consumer: &str, group: &[Borrow]) {
-        super::resource::apply_resource_borrows(ctx.scenario, consumer, group);
-    }
-}
-
-/// Static dispatch list. Order matches the pre-trait inline dispatch
-/// (guard → python → human_task → backend → resource) so apply-side
-/// side-effects on multi-arm-co-located transitions land in the same
-/// sequence. AIR snapshots verify this is byte-identical.
+/// Static dispatch list. Order matches the pre-collapse inline dispatch
+/// (guard → envelope → human_task → backend) so apply-side side-effects
+/// on multi-arm-co-located transitions land in the same sequence.
+/// `EnvelopeStageStrategy` slot subsumes the previous python_envelope
+/// + resource_envelope entries — they shared the splice site. AIR
+/// snapshots verify this is byte-identical.
 pub(crate) const STRATEGIES: &[&(dyn ApplyStrategy + Sync)] = &[
     &GuardRewriteStrategy,
-    &PythonEnvelopeStrategy,
+    &EnvelopeStageStrategy,
     &HumanTaskStrategy,
     &BackendFieldStrategy,
-    &ResourceEnvelopeStrategy,
 ];
