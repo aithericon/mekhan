@@ -237,6 +237,53 @@
         }
       }
     },
+    "/api/v1/backends/{name}/derive-output": {
+      "post": {
+        "tags": [
+          "backends"
+        ],
+        "summary": "POST /api/v1/backends/{name}/derive-output",
+        "description": "Compute the canonical output [`Port`] for an AutomatedStep with this\nbackend, given its current config. Frontend calls this for\n`output_authoring == \"derived\"` backends (LLM today) whenever the\nstep's config changes, so the read-only port editor always reflects\nthe actual runtime envelope.\n\nPermissive: a half-typed config (missing fields, partial schema)\nreturns the closest valid port — not an error. Hard validation runs at\npublish time via `BackendDecl::validate`.\n\nReturns:\n- 200 with the derived [`Port`] on success.\n- 400 when the backend exists but isn't `Derived` (callers should use\n  `default_output_port` from `GET /api/v1/backends` for `Fixed` /\n  `Free` backends).\n- 404 when the backend name doesn't resolve.",
+        "operationId": "derive_backend_output",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Backend wire name (e.g. `llm`, `python`)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Derived output port",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Port"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Backend's output is not derived from config"
+          },
+          "404": {
+            "description": "Unknown backend"
+          }
+        }
+      }
+    },
     "/api/v1/catalogue": {
       "get": {
         "tags": [
@@ -4847,7 +4894,8 @@
           "dispatchMode",
           "resourceChannel",
           "schedulable",
-          "consumesDeclaredOutputs"
+          "consumesDeclaredOutputs",
+          "outputAuthoring"
         ],
         "properties": {
           "consumesDeclaredOutputs": {
@@ -4873,6 +4921,10 @@
           "name": {
             "type": "string",
             "description": "Snake-case wire tag (`\"smtp\"`, `\"python\"`, …). Matches\n[`ExecutionBackendType`]'s wire encoding and the executor's\n`ExecutionSpec.backend` string."
+          },
+          "outputAuthoring": {
+            "$ref": "#/components/schemas/OutputAuthoring",
+            "description": "Who owns the output port shape — user (free), backend (fixed), or\nderived from config. Drives the editor's port-section rendering."
           },
           "resourceChannel": {
             "$ref": "#/components/schemas/ResourceChannel"
@@ -7127,6 +7179,15 @@
             "format": "int64"
           }
         }
+      },
+      "OutputAuthoring": {
+        "type": "string",
+        "description": "Who owns the AutomatedStep's output port shape — the user (free\nauthoring), the backend (fixed canonical shape), or the backend's\nconfig (derived from `response_format` / schema / similar).\n\nFrontend reads this off `BackendDescriptor` and either renders the\ngeneric editable `PortsSection` (Free) or a read-only one whose fields\ncome from the registry (Fixed) or from a per-config server-side derive\ncall (Derived). The compiler still validates the persisted `output`\nagainst the canonical shape on publish — the authoring flag is a UX\ncontract, not a security boundary.",
+        "enum": [
+          "free",
+          "fixed",
+          "derived"
+        ]
       },
       "PaginatedResponse_InstanceListItem": {
         "type": "object",

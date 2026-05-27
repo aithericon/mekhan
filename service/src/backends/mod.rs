@@ -105,6 +105,15 @@ pub struct BackendDecl {
     /// without per-site constraints; LLM uses a custom validator to
     /// enforce `images[].path → File` and content-sites → not-File.
     pub validate_ref_kind: RefKindValidator,
+    /// Who owns the output port shape — user, backend, or config-derived.
+    /// Frontend branches its editor UI on this; the compiler still
+    /// validates the persisted `output` field on publish either way.
+    pub output_authoring: OutputAuthoring,
+    /// Derive the output port from the step's `config`. Required when
+    /// `output_authoring == Derived`; ignored otherwise. Pure function —
+    /// called from the `POST /api/v1/backends/{name}/derive-output`
+    /// endpoint and (potentially) compile-time validation hooks.
+    pub derive_output_port: Option<DeriveOutputFn>,
 }
 
 impl BackendDecl {
@@ -198,6 +207,32 @@ pub struct RefSite {
     pub site_label: String,
 }
 
+/// Who owns the AutomatedStep's output port shape — the user (free
+/// authoring), the backend (fixed canonical shape), or the backend's
+/// config (derived from `response_format` / schema / similar).
+///
+/// Frontend reads this off `BackendDescriptor` and either renders the
+/// generic editable `PortsSection` (Free) or a read-only one whose fields
+/// come from the registry (Fixed) or from a per-config server-side derive
+/// call (Derived). The compiler still validates the persisted `output`
+/// against the canonical shape on publish — the authoring flag is a UX
+/// contract, not a security boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum OutputAuthoring {
+    /// User defines the output port fields freely. Editable
+    /// `PortsSection` + "Reset to default" button.
+    Free,
+    /// Backend's `default_output_fields` is the canonical shape. Read-only
+    /// in the editor; persisted `output` is overwritten with the default
+    /// on first paint.
+    Fixed,
+    /// Output fields are computed server-side from the step's config (and
+    /// re-derived whenever it changes). Backends choosing this MUST set
+    /// `derive_output_port` on their decl.
+    Derived,
+}
+
 /// How the registry-driven borrow planner stages refs emitted by a
 /// backend's [`RefScanner`]. Decided by the decl, intrinsic to the
 /// backend.
@@ -245,6 +280,16 @@ pub type RefKindValidator = fn(&RefKindCtx<'_>) -> Result<(), CompileError>;
 pub fn accept_any_ref_kind(_: &RefKindCtx<'_>) -> Result<(), CompileError> {
     Ok(())
 }
+
+/// Output-port deriver for `OutputAuthoring::Derived` backends. Maps the
+/// step's `config` to its canonical output [`Port`]. Pure: no I/O, no
+/// global state, called per editor keystroke (with debouncing on the
+/// frontend) from `POST /api/v1/backends/{name}/derive-output`.
+///
+/// Implementations should be permissive — partial/invalid configs are
+/// expected at edit time, so return the closest valid port shape rather
+/// than erroring. Hard validation belongs in [`BackendDecl::validate`].
+pub type DeriveOutputFn = fn(&Value) -> Port;
 
 // `DispatchMode` and `ResourceChannel` moved to `aithericon-backends` and
 // are re-exported at the top of this module.
@@ -335,6 +380,9 @@ pub struct BackendDescriptor {
     /// Whether this backend's declared output port fields drive a Rhai
     /// `outputs:` constant (mostly informational for the frontend).
     pub consumes_declared_outputs: bool,
+    /// Who owns the output port shape — user (free), backend (fixed), or
+    /// derived from config. Drives the editor's port-section rendering.
+    pub output_authoring: OutputAuthoring,
 }
 
 impl BackendDecl {
@@ -357,6 +405,7 @@ impl BackendDecl {
             resource_channel: self.meta.resource_channel,
             schedulable: self.meta.schedulable,
             consumes_declared_outputs: self.consumes_declared_outputs,
+            output_authoring: self.output_authoring,
         }
     }
 }

@@ -2,7 +2,7 @@
 	import type { AutomatedStepNodeData, ExecutionBackendType } from '$lib/types/editor';
 	import type { components } from '$lib/api/schema';
 	import type { ScopeEntry } from '$lib/editor/guard-scope';
-	import { onMount } from 'svelte';
+	import { onMount, untrack } from 'svelte';
 	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
 	import RotateCcw from '@lucide/svelte/icons/rotate-ccw';
@@ -10,6 +10,7 @@
 	import { defaultOutputPort, emptyOutputPort } from '$lib/editor/automated-ports';
 	import {
 		backendList,
+		deriveBackendOutput,
 		getCachedBackend,
 		loadBackends
 	} from '$lib/editor/backend-registry.svelte';
@@ -53,6 +54,12 @@
 	const backends = $derived(backendList());
 	const currentBackend = $derived(getCachedBackend(data.executionSpec.backendType));
 	const CurrentPanel = $derived(BACKEND_PANELS[data.executionSpec.backendType]);
+	// `free` → user owns the port (current behavior, with Reset button).
+	// `fixed` → backend's canonical default; read-only.
+	// `derived` → server-derived from config; read-only and refetched on change.
+	// Defaults to `free` so callers that pre-date the field (or hit the
+	// registry before it loads) keep the legacy editable surface.
+	const outputAuthoring = $derived(currentBackend?.outputAuthoring ?? 'free');
 
 	function handleOutputPortChange(port: Port) {
 		onchange({ ...data, output: port });
@@ -60,6 +67,81 @@
 
 	function resetOutputToBackendDefault() {
 		onchange({ ...data, output: defaultOutputPort(data.executionSpec.backendType) });
+	}
+
+	// Derived-authoring effect: whenever the backend is `derived` and the
+	// step config changes, fetch the canonical port shape from the server
+	// and persist it onto `data.output`. The compiler is the source of
+	// truth, so the editor never derives locally — drift is impossible.
+	//
+	// Debounced lightly (250ms) so rapid keystrokes in the JSON-schema
+	// editor don't flood the endpoint. On failure we fall back to the
+	// backend's default port shape from the descriptor rather than
+	// silently keeping a stale `data.output`.
+	let deriveTimer: ReturnType<typeof setTimeout> | null = null;
+	let deriveSeq = 0;
+	$effect(() => {
+		if (outputAuthoring !== 'derived' || readonly) return;
+		const backendType = data.executionSpec.backendType;
+		const cfg = data.executionSpec.config;
+		if (deriveTimer) clearTimeout(deriveTimer);
+		const seq = ++deriveSeq;
+		deriveTimer = setTimeout(() => {
+			deriveBackendOutput(backendType, cfg)
+				.then((port) => {
+					if (seq !== deriveSeq) return;
+					untrack(() => {
+						if (!portsEqual(data.output, port)) {
+							onchange({ ...data, output: port });
+						}
+					});
+				})
+				.catch(() => {
+					if (seq !== deriveSeq) return;
+					untrack(() => {
+						const fallback = defaultOutputPort(backendType);
+						if (!portsEqual(data.output, fallback)) {
+							onchange({ ...data, output: fallback });
+						}
+					});
+				});
+		}, 250);
+	});
+
+	// Fixed-authoring effect: backend owns the canonical shape, so
+	// overwrite any legacy/customized `data.output` with the descriptor's
+	// default on first paint and whenever the backend changes. No debounce
+	// — the descriptor is static.
+	$effect(() => {
+		if (outputAuthoring !== 'fixed' || readonly) return;
+		const fixed = defaultOutputPort(data.executionSpec.backendType);
+		untrack(() => {
+			if (!portsEqual(data.output, fixed)) {
+				onchange({ ...data, output: fixed });
+			}
+		});
+	});
+
+	function portsEqual(a: Port | undefined, b: Port): boolean {
+		if (!a) return false;
+		if (a.id !== b.id || a.label !== b.label) return false;
+		const af = a.fields ?? [];
+		const bf = b.fields ?? [];
+		if (af.length !== bf.length) return false;
+		for (let i = 0; i < af.length; i++) {
+			const x = af[i];
+			const y = bf[i];
+			if (
+				x.name !== y.name ||
+				x.kind !== y.kind ||
+				x.label !== y.label ||
+				(x.required ?? false) !== (y.required ?? false) ||
+				(x.description ?? null) !== (y.description ?? null)
+			) {
+				return false;
+			}
+		}
+		return true;
 	}
 
 	function handleBackendTypeChange(backendType: ExecutionBackendType) {
@@ -221,7 +303,7 @@
 <div class="space-y-2 pt-3 border-t border-border/40">
 	<div class="flex items-center justify-between">
 		<span class="text-sm font-medium text-muted-foreground">Output port</span>
-		{#if !readonly}
+		{#if !readonly && outputAuthoring === 'free'}
 			<Button
 				variant="ghost"
 				size="sm"
@@ -234,11 +316,23 @@
 			</Button>
 		{/if}
 	</div>
+	{#if outputAuthoring === 'derived'}
+		<p class="text-sm text-muted-foreground">
+			Derived from this step's config — edit the config above (response format, schema) to change the
+			output fields. The runner produces this exact shape; declaring it manually would only drift.
+		</p>
+	{:else if outputAuthoring === 'fixed'}
+		<p class="text-sm text-muted-foreground">
+			Fixed canonical shape for this backend. The runner always emits these fields.
+		</p>
+	{/if}
 	<PortsSection
 		port={outputPort}
-		{readonly}
+		readonly={readonly || outputAuthoring !== 'free'}
 		title="Fields"
-		emptyHint="No declared output fields. Downstream edges with declared input ports will type-mismatch on publish — click reset to seed the backend's default shape."
+		emptyHint={outputAuthoring === 'derived'
+			? 'No fields yet — pick a response format on this step to define them.'
+			: "No declared output fields. Downstream edges with declared input ports will type-mismatch on publish — click reset to seed the backend's default shape."}
 		onchange={handleOutputPortChange}
 	/>
 </div>

@@ -92,3 +92,34 @@ export function backendList(): BackendDescriptor[] {
 export function backendsReady(): boolean {
 	return state.kind === 'ready';
 }
+
+export type Port = components['schemas']['Port'];
+
+/**
+ * Server-side derive of the canonical output [`Port`] for a `Derived`
+ * backend (LLM today). Calls `POST /api/v1/backends/{name}/derive-output`
+ * with the step's current config; the server runs the backend's pure
+ * `derive_output_port` and returns the resulting Port.
+ *
+ * Server-side keeps drift impossible: the same logic that the compiler
+ * uses for publish-time validation also drives the editor preview, so a
+ * config that lints clean in the editor will publish clean.
+ *
+ * Throws on network failure or non-200 response — callers should fall
+ * back to the descriptor's `defaultOutputPort` on error.
+ */
+export async function deriveBackendOutput(
+	name: ExecutionBackendType,
+	config: unknown
+): Promise<Port> {
+	const res = await fetch(`/api/v1/backends/${name}/derive-output`, {
+		method: 'POST',
+		credentials: 'same-origin',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify(config ?? {})
+	});
+	if (!res.ok) {
+		throw new Error(`POST /api/v1/backends/${name}/derive-output failed: ${res.status}`);
+	}
+	return res.json() as Promise<Port>;
+}

@@ -26,23 +26,41 @@ use aithericon_executor_domain::InputDeclaration;
 use crate::compiler::backend_configs::{require_node_file, stage_all_files, validate_placeholders};
 use crate::compiler::placeholder_refs::scan_placeholders;
 use crate::compiler::CompileError;
-use crate::models::template::{ExecutionBackendType, FieldKind};
+use crate::models::template::{ExecutionBackendType, FieldKind, Port, PortField};
 
 use super::{
-    BackendDecl, BorrowShape, DefaultPortField, RefKindCtx, RefSite, ScanCtx, ValidationCtx,
-    LLM_META,
+    BackendDecl, BorrowShape, DefaultPortField, OutputAuthoring, RefKindCtx, RefSite, ScanCtx,
+    ValidationCtx, LLM_META,
 };
 
+/// Fallback shape used before the editor's config has any `response_format`
+/// set. Mirrors the text-mode default the deriver returns. Keeps
+/// [[reference_openapi_schema_regen]]'s `Reset to default` button useful for
+/// the (very brief) authoring window before a format is picked.
+///
+/// Field names match what `executor-llm/src/backend.rs:238-247` puts into
+/// the run outputs (`response` / `usage` / `finish_reason` / `model`) so a
+/// step with the default port shape lines up with the runtime envelope.
 const DEFAULT_OUTPUT_FIELDS: &[DefaultPortField] = &[
     DefaultPortField {
-        name: "text",
-        label: "Text",
+        name: "response",
+        label: "Response",
         kind: FieldKind::Textarea,
     },
     DefaultPortField {
         name: "usage",
-        label: "Usage",
+        label: "Token usage",
         kind: FieldKind::Json,
+    },
+    DefaultPortField {
+        name: "finish_reason",
+        label: "Finish reason",
+        kind: FieldKind::Text,
+    },
+    DefaultPortField {
+        name: "model",
+        label: "Model",
+        kind: FieldKind::Text,
     },
 ];
 
@@ -60,6 +78,8 @@ pub static LLM_DECL: BackendDecl = BackendDecl {
     pyi_introspection: false,
     borrow_shape: BorrowShape::PerField,
     validate_ref_kind: validate_ref_kind,
+    output_authoring: OutputAuthoring::Derived,
+    derive_output_port: Some(derive_output_port),
 };
 
 /// Seed config the editor inserts when a step's backend is first set to
@@ -198,4 +218,193 @@ fn validate_ref_kind(ctx: &RefKindCtx<'_>) -> Result<(), CompileError> {
         });
     }
     Ok(())
+}
+
+/// Derive the LLM step's output port from its config. The runtime emits a
+/// fixed envelope (`executor-llm/src/backend.rs:238-247`):
+///
+/// - `response` — either the structured JSON object (when `response_format
+///   = json_schema`) or the raw assistant text.
+/// - `usage`, `finish_reason`, `model` — call metadata, always present.
+///
+/// In structured mode the runner additionally unpacks each top-level
+/// schema property to a same-named output (`unpack_by_name`). So the
+/// editor port shape is: schema properties (or a single `response` field
+/// in text mode) + the three metadata fields.
+///
+/// Permissive at edit time: a half-typed schema with no `properties` falls
+/// back to the text-mode shape rather than erroring. Strict validation is
+/// `validate`'s job, run on publish.
+fn derive_output_port(config: &Value) -> Port {
+    let fmt = config.get("response_format");
+    let fmt_type = fmt.and_then(|v| v.get("type")).and_then(|v| v.as_str());
+
+    let mut fields: Vec<PortField> = Vec::new();
+
+    match fmt_type {
+        Some("json_schema") => {
+            let schema = fmt.and_then(|v| v.get("schema"));
+            let props = schema
+                .and_then(|s| s.get("properties"))
+                .and_then(|p| p.as_object());
+            let required: std::collections::HashSet<&str> = schema
+                .and_then(|s| s.get("required"))
+                .and_then(|r| r.as_array())
+                .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
+                .unwrap_or_default();
+            if let Some(props) = props {
+                for (name, prop) in props.iter() {
+                    fields.push(PortField {
+                        name: name.clone(),
+                        label: prop
+                            .get("title")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string())
+                            .unwrap_or_else(|| name.clone()),
+                        kind: kind_from_json_schema(prop),
+                        required: required.contains(name.as_str()),
+                        options: None,
+                        description: prop
+                            .get("description")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string()),
+                        accept: None,
+                    });
+                }
+            } else {
+                fields.push(text_response_field());
+            }
+        }
+        _ => {
+            fields.push(text_response_field());
+        }
+    }
+
+    // Metadata fields — always present in the runtime envelope.
+    fields.push(PortField {
+        name: "usage".into(),
+        label: "Token usage".into(),
+        kind: FieldKind::Json,
+        required: false,
+        options: None,
+        description: None,
+        accept: None,
+    });
+    fields.push(PortField {
+        name: "finish_reason".into(),
+        label: "Finish reason".into(),
+        kind: FieldKind::Text,
+        required: false,
+        options: None,
+        description: None,
+        accept: None,
+    });
+    fields.push(PortField {
+        name: "model".into(),
+        label: "Model".into(),
+        kind: FieldKind::Text,
+        required: false,
+        options: None,
+        description: None,
+        accept: None,
+    });
+
+    Port {
+        id: "out".into(),
+        label: "Output".into(),
+        fields,
+    }
+}
+
+fn text_response_field() -> PortField {
+    PortField {
+        name: "response".into(),
+        label: "Response".into(),
+        kind: FieldKind::Textarea,
+        required: false,
+        options: None,
+        description: None,
+        accept: None,
+    }
+}
+
+/// Map a JSON Schema property to the closest [`FieldKind`]. Conservative:
+/// anything we can't classify falls to `Json` so downstream consumers
+/// don't get a misleadingly narrow shape.
+fn kind_from_json_schema(prop: &Value) -> FieldKind {
+    let ty = prop.get("type").and_then(|v| v.as_str());
+    match ty {
+        Some("string") => {
+            // Hint: explicit `format: "textarea"` or long-text contentMediaType
+            // gets the textarea kind; everything else stays single-line.
+            let format = prop.get("format").and_then(|v| v.as_str());
+            if matches!(format, Some("textarea") | Some("multi-line")) {
+                FieldKind::Textarea
+            } else {
+                FieldKind::Text
+            }
+        }
+        Some("integer") | Some("number") => FieldKind::Number,
+        Some("boolean") => FieldKind::Bool,
+        _ => FieldKind::Json,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn derive_text_mode() {
+        let port = derive_output_port(&json!({}));
+        let names: Vec<_> = port.fields.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, ["response", "usage", "finish_reason", "model"]);
+    }
+
+    #[test]
+    fn derive_json_schema_mode() {
+        // Note: schema property iteration order follows `serde_json::Map`'s
+        // (alphabetical) ordering since this workspace does not enable
+        // `serde_json/preserve_order`. Schema-property ports come out
+        // alphabetically (`ok`, `score`, `summary`), then the metadata
+        // tail in fixed order.
+        let cfg = json!({
+            "response_format": {
+                "type": "json_schema",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "summary": { "type": "string", "title": "Summary" },
+                        "score": { "type": "number" },
+                        "ok": { "type": "boolean" }
+                    },
+                    "required": ["summary"]
+                }
+            }
+        });
+        let port = derive_output_port(&cfg);
+        let names: Vec<_> = port.fields.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(
+            names,
+            ["ok", "score", "summary", "usage", "finish_reason", "model"]
+        );
+        let summary = port.fields.iter().find(|f| f.name == "summary").unwrap();
+        assert_eq!(summary.kind, FieldKind::Text);
+        assert_eq!(summary.label, "Summary");
+        assert!(summary.required);
+        let score = port.fields.iter().find(|f| f.name == "score").unwrap();
+        assert_eq!(score.kind, FieldKind::Number);
+        let ok = port.fields.iter().find(|f| f.name == "ok").unwrap();
+        assert_eq!(ok.kind, FieldKind::Bool);
+    }
+
+    #[test]
+    fn derive_json_schema_no_properties_falls_back_to_text() {
+        let cfg = json!({
+            "response_format": { "type": "json_schema", "schema": { "type": "object" } }
+        });
+        let port = derive_output_port(&cfg);
+        let names: Vec<_> = port.fields.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, ["response", "usage", "finish_reason", "model"]);
+    }
 }
