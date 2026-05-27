@@ -5,7 +5,7 @@ Aithericon platform — Rust crate, declarative registry entry, frontend
 config panel, instance-view renderer, failure handling, demo, and tests.
 
 The **SMTP backend** (added at commit `5d595ee`, then ported to the
-declarative registry in the Phase 2.a–2.h work) is the worked example
+declarative registry) is the worked example
 throughout — every section cites real file paths from the merged
 implementation. If a step here looks abstract, open the SMTP file in the
 same section to see exactly what it became in practice.
@@ -599,7 +599,7 @@ which dispatches by `BackendDecl::borrow_shape`:
   rewrite; the config's field value is replaced with the staged path
   before the executor sees it.
 
-The legacy `BORROW_MARKER` multi-arm dance is gone (Phase 3 cleanup).
+The legacy `BORROW_MARKER` multi-arm dance is gone.
 You don't need to think about it for a new backend — set `borrow_shape`
 correctly and the unified planner handles the rest. The earlier
 regression class ("resource arm silently no-ops because Python's arm
@@ -668,8 +668,8 @@ editor's `AutomatedStepSection.svelte` reads everything else from
 - The Scheduled-toggle visibility comes from `BackendMeta::schedulable`.
 
 You don't edit `AutomatedStepSection.svelte`, `defaultConfigs`,
-`backendLabels`, or any `<Select.Item>` list. Those were collapsed to
-registry consumption in the Phase 2.end refactor.
+`backendLabels`, or any `<Select.Item>` list. Those are driven by
+`GET /api/v1/backends` via `backend-registry.svelte.ts`.
 
 ---
 
