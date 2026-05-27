@@ -593,24 +593,13 @@ impl WorkflowNodeData {
         }
     }
 
-    pub fn type_name(&self) -> &str {
-        match self {
-            Self::Start { .. } => "start",
-            Self::End { .. } => "end",
-            Self::HumanTask { .. } => "human_task",
-            Self::AutomatedStep { .. } => "automated_step",
-            Self::Agent { .. } => "agent",
-            Self::Decision { .. } => "decision",
-            Self::ParallelSplit { .. } => "parallel_split",
-            Self::Join { .. } => "join",
-            Self::Loop { .. } => "loop",
-            Self::Scope { .. } => "scope",
-            Self::PhaseUpdate { .. } => "phase_update",
-            Self::ProgressUpdate { .. } => "progress_update",
-            Self::Failure { .. } => "failure",
-            Self::Trigger { .. } => "trigger",
-            Self::SubWorkflow { .. } => "sub_workflow",
-        }
+    /// Snake-case wire tag. The registry's `NodeDecl::wire_name` is the
+    /// single source of truth — this method is a thin lookup for callers
+    /// that have `&WorkflowNodeData` but no `NodeDecl` in scope.
+    pub fn type_name(&self) -> &'static str {
+        crate::nodes::lookup_by_variant(self)
+            .expect("every WorkflowNodeData variant is registered in crate::nodes::NODES")
+            .wire_name
     }
 
     pub fn description(&self) -> Option<&str> {
@@ -633,221 +622,32 @@ impl WorkflowNodeData {
         }
     }
 
-    /// Typed input ports declared or derived for this node. Returns owned
-    /// ports because some variants (HumanTask, Decision, ...) derive their
-    /// ports from inner config rather than carrying a stored `Port`. The
-    /// returned list is small (1-2 entries) so allocation is negligible.
+    /// Typed input ports declared or derived for this variant. Routes to
+    /// the registry's per-variant `input_ports` fn pointer; the actual
+    /// derivation lives in `service/src/nodes/<variant>.rs`.
     ///
     /// An empty list means "single anonymous input" — edges with
     /// `target_handle: "in"` still resolve via the pass-through path in
     /// `validate_edges_typed`.
     pub fn input_ports(&self) -> Vec<Port> {
-        match self {
-            Self::Start { .. } => vec![],
-            Self::End { terminal, .. } => vec![terminal.clone()],
-            Self::AutomatedStep { input, .. } => vec![input.clone()],
-
-            // Phase 4: derived inputs. Each control-flow block accepts a
-            // single anonymous "in" port that's a Json pass-through — the
-            // typed-edge check treats empty target fields as compatible with
-            // anything, which matches the proposal §3.3 semantics for these
-            // blocks ("they don't transform the token, they route or fan it").
-            Self::HumanTask { .. }
-            | Self::Decision { .. }
-            | Self::ParallelSplit { .. }
-            | Self::Join { .. }
-            | Self::Scope { .. }
-            | Self::PhaseUpdate { .. }
-            | Self::ProgressUpdate { .. }
-            | Self::Failure { .. }
-            // Agent accepts the single anonymous upstream token. The
-            // user/system prompt templates `{{<slug>.<field>}}`-interpolate
-            // against the parked-data envelopes of upstream producers, not
-            // the inbound port; the input port is a Json pass-through.
-            | Self::Agent { .. }
-            // SubWorkflow accepts the single anonymous upstream token; its
-            // `input_mapping` shapes it into the child Start input at compile
-            // time, so the parent-side input port is a Json pass-through.
-            | Self::SubWorkflow { .. } => vec![Port::empty_input()],
-
-            // Loop accepts the outer `in` and a `body_out` handle from its
-            // body children. Both are Json pass-throughs.
-            Self::Loop { .. } => vec![
-                Port::empty_input(),
-                Port {
-                    id: "body_out".to_string(),
-                    label: "Body Out".to_string(),
-                    fields: vec![],
-                },
-            ],
-
-            // Trigger nodes are never edge targets — the editor refuses to draw
-            // an edge into a Trigger node. Return empty so any malformed graph
-            // that does attempt it surfaces as `UnknownTargetPort` during
-            // `validate_edges_typed`.
-            Self::Trigger { .. } => vec![],
-        }
+        let decl = crate::nodes::lookup_by_variant(self)
+            .expect("every WorkflowNodeData variant is registered in crate::nodes::NODES");
+        (decl.input_ports)(self)
     }
 
-    /// Typed output ports declared or derived for this node.
+    /// Typed output ports declared or derived for this variant. Routes to
+    /// the registry's per-variant `output_ports` fn pointer; the actual
+    /// derivation lives in `service/src/nodes/<variant>.rs`.
     ///
-    /// Derived ports (Phase 4):
-    /// - `HumanTask` → single `out` port whose fields are the union of every
-    ///   Input block's `TaskFieldConfig` across all steps, mapped via
-    ///   `FieldKind::from(TaskFieldKind)`.
-    /// - `Decision` → one port per branch (id = `BranchCondition.edge_id`,
-    ///   label = branch label) plus a `default` port for the catch-all.
-    ///   Phase 4 stub: each branch port has empty fields (pass-through), so
-    ///   downstream type-checking flows through unchanged.
-    /// - `ParallelSplit` / `Loop` → single `out` port, empty fields
-    ///   (pass-through).
-    /// - `Scope` → single `out` port, empty fields (pass-through). The
-    ///   scope's *boundary* port editor lands separately.
+    /// Derived-shape variants worth knowing (the derivation lives in the
+    /// per-variant module): `HumanTask` unions step input fields; `Decision`
+    /// emits one port per branch + the default; `Agent`/`AutomatedStep`/
+    /// `SubWorkflow` append a canonical `error` port; `Loop` exposes outer
+    /// `out` plus `body_in`; `End` returns empty.
     pub fn output_ports(&self) -> Vec<Port> {
-        match self {
-            Self::Start { initial, .. } => vec![initial.clone()],
-            // Declared success output + an always-present "error" output
-            // (retries exhausted / infra failure). Empty fields ⇒ pass-through
-            // so wiring it to any handler/End type-checks. The compiler maps
-            // this to the node's `p_{id}_error` place.
-            Self::AutomatedStep { output, .. } => vec![
-                output.clone(),
-                Port {
-                    id: "error".to_string(),
-                    label: "On error".to_string(),
-                    fields: vec![],
-                },
-            ],
-
-            // Agent's success output starts with the canonical LLM fields
-            // (`response`, `usage`, `finish_reason`, `model`) — same shape
-            // a plain `AutomatedStep(Llm)` declares, so the degenerate
-            // path's editor wiring matches an Llm step's. The loop path
-            // additionally packs four agent-specific fields (`turn`,
-            // `history`, `final_response`, `input`) under
-            // `detail.outputs`; declared here only when the agent will
-            // actually take the loop path so the degenerate-path
-            // byte-identical contract with `AutomatedStep(Llm)` holds.
-            //
-            // We can only inspect `self` here — tool_children live in the
-            // graph, not on the variant — so an agent that has tool
-            // children but `max_turns == 1 && stop_when.is_none()` will
-            // declare just the four canonical fields and under-promise vs.
-            // the actually-emitted token (which carries the extras). Not
-            // ideal, but the editor never silently shows fields that the
-            // runtime might drop. `error` mirrors AutomatedStep's error.
-            Self::Agent {
-                model,
-                system_prompt,
-                user_prompt,
-                response_format,
-                max_turns,
-                stop_when,
-                ..
-            } => {
-                let cfg = agent_to_llm_config(
-                    model,
-                    system_prompt.as_deref(),
-                    user_prompt,
-                    response_format.as_ref(),
-                    &[],
-                );
-                let mut success = crate::backends::lookup(ExecutionBackendType::Llm)
-                    .and_then(|d| d.derive_output_port)
-                    .map(|f| f(&cfg))
-                    .unwrap_or_else(|| default_output_port(ExecutionBackendType::Llm));
-                let takes_loop_path = *max_turns > 1 || stop_when.is_some();
-                if takes_loop_path {
-                    success.fields.extend(agent_extra_output_fields());
-                }
-                vec![
-                    success,
-                    Port {
-                        id: "error".to_string(),
-                        label: "On error".to_string(),
-                        fields: vec![],
-                    },
-                ]
-            }
-
-            // Declared child-result success output + an always-present
-            // "error" output (child failure / spawn failure). Mirrors
-            // AutomatedStep; the compiler maps "error" to `p_{id}_error`.
-            Self::SubWorkflow { output, .. } => vec![
-                output.clone(),
-                Port {
-                    id: "error".to_string(),
-                    label: "On error".to_string(),
-                    fields: vec![],
-                },
-            ],
-
-            Self::HumanTask { steps, .. } => vec![derive_human_task_output_port(steps)],
-
-            Self::Decision { conditions, default_branch, .. } => {
-                let mut out: Vec<Port> = conditions
-                    .iter()
-                    .map(|c| Port {
-                        id: c.edge_id.clone(),
-                        label: c.label.clone(),
-                        fields: vec![],
-                    })
-                    .collect();
-                if let Some(default_id) = default_branch {
-                    out.push(Port {
-                        id: default_id.clone(),
-                        label: "Default".to_string(),
-                        fields: vec![],
-                    });
-                }
-                out
-            }
-
-            Self::ParallelSplit { .. }
-            | Self::Scope { .. }
-            | Self::PhaseUpdate { .. }
-            | Self::ProgressUpdate { .. }
-            | Self::Failure { .. } => vec![Port {
-                id: "out".to_string(),
-                label: "Output".to_string(),
-                fields: vec![],
-            }],
-
-            // Join carries an explicit output Port describing the parked
-            // `<slug>.<field>` shape downstream borrows can read.
-            Self::Join { output, .. } => vec![output.clone()],
-
-            // Loop exposes its outer `out` plus a `body_in` handle that feeds
-            // body children. Body children's outgoing edges back into the
-            // loop carry `targetHandle: "body_out"` (declared in `input_ports`).
-            Self::Loop { .. } => vec![
-                Port {
-                    id: "out".to_string(),
-                    label: "Output".to_string(),
-                    fields: vec![],
-                },
-                Port {
-                    id: "body_in".to_string(),
-                    label: "Body In".to_string(),
-                    fields: vec![],
-                },
-            ],
-
-            // End has no output port — tokens terminate here.
-            Self::End { .. } => vec![],
-
-            // Trigger nodes "wear the shape" of whatever they target. The
-            // resolved shape is computed at compile / fire time by
-            // looking up the outgoing edge's target port; statically here we
-            // emit an empty pass-through port. `validate_edges_typed` skips
-            // type-checking when the source is a Trigger; payload-mapping
-            // validation handles the field-level contract instead.
-            Self::Trigger { .. } => vec![Port {
-                id: "out".to_string(),
-                label: "Output".to_string(),
-                fields: vec![],
-            }],
-        }
+        let decl = crate::nodes::lookup_by_variant(self)
+            .expect("every WorkflowNodeData variant is registered in crate::nodes::NODES");
+        (decl.output_ports)(self)
     }
 }
 
