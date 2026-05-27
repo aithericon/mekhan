@@ -240,8 +240,8 @@ mod tests {
     /// verifies the borrow-apply emits the push correctly.
     #[test]
     fn resource_envelope_apply_emits_job_inputs_push() {
-        use crate::compiler::borrow::apply::resource::apply_resource_borrows;
-        use crate::compiler::borrow::apply::strip_borrow_markers;
+        use crate::compiler::borrow::apply::apply_borrows;
+        use crate::compiler::interface::InterfaceRegistry;
         use aithericon_sdk::scenario::{ScenarioDefinition, ScenarioTransition, TransitionLogic};
 
         let (graph, files) = make_python_step_graph("", "", "print(local_pg.host)\n");
@@ -279,13 +279,15 @@ mod tests {
             "fixture must have at least one resource borrow"
         );
 
-        apply_resource_borrows(&mut scenario, "step", &resource_borrows);
-        // The final marker strip happens inside the full apply_borrows
-        // orchestrator; per-arm invocations leave the marker in place so
-        // multi-arm composition works (resource + python + backend-field-
-        // stage can all splice into one node). Replicate the cleanup here
-        // to keep this unit test asserting the final-AIR shape.
-        strip_borrow_markers(&mut scenario);
+        // Drive the full dispatcher rather than the (now-removed) per-arm
+        // `apply_resource_borrows`. Empty interfaces + node_configs are
+        // fine: the resource arm of EnvelopeStageStrategy doesn't consult
+        // interfaces (no read-arc) and doesn't touch node_configs. The
+        // dispatcher's final `strip_borrow_markers` pass runs inside
+        // `apply_borrows`, so the assertion below sees the final AIR shape.
+        let interfaces = InterfaceRegistry::new();
+        let mut node_configs = std::collections::HashMap::new();
+        apply_borrows(&mut scenario, &interfaces, resource_borrows, &mut node_configs);
 
         let TransitionLogic::Rhai { source } = &scenario.transitions[0].logic else {
             panic!("prepare transition must remain Rhai")
