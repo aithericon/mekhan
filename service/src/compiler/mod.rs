@@ -1,5 +1,5 @@
 pub mod backend_configs;
-mod borrow;
+pub(crate) mod borrow;
 mod compile;
 mod error;
 mod graph;

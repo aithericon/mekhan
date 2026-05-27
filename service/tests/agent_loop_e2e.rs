@@ -370,13 +370,18 @@ fn route_guards_bake_in_stop_when() {
     }
 }
 
-/// `ToolErrorPolicy::Bubble`: per-tool error transitions are minted as
+/// `ToolErrorPolicy::Bubble`: per-tool collect transitions are minted as
 /// `_bubble` (drain state, propagate child error to agent's p_error)
-/// instead of `_error` (re-feed loop). The route_unknown branch is
-/// suppressed so unknown-tool misbehaviour stalls the net rather than
-/// silently looping — the explicit "noisy failure" semantics.
+/// instead of `_error` (re-feed loop). The `t_a_route_unknown` transition
+/// is ALSO emitted under Bubble — but its destination is `p_error` (with
+/// a status-failed envelope) instead of `p_state` (with a synthetic
+/// `role: tool` failure message). Earlier the Bubble path simply omitted
+/// `route_unknown`; if the model picked an unknown tool, no route guard
+/// could fire and the net stalled silently on `p_response`. The bubble
+/// variant deposits a visible error so the agent exits via its error
+/// handle instead.
 #[test]
-fn bubble_policy_omits_unknown_route_and_mints_bubble_collectors() {
+fn bubble_policy_routes_unknown_to_error_and_mints_bubble_collectors() {
     let mut node = agent_node("a");
     if let WorkflowNodeData::Agent { on_tool_error, .. } = &mut node.data {
         *on_tool_error = ToolErrorPolicy::Bubble;
@@ -394,8 +399,8 @@ fn bubble_policy_omits_unknown_route_and_mints_bubble_collectors() {
     );
     let transitions = transition_ids(&air);
     assert!(
-        !transitions.iter().any(|t| t == "t_a_route_unknown"),
-        "Bubble policy must NOT emit t_a_route_unknown; have: {transitions:?}"
+        transitions.iter().any(|t| t == "t_a_route_unknown"),
+        "Bubble policy MUST emit t_a_route_unknown (routing to p_error); have: {transitions:?}"
     );
     assert!(
         transitions.iter().any(|t| t == "t_a_collect_lookup_bubble"),
@@ -404,6 +409,25 @@ fn bubble_policy_omits_unknown_route_and_mints_bubble_collectors() {
     assert!(
         !transitions.iter().any(|t| t == "t_a_collect_lookup_error"),
         "Bubble policy must NOT emit t_a_collect_lookup_error (that's the Feedback variant); have: {transitions:?}"
+    );
+
+    // The Bubble variant of route_unknown must deposit on p_error, NOT
+    // p_state. Asserted on the transition's named outputs.
+    let route_unknown = air
+        .get("transitions")
+        .and_then(Value::as_array)
+        .unwrap()
+        .iter()
+        .find(|t| t.get("id").and_then(Value::as_str) == Some("t_a_route_unknown"))
+        .expect("Bubble route_unknown present");
+    let logic_src = route_unknown
+        .get("logic")
+        .and_then(|l| l.get("source"))
+        .and_then(Value::as_str)
+        .expect("Rhai logic");
+    assert!(
+        logic_src.contains("error:") && logic_src.contains(r#"status: "failed""#),
+        "Bubble route_unknown must emit a status-failed envelope on the error output; got: {logic_src}"
     );
 }
 

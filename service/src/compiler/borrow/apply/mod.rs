@@ -83,27 +83,45 @@ pub(crate) fn strip_borrow_markers(scenario: &mut ScenarioDefinition) {
     }
 }
 
-/// Locate the prepare transition for `consumer_id`. Compiler lowering
-/// emits exactly one prepare transition per AutomatedStep / HumanTask /
-/// LLM / Kreuzberg consumer, named either `{consumer_id}/prepare` (the
-/// newer convention), `t_{consumer_id}_prepare` (legacy lowering), or
-/// `t_{consumer_id}_prepare_call` (Agent — its lowering mints multiple
-/// prep-shaped transitions across the loop, so the LLM-call prep
-/// carries the more specific name). The `Option` return makes the "no
-/// prepare here" path explicit (the borrow-source surfaces don't emit
-/// borrows for nodes without a prepare transition, but defensive code
-/// should still bail rather than panic).
+/// Recognises a prepare transition id by trailing suffix. Used by both
+/// `find_prepare_transition_mut` (borrow apply) and
+/// `splice_resources_into_air` (publish-time `let __resources` splice).
+/// The two stayed in sync by hand prior to this; centralising the
+/// pattern set avoids future drift when a new lowering adds another
+/// prep-shaped transition.
+///
+/// Today's set:
+/// - `{id}/prepare` — newer slashed convention
+/// - `t_{id}_prepare` — legacy lowering (AutomatedStep, HumanTask, Kreuzberg)
+/// - `t_{id}_prepare_call` — Agent (loop mints multiple prep-shaped
+///   transitions per cycle; the LLM-call prep carries the more specific
+///   name)
+pub(crate) fn is_prepare_transition_id(transition_id: &str, consumer_id: &str) -> bool {
+    transition_id == format!("{consumer_id}/prepare")
+        || transition_id == format!("t_{consumer_id}_prepare")
+        || transition_id == format!("t_{consumer_id}_prepare_call")
+}
+
+/// Same predicate, without a known consumer id — for the publish-time
+/// splice that walks every transition and matches by suffix only.
+pub(crate) fn has_prepare_transition_suffix(transition_id: &str) -> bool {
+    transition_id.ends_with("/prepare")
+        || transition_id.ends_with("_prepare")
+        || transition_id.ends_with("_prepare_call")
+}
+
+/// Locate the prepare transition for `consumer_id`. The `Option` return
+/// makes the "no prepare here" path explicit (the borrow-source surfaces
+/// don't emit borrows for nodes without a prepare transition, but
+/// defensive code should still bail rather than panic).
 pub(crate) fn find_prepare_transition_mut<'a>(
     scenario: &'a mut ScenarioDefinition,
     consumer_id: &str,
 ) -> Option<&'a mut ScenarioTransition> {
-    let prepare_a = format!("{consumer_id}/prepare");
-    let prepare_b = format!("t_{consumer_id}_prepare");
-    let prepare_c = format!("t_{consumer_id}_prepare_call");
     scenario
         .transitions
         .iter_mut()
-        .find(|t| t.id == prepare_a || t.id == prepare_b || t.id == prepare_c)
+        .find(|t| is_prepare_transition_id(&t.id, consumer_id))
 }
 
 /// Stable input-declaration name for a given `(slug, attr)` borrow. Used

@@ -286,10 +286,10 @@ async fn discover_known_resources(
     let mut heads: BTreeSet<String> = BTreeSet::new();
     let mut declared: Vec<(String, String)> = Vec::new(); // (node_id, alias)
     for node in &graph.nodes {
-        // AutomatedStep reads its config directly; Agent synthesises an
-        // equivalent LLM config containing just the resource_alias (the
-        // only field the scanner cares about). Matches the parallel
-        // path in `borrow::planners::resource`.
+        // Single projection path: both AutomatedStep and Agent feed the
+        // same scanner with the same shape. Agent uses the central
+        // `agent_to_llm_config` so any future LLM-backend scan rules
+        // (`ref_scanner`, new `resource_alias_paths`) apply uniformly.
         let (backend_type, config_owned, config_ref, entrypoint): (
             crate::models::template::ExecutionBackendType,
             Option<serde_json::Value>,
@@ -302,18 +302,24 @@ async fn discover_known_resources(
                 Some(&execution_spec.config),
                 execution_spec.entrypoint.as_deref(),
             ),
-            WorkflowNodeData::Agent { model, .. } => {
-                let mut cfg = serde_json::Map::new();
-                if let Some(a) = &model.resource_alias {
-                    cfg.insert("resource_alias".to_string(), serde_json::json!(a));
-                }
-                (
-                    crate::models::template::ExecutionBackendType::Llm,
-                    Some(serde_json::Value::Object(cfg)),
-                    None,
-                    None,
-                )
-            }
+            WorkflowNodeData::Agent {
+                model,
+                system_prompt,
+                user_prompt,
+                response_format,
+                ..
+            } => (
+                crate::models::template::ExecutionBackendType::Llm,
+                Some(crate::models::template::agent_to_llm_config(
+                    model,
+                    system_prompt.as_deref(),
+                    user_prompt,
+                    response_format.as_ref(),
+                    &[],
+                )),
+                None,
+                None,
+            ),
             _ => continue,
         };
         let config: &serde_json::Value =

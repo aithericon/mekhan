@@ -755,8 +755,26 @@ impl WorkflowNodeData {
             // the actually-emitted token (which carries the extras). Not
             // ideal, but the editor never silently shows fields that the
             // runtime might drop. `error` mirrors AutomatedStep's error.
-            Self::Agent { max_turns, stop_when, .. } => {
-                let mut success = default_output_port(ExecutionBackendType::Llm);
+            Self::Agent {
+                model,
+                system_prompt,
+                user_prompt,
+                response_format,
+                max_turns,
+                stop_when,
+                ..
+            } => {
+                let cfg = agent_to_llm_config(
+                    model,
+                    system_prompt.as_deref(),
+                    user_prompt,
+                    response_format.as_ref(),
+                    &[],
+                );
+                let mut success = crate::backends::lookup(ExecutionBackendType::Llm)
+                    .and_then(|d| d.derive_output_port)
+                    .map(|f| f(&cfg))
+                    .unwrap_or_else(|| default_output_port(ExecutionBackendType::Llm));
                 let takes_loop_path = *max_turns > 1 || stop_when.is_some();
                 if takes_loop_path {
                     success.fields.extend(agent_extra_output_fields());
@@ -1716,6 +1734,59 @@ pub fn default_automated_output_port() -> Port {
         label: "Output".to_string(),
         fields: vec![],
     }
+}
+
+/// Single source of truth for "what LLM config would this Agent send?".
+/// The agent loop, the degenerate-path delegate, the resource borrow
+/// planner, the publish-time resource-discovery scan, and the
+/// `output_ports` deriver all need an equivalent `LlmConfig` payload —
+/// before this helper they each rebuilt their own subset and drifted.
+///
+/// Field names match `aithericon_executor_backend_configs::llm::LlmConfig`
+/// 1:1 so `validate_and_transform`'s LLM arm round-trips this without
+/// coercion. `tools` is passed through verbatim — the agent loop populates
+/// it with one entry per tool child; resource discovery / borrow planning
+/// pass `&[]` because tool wiring is irrelevant to those scans.
+pub fn agent_to_llm_config(
+    model: &ModelRef,
+    system_prompt: Option<&str>,
+    user_prompt: &str,
+    response_format: Option<&serde_json::Value>,
+    tools: &[serde_json::Value],
+) -> serde_json::Value {
+    use serde_json::{Number, Value};
+    let mut config = serde_json::Map::new();
+    config.insert("provider".to_string(), Value::String(model.provider.clone()));
+    config.insert("model".to_string(), Value::String(model.model.clone()));
+    if let Some(k) = &model.api_key {
+        config.insert("api_key".to_string(), Value::String(k.clone()));
+    }
+    if let Some(b) = &model.base_url {
+        config.insert("base_url".to_string(), Value::String(b.clone()));
+    }
+    if let Some(a) = &model.resource_alias {
+        config.insert("resource_alias".to_string(), Value::String(a.clone()));
+    }
+    config.insert("prompt".to_string(), Value::String(user_prompt.to_string()));
+    if let Some(sp) = system_prompt {
+        config.insert("system_prompt".to_string(), Value::String(sp.to_string()));
+    }
+    if let Some(t) = model.temperature {
+        config.insert(
+            "temperature".to_string(),
+            Number::from_f64(t).map(Value::Number).unwrap_or(Value::Null),
+        );
+    }
+    if let Some(m) = model.max_tokens {
+        config.insert("max_tokens".to_string(), Value::Number(m.into()));
+    }
+    if let Some(rf) = response_format {
+        config.insert("response_format".to_string(), rf.clone());
+    }
+    if !tools.is_empty() {
+        config.insert("tools".to_string(), Value::Array(tools.to_vec()));
+    }
+    Value::Object(config)
 }
 
 // --- Trigger nodes (Phase 5) ---

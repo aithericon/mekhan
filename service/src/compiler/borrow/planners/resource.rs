@@ -67,35 +67,50 @@ pub(crate) fn automated_step_resource_borrow_plan(
 
     for node in &graph.nodes {
         // Build the (backend_type, config) pair the scanner reads. Agents
-        // synthesize an equivalent LLM config at compile (see
-        // `lower::agent::build_llm_config_value`) — replicating just the
-        // resource_alias field is enough for `collect_resource_heads` to
-        // discover it, because the LLM backend's `resource_alias_paths`
-        // is `[["resource_alias"]]`.
-        let (backend_type, config_owned, config_ref): (
+        // are projected through the shared
+        // `models::template::agent_to_llm_config` so the same scan rules
+        // (`resource_alias_paths`, future `ref_scanner` overlays) apply
+        // verbatim. AutomatedStep uses its native config.
+        let (backend_type, config_owned, config_ref, entrypoint): (
             ExecutionBackendType,
             Option<serde_json::Value>,
             Option<&serde_json::Value>,
+            Option<&str>,
         ) = match &node.data {
-            WorkflowNodeData::AutomatedStep { execution_spec, .. } => {
-                (execution_spec.backend_type, None, Some(&execution_spec.config))
-            }
-            WorkflowNodeData::Agent { model, .. } => {
-                let mut cfg = serde_json::Map::new();
-                if let Some(a) = &model.resource_alias {
-                    cfg.insert("resource_alias".to_string(), serde_json::json!(a));
-                }
-                (ExecutionBackendType::Llm, Some(serde_json::Value::Object(cfg)), None)
-            }
+            WorkflowNodeData::AutomatedStep { execution_spec, .. } => (
+                execution_spec.backend_type,
+                None,
+                Some(&execution_spec.config),
+                execution_spec.entrypoint.as_deref(),
+            ),
+            WorkflowNodeData::Agent {
+                model,
+                system_prompt,
+                user_prompt,
+                response_format,
+                ..
+            } => (
+                ExecutionBackendType::Llm,
+                Some(crate::models::template::agent_to_llm_config(
+                    model,
+                    system_prompt.as_deref(),
+                    user_prompt,
+                    response_format.as_ref(),
+                    &[],
+                )),
+                None,
+                None,
+            ),
             _ => continue,
         };
-        let config: &serde_json::Value = config_ref.unwrap_or_else(|| config_owned.as_ref().unwrap());
+        let config: &serde_json::Value =
+            config_ref.unwrap_or_else(|| config_owned.as_ref().unwrap());
 
         let ctx = ScanCtx {
             config,
             node_id: &node.id,
             inline_sources,
-            entrypoint: None,
+            entrypoint,
         };
         let heads = collect_resource_heads(&ctx, backend_type);
 

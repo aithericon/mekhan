@@ -78,7 +78,13 @@ fn lower_agent_degenerate(cx: &mut LoweringCtx) -> Result<(), CompileError> {
         unreachable!("lower_agent_degenerate on non-Agent node")
     };
 
-    let llm_config = build_llm_config_value(model, system_prompt, user_prompt, response_format, &[]);
+    let llm_config = crate::models::template::agent_to_llm_config(
+        model,
+        system_prompt.as_deref(),
+        user_prompt,
+        response_format.as_ref(),
+        &[],
+    );
 
     let virtual_node = WorkflowNode {
         id: cx.node.id.clone(),
@@ -123,51 +129,9 @@ fn lower_agent_degenerate(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     super::automated_step::lower_automated_step(&mut virtual_cx)
 }
 
-/// Build the `LlmConfig` JSON the executor LLM backend deserializes.
-/// Field names match `aithericon_executor_backend_configs::llm::LlmConfig`
-/// 1:1 so `validate_and_transform`'s LLM arm round-trips this without
-/// coercion. `tools` is empty for degenerate single-shot calls and
-/// populated by the agent loop with one entry per tool child.
-fn build_llm_config_value(
-    model: &crate::models::template::ModelRef,
-    system_prompt: &Option<String>,
-    user_prompt: &str,
-    response_format: &Option<serde_json::Value>,
-    tools: &[serde_json::Value],
-) -> serde_json::Value {
-    let mut config = serde_json::Map::new();
-    config.insert("provider".to_string(), json!(model.provider));
-    config.insert("model".to_string(), json!(model.model));
-    if let Some(k) = &model.api_key {
-        config.insert("api_key".to_string(), json!(k));
-    }
-    if let Some(b) = &model.base_url {
-        config.insert("base_url".to_string(), json!(b));
-    }
-    if let Some(a) = &model.resource_alias {
-        config.insert("resource_alias".to_string(), json!(a));
-    }
-    config.insert("prompt".to_string(), json!(user_prompt));
-    if let Some(sp) = system_prompt {
-        config.insert("system_prompt".to_string(), json!(sp));
-    }
-    if let Some(t) = model.temperature {
-        config.insert("temperature".to_string(), json!(t));
-    }
-    if let Some(m) = model.max_tokens {
-        config.insert("max_tokens".to_string(), json!(m));
-    }
-    if let Some(rf) = response_format {
-        config.insert("response_format".to_string(), rf.clone());
-    }
-    if !tools.is_empty() {
-        config.insert(
-            "tools".to_string(),
-            serde_json::Value::Array(tools.to_vec()),
-        );
-    }
-    serde_json::Value::Object(config)
-}
+// LLM config projection lives in `models::template::agent_to_llm_config`
+// — single source of truth shared with the resource borrow planner, the
+// publish-time resource scan, and the `output_ports` deriver.
 
 /// Full agent-loop lowering (docs/12 § 3). State is the single token
 /// migrating through phase-named places — exactly one of {p_state,
@@ -262,11 +226,11 @@ fn lower_agent_loop(
         })
         .collect();
 
-    let llm_config = build_llm_config_value(
+    let llm_config = crate::models::template::agent_to_llm_config(
         model,
-        system_prompt,
+        system_prompt.as_deref(),
         user_prompt,
-        response_format,
+        response_format.as_ref(),
         &tool_schemas,
     );
 
@@ -485,11 +449,16 @@ fn lower_agent_loop(
     // status, source, detail: {outputs, exit_code}}` — so the
     // `NodeKind::AutomatedStep` hoist path (`detail.outputs`) the borrow
     // planner uses resolves `<agent>.response`, `<agent>.usage`, etc.
-    // exactly the way a plain LLM step's borrows resolve. Agent-specific
-    // extras (turn, history, final_response, input) ride along under
-    // `detail.outputs` so an author who walks the picker can still see
-    // them.
-    let model_lit = rhai_str_escape(&model.model);
+    // exactly the way a plain LLM step's borrows resolve.
+    //
+    // We START from `outs` (the LLM backend's actual emit) so structured
+    // `response_format: json_schema` outputs (each schema property
+    // unpacked by `unpack_by_name`) flow through unchanged — matches what
+    // `output_ports()`'s call to `LLM_DECL.derive_output_port` declares.
+    // Then we OVERRIDE `usage` with the per-turn-accumulated totals from
+    // state (the executor's `usage` is just the last turn's count, the
+    // agent's is the conversation total) and add the four agent-specific
+    // extras (turn, history, final_response, input).
     ctx.transition(
         format!("t_{id}_route_final"),
         format!("{label} - Route: Final"),
@@ -500,7 +469,7 @@ fn lower_agent_loop(
         r#"let s = response.state; {extract_tr} let tc = if type_of(tr.tool_calls) == "array" {{ tr.tool_calls }} else {{ [] }}; tc.len() == 0 || s.turn + 1 >= {max_turns} || {stop_when_expr}"#
     ))
     .logic_rhai(format!(
-        r#"let s = response.state; {extract_tr} let content = if type_of(tr.content) == "string" {{ tr.content }} else {{ () }}; let finish_reason = if type_of(tr.stop_reason) == "string" {{ tr.stop_reason }} else {{ "end_turn" }}; let usage = #{{ input_tokens: s.total_tokens_in, output_tokens: s.total_tokens_out }}; let outputs = #{{ response: content, usage: usage, finish_reason: finish_reason, model: "{model_lit}", turn: s.turn, history: s.history, final_response: tr, input: s.input }}; let env = #{{ execution_id: "agent-{id}", job_id: "{id}", run: s.turn, status: "succeeded", source: "agent_loop", detail: #{{ outputs: outputs, exit_code: 0 }} }}; #{{ final: env }}"#
+        r#"let s = response.state; {extract_tr} let outputs = outs; outputs.usage = #{{ input_tokens: s.total_tokens_in, output_tokens: s.total_tokens_out }}; outputs.turn = s.turn; outputs.history = s.history; outputs.final_response = tr; outputs.input = s.input; let env = #{{ execution_id: "agent-{id}", job_id: "{id}", run: s.turn, status: "succeeded", source: "agent_loop", detail: #{{ outputs: outputs, exit_code: 0 }} }}; #{{ final: env }}"#
     ))
     .done();
 
@@ -528,28 +497,49 @@ fn lower_agent_loop(
         .done();
     }
 
-    // t_route_unknown: ToolErrorPolicy::Feedback only. Fires when the
-    // model picked a tool not in the known set, turn budget remains.
-    // No dispatch — append a failure message and re-deposit state so
-    // the next turn can correct the model. For Bubble policy this
-    // transition is omitted; an unknown tool with no fallback then
-    // can't satisfy any route guard and the net stalls — which is the
-    // explicit "the model misbehaved and we want a noisy failure"
-    // semantics of Bubble.
-    if matches!(on_tool_error, ToolErrorPolicy::Feedback) && !tool_children.is_empty() {
-        ctx.transition(
-            format!("t_{id}_route_unknown"),
-            format!("{label} - Route: Unknown Tool (feedback)"),
-        )
-        .auto_input("response", &p_response)
-        .auto_output("state", &p_state)
-        .guard_rhai(format!(
-            r#"let s = response.state; {extract_tr} let tc = if type_of(tr.tool_calls) == "array" {{ tr.tool_calls }} else {{ [] }}; let known = {known_names_rhai}; tc.len() > 0 && !(known.contains(tc[0].name)) && s.turn + 1 < {max_turns} && !({stop_when_expr})"#
-        ))
-        .logic_rhai(format!(
-            r#"let s = response.state; {extract_tr} let tcall = tr.tool_calls[0]; s.history.push(#{{ role: "tool", tool_name: tcall.name, tool_call_id: tcall.id, content: "tool '" + tcall.name + "' not found — pick one of: " + {known_names_rhai} }}); s.turn = s.turn + 1; s.message_count = s.message_count + 1; #{{ state: s }}"#
-        ))
-        .done();
+    // t_route_unknown: both policies emit a transition for the
+    // unknown-tool case, but the destination differs.
+    //
+    // - Feedback (default): append a synthetic `role: tool` failure
+    //   message to history, re-deposit state on p_state, let the model
+    //   retry on the next turn with the corrected tool list in context.
+    // - Bubble: deposit a status-failed envelope on p_error so the agent
+    //   exits via its error handle. Without this transition the token
+    //   sat on p_response forever — a silent stall that looked exactly
+    //   like a hung LLM call to anyone debugging.
+    if !tool_children.is_empty() {
+        match on_tool_error {
+            ToolErrorPolicy::Feedback => {
+                ctx.transition(
+                    format!("t_{id}_route_unknown"),
+                    format!("{label} - Route: Unknown Tool (feedback)"),
+                )
+                .auto_input("response", &p_response)
+                .auto_output("state", &p_state)
+                .guard_rhai(format!(
+                    r#"let s = response.state; {extract_tr} let tc = if type_of(tr.tool_calls) == "array" {{ tr.tool_calls }} else {{ [] }}; let known = {known_names_rhai}; tc.len() > 0 && !(known.contains(tc[0].name)) && s.turn + 1 < {max_turns} && !({stop_when_expr})"#
+                ))
+                .logic_rhai(format!(
+                    r#"let s = response.state; {extract_tr} let tcall = tr.tool_calls[0]; s.history.push(#{{ role: "tool", tool_name: tcall.name, tool_call_id: tcall.id, content: "tool '" + tcall.name + "' not found — pick one of: " + {known_names_rhai} }}); s.turn = s.turn + 1; s.message_count = s.message_count + 1; #{{ state: s }}"#
+                ))
+                .done();
+            }
+            ToolErrorPolicy::Bubble => {
+                ctx.transition(
+                    format!("t_{id}_route_unknown"),
+                    format!("{label} - Route: Unknown Tool (bubble to error)"),
+                )
+                .auto_input("response", &p_response)
+                .auto_output("error", &p_error)
+                .guard_rhai(format!(
+                    r#"let s = response.state; {extract_tr} let tc = if type_of(tr.tool_calls) == "array" {{ tr.tool_calls }} else {{ [] }}; let known = {known_names_rhai}; tc.len() > 0 && !(known.contains(tc[0].name)) && s.turn + 1 < {max_turns} && !({stop_when_expr})"#
+                ))
+                .logic_rhai(format!(
+                    r#"let s = response.state; {extract_tr} let tcall = tr.tool_calls[0]; let msg = "agent picked unknown tool '" + tcall.name + "' (known: " + {known_names_rhai} + ")"; #{{ error: #{{ execution_id: "agent-{id}", job_id: "{id}", run: s.turn, status: "failed", source: "agent_loop", detail: #{{ outputs: #{{}}, exit_code: 1, error: #{{ kind: "unknown_tool", message: msg, tool_name: tcall.name }} }} }} }}"#
+                ))
+                .done();
+            }
+        }
     }
 
     // ----- t_exit -----

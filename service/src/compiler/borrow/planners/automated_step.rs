@@ -123,21 +123,59 @@ pub(crate) fn automated_step_borrow_plan(
         std::collections::BTreeSet::new();
 
     for node in &graph.nodes {
-        let WorkflowNodeData::AutomatedStep { execution_spec, .. } = &node.data else {
-            continue;
+        // Both AutomatedStep and Agent feed the same backend ref scanner.
+        // Agent projects through the shared `agent_to_llm_config` so its
+        // `system_prompt` / `user_prompt` `{{ <slug>.<field> }}` refs get
+        // scanned exactly the way a plain LLM step's `prompt` /
+        // `system_prompt` do. Without this, the prompts arrive at the
+        // executor as literal Tera placeholders because no borrow was
+        // staged.
+        let (backend_type, config_owned, config_ref, entrypoint): (
+            crate::models::template::ExecutionBackendType,
+            Option<serde_json::Value>,
+            Option<&serde_json::Value>,
+            Option<&str>,
+        ) = match &node.data {
+            WorkflowNodeData::AutomatedStep { execution_spec, .. } => (
+                execution_spec.backend_type,
+                None,
+                Some(&execution_spec.config),
+                execution_spec.entrypoint.as_deref(),
+            ),
+            WorkflowNodeData::Agent {
+                model,
+                system_prompt,
+                user_prompt,
+                response_format,
+                ..
+            } => (
+                crate::models::template::ExecutionBackendType::Llm,
+                Some(crate::models::template::agent_to_llm_config(
+                    model,
+                    system_prompt.as_deref(),
+                    user_prompt,
+                    response_format.as_ref(),
+                    &[],
+                )),
+                None,
+                None,
+            ),
+            _ => continue,
         };
+        let config: &serde_json::Value =
+            config_ref.unwrap_or_else(|| config_owned.as_ref().unwrap());
 
-        let Some(decl) = crate::backends::lookup(execution_spec.backend_type) else {
+        let Some(decl) = crate::backends::lookup(backend_type) else {
             continue;
         };
         let Some(scanner) = decl.ref_scanner else {
             continue;
         };
         let ctx = crate::backends::ScanCtx {
-            config: &execution_spec.config,
+            config,
             node_id: &node.id,
             inline_sources,
-            entrypoint: execution_spec.entrypoint.as_deref(),
+            entrypoint,
         };
         let refs = scanner(&ctx);
 
