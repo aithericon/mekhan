@@ -59,16 +59,17 @@ function matchesAutomatedStep(value: unknown, ctx: RenderContext): boolean {
  *  End / Failure nodes. Built by `lower_end`'s result_shape transition
  *  (`exit_code: { ok: true, value: <result_mapping> }`) and `lower_failure`
  *  (`exit_code: { ok: false, error }`), riding atop the process token's
- *  workflow-level `name` / `process_id` / `task_id` / `status` fields.
- *  Distinguishing signature: all four workflow-metadata strings present.
- *  `exit_code` is treated as optional so bare-End terminals (no result
- *  mapping) still match and render the metadata cleanly. Accepts both `end`
- *  and `failure` node kinds because `lower_failure` emits the identical
- *  shape — only the `exit_code.ok` arm differs. */
+ *  workflow-level `name` / `process_id` / `status` fields (plus an optional
+ *  `task_id` when a HumanTask ran on the path — pure-automated workflows
+ *  reach End with no task_id ever stamped). Distinguishing signature: the
+ *  `name + process_id + status` triple. `exit_code` is treated as optional
+ *  so bare-End terminals (no result mapping) still match and render the
+ *  metadata cleanly. Accepts both `end` and `failure` node kinds because
+ *  `lower_failure` emits the identical shape — only the `exit_code.ok` arm
+ *  differs. */
 function matchesEndTerminal(value: unknown, ctx: RenderContext): boolean {
 	if (!isObj(value)) return false;
 	if (typeof value.process_id !== 'string') return false;
-	if (typeof value.task_id !== 'string') return false;
 	if (typeof value.status !== 'string') return false;
 	if (typeof value.name !== 'string') return false;
 	if ('exit_code' in value && value.exit_code !== null && !isObj(value.exit_code)) return false;
