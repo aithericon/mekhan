@@ -188,7 +188,7 @@ openapi:
     echo "▶ building mekhan CLI…"
     cargo build --bin mekhan
     echo "▶ dumping spec → openapi-mekhan.json"
-    ./target/debug/mekhan openapi > openapi-mekhan.json
+    "${CARGO_TARGET_DIR:-./target}/debug/mekhan" openapi > openapi-mekhan.json
     echo "▶ regenerating app/src/lib/api/schema.d.ts"
     (cd app && pnpm run openapi:generate)
     echo "✓ openapi spec + schema regenerated"
@@ -436,7 +436,11 @@ up-executor:
     # VAULT_ADDR is set so PlanSecretsHook can unwrap per-job wrapping tokens
     # the engine attaches; VAULT_TOKEN is intentionally NOT set on the
     # executor — it authenticates by exchanging the wrapping token itself.
-    bin="$PWD/executor/target/debug/aithericon-executor-service"
+    # Honor CARGO_TARGET_DIR so the binary lookup follows the same
+    # redirect cargo did. Shared-target setups (umbrella .envrc) put
+    # everything under `~/.cache/cargo-targets/...`; the bare workspace
+    # fallback is what cargo uses when no env var is set.
+    bin="${CARGO_TARGET_DIR:-$PWD/executor/target}/debug/aithericon-executor-service"
     nohup env RUST_LOG="info,aithericon_executor=debug" \
       VAULT_ADDR="{{vault_addr}}" \
       bash -c 'cd "{{work_dir}}/executor" && exec "$0"' "$bin" \
@@ -511,7 +515,7 @@ up-engine scheduler="off":
       VAULT_ADDR="{{vault_addr}}" \
       VAULT_TOKEN="{{vault_token}}" \
       PORT="3030" \
-      "$PWD/engine/target/debug/core-engine" \
+      "${CARGO_TARGET_DIR:-$PWD/engine/target}/debug/core-engine" \
       > "{{log_dir}}/engine.log" 2>&1 &
     echo $! > "{{pid_dir}}/engine.pid"
     echo "  ✓ engine (pid $(cat {{pid_dir}}/engine.pid))  http://localhost:3030  log: {{log_dir}}/engine.log"
@@ -558,7 +562,7 @@ scheduler-up:
     fi
 
     # 2. Executor binary — reused by Nomad per job (run_to_completion).
-    exec_bin="$PWD/executor/target/debug/aithericon-executor-service"
+    exec_bin="${CARGO_TARGET_DIR:-$PWD/executor/target}/debug/aithericon-executor-service"
     if [ ! -x "$exec_bin" ]; then
       echo "▶ building executor (features: {{executor_features}})…"
       (cd executor && cargo build -p aithericon-executor-service --features "{{executor_features}}")
@@ -934,7 +938,7 @@ up-mekhan auth_mode="dev_noop":
       VAULT_ADDR="{{vault_addr}}" \
       VAULT_TOKEN="{{vault_token}}" \
       ${mode_assign:+"$mode_assign"} \
-      "$PWD/target/debug/mekhan-service" \
+      "${CARGO_TARGET_DIR:-$PWD/target}/debug/mekhan-service" \
       > "{{log_dir}}/mekhan.log" 2>&1 &
     echo $! > "{{pid_dir}}/mekhan.pid"
     echo "  ✓ mekhan-service (pid $(cat {{pid_dir}}/mekhan.pid))  http://localhost:3100  log: {{log_dir}}/mekhan.log"
