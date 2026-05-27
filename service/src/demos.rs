@@ -1210,6 +1210,55 @@ mod tests {
         );
     }
 
+    /// The 09-agent-tool-loop demo (Start → Agent[+ python tool child] → End)
+    /// must parse + compile cleanly. Pins the agent loop path: with
+    /// `maxTurns: 4` + a tool child the compiler takes `lower_agent_loop`
+    /// (NOT the degenerate single-shot path), so the resulting AIR must
+    /// carry the loop scaffold's signature places + transitions.
+    #[test]
+    fn agent_tool_loop_demo_loads_and_compiles() {
+        use crate::compiler::{compile_to_air, node_files_inline};
+
+        let root = repo_root().join("demos");
+        let demo = load_demo(&root.join("09-agent-tool-loop"))
+            .expect("09-agent-tool-loop must load");
+        assert_eq!(demo.metadata.name, "09 · Agent + Tool Loop");
+        assert_eq!(
+            demo.metadata.template_id,
+            "00000000-0000-0000-0000-000000000019"
+        );
+
+        let files = node_files_inline(&demo.files);
+        let air = compile_to_air(
+            &demo.graph,
+            &demo.metadata.name,
+            demo.metadata.description.as_deref().unwrap_or(""),
+            &files,
+        )
+        .unwrap_or_else(|e| panic!("09-agent-tool-loop must compile to AIR: {e:?}"));
+
+        let air_str = air.to_string();
+        // Signature transitions of the loop path — degenerate would emit
+        // none of these and instead delegate to AutomatedStep's plain
+        // lifecycle, so seeing them proves the compiler took the right
+        // branch and minted the tool dispatch/collect plumbing.
+        for marker in [
+            "t_agent_enter",
+            "t_agent_prepare_call",
+            "t_agent_route_final",
+            "t_agent_route_dispatch_lookup_order",
+            "t_agent_invoke_lookup_order",
+            "t_agent_collect_lookup_order",
+            "p_agent_state",
+            "p_agent_dispatch_lookup_order",
+        ] {
+            assert!(
+                air_str.contains(marker),
+                "agent loop AIR must contain `{marker}` — compiler skipped the loop path?"
+            );
+        }
+    }
+
     /// The email-welcome demo (Start → HumanTask intake → SMTP send → End)
     /// must parse + compile cleanly through the same AIR pipeline
     /// `/api/v1/templates/{id}/publish` uses. This is the canonical SMTP-backend

@@ -138,20 +138,40 @@ logs name:
 psql:
     psql "{{database_url}}"
 
-# Configure this worktree to share cargo target dirs with all other worktrees
-# on this machine (via direnv .envrc + $HOME/.cache/cargo-targets/...). Saves
-# 100s of GB across many worktrees. Pass --migrate to mv existing target/
-# into the shared dir (preserves build cache); --clean to delete it.
-# Safe to re-run. Normally only needed if .envrc files are missing — fresh
-# worktrees created via `just dev::worktree-add` already have them.
-setup-shared-target *args:
-    just/scripts/setup-shared-target.sh {{args}}
+# Configure this worktree to use sccache as cargo's rustc wrapper, so
+# compiled crates are content-addressed in ~/Library/Caches/Mozilla.sccache
+# and reused across worktrees without sharing target/ dirs (which would
+# serialize concurrent builds via cargo's target-dir lock). Pass
+# --clean-shared to additionally delete the legacy
+# ~/.cache/cargo-targets/aithericon-platform/ dirs from the old shared-target
+# scheme. Safe to re-run. Normally only needed if .envrc files are missing —
+# fresh worktrees created via `just dev::worktree-add` already have them.
+setup-cargo-cache *args:
+    just/scripts/setup-cargo-cache.sh {{args}}
 
-# Create a worktree at .claude/worktrees/<name> with shared cargo targets
-# pre-allowed. Trailing args pass through to `git worktree add` (e.g. a
-# start-point, or `-b <new-branch>`). The tracked .envrc files come with the
-# checkout; this recipe runs `direnv allow` for the three workspaces so the
-# first `cargo` invocation already points at the shared target dirs.
+# GC stale build artifacts across all three workspaces. cargo-sweep removes
+# target/ files older than N days (default 30). Run periodically if disk
+# fills up — per-worktree target/ dirs can grow large even with sccache
+# (sccache caches rustc outputs but cargo still writes them to target/).
+# Use --installed instead of --time to prune artifacts from other toolchains.
+gc-targets days="30":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    command -v cargo-sweep >/dev/null 2>&1 || {
+      echo "✗ cargo-sweep not on PATH — brew install cargo-sweep" >&2; exit 1; }
+    for ws in . engine executor; do
+      echo "▶ sweeping $ws/target (older than {{days}} days)…"
+      (cd "$ws" && cargo sweep --time {{days}} || true)
+    done
+    echo
+    echo "sccache stats:"
+    sccache --show-stats || true
+
+# Create a worktree at .claude/worktrees/<name> with sccache pre-allowed.
+# Trailing args pass through to `git worktree add` (e.g. a start-point, or
+# `-b <new-branch>`). The tracked .envrc files come with the checkout;
+# this recipe runs `direnv allow` for the three workspaces so the first
+# `cargo` invocation already has RUSTC_WRAPPER=sccache wired up.
 #
 # Examples:
 #   just dev::worktree-add foo                       # branch off HEAD, name `foo`
@@ -168,16 +188,16 @@ worktree-add name *args:
     # Capture script path BEFORE creating the worktree — if the script
     # isn't yet committed, the new worktree won't contain it, so we invoke
     # the main repo's copy by absolute path.
-    setup_script="$(pwd)/just/scripts/setup-shared-target.sh"
+    setup_script="$(pwd)/just/scripts/setup-cargo-cache.sh"
     git worktree add "$wt" {{args}}
     # Run the setup script inside the new worktree. Idempotent: if .envrc
     # files are already tracked + checked out, it just direnv-allows them;
     # if they're missing (e.g. not yet committed), it writes them. Either
-    # way the new worktree picks up CARGO_TARGET_DIR on first cd.
+    # way the new worktree picks up RUSTC_WRAPPER=sccache on first cd.
     (cd "$wt" && "$setup_script")
     echo
     echo "✓ worktree ready: $wt"
-    echo "  cd $wt   # direnv loads CARGO_TARGET_DIR automatically"
+    echo "  cd $wt   # direnv loads RUSTC_WRAPPER=sccache automatically"
 
 # Regenerate openapi-mekhan.json (from the mekhan-service binary, no infra
 # needed) and refresh the SvelteKit app's typed schema from it. Run this
@@ -188,7 +208,7 @@ openapi:
     echo "▶ building mekhan CLI…"
     cargo build --bin mekhan
     echo "▶ dumping spec → openapi-mekhan.json"
-    ./target/debug/mekhan openapi > openapi-mekhan.json
+    "${CARGO_TARGET_DIR:-./target}/debug/mekhan" openapi > openapi-mekhan.json
     echo "▶ regenerating app/src/lib/api/schema.d.ts"
     (cd app && pnpm run openapi:generate)
     echo "✓ openapi spec + schema regenerated"
@@ -436,7 +456,11 @@ up-executor:
     # VAULT_ADDR is set so PlanSecretsHook can unwrap per-job wrapping tokens
     # the engine attaches; VAULT_TOKEN is intentionally NOT set on the
     # executor — it authenticates by exchanging the wrapping token itself.
-    bin="$PWD/executor/target/debug/aithericon-executor-service"
+    # Honor CARGO_TARGET_DIR so the binary lookup follows the same
+    # redirect cargo did. Shared-target setups (umbrella .envrc) put
+    # everything under `~/.cache/cargo-targets/...`; the bare workspace
+    # fallback is what cargo uses when no env var is set.
+    bin="${CARGO_TARGET_DIR:-$PWD/executor/target}/debug/aithericon-executor-service"
     nohup env RUST_LOG="info,aithericon_executor=debug" \
       VAULT_ADDR="{{vault_addr}}" \
       bash -c 'cd "{{work_dir}}/executor" && exec "$0"' "$bin" \
@@ -511,7 +535,7 @@ up-engine scheduler="off":
       VAULT_ADDR="{{vault_addr}}" \
       VAULT_TOKEN="{{vault_token}}" \
       PORT="3030" \
-      "$PWD/engine/target/debug/core-engine" \
+      "${CARGO_TARGET_DIR:-$PWD/engine/target}/debug/core-engine" \
       > "{{log_dir}}/engine.log" 2>&1 &
     echo $! > "{{pid_dir}}/engine.pid"
     echo "  ✓ engine (pid $(cat {{pid_dir}}/engine.pid))  http://localhost:3030  log: {{log_dir}}/engine.log"
@@ -558,7 +582,7 @@ scheduler-up:
     fi
 
     # 2. Executor binary — reused by Nomad per job (run_to_completion).
-    exec_bin="$PWD/executor/target/debug/aithericon-executor-service"
+    exec_bin="${CARGO_TARGET_DIR:-$PWD/executor/target}/debug/aithericon-executor-service"
     if [ ! -x "$exec_bin" ]; then
       echo "▶ building executor (features: {{executor_features}})…"
       (cd executor && cargo build -p aithericon-executor-service --features "{{executor_features}}")
@@ -934,7 +958,7 @@ up-mekhan auth_mode="dev_noop":
       VAULT_ADDR="{{vault_addr}}" \
       VAULT_TOKEN="{{vault_token}}" \
       ${mode_assign:+"$mode_assign"} \
-      "$PWD/target/debug/mekhan-service" \
+      "${CARGO_TARGET_DIR:-$PWD/target}/debug/mekhan-service" \
       > "{{log_dir}}/mekhan.log" 2>&1 &
     echo $! > "{{pid_dir}}/mekhan.pid"
     echo "  ✓ mekhan-service (pid $(cat {{pid_dir}}/mekhan.pid))  http://localhost:3100  log: {{log_dir}}/mekhan.log"

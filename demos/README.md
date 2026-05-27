@@ -56,6 +56,7 @@ capstone that ties them together.
 | 06 | `06-subworkflow/` | Flow-in-flow: parent embeds `01-hello-world` via a `sub_workflow` node + `inputMapping`. |
 | 07 | `07-ocr-classify-extract/` | LLM + Kreuzberg consume upstream-producer fields via `{{ <slug>.<field> }}` placeholders — same convention HumanTask uses. Start uploads a PDF, Kreuzberg reads `{{ start.document }}`, LLM classifier reads `{{ extract_text.content }}` (kreuzberg's native ExtractionResult key — declarations match 1:1, no remap). |
 | 08 | `08-failure-handling/` | AutomatedStep's red `error` handle: a Python `raise` (or `sys.exit(<nonzero>)`) routes out the error port once `retryPolicy.maxRetries` is exhausted. Wired to a Failure node + dedicated End so the run completes with a structured `{ ok: false, error: { reason, value } }` envelope. |
+| 09 | `09-agent-tool-loop/` | Agent node with one Python tool child. Multi-turn LLM (Ollama qwen2.5:3b via native `/api/chat` tools) decides whether to call `lookup_order`, reads the result, then composes a final reply. Exercises the full agent loop topology (parked state, dispatch/collect per tool, route guards) end-to-end. Requires a tool-capable Ollama model — `up-ollama`'s default `qwen3.5:9b` works; demo pins `qwen2.5:3b` so it stays fast on CPU and shares the testcontainer model. |
 | ★ | `invoice-processing/` | Capstone: trigger → human review → Python extract → decision → scope[split + join] → end. Exercises every editor node type plus direct slug access in Python. |
 
 The seeder loads directories in lexical order, so `01-` … `06-` seed
