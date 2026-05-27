@@ -101,7 +101,7 @@ impl ScalarTy {
         }
     }
 
-    fn label(&self) -> &'static str {
+    pub(crate) fn label(&self) -> &'static str {
         match self {
             ScalarTy::String => "String",
             ScalarTy::Number => "Number",
@@ -205,7 +205,7 @@ impl TokenShape {
 
     /// Resolve a dotted path (the segments *after* `input`). Returns the
     /// matched field's shape + provenance, or `None` if any segment is absent.
-    fn resolve<'a>(&'a self, segs: &[String]) -> Option<(&'a TokenShape, Option<&'a Provenance>)> {
+    pub(crate) fn resolve<'a>(&'a self, segs: &[String]) -> Option<(&'a TokenShape, Option<&'a Provenance>)> {
         let mut cur = self;
         let mut prov: Option<&Provenance> = None;
         for seg in segs {
@@ -225,7 +225,7 @@ impl TokenShape {
     /// Depth-first search for any leaf whose *final* path segment equals
     /// `name`. Used to suggest "did you mean …" when a guard ref is
     /// unresolved. Returns (dotted_path, scalar/shape label, provenance).
-    fn find_by_leaf(&self, name: &str) -> Option<(String, String, Provenance)> {
+    pub(crate) fn find_by_leaf(&self, name: &str) -> Option<(String, String, Provenance)> {
         fn walk(
             shape: &TokenShape,
             prefix: &str,
@@ -251,7 +251,7 @@ impl TokenShape {
         walk(self, "", name)
     }
 
-    fn kind_label(&self) -> String {
+    pub(crate) fn kind_label(&self) -> String {
         match self {
             TokenShape::Object(_) => "Object".to_string(),
             TokenShape::Array(_) => "Array".to_string(),
@@ -874,6 +874,8 @@ fn out_shape(node: &WorkflowNode, in_shape: &TokenShape) -> TokenShape {
 /// Compute inbound + outbound shapes for every node, then validate guards
 /// against the *real* inbound shape.
 pub fn analyze(graph: &WorkflowGraph) -> Result<ShapeReport, CompileError> {
+    use crate::compiler::borrow::planners::guard::{check_guard, reachable_scope};
+
     let wg = WorkflowDiGraph::build(graph)?;
     let order = topo_order(&wg)?;
     // Author-facing `<slug>.<field>` namespace — built once; a hard
@@ -996,7 +998,7 @@ pub fn analyze(graph: &WorkflowGraph) -> Result<ShapeReport, CompileError> {
 }
 
 /// Every `(dotted_path, type_label, provenance)` leaf of a shape.
-fn collect_leaves(
+pub(crate) fn collect_leaves(
     shape: &TokenShape,
     prefix: &str,
     prov: Option<&Provenance>,
@@ -1057,7 +1059,7 @@ fn collect_leaves(
 /// SubWorkflow uses the same split_outputs tail as AutomatedStep, so its
 /// declared output fields ride the parked `p_{id}_data` place after the
 /// join — `<sub_slug>.<field>` is the only addressable form downstream.
-fn is_parked_producer(graph: &WorkflowGraph, id: &str) -> bool {
+pub(crate) fn is_parked_producer(graph: &WorkflowGraph, id: &str) -> bool {
     graph.nodes.iter().any(|n| {
         n.id == id
             && matches!(
@@ -1076,50 +1078,19 @@ fn is_parked_producer(graph: &WorkflowGraph, id: &str) -> bool {
 /// parked `p_<loop>_data` place keyed flat (`{iteration: N}`), so
 /// `<slug>.iteration` borrows resolve through the standard read-arc pipeline
 /// (see `resolve_ref`'s Qualified branch).
-fn is_loop_node(graph: &WorkflowGraph, id: &str) -> bool {
+pub(crate) fn is_loop_node(graph: &WorkflowGraph, id: &str) -> bool {
     graph
         .nodes
         .iter()
         .any(|n| n.id == id && matches!(n.data, WorkflowNodeData::Loop { .. }))
 }
 
-fn topo_pos(order: &[petgraph::graph::NodeIndex], wg: &WorkflowDiGraph) -> BTreeMap<String, usize> {
+pub(crate) fn topo_pos(order: &[petgraph::graph::NodeIndex], wg: &WorkflowDiGraph) -> BTreeMap<String, usize> {
     let mut pos = BTreeMap::new();
     for (i, ni) in order.iter().enumerate() {
         pos.insert(wg.dag.node_weight(*ni).unwrap().id.clone(), i);
     }
     pos
-}
-
-/// Shared prelude for every borrow planner: the directed workflow graph, its
-/// topological order, the slug→node-id resolver, and the per-node topo
-/// position used by `resolve_ref` / `resolve_backend_ref` to verify the
-/// producer is strictly upstream of the consumer.
-///
-/// Built once via [`BorrowContext::build`]; each planner (guard read-arc,
-/// AutomatedStep / resource / HumanTask / LLM / Kreuzberg) consumes the same
-/// shape, so the four-line `wg + order + pos + slugs` recipe lives here
-/// rather than copy-pasted into every planner head.
-pub(crate) struct BorrowContext<'a> {
-    pub(crate) wg: WorkflowDiGraph<'a>,
-    pub(crate) order: Vec<petgraph::graph::NodeIndex>,
-    pub(crate) pos: BTreeMap<String, usize>,
-    pub(crate) slugs: SlugIndex,
-}
-
-impl<'a> BorrowContext<'a> {
-    pub(crate) fn build(graph: &'a WorkflowGraph) -> Result<Self, CompileError> {
-        let wg = WorkflowDiGraph::build(graph)?;
-        let order = topo_order(&wg)?;
-        let pos = topo_pos(&order, &wg);
-        let slugs = slug_index(graph)?;
-        Ok(Self {
-            wg,
-            order,
-            pos,
-            slugs,
-        })
-    }
 }
 
 // ─── Slug index: the `<slug>.<field>` ↔ node-id resolver ────────────────────
@@ -1241,378 +1212,10 @@ pub(crate) fn slug_index(graph: &WorkflowGraph) -> Result<SlugIndex, CompileErro
 }
 
 // ─── One guard-reference resolver ───────────────────────────────────────────
+// (`RefRoot`, `GuardRef`, `guard_refs`, `RefResolution`, `resolve_ref`,
+// `reachable_scope`, and `check_guard` moved to
+// `crate::compiler::borrow::planners::guard`.)
 
-/// The root of a dotted guard reference.
-#[derive(Debug, Clone)]
-enum RefRoot {
-    /// `input.<path>` — only legitimate for control-token-resident leaves
-    /// (Start fields before any task, `_loop_*`, `task_id`, `status`).
-    Input,
-    /// `<slug>.<path>` — borrowed parked-producer data; `slug` still has to
-    /// resolve to a strictly-upstream parked producer.
-    Qualified(String),
-}
-
-/// One scope reference parsed out of a guard / result-mapping expression.
-struct GuardRef {
-    root: RefRoot,
-    segs: Vec<String>,
-    lit: Option<LitTy>,
-    /// Exactly the substring written in the source — what
-    /// `apply_control_data_foundation` string-replaces with the read-arc var.
-    referenced: String,
-}
-
-/// Parse the scope references out of `src`. The raw [`scan_dotted_refs`]
-/// scanner finds dotted paths + the RHS literal; `rhai_scope` (keyword / local
-/// / string / comment aware) gates which non-`input` roots are real
-/// references, so the picker, the diagnostics and the read-arc synthesis all
-/// see one and the same set.
-fn guard_refs(src: &str) -> Vec<GuardRef> {
-    let legit: std::collections::HashSet<(String, String)> =
-        crate::compiler::rhai_scope::extract_qualified_refs(src)
-            .into_iter()
-            .map(|q| (q.node_id, q.field))
-            .collect();
-    let mut out = Vec::new();
-    for (root, segs, lit) in scan_dotted_refs(src) {
-        let referenced = format!("{root}.{}", segs.join("."));
-        if root == "input" {
-            out.push(GuardRef {
-                root: RefRoot::Input,
-                segs,
-                lit,
-                referenced,
-            });
-        } else if legit.contains(&(root.clone(), segs[0].clone())) {
-            out.push(GuardRef {
-                root: RefRoot::Qualified(root),
-                segs,
-                lit,
-                referenced,
-            });
-        }
-        // else: a Rhai local / keyword / string / comment — not scope.
-    }
-    out
-}
-
-/// Outcome of resolving one [`GuardRef`] against the borrow-reachable model.
-enum RefResolution {
-    /// Stays on the inbound control token — no read-arc.
-    Control,
-    /// Borrowed from an upstream parked producer's `p_{id}_data`. Loop counters
-    /// resolve here too: their counter lives in a parked `p_<loop>_data` place
-    /// keyed flat (`{iteration: N}`), so the standard read-arc synthesis
-    /// rewrites `<slug>.iteration` to `d_<slug>.iteration` like any other
-    /// producer borrow.
-    Borrow {
-        producer_id: String,
-        producer_path: String,
-        producer_label: String,
-    },
-    /// Nothing the compiler can bind (non-control `input.*`, unknown slug,
-    /// non-upstream / non-parked producer, or unknown field).
-    Unresolved,
-}
-
-/// The single resolver shared by `reachable_scope`, `check_guard` and
-/// `guard_readarc_plan` — the picker offers exactly what this binds, and no
-/// diagnostic contradicts it.
-///
-/// **Why a second resolver exists ([`resolve_backend_ref`])**: this function
-/// takes a structured [`GuardRef`] AST (parsed from Rhai source by
-/// [`guard_refs`]) plus the consumer node's full in/out shape context, and
-/// returns a [`RefResolution`] discriminated by whether the ref stays on
-/// the control token, borrows from a parked producer, or is unbindable.
-/// Backend planners (LLM, Kreuzberg, AutomatedStep) author refs as plain
-/// `{{slug.field}}` placeholder text, not Rhai expressions — they go
-/// through [`resolve_backend_ref`] which takes raw `(slug, attr)` strings
-/// and returns the producer node id + field kind for staging. The
-/// validation logic (upstream position, parked producer, field exists) is
-/// the same; the two entry points differ only in input shape and what they
-/// return to the caller. Don't try to unify the signatures — guard refs
-/// need the full shape context to decide control vs. borrow, while backend
-/// refs only need to verify "this exists and is upstream."
-fn resolve_ref(
-    gref: &GuardRef,
-    consumer: &WorkflowNode,
-    slugs: &SlugIndex,
-    graph: &WorkflowGraph,
-    in_shape: Option<&TokenShape>,
-    node_out: &BTreeMap<String, TokenShape>,
-    pos: &BTreeMap<String, usize>,
-) -> RefResolution {
-    match &gref.root {
-        RefRoot::Input => {
-            let full = format!("input.{}", gref.segs.join("."));
-            if is_control_leaf(&full)
-                || in_shape
-                    .map(|s| s.resolve(&gref.segs).is_some())
-                    .unwrap_or(false)
-            {
-                RefResolution::Control
-            } else {
-                // Borrowed data must be qualified `<slug>.<field>` — a bare
-                // `input.<field>` that no longer rides the control token is
-                // unbindable (clean-cut: no legacy nearest-wins fallback).
-                RefResolution::Unresolved
-            }
-        }
-        RefRoot::Qualified(root) => {
-            let Some(prod_id) = slugs.node_for(root).map(str::to_string) else {
-                return RefResolution::Unresolved;
-            };
-            // Loop producers store their declared counter in a *parked*
-            // `p_{id}_data` place — the workflow token is left untouched (see
-            // `lower_loop`). Resolution returns a regular [`Borrow`] so the
-            // standard (c) read-arc synthesis pipeline handles the rewrite:
-            // `<slug>.iteration` → `d_<slug>.iteration`, read-arc on
-            // `p_<slug>_data`.
-            //
-            // The parked counter survives any body — including an
-            // AutomatedStep whose executor envelope strips the workflow token.
-            // Loop's own continue/exit guards are pre-wired in `lower_loop`
-            // (their input port `d_<slug>` is already there, so the (c) pass
-            // skips them via the "any arc to this place" check).
-            //
-            // out_shape still nests the iteration under `<slug>` (so the
-            // picker/`reachable_scope` keep showing `<slug>.iteration`); we
-            // strip the slug for the parked producer_path because the parked
-            // token stores `{ iteration: N }` flat — see `lower_loop`'s
-            // `t_<id>_enter` logic.
-            if is_loop_node(graph, &prod_id) {
-                if gref.segs.is_empty() {
-                    return RefResolution::Unresolved;
-                }
-                let Some(shape) = node_out.get(&prod_id) else {
-                    return RefResolution::Unresolved;
-                };
-                let mut full: Vec<String> = vec![root.clone()];
-                full.extend(gref.segs.iter().cloned());
-                if shape.resolve(&full).is_none() {
-                    return RefResolution::Unresolved;
-                }
-                let prov = shape
-                    .find_by_leaf(&gref.segs[gref.segs.len() - 1])
-                    .map(|(_, _, p)| p.node_label)
-                    .unwrap_or_else(|| "loop".to_string());
-                return RefResolution::Borrow {
-                    producer_id: prod_id,
-                    producer_path: gref.segs.join("."),
-                    producer_label: prov,
-                };
-            }
-            // Parked-producer borrows must reach a *strictly upstream* node
-            // and can't self-reference (a producer can't read its own future
-            // output).
-            if prod_id == consumer.id {
-                return RefResolution::Unresolved;
-            }
-            let up = pos.get(&prod_id).copied().unwrap_or(usize::MAX);
-            let me = pos.get(&consumer.id).copied().unwrap_or(0);
-            if up >= me {
-                return RefResolution::Unresolved;
-            }
-            if !is_parked_producer(graph, &prod_id) {
-                return RefResolution::Unresolved;
-            }
-            let Some(shape) = node_out.get(&prod_id) else {
-                return RefResolution::Unresolved;
-            };
-            // The author writes the simple producer leaf; map it to the
-            // physical path inside that producer's parked token (e.g. a
-            // human-task field lives under `data.`), then append any deeper
-            // sub-path the author addressed. Keeps `producer_path` — and so
-            // the synthesized read-arc — byte-identical to today.
-            let Some((phys, _ty, prov)) = shape.find_by_leaf(&gref.segs[0]) else {
-                return RefResolution::Unresolved;
-            };
-            let mut producer_path = phys;
-            for extra in &gref.segs[1..] {
-                producer_path.push('.');
-                producer_path.push_str(extra);
-            }
-            RefResolution::Borrow {
-                producer_id: prod_id,
-                producer_path,
-                producer_label: prov.node_label,
-            }
-        }
-    }
-}
-
-/// Borrow-reachable scope at a node: exactly the references the compiler
-/// (`check_guard` / `guard_readarc_plan`) resolves — (1) every leaf still on
-/// the node's own inbound control token (typed `input.<path>`, no read-arc),
-/// plus (2) every leaf a strictly-upstream *parked producer* owns, typed
-/// `<slug>.<field>` and attributed to its real producer **by provenance** (not
-/// nearest-wins): distinct producers of the same key become distinct paths
-/// (`review.amount` vs `compliance.amount`), and a nearer non-parked node can
-/// never mask a farther parked one.
-fn reachable_scope(
-    node: &WorkflowNode,
-    graph: &WorkflowGraph,
-    node_in: &BTreeMap<String, TokenShape>,
-    node_out: &BTreeMap<String, TokenShape>,
-    order: &[petgraph::graph::NodeIndex],
-    wg: &WorkflowDiGraph,
-    slugs: &SlugIndex,
-) -> Vec<ScopeEntry> {
-    let mut by_path: BTreeMap<String, ScopeEntry> = BTreeMap::new();
-
-    // (1) Genuinely control-token-resident — Start fields before any task,
-    //     the slim control keys (`_*`, `task_id`, `status`). A leaf that
-    //     *rides the token* but is owned by a parked producer (a forwarded
-    //     human-task / automated field) is NOT offered here as the deep
-    //     `input.<envelope.path>` — it is the qualified `<slug>.<field>` in
-    //     phase (2), per spec §2 ("the picker emits the qualified form for
-    //     everything borrowed").
-    if let Some(in_shape) = node_in.get(&node.id) {
-        let mut leaves = Vec::new();
-        collect_leaves(in_shape, "", None, &mut leaves);
-        for (dotted, ty, prov) in leaves {
-            // Classify by the *top-level* key — what `is_control_leaf` and
-            // `is_parked_producer` reason about — not the deepest segment.
-            let head = dotted.split('.').next().unwrap_or(&dotted);
-            let is_ctrl = is_control_leaf(&format!("input.{head}"));
-            if !is_ctrl && is_parked_producer(graph, &prov.node_id) {
-                continue; // borrowed data on the token → qualified in (2)
-            }
-            // Genuine control / identity keys (`_*`, `task_id`, `status`)
-            // ride the slim control token, not a business producer. Group
-            // them under a synthetic "Process" bucket instead of
-            // mis-attributing them to whichever node last forwarded the
-            // token (the `input.status`-under-Extract-Data bug).
-            let (producer_node, producer_label) = if is_ctrl {
-                (String::new(), "Process".to_string())
-            } else {
-                (prov.node_id, prov.node_label)
-            };
-            by_path
-                .entry(format!("input.{dotted}"))
-                .or_insert(ScopeEntry {
-                    path: format!("input.{dotted}"),
-                    ty,
-                    producer_node,
-                    producer_label,
-                    note: prov.note,
-                });
-        }
-    }
-
-    // (2) Borrow-reachable — every leaf a strictly-upstream parked producer
-    //     owns, attributed by provenance (the true owner). Iterating all
-    //     upstream node_outs and keying off provenance means a forwarded copy
-    //     dedupes back to its owner and a non-parked producer of the same key
-    //     simply never qualifies.
-    let pos = topo_pos(order, wg);
-    if let Some(self_pos) = pos.get(&node.id).copied() {
-        for ni in order.iter() {
-            let up = *wg.dag.node_weight(*ni).unwrap();
-            if pos.get(&up.id).copied().unwrap_or(usize::MAX) >= self_pos {
-                continue;
-            }
-            let Some(shape) = node_out.get(&up.id) else {
-                continue;
-            };
-            let mut leaves = Vec::new();
-            collect_leaves(shape, "", None, &mut leaves);
-            for (dotted, ty, prov) in leaves {
-                let owner = prov.node_id.clone();
-                if owner == node.id || !is_parked_producer(graph, &owner) {
-                    continue;
-                }
-                // Preserve the *full* dotted path — anchored containers (File
-                // envelopes) emit both the container leaf (`document`) and
-                // nested subkey leaves (`document.url`, `.filename`, …), and
-                // truncating to the last segment would (a) drop the container
-                // leaf entirely and (b) misattribute `document.url` to a
-                // nonexistent `start.url`. `is_control_leaf` is already
-                // head-aware, so it does the right thing on multi-segment input.
-                if is_control_leaf(&format!("input.{dotted}")) {
-                    continue; // identity/routing — slim control token
-                }
-                let slug = slugs.slug_for(&owner).unwrap_or(&owner).to_string();
-                let path = format!("{slug}.{dotted}");
-                by_path.entry(path.clone()).or_insert(ScopeEntry {
-                    path,
-                    ty,
-                    producer_node: owner,
-                    producer_label: prov.node_label,
-                    note: prov.note,
-                });
-            }
-        }
-    }
-
-    by_path.into_values().collect()
-}
-
-#[allow(clippy::too_many_arguments)]
-fn check_guard(
-    node: &WorkflowNode,
-    guard: &str,
-    slugs: &SlugIndex,
-    graph: &WorkflowGraph,
-    in_shape: &TokenShape,
-    node_out: &BTreeMap<String, TokenShape>,
-    pos: &BTreeMap<String, usize>,
-    out: &mut Vec<ShapeDiagnostic>,
-) {
-    for gref in guard_refs(guard) {
-        match resolve_ref(&gref, node, slugs, graph, Some(in_shape), node_out, pos) {
-            RefResolution::Control => {
-                if let (Some((TokenShape::Scalar(ty), _)), Some(lit)) =
-                    (in_shape.resolve(&gref.segs), &gref.lit)
-                {
-                    if !scalar_satisfies(ty, lit) {
-                        out.push(ShapeDiagnostic::GuardTypeMismatch {
-                            node_id: node.id.clone(),
-                            node_label: node.data.label().to_string(),
-                            guard: guard.to_string(),
-                            referenced: gref.referenced.clone(),
-                            found: ty.label().to_string(),
-                            note: format!("compared against a {} literal", lit.label()),
-                        });
-                    }
-                }
-            }
-            RefResolution::Borrow {
-                producer_id,
-                producer_path,
-                ..
-            } => {
-                // Opportunistic scalar/comparison type check on the resolved
-                // producer field (same as the control branch, one hop away).
-                if let (Some(shape), Some(lit)) = (node_out.get(&producer_id), &gref.lit) {
-                    let segs: Vec<String> =
-                        producer_path.split('.').map(str::to_string).collect();
-                    if let Some((TokenShape::Scalar(ty), _)) = shape.resolve(&segs) {
-                        if !scalar_satisfies(ty, lit) {
-                            out.push(ShapeDiagnostic::GuardTypeMismatch {
-                                node_id: node.id.clone(),
-                                node_label: node.data.label().to_string(),
-                                guard: guard.to_string(),
-                                referenced: gref.referenced.clone(),
-                                found: ty.label().to_string(),
-                                note: format!("compared against a {} literal", lit.label()),
-                            });
-                        }
-                    }
-                }
-            }
-            RefResolution::Unresolved => {
-                out.push(ShapeDiagnostic::UnresolvedGuardPath {
-                    node_id: node.id.clone(),
-                    node_label: node.data.label().to_string(),
-                    guard: guard.to_string(),
-                    referenced: gref.referenced.clone(),
-                });
-            }
-        }
-    }
-}
 
 // ─── Tiny guard expression scanner ──────────────────────────────────────────
 //
@@ -1621,14 +1224,14 @@ fn check_guard(
 // check. This is a deliberately small scanner — not a Rhai parser.
 
 #[derive(Debug, Clone)]
-enum LitTy {
+pub(crate) enum LitTy {
     Number,
     Bool,
     Str,
 }
 
 impl LitTy {
-    fn label(&self) -> &'static str {
+    pub(crate) fn label(&self) -> &'static str {
         match self {
             LitTy::Number => "number",
             LitTy::Bool => "bool",
@@ -1637,7 +1240,7 @@ impl LitTy {
     }
 }
 
-fn scalar_satisfies(ty: &ScalarTy, lit: &LitTy) -> bool {
+pub(crate) fn scalar_satisfies(ty: &ScalarTy, lit: &LitTy) -> bool {
     matches!(
         (ty, lit),
         (ScalarTy::Number, LitTy::Number)
@@ -1655,7 +1258,7 @@ fn scalar_satisfies(ty: &ScalarTy, lit: &LitTy) -> bool {
 /// This is the single scanner feeding `guard_refs` (and through it
 /// `reachable_scope`, `check_guard` and `guard_readarc_plan`) so the picker,
 /// the read-arc synthesis and the diagnostics can never disagree.
-fn scan_dotted_refs(src: &str) -> Vec<(String, Vec<String>, Option<LitTy>)> {
+pub(crate) fn scan_dotted_refs(src: &str) -> Vec<(String, Vec<String>, Option<LitTy>)> {
     let bytes: Vec<char> = src.chars().collect();
     let mut i = 0;
     let mut out = Vec::new();
@@ -1900,7 +1503,7 @@ pub fn surface_types(graph: &WorkflowGraph) -> TypeSurface {
 
 /// A control-token field = identity / routing only (`_`-prefixed metadata,
 /// loop counter, plus correlation/outcome). Everything else is data.
-fn is_control_leaf(path: &str) -> bool {
+pub(crate) fn is_control_leaf(path: &str) -> bool {
     // path looks like `input.<seg>...`
     let seg = path.strip_prefix("input.").unwrap_or(path);
     let head = seg.split('.').next().unwrap_or(seg);
@@ -1959,599 +1562,30 @@ pub fn node_input_field_kinds(
     Ok(out)
 }
 
-/// One guard reference that must be lowered to a physical read-arc into a
-/// producer's parked data place. The compiler-as-borrow-checker output.
-#[derive(Debug)]
-pub(crate) struct ReadArcBind {
-    /// Node whose Decision/Loop guard holds the reference.
-    pub consumer_node_id: String,
-    /// Literal text in the guard, e.g. `input.invoice_amount`.
-    pub referenced: String,
-    /// Data-yielding node that owns the field (its `p_{producer}_data`).
-    pub producer_node: String,
-    /// Path within that producer's parked token, e.g. `data.invoice_amount`.
-    pub producer_path: String,
-}
+// ─── Borrow planners (moved) ─────────────────────────────────────────────────
+// `ReadArcBind`, `guard_readarc_plan`, `AutomatedStepDataBorrow`,
+// `automated_step_borrow_plan`, `AutomatedStepResourceBorrow`,
+// `automated_step_resource_borrow_plan`, `HumanTaskDataBorrow`,
+// `human_task_borrow_plan`, and `resolve_backend_ref` live under
+// `crate::compiler::borrow::planners`. Re-exported here so external callers
+// (notably `crate::compiler::validate`) keep working with the same path.
 
-/// For every Decision/Loop guard, resolve each non-control `input.<path>`
-/// reference to the parked data place that owns it (via shape provenance).
-/// This is the compiler playing borrow-checker: it proves which `let`-owned
-/// data token holds the value and emits the `&`-borrow plan. A reference that
-/// no upstream data-yielding node produces *and* isn't on the pre-yield
-/// control token is a hard `CompileError`.
-pub(crate) fn guard_readarc_plan(
-    graph: &WorkflowGraph,
-) -> Result<Vec<ReadArcBind>, CompileError> {
-    let report = analyze(graph)?;
-    let BorrowContext { pos, slugs, .. } = BorrowContext::build(graph)?;
-    let mut binds = Vec::new();
+// `guard_readarc_plan` is consumed by `crate::compiler::validate` via this
+// re-export — kept in non-test builds. The other planners are referenced
+// only by this module's own tests; gate them on `cfg(test)` to avoid
+// dead-import warnings in non-test builds.
+pub(crate) use crate::compiler::borrow::planners::guard::guard_readarc_plan;
 
-    for node in &graph.nodes {
-        let guards: Vec<String> = match &node.data {
-            WorkflowNodeData::Decision { conditions, .. } => conditions
-                .iter()
-                .filter(|c| !c.guard.trim().is_empty())
-                .map(|c| c.guard.clone())
-                .collect(),
-            WorkflowNodeData::Loop { loop_condition, .. }
-                if !loop_condition.trim().is_empty() =>
-            {
-                vec![loop_condition.clone()]
-            }
-            // Result-mapping expressions (End/Failure, added on main)
-            // reference `input.<path>` in transition logic — same shape
-            // resolution + read-arc synthesis as guards.
-            WorkflowNodeData::End { result_mapping, .. } => result_mapping
-                .iter()
-                .map(|m| m.expression.clone())
-                .filter(|s| !s.trim().is_empty())
-                .collect(),
-            WorkflowNodeData::Failure {
-                error_result_mapping,
-                ..
-            } => error_result_mapping
-                .iter()
-                .map(|m| m.expression.clone())
-                .filter(|s| !s.trim().is_empty())
-                .collect(),
-            _ => continue,
-        };
-        let in_shape = report.node_in.get(&node.id);
-        for guard in &guards {
-            for gref in guard_refs(guard) {
-                match resolve_ref(
-                    &gref,
-                    node,
-                    &slugs,
-                    graph,
-                    in_shape,
-                    &report.node_out,
-                    &pos,
-                ) {
-                    // Control-resident — stays on the slim control token, no
-                    // read-arc.
-                    RefResolution::Control => {}
-                    // Borrowed — synthesize the read-arc into the owner's
-                    // parked data place. `referenced` is the exact source
-                    // substring so `apply_control_data_foundation`'s
-                    // string-replace targets it.
-                    RefResolution::Borrow {
-                        producer_id,
-                        producer_path,
-                        ..
-                    } => binds.push(ReadArcBind {
-                        consumer_node_id: node.id.clone(),
-                        referenced: gref.referenced.clone(),
-                        producer_node: producer_id,
-                        producer_path,
-                    }),
-                    // Unbindable — hard error (publish blocks; the editor sees
-                    // the matching `UnresolvedGuardPath` via `analyze`).
-                    RefResolution::Unresolved => {
-                        let available = report
-                            .scopes
-                            .get(&node.id)
-                            .map(|v| v.iter().map(|e| e.path.clone()).collect())
-                            .unwrap_or_default();
-                        return Err(CompileError::GuardUnresolved {
-                            node_id: node.id.clone(),
-                            identifier: gref.referenced.clone(),
-                            available,
-                        });
-                    }
-                }
-            }
-        }
-    }
-    Ok(binds)
-}
-
-/// One Python AutomatedStep borrow into an upstream parked place.
-///
-/// Distinct from [`ReadArcBind`] (which is for Rhai-source guards on
-/// Decision/Loop/End/Failure transitions): the AutomatedStep doesn't
-/// reference upstream data in Rhai — it references it from Python source
-/// (e.g. `a = review.invoice_amount`). The lowering target is also
-/// different: instead of string-replacing transition source, the
-/// `prepare` transition's `job_inputs` list is extended so the runtime
-/// stages the producer's full parked envelope as `<slug>.json` and the
-/// Python runner exposes `<slug>` as a module global namespace.
-///
-/// One borrow record emitted by the unified [`automated_step_borrow_plan`].
-/// Two variants — `Envelope` (whole-`<slug>.json` stage, Python + SMTP)
-/// and `PerField` (per-field stage, LLM + Kreuzberg). The variant is
-/// chosen by the backend decl's `borrow_shape` and decides the
-/// downstream `BorrowResolution` the apply step dispatches on.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum AutomatedStepDataBorrow {
-    /// Whole-envelope stage. One per `(consumer, producer)` regardless
-    /// of how many fields the consumer's source reads off the slug —
-    /// the runtime stages the producer's parked envelope once and the
-    /// consumer's runtime (Python AccessibleDict, SMTP Tera context)
-    /// surfaces fields client-side.
-    Envelope {
-        consumer_node_id: String,
-        slug: String,
-        producer_node: String,
-    },
-    /// Per-field stage. One per `(consumer, slug, attr, site)`. The
-    /// apply step (`apply_backend_borrows`) dedupes by `(slug, attr)`
-    /// before staging.
-    PerField {
-        consumer_node_id: String,
-        slug: String,
-        producer_node: String,
-        attr: String,
-        /// True when the ref site needs a filesystem path
-        /// (Kreuzberg `file`/`files[i]`, LLM `images[].path`). Drives
-        /// `{{input_path:NAME}}` vs `{{input:NAME}}` rewrite + Raw vs
-        /// StoragePath staging dispatch.
-        is_path_site: bool,
-        /// Resolved kind of `<attr>` on the producer's data port. Used
-        /// by `apply_backend_borrows` to pick Raw vs StoragePath
-        /// staging when `is_path_site` is true.
-        producer_field_kind: crate::models::template::FieldKind,
-    },
-}
-
-impl AutomatedStepDataBorrow {
-    pub fn consumer_node_id(&self) -> &str {
-        match self {
-            Self::Envelope {
-                consumer_node_id, ..
-            } => consumer_node_id,
-            Self::PerField {
-                consumer_node_id, ..
-            } => consumer_node_id,
-        }
-    }
-    pub fn slug(&self) -> &str {
-        match self {
-            Self::Envelope { slug, .. } => slug,
-            Self::PerField { slug, .. } => slug,
-        }
-    }
-    pub fn producer_node(&self) -> &str {
-        match self {
-            Self::Envelope { producer_node, .. } => producer_node,
-            Self::PerField { producer_node, .. } => producer_node,
-        }
-    }
-}
-
-/// Unified borrow planner across every AutomatedStep backend. Replaces
-/// the per-backend `llm_borrow_plan` / `kreuzberg_borrow_plan` that used
-/// to be sibling functions in this module. **Pure registry-driven** —
-/// every AutomatedStep backend ships a decl in `crate::backends`; nodes
-/// whose backend has no decl simply produce no borrows.
-///
-/// Per node:
-/// 1. Look up the backend's decl in `crate::backends`. Skip if absent or
-///    `ref_scanner` is `None`.
-/// 2. Run `decl.ref_scanner(ctx)` to discover `<head>.<attr>` accesses
-///    with site context.
-/// 3. For each emitted [`crate::backends::RefSite`]:
-///    - `BorrowShape::Envelope`: silent-skip on unresolved heads,
-///      non-upstream slugs, non-parked producers. Matches the historical
-///      Python/SMTP behavior — Python source legitimately references
-///      non-slug names (`os.path`, locals), Tera templates can use
-///      built-ins.
-///    - `BorrowShape::PerField`: call [`resolve_backend_ref`] which
-///      hard-errors on every unresolved head — LLM/Kreuzberg grammar is
-///      unambiguous, so unknown heads are typos.
-///    - For PerField, call `decl.validate_ref_kind(&ctx)` once per
-///      resolved ref. LLM enforces `images[].path → File` and
-///      content-sites → not-File. Errors propagate.
-/// 4. Emit:
-///    - `Envelope` borrows: dedup by `(consumer, producer)` so only one
-///      `<slug>.json` is staged per pair.
-///    - `PerField` borrows: keep every `(consumer, slug, attr, site)`;
-///      the apply step dedupes by `(slug, attr)`.
-pub(crate) fn automated_step_borrow_plan(
-    graph: &WorkflowGraph,
-    inline_sources: &std::collections::HashMap<String, std::collections::HashMap<String, String>>,
-) -> Result<Vec<AutomatedStepDataBorrow>, CompileError> {
-    use crate::backends::BorrowShape;
-
-    let BorrowContext { pos, slugs, .. } = BorrowContext::build(graph)?;
-
-    let mut out: Vec<AutomatedStepDataBorrow> = Vec::new();
-    let mut envelope_seen: std::collections::BTreeSet<(String, String)> =
-        std::collections::BTreeSet::new();
-
-    for node in &graph.nodes {
-        let WorkflowNodeData::AutomatedStep { execution_spec, .. } = &node.data else {
-            continue;
-        };
-
-        let Some(decl) = crate::backends::lookup(execution_spec.backend_type) else {
-            continue;
-        };
-        let Some(scanner) = decl.ref_scanner else {
-            continue;
-        };
-        let ctx = crate::backends::ScanCtx {
-            config: &execution_spec.config,
-            node_id: &node.id,
-            inline_sources,
-            entrypoint: execution_spec.entrypoint.as_deref(),
-        };
-        let refs = scanner(&ctx);
-
-        for r in refs {
-            match decl.borrow_shape {
-                BorrowShape::Envelope => {
-                    let Some(prod_id) = slugs.node_for(&r.head).map(str::to_string) else {
-                        continue;
-                    };
-                    if prod_id == node.id {
-                        continue;
-                    }
-                    let up = pos.get(&prod_id).copied().unwrap_or(usize::MAX);
-                    let me = pos.get(&node.id).copied().unwrap_or(0);
-                    if up >= me {
-                        continue;
-                    }
-                    if !is_parked_producer(graph, &prod_id) {
-                        continue;
-                    }
-                    let key = (node.id.clone(), prod_id.clone());
-                    if !envelope_seen.insert(key) {
-                        continue;
-                    }
-                    out.push(AutomatedStepDataBorrow::Envelope {
-                        consumer_node_id: node.id.clone(),
-                        slug: r.head,
-                        producer_node: prod_id,
-                    });
-                }
-                BorrowShape::PerField => {
-                    let (prod_id, kind) = resolve_backend_ref(
-                        graph,
-                        &slugs,
-                        &pos,
-                        &node.id,
-                        decl.executor_wire_name,
-                        &r.site_label,
-                        &r.head,
-                        &r.attr,
-                    )?;
-                    let kind_ctx = crate::backends::RefKindCtx {
-                        node_id: &node.id,
-                        site_label: &r.site_label,
-                        is_path_site: r.is_path_site,
-                        slug: &r.head,
-                        attr: &r.attr,
-                        kind,
-                    };
-                    (decl.validate_ref_kind)(&kind_ctx)?;
-                    out.push(AutomatedStepDataBorrow::PerField {
-                        consumer_node_id: node.id.clone(),
-                        slug: r.head,
-                        producer_node: prod_id,
-                        attr: r.attr,
-                        is_path_site: r.is_path_site,
-                        producer_field_kind: kind,
-                    });
-                }
-            }
-        }
-    }
-    Ok(out)
-}
-
-/// One resolved Python `<name>.<attr>` access where `<name>` is a known
-/// workspace resource. Direct sibling of [`AutomatedStepDataBorrow`] — same
-/// scanner input ([`extract_python_refs`]), but the head doesn't resolve to
-/// a producer slug; it resolves to a workspace resource the caller
-/// (publish handler) discovered before invoking the compiler.
-///
-/// Unlike `AutomatedStepDataBorrow`, there is **no upstream producer**:
-/// the resource envelope is materialized at publish time by the resolver
-/// and spliced into the AIR. The apply step for this borrow emits a
-/// `job_inputs.push` snippet that reads from the spliced `__resources` Rhai
-/// map; it does NOT call `wire_read_arc`.
-///
-/// One borrow per `(consumer, name)` pair regardless of how many fields
-/// the Python source reads off the name — the runner stages the whole
-/// envelope as `<name>.json` and the Python `AccessibleDict` exposes the
-/// fields client-side.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct AutomatedStepResourceBorrow {
-    /// Python AutomatedStep that authors the borrow.
-    pub consumer_node_id: String,
-    /// Workspace-known resource name (`local_pg` in `local_pg.host`). Also
-    /// the staged filename stem (`local_pg.json`) and the Python global.
-    pub name: String,
-    /// Pinned resource_id — rename-safe across publishes.
-    pub resource_id: uuid::Uuid,
-    /// Resource type name (`postgres`, `openai`, …). Carried through to
-    /// downstream consumers (`.pyi` generation, telemetry).
-    pub type_name: String,
-    /// Latest version at publish time.
-    pub latest_version: i32,
-}
-
-/// Scan every Python `AutomatedStep`'s entrypoint for `<name>.<attr>`
-/// accesses whose `<name>` matches an entry in `known`. Returns one
-/// [`AutomatedStepResourceBorrow`] per `(consumer, name)` pair.
-///
-/// Same lexical scanner as [`automated_step_borrow_plan`]; the discrimination
-/// happens via [`crate::compiler::resource_refs::is_resource_name`] rather
-/// than the slug index. A `<head>.<attr>` access where the head matches
-/// *both* a slug and a known resource is impossible because
-/// [`validate_resource_refs`] rejects name/slug collisions at compile time
-/// — see [`CompileError::ResourceAliasCollidesWithSlug`].
-pub(crate) fn automated_step_resource_borrow_plan(
-    graph: &WorkflowGraph,
-    inline_sources: &std::collections::HashMap<String, std::collections::HashMap<String, String>>,
-    known: &crate::compiler::resource_refs::KnownResources,
-) -> Result<Vec<AutomatedStepResourceBorrow>, CompileError> {
-    use crate::backends::ScanCtx;
-    use crate::compiler::resource_binding::collect_resource_heads;
-
-    if known.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let mut out: Vec<AutomatedStepResourceBorrow> = Vec::new();
-    let mut seen: std::collections::BTreeSet<(String, String)> = std::collections::BTreeSet::new();
-
-    for node in &graph.nodes {
-        let WorkflowNodeData::AutomatedStep { execution_spec, .. } = &node.data else {
-            continue;
-        };
-
-        let ctx = ScanCtx {
-            config: &execution_spec.config,
-            node_id: &node.id,
-            inline_sources,
-            entrypoint: execution_spec.entrypoint.as_deref(),
-        };
-        let heads = collect_resource_heads(&ctx, execution_spec.backend_type);
-
-        for head in heads {
-            let Some(info) = known.get(&head) else {
-                continue;
-            };
-            let key = (node.id.clone(), head.clone());
-            if !seen.insert(key) {
-                continue;
-            }
-            out.push(AutomatedStepResourceBorrow {
-                consumer_node_id: node.id.clone(),
-                name: head,
-                resource_id: info.id,
-                type_name: info.type_name.clone(),
-                latest_version: info.latest_version,
-            });
-        }
-    }
-    Ok(out)
-}
-
-/// One slug-namespaced `{{ <slug>.<field> }}` placeholder access on a
-/// HumanTask, resolved into a Petri read-arc against the upstream parked
-/// place. Direct sibling of [`AutomatedStepDataBorrow`] — same lifecycle,
-/// same `(consumer, producer)` dedupe key, same downstream rewrite
-/// shape. The runtime difference: instead of staging the producer
-/// envelope as `<slug>.json`, the compiler's post-merge rewrite swaps
-/// `__pluck(input, ["<slug>", ...])` → `__pluck(d_<producer>, [...])`
-/// so the existing interpolation Rhai resolves against the read-arc-
-/// bound parked envelope.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct HumanTaskDataBorrow {
-    /// HumanTask node that authors the `{{ <slug>.<field> }}` reference.
-    pub consumer_node_id: String,
-    /// Slug the author wrote (`start` in `{{ start.invoice_id }}`).
-    pub slug: String,
-    /// Resolved upstream node id whose parked data the borrow reaches.
-    pub producer_node: String,
-}
-
-/// For every HumanTask, scan its authored strings (title / instructions /
-/// step blocks) and resolve every `{{ <slug>.<field> }}` placeholder into
-/// an upstream parked place. Returns one [`HumanTaskDataBorrow`] per
-/// `(consumer, producer)` pair.
-///
-/// Best-effort: a head identifier that isn't a known graph slug is
-/// silently ignored (could be a typo or — at the wire-edge — a
-/// legitimate root-level field on the slim control token, which
-/// `interpolate_to_rhai_expr` already plucks against). A slug whose
-/// producer isn't strictly upstream is likewise ignored. Self-references
-/// (`<slug>` resolving back to the HumanTask itself) skip.
-pub(crate) fn human_task_borrow_plan(
-    graph: &WorkflowGraph,
-) -> Result<Vec<HumanTaskDataBorrow>, CompileError> {
-    let BorrowContext { pos, slugs, .. } = BorrowContext::build(graph)?;
-
-    let mut out: Vec<HumanTaskDataBorrow> = Vec::new();
-    let mut seen: std::collections::BTreeSet<(String, String)> = std::collections::BTreeSet::new();
-
-    for node in &graph.nodes {
-        if !matches!(node.data, WorkflowNodeData::HumanTask { .. }) {
-            continue;
-        }
-        for r in crate::compiler::human_task_refs::extract_human_task_refs(node) {
-            let Some(prod_id) = slugs.node_for(&r.head).map(str::to_string) else {
-                continue;
-            };
-            if prod_id == node.id {
-                continue;
-            }
-            let up = pos.get(&prod_id).copied().unwrap_or(usize::MAX);
-            let me = pos.get(&node.id).copied().unwrap_or(0);
-            if up >= me {
-                continue;
-            }
-            if !is_parked_producer(graph, &prod_id) {
-                continue;
-            }
-            let key = (node.id.clone(), prod_id.clone());
-            if !seen.insert(key) {
-                continue;
-            }
-            out.push(HumanTaskDataBorrow {
-                consumer_node_id: node.id.clone(),
-                slug: r.head,
-                producer_node: prod_id,
-            });
-        }
-    }
-    Ok(out)
-}
-
-// ──────────────────────────────────────────────────────────────────────
-// Backend ref resolution
-//
-// Shared `{{<slug>.<attr>}}` resolver. Used by the unified
-// `automated_step_borrow_plan` (registry-driven) for any backend whose
-// decl declares `BorrowShape::PerField` (LLM, Kreuzberg). Hard-errors on
-// unresolved slugs / non-upstream / non-parked / unknown attrs — the
-// `{{...}}` syntax is unambiguous, so any miss is a typo or contract
-// violation. Symmetric with Decision-guard semantics (`GuardUnresolved`).
-// ──────────────────────────────────────────────────────────────────────
-
-/// Resolve a `{{<slug>.<attr>}}` placeholder against the graph.
-///
-/// Returns the producer node id and the resolved field kind on its data
-/// port. Hard-errors on: unknown slug, slug not strictly upstream, slug
-/// not a parked producer, unknown field on the producer's port.
-///
-/// Counterpart to [`resolve_ref`] (which resolves Rhai-source guard refs).
-/// Both run the same upstream/parked/exists checks; this one takes raw
-/// `(slug, attr)` strings (the picker emits them flat) and skips the
-/// control-token discrimination that guards need.
-fn resolve_backend_ref(
-    graph: &WorkflowGraph,
-    slugs: &SlugIndex,
-    pos: &BTreeMap<String, usize>,
-    consumer_id: &str,
-    backend_label: &str,
-    site_label: &str,
-    slug: &str,
-    attr: &str,
-) -> Result<(String, crate::models::template::FieldKind), CompileError> {
-    use crate::models::template::WorkflowNodeData;
-
-    // Unknown slug → BackendRefUnresolved (kind="slug").
-    let Some(prod_id) = slugs.node_for(slug).map(str::to_string) else {
-        return Err(CompileError::BackendRefUnresolved {
-            node_id: consumer_id.to_string(),
-            backend: backend_label.to_string(),
-            site: site_label.to_string(),
-            slug: slug.to_string(),
-            field: attr.to_string(),
-            kind: "slug".to_string(),
-            name: slug.to_string(),
-            available: slugs.all_slugs().into_iter().map(str::to_string).collect(),
-        });
-    };
-
-    if prod_id == consumer_id {
-        return Err(CompileError::BackendRefNotUpstream {
-            node_id: consumer_id.to_string(),
-            backend: backend_label.to_string(),
-            site: site_label.to_string(),
-            slug: slug.to_string(),
-            field: attr.to_string(),
-            producer_node_id: prod_id,
-        });
-    }
-
-    let up = pos.get(&prod_id).copied().unwrap_or(usize::MAX);
-    let me = pos.get(consumer_id).copied().unwrap_or(0);
-    if up >= me {
-        return Err(CompileError::BackendRefNotUpstream {
-            node_id: consumer_id.to_string(),
-            backend: backend_label.to_string(),
-            site: site_label.to_string(),
-            slug: slug.to_string(),
-            field: attr.to_string(),
-            producer_node_id: prod_id,
-        });
-    }
-
-    if !is_parked_producer(graph, &prod_id) {
-        return Err(CompileError::BackendRefNotUpstream {
-            node_id: consumer_id.to_string(),
-            backend: backend_label.to_string(),
-            site: site_label.to_string(),
-            slug: slug.to_string(),
-            field: attr.to_string(),
-            producer_node_id: prod_id,
-        });
-    }
-
-    // Resolve `<attr>` on the producer's data port (first output port,
-    // mirroring how interface.data_port is assigned in lowering).
-    let producer_node = graph
-        .nodes
-        .iter()
-        .find(|n| n.id == prod_id)
-        .ok_or_else(|| CompileError::Compilation(format!("producer node '{prod_id}' not found")))?;
-
-    let data_port = producer_node
-        .data
-        .output_ports()
-        .into_iter()
-        .next()
-        .ok_or_else(|| CompileError::BackendRefUnresolved {
-            node_id: consumer_id.to_string(),
-            backend: backend_label.to_string(),
-            site: site_label.to_string(),
-            slug: slug.to_string(),
-            field: attr.to_string(),
-            kind: "field".to_string(),
-            name: attr.to_string(),
-            available: vec![],
-        })?;
-
-    let Some(field) = data_port.fields.iter().find(|f| f.name == attr) else {
-        // Trigger nodes synthesize an empty pass-through port at the model
-        // level but their actual envelope shape is the resolved target
-        // port. Trigger borrows defer to `<slug>` as the whole envelope
-        // (single-segment placeholder), so unknown attrs on Trigger
-        // surface here. Mirror the rest of the planner: hard error.
-        return Err(CompileError::BackendRefUnresolved {
-            node_id: consumer_id.to_string(),
-            backend: backend_label.to_string(),
-            site: site_label.to_string(),
-            slug: slug.to_string(),
-            field: attr.to_string(),
-            kind: "field".to_string(),
-            name: attr.to_string(),
-            available: data_port.fields.iter().map(|f| f.name.clone()).collect(),
-        });
-    };
-
-    // Trigger producers carry a typed port at compile resolve time but
-    // their shape can change with retargeting — skip kind enforcement
-    // here. (Triggers are uncommon as direct borrow producers.)
-    let _ = matches!(producer_node.data, WorkflowNodeData::Trigger { .. });
-
-    Ok((prod_id, field.kind))
-}
+#[cfg(test)]
+pub(crate) use crate::compiler::borrow::planners::automated_step::{
+    automated_step_borrow_plan, AutomatedStepDataBorrow,
+};
+#[cfg(test)]
+pub(crate) use crate::compiler::borrow::planners::guard::ReadArcBind;
+#[cfg(test)]
+pub(crate) use crate::compiler::borrow::planners::human_task::human_task_borrow_plan;
+#[cfg(test)]
+pub(crate) use crate::compiler::borrow::planners::resource::automated_step_resource_borrow_plan;
 
 /// Per-node, per-slug field map — the picker model pivoted from a flat
 /// list to `slug → fields`. Drives the Python `.pyi` overlay's one
