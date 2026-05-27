@@ -65,126 +65,18 @@ export type PdfBlock = Extract<SchemaTaskBlockConfig, { type: 'pdf' }>;
 export type DownloadBlock = Extract<SchemaTaskBlockConfig, { type: 'download' }>;
 export type RepeaterBlockConfig = Extract<SchemaTaskBlockConfig, { type: 'repeater' }>;
 
-/** Node type metadata for the sidebar palette. */
-export type NodePaletteItem = {
-	type: WorkflowNodeType;
-	label: string;
-	description: string;
-	icon: string;
-	color: string;
-	maxInstances?: number; // e.g., Start = 1
-};
-
-export const NODE_PALETTE: NodePaletteItem[] = [
-	{
-		type: 'start',
-		label: 'Start',
-		description: 'Entry point of the workflow',
-		icon: 'play',
-		color: '#22c55e',
-		maxInstances: 1
-	},
-	{
-		type: 'end',
-		label: 'End',
-		description: 'Terminal state of the workflow',
-		icon: 'square',
-		color: '#ef4444'
-	},
-	{
-		type: 'human_task',
-		label: 'Human Task',
-		description: 'Form-based task for human operators',
-		icon: 'user',
-		color: '#3b82f6'
-	},
-	{
-		type: 'automated_step',
-		label: 'Automated Step',
-		description: 'Automated execution (Python, Docker, etc.)',
-		icon: 'cpu',
-		color: '#8b5cf6'
-	},
-	{
-		type: 'decision',
-		label: 'Decision',
-		description: 'Conditional branching based on data',
-		icon: 'git-branch',
-		color: '#f59e0b'
-	},
-	{
-		type: 'parallel_split',
-		label: 'Parallel Split',
-		description: 'Fan out to concurrent paths',
-		icon: 'git-fork',
-		color: '#06b6d4'
-	},
-	{
-		type: 'join',
-		label: 'Join',
-		description: 'Converge branches — wait for all, or fire on any (XOR-join)',
-		icon: 'git-merge',
-		color: '#06b6d4'
-	},
-	{
-		type: 'loop',
-		label: 'Loop',
-		description: 'Retry or iterate with conditions',
-		icon: 'repeat',
-		color: '#ec4899'
-	},
-	{
-		type: 'scope',
-		label: 'Scope',
-		description: 'Visual container for grouping nodes',
-		icon: 'group',
-		color: '#64748b'
-	},
-	{
-		type: 'phase_update',
-		label: 'Phase Update',
-		description: 'Mark a named phase on the process (within a named process)',
-		icon: 'flag',
-		color: '#0ea5a4'
-	},
-	{
-		type: 'progress_update',
-		label: 'Progress Update',
-		description: 'Set process progress fraction (within a named process)',
-		icon: 'gauge',
-		color: '#c026d3'
-	},
-	{
-		type: 'failure',
-		label: 'Failure',
-		description: 'Mark the process failed with a message (net continues)',
-		icon: 'octagon-x',
-		color: '#dc2626'
-	},
-	{
-		type: 'trigger',
-		label: 'Trigger',
-		description: 'Fires the workflow on cron, catalog, webhook, etc.',
-		icon: 'zap',
-		color: '#fbbf24'
-	},
-	{
-		type: 'sub_workflow',
-		label: 'Sub-workflow',
-		description: 'Call another template and return its typed result',
-		icon: 'workflow',
-		color: '#14b8a6'
-	},
-	{
-		type: 'agent',
-		label: 'Agent',
-		description: 'LLM that calls tagged child tools and loops until a stop condition',
-		icon: 'bot',
-		color: '#f97316'
-	}
-];
-
-/** Create default node data for a given type. */
+/**
+ * Create default node data for a given type.
+ *
+ * Kept frontend-side (not derived from `/api/v1/node-types`) because it
+ * constructs typed `WorkflowNodeData` objects with nested defaults — port
+ * shapes, default retry policy, default model ref, default trigger source.
+ * The palette fires this on every drag-drop, so a round-trip would visibly
+ * lag. The exhaustive `switch` is type-checked against the schema-derived
+ * `WorkflowNodeType` so a new variant is a compile error here too. Palette
+ * metadata (labels, descriptions, kind, protocol flags) flows from the
+ * registry via `node-registry.svelte.ts` + `node-palette-meta.ts`.
+ */
 export function createDefaultNodeData(type: WorkflowNodeType): SchemaWorkflowNodeData {
 	switch (type) {
 		case 'start':

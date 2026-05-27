@@ -9,6 +9,7 @@
 	import { auth } from '$lib/auth/store.svelte';
 	import { ensureAuthInitialized, requireSession } from '$lib/auth/guard';
 	import { loadBackends } from '$lib/editor/backend-registry.svelte';
+	import { loadNodeTypes } from '$lib/editor/node-registry.svelte';
 
 	let { children } = $props();
 
@@ -22,6 +23,10 @@
 		// default" resolves synchronously on first paint. Non-fatal: the
 		// hardcoded TS twin in automated-ports.ts is the fallback.
 		loadBackends().catch(() => { /* swallowed: TS twin remains */ });
+		// Same pattern for the node-type registry; palette renders empty
+		// until this resolves on first paint, which is acceptable since the
+		// /templates/[id]/edit route is the only place that uses it.
+		loadNodeTypes().catch(() => { /* swallowed */ });
 	});
 
 	async function signOut() {
