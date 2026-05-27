@@ -57,6 +57,16 @@
 		onadd({ type: 'download', downloads: [{ url: '', filename: '' }] });
 		open = false;
 	}
+
+	function addRepeater() {
+		onadd({
+			type: 'repeater',
+			items_ref: '',
+			fields: [],
+			output_slug: `repeater_${Date.now().toString(36)}`
+		});
+		open = false;
+	}
 </script>
 
 <div class="relative">
@@ -150,6 +160,15 @@
 				<!-- ui-allow: block-type swatch — no theme token for download/indigo identity -->
 				<span class="size-2.5 rounded-sm bg-indigo-400"></span>
 				Download
+			</button>
+			<button
+				type="button"
+				class="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-accent"
+				onclick={addRepeater}
+			>
+				<!-- ui-allow: block-type swatch — repeater identity uses violet -->
+				<span class="size-2.5 rounded-sm bg-violet-400"></span>
+				Repeater
 			</button>
 		</div>
 	{/if}
