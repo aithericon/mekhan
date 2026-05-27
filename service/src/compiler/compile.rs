@@ -37,10 +37,10 @@ fn derive_inline_sources(
                 InputSource::Raw { content } => {
                     inner.insert(name.clone(), content.clone());
                 }
-                InputSource::Inline { value } => {
-                    if let Value::String(s) = value {
-                        inner.insert(name.clone(), s.clone());
-                    }
+                InputSource::Inline {
+                    value: Value::String(s),
+                } => {
+                    inner.insert(name.clone(), s.clone());
                 }
                 _ => {}
             }
@@ -3208,7 +3208,7 @@ mod tests {
             .map(|p| p["id"].as_str().unwrap_or_default())
             .collect();
         assert!(
-            place_ids.iter().any(|p| *p == "p_q_query"),
+            place_ids.contains(&"p_q_query"),
             "missing engine-effect intermediate place p_q_query (places: {place_ids:?})"
         );
 

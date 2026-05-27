@@ -1,0 +1,6 @@
+# `CompileError` is ~192 B of structured diagnostic detail — slug names,
+# candidate lists, span info. Boxing it would buy nothing on the cold
+# compile-once-per-publish error path and would make every `Result<T,
+# CompileError>` less ergonomic. Threshold lifted just past CompileError's
+# size so the lint still flags genuinely-runaway enums.
+large-error-threshold = 256

@@ -46,8 +46,8 @@ pub static PYTHON_DECL: BackendDecl = BackendDecl {
     meta: &PYTHON_META,
     backend_type: ExecutionBackendType::Python,
     default_output_fields: DEFAULT_OUTPUT_FIELDS,
-    default_editor_config: default_editor_config,
-    validate: validate,
+    default_editor_config,
+    validate,
     ref_scanner: Some(ref_scanner),
     // Python resource refs are name-scanned out of the source by
     // `ref_scanner` (which emits both data-borrow and resource-borrow

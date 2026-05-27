@@ -43,7 +43,7 @@ pub async fn run(server: &str, chain_id: &str, directory: Option<&str>, format: 
         .await
         .context("template not found or invalid response")?;
 
-    let dir_name = directory.unwrap_or_else(|| info.name.as_str());
+    let dir_name = directory.unwrap_or(info.name.as_str());
     let dir = PathBuf::from(dir_name);
 
     if fs_ops::meta_path(&dir).exists() {

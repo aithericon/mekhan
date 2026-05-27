@@ -35,10 +35,10 @@ fn engine_url() -> String {
 
 /// Check if the petri-lab engine is reachable.
 async fn engine_available() -> bool {
-    match reqwest::get(format!("{}/api/nets/metadata", engine_url())).await {
-        Ok(resp) if resp.status().is_success() => true,
-        _ => false,
-    }
+    matches!(
+        reqwest::get(format!("{}/api/nets/metadata", engine_url())).await,
+        Ok(resp) if resp.status().is_success()
+    )
 }
 
 /// Simple Start → End workflow graph.

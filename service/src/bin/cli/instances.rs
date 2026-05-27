@@ -37,8 +37,8 @@ pub async fn run(server: &str, template_id: Option<&str>) -> Result<()> {
     }
 
     println!(
-        "{:<38}  {:<25}  {:<12}  {}",
-        "ID", "TEMPLATE", "STATUS", "CREATED"
+        "{:<38}  {:<25}  {:<12}  CREATED",
+        "ID", "TEMPLATE", "STATUS"
     );
     println!("{}", "-".repeat(90));
 

@@ -145,9 +145,7 @@ fn parse_repeater_ref_head_attr(raw: &str) -> Option<HumanTaskRef> {
     }
     // Attr ends at the first `.` (next segment) or `[` (wildcard / index).
     let after = &trimmed[dot + 1..];
-    let attr_end = after
-        .find(|c: char| c == '.' || c == '[')
-        .unwrap_or(after.len());
+    let attr_end = after.find(['.', '[']).unwrap_or(after.len());
     let attr = &after[..attr_end];
     if attr.is_empty() {
         return None;

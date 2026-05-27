@@ -463,23 +463,22 @@ impl State {
             // open row at iteration 0 implicitly.
             .unwrap_or(0);
 
-        if !self.rows.contains_key(&(owner.clone(), iter)) {
-            self.rows.insert(
-                (owner.clone(), iter),
-                StepExecutionRow {
-                    node_id: owner.clone(),
-                    iteration_index: iter,
-                    node_kind: lookups.kind_of(&owner),
-                    status: StepStatus::Pending,
-                    inputs: None,
-                    outputs: None,
-                    branch_taken: None,
-                    started_at: None,
-                    completed_at: None,
-                    error: None,
-                    last_sequence: 0,
-                },
-            );
+        if let std::collections::btree_map::Entry::Vacant(e) =
+            self.rows.entry((owner.clone(), iter))
+        {
+            e.insert(StepExecutionRow {
+                node_id: owner.clone(),
+                iteration_index: iter,
+                node_kind: lookups.kind_of(&owner),
+                status: StepStatus::Pending,
+                inputs: None,
+                outputs: None,
+                branch_taken: None,
+                started_at: None,
+                completed_at: None,
+                error: None,
+                last_sequence: 0,
+            });
             self.active_iter.insert(owner.clone(), iter);
             self.next_iter
                 .entry(owner.clone())
