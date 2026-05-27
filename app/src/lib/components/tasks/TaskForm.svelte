@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { TaskStep, TaskField } from '$lib/hpi/types';
 	import { BlockRenderer } from '$lib/hpi';
+	import RepeaterBlock from './RepeaterBlock.svelte';
 	import * as Select from '$lib/components/ui/select';
 	import { Input } from '$lib/components/ui/input';
 	import { Textarea } from '$lib/components/ui/textarea';
@@ -30,8 +31,12 @@
 		buildDateString,
 		parseFileValue,
 		validateFields,
+		validateField,
 		coerceFormData,
-		fieldsForStep
+		fieldsForStep,
+		parseRepeaterRef,
+		getAtPath,
+		asItemsArray
 	} from './task-form-values.svelte.ts';
 
 	interface Props {
@@ -41,9 +46,17 @@
 		submitting?: boolean;
 		/** Persist form draft (values + active step) to localStorage under this key. */
 		taskId?: string;
+		/**
+		 * Feature B — upstream data the HumanTask request envelope carries
+		 * for Repeater blocks. Looked up via the Repeater's `items_ref`
+		 * pre-`[*]` path; the renderer iterates the resolved array. When
+		 * omitted (or the path resolves to a non-array), Repeater blocks
+		 * render an empty-state notice instead of crashing.
+		 */
+		taskData?: Record<string, unknown>;
 	}
 
-	let { steps, onsubmit, oncancel, submitting = false, taskId }: Props = $props();
+	let { steps, onsubmit, oncancel, submitting = false, taskId, taskData }: Props = $props();
 
 	let formData: Record<string, unknown> = $state({});
 	let errors: Record<string, string> = $state({});
@@ -119,12 +132,14 @@
 	function validateStep(stepIdx: number): string | null {
 		const s = steps[stepIdx];
 		if (!s) return null;
-		return validateFields(
+		const fieldFail = validateFields(
 			fieldsForStep(s),
 			formData,
 			setFieldErrorBound,
 			clearFieldErrorBound
 		);
+		if (fieldFail) return fieldFail;
+		return validateRepeaters(s);
 	}
 
 	/** Walk forward from current step toward `targetStep` (1-based, exclusive).
@@ -176,6 +191,82 @@
 	const isLastStep = $derived(activeStep === steps.length);
 	const allFields = $derived(steps.flatMap((s) => fieldsForStep(s)));
 
+	// ── Repeater (Feature B) helpers ─────────────────────────────
+	// Repeater state lives at `formData[output_slug]: Array<Record<string, unknown>>`.
+	// Per-row field errors use the key `<output_slug>.<row_index>.<field_name>`
+	// so the existing focusField pattern keeps working for them.
+	function repeaterRows(outputSlug: string): Record<string, unknown>[] {
+		const v = formData[outputSlug];
+		return Array.isArray(v) ? (v as Record<string, unknown>[]) : [];
+	}
+
+	function setRepeaterField(
+		outputSlug: string,
+		rowIndex: number,
+		fieldName: string,
+		value: unknown
+	) {
+		const rows = repeaterRows(outputSlug).slice();
+		const cur = (rows[rowIndex] ?? {}) as Record<string, unknown>;
+		rows[rowIndex] = { ...cur, [fieldName]: value };
+		formData = { ...formData, [outputSlug]: rows };
+		const errKey = `${outputSlug}.${rowIndex}.${fieldName}`;
+		if (errors[errKey]) {
+			const { [errKey]: _, ...rest } = errors;
+			errors = rest;
+		}
+	}
+
+	function getRepeaterFieldText(outputSlug: string, rowIndex: number, fieldName: string): string {
+		const rows = repeaterRows(outputSlug);
+		const v = rows[rowIndex]?.[fieldName];
+		if (typeof v === 'number') return Number.isFinite(v) ? String(v) : '';
+		return typeof v === 'string' ? v : '';
+	}
+
+	function getRepeaterFieldBool(outputSlug: string, rowIndex: number, fieldName: string): boolean {
+		const rows = repeaterRows(outputSlug);
+		return rows[rowIndex]?.[fieldName] === true;
+	}
+
+	/**
+	 * Walk a step's Repeater blocks; for each block resolve the upstream
+	 * items array from `taskData` and emit one synthetic field-error key
+	 * per (row, sub-field) on validation failure. Returns the first
+	 * invalid `<output_slug>.<row>.<field>` (mirrors validateFields'
+	 * single-string return).
+	 */
+	function validateRepeaters(step: TaskStep): string | null {
+		let first: string | null = null;
+		for (const block of step.blocks) {
+			if (block.type !== 'repeater') continue;
+			const parsed = parseRepeaterRef(block.items_ref);
+			if (!parsed) continue;
+			const items = asItemsArray(getAtPath(taskData ?? {}, [parsed.head, ...parsed.pre]));
+			const rows = repeaterRows(block.output_slug);
+			for (let i = 0; i < items.length; i++) {
+				const row = (rows[i] ?? {}) as Record<string, unknown>;
+				for (const subField of block.fields) {
+					const message = validateField(subField, row);
+					const key = `${block.output_slug}.${i}.${subField.name}`;
+					if (message) {
+						setFieldErrorBound(key, message);
+						if (!first) first = key;
+					} else {
+						clearFieldErrorBound(key);
+					}
+				}
+			}
+		}
+		return first;
+	}
+
+	function repeaterBlocks(step: TaskStep) {
+		return step.blocks.filter((b): b is Extract<typeof b, { type: 'repeater' }> =>
+			b.type === 'repeater'
+		);
+	}
+
 	function handleSubmit() {
 		const firstInvalid = validateFields(
 			allFields,
@@ -183,13 +274,27 @@
 			setFieldErrorBound,
 			clearFieldErrorBound
 		);
-		if (firstInvalid) {
-			// Jump to first step containing an error
+		// Repeater rows go through their own per-row validation. A failing
+		// repeater behaves like a failing top-level field: jump to its step.
+		let firstRepeaterInvalid: string | null = null;
+		for (const step of steps) {
+			const r = validateRepeaters(step);
+			if (r && !firstRepeaterInvalid) firstRepeaterInvalid = r;
+		}
+		const blocker = firstInvalid ?? firstRepeaterInvalid;
+		if (blocker) {
+			// Jump to first step containing an error (field-level or
+			// repeater-level — both live in `errors`).
 			for (let i = 0; i < steps.length; i++) {
 				const stepFields = fieldsForStep(steps[i]);
-				if (stepFields.some((f) => errors[f.name])) {
+				const repBlocks = repeaterBlocks(steps[i]);
+				const hasFieldErr = stepFields.some((f) => errors[f.name]);
+				const hasRepErr = repBlocks.some((rb) =>
+					Object.keys(errors).some((k) => k.startsWith(`${rb.output_slug}.`))
+				);
+				if (hasFieldErr || hasRepErr) {
 					activeStep = i + 1;
-					focusField(firstInvalid);
+					focusField(blocker);
 					break;
 				}
 			}
@@ -540,6 +645,18 @@
 						</p>
 					{/if}
 				</div>
+			{:else if block.type === 'repeater'}
+				<RepeaterBlock
+					items_ref={block.items_ref}
+					item_label_ref={block.item_label_ref}
+					fields={block.fields}
+					output_slug={block.output_slug}
+					{taskData}
+					getText={getRepeaterFieldText}
+					getBool={getRepeaterFieldBool}
+					setValue={setRepeaterField}
+					{errors}
+				/>
 			{:else}
 				<BlockRenderer {block} />
 			{/if}

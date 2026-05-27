@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use crate::compiler::error::CompileError;
 use crate::compiler::graph::{topo_order, WorkflowDiGraph};
 use crate::models::template::{
-    JoinMode, MergeStrategy, WorkflowGraph, WorkflowNode, WorkflowNodeData,
+    JoinMode, MergeStrategy, TaskBlockConfig, WorkflowGraph, WorkflowNode, WorkflowNodeData,
 };
 
 use super::*;// ─── Per-node shape derivation ──────────────────────────────────────────────
@@ -235,11 +235,43 @@ fn out_shape(node: &WorkflowNode, in_shape: &TokenShape) -> TokenShape {
                 TokenShape::Scalar(ScalarTy::String),
                 Provenance::new(node, "human-task outcome (HumanTaskResponse.status)"),
             );
-            let form = port_to_shape(
+            let mut form = port_to_shape(
                 &crate::models::template::derive_human_task_output_port(steps),
                 node,
                 "HUMAN-TASK FORM FIELD — nested under `data` (HumanTaskResponse.data)",
             );
+            // Feature B: each Repeater block in this HumanTask contributes a
+            // typed array `<output_slug>: Array<{<sub_fields>}>` to the
+            // form envelope. Downstream consumers pick
+            // `<human_task_slug>.<output_slug>[*].<sub_field>` via the same
+            // `[*]` synthetic-child picker affordance as any other array.
+            // Validation (collision with form-field names, malformed refs)
+            // runs in `validate_repeaters`; here we just emit the shape
+            // assuming the config is well-formed.
+            for step in steps {
+                for block in &step.blocks {
+                    if let TaskBlockConfig::Repeater {
+                        output_slug,
+                        fields,
+                        ..
+                    } = block
+                    {
+                        let key = output_slug.trim();
+                        if key.is_empty() {
+                            continue;
+                        }
+                        let elem = repeater_element_to_shape(fields, node);
+                        form.insert(
+                            key,
+                            TokenShape::Array(Box::new(elem)),
+                            Provenance::new(
+                                node,
+                                "Repeater typed array output — one element per sub-form row",
+                            ),
+                        );
+                    }
+                }
+            }
             o.insert(
                 "data",
                 form,

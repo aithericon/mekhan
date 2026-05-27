@@ -11,7 +11,11 @@
 	import DividerBlock from './blocks/divider-block.svelte';
 	import type { TaskBlock } from '../types';
 
-	type NonInputBlock = Exclude<TaskBlock, { type: 'input' }>;
+	// Repeater is intentionally NOT a NonInputBlock renderer target —
+	// it carries an interactive sub-form (Feature B). TaskForm.svelte
+	// handles it inline alongside Input blocks, sharing the same
+	// form-state machinery. BlockRenderer is only for display blocks.
+	type NonInputBlock = Exclude<TaskBlock, { type: 'input' } | { type: 'repeater' }>;
 
 	let { block }: { block: NonInputBlock } = $props();
 

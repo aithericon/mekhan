@@ -309,6 +309,61 @@ pub enum CompileError {
         path: String,
         message: String,
     },
+
+    // --- Repeater block validation (Feature B). A HumanTask
+    //     `TaskBlockConfig::Repeater` carries a structured `<slug>.<field>[*]…`
+    //     reference into an upstream array. The compiler validates the ref
+    //     syntax, resolution, array shape, and the Repeater's own
+    //     `output_slug` at publish time.
+    /// `items_ref` (or `item_label_ref`) does not parse as
+    /// `<slug>.<field>[*]…` with exactly one `[*]` iteration boundary.
+    /// Covers nested `[*]` (v1 rejects with `NestedIterationUnsupported`
+    /// wording) and missing boundaries.
+    #[error(
+        "human task '{node_id}': Repeater {site} '{ref_value}' is malformed: {message}"
+    )]
+    RepeaterRefMalformed {
+        node_id: String,
+        site: String,
+        ref_value: String,
+        message: String,
+    },
+
+    /// `items_ref` parses cleanly but its `<slug>` doesn't match any
+    /// graph slug, OR the pre-`[*]` path doesn't land on a field on the
+    /// resolved producer's outbound shape.
+    #[error(
+        "human task '{node_id}': Repeater items_ref '{ref_value}' is unresolved (slug: '{slug}', candidates: {available:?})"
+    )]
+    RepeaterRefUnresolved {
+        node_id: String,
+        ref_value: String,
+        slug: String,
+        available: Vec<String>,
+    },
+
+    /// The pre-`[*]` path resolves to a non-array shape on the upstream
+    /// producer. `[*]` only makes sense over an Array — a Scalar/Object
+    /// is a hard reject. `Any`/`Opaque` are accepted (deferred to runtime).
+    #[error(
+        "human task '{node_id}': Repeater items_ref '{ref_value}' resolves to {actual_kind}, not an array — iteration boundary `[*]` requires an array"
+    )]
+    RepeaterItemsRefNotArray {
+        node_id: String,
+        ref_value: String,
+        actual_kind: String,
+    },
+
+    /// `output_slug` is missing/empty, or not a valid Rhai identifier
+    /// (`[A-Za-z_][A-Za-z0-9_]*`). Required because downstream consumers
+    /// address the Repeater's typed array as `<human_task_slug>.<output_slug>`.
+    #[error(
+        "human task '{node_id}': Repeater output_slug '{output_slug}' is invalid — must be a non-empty Rhai identifier ([A-Za-z_][A-Za-z0-9_]*)"
+    )]
+    RepeaterOutputSlugInvalid {
+        node_id: String,
+        output_slug: String,
+    },
 }
 
 impl CompileError {
@@ -348,6 +403,10 @@ impl CompileError {
             Self::ResourceAliasCollidesWithSlug { .. } => "resource_alias_collides_with_slug",
             Self::ResourceAliasCollidesWithToken { .. } => "resource_alias_collides_with_token",
             Self::SchemaRefUnresolved { .. } => "schema_ref_unresolved",
+            Self::RepeaterRefMalformed { .. } => "repeater_ref_malformed",
+            Self::RepeaterRefUnresolved { .. } => "repeater_ref_unresolved",
+            Self::RepeaterItemsRefNotArray { .. } => "repeater_items_ref_not_array",
+            Self::RepeaterOutputSlugInvalid { .. } => "repeater_output_slug_invalid",
         }
     }
 
@@ -387,7 +446,11 @@ impl CompileError {
             | Self::BackendRefNotUpstream { node_id, .. }
             | Self::BackendPlaceholderSyntax { node_id, .. }
             | Self::LlmImageRefNotFileKind { node_id, .. }
-            | Self::SchemaRefUnresolved { node_id, .. } => Some(node_id),
+            | Self::SchemaRefUnresolved { node_id, .. }
+            | Self::RepeaterRefMalformed { node_id, .. }
+            | Self::RepeaterRefUnresolved { node_id, .. }
+            | Self::RepeaterItemsRefNotArray { node_id, .. }
+            | Self::RepeaterOutputSlugInvalid { node_id, .. } => Some(node_id),
             _ => None,
         }
     }

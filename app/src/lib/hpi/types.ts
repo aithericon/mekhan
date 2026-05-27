@@ -96,7 +96,22 @@ export type TaskBlock =
 	| { type: 'callout'; severity: 'info' | 'warning' | 'error' | 'success'; title?: string; content: string }
 	| { type: 'pdf'; url: string; filename?: string; caption?: string; height?: string }
 	| { type: 'chart'; chart_type: ChartType; data: Record<string, unknown>[]; x?: string; series?: ChartSeries[]; caption?: string; height?: string; x_label?: string; y_label?: string }
-	| { type: 'divider' };
+	| { type: 'divider' }
+	/**
+	 * Feature B — render N copies of a sub-form, one per element of an
+	 * upstream array. `items_ref` carries exactly one `[*]` iteration
+	 * boundary (e.g. `extract.tasks[*]`); the renderer reads
+	 * `taskData[<pre-[*]-path>]` for the resolved array and instantiates
+	 * `fields` once per element. The submitted form value is collected
+	 * under `output_slug` as a `{ name: value }[]` array.
+	 */
+	| {
+		type: 'repeater';
+		items_ref: string;
+		item_label_ref?: string;
+		fields: TaskField[];
+		output_slug: string;
+	};
 
 export type TaskStep = {
 	id: string;

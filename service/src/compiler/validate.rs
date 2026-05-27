@@ -720,3 +720,407 @@ pub(crate) fn validate_triggers(graph: &WorkflowGraph) -> Result<(), CompileErro
 
     Ok(())
 }
+
+// --- Repeater block validation (Feature B) ---
+
+/// One Repeater ref parsed into its structural pieces. `pre` are the
+/// segments before `[*]` (must resolve to an array on the producer);
+/// `post` are the segments after (consumer-side path into each element).
+#[derive(Debug)]
+struct ParsedRepeaterRef<'a> {
+    head: &'a str,
+    pre: Vec<&'a str>,
+    post: Vec<&'a str>,
+}
+
+/// Parse a Repeater `items_ref` / `item_label_ref` of the form
+/// `<head>.<seg>...[*].<seg>...`. Returns `None` for malformed inputs.
+///
+/// Strict syntax: exactly one `[*]` boundary, head must be a non-empty
+/// identifier-ish slug (we don't enforce strict Rhai-identifier syntax —
+/// `parse_repeater_ref_head_attr` is also lenient — the slug resolution
+/// step rejects unknown heads anyway).
+fn parse_repeater_ref(raw: &str) -> Result<ParsedRepeaterRef<'_>, &'static str> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("empty");
+    }
+    // Find `[*]`. Reject nested iteration (two or more `[*]`s).
+    let first = trimmed.find("[*]").ok_or("missing `[*]` iteration boundary")?;
+    if trimmed[first + 3..].contains("[*]") {
+        return Err("nested `[*]` is not supported (NestedIterationUnsupported)");
+    }
+    let before = &trimmed[..first];
+    let after = trimmed[first + 3..].strip_prefix('.').unwrap_or(&trimmed[first + 3..]);
+    // `before` must be `<head>.<seg>...` — at least head + one seg.
+    let dot = before.find('.').ok_or("expected `<slug>.<field>[*]`")?;
+    let head = &before[..dot];
+    if head.is_empty() {
+        return Err("empty slug before `.`");
+    }
+    let pre_str = &before[dot + 1..];
+    if pre_str.is_empty() {
+        return Err("expected `<slug>.<field>[*]`");
+    }
+    let pre: Vec<&str> = pre_str.split('.').collect();
+    if pre.iter().any(|s| s.is_empty()) {
+        return Err("empty segment in pre-`[*]` path");
+    }
+    let post: Vec<&str> = if after.is_empty() {
+        Vec::new()
+    } else {
+        after.split('.').collect()
+    };
+    if post.iter().any(|s| s.is_empty()) {
+        return Err("empty segment in post-`[*]` path");
+    }
+    Ok(ParsedRepeaterRef { head, pre, post })
+}
+
+fn is_rhai_ident(s: &str) -> bool {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Walk every HumanTask's Repeater block and validate the `items_ref`,
+/// `item_label_ref`, and `output_slug`. Runs after `validate_guards` so
+/// the per-node shapes are available via `analyze`. Errors are hard
+/// rejects — a malformed Repeater can't lower cleanly and the typed
+/// downstream output would silently fall through.
+pub(crate) fn validate_repeaters(graph: &WorkflowGraph) -> Result<(), CompileError> {
+    use crate::compiler::token_shape::{analyze, is_parked_producer, slug_index, TokenShape};
+
+    // Short-circuit when no HumanTask carries a Repeater: avoids paying for
+    // the analyze pass on graphs that don't use Feature B at all.
+    let has_repeater = graph.nodes.iter().any(|n| {
+        if let WorkflowNodeData::HumanTask { steps, .. } = &n.data {
+            steps.iter().any(|s| {
+                s.blocks
+                    .iter()
+                    .any(|b| matches!(b, crate::models::template::TaskBlockConfig::Repeater { .. }))
+            })
+        } else {
+            false
+        }
+    });
+    if !has_repeater {
+        return Ok(());
+    }
+
+    let report = analyze(graph)?;
+    let slugs = slug_index(graph)?;
+
+    for node in &graph.nodes {
+        let WorkflowNodeData::HumanTask { steps, .. } = &node.data else {
+            continue;
+        };
+        for step in steps {
+            for block in &step.blocks {
+                let crate::models::template::TaskBlockConfig::Repeater {
+                    items_ref,
+                    item_label_ref,
+                    output_slug,
+                    ..
+                } = block
+                else {
+                    continue;
+                };
+
+                // 1. output_slug — non-empty, Rhai-safe.
+                let slug_trim = output_slug.trim();
+                if !is_rhai_ident(slug_trim) {
+                    return Err(CompileError::RepeaterOutputSlugInvalid {
+                        node_id: node.id.clone(),
+                        output_slug: output_slug.clone(),
+                    });
+                }
+
+                // 2. items_ref — structural parse + resolution + array shape.
+                let parsed = parse_repeater_ref(items_ref).map_err(|msg| {
+                    CompileError::RepeaterRefMalformed {
+                        node_id: node.id.clone(),
+                        site: "items_ref".to_string(),
+                        ref_value: items_ref.clone(),
+                        message: msg.to_string(),
+                    }
+                })?;
+
+                let prod_id = slugs.node_for(parsed.head).map(str::to_string);
+                let Some(prod_id) = prod_id else {
+                    return Err(CompileError::RepeaterRefUnresolved {
+                        node_id: node.id.clone(),
+                        ref_value: items_ref.clone(),
+                        slug: parsed.head.to_string(),
+                        available: slugs.all_slugs().iter().map(|s| s.to_string()).collect(),
+                    });
+                };
+                if !is_parked_producer(graph, &prod_id) {
+                    return Err(CompileError::RepeaterRefUnresolved {
+                        node_id: node.id.clone(),
+                        ref_value: items_ref.clone(),
+                        slug: parsed.head.to_string(),
+                        available: slugs.all_slugs().iter().map(|s| s.to_string()).collect(),
+                    });
+                }
+
+                // Walk the producer's outbound shape using `find_by_leaf`
+                // semantics for the first segment + literal dotted descent
+                // thereafter (matches `resolve_ref`'s mapping into the
+                // physical producer path, e.g. `data.<field>` on HumanTask).
+                let shape = report.node_out.get(&prod_id);
+                let resolved = shape.and_then(|s| {
+                    let head_seg = parsed.pre[0];
+                    let (phys, _ty, _prov) = s.find_by_leaf(head_seg)?;
+                    let mut segs: Vec<String> =
+                        phys.split('.').map(str::to_string).collect();
+                    for extra in &parsed.pre[1..] {
+                        segs.push((*extra).to_string());
+                    }
+                    s.resolve(&segs).map(|(t, _)| t.clone())
+                });
+
+                match resolved {
+                    Some(TokenShape::Array(_))
+                    | Some(TokenShape::Any)
+                    | Some(TokenShape::Opaque(_))
+                    | Some(TokenShape::Scalar(
+                        crate::compiler::token_shape::ScalarTy::Json,
+                    )) => {
+                        // Array (canonical), Any/Opaque (deferred to runtime),
+                        // or Json (deliberately opaque — the producer declared
+                        // arbitrary JSON which the executor will deliver as
+                        // an array at runtime, e.g. Python emitting a list).
+                    }
+                    Some(other) => {
+                        return Err(CompileError::RepeaterItemsRefNotArray {
+                            node_id: node.id.clone(),
+                            ref_value: items_ref.clone(),
+                            actual_kind: other.kind_label(),
+                        });
+                    }
+                    None => {
+                        return Err(CompileError::RepeaterRefUnresolved {
+                            node_id: node.id.clone(),
+                            ref_value: items_ref.clone(),
+                            slug: parsed.head.to_string(),
+                            available: slugs
+                                .all_slugs()
+                                .iter()
+                                .map(|s| s.to_string())
+                                .collect(),
+                        });
+                    }
+                }
+
+                // 3. item_label_ref — same syntactic checks; the head + pre
+                //    path must match items_ref (no cross-array labels in v1).
+                if let Some(label_ref) = item_label_ref {
+                    if label_ref.trim().is_empty() {
+                        continue;
+                    }
+                    let label_parsed = parse_repeater_ref(label_ref).map_err(|msg| {
+                        CompileError::RepeaterRefMalformed {
+                            node_id: node.id.clone(),
+                            site: "item_label_ref".to_string(),
+                            ref_value: label_ref.clone(),
+                            message: msg.to_string(),
+                        }
+                    })?;
+                    if label_parsed.head != parsed.head || label_parsed.pre != parsed.pre {
+                        return Err(CompileError::RepeaterRefMalformed {
+                            node_id: node.id.clone(),
+                            site: "item_label_ref".to_string(),
+                            ref_value: label_ref.clone(),
+                            message: format!(
+                                "must share the items_ref iteration prefix `{}.{}[*]`",
+                                parsed.head,
+                                parsed.pre.join(".")
+                            ),
+                        });
+                    }
+                    if label_parsed.post.is_empty() {
+                        return Err(CompileError::RepeaterRefMalformed {
+                            node_id: node.id.clone(),
+                            site: "item_label_ref".to_string(),
+                            ref_value: label_ref.clone(),
+                            message: "expected a `[*].<field>` per-element label path"
+                                .to_string(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod repeater_tests {
+    use super::*;
+
+    fn graph_with_repeater(
+        items_ref: &str,
+        item_label_ref: Option<&str>,
+        output_slug: &str,
+    ) -> WorkflowGraph {
+        let label_json = match item_label_ref {
+            Some(v) => format!(r#","item_label_ref":"{}""#, v),
+            None => String::new(),
+        };
+        let json = format!(
+            r#"{{
+              "nodes": [
+                {{"id":"s","type":"start","slug":"start","position":{{"x":0,"y":0}},
+                 "data":{{"type":"start","label":"Start",
+                          "initial":{{"id":"init","label":"init","fields":[]}}}}}},
+                {{"id":"extract","type":"automated_step","slug":"extract","position":{{"x":0,"y":0}},
+                 "data":{{"type":"automated_step","label":"Extract",
+                         "executionSpec":{{"backendType":"python","config":{{"source":""}}}},
+                         "retryPolicy":{{"maxRetries":0,"strategy":{{"type":"immediate"}}}},
+                         "deploymentModel":{{"mode":"inline"}},
+                         "output":{{"id":"out","label":"out","fields":[
+                           {{"name":"tasks","label":"Tasks","kind":"json","required":true}}
+                         ]}}}}}},
+                {{"id":"review","type":"human_task","slug":"review","position":{{"x":0,"y":0}},
+                 "data":{{"type":"human_task","label":"Review","taskTitle":"R",
+                         "steps":[{{"id":"s1","title":"S","blocks":[
+                           {{"type":"repeater","items_ref":"{items_ref}"{label_json},
+                             "fields":[{{"name":"done","label":"Done","kind":"checkbox","required":true}}],
+                             "output_slug":"{output_slug}"}}
+                         ]}}]}}}},
+                {{"id":"end","type":"end","position":{{"x":0,"y":0}},
+                 "data":{{"type":"end","label":"End"}}}}
+              ],
+              "edges":[
+                {{"id":"e1","source":"s","target":"extract","type":"sequence","targetHandle":"init"}},
+                {{"id":"e2","source":"extract","target":"review","type":"sequence"}},
+                {{"id":"e3","source":"review","target":"end","type":"sequence"}}
+              ]
+            }}"#,
+            items_ref = items_ref,
+            label_json = label_json,
+            output_slug = output_slug,
+        );
+        serde_json::from_str(&json).expect("deser repeater fixture")
+    }
+
+    #[test]
+    fn parses_well_formed_ref() {
+        let p = parse_repeater_ref("extract.tasks[*]").expect("ok");
+        assert_eq!(p.head, "extract");
+        assert_eq!(p.pre, vec!["tasks"]);
+        assert!(p.post.is_empty());
+    }
+
+    #[test]
+    fn parses_ref_with_post_segment() {
+        let p = parse_repeater_ref("extract.tasks[*].title").expect("ok");
+        assert_eq!(p.head, "extract");
+        assert_eq!(p.pre, vec!["tasks"]);
+        assert_eq!(p.post, vec!["title"]);
+    }
+
+    #[test]
+    fn parses_nested_pre_path() {
+        let p = parse_repeater_ref("extract.outer.inner[*].title").expect("ok");
+        assert_eq!(p.head, "extract");
+        assert_eq!(p.pre, vec!["outer", "inner"]);
+        assert_eq!(p.post, vec!["title"]);
+    }
+
+    #[test]
+    fn rejects_missing_boundary() {
+        assert!(parse_repeater_ref("extract.tasks").is_err());
+    }
+
+    #[test]
+    fn rejects_nested_iteration() {
+        let err = parse_repeater_ref("a.b[*].c[*].d").unwrap_err();
+        assert!(err.contains("nested"), "got: {err}");
+    }
+
+    #[test]
+    fn rejects_empty_pre_segment() {
+        assert!(parse_repeater_ref(".tasks[*]").is_err());
+        assert!(parse_repeater_ref("extract..tasks[*]").is_err());
+    }
+
+    #[test]
+    fn accepts_valid_output_slug() {
+        let g = graph_with_repeater("extract.tasks[*]", None, "review_tasks");
+        validate_repeaters(&g).expect("ok");
+    }
+
+    #[test]
+    fn rejects_empty_output_slug() {
+        let g = graph_with_repeater("extract.tasks[*]", None, "");
+        let err = validate_repeaters(&g).unwrap_err();
+        assert!(matches!(err, CompileError::RepeaterOutputSlugInvalid { .. }));
+    }
+
+    #[test]
+    fn rejects_non_ident_output_slug() {
+        let g = graph_with_repeater("extract.tasks[*]", None, "9bad");
+        let err = validate_repeaters(&g).unwrap_err();
+        assert!(matches!(err, CompileError::RepeaterOutputSlugInvalid { .. }));
+    }
+
+    #[test]
+    fn rejects_unknown_slug() {
+        let g = graph_with_repeater("nonesuch.tasks[*]", None, "review_tasks");
+        let err = validate_repeaters(&g).unwrap_err();
+        match err {
+            CompileError::RepeaterRefUnresolved { slug, .. } => assert_eq!(slug, "nonesuch"),
+            other => panic!("expected RepeaterRefUnresolved, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_nested_iteration_in_items_ref() {
+        let g = graph_with_repeater("extract.tasks[*].sub[*].x", None, "review_tasks");
+        let err = validate_repeaters(&g).unwrap_err();
+        assert!(matches!(err, CompileError::RepeaterRefMalformed { .. }));
+    }
+
+    #[test]
+    fn accepts_label_ref_sharing_prefix() {
+        let g = graph_with_repeater(
+            "extract.tasks[*]",
+            Some("extract.tasks[*].title"),
+            "review_tasks",
+        );
+        validate_repeaters(&g).expect("ok");
+    }
+
+    #[test]
+    fn rejects_label_ref_with_different_prefix() {
+        let g = graph_with_repeater(
+            "extract.tasks[*]",
+            Some("extract.other[*].title"),
+            "review_tasks",
+        );
+        let err = validate_repeaters(&g).unwrap_err();
+        match err {
+            CompileError::RepeaterRefMalformed { site, .. } => {
+                assert_eq!(site, "item_label_ref")
+            }
+            other => panic!("expected RepeaterRefMalformed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_label_ref_without_post_segment() {
+        let g = graph_with_repeater(
+            "extract.tasks[*]",
+            Some("extract.tasks[*]"),
+            "review_tasks",
+        );
+        let err = validate_repeaters(&g).unwrap_err();
+        assert!(matches!(err, CompileError::RepeaterRefMalformed { .. }));
+    }
+}
