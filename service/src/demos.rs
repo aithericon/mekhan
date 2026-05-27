@@ -597,6 +597,7 @@ pub async fn seed_one(
             Some(template_id),
             &mut files,
             DEMO_SEEDER_AUTHOR_ID,
+            DEMO_WORKSPACE_ID,
         )
         .await
         .map_err(|e| DemoSeedError::Compile(format!("{e:?}")))?;

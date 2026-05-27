@@ -642,6 +642,7 @@ pub async fn publish_template(
             Some(existing.base_template_id.unwrap_or(existing.id)),
             &mut ydoc_files,
             principal_id,
+            existing.workspace_id,
         )
         .await?;
 
@@ -1102,6 +1103,10 @@ pub async fn apply_template(
             Some(latest.base_template_id.unwrap_or(latest.id)),
             &mut files_map,
             user.subject_as_uuid(),
+            // Apply (no-version-bump) hits the same workspace as the latest
+            // template row; reuse it directly to keep the resource lookup
+            // tenant-correct.
+            latest.workspace_id,
         )
         .await?;
     let source_ref_json = req

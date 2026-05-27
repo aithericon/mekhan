@@ -88,6 +88,7 @@ impl<'a> PublishService<'a> {
         publishing_family: Option<Uuid>,
         files: &mut HashMap<String, HashMap<String, String>>,
         principal_id: Uuid,
+        workspace_id: Uuid,
     ) -> Result<CompiledArtifacts, ApiError> {
         synthesize_py_io_files(graph, files);
 
@@ -100,7 +101,8 @@ impl<'a> PublishService<'a> {
         // map (a) to validate name/slug collisions, (b) to discriminate
         // resource refs from slug refs in the borrow planner, and (c) to
         // pin each ref to `(resource_id, latest_version)` in the AIR.
-        let known_resources = discover_known_resources(self.state, graph, files).await?;
+        let known_resources =
+            discover_known_resources(self.state, graph, files, workspace_id).await?;
 
         // Per-job NATS payloads only carry storage paths; the executor
         // downloads the file at stage time. The compile-time borrow
@@ -137,12 +139,7 @@ impl<'a> PublishService<'a> {
             let envelope = self
                 .state
                 .resource_resolver
-                .resolve_known(
-                    default_workspace(),
-                    principal_id,
-                    &known_resources,
-                    None,
-                )
+                .resolve_known(workspace_id, principal_id, &known_resources, None)
                 .await
                 .map_err(|e| {
                     ApiError::bad_request(format!("resource resolution failed at publish: {e}"))
@@ -238,14 +235,6 @@ impl<'a> PublishService<'a> {
     }
 }
 
-/// Default workspace id until the workspaces table lands. Mirrors the same
-/// constant used by the resource CRUD handlers — when real workspaces land,
-/// publish picks the workspace from the caller's session and this constant
-/// goes away.
-fn default_workspace() -> Uuid {
-    Uuid::nil()
-}
-
 /// Build a [`KnownResources`] map by source-scanning every Python entrypoint
 /// for `<head>.<field>` references and intersecting the head identifiers with
 /// the workspace's live (non-soft-deleted) resources.
@@ -271,6 +260,7 @@ async fn discover_known_resources(
     state: &AppState,
     graph: &WorkflowGraph,
     inline_sources: &HashMap<String, HashMap<String, String>>,
+    workspace_id: Uuid,
 ) -> Result<KnownResources, ApiError> {
     use crate::backends::ScanCtx;
     use crate::compiler::resource_binding::{
@@ -347,12 +337,11 @@ async fn discover_known_resources(
     // regardless of how many heads the source touches. Soft-deleted
     // resources are invisible (NULL filter on `deleted_at`).
     let head_vec: Vec<String> = heads.into_iter().collect();
-    let workspace = default_workspace();
     let rows: Vec<(Uuid, String, String, i32)> = sqlx::query_as(
         "SELECT id, path, resource_type, latest_version FROM resources \
          WHERE workspace_id = $1 AND path = ANY($2) AND deleted_at IS NULL",
     )
-    .bind(workspace)
+    .bind(workspace_id)
     .bind(&head_vec)
     .fetch_all(&state.db)
     .await

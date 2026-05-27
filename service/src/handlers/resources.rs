@@ -60,12 +60,13 @@ static PATH_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^[a-z][a-z0-9_]*$").expect("PATH_REGEX must compile")
 });
 
-/// Default workspace until the workspaces table lands. Centralized so the
-/// migration that introduces real workspaces can flip every call site by
-/// changing this one constant — and tests can lean on the same value when
-/// asserting create→list round-trips.
-fn default_workspace() -> Uuid {
-    Uuid::nil()
+/// Caller-implicit workspace: falls back to the user's session workspace
+/// (set by the resolver from claims), then to `Uuid::nil()` for code paths
+/// without an `AuthUser` (legacy `dev_noop` shape + the seeded default
+/// workspace). The list/create endpoints accept an explicit `workspace_id`
+/// query/body field that overrides this.
+fn caller_workspace(user: &AuthUser) -> Uuid {
+    user.workspace_id.unwrap_or_else(Uuid::nil)
 }
 
 /// Resolve the resource type or fail 400.
@@ -326,9 +327,10 @@ fn rows_to_summaries(
 )]
 pub async fn list_resources(
     State(state): State<AppState>,
+    user: AuthUser,
     Query(params): Query<ListResourcesQuery>,
 ) -> Json<PaginatedResponse<ResourceSummary>> {
-    let workspace_id = params.workspace_id.unwrap_or_else(default_workspace);
+    let workspace_id = params.workspace_id.unwrap_or_else(|| caller_workspace(&user));
     let offset = (params.page - 1) * params.per_page;
 
     let (rows, total) = if let Some(ref ty) = params.resource_type {
@@ -444,7 +446,7 @@ pub async fn create_resource(
     let descriptor = descriptor_or_400(&req.resource_type)?;
     let (public, secret) = split_config(descriptor, req.config)?;
 
-    let workspace_id = req.workspace_id.unwrap_or_else(default_workspace);
+    let workspace_id = req.workspace_id.unwrap_or_else(|| caller_workspace(&user));
     let resource_id = Uuid::new_v4();
     let version = 1;
     let vault_path = vault_path_for(workspace_id, resource_id, version);
