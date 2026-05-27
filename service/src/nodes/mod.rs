@@ -65,10 +65,12 @@ pub(crate) struct NodeDecl {
     /// Optional static description (palette tooltip + descriptor body).
     pub description: Option<&'static str>,
     /// Runtime kind for projections / borrow planner / hoist_path.
-    /// One-to-one with [`WorkflowNodeData`] for every variant **except
-    /// Agent**, which maps to `NodeKind::AutomatedStep` (declared, not
-    /// derived — preserves the byte-identical contract with
-    /// `AutomatedStep(Llm)` pinned by `agent_degenerate_lowers_byte_identical_to_llm_automated_step`).
+    /// One-to-one with [`WorkflowNodeData`]. For Agent the loop path
+    /// publishes `NodeKind::Agent`; the degenerate path delegates via a
+    /// virtual `WorkflowNodeData::AutomatedStep` node, so its published
+    /// interface kind is read from the *virtual* variant and stays
+    /// `AutomatedStep` (keeps the byte-identical contract pinned by
+    /// `agent_degenerate_lowers_byte_identical_to_llm_automated_step`).
     pub kind: NodeKind,
 
     // ── Protocol flags ────────────────────────────────────────────────
@@ -354,10 +356,11 @@ mod tests {
         };
         let decl = lookup_by_variant(&data).expect("agent registered");
         assert_eq!(decl.wire_name, "agent");
-        // Declared Agent→AutomatedStep mapping (preserves the byte-identical
-        // contract pinned by `agent_degenerate_lowers_byte_identical_to_llm_automated_step`;
-        // replaces the `node_kind_of` hack at lower/mod.rs:412).
-        assert_eq!(decl.kind, NodeKind::AutomatedStep);
+        // Loop-path kind. The degenerate path's published kind is read
+        // through a virtual `AutomatedStep` node, so the byte-identical
+        // contract (`agent_degenerate_lowers_byte_identical_to_llm_automated_step`)
+        // is unaffected by this declaration.
+        assert_eq!(decl.kind, NodeKind::Agent);
         assert!(decl.lowers_to_air);
         assert!(decl.parks_data_envelope);
         assert!(decl.lower.is_some());
@@ -570,10 +573,11 @@ mod tests {
         assert_eq!(pgu.kind, "progress_update");
         let fl = all.iter().find(|d| d.wire_name == "failure").unwrap();
         assert_eq!(fl.kind, "failure");
-        // Agent's serialized kind is "automated_step" (declared mapping;
-        // see `agent::AGENT_DECL` doc comment).
+        // Agent's serialized kind is "agent" (loop-path kind declaration;
+        // see `agent::AGENT_DECL` doc comment). Same hoist_path as
+        // AutomatedStep — the runtime envelope shape is shared.
         let ag = all.iter().find(|d| d.wire_name == "agent").unwrap();
-        assert_eq!(ag.kind, "automated_step");
+        assert_eq!(ag.kind, "agent");
         let ps = all.iter().find(|d| d.wire_name == "parallel_split").unwrap();
         assert_eq!(ps.kind, "parallel_split");
         let jn = all.iter().find(|d| d.wire_name == "join").unwrap();

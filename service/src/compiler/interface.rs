@@ -103,12 +103,21 @@ use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 /// `WorkflowNodeData` so consumers can dispatch without re-inspecting the
 /// graph. (CatalogueQuery is *not* a top-level variant — it's an AutomatedStep
 /// flavour selected by `execution_spec.backend_type`.)
+///
+/// `Agent` is its own variant: the loop path emits the agent-specific subnet
+/// (`p_state`, `p_response`, `p_final`, `t_route_final`, …), but the parked
+/// output envelope has the SAME `{detail: {outputs: …}}` nesting an
+/// `AutomatedStep(Llm)` produces — so `hoist_path` returns `["detail",
+/// "outputs"]` for both. The degenerate path delegates to the AutomatedStep
+/// lowering via a virtual node, so the published interface kind for that
+/// path stays `AutomatedStep` and the byte-identical contract holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NodeKind {
     Start,
     End,
     HumanTask,
     AutomatedStep,
+    Agent,
     Decision,
     Loop,
     ParallelSplit,
@@ -123,30 +132,29 @@ pub enum NodeKind {
 
 impl NodeKind {
     /// Unquoted hoist-path segments for this kind's parked-envelope shape.
-    /// HumanTask nests business data under `data`; AutomatedStep (which
-    /// every backend lowering shares) nests under `detail.outputs`; every
-    /// other kind keeps fields at the top level. The borrow apply phases
-    /// use this to bridge the user-visible flat shape (`<slug>.<field>`)
-    /// to the nested engine shape.
+    /// HumanTask nests business data under `data`; AutomatedStep + Agent
+    /// (which share the executor envelope shape) nest under `detail.outputs`;
+    /// every other kind keeps fields at the top level. The borrow apply
+    /// phases use this to bridge the user-visible flat shape
+    /// (`<slug>.<field>`) to the nested engine shape.
     pub fn hoist_path(&self) -> &'static [&'static str] {
         match self {
             NodeKind::HumanTask => &["data"],
-            NodeKind::AutomatedStep => &["detail", "outputs"],
+            NodeKind::AutomatedStep | NodeKind::Agent => &["detail", "outputs"],
             _ => &[],
         }
     }
 
     /// Snake-case wire string for this kind. Used by the step-executions
     /// projection writer and `NodeDescriptor` serialization (consumed by
-    /// `GET /api/v1/node-types`). The only consumer that *isn't*
-    /// `WorkflowNodeData::type_name()` — Agent serializes as kind
-    /// `automated_step` because it shares AutomatedStep's runtime shape.
+    /// `GET /api/v1/node-types`).
     pub fn wire_str(&self) -> &'static str {
         match self {
             NodeKind::Start => "start",
             NodeKind::End => "end",
             NodeKind::HumanTask => "human_task",
             NodeKind::AutomatedStep => "automated_step",
+            NodeKind::Agent => "agent",
             NodeKind::Decision => "decision",
             NodeKind::Loop => "loop",
             NodeKind::ParallelSplit => "parallel_split",

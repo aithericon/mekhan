@@ -708,13 +708,13 @@ fn token_color_to_json(color: &TokenColor) -> serde_json::Value {
 /// Hoist the user-facing output payload out of a parked-envelope token so
 /// `step_execution.outputs` shows the same shape downstream borrowers read
 /// via `<slug>.<field>`. Mirrors `compile::producer_field_access_hoist`:
-/// AutomatedStep envelopes are `{ detail: { outputs: {...}, ... }, ... }`,
+/// AutomatedStep + Agent envelopes are `{ detail: { outputs: {...}, ... }, ... }`,
 /// HumanTask envelopes are `{ data: {...}, ... }`. Falls back to the raw
 /// value if the expected nesting isn't present (legacy events / synthetic
 /// tokens in unit tests stay shape-stable).
 fn canonical_output_payload(kind: NodeKind, raw: serde_json::Value) -> serde_json::Value {
     let path: &[&str] = match kind {
-        NodeKind::AutomatedStep => &["detail", "outputs"],
+        NodeKind::AutomatedStep | NodeKind::Agent => &["detail", "outputs"],
         NodeKind::HumanTask => &["data"],
         _ => return raw,
     };
