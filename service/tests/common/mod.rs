@@ -13,6 +13,7 @@ use tokio::net::TcpListener;
 
 pub mod mock_auth;
 pub mod test_infra;
+pub mod workspace_fixtures;
 pub mod zitadel_live;
 pub mod zitadel_mock;
 pub use test_infra::{nats_url, postgres_url, wait_for_nats, wait_for_postgres, TestDb, TestNats};
