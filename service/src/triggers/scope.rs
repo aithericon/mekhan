@@ -35,15 +35,10 @@ fn var(name: &str, kind: FieldKind) -> ScopeVar {
 }
 
 fn task_kind_to_field_kind(k: TaskFieldKind) -> FieldKind {
-    match k {
-        TaskFieldKind::Text => FieldKind::Text,
-        TaskFieldKind::Textarea => FieldKind::Textarea,
-        TaskFieldKind::Number => FieldKind::Number,
-        TaskFieldKind::Select => FieldKind::Select,
-        TaskFieldKind::Checkbox => FieldKind::Bool,
-        TaskFieldKind::File => FieldKind::File,
-        TaskFieldKind::Signature => FieldKind::Signature,
-    }
+    // Single source of truth: the `From<TaskFieldKind> for FieldKind` impl
+    // on `crate::models::template`. Keeps the trigger scope mapping in
+    // sync when a new TaskFieldKind variant lands.
+    FieldKind::from(k)
 }
 
 /// Scope for the source *kinds* whose identifier set is fixed regardless of
@@ -177,16 +172,13 @@ mod tests {
                     label: "Customer".into(),
                     kind: TaskFieldKind::Text,
                     required: Some(true),
-                    placeholder: None,
-                    options: None,
+                    ..TaskFieldConfig::default()
                 },
                 TaskFieldConfig {
                     name: "urgent".into(),
                     label: "Urgent".into(),
                     kind: TaskFieldKind::Checkbox,
-                    required: None,
-                    placeholder: None,
-                    options: None,
+                    ..TaskFieldConfig::default()
                 },
             ],
         }));

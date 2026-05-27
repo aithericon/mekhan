@@ -8906,11 +8906,75 @@
           "kind"
         ],
         "properties": {
+          "accept": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For `File` kind: accepted file types as an HTML input `accept`\nattribute (e.g. `\"image/png,image/jpeg,.pdf\"`). Ignored for\nnon-file kinds."
+          },
+          "description_mdsvex": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Per-field helper text shown under the input. Mdsvex source."
+          },
+          "include_time": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "For `Date` kind: when true, capture date + time (`YYYY-MM-DDTHH:MM`);\notherwise capture date only (`YYYY-MM-DD`)."
+          },
           "kind": {
             "$ref": "#/components/schemas/TaskFieldKind"
           },
           "label": {
             "type": "string"
+          },
+          "max": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "For `Number` / `Range` kinds: maximum allowed value (inclusive)."
+          },
+          "max_file_size": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "For `File` kind: maximum file size in bytes.",
+            "minimum": 0
+          },
+          "max_files": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "For `File` kind: maximum number of files (defaults to 1).",
+            "minimum": 0
+          },
+          "max_rating": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "For `Rating` kind: number of stars (defaults to 5).",
+            "minimum": 0
+          },
+          "min": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "For `Number` / `Range` kinds: minimum allowed value (inclusive)."
           },
           "name": {
             "type": "string"
@@ -8923,7 +8987,14 @@
             "items": {
               "$ref": "#/components/schemas/SelectOption"
             },
-            "description": "Choice list for `kind = \"select\"`. Authored as\n`[{\"value\": \"approve\", \"label\": \"Approve\"}, …]` — `value` is the\ncanonical wire value submitted by the form, `label` is the\nhuman-facing display string. A bare string shorthand\n(`[\"approve\", \"reject\"]`) is accepted at deserialize time and\nnormalized to `{value, label}` where `label = value` — convenient\nfor trivial sets while keeping the runtime representation uniform."
+            "description": "Choice list for `kind = \"select\"` / `\"radio\"`. Authored as\n`[{\"value\": \"approve\", \"label\": \"Approve\"}, …]` — `value` is the\ncanonical wire value submitted by the form, `label` is the\nhuman-facing display string. A bare string shorthand\n(`[\"approve\", \"reject\"]`) is accepted at deserialize time and\nnormalized to `{value, label}` where `label = value` — convenient\nfor trivial sets while keeping the runtime representation uniform."
+          },
+          "pen_color": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For `Signature` kind: ink color (CSS color string)."
           },
           "placeholder": {
             "type": [
@@ -8936,12 +9007,27 @@
               "boolean",
               "null"
             ]
+          },
+          "signature_mode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For `Signature` kind: capture mode (currently only `\"draw\"` is\nimplemented)."
+          },
+          "step": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "For `Number` / `Range` kinds: step increment (defaults to 1)."
           }
         }
       },
       "TaskFieldKind": {
         "type": "string",
-        "description": "Form-field control kind for `input` task blocks. Snake-case wire values\nsuch as `\"text\"`, `\"textarea\"`, `\"number\"`, `\"select\"`, `\"checkbox\"`,\n`\"file\"`, `\"signature\"`.",
+        "description": "Form-field control kind for `input` task blocks. Snake-case wire values\nsuch as `\"text\"`, `\"textarea\"`, `\"number\"`, `\"select\"`, `\"checkbox\"`,\n`\"file\"`, `\"signature\"`, `\"radio\"`, `\"date\"`, `\"range\"`, `\"rating\"`.\nMust stay in sync with the engine's `TaskFieldKind` in\n`engine/core-engine/crates/domain/src/human.rs` and the frontend's\n`TASK_FIELD_KINDS` in `app/src/lib/hpi/types.ts` — drift means the\ncompiler accepts an author's choice that the engine rejects (or\nvice-versa).",
         "enum": [
           "text",
           "textarea",
@@ -8949,7 +9035,11 @@
           "select",
           "checkbox",
           "file",
-          "signature"
+          "signature",
+          "radio",
+          "date",
+          "range",
+          "rating"
         ]
       },
       "TaskListResponse": {

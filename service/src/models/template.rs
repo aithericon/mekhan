@@ -877,6 +877,18 @@ impl From<TaskFieldKind> for FieldKind {
             TaskFieldKind::Checkbox => FieldKind::Bool,
             TaskFieldKind::File => FieldKind::File,
             TaskFieldKind::Signature => FieldKind::Signature,
+            // Radio is a Select with inline option rendering — wire kind is
+            // identical so downstream borrow-checking treats them the same.
+            TaskFieldKind::Radio => FieldKind::Select,
+            // Date is an ISO 8601 string on the wire; reuse Text so guards
+            // can do lexicographic comparison (`step.due < "2026-01-01"`).
+            // A dedicated `FieldKind::Date` could come later if we want
+            // typed-date guard helpers; for now Text-with-format is enough.
+            TaskFieldKind::Date => FieldKind::Text,
+            // Range / Rating both emit numbers; min/max/step/max_rating are
+            // renderer hints, not wire-shape constraints.
+            TaskFieldKind::Range => FieldKind::Number,
+            TaskFieldKind::Rating => FieldKind::Number,
         }
     }
 }
@@ -1258,7 +1270,7 @@ fn default_max_turns() -> u32 {
     1
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
 pub struct TaskFieldConfig {
     pub name: String,
     pub label: String,
@@ -1267,7 +1279,10 @@ pub struct TaskFieldConfig {
     pub required: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub placeholder: Option<String>,
-    /// Choice list for `kind = "select"`. Authored as
+    /// Per-field helper text shown under the input. Mdsvex source.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description_mdsvex: Option<String>,
+    /// Choice list for `kind = "select"` / `"radio"`. Authored as
     /// `[{"value": "approve", "label": "Approve"}, …]` — `value` is the
     /// canonical wire value submitted by the form, `label` is the
     /// human-facing display string. A bare string shorthand
@@ -1280,6 +1295,40 @@ pub struct TaskFieldConfig {
         deserialize_with = "deserialize_task_field_options"
     )]
     pub options: Option<Vec<SelectOption>>,
+    /// For `File` kind: accepted file types as an HTML input `accept`
+    /// attribute (e.g. `"image/png,image/jpeg,.pdf"`). Ignored for
+    /// non-file kinds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accept: Option<String>,
+    /// For `File` kind: maximum file size in bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_file_size: Option<u64>,
+    /// For `File` kind: maximum number of files (defaults to 1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_files: Option<u32>,
+    /// For `Signature` kind: capture mode (currently only `"draw"` is
+    /// implemented).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature_mode: Option<String>,
+    /// For `Signature` kind: ink color (CSS color string).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pen_color: Option<String>,
+    /// For `Number` / `Range` kinds: minimum allowed value (inclusive).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min: Option<f64>,
+    /// For `Number` / `Range` kinds: maximum allowed value (inclusive).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max: Option<f64>,
+    /// For `Number` / `Range` kinds: step increment (defaults to 1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step: Option<f64>,
+    /// For `Rating` kind: number of stars (defaults to 5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_rating: Option<u32>,
+    /// For `Date` kind: when true, capture date + time (`YYYY-MM-DDTHH:MM`);
+    /// otherwise capture date only (`YYYY-MM-DD`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_time: Option<bool>,
 }
 
 /// One choice in a `kind = "select"` field. `value` is what the form
@@ -1364,10 +1413,16 @@ where
 
 /// Form-field control kind for `input` task blocks. Snake-case wire values
 /// such as `"text"`, `"textarea"`, `"number"`, `"select"`, `"checkbox"`,
-/// `"file"`, `"signature"`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+/// `"file"`, `"signature"`, `"radio"`, `"date"`, `"range"`, `"rating"`.
+/// Must stay in sync with the engine's `TaskFieldKind` in
+/// `engine/core-engine/crates/domain/src/human.rs` and the frontend's
+/// `TASK_FIELD_KINDS` in `app/src/lib/hpi/types.ts` — drift means the
+/// compiler accepts an author's choice that the engine rejects (or
+/// vice-versa).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskFieldKind {
+    #[default]
     Text,
     Textarea,
     Number,
@@ -1375,6 +1430,21 @@ pub enum TaskFieldKind {
     Checkbox,
     File,
     Signature,
+    /// Radio button group — same `{value, label}` options as `Select`,
+    /// rendered inline (all options visible at once) instead of as a
+    /// dropdown. Picked-value wire shape matches `Select`.
+    Radio,
+    /// Date picker (`YYYY-MM-DD`) or datetime picker (`YYYY-MM-DDTHH:MM`)
+    /// when the field carries `include_time = true`. Wire value is a
+    /// plain ISO string; downstream comparisons can use lexicographic
+    /// ordering up to minute precision.
+    Date,
+    /// Slider control — emits a `number` on the wire. Customize the
+    /// span via `min` / `max` / `step` on the field config.
+    Range,
+    /// Star-rating control — emits a `number` from 0 to `max_rating`
+    /// (default 5) on the wire.
+    Rating,
 }
 
 /// Type kind for a typed port field. Superset of `TaskFieldKind`: adds `Bool`
@@ -2597,6 +2667,130 @@ mod tests {
             description: None,
             accept: None,
         }
+    }
+
+    // ── TaskFieldKind / TaskFieldConfig type-parity tests ─────────────
+    //
+    // These pin the wire-shape sync between the compiler-side
+    // `TaskFieldKind` (this file) and the engine-side equivalent in
+    // `engine/core-engine/crates/domain/src/human.rs`. The two have to
+    // agree exactly — a kind the compiler accepts but the engine
+    // rejects wedges a live net at the human-task effect handler.
+    //
+    // The frontend's `TASK_FIELD_KINDS` in
+    // `app/src/lib/hpi/types.ts` is the third leg; it isn't
+    // auto-generated but is asserted against the OpenAPI schema in CI's
+    // `openapi-drift` check.
+
+    #[test]
+    fn task_field_kind_all_variants_round_trip_through_json() {
+        // Every TaskFieldKind round-trips through serde with its
+        // snake_case wire form. Adding a new variant without serde
+        // tagging or with a wrong rename_all here would slip past type
+        // checks but fail at compile-to-air time.
+        let cases = [
+            (TaskFieldKind::Text, "\"text\""),
+            (TaskFieldKind::Textarea, "\"textarea\""),
+            (TaskFieldKind::Number, "\"number\""),
+            (TaskFieldKind::Select, "\"select\""),
+            (TaskFieldKind::Checkbox, "\"checkbox\""),
+            (TaskFieldKind::File, "\"file\""),
+            (TaskFieldKind::Signature, "\"signature\""),
+            (TaskFieldKind::Radio, "\"radio\""),
+            (TaskFieldKind::Date, "\"date\""),
+            (TaskFieldKind::Range, "\"range\""),
+            (TaskFieldKind::Rating, "\"rating\""),
+        ];
+        for (kind, wire) in cases {
+            let ser = serde_json::to_string(&kind).expect("serialize");
+            assert_eq!(ser, wire, "wire form drift for {kind:?}");
+            let back: TaskFieldKind = serde_json::from_str(wire).expect("deserialize");
+            assert_eq!(back, kind, "round-trip drift for {wire}");
+        }
+    }
+
+    #[test]
+    fn task_field_kind_maps_to_typed_port_field_kind() {
+        // The compiler emits a typed `Port` for the HumanTask's parked
+        // output by mapping each Input block's field kind through this
+        // From impl. Pin the mapping so downstream borrow-checking can
+        // rely on the typed-ports superset (`Bool` for checkbox, etc.).
+        assert_eq!(FieldKind::from(TaskFieldKind::Text), FieldKind::Text);
+        assert_eq!(FieldKind::from(TaskFieldKind::Textarea), FieldKind::Textarea);
+        assert_eq!(FieldKind::from(TaskFieldKind::Number), FieldKind::Number);
+        assert_eq!(FieldKind::from(TaskFieldKind::Select), FieldKind::Select);
+        assert_eq!(FieldKind::from(TaskFieldKind::Checkbox), FieldKind::Bool);
+        assert_eq!(FieldKind::from(TaskFieldKind::File), FieldKind::File);
+        assert_eq!(FieldKind::from(TaskFieldKind::Signature), FieldKind::Signature);
+        // New in Feature B parity sync: Radio borrows Select's option
+        // semantics, Date is wire-text (ISO string), Range/Rating emit
+        // plain numbers.
+        assert_eq!(FieldKind::from(TaskFieldKind::Radio), FieldKind::Select);
+        assert_eq!(FieldKind::from(TaskFieldKind::Date), FieldKind::Text);
+        assert_eq!(FieldKind::from(TaskFieldKind::Range), FieldKind::Number);
+        assert_eq!(FieldKind::from(TaskFieldKind::Rating), FieldKind::Number);
+    }
+
+    #[test]
+    fn task_field_config_renderer_metadata_round_trips() {
+        // Authors set min/max/step on a Range field (or max_rating on a
+        // Rating field, or include_time on a Date field). The compiler
+        // must serialize these so the engine can forward them to the
+        // renderer — otherwise the per-field customization disappears
+        // between editor and run.
+        let raw = serde_json::json!({
+            "name": "score",
+            "label": "Score",
+            "kind": "range",
+            "required": true,
+            "min": 0,
+            "max": 10,
+            "step": 0.5,
+        });
+        let field: TaskFieldConfig =
+            serde_json::from_value(raw.clone()).expect("range field parses");
+        assert_eq!(field.kind, TaskFieldKind::Range);
+        assert_eq!(field.min, Some(0.0));
+        assert_eq!(field.max, Some(10.0));
+        assert_eq!(field.step, Some(0.5));
+        // And round-trip: re-serializing must preserve the metadata.
+        let back = serde_json::to_value(&field).expect("serialize");
+        assert_eq!(back["min"], 0.0);
+        assert_eq!(back["max"], 10.0);
+        assert_eq!(back["step"], 0.5);
+    }
+
+    #[test]
+    fn task_field_config_omits_unset_metadata_from_wire() {
+        // skip_serializing_if = "Option::is_none" must hold for every
+        // optional metadata key — otherwise byte-identity guards for
+        // legacy TaskField shapes break and OpenAPI drift cycles
+        // forever as tests churn the spec.
+        let field = TaskFieldConfig {
+            name: "x".into(),
+            label: "X".into(),
+            kind: TaskFieldKind::Text,
+            required: None,
+            placeholder: None,
+            description_mdsvex: None,
+            options: None,
+            accept: None,
+            max_file_size: None,
+            max_files: None,
+            signature_mode: None,
+            pen_color: None,
+            min: None,
+            max: None,
+            step: None,
+            max_rating: None,
+            include_time: None,
+        };
+        let wire = serde_json::to_value(&field).expect("serialize");
+        let obj = wire.as_object().expect("object");
+        // Only name + label + kind survive when nothing else is set.
+        let mut keys: Vec<&str> = obj.keys().map(|s| s.as_str()).collect();
+        keys.sort();
+        assert_eq!(keys, vec!["kind", "label", "name"]);
     }
 
     #[test]

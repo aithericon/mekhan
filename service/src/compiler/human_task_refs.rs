@@ -285,8 +285,7 @@ mod tests {
                     label: "Amount".into(),
                     kind: TaskFieldKind::Number,
                     required: Some(true),
-                    placeholder: None,
-                    options: None,
+                    ..TaskFieldConfig::default()
                 },
             }],
         };

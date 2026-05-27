@@ -3225,11 +3225,49 @@ export interface components {
             type: "repeater";
         };
         TaskFieldConfig: {
+            /**
+             * @description For `File` kind: accepted file types as an HTML input `accept`
+             *     attribute (e.g. `"image/png,image/jpeg,.pdf"`). Ignored for
+             *     non-file kinds.
+             */
+            accept?: string | null;
+            /** @description Per-field helper text shown under the input. Mdsvex source. */
+            description_mdsvex?: string | null;
+            /**
+             * @description For `Date` kind: when true, capture date + time (`YYYY-MM-DDTHH:MM`);
+             *     otherwise capture date only (`YYYY-MM-DD`).
+             */
+            include_time?: boolean | null;
             kind: components["schemas"]["TaskFieldKind"];
             label: string;
+            /**
+             * Format: double
+             * @description For `Number` / `Range` kinds: maximum allowed value (inclusive).
+             */
+            max?: number | null;
+            /**
+             * Format: int64
+             * @description For `File` kind: maximum file size in bytes.
+             */
+            max_file_size?: number | null;
+            /**
+             * Format: int32
+             * @description For `File` kind: maximum number of files (defaults to 1).
+             */
+            max_files?: number | null;
+            /**
+             * Format: int32
+             * @description For `Rating` kind: number of stars (defaults to 5).
+             */
+            max_rating?: number | null;
+            /**
+             * Format: double
+             * @description For `Number` / `Range` kinds: minimum allowed value (inclusive).
+             */
+            min?: number | null;
             name: string;
             /**
-             * @description Choice list for `kind = "select"`. Authored as
+             * @description Choice list for `kind = "select"` / `"radio"`. Authored as
              *     `[{"value": "approve", "label": "Approve"}, …]` — `value` is the
              *     canonical wire value submitted by the form, `label` is the
              *     human-facing display string. A bare string shorthand
@@ -3238,16 +3276,33 @@ export interface components {
              *     for trivial sets while keeping the runtime representation uniform.
              */
             options?: components["schemas"]["SelectOption"][] | null;
+            /** @description For `Signature` kind: ink color (CSS color string). */
+            pen_color?: string | null;
             placeholder?: string | null;
             required?: boolean | null;
+            /**
+             * @description For `Signature` kind: capture mode (currently only `"draw"` is
+             *     implemented).
+             */
+            signature_mode?: string | null;
+            /**
+             * Format: double
+             * @description For `Number` / `Range` kinds: step increment (defaults to 1).
+             */
+            step?: number | null;
         };
         /**
          * @description Form-field control kind for `input` task blocks. Snake-case wire values
          *     such as `"text"`, `"textarea"`, `"number"`, `"select"`, `"checkbox"`,
-         *     `"file"`, `"signature"`.
+         *     `"file"`, `"signature"`, `"radio"`, `"date"`, `"range"`, `"rating"`.
+         *     Must stay in sync with the engine's `TaskFieldKind` in
+         *     `engine/core-engine/crates/domain/src/human.rs` and the frontend's
+         *     `TASK_FIELD_KINDS` in `app/src/lib/hpi/types.ts` — drift means the
+         *     compiler accepts an author's choice that the engine rejects (or
+         *     vice-versa).
          * @enum {string}
          */
-        TaskFieldKind: "text" | "textarea" | "number" | "select" | "checkbox" | "file" | "signature";
+        TaskFieldKind: "text" | "textarea" | "number" | "select" | "checkbox" | "file" | "signature" | "radio" | "date" | "range" | "rating";
         /**
          * @description Response shape for `GET /api/v1/tasks`.
          *
