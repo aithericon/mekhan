@@ -162,16 +162,18 @@
 			disabled={readonly}
 			oninput={(e) =>
 				updateRecipient(field, idx, (e.currentTarget as HTMLInputElement).value)}
-			class="flex-1 font-mono"
+			class="min-w-0 flex-1 font-mono"
 			data-testid={`smtp-${field}-${idx}`}
 		/>
 		{#if scope.length > 0 && !readonly}
-			<InsertRefButton
-				{scope}
-				disabled={readonly}
-				placeholder="Insert ref…"
-				oninsert={(s) => updateRecipient(field, idx, appendSnippet(addr, s))}
-			/>
+			<div class="w-32 shrink-0">
+				<InsertRefButton
+					{scope}
+					disabled={readonly}
+					placeholder="Insert ref…"
+					oninsert={(s) => updateRecipient(field, idx, appendSnippet(addr, s))}
+				/>
+			</div>
 		{/if}
 		{#if !readonly}
 			<button
