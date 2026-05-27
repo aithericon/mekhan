@@ -20,10 +20,14 @@
         "output_slug": "line_approvals",
         "fields": [
           {
-            "name": "approved",
-            "label": "Approved",
-            "kind": "checkbox",
-            "required": true
+            "name": "decision",
+            "label": "Decision",
+            "kind": "select",
+            "required": true,
+            "options": [
+              {"value": "approve", "label": "Approve"},
+              {"value": "reject", "label": "Reject"}
+            ]
           },
           {
             "name": "notes",
