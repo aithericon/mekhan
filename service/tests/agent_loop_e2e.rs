@@ -539,6 +539,40 @@ fn every_emitted_rhai_script_parses() {
     );
 }
 
+/// Every terminal place the agent's lowering emits must be node-scoped
+/// (`{id}/...` or `p_{id}_*`). Without the `scoped_prefix` wrap around
+/// `executor_lifecycle`, the lifecycle's `completed`, `dead_letter`,
+/// and `cancelled` terminals escape into the top-level namespace —
+/// they collide if any other node calls `executor_lifecycle`, and the
+/// petri-net visualisation renders them as free-floating workflow
+/// terminals. Pins the wrap so a future refactor that drops it would
+/// fail here, not in production graphs.
+#[test]
+fn agent_terminals_must_be_node_scoped() {
+    let air = compile(
+        vec![start_node("s"), agent_node("a"), end_node("e")],
+        vec![edge("e1", "s", "a"), edge("e2", "a", "e")],
+    );
+    let places = air
+        .get("places")
+        .and_then(Value::as_array)
+        .expect("places array");
+    let stray: Vec<&str> = places
+        .iter()
+        .filter(|p| p.get("type").and_then(Value::as_str) == Some("terminal"))
+        .filter_map(|p| p.get("id").and_then(Value::as_str))
+        // p_*_ctrl is the workflow-exit terminal the End node's
+        // `workflow_terminals` aliases onto the upstream's split_outputs
+        // ctrl place — that's correct workflow-terminal semantics, not
+        // a lifecycle leak.
+        .filter(|id| !id.starts_with("a/") && !id.starts_with("p_") && !id.contains("/"))
+        .collect();
+    assert!(
+        stray.is_empty(),
+        "agent terminals must be node-scoped under `a/...`; found unscoped: {stray:?}"
+    );
+}
+
 /// Two tool children with the same `tool_meta.tool_name` are a hard
 /// compile error — same shape as `SlugConflict`.
 #[test]

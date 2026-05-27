@@ -367,18 +367,28 @@ fn lower_agent_loop(
     ))
     .done();
 
-    let lc = executor_lifecycle(
-        ctx,
-        ExecutorBridges {
-            inbox: exec_inbox_for_lc,
-            result_out: None,
-            failure_out: None,
-            process_id: None,
-            process_step: None,
-            catalogue: false,
-            process: false,
-        },
-    );
+    // Scoped-prefix wrap mirrors `lower_automated_step`. Without it the
+    // lifecycle's terminal places (`completed`, `dead_letter`,
+    // `cancelled`) leak into the top-level namespace and (1) collide if
+    // any other node calls `executor_lifecycle`, (2) clutter the
+    // petri-net visualisation with free-floating terminals that look
+    // like workflow exits. Inside the prefix they become
+    // `{id}/completed`, `{id}/dead_letter`, etc. — same shape an LLM
+    // AutomatedStep produces.
+    let lc = ctx.scoped_prefix(id.as_str(), label.as_str(), |ctx| {
+        executor_lifecycle(
+            ctx,
+            ExecutorBridges {
+                inbox: exec_inbox_for_lc,
+                result_out: None,
+                failure_out: None,
+                process_id: None,
+                process_step: None,
+                catalogue: false,
+                process: false,
+            },
+        )
+    });
 
     // ----- t_to_response: lc.completed + p_state_in_flight → p_response -----
     // Re-unites state with the LLM response and accumulates this turn's
