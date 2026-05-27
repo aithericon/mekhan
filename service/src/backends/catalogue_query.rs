@@ -1,19 +1,15 @@
-//! CatalogueQuery backend declaration — Phase 2.e port.
+//! CatalogueQuery backend declaration.
 //!
-//! Point-in-time read of the data catalogue. **First non-executor backend**
-//! to migrate to the registry: instead of `DispatchMode::ExecutorJob`, it
-//! uses `DispatchMode::EngineEffect { handler: "catalogue_lookup" }`. The
-//! compiler skips executor lowering entirely and emits a direct
+//! Point-in-time read of the data catalogue. Uses
+//! `DispatchMode::EngineEffect { handler: "catalogue_lookup" }` instead of
+//! `ExecutorJob`: the compiler skips executor lowering and emits a direct
 //! engine-effect handler invocation inside the Petri transition (see
 //! `lower::lower_engine_effect`).
 //!
-//! The validate body is moved verbatim from
-//! `compiler/backend_configs.rs::validate_and_transform` CatalogueQuery arm:
-//! parses the editor config into [`CatalogueQueryConfig`] (defined in the
-//! sibling `backend_configs` module) and re-serializes to the normalized
-//! `query` token shape the engine's `catalogue_lookup` handler consumes
-//! (ADR-17 convenience format). Emits NO `InputDeclaration`s — engine
-//! effects don't stage executor inputs.
+//! `validate` parses the editor config into [`CatalogueQueryConfig`] and
+//! re-serializes to the normalized `query` token shape the engine's
+//! `catalogue_lookup` handler consumes (ADR-17 convenience format). Emits
+//! NO `InputDeclaration`s — engine effects don't stage executor inputs.
 //!
 //! `schedulable: false` — engine-effect backends are inherently inline,
 //! never schedulable. The editor's Scheduled toggle hides for this backend
@@ -30,8 +26,6 @@ use crate::models::template::{ExecutionBackendType, FieldKind};
 use super::{BackendDecl, DefaultPortField, ValidationCtx, CATALOGUE_QUERY_META};
 
 /// Mirrors the engine `catalogue_lookup` handler's result token shape.
-/// Kept in lockstep with the legacy `default_output_port` arm so the
-/// registry-first path produces byte-identical port fields.
 const DEFAULT_OUTPUT_FIELDS: &[DefaultPortField] = &[
     DefaultPortField {
         name: "artifacts",

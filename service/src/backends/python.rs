@@ -1,4 +1,4 @@
-//! Python backend declaration — Phase 2.h port.
+//! Python backend declaration.
 //!
 //! Owns the editor-config → executor-config conversion + entrypoint
 //! source scanning for upstream `<slug>.<attr>` references. The
@@ -49,11 +49,9 @@ pub static PYTHON_DECL: BackendDecl = BackendDecl {
     default_editor_config: default_editor_config,
     validate: validate,
     ref_scanner: Some(ref_scanner),
-    // Resource refs in Python are name-scanned out of the source by
-    // `automated_step_resource_borrow_plan` via the legacy
-    // `resource_binding::BINDINGS::python_scanner` — Phase 3 collapses
-    // that into this decl. For now this static-path list stays empty
-    // and the dynamic source scanner stays where it is.
+    // Python resource refs are name-scanned out of the source by
+    // `ref_scanner` (which emits both data-borrow and resource-borrow
+    // heads); the static-path list stays empty by design.
     resource_alias_paths: &[],
     consumes_declared_outputs: false,
     pyi_introspection: true,

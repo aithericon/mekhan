@@ -19,9 +19,6 @@ use crate::backends::{descriptors, BackendDescriptor};
 /// default config seed, default output port. The Svelte config-panel
 /// component map (`backend-panels.ts`) stays hand-written; everything
 /// else flows from here.
-///
-/// Phase 1 ships SMTP only. The legacy match arms in `backend_configs.rs`,
-/// `template.rs`, etc. cover the other 8 backends until they're migrated.
 #[utoipa::path(
     get,
     path = "/api/v1/backends",

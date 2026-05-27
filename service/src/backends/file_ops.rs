@@ -1,23 +1,16 @@
-//! FileOps backend declaration — Phase 2.d port.
+//! FileOps backend declaration.
 //!
 //! Performs storage operations (list / stat / copy / etc.) against a
 //! configured backend (local fs, S3, GCS, Azure). Validation is pure
 //! structure: the `#[serde(tag = "operation")]` enum on `FileOpsConfig`
-//! enforces per-op required fields, so the decl's `validate` body is
-//! essentially the legacy arm's `serde_json::from_value` shape check.
+//! enforces per-op required fields, so the decl's `validate` body is a
+//! `serde_json::from_value` shape check.
 //!
-//! FileOps DOES bind workspace resources — storage credentials (S3, etc.)
-//! are looked up by `resource_alias` on each StorageConfig the operation
-//! mentions. The decl declares those alias paths so the platform's
+//! FileOps binds workspace resources — storage credentials (S3, etc.) are
+//! looked up by `resource_alias` on each StorageConfig the operation
+//! mentions. The decl declares those alias paths so
 //! `collect_resource_heads` can stage `<alias>.json` envelopes at publish
 //! time and the executor can `load_resource::<T>` at run time.
-//!
-//! The legacy `resource_binding.rs::BINDINGS` entry for FileOps stays
-//! untouched in Phase 2 (Phase 3 cleanup deletes it as a unit). Both the
-//! legacy entry and this decl point at the same alias paths.
-//!
-//! The validate body is moved verbatim from
-//! `compiler/backend_configs.rs::validate_and_transform` FileOps arm.
 
 use serde_json::{json, Value};
 
@@ -35,7 +28,6 @@ const DEFAULT_OUTPUT_FIELDS: &[DefaultPortField] = &[DefaultPortField {
     kind: FieldKind::Json,
 }];
 
-/// Mirror of the legacy `FILE_OPS_PATHS` in `compiler/resource_binding.rs`.
 /// Each StorageConfig variant the op may carry (`storage`, `source_storage`,
 /// `destination_storage`) optionally references a workspace resource by alias.
 const RESOURCE_ALIAS_PATHS: &[&[&str]] = &[

@@ -1,4 +1,4 @@
-//! Kreuzberg backend declaration — Phase 2.g port.
+//! Kreuzberg backend declaration.
 //!
 //! Document-extraction backend. Validates `file` / `files[i]` against the
 //! placeholder-syntax checker + node-attached files; emits per-field

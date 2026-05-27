@@ -1031,12 +1031,9 @@ fn lower_human_task(cx: &mut LoweringCtx) -> Result<(), CompileError> {
 /// `required`-output check to fail. Keep `[]` for them until they grow
 /// their own auto-fill or output-validation path.
 fn declared_outputs_rhai(backend: ExecutionBackendType, output: &Port) -> String {
-    let backend_consumes_declared = matches!(
-        backend,
-        ExecutionBackendType::Python
-            | ExecutionBackendType::Kreuzberg
-            | ExecutionBackendType::Llm
-    );
+    let backend_consumes_declared = crate::backends::lookup(backend)
+        .map(|d| d.consumes_declared_outputs)
+        .unwrap_or(false);
     if !backend_consumes_declared || output.fields.is_empty() {
         return "[]".to_string();
     }

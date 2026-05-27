@@ -1,4 +1,4 @@
-//! HTTP backend declaration — Phase 2.c port.
+//! HTTP backend declaration.
 //!
 //! Issues an HTTP request from the executor. No resource binding, no
 //! template/placeholder surfaces — Http's body is opaque bytes. Validates

@@ -1,4 +1,4 @@
-//! Process backend declaration — Phase 2.a port.
+//! Process backend declaration.
 //!
 //! Runs a shell command in the executor's sandbox. No resource binding, no
 //! template/placeholder surfaces — the simplest backend in the registry,

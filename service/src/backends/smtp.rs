@@ -1,4 +1,4 @@
-//! SMTP backend declaration — Phase 1 pilot for the registry.
+//! SMTP backend declaration.
 //!
 //! Owns validation, placeholder/reference scanning, default output port
 //! fields, and the editor's seed config. The bodies are moved (not

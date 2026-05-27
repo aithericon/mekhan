@@ -1,4 +1,4 @@
-//! LLM backend declaration — Phase 2.f port.
+//! LLM backend declaration.
 //!
 //! Wraps the executor's LLM backend (OpenAI / Ollama / Anthropic /
 //! local). Scans every author-string surface for `{{<slug>.<attr>}}`

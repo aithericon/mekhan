@@ -11,10 +11,6 @@
 //!   emitted heads might resolve to either graph slugs or workspace
 //!   resources; the caller (validate_resource_refs, publish handler)
 //!   filters by namespace.
-//!
-//! Phase 3 collapse — the legacy `ResourceBindingDecl` / `BINDINGS` /
-//! `python_scanner` / `smtp_scanner` are gone; the registry covers the
-//! same surface with one source of truth.
 
 use serde_json::Value;
 

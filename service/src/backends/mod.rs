@@ -274,10 +274,11 @@ impl DefaultPortField {
 
 // ─── Registry ───────────────────────────────────────────────────────────────
 
-/// Static slice of every backend. Phase 1 ships SMTP only; the legacy match
-/// arms in `backend_configs.rs`, `token_shape.rs`, `compile.rs` and
-/// `template.rs` cover the other 8 backends and fall through when
-/// `lookup(bt)` returns `None`.
+/// Static slice of every backend. Covers all 9 `ExecutionBackendType`
+/// variants — the registry-coverage test enforces it. Every dispatch site
+/// (compiler validation, ref scanning, lowering, `default_output_port`,
+/// frontend metadata) reads from this slice; there are no remaining
+/// per-backend match arms in the platform.
 pub static BACKENDS: &[&BackendDecl] = &[
     &catalogue_query::CATALOGUE_QUERY_DECL,
     &docker::DOCKER_DECL,
@@ -290,9 +291,10 @@ pub static BACKENDS: &[&BackendDecl] = &[
     &smtp::SMTP_DECL,
 ];
 
-/// Look up the decl for a backend type. Returns `None` for backends not yet
-/// migrated to the registry — callers then fall through to their legacy
-/// match arm.
+/// Look up the decl for a backend type. Returns `None` only if `BACKENDS`
+/// is missing the variant — and the registry-coverage test makes that a
+/// build-time failure, so every dispatch site can safely `.expect()` or
+/// early-out without a legacy fallback.
 pub fn lookup(backend_type: ExecutionBackendType) -> Option<&'static BackendDecl> {
     BACKENDS
         .iter()

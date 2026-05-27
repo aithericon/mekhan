@@ -1,4 +1,4 @@
-//! Docker backend declaration — Phase 2.b port.
+//! Docker backend declaration.
 //!
 //! Runs a containerized command via the executor's Docker backend. No
 //! resource binding, no template/placeholder surfaces — structurally a
