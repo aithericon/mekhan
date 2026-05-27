@@ -7,8 +7,9 @@
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { FormField } from '$lib/components/ui/form-field';
 	import CodeEditor from '../shared/CodeEditor.svelte';
-	import InsertRefButton from './InsertRefButton.svelte';
-	import ResourcePicker from './shared/ResourcePicker.svelte';
+	import LlmCommonFields, {
+		type LlmCommonShape
+	} from './shared/LlmCommonFields.svelte';
 	import { untrack } from 'svelte';
 
 	type Props = {
@@ -22,47 +23,50 @@
 
 	let { data, readonly = false, onchange, binding, nodeId, scope = [] }: Props = $props();
 
-	const providerLabels: Record<string, string> = {
-		openai: 'OpenAI',
-		anthropic: 'Anthropic',
-		ollama: 'Ollama'
-	};
+	// Project the agent's nested `data.model.*` + `data.systemPrompt` +
+	// `data.userPrompt` into the shared `LlmCommonShape` and back. The
+	// shared component knows nothing about whether values live flat or
+	// nested; the adapter handles the translation.
+	const common = $derived<LlmCommonShape>({
+		provider: data.model?.provider ?? 'anthropic',
+		model: data.model?.model ?? '',
+		apiKey: data.model?.apiKey ?? undefined,
+		baseUrl: data.model?.baseUrl ?? undefined,
+		resourceAlias: data.model?.resourceAlias ?? undefined,
+		systemPrompt: data.systemPrompt ?? undefined,
+		userPrompt: data.userPrompt
+	});
 
-	const resourceTypeForProvider: Record<string, string | null> = {
-		openai: 'openai',
-		anthropic: null,
-		ollama: null
-	};
-
-	const provider = $derived(data.model?.provider ?? 'anthropic');
-	const modelName = $derived(data.model?.model ?? '');
-	const resourceAlias = $derived(data.model?.resourceAlias ?? '');
-	const resourceType = $derived(resourceTypeForProvider[provider] ?? null);
-
-	function updateModel<K extends keyof AgentNodeData['model']>(
-		key: K,
-		value: AgentNodeData['model'][K]
-	) {
-		onchange({ ...data, model: { ...data.model, [key]: value } });
-	}
-
-	function setResourceAlias(alias: string) {
-		const next = { ...data.model } as AgentNodeData['model'];
-		if (alias) {
-			next.resourceAlias = alias;
+	function applyCommon(next: LlmCommonShape) {
+		const nextModel = { ...data.model } as AgentNodeData['model'];
+		nextModel.provider = next.provider;
+		nextModel.model = next.model;
+		setOrDelete(nextModel as Record<string, unknown>, 'apiKey', next.apiKey);
+		setOrDelete(nextModel as Record<string, unknown>, 'baseUrl', next.baseUrl);
+		setOrDelete(nextModel as Record<string, unknown>, 'resourceAlias', next.resourceAlias);
+		const nextData: AgentNodeData = { ...data, model: nextModel, userPrompt: next.userPrompt };
+		if (next.systemPrompt) {
+			nextData.systemPrompt = next.systemPrompt;
 		} else {
-			delete (next as Record<string, unknown>).resourceAlias;
+			delete (nextData as Record<string, unknown>).systemPrompt;
 		}
-		onchange({ ...data, model: next });
+		onchange(nextData);
 	}
 
-	function appendToField(field: 'systemPrompt' | 'userPrompt', snippet: string) {
-		const curr = (data[field] as string | undefined) ?? '';
-		onchange({ ...data, [field]: curr ? `${curr} ${snippet}` : snippet });
+	function setOrDelete(out: Record<string, unknown>, key: string, value: unknown) {
+		if (value === undefined || value === '' || value === null) {
+			delete out[key];
+		} else {
+			out[key] = value;
+		}
 	}
 
-	// Response format: identical UX to LlmConfigPanel — text vs json_schema,
-	// with the same draft/parse guard so mid-edit JSON isn't clobbered.
+	// Response format: agent currently has no Builder mode (LLM step's
+	// `JsonSchemaBuilder` is a separate, larger refactor to also land
+	// here). Raw JSON editor only, with the same draft/parse guard so
+	// mid-edit JSON isn't clobbered — kept duplicated from LlmConfigPanel
+	// for now because the two editors are configured differently
+	// (builder vs raw-only) and sharing them would tangle that toggle.
 	const responseFormat = $derived(
 		(data.responseFormat as Record<string, unknown> | undefined) ?? { type: 'text' }
 	);
@@ -120,103 +124,19 @@
 	const isSingleShot = $derived((data.maxTurns ?? 1) <= 1 && !data.stopWhen);
 </script>
 
-<!-- Model -->
-<div class="space-y-1.5">
-	<span class="text-sm font-medium text-muted-foreground">Provider</span>
-	<Select.Root
-		type="single"
-		value={provider}
-		onValueChange={(v) => {
-			if (v) updateModel('provider', v);
-		}}
-		disabled={readonly}
-	>
-		<Select.Trigger disabled={readonly} data-testid="agent-provider-select">
-			{providerLabels[provider] ?? 'Anthropic'}
-		</Select.Trigger>
-		<Select.Content>
-			<Select.Item value="openai" label="OpenAI" />
-			<Select.Item value="anthropic" label="Anthropic" />
-			<Select.Item value="ollama" label="Ollama" />
-		</Select.Content>
-	</Select.Root>
-</div>
-
-<FormField label="Model" for="agent-model">
-	<Input
-		id="agent-model"
-		type="text"
-		value={modelName}
-		placeholder={
-			provider === 'anthropic'
-				? 'claude-haiku-4-5-20251001'
-				: provider === 'ollama'
-					? 'llama3'
-					: 'gpt-4o'
-		}
-		disabled={readonly}
-		oninput={(e) => updateModel('model', (e.currentTarget as HTMLInputElement).value)}
-		class="font-mono"
-		data-testid="agent-model-input"
-	/>
-</FormField>
-
-<ResourcePicker
-	{resourceType}
-	selected={resourceAlias}
-	onChange={setResourceAlias}
-	label="Credentials resource"
+<LlmCommonFields
+	value={common}
+	onchange={applyCommon}
 	{readonly}
-	testId="agent-resource-select"
-	typeLabel={providerLabels[provider]}
+	{scope}
+	userPromptLabel="User Prompt"
+	userPromptPlaceholder={'Initial turn prompt. Supports {{ upstream.field }} placeholders.'}
+	systemPromptPlaceholder="You are a helpful agent. Call tools when needed and stop when finished."
+	idPrefix="agent"
 />
 
-<!-- Prompts -->
-<div class="space-y-1.5">
-	<span class="text-sm font-medium text-muted-foreground">System Prompt (optional)</span>
-	<Textarea
-		value={data.systemPrompt ?? ''}
-		placeholder="You are a helpful agent. Call tools when needed and stop when finished."
-		disabled={readonly}
-		oninput={(e) => {
-			const v = (e.currentTarget as HTMLTextAreaElement).value;
-			onchange({ ...data, systemPrompt: v || undefined });
-		}}
-		rows={3}
-		data-testid="agent-system-prompt"
-	/>
-	{#if scope.length > 0}
-		<InsertRefButton
-			{scope}
-			disabled={readonly}
-			placeholder="Insert upstream ref…"
-			oninsert={(snippet) => appendToField('systemPrompt', snippet)}
-		/>
-	{/if}
-</div>
-
-<div class="space-y-1.5">
-	<span class="text-sm font-medium text-muted-foreground">User Prompt</span>
-	<Textarea
-		value={data.userPrompt}
-		placeholder={'Initial turn prompt. Supports {{ upstream.field }} placeholders.'}
-		disabled={readonly}
-		oninput={(e) =>
-			onchange({ ...data, userPrompt: (e.currentTarget as HTMLTextAreaElement).value })}
-		rows={4}
-		data-testid="agent-user-prompt"
-	/>
-	{#if scope.length > 0}
-		<InsertRefButton
-			{scope}
-			disabled={readonly}
-			placeholder="Insert upstream ref…"
-			oninsert={(snippet) => appendToField('userPrompt', snippet)}
-		/>
-	{/if}
-</div>
-
-<!-- Loop controls -->
+<!-- Loop controls: max_turns + temperature side by side (LLM step
+     uses max_tokens here instead). -->
 <div class="flex gap-3">
 	<FormField label="Max turns" for="agent-max-turns" class="flex-1">
 		<Input
@@ -244,7 +164,7 @@
 			disabled={readonly}
 			oninput={(e) => {
 				const v = parseFloat((e.currentTarget as HTMLInputElement).value);
-				updateModel('temperature', isNaN(v) ? null : v);
+				onchange({ ...data, model: { ...data.model, temperature: isNaN(v) ? null : v } });
 			}}
 		/>
 	</FormField>
