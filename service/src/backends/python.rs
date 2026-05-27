@@ -53,7 +53,7 @@ pub static PYTHON_DECL: BackendDecl = BackendDecl {
     // `ref_scanner` (which emits both data-borrow and resource-borrow
     // heads); the static-path list stays empty by design.
     resource_alias_paths: &[],
-    consumes_declared_outputs: false,
+    consumes_declared_outputs: true,
     pyi_introspection: true,
     borrow_shape: BorrowShape::Envelope,
     validate_ref_kind: accept_any_ref_kind,
