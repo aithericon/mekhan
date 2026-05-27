@@ -129,6 +129,7 @@ fn user(subject: &str) -> AuthUser {
         display_name: Some(subject.to_string()),
         roles: Vec::new(),
         org_id: None,
+        workspace_id: None,
     }
 }
 

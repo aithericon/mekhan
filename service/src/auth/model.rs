@@ -20,8 +20,19 @@ pub struct AuthUser {
     pub display_name: Option<String>,
     #[serde(default)]
     pub roles: Vec<String>,
-    /// Present-but-unused seam for future multi-tenant data isolation.
+    /// Upstream identity-provider org id (e.g. Zitadel `urn:zitadel:iam:org:id`).
+    /// Metadata only — the authoritative tenant is `workspace_id`, looked up
+    /// from `workspaces.zitadel_org_id` by `DbPrincipalResolver`.
     pub org_id: Option<String>,
+    /// Mekhan workspace the principal is currently acting in. Populated by
+    /// `DbPrincipalResolver` from the user's `workspace_members` row (auto-
+    /// provisioned from `org_id` when a matching `workspaces.zitadel_org_id`
+    /// exists; otherwise the seeded default workspace if the user is a
+    /// member there). `None` only when no DB handle is available (unit
+    /// tests + legacy session rows; `#[serde(default)]` keeps deserialize
+    /// of old session JSON working).
+    #[serde(default)]
+    pub workspace_id: Option<Uuid>,
 }
 
 impl AuthUser {

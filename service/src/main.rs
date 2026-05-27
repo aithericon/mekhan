@@ -7,7 +7,7 @@ use mekhan_service::auth::authenticator::{
 use mekhan_service::auth::bff::oidc::{OidcClient, OidcConfig};
 use mekhan_service::auth::bff::session::{PgSessionStore, SessionStore};
 use mekhan_service::auth::dev::NoopTokenVerifier;
-use mekhan_service::auth::resolver::StaticPrincipalResolver;
+use mekhan_service::auth::resolver::DbPrincipalResolver;
 use mekhan_service::auth::zitadel::{ZitadelConfig, ZitadelTokenVerifier};
 use mekhan_service::auth::{IntrospectionVerifier, PrincipalResolver, TokenVerifier, ZitadelMgmt};
 use mekhan_service::config::{AppConfig, AuthMode};
@@ -171,8 +171,14 @@ async fn main() -> anyhow::Result<()> {
     // callback verifies the IdP's token with them, then caches the resolved
     // `AuthUser`. The per-request hot path goes through the `Authenticator`.
     let token_verifier = build_token_verifier(&config).await?;
+    // `DbPrincipalResolver` enriches the static claim mapping with a
+    // workspace lookup against `workspaces`/`workspace_members`, so every
+    // resolved `AuthUser` carries a `workspace_id`. Tests keep using
+    // `StaticPrincipalResolver` (no DB) — that path yields `workspace_id =
+    // None` which handlers tolerate by falling back to the default
+    // workspace at the call site.
     let principal_resolver: Arc<dyn PrincipalResolver> =
-        Arc::new(StaticPrincipalResolver);
+        Arc::new(DbPrincipalResolver::new(db.clone()));
 
     let session_store: Arc<dyn SessionStore> = Arc::new(PgSessionStore::new(db.clone()));
     let (authenticator, oidc) =
