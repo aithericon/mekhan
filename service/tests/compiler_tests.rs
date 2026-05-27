@@ -3954,7 +3954,9 @@ fn timeout_node_compiles_with_body_in_body_out_race_and_drain() {
                 source_handle: None,
                 target_handle: Some("body_out".to_string()),
                 label: None,
-                edge_type: "sequence".to_string(),
+                // loop_back so the DAG cycle check excludes this edge,
+                // matching Loop's convention for body completion edges.
+                edge_type: "loop_back".to_string(),
             },
             // Outer outputs: done + timeout.
             edge("e_done", "t", "e_done"),
