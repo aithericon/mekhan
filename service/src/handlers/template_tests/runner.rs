@@ -612,7 +612,7 @@ fn eval_assertion(scope: &Value, assertion: &Assertion) -> Result<AssertionOutco
     let rhs = &resolved_rhs;
     let passed = match assertion.op {
         AssertOp::Exists => actual.is_some_and(|v| !v.is_null()),
-        AssertOp::NotExists => actual.map_or(true, Value::is_null),
+        AssertOp::NotExists => actual.is_none_or(Value::is_null),
         AssertOp::Eq => actual == Some(rhs),
         AssertOp::Neq => actual != Some(rhs),
         AssertOp::Gt | AssertOp::Gte | AssertOp::Lt | AssertOp::Lte => {

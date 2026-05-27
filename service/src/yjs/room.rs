@@ -187,14 +187,12 @@ impl YjsRoom {
     async fn broadcast(&self, sender_id: u64, msg: &[u8]) {
         let clients = self.clients.read().await;
         for (&id, tx) in clients.iter() {
-            if id != sender_id {
-                if tx.send(msg.to_vec()).is_err() {
-                    tracing::warn!(
-                        template_id = %self.template_id,
-                        client_id = id,
-                        "failed to send broadcast, client likely disconnected"
-                    );
-                }
+            if id != sender_id && tx.send(msg.to_vec()).is_err() {
+                tracing::warn!(
+                    template_id = %self.template_id,
+                    client_id = id,
+                    "failed to send broadcast, client likely disconnected"
+                );
             }
         }
     }

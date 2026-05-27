@@ -86,7 +86,7 @@ async fn proxy(State(state): State<AppState>, req: Request) -> Result<Response, 
     let resp_headers = upstream.headers().clone();
     let stream = upstream
         .bytes_stream()
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e));
+        .map_err(std::io::Error::other);
 
     let mut out = Response::new(Body::from_stream(stream));
     *out.status_mut() = status;

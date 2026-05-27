@@ -142,6 +142,7 @@ pub(crate) use crate::compiler::borrow::planners::human_task::human_task_borrow_
 /// control-token references and the synthetic `Process` bucket — those
 /// are emitted as direct `Token` class attrs in the existing flat path,
 /// not as their own namespace).
+#[allow(clippy::type_complexity)]
 pub fn node_namespace_scopes(
     graph: &WorkflowGraph,
 ) -> Result<

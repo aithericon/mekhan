@@ -100,6 +100,7 @@ static KV_KEY_REGEX: LazyLock<Regex> = LazyLock::new(|| {
 /// user-supplied key is treated as a secret, the field list is stashed in
 /// `public_config.__kv_keys`, and the strays / required-fields gates are
 /// replaced by a per-key identifier-safety check.
+#[allow(clippy::type_complexity)]
 fn split_config(
     descriptor: &aithericon_resources::ResourceTypeDescriptor,
     config: Value,

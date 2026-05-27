@@ -71,11 +71,6 @@ async fn engine_available() -> bool {
     )
 }
 
-async fn body_json(body: Body) -> Value {
-    let bytes = body.collect().await.unwrap().to_bytes();
-    serde_json::from_slice(&bytes).unwrap()
-}
-
 struct TaskHandle(tokio::task::AbortHandle);
 impl Drop for TaskHandle {
     fn drop(&mut self) {
@@ -423,7 +418,7 @@ async fn malformed_catalogue_register_bumps_silent_drops() {
         // created_at intentionally omitted
     });
     let event = catalogue_register_event(1, bad_cmd);
-    publish_event(&nats.jetstream(), &net_id, "effect_completed", &event).await;
+    publish_event(nats.jetstream(), &net_id, "effect_completed", &event).await;
 
     // Wait for ingest to consume and the counter to bump.
     let start = std::time::Instant::now();
@@ -502,7 +497,7 @@ async fn dlq_endpoint_returns_malformed_payload() {
         // created_at intentionally omitted
     });
     let event = catalogue_register_event(1, bad_cmd);
-    publish_event(&nats.jetstream(), &net_id, "effect_completed", &event).await;
+    publish_event(nats.jetstream(), &net_id, "effect_completed", &event).await;
 
     // Wait for the silent_drops counter to bump (proves ingest consumed
     // the event and the projector called record_silent_drop_with).

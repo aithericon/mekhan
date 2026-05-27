@@ -83,6 +83,7 @@ pub fn export_to_dir(
 /// Read a directory into graph + files.
 ///
 /// Returns (metadata, graph, files).
+#[allow(clippy::type_complexity)]
 pub fn import_from_dir(
     dir: &Path,
 ) -> Result<(
@@ -305,7 +306,7 @@ mod tests {
         // Write text file
         std::fs::write(node_dir.join("main.py"), "print('hello')").unwrap();
         // Write binary file (fake PNG header)
-        std::fs::write(node_dir.join("screenshot.png"), &[0x89, 0x50, 0x4E, 0x47]).unwrap();
+        std::fs::write(node_dir.join("screenshot.png"), [0x89, 0x50, 0x4E, 0x47]).unwrap();
         // Write another text file
         std::fs::write(node_dir.join("config.json"), "{}").unwrap();
 
@@ -326,7 +327,7 @@ mod tests {
         // Write text file
         std::fs::write(node_dir.join("main.py"), "print('hello')").unwrap();
         // Write binary files
-        std::fs::write(node_dir.join("screenshot.png"), &[0x89, 0x50, 0x4E, 0x47]).unwrap();
+        std::fs::write(node_dir.join("screenshot.png"), [0x89, 0x50, 0x4E, 0x47]).unwrap();
         std::fs::write(node_dir.join("diagram.svg"), "<svg></svg>").unwrap();
 
         let assets = read_node_assets(tmp.path()).unwrap();
@@ -345,8 +346,8 @@ mod tests {
 
         std::fs::write(node_dir.join("main.py"), "import os").unwrap();
         std::fs::write(node_dir.join("requirements.txt"), "requests").unwrap();
-        std::fs::write(node_dir.join("input.png"), &[0x89, 0x50]).unwrap();
-        std::fs::write(node_dir.join("report.pdf"), &[0x25, 0x50]).unwrap();
+        std::fs::write(node_dir.join("input.png"), [0x89, 0x50]).unwrap();
+        std::fs::write(node_dir.join("report.pdf"), [0x25, 0x50]).unwrap();
 
         let text_files = read_node_files(tmp.path()).unwrap();
         let binary_files = read_node_assets(tmp.path()).unwrap();

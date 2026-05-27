@@ -52,7 +52,7 @@ async fn create_published_template(app: &axum::Router) -> String {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(&format!("/api/v1/templates/{id}/publish"))
+                .uri(format!("/api/v1/templates/{id}/publish"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -168,7 +168,7 @@ async fn get_nonexistent_instance_returns_404() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri(&format!("/api/v1/instances/{}", Uuid::new_v4()))
+                .uri(format!("/api/v1/instances/{}", Uuid::new_v4()))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -190,7 +190,7 @@ async fn cancel_nonexistent_instance_returns_404() {
         .oneshot(
             Request::builder()
                 .method("DELETE")
-                .uri(&format!("/api/v1/instances/{}", Uuid::new_v4()))
+                .uri(format!("/api/v1/instances/{}", Uuid::new_v4()))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -256,7 +256,7 @@ async fn list_instances_with_template_filter() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri(&format!("/api/v1/instances?template_id={template_id}"))
+                .uri(format!("/api/v1/instances?template_id={template_id}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -298,7 +298,7 @@ async fn cancel_instance_updates_status_in_db() {
         .oneshot(
             Request::builder()
                 .method("DELETE")
-                .uri(&format!("/api/v1/instances/{instance_id}"))
+                .uri(format!("/api/v1/instances/{instance_id}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -349,7 +349,7 @@ async fn cancel_already_cancelled_returns_409() {
         .oneshot(
             Request::builder()
                 .method("DELETE")
-                .uri(&format!("/api/v1/instances/{instance_id}"))
+                .uri(format!("/api/v1/instances/{instance_id}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -386,7 +386,7 @@ async fn cancel_completed_returns_409() {
         .oneshot(
             Request::builder()
                 .method("DELETE")
-                .uri(&format!("/api/v1/instances/{instance_id}"))
+                .uri(format!("/api/v1/instances/{instance_id}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -423,7 +423,7 @@ async fn get_instance_returns_data() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri(&format!("/api/v1/instances/{instance_id}"))
+                .uri(format!("/api/v1/instances/{instance_id}"))
                 .body(Body::empty())
                 .unwrap(),
         )

@@ -7,6 +7,9 @@
 //! - [`MockAuthenticator`] — the per-request authn double: decide 200/401
 //!   based on the presence of the `mekhan_session` cookie.
 
+// Per-binary subset usage — see `common/mod.rs`.
+#![allow(dead_code)]
+
 use std::collections::BTreeMap;
 
 use async_trait::async_trait;

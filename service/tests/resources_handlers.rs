@@ -93,7 +93,7 @@ async fn resources_test_app() -> (Router, PgPool, Arc<InMemoryResourceStore>) {
 
 async fn body_json(body: Body) -> Value {
     let bytes = body.collect().await.unwrap().to_bytes();
-    serde_json::from_slice(&bytes).unwrap_or_else(|_| Value::Null)
+    serde_json::from_slice(&bytes).unwrap_or(Value::Null)
 }
 
 fn pg_config_full() -> Value {

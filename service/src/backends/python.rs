@@ -19,6 +19,7 @@
 //! live in their existing call sites because they're cross-cutting):
 //! - Python-reserved-globals check (`compile.rs::PY_RESERVED_GLOBALS`)
 //! - `__BORROWED_INPUTS__` Rhai marker emission
+//!
 //! Both fire later in the compile pipeline and aren't a per-backend
 //! validate concern.
 
@@ -46,8 +47,8 @@ pub static PYTHON_DECL: BackendDecl = BackendDecl {
     meta: &PYTHON_META,
     backend_type: ExecutionBackendType::Python,
     default_output_fields: DEFAULT_OUTPUT_FIELDS,
-    default_editor_config: default_editor_config,
-    validate: validate,
+    default_editor_config,
+    validate,
     ref_scanner: Some(ref_scanner),
     // Python resource refs are name-scanned out of the source by
     // `ref_scanner` (which emits both data-borrow and resource-borrow

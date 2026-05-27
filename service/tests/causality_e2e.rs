@@ -491,7 +491,7 @@ async fn causality_full_pipeline() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(&format!(
+                .uri(format!(
                     "/api/v1/provenance/{net_id}/{some_token}?depth=5"
                 ))
                 .body(Body::empty())

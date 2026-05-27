@@ -19,6 +19,7 @@
 //!     mime_type, metadata, tables, detected_languages).
 //!   - `batch`  → aggregate (results, total_files, successful, failed,
 //!     errors).
+//!
 //! The deriver branches on `config.mode` so the editor port mirrors the
 //! actual runtime envelope.
 
@@ -73,8 +74,8 @@ pub static KREUZBERG_DECL: BackendDecl = BackendDecl {
     meta: &KREUZBERG_META,
     backend_type: ExecutionBackendType::Kreuzberg,
     default_output_fields: DEFAULT_OUTPUT_FIELDS,
-    default_editor_config: default_editor_config,
-    validate: validate,
+    default_editor_config,
+    validate,
     ref_scanner: Some(ref_scanner),
     resource_alias_paths: &[],
     consumes_declared_outputs: true,

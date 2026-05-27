@@ -1,3 +1,8 @@
+// `mod common` is included by many test binaries; each binary only references
+// a subset of these helpers, so unused items appear "dead" per-binary even
+// though they're load-bearing in others.
+#![allow(dead_code, unused_imports)]
+
 use std::future::IntoFuture;
 use std::net::SocketAddr;
 use std::sync::Arc;

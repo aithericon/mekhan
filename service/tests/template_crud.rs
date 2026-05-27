@@ -147,7 +147,7 @@ async fn get_template_by_id_returns_200() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri(&format!("/api/v1/templates/{id}"))
+                .uri(format!("/api/v1/templates/{id}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -172,7 +172,7 @@ async fn get_nonexistent_template_returns_404() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri(&format!("/api/v1/templates/{}", Uuid::new_v4()))
+                .uri(format!("/api/v1/templates/{}", Uuid::new_v4()))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -218,7 +218,7 @@ async fn update_template_changes_name_and_description() {
         .oneshot(
             Request::builder()
                 .method("PUT")
-                .uri(&format!("/api/v1/templates/{id}"))
+                .uri(format!("/api/v1/templates/{id}"))
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
@@ -276,7 +276,7 @@ async fn update_published_template_returns_409() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(&format!("/api/v1/templates/{id}/publish"))
+                .uri(format!("/api/v1/templates/{id}/publish"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -290,7 +290,7 @@ async fn update_published_template_returns_409() {
         .oneshot(
             Request::builder()
                 .method("PUT")
-                .uri(&format!("/api/v1/templates/{id}"))
+                .uri(format!("/api/v1/templates/{id}"))
                 .header("content-type", "application/json")
                 .body(Body::from(json!({"name": "Nope"}).to_string()))
                 .unwrap(),
@@ -336,7 +336,7 @@ async fn delete_template_returns_204() {
         .oneshot(
             Request::builder()
                 .method("DELETE")
-                .uri(&format!("/api/v1/templates/{id}"))
+                .uri(format!("/api/v1/templates/{id}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -368,7 +368,7 @@ async fn delete_nonexistent_template_returns_404() {
         .oneshot(
             Request::builder()
                 .method("DELETE")
-                .uri(&format!("/api/v1/templates/{}", Uuid::new_v4()))
+                .uri(format!("/api/v1/templates/{}", Uuid::new_v4()))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -413,7 +413,7 @@ async fn compile_preview_returns_air_json() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(&format!("/api/v1/templates/{id}/compile"))
+                .uri(format!("/api/v1/templates/{id}/compile"))
                 .body(Body::empty())
                 .unwrap(),
         )

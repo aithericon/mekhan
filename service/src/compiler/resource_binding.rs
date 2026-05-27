@@ -25,6 +25,29 @@ pub(crate) fn collect_resource_heads(
     ctx: &ScanCtx<'_>,
     backend_type: ExecutionBackendType,
 ) -> Vec<String> {
+    let mut heads = collect_declared_resource_aliases(ctx, backend_type);
+    if let Some(decl) = crate::backends::lookup(backend_type) {
+        if let Some(scanner) = decl.ref_scanner {
+            for r in scanner(ctx) {
+                heads.push(r.head);
+            }
+        }
+    }
+    heads
+}
+
+/// Subset of [`collect_resource_heads`] limited to aliases the backend
+/// declares via `resource_alias_paths`. Unlike the `ref_scanner` heads
+/// (which can be a slug, a control-token leaf, or a real resource), these
+/// are *unambiguous* resource bindings — a workflow author wrote
+/// `resource_alias: "mail"` on an SMTP step. The publish handler treats a
+/// missing match as a hard error so the user finds out at apply/publish
+/// time rather than getting "compiler must emit a ResourceEnvelope borrow"
+/// at run time.
+pub(crate) fn collect_declared_resource_aliases(
+    ctx: &ScanCtx<'_>,
+    backend_type: ExecutionBackendType,
+) -> Vec<String> {
     let Some(decl) = crate::backends::lookup(backend_type) else {
         return Vec::new();
     };
@@ -34,11 +57,6 @@ pub(crate) fn collect_resource_heads(
             if !alias.is_empty() {
                 heads.push(alias);
             }
-        }
-    }
-    if let Some(scanner) = decl.ref_scanner {
-        for r in scanner(ctx) {
-            heads.push(r.head);
         }
     }
     heads
@@ -115,6 +133,26 @@ mod tests {
             sorted,
             vec!["greeter".to_string(), "mail".to_string(), "recipient".to_string()]
         );
+    }
+
+    #[test]
+    fn declared_aliases_excludes_scanner_heads() {
+        // SMTP declares `resource_alias` AND a template placeholder
+        // scanner. `collect_declared_resource_aliases` must return ONLY
+        // the explicit `resource_alias` value — template heads
+        // (`greeter`, `recipient`) are ambiguous (could be slugs) and
+        // mustn't trigger the publish-time "resource not in workspace"
+        // hard fail.
+        let cfg = json!({
+            "resource_alias": "mail",
+            "subject": { "source": "Hello from {{ greeter.name }}" },
+            "body_text": { "source": "" },
+            "body_html": { "source": "" },
+            "to": ["{{ recipient.email }}"],
+        });
+        let declared =
+            collect_declared_resource_aliases(&empty_ctx(&cfg), ExecutionBackendType::Smtp);
+        assert_eq!(declared, vec!["mail".to_string()]);
     }
 
     #[test]

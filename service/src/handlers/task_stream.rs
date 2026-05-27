@@ -77,7 +77,7 @@ pub async fn task_stream(
                     if let Some(net_id) = extract_net_id(&msg.subject, "human.request.") {
                         if net_id.starts_with("mekhan-") {
                             let data = String::from_utf8_lossy(&msg.payload);
-                            yield Ok(Event::default().event("task_created").data(data.into_owned()));
+                            yield Ok(Event::default().event("task_created").data(&*data));
                         }
                     }
                 }
@@ -85,7 +85,7 @@ pub async fn task_stream(
                     if let Some(net_id) = extract_net_id(&msg.subject, "human.completed.") {
                         if net_id.starts_with("mekhan-") {
                             let data = String::from_utf8_lossy(&msg.payload);
-                            yield Ok(Event::default().event("task_completed").data(data.into_owned()));
+                            yield Ok(Event::default().event("task_completed").data(&*data));
                         }
                     }
                 }
@@ -93,7 +93,7 @@ pub async fn task_stream(
                     if let Some(net_id) = extract_net_id(&msg.subject, "human.failed.") {
                         if net_id.starts_with("mekhan-") {
                             let data = String::from_utf8_lossy(&msg.payload);
-                            yield Ok(Event::default().event("task_failed").data(data.into_owned()));
+                            yield Ok(Event::default().event("task_failed").data(&*data));
                         }
                     }
                 }
@@ -101,7 +101,7 @@ pub async fn task_stream(
                     if let Some(net_id) = extract_net_id(&msg.subject, "human.cancelled.") {
                         if net_id.starts_with("mekhan-") {
                             let data = String::from_utf8_lossy(&msg.payload);
-                            yield Ok(Event::default().event("task_cancelled").data(data.into_owned()));
+                            yield Ok(Event::default().event("task_cancelled").data(&*data));
                         }
                     }
                 }
@@ -109,7 +109,7 @@ pub async fn task_stream(
                     if let Some(namespace) = extract_net_id(&msg.subject, "human.process.") {
                         if namespace.starts_with("mekhan-") {
                             let data = String::from_utf8_lossy(&msg.payload);
-                            yield Ok(Event::default().event("process_update").data(data.into_owned()));
+                            yield Ok(Event::default().event("process_update").data(&*data));
                         }
                     }
                 }

@@ -303,7 +303,7 @@ async fn process_get_detail() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri(&format!("/api/v1/processes/{tid}"))
+                .uri(format!("/api/v1/processes/{tid}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -335,7 +335,7 @@ async fn process_update() {
         .oneshot(
             Request::builder()
                 .method("PUT")
-                .uri(&format!("/api/v1/processes/{tid}"))
+                .uri(format!("/api/v1/processes/{tid}"))
                 .header("content-type", "application/json")
                 .body(Body::from(
                     serde_json::to_string(&json!({
@@ -406,7 +406,7 @@ async fn process_metrics() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(&format!("/api/v1/processes/{tid}/metrics"))
+                .uri(format!("/api/v1/processes/{tid}/metrics"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -421,7 +421,7 @@ async fn process_metrics() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri(&format!("/api/v1/processes/{tid}/metrics?key=loss"))
+                .uri(format!("/api/v1/processes/{tid}/metrics?key=loss"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -453,7 +453,7 @@ async fn process_logs() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(&format!("/api/v1/processes/{tid}/logs"))
+                .uri(format!("/api/v1/processes/{tid}/logs"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -468,7 +468,7 @@ async fn process_logs() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri(&format!("/api/v1/processes/{tid}/logs?filter[level][eq]=error"))
+                .uri(format!("/api/v1/processes/{tid}/logs?filter[level][eq]=error"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -497,7 +497,7 @@ async fn process_tasks() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri(&format!("/api/v1/processes/{tid}/tasks"))
+                .uri(format!("/api/v1/processes/{tid}/tasks"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -525,7 +525,7 @@ async fn process_artifacts() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri(&format!("/api/v1/processes/{tid}/artifacts"))
+                .uri(format!("/api/v1/processes/{tid}/artifacts"))
                 .body(Body::empty())
                 .unwrap(),
         )

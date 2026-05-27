@@ -310,6 +310,19 @@ pub enum CompileError {
     )]
     ResourceAliasCollidesWithToken { alias: String },
 
+    /// A step explicitly declared `resource_alias: "<alias>"` (via the
+    /// backend's `resource_alias_paths`), but the workspace has no
+    /// resource at that path. Without this hard fail at publish time the
+    /// AIR would still build — minus the resource borrow — and the SMTP /
+    /// LLM / FileOps backend would crash at run time with "compiler must
+    /// emit a ResourceEnvelope borrow". This variant points the operator
+    /// at the right fix (create the resource at `/resources`).
+    #[error(
+        "node '{node_id}': resource_alias '{alias}' is not defined in this workspace — \
+         create it at /resources before publishing"
+    )]
+    WorkspaceResourceUnknown { node_id: String, alias: String },
+
     /// `executionSpec.config` (or a nested value) carries a
     /// `{"$ref": "#/definitions/<name>"}` that the workflow-level
     /// `definitions` map can't resolve — unknown name, cycle,
@@ -419,6 +432,7 @@ impl CompileError {
             Self::ResourceTypeUnknown { .. } => "resource_type_unknown",
             Self::ResourceAliasCollidesWithSlug { .. } => "resource_alias_collides_with_slug",
             Self::ResourceAliasCollidesWithToken { .. } => "resource_alias_collides_with_token",
+            Self::WorkspaceResourceUnknown { .. } => "workspace_resource_unknown",
             Self::SchemaRefUnresolved { .. } => "schema_ref_unresolved",
             Self::RepeaterRefMalformed { .. } => "repeater_ref_malformed",
             Self::RepeaterRefUnresolved { .. } => "repeater_ref_unresolved",
@@ -471,7 +485,8 @@ impl CompileError {
             | Self::RepeaterRefMalformed { node_id, .. }
             | Self::RepeaterRefUnresolved { node_id, .. }
             | Self::RepeaterItemsRefNotArray { node_id, .. }
-            | Self::RepeaterOutputSlugInvalid { node_id, .. } => Some(node_id),
+            | Self::RepeaterOutputSlugInvalid { node_id, .. }
+            | Self::WorkspaceResourceUnknown { node_id, .. } => Some(node_id),
             _ => None,
         }
     }

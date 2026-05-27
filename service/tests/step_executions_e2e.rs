@@ -156,6 +156,7 @@ async fn engine_available() -> bool {
 }
 
 #[tokio::test]
+#[allow(clippy::type_complexity)]
 async fn step_executions_materialize_for_completed_instance() {
     if !engine_available().await {
         panic!(

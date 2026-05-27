@@ -51,7 +51,7 @@ pub(super) fn lower_join(cx: &mut LoweringCtx) -> Result<(), CompileError> {
             // token also lands at the parked `p_<id>_data` place.
             let mut tb = ctx.transition(format!("t_{id}_join"), format!("{label} - Join"));
             for (i, (_, p_in)) in input_place_ids.iter().enumerate() {
-                tb = tb.auto_input(&format!("in_{i}"), p_in);
+                tb = tb.auto_input(format!("in_{i}"), p_in);
             }
             tb = tb
                 .auto_output("output", &p_output)

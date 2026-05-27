@@ -642,6 +642,7 @@ pub async fn publish_template(
 ///
 /// Reads from the new schema: Y.Map("nodes"), Y.Array("edges"), Y.Map("viewport").
 /// Also extracts Y.Text file entries from `nodes[nodeId].files`.
+#[allow(clippy::type_complexity)]
 async fn reconstruct_graph_from_ydoc(
     state: &AppState,
     template_id: Uuid,

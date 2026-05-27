@@ -14,6 +14,7 @@ import ProgressUpdateNode from './ProgressUpdateNode.svelte';
 import FailureNode from './FailureNode.svelte';
 import TriggerNode from './TriggerNode.svelte';
 import SubWorkflowNode from './SubWorkflowNode.svelte';
+import AgentNode from './AgentNode.svelte';
 
 export const nodeTypes: NodeTypes = {
 	start: StartNode as any,
@@ -30,5 +31,6 @@ export const nodeTypes: NodeTypes = {
 	progress_update: ProgressUpdateNode as any,
 	failure: FailureNode as any,
 	trigger: TriggerNode as any,
-	sub_workflow: SubWorkflowNode as any
+	sub_workflow: SubWorkflowNode as any,
+	agent: AgentNode as any
 };

@@ -135,14 +135,12 @@ pub(crate) fn validate(graph: &WorkflowGraph, wg: &WorkflowDiGraph) -> Result<()
     // it. Reject at publish so hand-authored JSON can't silently produce a
     // graph the editor won't render correctly.
     for node in &graph.nodes {
-        if let WorkflowNodeData::Decision { default_branch, .. } = &node.data {
-            if let Some(db) = default_branch {
-                if db != DEFAULT_BRANCH_HANDLE_ID {
-                    return Err(CompileError::Validation(format!(
-                        "decision '{}' defaultBranch must be exactly \"{}\", got \"{}\"",
-                        node.id, DEFAULT_BRANCH_HANDLE_ID, db
-                    )));
-                }
+        if let WorkflowNodeData::Decision { default_branch: Some(db), .. } = &node.data {
+            if db != DEFAULT_BRANCH_HANDLE_ID {
+                return Err(CompileError::Validation(format!(
+                    "decision '{}' defaultBranch must be exactly \"{}\", got \"{}\"",
+                    node.id, DEFAULT_BRANCH_HANDLE_ID, db
+                )));
             }
         }
     }
