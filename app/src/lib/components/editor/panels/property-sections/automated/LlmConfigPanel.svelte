@@ -57,6 +57,55 @@
 	const responseFormatType = $derived(
 		((config.response_format as Record<string, unknown>)?.type as string) ?? 'text'
 	);
+
+	// Track the schema editor's raw text + last parse error so we can
+	// surface "your schema is invalid JSON, the output fields are stale"
+	// rather than swallowing the parse failure (which is what made the
+	// editor look broken — typing a half-finished schema silently held
+	// the derived fields at the last good shape).
+	let schemaDraft = $state('');
+	let schemaParseError = $state<string | null>(null);
+
+	// Seed + resync the draft + error from the underlying config (initial
+	// mount, response-format toggle, Yjs round-trip from a remote peer).
+	// Avoids ghost parse errors that survived a format switch, and keeps
+	// the editor's first paint aligned with persisted state. Reads `config`
+	// inside the effect (not in `$state`'s init expression) so Svelte
+	// tracks the prop reactively.
+	$effect(() => {
+		const next = JSON.stringify(
+			(config.response_format as Record<string, unknown>)?.schema ?? {},
+			null,
+			2
+		);
+		if (next !== schemaDraft) {
+			schemaDraft = next;
+			schemaParseError = null;
+		}
+	});
+
+	// Heuristic for "schema parses but has no usable shape" — the
+	// derive endpoint will fall back to a single text-mode `response`
+	// field, which often surprises authors who expected their schema
+	// to drive the output. Mirror the deriver's logic so the message
+	// matches what they'll actually see.
+	const schemaIsEffectivelyEmpty = $derived.by(() => {
+		if (responseFormatType !== 'json_schema') return false;
+		const schema = (config.response_format as Record<string, unknown>)?.schema as
+			| Record<string, unknown>
+			| undefined;
+		if (!schema || Object.keys(schema).length === 0) return true;
+		const t = schema.type as string | undefined;
+		// Object schemas need `properties` to expand into per-field outputs.
+		if (t === 'object') {
+			const props = schema.properties as Record<string, unknown> | undefined;
+			return !props || Object.keys(props).length === 0;
+		}
+		// Scalar/array schemas always derive a single `response` field
+		// (handled by the backend). Anything with no `type` at all is
+		// untyped → falls back to text mode.
+		return t == null;
+	});
 </script>
 
 <div class="space-y-1.5">
@@ -248,28 +297,46 @@
 	<div class="space-y-1.5">
 		<span class="text-sm font-medium text-muted-foreground">JSON Schema</span>
 		<CodeEditor
-			value={JSON.stringify(
-				(config.response_format as Record<string, unknown>)?.schema ?? {},
-				null,
-				2
-			)}
+			value={schemaDraft}
 			language="json"
 			{readonly}
 			minHeight="80px"
 			maxHeight="200px"
 			onchange={(val) => {
+				schemaDraft = val;
 				try {
+					const parsed = JSON.parse(val);
+					schemaParseError = null;
 					onchange({
 						...config,
 						response_format: {
 							type: 'json_schema',
-							schema: JSON.parse(val)
+							schema: parsed
 						}
 					});
-				} catch {
-					// Wait for valid JSON
+				} catch (e) {
+					// Hold the last good schema (don't propagate) but
+					// surface the parse error so the user knows the
+					// derived output port is frozen until they fix it.
+					schemaParseError = e instanceof Error ? e.message : String(e);
 				}
 			}}
 		/>
+		{#if schemaParseError}
+			<p class="text-sm text-destructive" data-testid="llm-schema-parse-error">
+				Invalid JSON — output fields won't update until this is fixed. ({schemaParseError})
+			</p>
+		{:else if schemaIsEffectivelyEmpty}
+			<p class="text-sm text-muted-foreground" data-testid="llm-schema-empty-hint">
+				Schema has no declared shape — output falls back to a single
+				<code class="rounded bg-muted px-1 py-0.5 font-mono text-sm">response</code> field. Add
+				<code class="rounded bg-muted px-1 py-0.5 font-mono text-sm">"type"</code> (e.g.
+				<code class="rounded bg-muted px-1 py-0.5 font-mono text-sm">"string"</code>) for a single
+				scalar output, or
+				<code class="rounded bg-muted px-1 py-0.5 font-mono text-sm">"type":"object"</code> +
+				<code class="rounded bg-muted px-1 py-0.5 font-mono text-sm">"properties"</code> to expand into
+				multiple fields.
+			</p>
+		{/if}
 	</div>
 {/if}

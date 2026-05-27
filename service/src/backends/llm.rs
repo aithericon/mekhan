@@ -244,6 +244,7 @@ fn derive_output_port(config: &Value) -> Port {
     match fmt_type {
         Some("json_schema") => {
             let schema = fmt.and_then(|v| v.get("schema"));
+            let schema_type = schema.and_then(|s| s.get("type")).and_then(|v| v.as_str());
             let props = schema
                 .and_then(|s| s.get("properties"))
                 .and_then(|p| p.as_object());
@@ -252,27 +253,70 @@ fn derive_output_port(config: &Value) -> Port {
                 .and_then(|r| r.as_array())
                 .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
                 .unwrap_or_default();
-            if let Some(props) = props {
-                for (name, prop) in props.iter() {
+            match (schema_type, props) {
+                // Object with explicit properties → one field per property.
+                // This is the canonical "structured output" shape: the
+                // executor's `unpack_by_name` walks the same property set
+                // and routes each to a same-named declared output port.
+                (Some("object"), Some(props)) => {
+                    for (name, prop) in props.iter() {
+                        fields.push(PortField {
+                            name: name.clone(),
+                            label: prop
+                                .get("title")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string())
+                                .unwrap_or_else(|| name.clone()),
+                            kind: kind_from_json_schema(prop),
+                            required: required.contains(name.as_str()),
+                            options: None,
+                            description: prop
+                                .get("description")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string()),
+                            accept: None,
+                        });
+                    }
+                }
+                // Root-level scalar/array schema → a single `response`
+                // field whose kind matches the schema's `type`. The
+                // runner returns the parsed value (string / number / bool
+                // / array) under `outputs.response` (it never unpacks a
+                // non-object); the label comes from the schema's `title`
+                // if the author gave one, so a `{title:"Sentiment",
+                // type:"string"}` schema shows up as a single
+                // "Sentiment"-labeled Text field instead of the generic
+                // text-mode placeholder.
+                (Some("string"), _)
+                | (Some("integer"), _)
+                | (Some("number"), _)
+                | (Some("boolean"), _)
+                | (Some("array"), _) => {
+                    let label = schema
+                        .and_then(|s| s.get("title"))
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| "Response".to_string());
+                    let description = schema
+                        .and_then(|s| s.get("description"))
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
                     fields.push(PortField {
-                        name: name.clone(),
-                        label: prop
-                            .get("title")
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string())
-                            .unwrap_or_else(|| name.clone()),
-                        kind: kind_from_json_schema(prop),
-                        required: required.contains(name.as_str()),
+                        name: "response".into(),
+                        label,
+                        kind: schema.map(kind_from_json_schema).unwrap_or(FieldKind::Textarea),
+                        required: false,
                         options: None,
-                        description: prop
-                            .get("description")
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string()),
+                        description,
                         accept: None,
                     });
                 }
-            } else {
-                fields.push(text_response_field());
+                // Object with no declared properties, missing `type`, or
+                // anything we don't recognize → text-mode fallback. The
+                // runner emits the assistant's content as the `response`
+                // string; declaring more shape here would just mislead
+                // downstream consumers.
+                _ => fields.push(text_response_field()),
             }
         }
         _ => {
@@ -346,6 +390,7 @@ fn kind_from_json_schema(prop: &Value) -> FieldKind {
         }
         Some("integer") | Some("number") => FieldKind::Number,
         Some("boolean") => FieldKind::Bool,
+        Some("object") | Some("array") => FieldKind::Json,
         _ => FieldKind::Json,
     }
 }
@@ -406,5 +451,53 @@ mod tests {
         let port = derive_output_port(&cfg);
         let names: Vec<_> = port.fields.iter().map(|f| f.name.as_str()).collect();
         assert_eq!(names, ["response", "usage", "finish_reason", "model"]);
+    }
+
+    #[test]
+    fn derive_root_scalar_string_schema() {
+        // Root-level scalar schema — the case the user hit. The LLM
+        // returns a single string; we expose it as one `response` field
+        // labeled from the schema's `title`, kind Text (not Textarea —
+        // root scalars are usually short answers).
+        let cfg = json!({
+            "response_format": {
+                "type": "json_schema",
+                "schema": { "type": "string", "title": "Sentiment" }
+            }
+        });
+        let port = derive_output_port(&cfg);
+        let names: Vec<_> = port.fields.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, ["response", "usage", "finish_reason", "model"]);
+        let response = port.fields.iter().find(|f| f.name == "response").unwrap();
+        assert_eq!(response.kind, FieldKind::Text);
+        assert_eq!(response.label, "Sentiment");
+    }
+
+    #[test]
+    fn derive_root_number_schema() {
+        let cfg = json!({
+            "response_format": {
+                "type": "json_schema",
+                "schema": { "type": "number" }
+            }
+        });
+        let port = derive_output_port(&cfg);
+        let response = port.fields.iter().find(|f| f.name == "response").unwrap();
+        assert_eq!(response.kind, FieldKind::Number);
+        assert_eq!(response.label, "Response");
+    }
+
+    #[test]
+    fn derive_root_array_schema() {
+        let cfg = json!({
+            "response_format": {
+                "type": "json_schema",
+                "schema": { "type": "array", "title": "Tags" }
+            }
+        });
+        let port = derive_output_port(&cfg);
+        let response = port.fields.iter().find(|f| f.name == "response").unwrap();
+        assert_eq!(response.kind, FieldKind::Json);
+        assert_eq!(response.label, "Tags");
     }
 }
