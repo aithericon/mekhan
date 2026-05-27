@@ -126,6 +126,10 @@ impl ApiError {
         Self::new(StatusCode::CONFLICT, message)
     }
 
+    pub fn forbidden(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::FORBIDDEN, message)
+    }
+
     /// Bad-request error that attaches a structured `compile_errors` payload
     /// so the editor can highlight inline. The handler stays in control of
     /// the surrounding human-readable message (kept terse to avoid duplicating

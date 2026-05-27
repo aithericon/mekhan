@@ -8,7 +8,7 @@ use axum::{
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::auth::AuthUser;
+use crate::auth::{require_role, AuthUser, MembershipError, Role};
 use crate::compiler::{
     compile_to_air, compile_to_air_with_subworkflows_inline, generate_py_io_files,
     node_files_inline, node_files_storage_path, node_input_scopes, node_namespace_scopes,
@@ -25,6 +25,48 @@ use crate::models::template::{
 use crate::models::template_test::{FailingTestInfo, PublishGateBlockedResponse, TemplateTest};
 use crate::process::publish::{resolve_subworkflow_air, CompiledArtifacts, PublishService};
 use crate::AppState;
+
+/// Visibility-aware read gate: passes when the template is `public` OR the
+/// caller is at least a `viewer` member of the template's workspace. Maps
+/// the underlying membership errors to standard `ApiError` shapes.
+fn gate_template_read(
+    _state: &AppState,
+    user: &AuthUser,
+    template: &WorkflowTemplate,
+) -> Result<(), ApiError> {
+    if template.visibility == "public" {
+        return Ok(());
+    }
+    let user_ws = user.workspace_id.unwrap_or_else(Uuid::nil);
+    if template.workspace_id == user_ws {
+        return Ok(());
+    }
+    Err(ApiError::forbidden("not a member of this template's workspace"))
+}
+
+/// Write gate for mutate paths (update/delete/publish): requires the caller
+/// to be at least an `editor` member of the template's workspace. Public
+/// visibility does NOT grant write — cross-workspace reads of public
+/// templates are read-only by design.
+async fn gate_template_write(
+    state: &AppState,
+    user: &AuthUser,
+    template: &WorkflowTemplate,
+) -> Result<(), ApiError> {
+    match require_role(&state.db, user, template.workspace_id, Role::Editor).await {
+        Ok(_) => Ok(()),
+        Err(MembershipError::NotMember(_)) => {
+            Err(ApiError::forbidden("not a member of this template's workspace"))
+        }
+        Err(MembershipError::InsufficientRole { .. }) => {
+            Err(ApiError::forbidden("editor role required"))
+        }
+        Err(MembershipError::TemplateNotFound(_)) => {
+            Err(ApiError::not_found("template not found"))
+        }
+        Err(MembershipError::Db(e)) => Err(ApiError::internal(e.to_string())),
+    }
+}
 
 #[derive(Debug, Deserialize, utoipa::IntoParams)]
 pub struct PublishQuery {
@@ -56,10 +98,16 @@ pub async fn create_template(
     let graph_json = serde_json::to_value(&graph).unwrap();
     let description = req.description.unwrap_or_default();
 
+    // Anchor the new template in the caller's workspace. Falls back to the
+    // seeded default workspace (Uuid::nil()) when the resolver didn't
+    // populate workspace_id — keeps test paths (which use the no-DB
+    // StaticPrincipalResolver) writing into a valid workspace.
+    let workspace_id = user.workspace_id.unwrap_or_else(Uuid::nil);
+
     let template = sqlx::query_as::<_, WorkflowTemplate>(
         r#"
-        INSERT INTO workflow_templates (id, name, description, base_template_id, version, is_latest, graph, author_id)
-        VALUES ($1, $2, $3, $1, 1, TRUE, $4, $5)
+        INSERT INTO workflow_templates (id, name, description, base_template_id, version, is_latest, graph, author_id, workspace_id)
+        VALUES ($1, $2, $3, $1, 1, TRUE, $4, $5, $6)
         RETURNING *
         "#,
     )
@@ -68,6 +116,7 @@ pub async fn create_template(
     .bind(&description)
     .bind(&graph_json)
     .bind(user.subject_as_uuid())
+    .bind(workspace_id)
     .fetch_one(&state.db)
     .await
     .map_err(|e| {
@@ -114,17 +163,26 @@ pub async fn create_template(
 )]
 pub async fn list_templates(
     State(state): State<AppState>,
+    user: AuthUser,
     Query(params): Query<ListTemplatesQuery>,
 ) -> Json<PaginatedResponse<WorkflowTemplate>> {
     let offset = (params.page - 1) * params.per_page;
+    let workspace_id = user.workspace_id.unwrap_or_else(Uuid::nil);
 
-    // Build dynamic query based on filters
-    let (items, total): (Vec<WorkflowTemplate>, i64) = if let Some(base_id) = params.base_template_id {
-        // List versions for a specific template chain
+    // The version-chain listing (base_template_id != None) is a separate
+    // mode: it shows every version of a template chain regardless of
+    // is_latest. Workspace gate still applies — but on the chain root's
+    // workspace (versions inherit it, since `new_version` keeps the same
+    // workspace_id by default per the DB column DEFAULT).
+    if let Some(base_id) = params.base_template_id {
         let items = sqlx::query_as::<_, WorkflowTemplate>(
-            "SELECT * FROM workflow_templates WHERE base_template_id = $1 ORDER BY version DESC LIMIT $2 OFFSET $3",
+            "SELECT * FROM workflow_templates \
+              WHERE base_template_id = $1 \
+                AND (workspace_id = $2 OR visibility = 'public') \
+              ORDER BY version DESC LIMIT $3 OFFSET $4",
         )
         .bind(base_id)
+        .bind(workspace_id)
         .bind(params.per_page)
         .bind(offset)
         .fetch_all(&state.db)
@@ -132,109 +190,115 @@ pub async fn list_templates(
         .unwrap_or_default();
 
         let total: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM workflow_templates WHERE base_template_id = $1",
+            "SELECT COUNT(*) FROM workflow_templates \
+              WHERE base_template_id = $1 \
+                AND (workspace_id = $2 OR visibility = 'public')",
         )
         .bind(base_id)
+        .bind(workspace_id)
         .fetch_one(&state.db)
         .await
         .unwrap_or((0,));
 
-        (items, total.0)
-    } else {
-        // List latest versions, optionally filtered — all parameters bound safely
-        match (params.published, &params.search) {
-            (Some(published), Some(search)) => {
-                let pattern = format!("%{search}%");
-                let items = sqlx::query_as::<_, WorkflowTemplate>(
-                    "SELECT * FROM workflow_templates WHERE is_latest = TRUE AND published = $1 AND (name ILIKE $2 OR description ILIKE $2) ORDER BY updated_at DESC LIMIT $3 OFFSET $4",
-                )
-                .bind(published)
-                .bind(&pattern)
-                .bind(params.per_page)
-                .bind(offset)
-                .fetch_all(&state.db)
-                .await
-                .unwrap_or_default();
+        return Json(PaginatedResponse {
+            items,
+            total: total.0,
+            page: params.page,
+            per_page: params.per_page,
+        });
+    }
 
-                let total: (i64,) = sqlx::query_as(
-                    "SELECT COUNT(*) FROM workflow_templates WHERE is_latest = TRUE AND published = $1 AND (name ILIKE $2 OR description ILIKE $2)",
-                )
-                .bind(published)
-                .bind(&pattern)
-                .fetch_one(&state.db)
-                .await
-                .unwrap_or((0,));
+    // Latest-version listing with composable filters. Use QueryBuilder so
+    // every optional filter (workspace, project_id, tag, published, search)
+    // composes through one code path. The workspace clause is mandatory:
+    // `(workspace_id = $ws OR visibility = 'public')`.
+    use sqlx::QueryBuilder;
 
-                (items, total.0)
-            }
-            (Some(published), None) => {
-                let items = sqlx::query_as::<_, WorkflowTemplate>(
-                    "SELECT * FROM workflow_templates WHERE is_latest = TRUE AND published = $1 ORDER BY updated_at DESC LIMIT $2 OFFSET $3",
-                )
-                .bind(published)
-                .bind(params.per_page)
-                .bind(offset)
-                .fetch_all(&state.db)
-                .await
-                .unwrap_or_default();
+    let mut qb: QueryBuilder<sqlx::Postgres> = QueryBuilder::new(
+        "SELECT t.* FROM workflow_templates t",
+    );
 
-                let total: (i64,) = sqlx::query_as(
-                    "SELECT COUNT(*) FROM workflow_templates WHERE is_latest = TRUE AND published = $1",
-                )
-                .bind(published)
-                .fetch_one(&state.db)
-                .await
-                .unwrap_or((0,));
+    if let Some(project_id) = params.project_id {
+        qb.push(" JOIN project_templates pt ON pt.base_template_id = COALESCE(t.base_template_id, t.id) AND pt.project_id = ");
+        qb.push_bind(project_id);
+    }
 
-                (items, total.0)
-            }
-            (None, Some(search)) => {
-                let pattern = format!("%{search}%");
-                let items = sqlx::query_as::<_, WorkflowTemplate>(
-                    "SELECT * FROM workflow_templates WHERE is_latest = TRUE AND (name ILIKE $1 OR description ILIKE $1) ORDER BY updated_at DESC LIMIT $2 OFFSET $3",
-                )
-                .bind(&pattern)
-                .bind(params.per_page)
-                .bind(offset)
-                .fetch_all(&state.db)
-                .await
-                .unwrap_or_default();
+    if let Some(ref tag) = params.tag {
+        qb.push(" JOIN template_tags tt ON tt.base_template_id = COALESCE(t.base_template_id, t.id) AND tt.workspace_id = ");
+        qb.push_bind(workspace_id);
+        qb.push(" AND tt.tag = ");
+        qb.push_bind(tag.clone());
+    }
 
-                let total: (i64,) = sqlx::query_as(
-                    "SELECT COUNT(*) FROM workflow_templates WHERE is_latest = TRUE AND (name ILIKE $1 OR description ILIKE $1)",
-                )
-                .bind(&pattern)
-                .fetch_one(&state.db)
-                .await
-                .unwrap_or((0,));
+    qb.push(" WHERE t.is_latest = TRUE AND (t.workspace_id = ");
+    qb.push_bind(workspace_id);
+    qb.push(" OR t.visibility = 'public')");
 
-                (items, total.0)
-            }
-            (None, None) => {
-                let items = sqlx::query_as::<_, WorkflowTemplate>(
-                    "SELECT * FROM workflow_templates WHERE is_latest = TRUE ORDER BY updated_at DESC LIMIT $1 OFFSET $2",
-                )
-                .bind(params.per_page)
-                .bind(offset)
-                .fetch_all(&state.db)
-                .await
-                .unwrap_or_default();
+    if let Some(published) = params.published {
+        qb.push(" AND t.published = ");
+        qb.push_bind(published);
+    }
 
-                let total: (i64,) = sqlx::query_as(
-                    "SELECT COUNT(*) FROM workflow_templates WHERE is_latest = TRUE",
-                )
-                .fetch_one(&state.db)
-                .await
-                .unwrap_or((0,));
+    let pattern: Option<String> = params.search.as_ref().map(|s| format!("%{s}%"));
+    if let Some(ref p) = pattern {
+        qb.push(" AND (t.name ILIKE ");
+        qb.push_bind(p.clone());
+        qb.push(" OR t.description ILIKE ");
+        qb.push_bind(p.clone());
+        qb.push(")");
+    }
 
-                (items, total.0)
-            }
-        }
-    };
+    // Count uses the same WHERE skeleton; build it once into a separate
+    // QueryBuilder so we don't double-bind. SQLx's `QueryBuilder::sql()`
+    // doesn't let us reuse params, so we replicate the predicate.
+    let mut cqb: QueryBuilder<sqlx::Postgres> = QueryBuilder::new(
+        "SELECT COUNT(*) FROM workflow_templates t",
+    );
+    if let Some(project_id) = params.project_id {
+        cqb.push(" JOIN project_templates pt ON pt.base_template_id = COALESCE(t.base_template_id, t.id) AND pt.project_id = ");
+        cqb.push_bind(project_id);
+    }
+    if let Some(ref tag) = params.tag {
+        cqb.push(" JOIN template_tags tt ON tt.base_template_id = COALESCE(t.base_template_id, t.id) AND tt.workspace_id = ");
+        cqb.push_bind(workspace_id);
+        cqb.push(" AND tt.tag = ");
+        cqb.push_bind(tag.clone());
+    }
+    cqb.push(" WHERE t.is_latest = TRUE AND (t.workspace_id = ");
+    cqb.push_bind(workspace_id);
+    cqb.push(" OR t.visibility = 'public')");
+    if let Some(published) = params.published {
+        cqb.push(" AND t.published = ");
+        cqb.push_bind(published);
+    }
+    if let Some(ref p) = pattern {
+        cqb.push(" AND (t.name ILIKE ");
+        cqb.push_bind(p.clone());
+        cqb.push(" OR t.description ILIKE ");
+        cqb.push_bind(p.clone());
+        cqb.push(")");
+    }
+
+    qb.push(" ORDER BY t.updated_at DESC LIMIT ");
+    qb.push_bind(params.per_page);
+    qb.push(" OFFSET ");
+    qb.push_bind(offset);
+
+    let items: Vec<WorkflowTemplate> = qb
+        .build_query_as()
+        .fetch_all(&state.db)
+        .await
+        .unwrap_or_default();
+
+    let total: (i64,) = cqb
+        .build_query_as()
+        .fetch_one(&state.db)
+        .await
+        .unwrap_or((0,));
 
     Json(PaginatedResponse {
         items,
-        total,
+        total: total.0,
         page: params.page,
         per_page: params.per_page,
     })
@@ -254,6 +318,7 @@ pub async fn list_templates(
 )]
 pub async fn get_template(
     State(state): State<AppState>,
+    user: AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<WorkflowTemplate>, ApiError> {
     let template = sqlx::query_as::<_, WorkflowTemplate>(
@@ -268,6 +333,7 @@ pub async fn get_template(
     })?
     .ok_or_else(|| ApiError::not_found("template not found"))?;
 
+    gate_template_read(&state, &user, &template)?;
     Ok(Json(template))
 }
 
@@ -295,6 +361,7 @@ pub struct TemplateBundle {
 )]
 pub async fn get_template_bundle(
     State(state): State<AppState>,
+    user: AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<TemplateBundle>, ApiError> {
     let existing = sqlx::query_as::<_, WorkflowTemplate>(
@@ -305,6 +372,8 @@ pub async fn get_template_bundle(
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?
     .ok_or_else(|| ApiError::not_found("template not found"))?;
+
+    gate_template_read(&state, &user, &existing)?;
 
     let (graph, files) = match reconstruct_graph_from_ydoc(&state, id).await {
         Ok(Some((g, f))) => (g, f),
@@ -340,6 +409,7 @@ pub async fn get_template_bundle(
 )]
 pub async fn update_template(
     State(state): State<AppState>,
+    user: AuthUser,
     Path(id): Path<Uuid>,
     Json(req): Json<UpdateTemplateRequest>,
 ) -> Result<Json<WorkflowTemplate>, ApiError> {
@@ -352,6 +422,8 @@ pub async fn update_template(
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?
     .ok_or_else(|| ApiError::not_found("template not found"))?;
+
+    gate_template_write(&state, &user, &existing).await?;
 
     if existing.published {
         return Err(ApiError::conflict("cannot edit a published template"));
@@ -402,6 +474,7 @@ pub async fn update_template(
 )]
 pub async fn delete_template(
     State(state): State<AppState>,
+    user: AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
     let existing = sqlx::query_as::<_, WorkflowTemplate>(
@@ -412,6 +485,8 @@ pub async fn delete_template(
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?
     .ok_or_else(|| ApiError::not_found("template not found"))?;
+
+    gate_template_write(&state, &user, &existing).await?;
 
     let base_id = existing.base_template_id.unwrap_or(existing.id);
 
@@ -520,6 +595,8 @@ pub async fn publish_template(
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?
     .ok_or_else(|| ApiError::not_found("template not found"))?;
+
+    gate_template_write(&state, &user, &existing).await?;
 
     if existing.published {
         return Err(ApiError::conflict("template is already published"));
@@ -1640,6 +1717,8 @@ mod apply_mode_tests {
             author_id: Uuid::new_v4(),
             created_at: Utc::now(),
             updated_at: Utc::now(),
+            workspace_id: Uuid::nil(),
+            visibility: "workspace".into(),
         }
     }
 

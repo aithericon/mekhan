@@ -252,17 +252,26 @@ impl ResourceResolver {
             }
         })?;
 
-        // (3) ACL check: workspace-scoped trust until `workspaces` /
-        // `workspace_members` land. The resource row was already filtered
-        // by `workspace_id` in step (1), and the caller is by definition an
-        // authenticated principal in that workspace, so we grant read here
-        // without consulting `resource_acl`. The table is still populated
-        // on create (see `handlers::resources::create_resource`) so v2 can
-        // promote it from "auto-grant" to "additional grants on top of
-        // workspace membership" without a backfill. `principal_id` is
-        // unused on this path but kept in the signature so the v2
-        // `UNION`-based check is a body change, not a signature change.
-        let _ = principal_id;
+        // (3) ACL check: workspace-membership. Resolves the stopgap that
+        // earlier kept this path bypassed pending the `workspace_members`
+        // table. The resource row was already filtered by `workspace_id`
+        // in step (1); now we additionally verify the calling principal is
+        // a member of that workspace. `resource_acl` remains populated on
+        // create — v2 promotes it from auto-grant to "additional grants
+        // on top of workspace membership" via a `UNION`-style query here.
+        let is_member: bool = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM workspace_members \
+                            WHERE workspace_id = $1 AND user_id = $2)",
+        )
+        .bind(workspace_id)
+        .bind(principal_id)
+        .fetch_one(&self.db)
+        .await?;
+        if !is_member {
+            return Err(ResolverError::ResourceNotFound {
+                resource_id: pin.resource_id,
+            });
+        }
 
         // (4) Load the pinned version row.
         let version: Option<ResourceVersionRow> = sqlx::query_as::<_, ResourceVersionRow>(

@@ -46,6 +46,13 @@ pub struct WorkflowTemplate {
     pub author_id: Uuid,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+
+    // Workspace + visibility — added by migration 20240124. The handler-side
+    // permission gate (`gate_template_read` / `gate_template_write`) reads
+    // these directly off the row; the OpenAPI surface exposes them so the
+    // frontend can render visibility badges and per-workspace filtering.
+    pub workspace_id: Uuid,
+    pub visibility: String,
 }
 
 // --- Visual editor data model (Section 2) ---
@@ -2099,6 +2106,12 @@ pub struct ListTemplatesQuery {
     pub published: Option<bool>,
     pub search: Option<String>,
     pub base_template_id: Option<Uuid>,
+    /// Restrict to templates attached to a project (M:N via
+    /// `project_templates.base_template_id`). The join is non-restrictive
+    /// w.r.t. version chain — the live `is_latest` row wins.
+    pub project_id: Option<Uuid>,
+    /// Restrict to templates carrying this tag in the user's workspace.
+    pub tag: Option<String>,
 }
 
 fn default_page() -> i64 {
