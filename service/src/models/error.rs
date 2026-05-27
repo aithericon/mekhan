@@ -130,6 +130,10 @@ impl ApiError {
         Self::new(StatusCode::FORBIDDEN, message)
     }
 
+    pub fn service_unavailable(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::SERVICE_UNAVAILABLE, message)
+    }
+
     /// Bad-request error that attaches a structured `compile_errors` payload
     /// so the editor can highlight inline. The handler stays in control of
     /// the surrounding human-readable message (kept terse to avoid duplicating

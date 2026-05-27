@@ -69,6 +69,10 @@ use utoipa::OpenApi;
         (name = "backends", description = "AutomatedStep backend registry — display metadata, default config, default output port, dispatch mode."),
         (name = "node-types", description = "Workflow node-type registry — per-variant display metadata, runtime kind, and protocol flags."),
         (name = "health", description = "Liveness probe."),
+        (name = "workspaces", description = "Tenant boundaries — membership + member admin (Phase A2)."),
+        (name = "projects", description = "Workspace-scoped template grouping + tag/visibility surface + per-project OpenAPI bundle."),
+        (name = "me", description = "Per-session preferences — active workspace switcher."),
+        (name = "users", description = "Directory lookups — email → OIDC subject resolver for member admin."),
     ),
 )]
 pub struct ApiDoc;
