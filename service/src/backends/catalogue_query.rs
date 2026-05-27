@@ -56,7 +56,11 @@ pub static CATALOGUE_QUERY_DECL: BackendDecl = BackendDecl {
     pyi_introspection: false,
     borrow_shape: super::BorrowShape::Envelope,
     validate_ref_kind: super::accept_any_ref_kind,
-    output_authoring: super::OutputAuthoring::Free,
+    // Engine effect's `catalogue_lookup` handler emits a fixed token shape
+    // (`artifacts` / `total_count` / `source_process_ids`); the editor
+    // renders the port read-only — varying the declared shape would only
+    // mismatch the handler's output at runtime.
+    output_authoring: super::OutputAuthoring::Fixed,
     derive_output_port: None,
 };
 

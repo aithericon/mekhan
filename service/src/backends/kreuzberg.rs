@@ -12,6 +12,15 @@
 //! `FieldKind` at any site (non-File kinds stage as Raw temp files so the
 //! placeholder still resolves to a filesystem path the backend can OCR);
 //! the `validate_ref_kind` is the default accept-any.
+//!
+//! `output_authoring: Derived`. The runtime emits one of two disjoint
+//! shapes depending on `mode`:
+//!   - `single` → kreuzberg's native `ExtractionResult` (content,
+//!     mime_type, metadata, tables, detected_languages).
+//!   - `batch`  → aggregate (results, total_files, successful, failed,
+//!     errors).
+//! The deriver branches on `config.mode` so the editor port mirrors the
+//! actual runtime envelope.
 
 use serde_json::{json, Value};
 
@@ -21,22 +30,41 @@ use aithericon_executor_domain::InputDeclaration;
 use crate::compiler::backend_configs::{require_node_file, stage_all_files, validate_placeholders};
 use crate::compiler::placeholder_refs::scan_placeholders;
 use crate::compiler::CompileError;
-use crate::models::template::{ExecutionBackendType, FieldKind};
+use crate::models::template::{ExecutionBackendType, FieldKind, Port, PortField};
 
 use super::{
     accept_any_ref_kind, BackendDecl, BorrowShape, DefaultPortField, RefSite, ScanCtx,
     ValidationCtx, KREUZBERG_META,
 };
 
+/// Fallback shape — single-mode canonical fields. Used by the
+/// `default_output_port` descriptor before the editor has any config to
+/// derive from. Mirrors the deriver's single-mode branch so the two
+/// entry points agree.
 const DEFAULT_OUTPUT_FIELDS: &[DefaultPortField] = &[
     DefaultPortField {
-        name: "text",
-        label: "Text",
+        name: "content",
+        label: "Content",
         kind: FieldKind::Textarea,
+    },
+    DefaultPortField {
+        name: "mime_type",
+        label: "MIME type",
+        kind: FieldKind::Text,
     },
     DefaultPortField {
         name: "metadata",
         label: "Metadata",
+        kind: FieldKind::Json,
+    },
+    DefaultPortField {
+        name: "tables",
+        label: "Tables",
+        kind: FieldKind::Json,
+    },
+    DefaultPortField {
+        name: "detected_languages",
+        label: "Detected languages",
         kind: FieldKind::Json,
     },
 ];
@@ -53,8 +81,8 @@ pub static KREUZBERG_DECL: BackendDecl = BackendDecl {
     pyi_introspection: false,
     borrow_shape: BorrowShape::PerField,
     validate_ref_kind: accept_any_ref_kind,
-    output_authoring: super::OutputAuthoring::Free,
-    derive_output_port: None,
+    output_authoring: super::OutputAuthoring::Derived,
+    derive_output_port: Some(derive_output_port),
 };
 
 /// Seed config the editor inserts when a step's backend is first set to
@@ -135,4 +163,112 @@ fn ref_scanner(ctx: &ScanCtx<'_>) -> Vec<RefSite> {
         }
     }
     out
+}
+
+/// Derive the Kreuzberg step's output port from its `mode`. Single mode
+/// emits kreuzberg's native `ExtractionResult` fields; batch mode emits
+/// the aggregate envelope from `build_batch_outputs` in
+/// `executor-kreuzberg/src/backend.rs`. Unknown / missing `mode`
+/// defaults to single — mirrors the executor's `ExtractionMode::Single`
+/// default.
+fn derive_output_port(config: &Value) -> Port {
+    let mode = config.get("mode").and_then(|v| v.as_str()).unwrap_or("single");
+    let fields: Vec<PortField> = match mode {
+        "batch" => batch_fields(),
+        _ => single_fields(),
+    };
+    Port {
+        id: "out".into(),
+        label: "Output".into(),
+        fields,
+    }
+}
+
+fn single_fields() -> Vec<PortField> {
+    DEFAULT_OUTPUT_FIELDS
+        .iter()
+        .map(|f| f.into_port_field())
+        .collect()
+}
+
+fn batch_fields() -> Vec<PortField> {
+    vec![
+        PortField {
+            name: "results".into(),
+            label: "Per-file results".into(),
+            kind: FieldKind::Json,
+            required: false,
+            options: None,
+            description: None,
+            accept: None,
+        },
+        PortField {
+            name: "total_files".into(),
+            label: "Total files".into(),
+            kind: FieldKind::Number,
+            required: false,
+            options: None,
+            description: None,
+            accept: None,
+        },
+        PortField {
+            name: "successful".into(),
+            label: "Successful".into(),
+            kind: FieldKind::Number,
+            required: false,
+            options: None,
+            description: None,
+            accept: None,
+        },
+        PortField {
+            name: "failed".into(),
+            label: "Failed".into(),
+            kind: FieldKind::Number,
+            required: false,
+            options: None,
+            description: None,
+            accept: None,
+        },
+        PortField {
+            name: "errors".into(),
+            label: "Errors".into(),
+            kind: FieldKind::Json,
+            required: false,
+            options: None,
+            description: None,
+            accept: None,
+        },
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn derive_default_is_single_mode() {
+        let port = derive_output_port(&json!({}));
+        let names: Vec<_> = port.fields.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(
+            names,
+            ["content", "mime_type", "metadata", "tables", "detected_languages"]
+        );
+    }
+
+    #[test]
+    fn derive_batch_mode() {
+        let port = derive_output_port(&json!({ "mode": "batch" }));
+        let names: Vec<_> = port.fields.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(
+            names,
+            ["results", "total_files", "successful", "failed", "errors"]
+        );
+    }
+
+    #[test]
+    fn derive_unknown_mode_falls_back_to_single() {
+        let port = derive_output_port(&json!({ "mode": "??" }));
+        let names: Vec<_> = port.fields.iter().map(|f| f.name.as_str()).collect();
+        assert!(names.contains(&"content"));
+    }
 }

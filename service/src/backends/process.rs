@@ -4,6 +4,10 @@
 //! template/placeholder surfaces — the simplest backend in the registry,
 //! used as the second pilot after SMTP.
 //!
+//! `output_authoring: Fixed` — the executor's process backend always emits
+//! exactly `stdout` / `stderr` / `exit_code`; the editor renders the port
+//! read-only against this shape so users can't introduce drift.
+//!
 //! The validate body is moved verbatim from
 //! `compiler/backend_configs.rs::validate_and_transform` Process arm.
 
@@ -48,7 +52,7 @@ pub static PROCESS_DECL: BackendDecl = BackendDecl {
     pyi_introspection: false,
     borrow_shape: super::BorrowShape::Envelope,
     validate_ref_kind: super::accept_any_ref_kind,
-    output_authoring: super::OutputAuthoring::Free,
+    output_authoring: super::OutputAuthoring::Fixed,
     derive_output_port: None,
 };
 

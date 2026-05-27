@@ -4,6 +4,10 @@
 //! resource binding, no template/placeholder surfaces — structurally a
 //! sibling of Process, with the addition of an `image` output field.
 //!
+//! `output_authoring: Fixed` — the executor's Docker backend always emits
+//! exactly `stdout` / `stderr` / `exit_code` / `image`; the editor renders
+//! the port read-only against this shape.
+//!
 //! The validate body is moved verbatim from
 //! `compiler/backend_configs.rs::validate_and_transform` Docker arm.
 
@@ -53,7 +57,7 @@ pub static DOCKER_DECL: BackendDecl = BackendDecl {
     pyi_introspection: false,
     borrow_shape: super::BorrowShape::Envelope,
     validate_ref_kind: super::accept_any_ref_kind,
-    output_authoring: super::OutputAuthoring::Free,
+    output_authoring: super::OutputAuthoring::Fixed,
     derive_output_port: None,
 };
 

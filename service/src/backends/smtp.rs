@@ -46,7 +46,12 @@ pub static SMTP_DECL: BackendDecl = BackendDecl {
     pyi_introspection: false,
     borrow_shape: super::BorrowShape::Envelope,
     validate_ref_kind: super::accept_any_ref_kind,
-    output_authoring: super::OutputAuthoring::Free,
+    // SMTP's runtime envelope is fixed: `outcome` always, `subject` on
+    // success, optional `body_text_preview` / `body_html_preview` when the
+    // corresponding bodies were configured. The editor renders the port
+    // read-only against the canonical 4-field shape; absent preview fields
+    // simply resolve to null in downstream consumers, which is acceptable.
+    output_authoring: super::OutputAuthoring::Fixed,
     derive_output_port: None,
 };
 
