@@ -31,6 +31,7 @@
 	import EllipsisVertical from '@lucide/svelte/icons/ellipsis-vertical';
 	import Search from '@lucide/svelte/icons/search';
 	import CreateInstanceDialog from '$lib/components/instances/CreateInstanceDialog.svelte';
+	import TemplatesFiltersSidebar from '$lib/components/TemplatesFiltersSidebar.svelte';
 
 	let templates = $state<TemplateSummary[]>([]);
 	let loading = $state(true);
@@ -39,6 +40,14 @@
 	let dialogTemplateId = $state<string | null>(null);
 	let runCounts = $state<Record<string, { running: number; completed: number }>>({});
 	let searchQuery = $state('');
+	let projectFilter = $state<string | null>(null);
+	let tagFilter = $state<string | null>(null);
+
+	function applyFilters(next: { projectId: string | null; tag: string | null }) {
+		projectFilter = next.projectId;
+		tagFilter = next.tag;
+		load();
+	}
 
 	const filteredTemplates = $derived.by(() => {
 		const q = searchQuery.trim().toLowerCase();
@@ -73,7 +82,14 @@
 		loading = true;
 		error = null;
 		try {
-			const result = await listTemplates();
+			const result = await listTemplates(
+				1,
+				20,
+				undefined,
+				undefined,
+				projectFilter ?? undefined,
+				tagFilter ?? undefined
+			);
 			templates = result.items;
 			loadRunCounts(result.items);
 		} catch (e) {
@@ -223,7 +239,13 @@
 	});
 </script>
 
-<div class="h-full overflow-y-auto" data-testid="templates-page">
+<div class="flex h-full" data-testid="templates-page">
+	<TemplatesFiltersSidebar
+		projectId={projectFilter}
+		tag={tagFilter}
+		onChange={applyFilters}
+	/>
+	<div class="flex-1 overflow-y-auto">
 	<div class="mx-auto max-w-5xl px-6 py-8 animate-rise">
 		<div class="mb-6 flex items-center justify-between">
 			<div>
@@ -436,6 +458,7 @@
 				{/each}
 			</div>
 		{/if}
+		</div>
 	</div>
 </div>
 
