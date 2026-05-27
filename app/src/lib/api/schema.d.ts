@@ -90,6 +90,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/backends/{name}/derive-output": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * POST /api/v1/backends/{name}/derive-output
+         * @description Compute the canonical output [`Port`] for an AutomatedStep with this
+         *     backend, given its current config. Frontend calls this for
+         *     `output_authoring == "derived"` backends (LLM today) whenever the
+         *     step's config changes, so the read-only port editor always reflects
+         *     the actual runtime envelope.
+         *
+         *     Permissive: a half-typed config (missing fields, partial schema)
+         *     returns the closest valid port — not an error. Hard validation runs at
+         *     publish time via `BackendDecl::validate`.
+         *
+         *     Returns:
+         *     - 200 with the derived [`Port`] on success.
+         *     - 400 when the backend exists but isn't `Derived` (callers should use
+         *       `default_output_port` from `GET /api/v1/backends` for `Fixed` /
+         *       `Free` backends).
+         *     - 404 when the backend name doesn't resolve.
+         */
+        post: operations["derive_backend_output"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/catalogue": {
         parameters: {
             query?: never;
@@ -1641,6 +1676,11 @@ export interface components {
              *     `ExecutionSpec.backend` string.
              */
             name: string;
+            /**
+             * @description Who owns the output port shape — user (free), backend (fixed), or
+             *     derived from config. Drives the editor's port-section rendering.
+             */
+            outputAuthoring: components["schemas"]["OutputAuthoring"];
             resourceChannel: components["schemas"]["ResourceChannel"];
             /** @description Whether the editor should show the Scheduled deployment toggle. */
             schedulable: boolean;
@@ -2494,6 +2534,20 @@ export interface components {
             /** Format: int64 */
             total_bytes: number;
         };
+        /**
+         * @description Who owns the AutomatedStep's output port shape — the user (free
+         *     authoring), the backend (fixed canonical shape), or the backend's
+         *     config (derived from `response_format` / schema / similar).
+         *
+         *     Frontend reads this off `BackendDescriptor` and either renders the
+         *     generic editable `PortsSection` (Free) or a read-only one whose fields
+         *     come from the registry (Fixed) or from a per-config server-side derive
+         *     call (Derived). The compiler still validates the persisted `output`
+         *     against the canonical shape on publish — the authoring flag is a UX
+         *     contract, not a security boundary.
+         * @enum {string}
+         */
+        OutputAuthoring: "free" | "fixed" | "derived";
         PaginatedResponse_InstanceListItem: {
             items: {
                 /** Format: date-time */
@@ -4250,6 +4304,47 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["BackendDescriptor"][];
                 };
+            };
+        };
+    };
+    derive_backend_output: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Backend wire name (e.g. `llm`, `python`) */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": unknown;
+            };
+        };
+        responses: {
+            /** @description Derived output port */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Port"];
+                };
+            };
+            /** @description Backend's output is not derived from config */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unknown backend */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

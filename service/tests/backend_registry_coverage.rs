@@ -146,11 +146,28 @@ fn descriptor_serialization_matches_decl() {
         assert_eq!(descriptor.icon, decl.meta.icon);
         assert_eq!(descriptor.schedulable, decl.meta.schedulable);
         assert_eq!(descriptor.consumes_declared_outputs, decl.consumes_declared_outputs);
+        assert_eq!(descriptor.output_authoring, decl.output_authoring);
         assert_eq!(
             descriptor.default_output_port.fields.len(),
             decl.default_output_fields.len(),
             "default_output_fields length mismatch for {:?}",
             decl.backend_type
         );
+    }
+}
+
+#[test]
+fn derived_authoring_backends_have_deriver() {
+    use mekhan_service::backends::OutputAuthoring;
+    for decl in BACKENDS {
+        if matches!(decl.output_authoring, OutputAuthoring::Derived) {
+            assert!(
+                decl.derive_output_port.is_some(),
+                "{:?} declares output_authoring=Derived but is missing derive_output_port — \
+                 the frontend will hit a 500 on POST /api/v1/backends/{}/derive-output",
+                decl.backend_type,
+                decl.meta.wire_name,
+            );
+        }
     }
 }

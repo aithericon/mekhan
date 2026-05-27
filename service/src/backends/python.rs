@@ -57,6 +57,8 @@ pub static PYTHON_DECL: BackendDecl = BackendDecl {
     pyi_introspection: true,
     borrow_shape: BorrowShape::Envelope,
     validate_ref_kind: accept_any_ref_kind,
+    output_authoring: super::OutputAuthoring::Free,
+    derive_output_port: None,
 };
 
 /// Seed config the editor inserts when a step's backend is first set to

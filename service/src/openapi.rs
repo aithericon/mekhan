@@ -36,6 +36,7 @@ use utoipa::OpenApi;
             crate::backends::BackendDescriptor,
             crate::backends::DispatchMode,
             crate::backends::ResourceChannel,
+            crate::backends::OutputAuthoring,
             // Phase B.9 — Resource CRUD DTOs. The handler bodies refer to
             // these directly but utoipa's auto-discovery only walks the
             // handler signature; nested types (e.g. ResourceTypeInfo

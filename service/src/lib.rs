@@ -119,7 +119,11 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
     OpenApiRouter::<AppState>::with_openapi(ApiDoc::openapi())
         // Backend registry — drives the editor's AutomatedStep panel
         // (picker labels/icons, default config seed, default output port).
+        // `derive-output` is the config→Port hook for `Derived` backends
+        // (LLM today); the editor calls it on every step config change so
+        // the read-only port section reflects the actual runtime envelope.
         .routes(routes!(handlers::backends::list_backends))
+        .routes(routes!(handlers::backends::derive_backend_output))
         // Auth tokens — embedded per-user PAT management. Cookie-only by
         // construction (the `AuthUser` arg re-runs the cookie authenticator,
         // so a Bearer PAT behind `require_auth_middleware` can't reach these

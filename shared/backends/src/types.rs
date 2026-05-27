@@ -50,6 +50,24 @@ impl ExecutionBackendType {
             Self::CatalogueQuery => "catalogue_query",
         }
     }
+
+    /// Inverse of [`Self::as_wire_str`]. Returns `None` for any unknown
+    /// wire tag — callers should treat that as a 404 / validation error
+    /// rather than a fallback to a default backend.
+    pub fn from_wire_str(s: &str) -> Option<Self> {
+        match s {
+            "python" => Some(Self::Python),
+            "process" => Some(Self::Process),
+            "docker" => Some(Self::Docker),
+            "http" => Some(Self::Http),
+            "llm" => Some(Self::Llm),
+            "file_ops" => Some(Self::FileOps),
+            "kreuzberg" => Some(Self::Kreuzberg),
+            "smtp" => Some(Self::Smtp),
+            "catalogue_query" => Some(Self::CatalogueQuery),
+            _ => None,
+        }
+    }
 }
 
 impl std::fmt::Display for ExecutionBackendType {
