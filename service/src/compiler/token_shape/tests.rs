@@ -1,8 +1,7 @@
-#![allow(unused_imports)]
 
 pub use super::*;
 pub use crate::compiler::error::CompileError;
-pub use crate::models::template::{FieldKind, JoinMode, MergeStrategy, Port, WorkflowGraph, WorkflowNode, WorkflowNodeData};
+pub use crate::models::template::{FieldKind, Port, WorkflowGraph, WorkflowNode, WorkflowNodeData};
 
 
 #[cfg(test)]

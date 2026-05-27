@@ -1,17 +1,8 @@
-#![allow(unused_imports)]
-
-use std::collections::BTreeMap;
-
 use serde_json::Value;
 
-use crate::compiler::error::CompileError;
-use crate::compiler::graph::{topo_order, WorkflowDiGraph};
-use crate::models::template::{
-    FieldKind, JoinMode, MergeStrategy, Port, WorkflowGraph, WorkflowNode, WorkflowNodeData,
-};
+use crate::models::template::{FieldKind, Port, WorkflowNode};
 
-use super::*;
-pub(super) fn port_to_shape(port: &Port, node: &WorkflowNode, note: &str) -> TokenShape {
+use super::*;pub(super) fn port_to_shape(port: &Port, node: &WorkflowNode, note: &str) -> TokenShape {
     let mut o = TokenShape::object();
     for f in &port.fields {
         let (shape, prov) = match f.kind {

@@ -1,17 +1,8 @@
-#![allow(unused_imports)]
-
 use std::collections::BTreeMap;
 
 use serde_json::Value;
 
-use crate::compiler::error::CompileError;
-use crate::compiler::graph::{topo_order, WorkflowDiGraph};
-use crate::models::template::{
-    FieldKind, JoinMode, MergeStrategy, Port, WorkflowGraph, WorkflowNode, WorkflowNodeData,
-};
-
-use super::*;
-// ─── Structural token type ──────────────────────────────────────────────────
+use crate::models::template::{FieldKind, WorkflowNode};// ─── Structural token type ──────────────────────────────────────────────────
 
 /// Leaf type of a token field. Deliberately small — the point is to model
 /// *where a value lives and roughly what it is*, not a full JSON Schema.

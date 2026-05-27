@@ -43,7 +43,6 @@
 //!   `POST /api/v1/analyze` consumer-facing API. Also carries the
 //!   `cfg(test)` borrow-planner re-exports the tests rely on.
 
-#![allow(unused_imports)]
 
 pub mod analyze;
 pub mod annotate;

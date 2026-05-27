@@ -1,17 +1,12 @@
-#![allow(unused_imports)]
-
 use std::collections::BTreeMap;
-
-use serde_json::Value;
 
 use crate::compiler::error::CompileError;
 use crate::compiler::graph::{topo_order, WorkflowDiGraph};
 use crate::models::template::{
-    FieldKind, JoinMode, MergeStrategy, Port, WorkflowGraph, WorkflowNode, WorkflowNodeData,
+    JoinMode, MergeStrategy, WorkflowGraph, WorkflowNode, WorkflowNodeData,
 };
 
-use super::*;
-// ─── Per-node shape derivation ──────────────────────────────────────────────
+use super::*;// ─── Per-node shape derivation ──────────────────────────────────────────────
 
 /// One reachable, still-live reference the editor variable picker should
 /// offer at a node — the producer-namespaced replacement for the flat TS
