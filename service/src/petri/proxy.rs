@@ -31,9 +31,7 @@ const STRIP_PREFIX: &str = "/petri";
 /// they don't enumerate per-instance state.
 fn extract_net_id(path: &str) -> Option<&str> {
     let stripped = path.strip_prefix("/api/nets/")?;
-    let end = stripped
-        .find(|c: char| c == '/' || c == '?')
-        .unwrap_or(stripped.len());
+    let end = stripped.find(['/', '?']).unwrap_or(stripped.len());
     let id = &stripped[..end];
     if id.is_empty() {
         None
