@@ -10,7 +10,12 @@
 //! No live executor — compile-level only. Live execution lives in the
 //! follow-up that wires tool subnets.
 
-use mekhan_service::compiler::compile_to_air;
+use mekhan_service::compiler::{
+    compile_to_air, compile_to_air_with_subworkflows_interfaces_and_configs, ConfigStorage,
+    SubWorkflowAir,
+};
+use mekhan_service::compiler::resource_refs::KnownResources;
+use mekhan_service::models::template::{FieldKind, PortField};
 use mekhan_service::models::template::{
     ContextStrategy, DeploymentModel, ExecutionBackendType, ExecutionSpecConfig, ModelRef, Port,
     Position, RetryPolicy, ToolErrorPolicy, WorkflowEdge, WorkflowGraph, WorkflowNode,
@@ -689,6 +694,152 @@ fn bare_end_after_agent_does_not_tag_upstream_ctrl_terminal() {
 /// hard compile error — same shape as `SlugConflict`. The agent
 /// compiler addresses tools by their slugified label, so a collision
 /// makes the per-tool dispatch route guards ambiguous.
+/// (Test fn lives below — see `duplicate_tool_name_is_compile_error`.)
+
+/// The LLM-facing tool `input_schema` must reflect the tool node's
+/// declared input port — field names, types, required list. Without
+/// this, the LLM has no idea what arg keys to emit and the Python
+/// runner blows up at runtime with `AttributeError: '_AccessibleDict'
+/// object has no attribute 'X'` when the user code reads e.g.
+/// `input.order_id`. Pin both the success shape (fields declared →
+/// tight schema with `additionalProperties: false`) and the fallback
+/// (no fields → permissive object).
+#[test]
+fn tool_input_schema_reflects_declared_input_port() {
+    let mut tool = tool_child("lookup_node", "a", "lookup");
+    if let WorkflowNodeData::AutomatedStep { input, .. } = &mut tool.data {
+        input.fields = vec![
+            PortField {
+                name: "order_id".to_string(),
+                label: "Order ID".to_string(),
+                kind: FieldKind::Text,
+                required: true,
+                options: None,
+                description: Some("The order id to look up.".to_string()),
+                accept: None,
+            },
+            PortField {
+                name: "include_history".to_string(),
+                label: "Include history".to_string(),
+                kind: FieldKind::Bool,
+                required: false,
+                options: None,
+                description: None,
+                accept: None,
+            },
+        ];
+    } else {
+        unreachable!()
+    }
+    let graph = WorkflowGraph {
+        nodes: vec![start_node("s"), agent_node("a"), tool, end_node("e")],
+        edges: vec![
+            edge("e1", "s", "a"),
+            edge("e2", "a", "e"),
+            tools_edge("et_lookup", "a", "lookup_node"),
+        ],
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+    };
+    let inline: std::collections::HashMap<String, std::collections::HashMap<String, String>> = Default::default();
+    let files = mekhan_service::compiler::node_files_inline(&inline);
+    let (_air, _iface, configs) = compile_to_air_with_subworkflows_interfaces_and_configs(
+        &graph,
+        "t",
+        "",
+        &files,
+        &inline,
+        &SubWorkflowAir::new(),
+        &KnownResources::new(),
+        ConfigStorage::ephemeral(),
+    )
+    .expect("compile");
+
+    let agent_cfg = configs
+        .get("a")
+        .expect("agent's LLM config must be in node_configs");
+    let tools = agent_cfg
+        .get("tools")
+        .and_then(Value::as_array)
+        .expect("agent LLM config carries `tools`");
+    let lookup = tools
+        .iter()
+        .find(|t| t.get("name").and_then(Value::as_str) == Some("lookup"))
+        .expect("lookup tool present");
+    let schema = lookup
+        .get("input_schema")
+        .expect("lookup carries input_schema");
+    assert_eq!(schema.get("type").and_then(Value::as_str), Some("object"));
+    assert_eq!(
+        schema
+            .get("additionalProperties")
+            .and_then(Value::as_bool),
+        Some(false),
+        "declared-fields tools must lock additionalProperties=false so the \
+         LLM can't invent unknown args; got: {schema}"
+    );
+    let props = schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .expect("input_schema.properties is an object");
+    let order_id = props
+        .get("order_id")
+        .expect("order_id property must be declared so the LLM emits the right key");
+    assert_eq!(order_id.get("type").and_then(Value::as_str), Some("string"));
+    assert_eq!(
+        order_id.get("description").and_then(Value::as_str),
+        Some("The order id to look up.")
+    );
+    let include_history = props
+        .get("include_history")
+        .expect("include_history property declared");
+    assert_eq!(
+        include_history.get("type").and_then(Value::as_str),
+        Some("boolean"),
+        "FieldKind::Bool must map to JSON Schema 'boolean'"
+    );
+    let required = schema
+        .get("required")
+        .and_then(Value::as_array)
+        .expect("required list present when any field is required");
+    let required: Vec<&str> = required.iter().filter_map(Value::as_str).collect();
+    assert_eq!(required, vec!["order_id"]);
+
+    // Negative companion: a tool with NO declared fields gets the
+    // permissive `additionalProperties: true` fallback so the LLM can
+    // call but the platform doesn't pretend to validate.
+    let bare = tool_child("bare_node", "a", "bare");
+    let graph2 = WorkflowGraph {
+        nodes: vec![start_node("s"), agent_node("a"), bare, end_node("e")],
+        edges: vec![
+            edge("e1", "s", "a"),
+            edge("e2", "a", "e"),
+            tools_edge("et_bare", "a", "bare_node"),
+        ],
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+    };
+    let (_air2, _iface2, configs2) = compile_to_air_with_subworkflows_interfaces_and_configs(
+        &graph2,
+        "t",
+        "",
+        &files,
+        &inline,
+        &SubWorkflowAir::new(),
+        &KnownResources::new(),
+        ConfigStorage::ephemeral(),
+    )
+    .expect("compile (bare tool)");
+    let bare_schema = configs2["a"]["tools"][0]["input_schema"].clone();
+    assert_eq!(
+        bare_schema.get("additionalProperties").and_then(Value::as_bool),
+        Some(true),
+        "no-fields tool must use the permissive fallback; got: {bare_schema}"
+    );
+}
+
 #[test]
 fn duplicate_tool_name_is_compile_error() {
     let graph = WorkflowGraph {

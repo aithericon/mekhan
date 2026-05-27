@@ -241,18 +241,31 @@ fn lower_agent_loop(
         }
     }
 
-    // Build the tool schemas. Each child's input port shape becomes the
-    // tool's `input_schema`. v1: ports don't yet carry per-field JSON
-    // Schema → fall back to a permissive `{type: object}` so the LLM
-    // can call but the platform doesn't pretend to validate. Per-port
-    // schemas are a separate concern from this PR.
+    // Build the tool schemas. Each tool node's declared input port becomes
+    // the LLM-facing `input_schema` — the LLM addresses tool args by the
+    // exact field names the node declares (e.g. `order_id`), and the
+    // runner promotes those args to Python globals via `_AccessibleDict`,
+    // so a mismatch surfaces as `AttributeError: '_AccessibleDict' object
+    // has no attribute 'X'` at the first tool-call turn. With no declared
+    // fields, the LLM gets a permissive `{type: object}` so it can call
+    // but the platform doesn't pretend to validate.
     let tool_schemas: Vec<serde_json::Value> = tool_meta
         .iter()
-        .map(|(name, description)| {
+        .zip(tool_children.iter())
+        .map(|((name, description), child)| {
+            let input_port = child.data.input_ports().into_iter().next();
+            let input_schema = match input_port {
+                Some(port) if !port.fields.is_empty() => port_to_input_schema(&port),
+                _ => serde_json::json!({
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": true,
+                }),
+            };
             serde_json::json!({
                 "name": name,
                 "description": description,
-                "input_schema": {"type": "object", "properties": {}, "additionalProperties": true},
+                "input_schema": input_schema,
             })
         })
         .collect();
@@ -620,4 +633,49 @@ fn lower_agent_loop(
     );
     cx.publish_interface().data_port = Some(data_place_id);
     Ok(())
+}
+
+/// Translate a tool node's declared input port into a JSON Schema fragment
+/// for the LLM's tool-use call. The model addresses tool args by the exact
+/// field names declared here (e.g. `order_id`); the runner then promotes
+/// those args to Python globals via `_AccessibleDict`, so a name mismatch
+/// surfaces as `AttributeError: '_AccessibleDict' object has no attribute
+/// 'X'` at runtime. Keep the property list tight + `additionalProperties:
+/// false` when fields are declared so the LLM can't invent unknown args.
+fn port_to_input_schema(port: &crate::models::template::Port) -> serde_json::Value {
+    use crate::models::template::FieldKind;
+    use serde_json::json;
+    let mut properties = serde_json::Map::new();
+    let mut required: Vec<String> = Vec::new();
+    for f in &port.fields {
+        let type_str: &str = match f.kind {
+            FieldKind::Number => "number",
+            FieldKind::Bool => "boolean",
+            FieldKind::Json => "object",
+            _ => "string",
+        };
+        let mut prop = serde_json::Map::new();
+        prop.insert("type".to_string(), json!(type_str));
+        let description = f
+            .description
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| f.label.clone());
+        if !description.is_empty() {
+            prop.insert("description".to_string(), json!(description));
+        }
+        properties.insert(f.name.clone(), serde_json::Value::Object(prop));
+        if f.required {
+            required.push(f.name.clone());
+        }
+    }
+    let mut schema = serde_json::Map::new();
+    schema.insert("type".to_string(), json!("object"));
+    schema.insert("properties".to_string(), serde_json::Value::Object(properties));
+    if !required.is_empty() {
+        schema.insert("required".to_string(), json!(required));
+    }
+    schema.insert("additionalProperties".to_string(), json!(false));
+    serde_json::Value::Object(schema)
 }
