@@ -2660,6 +2660,9 @@ export interface components {
                 updated_at: string;
                 /** Format: int32 */
                 version: number;
+                visibility: string;
+                /** Format: uuid */
+                workspace_id: string;
             }[];
             /** Format: int64 */
             page: number;
@@ -4110,6 +4113,9 @@ export interface components {
             updated_at: string;
             /** Format: int32 */
             version: number;
+            visibility: string;
+            /** Format: uuid */
+            workspace_id: string;
         };
     };
     responses: never;
@@ -6303,6 +6309,14 @@ export interface operations {
                 published?: boolean | null;
                 search?: string | null;
                 base_template_id?: string | null;
+                /**
+                 * @description Restrict to templates attached to a project (M:N via
+                 *     `project_templates.base_template_id`). The join is non-restrictive
+                 *     w.r.t. version chain — the live `is_latest` row wins.
+                 */
+                project_id?: string | null;
+                /** @description Restrict to templates carrying this tag in the user's workspace. */
+                tag?: string | null;
             };
             header?: never;
             path?: never;

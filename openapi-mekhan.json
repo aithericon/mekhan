@@ -3191,6 +3191,31 @@
               ],
               "format": "uuid"
             }
+          },
+          {
+            "name": "project_id",
+            "in": "query",
+            "description": "Restrict to templates attached to a project (M:N via\n`project_templates.base_template_id`). The join is non-restrictive\nw.r.t. version chain — the live `is_latest` row wins.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "tag",
+            "in": "query",
+            "description": "Restrict to templates carrying this tag in the user's workspace.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
           }
         ],
         "responses": {
@@ -7472,7 +7497,9 @@
                 "graph",
                 "author_id",
                 "created_at",
-                "updated_at"
+                "updated_at",
+                "workspace_id",
+                "visibility"
               ],
               "properties": {
                 "air_json": {},
@@ -7538,6 +7565,13 @@
                 "version": {
                   "type": "integer",
                   "format": "int32"
+                },
+                "visibility": {
+                  "type": "string"
+                },
+                "workspace_id": {
+                  "type": "string",
+                  "format": "uuid"
                 }
               }
             }
@@ -10888,7 +10922,9 @@
           "graph",
           "author_id",
           "created_at",
-          "updated_at"
+          "updated_at",
+          "workspace_id",
+          "visibility"
         ],
         "properties": {
           "air_json": {},
@@ -10954,6 +10990,13 @@
           "version": {
             "type": "integer",
             "format": "int32"
+          },
+          "visibility": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": "string",
+            "format": "uuid"
           }
         }
       }
