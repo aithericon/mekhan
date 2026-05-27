@@ -7,7 +7,8 @@ use crate::compiler::interface::InterfaceRegistry;
 use crate::compiler::lower::{expand_node, ConfigStorage, NodeFiles, NodePorts, PostProcess};
 use crate::compiler::resource_refs::KnownResources;
 use crate::compiler::validate::{
-    validate, validate_edges_typed, validate_guards, validate_schema_refs, validate_triggers,
+    validate, validate_edges_typed, validate_guards, validate_repeaters, validate_schema_refs,
+    validate_triggers,
 };
 use crate::compiler::wire::{apply_merges, resolve_aliases, wire_edge};
 use crate::compiler::CompileError;
@@ -478,6 +479,16 @@ pub fn compile_to_scenario_and_interfaces_with_configs(
     //     pointer to the `$ref` inside the config — the editor highlights
     //     the node instead of getting a generic "lowering failed".
     validate_schema_refs(graph)?;
+
+    // 2g. Repeater block validation (Feature B). Each HumanTask
+    //     `TaskBlockConfig::Repeater` carries a structured
+    //     `<slug>.<field>[*]…` reference into an upstream array — validate
+    //     the ref syntax, slug resolution, array shape on the producer,
+    //     and the Repeater's own `output_slug`. Runs AFTER
+    //     `validate_guards` so the analyze pass has already established
+    //     per-node shapes; runs BEFORE lowering so malformed Repeaters
+    //     surface with a typed `RepeaterRef*` error.
+    validate_repeaters(graph)?;
 
     // 3. Topological sort (on DAG — loop_back edges excluded)
     let sorted = topo_order(&wg)?;

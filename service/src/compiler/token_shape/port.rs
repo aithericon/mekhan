@@ -1,8 +1,46 @@
 use serde_json::Value;
 
-use crate::models::template::{FieldKind, Port, WorkflowNode};
+use crate::models::template::{FieldKind, Port, TaskFieldConfig, WorkflowNode};
 
-use super::*;pub(super) fn port_to_shape(port: &Port, node: &WorkflowNode, note: &str) -> TokenShape {
+use super::*;
+
+/// One Repeater sub-form element's shape — `TokenShape::Object` whose fields
+/// are the typed Repeater `fields`, modeled the same way `port_to_shape`
+/// models declared port fields (File expands to the `{url, filename,
+/// content_type}` envelope with a `FileRef` anchor; everything else is a
+/// scalar). Used by [`out_shape`]'s HumanTask arm to synthesize the typed
+/// array output `<output_slug>: Array<{<sub_fields>}>`.
+pub(crate) fn repeater_element_to_shape(
+    fields: &[TaskFieldConfig],
+    node: &WorkflowNode,
+) -> TokenShape {
+    let mut o = TokenShape::object();
+    for f in fields {
+        let kind = FieldKind::from(f.kind);
+        let (shape, prov) = match kind {
+            FieldKind::File => {
+                let mut fo = TokenShape::object();
+                let p = Provenance::new(node, "uploaded file (Repeater sub-form item)");
+                fo.insert("url", TokenShape::Scalar(ScalarTy::String), p.clone());
+                fo.insert("filename", TokenShape::Scalar(ScalarTy::String), p.clone());
+                fo.insert("content_type", TokenShape::Scalar(ScalarTy::String), p);
+                (
+                    fo,
+                    Provenance::new(node, "Repeater sub-form field")
+                        .with_anchor(ScalarTy::FileRef),
+                )
+            }
+            k => (
+                TokenShape::Scalar(ScalarTy::from_kind(k)),
+                Provenance::new(node, "Repeater sub-form field"),
+            ),
+        };
+        o.insert(&f.name, shape, prov);
+    }
+    o
+}
+
+pub(super) fn port_to_shape(port: &Port, node: &WorkflowNode, note: &str) -> TokenShape {
     let mut o = TokenShape::object();
     for f in &port.fields {
         let (shape, prov) = match f.kind {
