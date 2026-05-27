@@ -286,6 +286,14 @@ pub fn graph_to_doc_with_files(
                 node_map.insert(&mut txn, "description", desc.to_string());
             }
 
+            // Author-facing `<slug>.<field>` namespace. Round-tripped through
+            // Y.Doc so seed paths (new_version fork, demo seed, GitOps apply)
+            // don't drop the user-set slug and silently rename downstream
+            // borrow refs to the placeholder derived from the node id.
+            if let Some(ref s) = node.slug {
+                node_map.insert(&mut txn, "slug", s.clone());
+            }
+
             // position as Any::Map (plain object, not a Y.Map)
             let pos: HashMap<String, Any> = HashMap::from([
                 ("x".to_string(), Any::Number(node.position.x)),
@@ -836,6 +844,69 @@ mod tests {
             }
             other => panic!("expected AutomatedStep, got {other:?}"),
         }
+    }
+
+    /// Pre-fix the slug write side was missing, so `new_version` (and any
+    /// other graph→Y.Doc seed) silently dropped the user-set slug. The
+    /// reconstructed draft then opened with every node falling back to the
+    /// placeholder derived from the node id, silently breaking every
+    /// `<slug>.<field>` borrow ref authored against the published version.
+    #[test]
+    fn node_slug_survives_ydoc_roundtrip() {
+        let graph = WorkflowGraph {
+            nodes: vec![
+                WorkflowNode {
+                    id: "n_with_slug".to_string(),
+                    node_type: "start".to_string(),
+                    slug: Some("review_step".to_string()),
+                    position: Position { x: 0.0, y: 0.0 },
+                    data: WorkflowNodeData::Start {
+                        label: "Start".to_string(),
+                        description: None,
+                        initial: Port {
+                            id: "in".to_string(),
+                            label: "Input".to_string(),
+                            fields: vec![],
+                        },
+                        process_name: None,
+                    },
+                    parent_id: None,
+                    width: None,
+                    height: None,
+                    tool_meta: None,
+                },
+                WorkflowNode {
+                    id: "n_no_slug".to_string(),
+                    node_type: "end".to_string(),
+                    slug: None,
+                    position: Position { x: 100.0, y: 0.0 },
+                    data: WorkflowNodeData::End {
+                        label: "End".to_string(),
+                        description: None,
+                        terminal: Port {
+                            id: "in".to_string(),
+                            label: "Terminal".to_string(),
+                            fields: vec![],
+                        },
+                        result_mapping: Vec::new(),
+                    },
+                    parent_id: None,
+                    width: None,
+                    height: None,
+                    tool_meta: None,
+                },
+            ],
+            edges: vec![],
+            viewport: None,
+            instance_concurrency: Default::default(),
+            definitions: Default::default(),
+        };
+
+        let rt = doc_to_graph(&graph_to_doc(&graph)).expect("parse Y.Doc");
+        let with_slug = rt.nodes.iter().find(|n| n.id == "n_with_slug").unwrap();
+        assert_eq!(with_slug.slug.as_deref(), Some("review_step"));
+        let no_slug = rt.nodes.iter().find(|n| n.id == "n_no_slug").unwrap();
+        assert_eq!(no_slug.slug, None);
     }
 
     /// Verifies inline files at template creation make it into the Y.Doc as
