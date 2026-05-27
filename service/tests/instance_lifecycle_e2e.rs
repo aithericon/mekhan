@@ -59,7 +59,6 @@ fn simple_graph() -> WorkflowGraph {
                 parent_id: None,
                 width: None,
                 height: None,
-                tool_meta: None,
             },
             WorkflowNode {
                 id: "end".to_string(),
@@ -75,7 +74,6 @@ fn simple_graph() -> WorkflowGraph {
                 parent_id: None,
                 width: None,
                 height: None,
-                tool_meta: None,
             },
         ],
         edges: vec![WorkflowEdge {

@@ -1464,7 +1464,6 @@ mod tests {
             parent_id: None,
             width: None,
             height: None,
-            tool_meta: None,
         };
 
         let logic = build_human_task_injection_logic(&node);
@@ -1501,7 +1500,6 @@ mod tests {
             parent_id: None,
             width: None,
             height: None,
-            tool_meta: None,
         }
     }
 
@@ -1520,7 +1518,6 @@ mod tests {
             parent_id: None,
             width: None,
             height: None,
-            tool_meta: None,
         }
     }
 
@@ -1795,7 +1792,6 @@ mod tests {
                     parent_id: None,
                     width: None,
                     height: None,
-                    tool_meta: None,
                 },
                 end_node("e"),
             ],
@@ -1850,7 +1846,6 @@ mod tests {
                     parent_id: None,
                     width: None,
                     height: None,
-                    tool_meta: None,
                 },
                 end_node("e1"),
                 end_node_with_id("e2"),
@@ -1931,7 +1926,6 @@ mod tests {
                     parent_id: None,
                     width: None,
                     height: None,
-                    tool_meta: None,
                 },
                 end_node("e1"),
                 end_node_with_id("e2"),
@@ -1997,7 +1991,6 @@ mod tests {
             parent_id: None,
             width: None,
             height: None,
-            tool_meta: None,
         }
     }
 
@@ -2103,7 +2096,6 @@ mod tests {
             parent_id: None,
             width: None,
             height: None,
-            tool_meta: None,
         };
 
         let join_node = WorkflowNode {
@@ -2125,7 +2117,6 @@ mod tests {
             parent_id: None,
             width: None,
             height: None,
-            tool_meta: None,
         };
 
         let graph = WorkflowGraph {
@@ -2202,7 +2193,6 @@ mod tests {
             parent_id: None,
             width: None,
             height: None,
-            tool_meta: None,
         };
         let mk_step = |id: &str| WorkflowNode {
             id: id.to_string(),
@@ -2229,7 +2219,6 @@ mod tests {
             parent_id: None,
             width: None,
             height: None,
-            tool_meta: None,
         };
         let graph = WorkflowGraph {
             nodes: vec![
@@ -2286,7 +2275,6 @@ mod tests {
             parent_id: None,
             width: None,
             height: None,
-            tool_meta: None,
         }
     }
 
@@ -3196,7 +3184,6 @@ mod tests {
             parent_id: None,
             width: None,
             height: None,
-            tool_meta: None,
         };
         let graph = WorkflowGraph {
             nodes: vec![start_node("s"), cq_node, end_node("e")],
@@ -3301,7 +3288,6 @@ mod tests {
             parent_id: None,
             width: None,
             height: None,
-            tool_meta: None,
         }
     }
 
@@ -3321,7 +3307,6 @@ mod tests {
             parent_id: None,
             width: None,
             height: None,
-            tool_meta: None,
         }
     }
 
@@ -3965,7 +3950,6 @@ mod tests {
             parent_id: None,
             width: None,
             height: None,
-            tool_meta: None,
         }
     }
 
@@ -3991,7 +3975,6 @@ mod tests {
             parent_id: None,
             width: None,
             height: None,
-            tool_meta: None,
         }
     }
 
@@ -4326,7 +4309,6 @@ mod tests {
                     parent_id: None,
                     width: None,
                     height: None,
-                    tool_meta: None,
                 },
                 end_node_with_id("e_hi"),
                 end_node_with_id("e_lo"),
@@ -4444,7 +4426,6 @@ mod tests {
                     parent_id: None,
                     width: None,
                     height: None,
-                    tool_meta: None,
                 },
                 end_node("e"),
             ],
@@ -4509,7 +4490,6 @@ mod tests {
                     parent_id: None,
                     width: None,
                     height: None,
-                    tool_meta: None,
                 },
                 end_node("e"),
             ],
@@ -4624,7 +4604,6 @@ mod tests {
                     parent_id: None,
                     width: None,
                     height: None,
-                    tool_meta: None,
                 },
                 end_node("e"),
             ],

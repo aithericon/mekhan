@@ -54,7 +54,6 @@ fn start(id: &str) -> WorkflowNode {
         parent_id: None,
         width: None,
         height: None,
-        tool_meta: None,
     }
 }
 
@@ -73,7 +72,6 @@ fn end(id: &str) -> WorkflowNode {
         parent_id: None,
         width: None,
         height: None,
-        tool_meta: None,
     }
 }
 
@@ -94,7 +92,6 @@ fn subworkflow(id: &str, child_family: Uuid, pin: VersionPin) -> WorkflowNode {
         parent_id: None,
         width: None,
         height: None,
-        tool_meta: None,
     }
 }
 

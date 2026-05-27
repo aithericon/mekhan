@@ -693,7 +693,6 @@ mod tests {
             parent_id: None,
             width: None,
             height: None,
-            tool_meta: None,
         }
     }
 
@@ -1116,7 +1115,6 @@ mod tests {
             parent_id: None,
             width: None,
             height: None,
-            tool_meta: None,
         };
         assert_eq!(
             build_human_task_injection_logic(&node),

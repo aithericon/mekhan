@@ -6,7 +6,6 @@ use mekhan_service::models::template::WorkflowGraph;
 use super::dsl::{
     DslBranchCondition, DslExecution, DslStep, DslTaskStep, DslWorkflow,
 };
-use mekhan_service::models::template::dsl::DslToolMeta;
 
 pub fn parse(content: &str) -> Result<WorkflowGraph> {
     let body: hcl::Body = hcl::from_str(content)
@@ -72,7 +71,6 @@ fn parse_step_block(block: &hcl::Block) -> Result<DslStep> {
         children: get_attr_string_array(body, "children").unwrap_or_default(),
         width: get_attr_f64(body, "width"),
         height: get_attr_f64(body, "height"),
-        tool_meta: None,
     };
 
     // Parse nested blocks
@@ -90,19 +88,12 @@ fn parse_step_block(block: &hcl::Block) -> Result<DslStep> {
                     let cond = parse_condition_block(inner)?;
                     step.conditions.get_or_insert_with(Vec::new).push(cond);
                 }
-                "tool_meta" => {
-                    let body = inner.body();
-                    let tool_name = get_attr_str(body, "name")
-                        .or_else(|| get_attr_str(body, "tool_name"))
-                        .context("tool_meta block requires 'name' or 'tool_name'")?;
-                    let tool_description = get_attr_str(body, "description")
-                        .or_else(|| get_attr_str(body, "tool_description"))
-                        .unwrap_or_default();
-                    step.tool_meta = Some(DslToolMeta {
-                        tool_name,
-                        tool_description,
-                    });
-                }
+                // `tool_meta {}` blocks were removed when tool naming moved
+                // to be derived from the node's own `label` / `description`.
+                // Quietly ignore for old HCL files instead of hard-failing
+                // (so the rest of the file still parses); the agent compiler
+                // takes the label-derived path either way.
+                "tool_meta" => {}
                 _ => {}
             }
         }

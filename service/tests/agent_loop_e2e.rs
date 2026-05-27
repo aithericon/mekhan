@@ -13,7 +13,7 @@
 use mekhan_service::compiler::compile_to_air;
 use mekhan_service::models::template::{
     ContextStrategy, DeploymentModel, ExecutionBackendType, ExecutionSpecConfig, ModelRef, Port,
-    Position, RetryPolicy, ToolErrorPolicy, ToolMeta, WorkflowEdge, WorkflowGraph, WorkflowNode,
+    Position, RetryPolicy, ToolErrorPolicy, WorkflowEdge, WorkflowGraph, WorkflowNode,
     WorkflowNodeData,
 };
 use serde_json::{json, Value};
@@ -37,7 +37,6 @@ fn start_node(id: &str) -> WorkflowNode {
         parent_id: None,
         width: None,
         height: None,
-        tool_meta: None,
     }
 }
 
@@ -56,7 +55,6 @@ fn end_node(id: &str) -> WorkflowNode {
         parent_id: None,
         width: None,
         height: None,
-        tool_meta: None,
     }
 }
 
@@ -107,14 +105,16 @@ fn agent_node(id: &str) -> WorkflowNode {
         parent_id: None,
         width: None,
         height: None,
-        tool_meta: None,
     }
 }
 
-/// One tool-tagged HTTP child. The agent compiler discovers tools via
-/// outgoing edges with `source_handle == "tools"` (see `tools_edge`
-/// below) — `parent_id` is no longer a tool-binding mechanism. HTTP is
-/// the lightest AutomatedStep backend to wire — no staged files needed.
+/// One HTTP child wired as a tool. The agent compiler discovers tools
+/// via outgoing edges with `source_handle == "tools"` (see `tools_edge`
+/// below) and derives the LLM-facing `tool_name` from the node's
+/// `label` (slugified to Rhai-identifier-safe) and `tool_description`
+/// from the node's `description`. No separate `tool_meta` side-channel.
+/// HTTP is the lightest AutomatedStep backend to wire — no staged
+/// files needed.
 fn tool_child(id: &str, _agent_id: &str, tool_name: &str) -> WorkflowNode {
     WorkflowNode {
         id: id.to_string(),
@@ -122,8 +122,10 @@ fn tool_child(id: &str, _agent_id: &str, tool_name: &str) -> WorkflowNode {
         slug: None,
         position: pos(),
         data: WorkflowNodeData::AutomatedStep {
-            label: "Lookup".to_string(),
-            description: None,
+            // Label IS the tool name source — `sanitize_slug(label)`
+            // produces the identifier the LLM addresses the tool by.
+            label: tool_name.to_string(),
+            description: Some("Look up information on a topic.".to_string()),
             execution_spec: ExecutionSpecConfig {
                 backend_type: ExecutionBackendType::Http,
                 entrypoint: None,
@@ -142,10 +144,6 @@ fn tool_child(id: &str, _agent_id: &str, tool_name: &str) -> WorkflowNode {
         parent_id: None,
         width: None,
         height: None,
-        tool_meta: Some(ToolMeta {
-            tool_name: tool_name.to_string(),
-            tool_description: "Look up information on a topic.".to_string(),
-        }),
     }
 }
 
@@ -687,8 +685,10 @@ fn bare_end_after_agent_does_not_tag_upstream_ctrl_terminal() {
     );
 }
 
-/// Two tool children with the same `tool_meta.tool_name` are a hard
-/// compile error — same shape as `SlugConflict`.
+/// Two tool children whose labels slugify to the same identifier are a
+/// hard compile error — same shape as `SlugConflict`. The agent
+/// compiler addresses tools by their slugified label, so a collision
+/// makes the per-tool dispatch route guards ambiguous.
 #[test]
 fn duplicate_tool_name_is_compile_error() {
     let graph = WorkflowGraph {
@@ -710,10 +710,10 @@ fn duplicate_tool_name_is_compile_error() {
         definitions: Default::default(),
     };
     let err = compile_to_air(&graph, "t", "", &std::collections::HashMap::new())
-        .expect_err("duplicate tool_name must fail");
+        .expect_err("duplicate tool name must fail");
     let msg = err.to_string();
     assert!(
-        msg.contains("duplicate tool_name") && msg.contains("lookup"),
-        "expected duplicate tool_name error mentioning 'lookup', got: {msg}"
+        msg.contains("duplicate tool name") && msg.contains("lookup"),
+        "expected duplicate tool-name error mentioning 'lookup', got: {msg}"
     );
 }

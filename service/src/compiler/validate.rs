@@ -33,15 +33,17 @@ pub(crate) fn validate(graph: &WorkflowGraph, wg: &WorkflowDiGraph) -> Result<()
         ));
     }
 
-    // Tool nodes (`tool_meta.is_some()`) are dispatched by the agent
-    // compiler via the agent's `tools` source handle (docs/12 § 2.2). The
-    // only legitimate incoming edge into a tool node is the agent's
-    // tools-handle edge itself; any OTHER incoming edge (a stray sequence
-    // edge from somewhere else in the graph) would let the tool fire
-    // outside the agent's control loop — reject at publish so the editor
-    // catches an accidental edge-drag instead of producing a silently
-    // broken net. Identify each tool's owning agent (first source we see
-    // on a `tools`-handle edge into it) so the error names both endpoints.
+    // Tool nodes are identified structurally: a node is a tool iff it's
+    // the target of an edge with `source_handle == "tools"` (docs/12
+    // § 2.2). The agent compiler dispatches to those targets by their
+    // (slugified) label. The only legitimate incoming edge into a tool
+    // node is the agent's `tools`-handle edge itself; any OTHER incoming
+    // edge (a stray sequence edge from somewhere else in the graph) would
+    // let the tool fire outside the agent's control loop — reject at
+    // publish so the editor catches an accidental edge-drag instead of
+    // producing a silently broken net. Identify each tool's owning agent
+    // (first source we see on a `tools`-handle edge into it) so the error
+    // names both endpoints.
     let mut owning_agent_by_tool: HashMap<&str, &str> = HashMap::new();
     for edge in &graph.edges {
         if edge.source_handle.as_deref() == Some("tools") {
@@ -51,22 +53,15 @@ pub(crate) fn validate(graph: &WorkflowGraph, wg: &WorkflowDiGraph) -> Result<()
         }
     }
     for edge in &graph.edges {
-        let target = graph.nodes.iter().find(|n| n.id == edge.target);
-        if let Some(target) = target {
-            if target.tool_meta.is_some()
-                && edge.source_handle.as_deref() != Some("tools")
-            {
-                let agent_id = owning_agent_by_tool
-                    .get(target.id.as_str())
-                    .copied()
-                    .unwrap_or("<orphan>")
-                    .to_string();
-                return Err(CompileError::ToolChildHasIncomingEdge {
-                    agent_id,
-                    child_id: target.id.clone(),
-                    edge_id: edge.id.clone(),
-                });
-            }
+        if edge.source_handle.as_deref() == Some("tools") {
+            continue;
+        }
+        if let Some(&agent_id) = owning_agent_by_tool.get(edge.target.as_str()) {
+            return Err(CompileError::ToolChildHasIncomingEdge {
+                agent_id: agent_id.to_string(),
+                child_id: edge.target.clone(),
+                edge_id: edge.id.clone(),
+            });
         }
     }
 
@@ -77,24 +72,31 @@ pub(crate) fn validate(graph: &WorkflowGraph, wg: &WorkflowDiGraph) -> Result<()
         visited.insert(ni);
     }
 
+    let tool_target_ids: HashSet<&str> = graph
+        .edges
+        .iter()
+        .filter(|e| e.source_handle.as_deref() == Some("tools"))
+        .map(|e| e.target.as_str())
+        .collect();
     let unreachable: Vec<&str> = wg
         .indices
         .iter()
         .filter(|(_, &ni)| !visited.contains(&ni))
-        .filter(|(_, &ni)| {
+        .filter(|(&id, &ni)| {
             let node = wg.full.node_weight(ni).unwrap();
             // Scope nodes are containers — they have no edges and are not reachable via BFS.
             // Trigger nodes are inputs to the workflow, not part of it — they're never
             // reachable from Start either.
-            // Agent tool children (parent_id is an Agent, tool_meta.is_some()) are
-            // structurally referenced from their parent via tool_meta, not via
-            // edges — the agent compiler dispatches to them by name. Treating
-            // them as unreachable would force authors to draw a no-op edge into
-            // every tool just to satisfy the validator. (docs/12 § 2.2.)
+            // Tool nodes (target of an agent's `tools`-handle edge) are reached
+            // structurally, not via the normal flow — the agent compiler
+            // dispatches to them via the tools-edge index in compile.rs.
+            // Treating them as unreachable would force authors to draw a no-op
+            // sequence edge into every tool just to satisfy the validator.
+            // (docs/12 § 2.2.)
             !matches!(
                 node.data,
                 WorkflowNodeData::Scope { .. } | WorkflowNodeData::Trigger { .. }
-            ) && node.tool_meta.is_none()
+            ) && !tool_target_ids.contains(id)
         })
         .map(|(&id, _)| id)
         .collect();
@@ -619,7 +621,6 @@ mod tests {
             parent_id: None,
             width: None,
             height: None,
-            tool_meta: None,
         }
     }
 

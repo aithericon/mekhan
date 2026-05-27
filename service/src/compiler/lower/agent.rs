@@ -25,17 +25,23 @@ pub(crate) fn lower_agent(cx: &mut LoweringCtx) -> Result<(), CompileError> {
 
     // Tool detection: nodes the agent reaches via outgoing edges keyed by
     // `source_handle == "tools"` (orchestrator pre-indexes these into
-    // `cx.agent_tools`). Each tool target must declare its own `tool_meta`
-    // (the name + description the LLM sees); a tools-edge to a node without
-    // `tool_meta` is a hard compile error so authoring mistakes surface at
-    // publish, not silently at the first tool-use turn.
+    // `cx.agent_tools`). The LLM-facing `tool_name` is derived from the
+    // target node's own `data.label()` (slugified to Rhai-identifier-safe
+    // via `sanitize_slug`) and `tool_description` from `data.description()`
+    // — single source of truth, no separate `tool_meta` field. A tools
+    // edge to a node whose label slugifies to "node" (the empty/junk
+    // fallback in `sanitize_slug`) is a hard compile error so authoring
+    // mistakes surface at publish, not silently at the first tool-use
+    // turn.
     let mut tool_children: Vec<&WorkflowNode> = Vec::with_capacity(cx.agent_tools.len());
     for &child in cx.agent_tools.iter() {
-        if child.tool_meta.is_none() {
+        let raw_label = child.data.label();
+        if raw_label.trim().is_empty() {
             return Err(CompileError::Compilation(format!(
-                "agent node '{}': tool edge targets node '{}' which has no \
-                 tool_meta declared (set tool_name + tool_description on the \
-                 target node, or remove the tools-handle edge)",
+                "agent node '{}': tool edge targets node '{}' which has an \
+                 empty label — the LLM addresses tools by name. Set a label \
+                 on the target node (it becomes the tool's name after \
+                 slugification).",
                 cx.node.id, child.id
             )));
         }
@@ -116,7 +122,6 @@ fn lower_agent_degenerate(cx: &mut LoweringCtx) -> Result<(), CompileError> {
         parent_id: cx.node.parent_id.clone(),
         width: cx.node.width,
         height: cx.node.height,
-        tool_meta: cx.node.tool_meta.clone(),
     };
 
     let mut virtual_cx = LoweringCtx {
@@ -205,16 +210,33 @@ fn lower_agent_loop(
     let max_turns = *max_turns;
     let on_tool_error = *on_tool_error;
 
+    // Per-tool derived metadata: tool_name = slugified node label,
+    // tool_description = node description (verbatim). Single source of
+    // truth — the canvas label IS what the LLM sees (after sanitisation).
+    // Pre-computed so the uniqueness check, schema build, and per-tool
+    // route emission all share the same name/description strings.
+    let tool_meta: Vec<(String, String)> = tool_children
+        .iter()
+        .map(|c| {
+            (
+                crate::models::template::sanitize_slug(c.data.label()),
+                c.data.description().unwrap_or("").to_string(),
+            )
+        })
+        .collect();
+
     // Tool-name uniqueness — analog of `SlugConflict`. A duplicate would
     // make the per-tool dispatch route guards ambiguous; reject at
-    // compile so the editor can ring the offending children.
+    // compile so the editor can ring the offending children. Names
+    // collide post-slugification (e.g. "Order Lookup" and "order_lookup"
+    // both slugify to the same identifier), so check on the derived form.
     let mut seen_names: std::collections::HashSet<&str> = std::collections::HashSet::new();
-    for child in tool_children {
-        let tm = child.tool_meta.as_ref().expect("filtered to tool children");
-        if !seen_names.insert(tm.tool_name.as_str()) {
+    for (name, _) in &tool_meta {
+        if !seen_names.insert(name.as_str()) {
             return Err(CompileError::Compilation(format!(
-                "agent node '{}': duplicate tool_name '{}' among tool children",
-                id, tm.tool_name
+                "agent node '{id}': duplicate tool name '{name}' — two tool \
+                 children have labels that slugify to the same identifier. \
+                 Rename one of the tool nodes."
             )));
         }
     }
@@ -224,13 +246,12 @@ fn lower_agent_loop(
     // Schema → fall back to a permissive `{type: object}` so the LLM
     // can call but the platform doesn't pretend to validate. Per-port
     // schemas are a separate concern from this PR.
-    let tool_schemas: Vec<serde_json::Value> = tool_children
+    let tool_schemas: Vec<serde_json::Value> = tool_meta
         .iter()
-        .map(|child| {
-            let tm = child.tool_meta.as_ref().unwrap();
+        .map(|(name, description)| {
             serde_json::json!({
-                "name": tm.tool_name,
-                "description": tm.tool_description,
+                "name": name,
+                "description": description,
                 "input_schema": {"type": "object", "properties": {}, "additionalProperties": true},
             })
         })
@@ -266,15 +287,12 @@ fn lower_agent_loop(
     // Known tool names — baked into the route_unknown guard so the
     // compiler decides at publish what counts as "known" rather than
     // shipping the set to runtime. List literal in Rhai map-key form.
-    let known_names_rhai: String = if tool_children.is_empty() {
+    let known_names_rhai: String = if tool_meta.is_empty() {
         "[]".to_string()
     } else {
-        let inner: Vec<String> = tool_children
+        let inner: Vec<String> = tool_meta
             .iter()
-            .map(|c| {
-                let tm = c.tool_meta.as_ref().unwrap();
-                format!("\"{}\"", rhai_str_escape(&tm.tool_name))
-            })
+            .map(|(name, _)| format!("\"{}\"", rhai_str_escape(name)))
             .collect();
         format!("[{}]", inner.join(", "))
     };
@@ -313,9 +331,8 @@ fn lower_agent_loop(
     // node_ports.
     let mut dispatch_places: Vec<(String, PlaceHandle<DynamicToken>)> = Vec::new();
     let mut tool_entries: Vec<AgentToolEntry> = Vec::new();
-    for child in tool_children {
-        let tm = child.tool_meta.as_ref().unwrap();
-        let tn = crate::models::template::sanitize_slug(&tm.tool_name);
+    for (child, (tn, _desc)) in tool_children.iter().zip(tool_meta.iter()) {
+        let tn = tn.clone();
         let pd: PlaceHandle<DynamicToken> = ctx.state(
             format!("p_{id}_dispatch_{tn}"),
             format!("{label} - Dispatch {tn}"),

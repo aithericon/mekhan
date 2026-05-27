@@ -53,7 +53,6 @@ fn simple_graph() -> WorkflowGraph {
                 parent_id: None,
                 width: None,
                 height: None,
-                tool_meta: None,
             },
             WorkflowNode {
                 id: "end".to_string(),
@@ -69,7 +68,6 @@ fn simple_graph() -> WorkflowGraph {
                 parent_id: None,
                 width: None,
                 height: None,
-                tool_meta: None,
             },
         ],
         edges: vec![WorkflowEdge {
@@ -420,7 +418,6 @@ async fn insert_published_template_with_required_start_field(db: &sqlx::PgPool) 
                 parent_id: None,
                 width: None,
                 height: None,
-                tool_meta: None,
             },
             WorkflowNode {
                 id: "end".to_string(),
@@ -436,7 +433,6 @@ async fn insert_published_template_with_required_start_field(db: &sqlx::PgPool) 
                 parent_id: None,
                 width: None,
                 height: None,
-                tool_meta: None,
             },
         ],
         edges: vec![WorkflowEdge {

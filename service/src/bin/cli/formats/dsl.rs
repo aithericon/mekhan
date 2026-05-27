@@ -107,12 +107,6 @@ impl DslWorkflow {
                 parent_id: None,
                 width,
                 height,
-                tool_meta: step.tool_meta.as_ref().map(|tm| {
-                    mekhan_service::models::template::ToolMeta {
-                        tool_name: tm.tool_name.clone(),
-                        tool_description: tm.tool_description.clone(),
-                    }
-                }),
             });
         }
 
@@ -371,7 +365,6 @@ flow:
                     parent_id: None,
                     width: None,
                     height: None,
-                    tool_meta: None,
                 },
                 WorkflowNode {
                     id: "container".to_string(),
@@ -385,7 +378,6 @@ flow:
                     parent_id: None,
                     width: Some(600.0),
                     height: Some(400.0),
-                    tool_meta: None,
                 },
                 WorkflowNode {
                     id: "task1".to_string(),
@@ -401,7 +393,6 @@ flow:
                     parent_id: Some("container".to_string()),
                     width: None,
                     height: None,
-                    tool_meta: None,
                 },
             ],
             edges: vec![WorkflowEdge {
@@ -535,7 +526,6 @@ flow:
                     parent_id: None,
                     width: None,
                     height: None,
-                    tool_meta: None,
                 },
                 WorkflowNode {
                     id: "review".to_string(),
@@ -577,7 +567,6 @@ flow:
                     parent_id: None,
                     width: None,
                     height: None,
-                    tool_meta: None,
                 },
                 WorkflowNode {
                     id: "done".to_string(),
@@ -593,7 +582,6 @@ flow:
                     parent_id: None,
                     width: None,
                     height: None,
-                    tool_meta: None,
                 },
             ],
             edges: vec![
@@ -761,7 +749,6 @@ flow:
                     parent_id: None,
                     width: None,
                     height: None,
-                    tool_meta: None,
                 },
                 WorkflowNode {
                     id: "run".to_string(),
@@ -786,7 +773,6 @@ flow:
                     parent_id: None,
                     width: None,
                     height: None,
-                    tool_meta: None,
                 },
                 WorkflowNode {
                     id: "done".to_string(),
@@ -802,7 +788,6 @@ flow:
                     parent_id: None,
                     width: None,
                     height: None,
-                    tool_meta: None,
                 },
             ],
             edges: vec![

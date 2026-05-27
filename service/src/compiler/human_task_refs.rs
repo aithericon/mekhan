@@ -195,7 +195,6 @@ mod tests {
             parent_id: None,
             width: None,
             height: None,
-            tool_meta: None,
         }
     }
 
@@ -318,7 +317,6 @@ mod tests {
             parent_id: None,
             width: None,
             height: None,
-            tool_meta: None,
         };
         assert!(extract_human_task_refs(&n).is_empty());
     }

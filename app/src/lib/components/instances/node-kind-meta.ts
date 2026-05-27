@@ -21,6 +21,7 @@ import Gauge from '@lucide/svelte/icons/gauge';
 import Zap from '@lucide/svelte/icons/zap';
 import Timer from '@lucide/svelte/icons/timer';
 import TimerOff from '@lucide/svelte/icons/timer-off';
+import Bot from '@lucide/svelte/icons/bot';
 import Box from '@lucide/svelte/icons/box';
 
 export type NodeKindMeta = {
@@ -38,6 +39,7 @@ const KIND_META: Record<string, NodeKindMeta> = {
 	start: { icon: Play,       label: 'Start',           iconClass: 'text-white', chipClass: 'bg-node-start' },
 	end: { icon: Square,       label: 'End',             iconClass: 'text-white', chipClass: 'bg-node-end' },
 	automated_step: { icon: Cpu, label: 'Automated step', iconClass: 'text-white', chipClass: 'bg-node-automated' },
+	agent: { icon: Bot, label: 'Agent', iconClass: 'text-white', chipClass: 'bg-node-agent' },
 	human_task: { icon: User,  label: 'Human task',      iconClass: 'text-white', chipClass: 'bg-node-human-task' },
 	decision: { icon: GitBranch, label: 'Decision',      iconClass: 'text-white', chipClass: 'bg-node-decision' },
 	loop: { icon: Repeat,      label: 'Loop',            iconClass: 'text-white', chipClass: 'bg-node-loop' },

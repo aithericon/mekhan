@@ -35,7 +35,6 @@ fn start_node(id: &str) -> WorkflowNode {
         parent_id: None,
         width: None,
         height: None,
-        tool_meta: None,
     }
 }
 
@@ -54,7 +53,6 @@ fn end_node(id: &str) -> WorkflowNode {
         parent_id: None,
         width: None,
         height: None,
-        tool_meta: None,
     }
 }
 
@@ -116,7 +114,6 @@ fn agent_node(id: &str) -> WorkflowNode {
         parent_id: None,
         width: None,
         height: None,
-        tool_meta: None,
     }
 }
 
@@ -144,7 +141,6 @@ fn llm_step_node(id: &str) -> WorkflowNode {
         parent_id: None,
         width: None,
         height: None,
-        tool_meta: None,
     }
 }
 

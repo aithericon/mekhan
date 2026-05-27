@@ -27,7 +27,6 @@ mod port_contract_tests {
                 process_name: None,
             },
             parent_id: None,
-            tool_meta: None,
             width: None,
             height: None,
         }

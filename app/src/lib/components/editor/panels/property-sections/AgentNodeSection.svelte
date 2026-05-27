@@ -10,6 +10,7 @@
 	import LlmCommonFields, {
 		type LlmCommonShape
 	} from './shared/LlmCommonFields.svelte';
+	import { sanitizeSlug } from '$lib/editor/sanitize-slug';
 	import { untrack } from 'svelte';
 
 	type Props = {
@@ -99,15 +100,12 @@
 	});
 
 	// Tool children: every node reachable from this agent via a
-	// `tools`-handle edge — even ones not yet tagged with `toolMeta`. We
-	// list untagged tools too so the author can see them and is prompted
-	// to name them (otherwise the compiler rejects at publish with no
-	// canvas-side hint as to which node needs attention). The agent's
-	// `tools` source handle is the binding mechanism — drag from it onto
-	// any node you want the LLM to be able to call. To edit a tool's
-	// name / description, open that target node's panel. Compile rejects
-	// duplicates + untagged tools on publish, so we surface both
-	// warnings inline.
+	// `tools`-handle edge. The agent's `tools` source handle is the
+	// binding mechanism — drag from it onto any node you want the LLM
+	// to be able to call. The LLM-facing tool name + description come
+	// straight from the target node's own `label` and `description` (no
+	// separate `toolMeta` field — single source of truth). To edit them,
+	// open the target node's panel.
 	const toolChildren = $derived.by(() => {
 		if (!binding || !nodeId) return [];
 		const nodeById = new Map(binding.graph.nodes.map((n) => [n.id, n]));
@@ -120,11 +118,26 @@
 		}
 		return targets;
 	});
+	// Helpers: tool name = slugified node label; tool description = node
+	// description verbatim. Mirrors the compiler's derivation in
+	// `service/src/compiler/lower/agent.rs`. We surface BOTH the raw label
+	// and the slugified form in the panel so authors see exactly what the
+	// LLM will call.
+	type ToolLike = { data?: { label?: string | null; description?: string | null } };
+	function toolNameFor(child: ToolLike): string {
+		const label = child.data?.label?.trim() ?? '';
+		if (!label) return '';
+		return sanitizeSlug(label);
+	}
+	function toolDescriptionFor(child: ToolLike): string {
+		return child.data?.description?.trim() ?? '';
+	}
+
 	const duplicateToolNames = $derived.by(() => {
 		const seen = new Set<string>();
 		const dups = new Set<string>();
 		for (const child of toolChildren) {
-			const name = child.toolMeta?.toolName?.trim() ?? '';
+			const name = toolNameFor(child);
 			if (!name) continue;
 			if (seen.has(name)) dups.add(name);
 			seen.add(name);
@@ -354,14 +367,16 @@
 		</p>
 		<ul class="space-y-1" data-testid="agent-tool-list">
 			{#each toolChildren as child (child.id)}
-				{@const isTagged = !!child.toolMeta?.toolName?.trim()}
-				{@const isDup = isTagged && duplicateToolNames.has(child.toolMeta?.toolName?.trim() ?? '')}
+				{@const tName = toolNameFor(child)}
+				{@const tDesc = toolDescriptionFor(child)}
+				{@const hasName = tName !== ''}
+				{@const isDup = hasName && duplicateToolNames.has(tName)}
 				<li class="flex items-start justify-between gap-2 rounded-md border border-border/60 px-2 py-1.5">
 					<div class="min-w-0 flex-1">
 						<div class="flex items-center gap-1.5">
-							{#if isTagged}
+							{#if hasName}
 								<code class="truncate font-mono text-sm font-medium text-foreground">
-									{child.toolMeta?.toolName}
+									{tName}
 								</code>
 							{:else}
 								<span class="truncate text-sm text-muted-foreground italic">
@@ -369,10 +384,10 @@
 								</span>
 								<span
 									class="shrink-0 rounded bg-amber-500/15 px-1.5 py-0.5 text-sm font-medium text-amber-700 dark:text-amber-400"
-									title="The LLM addresses tools by name. Untagged tools are invisible to it and will be rejected at publish."
+									title="The tool name is derived from this node's label (slugified). An empty label means the LLM can't see this tool — publish will reject it."
 									data-testid="agent-tool-needs-name"
 								>
-									needs tool name
+									needs label
 								</span>
 							{/if}
 							{#if isDup}
@@ -384,13 +399,13 @@
 								</span>
 							{/if}
 						</div>
-						{#if child.toolMeta?.toolDescription}
-							<p class="truncate text-sm text-muted-foreground" title={child.toolMeta.toolDescription}>
-								{child.toolMeta.toolDescription}
+						{#if tDesc}
+							<p class="truncate text-sm text-muted-foreground" title={tDesc}>
+								{tDesc}
 							</p>
-						{:else if isTagged}
+						{:else if hasName}
 							<p class="truncate text-sm text-muted-foreground italic">
-								(no description — the model has nothing to decide when to call this tool)
+								(no description — set one on the tool node so the model knows when to call it)
 							</p>
 						{/if}
 					</div>

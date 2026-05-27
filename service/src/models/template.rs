@@ -133,26 +133,14 @@ pub struct WorkflowNode {
     /// Explicit height (used by scope nodes).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub height: Option<f64>,
-    /// When this node is a child of an Agent container and should be
-    /// exposed to the LLM as a callable tool, this carries the tool's
-    /// `name` (Rhai-identifier-safe, unique within the parent agent) and
-    /// `description` (shown to the LLM). Any node kind can be a tool;
-    /// its input port becomes the tool's argument schema. Absent on
-    /// non-tool children and on top-level nodes.
-    #[serde(rename = "toolMeta", skip_serializing_if = "Option::is_none")]
-    pub tool_meta: Option<ToolMeta>,
 }
 
-/// Marks a child of an Agent as a callable tool.
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct ToolMeta {
-    /// Rhai-identifier-safe; unique within the parent agent. The agent
-    /// compiler emits a hard `CompileError` on collision.
-    pub tool_name: String,
-    /// Shown to the LLM in the tool listing.
-    pub tool_description: String,
-}
+// `ToolMeta` removed: agent tools are discovered structurally (target of
+// an agent's `tools`-handle outgoing edge) and the LLM-facing
+// `tool_name` / `tool_description` are derived from the node's own
+// `data.label()` / `data.description()` rather than duplicated in a
+// side-channel struct. The compiler slugifies the label via
+// `sanitize_slug` to keep the name Rhai-identifier-safe.
 
 impl WorkflowNode {
     /// Author-facing slug candidate: the explicit `slug` when set and
@@ -1972,7 +1960,6 @@ impl WorkflowGraph {
                     parent_id: None,
                     width: None,
                     height: None,
-                    tool_meta: None,
                 },
                 WorkflowNode {
                     id: "end".to_string(),
@@ -1988,7 +1975,6 @@ impl WorkflowGraph {
                     parent_id: None,
                     width: None,
                     height: None,
-                    tool_meta: None,
                 },
             ],
             edges: vec![WorkflowEdge {
@@ -2092,18 +2078,6 @@ pub mod dsl {
 
         #[serde(skip_serializing_if = "Option::is_none")]
         pub height: Option<f64>,
-
-        /// When this step is a child of an Agent and should be exposed
-        /// to the LLM as a callable tool. Maps 1:1 to
-        /// [`super::ToolMeta`] on the node. Absent on non-tool children.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        pub tool_meta: Option<DslToolMeta>,
-    }
-
-    #[derive(Debug, Clone, Serialize, Deserialize)]
-    pub struct DslToolMeta {
-        pub tool_name: String,
-        pub tool_description: String,
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2437,10 +2411,6 @@ pub mod dsl {
                 children: Vec::new(),
                 width: node.width,
                 height: node.height,
-                tool_meta: node.tool_meta.as_ref().map(|tm| DslToolMeta {
-                    tool_name: tm.tool_name.clone(),
-                    tool_description: tm.tool_description.clone(),
-                }),
             };
 
             match self {
@@ -2875,7 +2845,6 @@ mod tests {
             parent_id: Some("scope1".to_string()),
             width: None,
             height: None,
-            tool_meta: None,
         };
         let json = serde_json::to_value(&node).unwrap();
         assert_eq!(json["parentId"], "scope1");
@@ -2898,7 +2867,6 @@ mod tests {
             parent_id: None,
             width: Some(500.0),
             height: Some(300.0),
-            tool_meta: None,
         };
         let json = serde_json::to_value(&node).unwrap();
         assert_eq!(json["width"], 500.0);
@@ -2927,7 +2895,6 @@ mod tests {
             parent_id: None,
             width: None,
             height: None,
-            tool_meta: None,
         };
         let json = serde_json::to_string(&node).unwrap();
         assert!(!json.contains("parentId"), "parentId should be omitted when None");

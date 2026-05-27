@@ -2,17 +2,21 @@
 //! byte-identically to `AutomatedStep(Llm)`) plus the multi-turn agent loop
 //! with optional tool children.
 //!
-//! **Kind mapping is intentional**: `NodeKind::AutomatedStep`, NOT
-//! `NodeKind::Agent`. The degenerate-path byte-identical contract is pinned
-//! by `agent_degenerate_lowers_byte_identical_to_llm_automated_step` — the
-//! emitted `NodeInterface` MUST publish `AutomatedStep` so downstream
-//! consumers (causality, the borrow planner's `hoist_path`, `canonical_output_payload`)
-//! treat the agent's degenerate path the same as a hand-authored Llm step.
+//! **Kind mapping is asymmetric by path**:
 //!
-//! The registry **declares** this mapping; before PR2 it lived as a special
-//! case in `compiler/lower/mod.rs::node_kind_of` (the "hack at line 412" the
-//! plan calls out). With Agent in the registry, that fallback becomes dead
-//! code at PR2's merge-time cleanup.
+//! - Loop path → published `NodeKind::Agent`. Reflects the distinct subnet
+//!   shape (`p_state`, `p_response`, `t_route_*`, per-tool dispatch).
+//!   `NodeKind::Agent::hoist_path() == ["detail", "outputs"]` so the borrow
+//!   planner resolves `<agent>.response` / `<agent>.usage` / `<agent>.turn`
+//!   against the same `{detail: {outputs: …}}` envelope an `AutomatedStep(Llm)`
+//!   would park.
+//! - Degenerate path (`max_turns == 1`, no `stop_when`, no tool children) →
+//!   published `NodeKind::AutomatedStep`. `lower_agent_degenerate` synthesises
+//!   a virtual `WorkflowNodeData::AutomatedStep` node and delegates to
+//!   `automated_step::lower_automated_step`; `publish_interface` reads the
+//!   kind from `lookup_by_variant(virtual_node.data)` and gets AutomatedStep.
+//!   This is what keeps `agent_degenerate_lowers_byte_identical_to_llm_automated_step`
+//!   green: the published interface is byte-identical to an Llm step's.
 
 use crate::compiler::interface::NodeKind;
 use crate::models::template::{
@@ -30,9 +34,12 @@ pub(crate) static AGENT_DECL: NodeDecl = NodeDecl {
          loop. Degenerate path (max_turns == 1, no stop_when, no tools) \
          lowers byte-identically to AutomatedStep(Llm).",
     ),
-    // Declared, not derived. Replaces the `node_kind_of` carve-out at
-    // `compiler/lower/mod.rs:412`. Preserves the byte-identical contract
-    // (`agent_degenerate_lowers_byte_identical_to_llm_automated_step`).
+    // Agent reuses `NodeKind::AutomatedStep` — declared, not a separate
+    // variant — to preserve the byte-identical contract pinned by
+    // `agent_degenerate_lowers_byte_identical_to_llm_automated_step`. The
+    // loop path's envelope nesting matches AutomatedStep's
+    // (`detail.outputs.*`), so AutomatedStep's `hoist_path()` is the
+    // right answer for the borrow apply phases.
     kind: NodeKind::AutomatedStep,
     lowers_to_air: true,
     is_join: false,

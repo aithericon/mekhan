@@ -38,10 +38,11 @@
 <Handle id="in" type="target" position={Position.Left} class={workflowNodeHandleClass('agent')} />
 <!-- Tools handle: drag from here to any AutomatedStep / SubWorkflow / etc.
      node that should be callable by the LLM. The compiler discovers tool
-     children by walking outgoing edges with sourceHandle="tools"; the target
-     node carries `toolMeta { toolName, toolDescription }` set in its panel.
-     Distinct purple style + top placement keeps it visually separated from
-     the data flow (`out` right, `error` bottom). -->
+     children by walking outgoing edges with sourceHandle="tools"; the
+     LLM-facing tool name + description come from the target node's own
+     `label` (slugified) and `description` — no separate side-channel.
+     Distinct purple style + top placement keeps it visually separated
+     from the data flow (`out` right, `error` bottom). -->
 <Handle
 	id="tools"
 	type="source"
