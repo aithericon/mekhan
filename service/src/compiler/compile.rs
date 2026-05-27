@@ -207,30 +207,6 @@ pub fn compile_to_air(
         .map_err(|e| CompileError::Compilation(format!("failed to serialize scenario: {e}")))
 }
 
-/// Like [`compile_to_air`] but with pre-resolved child sub-workflow AIR
-/// (built by the publish/preview handlers, frozen at parent publish time).
-pub fn compile_to_air_with_subworkflows(
-    graph: &WorkflowGraph,
-    name: &str,
-    description: &str,
-    files: &NodeFiles,
-    sub_air: &SubWorkflowAir,
-) -> Result<Value, CompileError> {
-    let inline = derive_inline_sources(files);
-    let known = KnownResources::new();
-    let scenario = compile_to_scenario_with_inline_sources(
-        graph,
-        name,
-        description,
-        files,
-        &inline,
-        sub_air,
-        &known,
-    )?;
-    serde_json::to_value(&scenario)
-        .map_err(|e| CompileError::Compilation(format!("failed to serialize scenario: {e}")))
-}
-
 /// Publish-path entry: `files` may carry `InputSource::StoragePath` for
 /// scaling (per-job-dispatch NATS payload stays small), and the
 /// `inline_sources` map carries the Python source the borrow planner
@@ -345,7 +321,7 @@ pub fn compile_to_scenario(
 /// Internal entry that decouples the executor-side `files` (which may
 /// carry `StoragePath` for runtime efficiency) from the compile-time
 /// `inline_sources` (which the borrow planner needs as plain text).
-pub fn compile_to_scenario_with_inline_sources(
+pub(crate) fn compile_to_scenario_with_inline_sources(
     graph: &WorkflowGraph,
     name: &str,
     description: &str,
@@ -376,7 +352,7 @@ pub fn compile_to_scenario_with_inline_sources(
 /// `interface_json`), so a parent compile that embeds this template via a
 /// `SubWorkflow` node reads the child's interface verbatim — no scanning,
 /// no `place_type == "terminal" && !id.contains('/')` filtering.
-pub fn compile_to_scenario_and_interfaces(
+pub(crate) fn compile_to_scenario_and_interfaces(
     graph: &WorkflowGraph,
     name: &str,
     description: &str,
@@ -407,7 +383,7 @@ pub fn compile_to_scenario_and_interfaces(
 /// [`ConfigStorage`]. `known_resources` carries the workspace-resource
 /// manifest collected by the publish handler (see `discover_known_resources`);
 /// tests / preview / analyze pass an empty map.
-pub fn compile_to_scenario_and_interfaces_with_configs(
+pub(crate) fn compile_to_scenario_and_interfaces_with_configs(
     graph: &WorkflowGraph,
     name: &str,
     description: &str,
@@ -3603,7 +3579,7 @@ mod tests {
         }"#;
         let graph: WorkflowGraph = serde_json::from_str(json).expect("deser graph");
         let (scenario, _interfaces, node_configs) =
-            crate::compiler::compile_to_scenario_and_interfaces_with_configs(
+            super::compile_to_scenario_and_interfaces_with_configs(
                 &graph,
                 "llm-borrow-test",
                 "",
@@ -3707,7 +3683,7 @@ mod tests {
         }"#;
         let graph: WorkflowGraph = serde_json::from_str(json).expect("deser graph");
         let (scenario, _interfaces, node_configs) =
-            crate::compiler::compile_to_scenario_and_interfaces_with_configs(
+            super::compile_to_scenario_and_interfaces_with_configs(
                 &graph,
                 "kz-borrow-test",
                 "",
