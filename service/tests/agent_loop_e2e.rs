@@ -573,6 +573,77 @@ fn agent_terminals_must_be_node_scoped() {
     );
 }
 
+/// Agent → bare End (no Start processName, no End resultMapping) must NOT
+/// promote the agent's slim `p_<agent>_ctrl` place to a workflow terminal.
+///
+/// Cause of the previously-observed bug: End's `p_<end>_done` is the dead
+/// side of a pass-through edge merge; the survivor is the upstream's
+/// `p_<agent>_ctrl`. The interface registry's `workflow_terminals` is
+/// alias-rewritten through the merge map, so a bare End's `terminal_id =
+/// p_<end>_done` collapsed onto `p_<agent>_ctrl` and `apply_terminal_place_types`
+/// tagged the agent's transient slim control place as a workflow exit.
+/// Effect: the engine marked the instance `completed` the instant the
+/// agent's `t_<agent>_yield` deposited a `{status: succeeded}` token, before
+/// any End-side projection ran. End stayed `pending` in the UI; the
+/// instance result was the slim envelope, not the agent's actual outputs.
+///
+/// Fix: `lower_end` now mints its own `p_<end>_terminal` place plus a
+/// `t_<end>_complete` forwarder for the no-process branch, anchoring the
+/// terminal on a place End emits. The agent's `p_<agent>_ctrl` survives the
+/// merge but remains a normal intermediate.
+#[test]
+fn bare_end_after_agent_does_not_tag_upstream_ctrl_terminal() {
+    let air = compile(
+        vec![start_node("s"), agent_node("a"), end_node("e")],
+        vec![edge("e1", "s", "a"), edge("e2", "a", "e")],
+    );
+    let places = air
+        .get("places")
+        .and_then(Value::as_array)
+        .expect("places array");
+
+    let ctrl = places
+        .iter()
+        .find(|p| p.get("id").and_then(Value::as_str) == Some("p_a_ctrl"))
+        .expect("agent ctrl place present");
+    let ctrl_ty = ctrl
+        .get("type")
+        .and_then(Value::as_str)
+        .or_else(|| ctrl.get("place_type").and_then(Value::as_str));
+    assert_ne!(
+        ctrl_ty,
+        Some("terminal"),
+        "p_a_ctrl is the agent's transient slim-control place; tagging it \
+         terminal makes the engine complete the workflow before End fires"
+    );
+
+    let end_term = places
+        .iter()
+        .find(|p| p.get("id").and_then(Value::as_str) == Some("p_e_terminal"))
+        .expect("End must mint its own p_e_terminal place");
+    let end_term_ty = end_term
+        .get("type")
+        .and_then(Value::as_str)
+        .or_else(|| end_term.get("place_type").and_then(Value::as_str));
+    assert_eq!(
+        end_term_ty,
+        Some("terminal"),
+        "End's own terminal place must carry the workflow-exit tag"
+    );
+
+    let transitions = air
+        .get("transitions")
+        .and_then(Value::as_array)
+        .expect("transitions array");
+    assert!(
+        transitions
+            .iter()
+            .any(|t| t.get("id").and_then(Value::as_str) == Some("t_e_complete")),
+        "End must emit a t_e_complete forwarder so a transition actually \
+         fires at workflow exit (so the UI/projector sees End execute)"
+    );
+}
+
 /// Two tool children with the same `tool_meta.tool_name` are a hard
 /// compile error — same shape as `SlugConflict`.
 #[test]

@@ -56,9 +56,33 @@ pub(super) fn lower_end(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     };
 
     let terminal_id = match cx.fixups.process_token_place.clone() {
-        // No process was registered by the Start (opt-in unused) —
-        // the terminal feed is itself the terminal place.
-        None => terminal_feed_id,
+        // No process was registered by the Start (opt-in unused).
+        // Mint an End-owned terminal place plus a forwarding transition
+        // so the workflow exit is anchored on a place this End emitted —
+        // not on the upstream's `_ctrl` survivor of the pass-through
+        // edge merge. Without this step, an upstream parking node
+        // (Agent, AutomatedStep, HumanTask, …) whose `p_<upstream>_ctrl`
+        // is the merge survivor of `p_{id}_done` ends up tagged
+        // `terminal`; the engine then declares the net complete the
+        // instant the upstream yields its slim control token, before
+        // any End-side projection runs. Symptom: instance status flips
+        // to `completed` with an empty/`{status: succeeded}` result and
+        // the End node stays `pending` in the UI because no End-tagged
+        // transition ever fires.
+        None => {
+            let exit: PlaceHandle<DynamicToken> =
+                ctx.state(format!("p_{id}_terminal"), format!("{label} - Exit"));
+            ctx.transition(
+                format!("t_{id}_complete"),
+                format!("{label} - Complete"),
+            )
+            .auto_input("input", &terminal_feed)
+            .auto_output("output", &exit)
+            .logic_rhai("#{ output: input }".to_string())
+            .done();
+            let _ = terminal_feed_id;
+            format!("p_{id}_terminal")
+        }
         // A Start registered a process — mirror the Start pattern:
         // insert a `process_complete` effect between the (post-shape)
         // feed place and a new terminal. The handler reads `process_id`

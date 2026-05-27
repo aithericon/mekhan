@@ -1517,18 +1517,23 @@ mod tests {
         let places = air["places"].as_array().unwrap();
         let transitions = air["transitions"].as_array().unwrap();
 
-        // Start now forks (`park_outputs`): p_s_ready (seed) + p_s_data
-        // (write-once parked copy, never read here) + p_s_main (token
-        // forwarded; End merges into it) = 3 places, 1 transition (t_s_park).
-        assert_eq!(places.len(), 3);
-        assert_eq!(transitions.len(), 1);
+        // Start forks (`park_outputs`): p_s_ready (seed) + p_s_data (write-once
+        // parked copy) + p_s_main (forwarded — End's `p_e_done` merges into it).
+        // End then mints its own terminal (`p_e_terminal`) + a `t_e_complete`
+        // forwarder so the workflow exit is End-owned rather than the upstream's
+        // ctrl-merge survivor. = 4 places (p_s_ready/p_s_data/p_s_main/p_e_terminal),
+        // 2 transitions (t_s_park, t_e_complete).
+        assert_eq!(places.len(), 4);
+        assert_eq!(transitions.len(), 2);
 
-        // The forwarded place absorbs the terminal type (End merged into
-        // p_s_main); the seed place stays a normal state place. With typed
-        // ports, initial tokens are NOT seeded at compile time —
-        // `parameterize_air` seeds them at instance creation.
+        // End's own terminal carries the workflow-exit tag; p_s_main is just
+        // the intermediate the forwarder consumes from. With typed ports, initial
+        // tokens are NOT seeded at compile time — `parameterize_air` seeds them
+        // at instance creation.
+        let term = places.iter().find(|p| p["id"] == "p_e_terminal").unwrap();
+        assert_eq!(term["type"], "terminal");
         let main_place = places.iter().find(|p| p["id"] == "p_s_main").unwrap();
-        assert_eq!(main_place["type"], "terminal");
+        assert_ne!(main_place["type"], "terminal");
     }
 
     /// Prototype proof: the per-node interface registry is alias-stable on
@@ -1574,28 +1579,32 @@ mod tests {
             s.owned_places
         );
 
-        // End: alive, kind, workflow_terminals alias-rewritten to the
-        // collapse survivor (the entire seam this prototype closes).
+        // End: alive, kind, workflow_terminals stable across alias rewrites.
+        // The current shape: End mints its OWN `p_e_terminal` place (with a
+        // `t_e_complete` forwarder) so the workflow exit is anchored on a
+        // place End emits — independent of whether the upstream's `p_*_ctrl`
+        // place collapsed onto `p_e_done` via the pass-through merge. This
+        // closes a premature-termination class: when an Agent/AutomatedStep/
+        // HumanTask feeds a bare End (no result_mapping, no Start-registered
+        // process), the engine would otherwise tag the upstream's slim
+        // control place `p_<upstream>_ctrl` as terminal and complete the
+        // net the instant the upstream yielded, with no End-side projection.
         let e = registry.get("e").expect("End interface present");
         assert_eq!(e.kind, NodeKind::End);
         assert_eq!(
             e.workflow_terminals,
-            vec!["p_s_main".to_string()],
-            "End's terminal should be alias-rewritten to the collapse survivor (was {:?})",
+            vec!["p_e_terminal".to_string()],
+            "End must own its own workflow terminal (was {:?})",
             e.workflow_terminals,
         );
-        // Critical SubWorkflow-resolution invariant: the terminal id is NOT
-        // a slash-separated SDK lifecycle place, so the old
-        // `!id.contains('/')` filter would still catch it — but it's also
-        // NOT the `p_e_done` prefix the original buggy filter (`e5ed9fc`)
-        // searched for. The interface registry sidesteps both checks.
+        // The terminal id is NOT a slash-separated SDK lifecycle place (the
+        // `!id.contains('/')` filter the original SubWorkflow reply-resolver
+        // used still passes). The interface registry remains the single
+        // source of truth — SubWorkflow's reply-resolver reads
+        // `workflow_terminals` directly without name-pattern filtering.
         assert!(
             !e.workflow_terminals[0].contains('/'),
             "Terminal must be a workflow-exit, not an SDK lifecycle marker",
-        );
-        assert!(
-            !e.workflow_terminals[0].starts_with("p_e_"),
-            "Terminal must be the post-collapse survivor, not the pre-collapse `p_e_done`",
         );
     }
 
@@ -1770,12 +1779,14 @@ mod tests {
         // HumanTask creates 5 places (input, active, signal, output, errors)
         // + the HT foundation split adds parked-data + slim-control = 7.
         // Start now forks too: p_s_ready + p_s_data + p_s_main = 3 → 10.
-        assert_eq!(places.len(), 10);
+        // End mints its own terminal (`p_e_terminal`) so the workflow exit
+        // is End-owned rather than the HumanTask's `p_ht_ctrl` survivor → 11.
+        assert_eq!(places.len(), 11);
 
         // request + finalize + 1 injection edge (s->ht) + the HT yield
-        // transition + Start's t_s_park = 5 (ht->e merged into the control
-        // place).
-        assert_eq!(transitions.len(), 5);
+        // transition + Start's t_s_park + End's t_e_complete forwarder = 6
+        // (ht->e merged into the control place).
+        assert_eq!(transitions.len(), 6);
     }
 
     #[test]
@@ -1825,9 +1836,10 @@ mod tests {
         let transitions = air["transitions"].as_array().unwrap();
 
         // Start's t_s_park + 1 branch + 1 default + the always-emitted
-        // dead-end (unroutable token -> observable net error) = 4. The 3
+        // dead-end (unroutable token -> observable net error) + one
+        // `t_e*_complete` forwarder per bare End (e1, e2) = 6. The 3
         // pass-through edge transitions (s->d, d->e1, d->e2) are merged.
-        assert_eq!(transitions.len(), 4);
+        assert_eq!(transitions.len(), 6);
 
         // The branch fires on its own guard.
         let branch = transitions
