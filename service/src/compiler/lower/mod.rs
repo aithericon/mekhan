@@ -209,6 +209,14 @@ pub(crate) struct LoweringCtx<'a, 'c> {
     /// reject empty Loops; other lowering paths ignore it today (Scope has its
     /// own group-based traversal).
     pub(crate) children: &'a [&'a WorkflowNode],
+    /// Agent tool targets — nodes reachable from this node via an outgoing
+    /// edge with `source_handle == "tools"`. Empty for non-Agent nodes and
+    /// for agents with no tools wired. Replaces the previous "any child node
+    /// with `tool_meta`" discovery (which required dragging the tool node
+    /// onto the agent to set `parent_id`); tools are now first-class graph
+    /// nodes connected by edges, not visually nested children. The orchestrator
+    /// builds the index once via `agent_tools_by_id` and passes the slice in.
+    pub(crate) agent_tools: &'a [&'a WorkflowNode],
     pub(crate) ctx: &'c mut Context,
     pub(crate) ports: &'c mut HashMap<String, NodePorts>,
     pub(crate) fixups: &'c mut PostProcess,
@@ -357,6 +365,7 @@ pub(crate) fn expand_node<'a>(
     outgoing_edges: &'a [&'a WorkflowEdge],
     incoming_edges: &'a [&'a WorkflowEdge],
     children: &'a [&'a WorkflowNode],
+    agent_tools: &'a [&'a WorkflowNode],
     ctx: &mut Context,
     ports: &mut HashMap<String, NodePorts>,
     fixups: &mut PostProcess,
@@ -372,6 +381,7 @@ pub(crate) fn expand_node<'a>(
         outgoing_edges,
         incoming_edges,
         children,
+        agent_tools,
         ctx,
         ports,
         fixups,

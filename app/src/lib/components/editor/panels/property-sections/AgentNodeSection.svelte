@@ -98,13 +98,23 @@
 		});
 	});
 
-	// Tool children: nodes in the same graph whose parent_id points here and
-	// which carry `tool_meta`. Shown read-only — to edit a tool's name /
-	// description the author opens that child node's panel. Compile rejects
-	// duplicates on publish, so we surface that warning inline too.
+	// Tool children: nodes reachable from this agent via a `tools`-handle
+	// edge AND which carry `tool_meta`. The agent's `tools` source handle
+	// is the binding mechanism — drag from it onto any node you want the
+	// LLM to be able to call. Shown read-only — to edit a tool's name /
+	// description the author opens that target node's panel. Compile
+	// rejects duplicates on publish, so we surface that warning inline too.
 	const toolChildren = $derived.by(() => {
 		if (!binding || !nodeId) return [];
-		return binding.graph.nodes.filter((n) => n.parentId === nodeId && n.toolMeta);
+		const nodeById = new Map(binding.graph.nodes.map((n) => [n.id, n]));
+		const targets: typeof binding.graph.nodes = [];
+		for (const e of binding.graph.edges) {
+			if (e.source !== nodeId) continue;
+			if (e.sourceHandle !== 'tools') continue;
+			const t = nodeById.get(e.target);
+			if (t && t.toolMeta) targets.push(t);
+		}
+		return targets;
 	});
 	const duplicateToolNames = $derived.by(() => {
 		const seen = new Set<string>();
@@ -329,8 +339,8 @@
 		</p>
 	{:else if toolChildren.length === 0}
 		<p class="text-sm text-muted-foreground">
-			No tool children yet. Drag an Automated Step (or any node type) onto this agent on the
-			canvas, then tag it with a tool name in its panel.
+			No tools connected yet. Drag from the agent's <code>tools</code> handle (top of the node)
+			to any Automated Step / SubWorkflow node, then set a tool name on its panel.
 		</p>
 	{:else}
 		<ul class="space-y-1" data-testid="agent-tool-list">

@@ -33,6 +33,18 @@ pub(crate) fn wire_edge(
         return Ok(());
     }
 
+    // Tools-handle edges are agent-loop bindings, not sequence arcs: the
+    // orchestrator pre-indexes them into `cx.agent_tools` and `lower_agent`
+    // mints the per-tool dispatch/invoke/collect transitions via the
+    // `apply_agent_tool_wirings` fixup. Treating them as regular edges here
+    // would (a) inject a stray `t_edge_*` pass-through between the agent's
+    // ctrl place and the tool's input, breaking the loop topology, and
+    // (b) double-count the tool's incoming-edge degree so the agent edge
+    // couldn't merge with a real upstream caller. Skip silently.
+    if edge.source_handle.as_deref() == Some("tools") {
+        return Ok(());
+    }
+
     let source_ports = node_ports.get(&edge.source).ok_or_else(|| {
         CompileError::Compilation(format!("no ports for source node '{}'", edge.source))
     })?;

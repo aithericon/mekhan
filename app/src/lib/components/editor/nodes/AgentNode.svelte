@@ -36,6 +36,19 @@
 </script>
 
 <Handle id="in" type="target" position={Position.Left} class={workflowNodeHandleClass('agent')} />
+<!-- Tools handle: drag from here to any AutomatedStep / SubWorkflow / etc.
+     node that should be callable by the LLM. The compiler discovers tool
+     children by walking outgoing edges with sourceHandle="tools"; the target
+     node carries `toolMeta { toolName, toolDescription }` set in its panel.
+     Distinct purple style + top placement keeps it visually separated from
+     the data flow (`out` right, `error` bottom). -->
+<Handle
+	id="tools"
+	type="source"
+	position={Position.Top}
+	style="background:#a855f7;border-color:#7e22ce;width:10px;height:10px;"
+	title="Connect to tool nodes the agent can call"
+/>
 <WorkflowNodeCard
 	nodeId={id}
 	kind="agent"

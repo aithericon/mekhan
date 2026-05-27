@@ -591,6 +591,26 @@ fn lower_nodes_topologically<'a>(
         }
     }
 
+    // Pre-index agent tool targets: agent_id → [tool nodes]. A tool is a
+    // node reached from an agent via an edge with `source_handle == "tools"`.
+    // The agent compiler reads this slice to mint per-tool dispatch/collect
+    // transitions; `wire_edge` skips `tools`-handled edges so they don't get
+    // wired as regular sequence arcs. Missing target node ids are caught by
+    // the standard graph-validation pass before we get here.
+    let node_by_id: HashMap<&str, &WorkflowNode> =
+        graph.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+    let mut agent_tools_by_id: HashMap<&str, Vec<&WorkflowNode>> = HashMap::new();
+    for edge in &graph.edges {
+        if edge.source_handle.as_deref() == Some("tools") {
+            if let Some(&target) = node_by_id.get(edge.target.as_str()) {
+                agent_tools_by_id
+                    .entry(edge.source.as_str())
+                    .or_default()
+                    .push(target);
+            }
+        }
+    }
+
     let empty_files: HashMap<String, InputSource> = HashMap::new();
     let empty_children: Vec<&WorkflowNode> = Vec::new();
     for ni in sorted {
@@ -601,11 +621,15 @@ fn lower_nodes_topologically<'a>(
         let children = children_by_parent
             .get(node.id.as_str())
             .unwrap_or(&empty_children);
+        let agent_tools = agent_tools_by_id
+            .get(node.id.as_str())
+            .unwrap_or(&empty_children);
         expand_node(
             node,
             &outgoing,
             &incoming,
             children,
+            agent_tools,
             ctx,
             node_ports,
             fixups,
