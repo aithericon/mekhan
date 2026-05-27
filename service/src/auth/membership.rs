@@ -15,6 +15,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use super::model::AuthUser;
+use crate::models::error::ApiError;
 
 /// Roles ordered by privilege. The check `role_at_least(actual, required)`
 /// passes when `actual` rank ≥ `required` rank.
@@ -129,6 +130,47 @@ pub async fn template_workspace(db: &PgPool, template_id: Uuid) -> Result<Uuid, 
             .fetch_optional(db)
             .await?;
     row.map(|(w,)| w).ok_or(MembershipError::TemplateNotFound(template_id))
+}
+
+/// Fused lookup for the petri proxy hot path: given an engine `net_id`,
+/// return the owning workspace + visibility of the template the instance
+/// was deployed from. Saves one roundtrip versus
+/// `template_id_for_instance(...)` + `template_workspace(...)`.
+pub async fn instance_workspace(
+    db: &PgPool,
+    net_id: &str,
+) -> Result<(Uuid, String), MembershipError> {
+    let row: Option<(Uuid, String)> = sqlx::query_as(
+        "SELECT t.workspace_id, t.visibility \
+           FROM workflow_instances i \
+           JOIN workflow_templates t ON t.id = i.template_id \
+          WHERE i.net_id = $1",
+    )
+    .bind(net_id)
+    .fetch_optional(db)
+    .await?;
+
+    // No row -> treat as a missing template from the caller's perspective.
+    // Carries the nil uuid because the net_id is the lookup key, not a
+    // template uuid; callers translate the variant to 404 without inspecting
+    // the inner id.
+    row.ok_or(MembershipError::TemplateNotFound(Uuid::nil()))
+}
+
+/// Translate a `MembershipError` to the standard `ApiError` shape used by
+/// handler gates. Lifted out of the per-handler match blocks so new gates
+/// don't re-paste the 8-line pattern.
+pub fn map_to_api_error(err: MembershipError) -> ApiError {
+    match err {
+        MembershipError::NotMember(_) => {
+            ApiError::forbidden("not a member of this workspace")
+        }
+        MembershipError::InsufficientRole { need, .. } => {
+            ApiError::forbidden(format!("{:?} role required", need).to_lowercase())
+        }
+        MembershipError::TemplateNotFound(_) => ApiError::not_found("template not found"),
+        MembershipError::Db(e) => ApiError::internal(e.to_string()),
+    }
 }
 
 #[cfg(test)]
