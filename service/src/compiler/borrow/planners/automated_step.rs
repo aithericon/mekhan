@@ -333,3 +333,51 @@ pub(crate) fn resolve_backend_ref(
 
     Ok((prod_id, field.kind))
 }
+
+// ─── BorrowSource impl ──────────────────────────────────────────────────────
+
+use crate::compiler::borrow::shape::{Borrow, BorrowResolution};
+use crate::compiler::borrow::source::{BorrowSource, PlanCtx};
+
+pub(crate) struct AutomatedStepSource;
+
+impl BorrowSource for AutomatedStepSource {
+    fn name(&self) -> &'static str {
+        "automated_step"
+    }
+    fn scan(&self, ctx: &PlanCtx<'_>) -> Result<Vec<Borrow>, CompileError> {
+        let mut out = Vec::new();
+        for b in automated_step_borrow_plan(ctx.graph, ctx.inline_sources)? {
+            match b {
+                AutomatedStepDataBorrow::Envelope {
+                    consumer_node_id,
+                    slug,
+                    producer_node,
+                } => out.push(Borrow {
+                    consumer_node_id,
+                    producer_node,
+                    slug,
+                    resolution: BorrowResolution::PythonEnvelope,
+                }),
+                AutomatedStepDataBorrow::PerField {
+                    consumer_node_id,
+                    slug,
+                    producer_node,
+                    attr,
+                    is_path_site,
+                    producer_field_kind,
+                } => out.push(Borrow {
+                    consumer_node_id,
+                    producer_node,
+                    slug,
+                    resolution: BorrowResolution::BackendFieldStage {
+                        attr,
+                        is_path_site,
+                        field_kind: producer_field_kind,
+                    },
+                }),
+            }
+        }
+        Ok(out)
+    }
+}

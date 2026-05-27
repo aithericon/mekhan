@@ -75,3 +75,28 @@ pub(crate) fn human_task_borrow_plan(
     }
     Ok(out)
 }
+
+// ─── BorrowSource impl ──────────────────────────────────────────────────────
+
+use crate::compiler::borrow::shape::{Borrow, BorrowResolution};
+use crate::compiler::borrow::source::{BorrowSource, PlanCtx};
+
+pub(crate) struct HumanTaskSource;
+
+impl BorrowSource for HumanTaskSource {
+    fn name(&self) -> &'static str {
+        "human_task"
+    }
+    fn scan(&self, ctx: &PlanCtx<'_>) -> Result<Vec<Borrow>, CompileError> {
+        let mut out = Vec::new();
+        for b in human_task_borrow_plan(ctx.graph)? {
+            out.push(Borrow {
+                consumer_node_id: b.consumer_node_id,
+                producer_node: b.producer_node,
+                slug: b.slug,
+                resolution: BorrowResolution::HumanTaskInputRewrite,
+            });
+        }
+        Ok(out)
+    }
+}
