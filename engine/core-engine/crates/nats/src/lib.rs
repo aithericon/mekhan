@@ -59,11 +59,8 @@ pub mod global_bridge_listener;
 pub mod global_signal_listener;
 pub mod hibernation;
 pub mod net_metadata;
-#[cfg(feature = "human")]
 pub mod human_client;
-#[cfg(feature = "human")]
 pub mod global_human_result_listener;
-#[cfg(feature = "human")]
 pub mod human_result_listener;
 mod idempotency;
 mod listener;
@@ -92,9 +89,7 @@ pub use event_consumer::EventConsumer;
 pub use event_store::NatsEventStore;
 pub use publisher::NatsEventPublisher;
 pub use signal_listener::{SignalListener, SignalListenerError};
-#[cfg(feature = "human")]
 pub use global_human_result_listener::GlobalHumanResultListener;
-#[cfg(feature = "human")]
 pub use human_result_listener::{HumanResultListener, HumanResultListenerError};
 pub use global_bridge_listener::{
     BridgeInjectError, BridgeResolver, BridgeTarget, GlobalBridgeListener,

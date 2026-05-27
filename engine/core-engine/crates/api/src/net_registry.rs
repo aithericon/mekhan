@@ -36,7 +36,6 @@ use petri_application::{
 };
 #[cfg(feature = "executor")]
 use petri_application::{ExecutorCancelHandler, ExecutorSubmitHandler};
-#[cfg(feature = "human")]
 use petri_domain::human::HumanTaskClient;
 #[cfg(feature = "executor")]
 use petri_domain::ExecutorClient;
@@ -72,11 +71,9 @@ pub trait MetadataLookup: Send + Sync {
 }
 
 /// Factory function type for creating human task clients per net.
-#[cfg(feature = "human")]
 pub type HumanClientFactory = Arc<dyn Fn(&str) -> Arc<dyn HumanTaskClient> + Send + Sync>;
 
 /// Configuration for human task integration.
-#[cfg(feature = "human")]
 #[derive(Clone)]
 pub struct HumanIntegrationConfig {
     /// Factory to create a human task client for a specific net.
@@ -257,7 +254,6 @@ where
     timer_client: Option<Arc<dyn TimerClient>>,
     #[cfg(feature = "executor")]
     executor_config: Option<ExecutorIntegrationConfig>,
-    #[cfg(feature = "human")]
     human_config: Option<HumanIntegrationConfig>,
     #[cfg(feature = "catalogue")]
     catalogue_config: Option<CatalogueIntegrationConfig>,
@@ -291,7 +287,6 @@ where
             timer_client: None,
             #[cfg(feature = "executor")]
             executor_config: None,
-            #[cfg(feature = "human")]
             human_config: None,
             #[cfg(feature = "catalogue")]
             catalogue_config: None,
@@ -417,7 +412,6 @@ where
     }
 
     /// Set the human task integration config.
-    #[cfg(feature = "human")]
     pub fn set_human_config(&mut self, config: HumanIntegrationConfig) {
         self.human_config = Some(config);
     }
@@ -626,7 +620,6 @@ where
         }
 
         // Register human task effect handlers if configured
-        #[cfg(feature = "human")]
         if let Some(ref hcfg) = self.human_config {
             // Create a per-net human client using the factory
             let human_client = (hcfg.client_factory)(net_id);

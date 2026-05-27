@@ -2,13 +2,10 @@ mod config;
 
 use std::sync::Arc;
 
-#[cfg(feature = "human")]
 use petri_api::HumanIntegrationConfig;
 use petri_api::{create_router_with_registry, NetRegistry};
 use petri_infrastructure::{MarkingProjection, MemoryEventStore, MemoryTopologyStore};
-#[cfg(feature = "human")]
 use petri_nats::human_client::HumanNatsClient;
-#[cfg(feature = "human")]
 use petri_nats::GlobalHumanResultListener;
 use petri_nats::{
     ActivityTracker, Clockmaster, CreateNetListener, EventConsumer,
@@ -194,7 +191,6 @@ async fn main() {
         .expect("failed to set pre-dispatch chain configs at startup");
 
     // Human Task Integration
-    #[cfg(feature = "human")]
     {
         // Create a factory that produces per-net human clients with the correct net_id
         let js_for_human = jetstream.clone();
@@ -453,7 +449,6 @@ async fn main() {
     }
 
     // Start GlobalHumanResultListener (routes human results to nets, wakes from hibernation)
-    #[cfg(feature = "human")]
     {
         let resolver = RegistryResolver {
             registry: registry.clone(),
@@ -1033,7 +1028,6 @@ async fn ensure_streams(
 
     // Create human task streams (cancel, cancelled, failed)
     // HUMAN_REQUESTS and HUMAN_COMPLETED are created by the human client and UI respectively.
-    #[cfg(feature = "human")]
     {
         let human_streams = [
             (Subjects::STREAM_HUMAN_CANCEL, Subjects::HUMAN_CANCEL_PREFIX),
