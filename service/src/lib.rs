@@ -249,6 +249,16 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::triggers::trigger_metrics))
         .routes(routes!(handlers::triggers::trigger_source_scope))
         .routes(routes!(handlers::observability::list_silent_drops))
+        // Workspaces (Phase A2) — membership-keyed tenant boundary.
+        // Creation is out-of-band (seed / Zitadel-auto-provision);
+        // these endpoints manage *members* of existing workspaces.
+        .routes(routes!(handlers::workspaces::list_workspaces))
+        .routes(routes!(handlers::workspaces::get_workspace))
+        .routes(routes!(
+            handlers::workspaces::list_members,
+            handlers::workspaces::add_member
+        ))
+        .routes(routes!(handlers::workspaces::remove_member))
 }
 
 pub fn build_router(state: AppState) -> Router {

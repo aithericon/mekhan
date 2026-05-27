@@ -10,4 +10,5 @@ pub mod task_stream;
 pub mod template_tests;
 pub mod templates;
 pub mod triggers;
+pub mod workspaces;
 pub mod yjs_sync;

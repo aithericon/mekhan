@@ -5,3 +5,4 @@ pub mod resource;
 pub mod responses;
 pub mod template;
 pub mod template_test;
+pub mod workspace;
