@@ -2254,6 +2254,155 @@
         }
       }
     },
+    "/api/v1/projects/{id}": {
+      "delete": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "DELETE /api/v1/projects/{id}",
+        "operationId": "delete_project",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "403": {
+            "description": "Editor role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{id}/templates": {
+      "post": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "POST /api/v1/projects/{id}/templates",
+        "description": "Attach a template (by *base* id — the chain root). The caller must be\nan editor on the project's workspace AND able to read the template\n(workspace member OR template is public).",
+        "operationId": "attach_template",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AttachTemplateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Attached"
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project or template not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{id}/templates/{base_template_id}": {
+      "delete": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "DELETE /api/v1/projects/{id}/templates/{base_template_id}",
+        "operationId": "detach_template",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "base_template_id",
+            "in": "path",
+            "description": "Base template id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Detached"
+          },
+          "403": {
+            "description": "Editor role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/provenance/from-artifact/{execution_id}/{artifact_id}": {
       "get": {
         "tags": [
@@ -3968,6 +4117,72 @@
         }
       }
     },
+    "/api/v1/templates/{id}/tags": {
+      "put": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "PUT /api/v1/templates/{id}/tags — full replace.",
+        "operationId": "set_template_tags",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Template id (any version)",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetTagsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Tags applied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Editor role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Template not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/templates/{id}/tests": {
       "get": {
         "tags": [
@@ -4214,6 +4429,73 @@
           },
           "500": {
             "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/templates/{id}/visibility": {
+      "patch": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "PATCH /api/v1/templates/{id}/visibility",
+        "description": "Flipping visibility is a tenancy decision (cross-workspace exposure) so\nit requires admin, not editor — even though it touches a template row.",
+        "operationId": "set_template_visibility",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Template id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetVisibilityRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Visibility updated"
+          },
+          "400": {
+            "description": "Invalid visibility value",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Template not found",
             "content": {
               "application/json": {
                 "schema": {
@@ -4736,6 +5018,376 @@
         }
       }
     },
+    "/api/v1/workspaces": {
+      "get": {
+        "tags": [
+          "workspaces"
+        ],
+        "summary": "GET /api/v1/workspaces",
+        "description": "Lists every workspace the caller is a member of. Authenticated; no\nper-workspace gate (the caller is implicitly restricted by their\n`workspace_members` rows).",
+        "operationId": "list_workspaces",
+        "responses": {
+          "200": {
+            "description": "Caller's workspaces",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/WorkspaceSummary"
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{id}": {
+      "get": {
+        "tags": [
+          "workspaces"
+        ],
+        "summary": "GET /api/v1/workspaces/{id}",
+        "operationId": "get_workspace",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Workspace id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Workspace detail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceSummary"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a member",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{id}/members": {
+      "get": {
+        "tags": [
+          "workspaces"
+        ],
+        "summary": "GET /api/v1/workspaces/{id}/members",
+        "operationId": "list_members",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Workspace id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Members",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/WorkspaceMember"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a member",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "workspaces"
+        ],
+        "summary": "POST /api/v1/workspaces/{id}/members",
+        "description": "Adds a member identified by OIDC `subject`. Server derives `user_id`\nvia `uuid_v5(SUBJECT_UUID_NAMESPACE, subject)` so this works for\nprincipals that haven't yet logged into mekhan. Upserts so calling\ntwice with a different role flips the role rather than failing.",
+        "operationId": "add_member",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Workspace id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddMemberRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Member added",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceMember"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid role",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{id}/members/{user_id}": {
+      "delete": {
+        "tags": [
+          "workspaces"
+        ],
+        "summary": "DELETE /api/v1/workspaces/{id}/members/{user_id}",
+        "description": "Removes a member. Refuses to remove the last `owner` so the workspace\ncan't be orphaned.",
+        "operationId": "remove_member",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Workspace id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "user_id",
+            "in": "path",
+            "description": "Member user_id (subject_as_uuid)",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed"
+          },
+          "403": {
+            "description": "Admin role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not a member",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Would orphan workspace",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{id}/projects": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "GET /api/v1/workspaces/{id}/projects",
+        "operationId": "list_projects",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Workspace id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Projects in this workspace",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Project"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a member",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "POST /api/v1/workspaces/{id}/projects",
+        "operationId": "create_project",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Workspace id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateProjectRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Project created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Project"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Editor role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Slug already exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/healthz": {
       "get": {
         "tags": [
@@ -4761,6 +5413,23 @@
   },
   "components": {
     "schemas": {
+      "AddMemberRequest": {
+        "type": "object",
+        "required": [
+          "subject",
+          "role"
+        ],
+        "properties": {
+          "role": {
+            "type": "string",
+            "description": "One of: `owner`, `admin`, `editor`, `viewer`."
+          },
+          "subject": {
+            "type": "string",
+            "description": "OIDC `sub` claim — the server derives `user_id` via\n`uuid_v5(SUBJECT_UUID_NAMESPACE, subject)`. Phase B will add an\nemail→subject resolver for the admin UI."
+          }
+        }
+      },
       "AncestryNode": {
         "type": "object",
         "required": [
@@ -4904,6 +5573,19 @@
           },
           "value": {
             "description": "Right-hand side. For `Exists`/`NotExists` this is ignored; for\n`Matches` it must be a string (regex); for `Contains` it can be a\nscalar (substring on string actual / membership on array actual)."
+          }
+        }
+      },
+      "AttachTemplateRequest": {
+        "type": "object",
+        "required": [
+          "template_id"
+        ],
+        "properties": {
+          "template_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The *base* template id (the first version's id, which the\n`is_latest`-chained version graph hangs off of). Project membership\nfollows the live version chain so attaching once survives version\nbumps."
           }
         }
       },
@@ -5356,6 +6038,24 @@
           "template_id": {
             "type": "string",
             "format": "uuid"
+          }
+        }
+      },
+      "CreateProjectRequest": {
+        "type": "object",
+        "required": [
+          "slug",
+          "display_name"
+        ],
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
           }
         }
       },
@@ -8103,6 +8803,45 @@
           }
         }
       },
+      "Project": {
+        "type": "object",
+        "required": [
+          "id",
+          "workspace_id",
+          "slug",
+          "display_name",
+          "description",
+          "created_at",
+          "created_by"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "description": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
       "PromoteToTestRequest": {
         "type": "object",
         "required": [
@@ -8538,6 +9277,20 @@
           }
         }
       },
+      "SetTagsRequest": {
+        "type": "object",
+        "required": [
+          "tags"
+        ],
+        "properties": {
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "SetTriggerEnabledRequest": {
         "type": "object",
         "required": [
@@ -8546,6 +9299,18 @@
         "properties": {
           "enabled": {
             "type": "boolean"
+          }
+        }
+      },
+      "SetVisibilityRequest": {
+        "type": "object",
+        "required": [
+          "visibility"
+        ],
+        "properties": {
+          "visibility": {
+            "type": "string",
+            "description": "`workspace` (default) or `public`."
           }
         }
       },
@@ -10997,6 +11762,63 @@
           "workspace_id": {
             "type": "string",
             "format": "uuid"
+          }
+        }
+      },
+      "WorkspaceMember": {
+        "type": "object",
+        "description": "A single `workspace_members` row. `user_id` is derived from the OIDC\nsubject via `uuid_v5(SUBJECT_UUID_NAMESPACE, subject)` — the same\nderivation the resolver uses.",
+        "required": [
+          "workspace_id",
+          "user_id",
+          "role",
+          "added_at"
+        ],
+        "properties": {
+          "added_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "role": {
+            "type": "string"
+          },
+          "user_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "workspace_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "WorkspaceSummary": {
+        "type": "object",
+        "description": "Summary view returned by `GET /workspaces` and embedded in\n`WorkspaceMember` responses.",
+        "required": [
+          "id",
+          "slug",
+          "display_name",
+          "is_system",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "is_system": {
+            "type": "boolean"
+          },
+          "slug": {
+            "type": "string"
           }
         }
       }

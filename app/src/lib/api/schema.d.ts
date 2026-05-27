@@ -779,6 +779,62 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** DELETE /api/v1/projects/{id} */
+        delete: operations["delete_project"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/templates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * POST /api/v1/projects/{id}/templates
+         * @description Attach a template (by *base* id — the chain root). The caller must be
+         *     an editor on the project's workspace AND able to read the template
+         *     (workspace member OR template is public).
+         */
+        post: operations["attach_template"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/templates/{base_template_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** DELETE /api/v1/projects/{id}/templates/{base_template_id} */
+        delete: operations["detach_template"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/provenance/from-artifact/{execution_id}/{artifact_id}": {
         parameters: {
             query?: never;
@@ -1279,6 +1335,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/templates/{id}/tags": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** PUT /api/v1/templates/{id}/tags — full replace. */
+        put: operations["set_template_tags"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/templates/{id}/tests": {
         parameters: {
             query?: never;
@@ -1350,6 +1423,27 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/api/v1/templates/{id}/visibility": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * PATCH /api/v1/templates/{id}/visibility
+         * @description Flipping visibility is a tenancy decision (cross-workspace exposure) so
+         *     it requires admin, not editor — even though it touches a template row.
+         */
+        patch: operations["set_template_visibility"];
         trace?: never;
     };
     "/api/v1/templates/{template_id}/tests/{test_id}": {
@@ -1554,6 +1648,108 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workspaces": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/v1/workspaces
+         * @description Lists every workspace the caller is a member of. Authenticated; no
+         *     per-workspace gate (the caller is implicitly restricted by their
+         *     `workspace_members` rows).
+         */
+        get: operations["list_workspaces"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** GET /api/v1/workspaces/{id} */
+        get: operations["get_workspace"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{id}/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** GET /api/v1/workspaces/{id}/members */
+        get: operations["list_members"];
+        put?: never;
+        /**
+         * POST /api/v1/workspaces/{id}/members
+         * @description Adds a member identified by OIDC `subject`. Server derives `user_id`
+         *     via `uuid_v5(SUBJECT_UUID_NAMESPACE, subject)` so this works for
+         *     principals that haven't yet logged into mekhan. Upserts so calling
+         *     twice with a different role flips the role rather than failing.
+         */
+        post: operations["add_member"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{id}/members/{user_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * DELETE /api/v1/workspaces/{id}/members/{user_id}
+         * @description Removes a member. Refuses to remove the last `owner` so the workspace
+         *     can't be orphaned.
+         */
+        delete: operations["remove_member"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{id}/projects": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** GET /api/v1/workspaces/{id}/projects */
+        get: operations["list_projects"];
+        put?: never;
+        /** POST /api/v1/workspaces/{id}/projects */
+        post: operations["create_project"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/healthz": {
         parameters: {
             query?: never;
@@ -1583,6 +1779,16 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        AddMemberRequest: {
+            /** @description One of: `owner`, `admin`, `editor`, `viewer`. */
+            role: string;
+            /**
+             * @description OIDC `sub` claim — the server derives `user_id` via
+             *     `uuid_v5(SUBJECT_UUID_NAMESPACE, subject)`. Phase B will add an
+             *     email→subject resolver for the admin UI.
+             */
+            subject: string;
+        };
         AncestryNode: {
             /** Format: int32 */
             depth: number;
@@ -1639,6 +1845,16 @@ export interface components {
              *     scalar (substring on string actual / membership on array actual).
              */
             value?: unknown;
+        };
+        AttachTemplateRequest: {
+            /**
+             * Format: uuid
+             * @description The *base* template id (the first version's id, which the
+             *     `is_latest`-chained version graph hangs off of). Project membership
+             *     follows the live version chain so attaching once survives version
+             *     bumps.
+             */
+            template_id: string;
         };
         /**
          * @description Frontend-visible metadata for one backend. Returned by `GET /api/v1/backends`.
@@ -1834,6 +2050,11 @@ export interface components {
             start_tokens?: components["schemas"]["StartToken"][];
             /** Format: uuid */
             template_id: string;
+        };
+        CreateProjectRequest: {
+            description?: string;
+            display_name: string;
+            slug: string;
         };
         /**
          * @description Request body for `POST /api/v1/resources`. Carries every field needed to
@@ -2842,6 +3063,19 @@ export interface components {
             owner?: string | null;
             status?: string | null;
         };
+        Project: {
+            /** Format: date-time */
+            created_at: string;
+            /** Format: uuid */
+            created_by: string;
+            description: string;
+            display_name: string;
+            /** Format: uuid */
+            id: string;
+            slug: string;
+            /** Format: uuid */
+            workspace_id: string;
+        };
         PromoteToTestRequest: {
             /** @description Name for the new test. Must be unique within the template family. */
             name: string;
@@ -3070,8 +3304,15 @@ export interface components {
             label: string;
             value: string;
         };
+        SetTagsRequest: {
+            tags: string[];
+        };
         SetTriggerEnabledRequest: {
             enabled: boolean;
+        };
+        SetVisibilityRequest: {
+            /** @description `workspace` (default) or `public`. */
+            visibility: string;
         };
         SignalDispatch: {
             dispatch_net: string;
@@ -4116,6 +4357,33 @@ export interface components {
             visibility: string;
             /** Format: uuid */
             workspace_id: string;
+        };
+        /**
+         * @description A single `workspace_members` row. `user_id` is derived from the OIDC
+         *     subject via `uuid_v5(SUBJECT_UUID_NAMESPACE, subject)` — the same
+         *     derivation the resolver uses.
+         */
+        WorkspaceMember: {
+            /** Format: date-time */
+            added_at: string;
+            role: string;
+            /** Format: uuid */
+            user_id: string;
+            /** Format: uuid */
+            workspace_id: string;
+        };
+        /**
+         * @description Summary view returned by `GET /workspaces` and embedded in
+         *     `WorkspaceMember` responses.
+         */
+        WorkspaceSummary: {
+            /** Format: date-time */
+            created_at: string;
+            display_name: string;
+            /** Format: uuid */
+            id: string;
+            is_system: boolean;
+            slug: string;
         };
     };
     responses: never;
@@ -5639,6 +5907,120 @@ export interface operations {
             };
         };
     };
+    delete_project: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Editor role required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Project not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    attach_template: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AttachTemplateRequest"];
+            };
+        };
+        responses: {
+            /** @description Attached */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Project or template not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    detach_template: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project id */
+                id: string;
+                /** @description Base template id */
+                base_template_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Detached */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Editor role required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     provenance_from_artifact: {
         parameters: {
             query?: {
@@ -6922,6 +7304,51 @@ export interface operations {
             };
         };
     };
+    set_template_tags: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Template id (any version) */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetTagsRequest"];
+            };
+        };
+        responses: {
+            /** @description Tags applied */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": string[];
+                };
+            };
+            /** @description Editor role required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Template not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     list_tests: {
         parameters: {
             query?: never;
@@ -7095,6 +7522,58 @@ export interface operations {
             };
             /** @description Server error */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    set_template_visibility: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Template id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetVisibilityRequest"];
+            };
+        };
+        responses: {
+            /** @description Visibility updated */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid visibility value */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Admin role required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Template not found */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -7453,6 +7932,280 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TriggerHistoryResponse"];
+                };
+            };
+        };
+    };
+    list_workspaces: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Caller's workspaces */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceSummary"][];
+                };
+            };
+            /** @description Server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    get_workspace: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Workspace detail */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceSummary"];
+                };
+            };
+            /** @description Not a member */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_members: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Members */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceMember"][];
+                };
+            };
+            /** @description Not a member */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    add_member: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AddMemberRequest"];
+            };
+        };
+        responses: {
+            /** @description Member added */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceMember"];
+                };
+            };
+            /** @description Invalid role */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Admin role required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    remove_member: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace id */
+                id: string;
+                /** @description Member user_id (subject_as_uuid) */
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Admin role required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not a member */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Would orphan workspace */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_projects: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Projects in this workspace */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Project"][];
+                };
+            };
+            /** @description Not a member */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    create_project: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateProjectRequest"];
+            };
+        };
+        responses: {
+            /** @description Project created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Project"];
+                };
+            };
+            /** @description Editor role required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Slug already exists */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
         };
