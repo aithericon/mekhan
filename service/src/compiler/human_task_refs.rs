@@ -96,11 +96,66 @@ fn scan_block(block: &TaskBlockConfig, out: &mut Vec<HumanTaskRef>) {
                 }
             }
         }
+        // Feature B Repeater: `items_ref` and `item_label_ref` are
+        // structured `<slug>.<field>[*]…` refs (no `{{ … }}` braces).
+        // The borrow planner needs the slug + first-field pair so it
+        // can synthesize a read-arc on the upstream parked array;
+        // `scan_placeholders` skips wildcards (text interpolation
+        // contract), so we extract the (head, attr) pair directly.
+        TaskBlockConfig::Repeater {
+            items_ref,
+            item_label_ref,
+            ..
+        } => {
+            if let Some(p) = parse_repeater_ref_head_attr(items_ref) {
+                out.push(p);
+            }
+            if let Some(label_ref) = item_label_ref {
+                if let Some(p) = parse_repeater_ref_head_attr(label_ref) {
+                    out.push(p);
+                }
+            }
+        }
     }
 }
 
 fn scan_into(raw: &str, out: &mut Vec<HumanTaskRef>) {
     out.extend(scan_placeholders(raw));
+}
+
+/// Parse a Repeater `items_ref` / `item_label_ref` as a structured ref
+/// (no `{{ … }}` braces) and extract `(head, attr)` — the slug + first
+/// field pair the borrow planner uses. Examples:
+///
+/// - `"extract.tasks[*]"`         → `Some(("extract", "tasks"))`
+/// - `"extract.tasks[*].title"`   → `Some(("extract", "tasks"))`
+/// - `"foo"`                      → `None` (bare, no field)
+/// - `""`                         → `None`
+///
+/// The compiler validates the rest (wildcard placement, upstream
+/// producer existence, array shape) via the standard
+/// `resolve_ref`/`scan_dotted_refs` path; this extractor only surfaces
+/// the head/attr pair so the read-arc planner can include the producer.
+fn parse_repeater_ref_head_attr(raw: &str) -> Option<HumanTaskRef> {
+    let trimmed = raw.trim();
+    let dot = trimmed.find('.')?;
+    let head = &trimmed[..dot];
+    if head.is_empty() {
+        return None;
+    }
+    // Attr ends at the first `.` (next segment) or `[` (wildcard / index).
+    let after = &trimmed[dot + 1..];
+    let attr_end = after
+        .find(|c: char| c == '.' || c == '[')
+        .unwrap_or(after.len());
+    let attr = &after[..attr_end];
+    if attr.is_empty() {
+        return None;
+    }
+    Some(HumanTaskRef {
+        head: head.to_string(),
+        attr: attr.to_string(),
+    })
 }
 
 #[cfg(test)]
@@ -286,5 +341,59 @@ mod tests {
         // the staged producer envelope.
         let n = ht("{{ review.config.timeout }}", None, vec![]);
         assert_eq!(pairs(&n), vec![("review".into(), "config".into())]);
+    }
+
+    #[test]
+    fn parse_repeater_ref_head_attr_handles_wildcards() {
+        // Bare iteration head — sub-form expects whole element.
+        assert_eq!(
+            parse_repeater_ref_head_attr("extract.tasks[*]"),
+            Some(HumanTaskRef {
+                head: "extract".into(),
+                attr: "tasks".into(),
+            })
+        );
+        // Per-element field — same (head, attr) pair: the borrow target
+        // is the parked array, not the inner field.
+        assert_eq!(
+            parse_repeater_ref_head_attr("extract.tasks[*].title"),
+            Some(HumanTaskRef {
+                head: "extract".into(),
+                attr: "tasks".into(),
+            })
+        );
+        // Whitespace-tolerant.
+        assert_eq!(
+            parse_repeater_ref_head_attr("  llm.items[*]  "),
+            Some(HumanTaskRef {
+                head: "llm".into(),
+                attr: "items".into(),
+            })
+        );
+        // Bare slug — no field, nothing to borrow.
+        assert_eq!(parse_repeater_ref_head_attr("extract"), None);
+        // Empty — nothing.
+        assert_eq!(parse_repeater_ref_head_attr(""), None);
+    }
+
+    #[test]
+    fn repeater_block_emits_items_ref_borrow() {
+        let step = TaskStepConfig {
+            id: "s1".into(),
+            title: "Review tasks".into(),
+            description_mdsvex: None,
+            blocks: vec![TaskBlockConfig::Repeater {
+                items_ref: "extract.tasks[*]".into(),
+                item_label_ref: Some("extract.tasks[*].title".into()),
+                fields: vec![],
+                output_slug: "review_tasks".into(),
+            }],
+        };
+        let n = ht("T", None, vec![step]);
+        let pairs = pairs(&n);
+        // The Repeater contributes one (extract, tasks) pair per ref; the
+        // borrow planner dedupes downstream. `item_label_ref` carries the
+        // same (head, attr) so we see it twice.
+        assert_eq!(pairs.iter().filter(|p| p.0 == "extract" && p.1 == "tasks").count(), 2);
     }
 }

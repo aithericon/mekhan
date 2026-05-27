@@ -35,6 +35,6 @@ pub use pyio::generate_py_io_files;
 pub use subworkflow::{make_child_callable, CHILD_FAIL_OUT, CHILD_INBOX, CHILD_REPLY_OUT};
 pub use token_shape::{
     analyze as analyze_token_shapes, node_namespace_scopes, surface_types, ScopeEntry,
-    ShapeDiagnostic, ShapeReport, TypeSurface,
+    ShapeDiagnostic, ShapeReport, TyDescriptor, TypeSurface,
 };
 pub use validate::{node_input_scopes, node_output_fields, resolve_trigger_target_port};

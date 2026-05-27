@@ -22,6 +22,7 @@ import {
 type WorkflowGraph = components['schemas']['WorkflowGraph'];
 type FieldKind = components['schemas']['FieldKind'];
 type GuardDiagnosticDto = components['schemas']['GuardDiagnosticDto'];
+export type TyDescriptor = components['schemas']['TyDescriptor'];
 
 export type ScopeEntry = {
 	nodeId: string;
@@ -32,6 +33,12 @@ export type ScopeEntry = {
 	 *  for borrowed parked-producer data (e.g. `review.invoice_amount`), or
 	 *  `input.<path>` for genuinely control-token-resident leaves. */
 	qualified: string;
+	/** Full recursive type tree from the backend analyzer. Populated for
+	 *  scope entries that came from the compiler; absent for resource
+	 *  entries (built client-side from the resource type registry).
+	 *  Pickers drill into `ty.fields` (Object) or `ty.element` (Array) to
+	 *  surface nested + per-element refs without further round-trips. */
+	ty?: TyDescriptor;
 };
 
 /** Result of one `/api/v1/analyze` round-trip. `graphOk: false` means the
@@ -47,23 +54,54 @@ export type ScopeAnalysis = {
 	requestFailed: boolean;
 };
 
-/** Backend type label → editor `FieldKind`. Non-scalar shapes (Object,
- *  Array, Any, Opaque) collapse to `json` — addressable but untyped at the
- *  leaf the picker offers. */
-function tyToFieldKind(ty: string): FieldKind {
-	switch (ty) {
-		case 'String':
-			return 'text';
-		case 'Number':
-			return 'number';
-		case 'Bool':
-			return 'bool';
-		case 'FileRef':
-			return 'file';
-		case 'Timestamp':
-			return 'timestamp';
+/** Reduce a [`TyDescriptor`] to the legacy single-label `FieldKind` for
+ *  callers that haven't moved to the recursive tree. The label matches the
+ *  string the backend used to emit on `ScopeEntryDto.ty`, so behavior is
+ *  byte-identical to before. */
+export function tyDescriptorToFieldKind(ty: TyDescriptor | undefined): FieldKind {
+	if (!ty) return 'json';
+	switch (ty.kind) {
+		case 'scalar':
+			switch (ty.name) {
+				case 'String':
+					return 'text';
+				case 'Number':
+					return 'number';
+				case 'Bool':
+					return 'bool';
+				case 'FileRef':
+					return 'file';
+				case 'Timestamp':
+					return 'timestamp';
+				default:
+					return 'json';
+			}
 		default:
 			return 'json';
+	}
+}
+
+/** Human-readable label for a [`TyDescriptor`], used by picker badges.
+ *  Arrays render as `array<T>` (recursing on `element`); objects render as
+ *  `{a, b, c}`; scalars use their raw name; `any` / `opaque` use their
+ *  canonical labels. */
+export function tyDescriptorLabel(ty: TyDescriptor | undefined): string {
+	if (!ty) return 'unknown';
+	switch (ty.kind) {
+		case 'scalar':
+			return ty.name;
+		case 'array':
+			return `array<${tyDescriptorLabel(ty.element)}>`;
+		case 'object': {
+			const keys = Object.keys(ty.fields);
+			if (keys.length === 0) return 'object';
+			if (keys.length <= 3) return `{${keys.join(', ')}}`;
+			return `{${keys.slice(0, 3).join(', ')}, …}`;
+		}
+		case 'any':
+			return 'any';
+		case 'opaque':
+			return `Opaque(${ty.name})`;
 	}
 }
 
@@ -91,8 +129,9 @@ export async function fetchNodeScopes(graph: WorkflowGraph): Promise<ScopeAnalys
 					nodeId: e.producer_node,
 					nodeLabel: e.producer_label,
 					field: e.path.split('.').pop() ?? e.path,
-					kind: tyToFieldKind(e.ty),
-					qualified: e.path
+					kind: tyDescriptorToFieldKind(e.ty),
+					qualified: e.path,
+					ty: e.ty
 				}))
 			);
 		}

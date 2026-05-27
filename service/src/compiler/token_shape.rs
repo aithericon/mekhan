@@ -1442,6 +1442,12 @@ fn guard_refs(src: &str) -> Vec<GuardRef> {
     out
 }
 
+/// The sentinel segment string used by [`scan_dotted_refs`] and downstream
+/// resolvers to carry the Feature-B iteration boundary marker `[*]`.
+/// Chosen because brackets can never appear in a legal identifier, so the
+/// sentinel can never collide with a real field name.
+pub(crate) const ITER_ALL_SEG: &str = "[*]";
+
 /// Outcome of resolving one [`GuardRef`] against the borrow-reachable model.
 enum RefResolution {
     /// Stays on the inbound control token — no read-arc.
@@ -1455,6 +1461,13 @@ enum RefResolution {
         producer_id: String,
         producer_path: String,
         producer_label: String,
+        /// Feature B — set when the ref crossed an iteration boundary
+        /// (`<slug>.<field>[*]…`). `producer_path` points at the parked
+        /// array; `iter_boundary` carries the segments after `[*]` so the
+        /// consumer (e.g. a HumanTask Repeater) knows what to project from
+        /// each element. `None` means a plain single-value borrow — the
+        /// existing pre-B semantics.
+        iter_boundary: Option<Vec<String>>,
     },
     /// Nothing the compiler can bind (non-control `input.*`, unknown slug,
     /// non-upstream / non-parked producer, or unknown field).
@@ -1530,6 +1543,12 @@ fn resolve_ref(
                 if gref.segs.is_empty() {
                     return RefResolution::Unresolved;
                 }
+                // Loop counter borrows have no iteration boundary —
+                // they're scalar `iteration: N`. A `[*]` segment here is
+                // structurally meaningless.
+                if gref.segs.iter().any(|s| s == ITER_ALL_SEG) {
+                    return RefResolution::Unresolved;
+                }
                 let Some(shape) = node_out.get(&prod_id) else {
                     return RefResolution::Unresolved;
                 };
@@ -1546,6 +1565,7 @@ fn resolve_ref(
                     producer_id: prod_id,
                     producer_path: gref.segs.join("."),
                     producer_label: prov,
+                    iter_boundary: None,
                 };
             }
             // Parked-producer borrows must reach a *strictly upstream* node
@@ -1565,16 +1585,38 @@ fn resolve_ref(
             let Some(shape) = node_out.get(&prod_id) else {
                 return RefResolution::Unresolved;
             };
+            // Feature B: split on the first `[*]` iteration boundary, if
+            // any. Pre-`[*]` segments address a parked array; post-`[*]`
+            // segments are projected per element by the consumer (e.g. a
+            // HumanTask Repeater). Nested iteration (two `[*]` in one
+            // ref) is rejected — the resolver leaves the second `[*]` in
+            // the boundary tail; consumer-side compilers can detect and
+            // reject it. For v1 (no Repeater consumer downstream of a
+            // boundary), we still emit the boundary so the picker /
+            // Repeater compiler can consume it once they land.
+            let (pre, boundary) = match gref.segs.iter().position(|s| s == ITER_ALL_SEG) {
+                Some(idx) => (
+                    &gref.segs[..idx],
+                    Some(gref.segs[idx + 1..].to_vec()),
+                ),
+                None => (&gref.segs[..], None),
+            };
+            // Need at least one segment before `[*]` (the array field
+            // itself); a bare `<slug>.[*]` is malformed.
+            if pre.is_empty() {
+                return RefResolution::Unresolved;
+            }
             // The author writes the simple producer leaf; map it to the
             // physical path inside that producer's parked token (e.g. a
             // human-task field lives under `data.`), then append any deeper
             // sub-path the author addressed. Keeps `producer_path` — and so
-            // the synthesized read-arc — byte-identical to today.
-            let Some((phys, _ty, prov)) = shape.find_by_leaf(&gref.segs[0]) else {
+            // the synthesized read-arc — byte-identical to today for plain
+            // (non-iter) refs.
+            let Some((phys, _ty, prov)) = shape.find_by_leaf(&pre[0]) else {
                 return RefResolution::Unresolved;
             };
             let mut producer_path = phys;
-            for extra in &gref.segs[1..] {
+            for extra in &pre[1..] {
                 producer_path.push('.');
                 producer_path.push_str(extra);
             }
@@ -1582,6 +1624,7 @@ fn resolve_ref(
                 producer_id: prod_id,
                 producer_path,
                 producer_label: prov.node_label,
+                iter_boundary: boundary,
             }
         }
     }
@@ -1817,17 +1860,32 @@ fn scan_dotted_refs(src: &str) -> Vec<(String, Vec<String>, Option<LitTy>)> {
         }
         let root: String = bytes[rs..i].iter().collect();
         let mut segs = Vec::new();
-        while i < bytes.len() && bytes[i] == '.' {
-            i += 1;
-            let start = i;
-            while i < bytes.len() && is_ident(bytes[i]) {
+        loop {
+            // Field segment: `.<identifier>`
+            if i < bytes.len() && bytes[i] == '.' {
                 i += 1;
-            }
-            if i > start {
-                segs.push(bytes[start..i].iter().collect::<String>());
-            } else {
+                let start = i;
+                while i < bytes.len() && is_ident(bytes[i]) {
+                    i += 1;
+                }
+                if i > start {
+                    segs.push(bytes[start..i].iter().collect::<String>());
+                    continue;
+                }
                 break;
             }
+            // Feature B iteration boundary: `[*]` — emitted as the
+            // sentinel string [`ITER_ALL_SEG`]. The bracket form is the
+            // only place `[` is legal between identifiers; a stray
+            // numeric `[N]` would terminate the path scan (same as before
+            // — `scan_dotted_refs` never modelled indices).
+            if i + 2 < bytes.len() && bytes[i] == '[' && bytes[i + 1] == '*' && bytes[i + 2] == ']'
+            {
+                i += 3;
+                segs.push(ITER_ALL_SEG.to_string());
+                continue;
+            }
+            break;
         }
         if !segs.is_empty() {
             let lit = sniff_rhs_literal(&bytes, i);
@@ -3796,5 +3854,175 @@ mod scope_reachability_tests {
         assert!(!by_path.contains_key("start.filename"));
         assert!(!by_path.contains_key("start.content_type"));
         assert!(!by_path.contains_key("start.document.url"));
+    }
+
+    /// Feature B — the dotted-ref scanner recognises `[*]` between
+    /// identifiers and emits it as the sentinel [`ITER_ALL_SEG`]. This is
+    /// the grammar layer; downstream resolvers split on the sentinel to
+    /// recover the iteration boundary.
+    #[test]
+    fn scan_dotted_refs_emits_iter_all_sentinel() {
+        let refs = scan_dotted_refs("extract.tasks[*].title");
+        assert_eq!(refs.len(), 1, "one ref scanned, got {refs:?}");
+        let (root, segs, _) = &refs[0];
+        assert_eq!(root, "extract");
+        assert_eq!(segs, &vec![
+            "tasks".to_string(),
+            ITER_ALL_SEG.to_string(),
+            "title".to_string()
+        ]);
+    }
+
+    /// Feature B — a `[*]`-bearing ref resolves to a [`RefResolution::Borrow`]
+    /// whose `producer_path` points at the parked array and whose
+    /// `iter_boundary` carries the segments after the boundary. The Repeater
+    /// lowering (and any future array consumer) reads `iter_boundary` to
+    /// know what field to project per element.
+    #[test]
+    fn resolve_ref_splits_iteration_boundary() {
+        // Three-node graph: Start → HumanTask (declares an array output) →
+        // Decision (guard references `ht.tasks[*].priority`). The decision
+        // shouldn't itself be wired to evaluate the wildcard guard
+        // sensibly — the test asserts the *resolver shape*, not the
+        // diagnostic, so even a degenerate consumer is fine.
+        let json = r#"{
+          "nodes":[
+            {"id":"s","type":"start","slug":"start","position":{"x":0,"y":0},
+             "data":{"type":"start","label":"Start",
+                     "initial":{"id":"in","label":"Input","fields":[
+                       {"name":"seed","label":"Seed","kind":"text","required":true}
+                     ]}}},
+            {"id":"ht","type":"human_task","slug":"ht","position":{"x":0,"y":0},
+             "data":{"type":"human_task","label":"HT",
+                     "taskTitle":"T","instructionsMdsvex":null,"steps":[]}},
+            {"id":"sink","type":"human_task","slug":"sink","position":{"x":0,"y":0},
+             "data":{"type":"human_task","label":"Sink",
+                     "taskTitle":"S","instructionsMdsvex":null,"steps":[]}},
+            {"id":"end","type":"end","position":{"x":0,"y":0},
+             "data":{"type":"end","label":"End"}}
+          ],
+          "edges":[
+            {"id":"e1","source":"s","target":"ht","type":"sequence"},
+            {"id":"e2","source":"ht","target":"sink","type":"sequence"},
+            {"id":"e3","source":"sink","target":"end","type":"sequence"}
+          ]
+        }"#;
+        let g: WorkflowGraph = serde_json::from_str(json).expect("deser graph");
+
+        // Manually synthesize a GuardRef with `[*]` in the middle. We don't
+        // need the full graph to host a real consuming guard — we exercise
+        // `resolve_ref` directly to keep the test small.
+        let bcx = BorrowContext::build(&g).expect("borrow ctx");
+        let report = analyze(&g).expect("analyze");
+
+        // Inject a synthetic `tasks` array into ht's node_out so the
+        // resolver has something to walk through. Production code path:
+        // a HumanTask Repeater would expose its own output as
+        // `array<{title, priority}>`; for this unit test we splice it in
+        // manually.
+        let mut node_out = report.node_out.clone();
+        let ht_shape = node_out.entry("ht".to_string()).or_insert_with(|| {
+            TokenShape::Object(BTreeMap::new())
+        });
+        if let TokenShape::Object(map) = ht_shape {
+            let mut elem = TokenShape::object();
+            elem.insert(
+                "title",
+                TokenShape::Scalar(ScalarTy::String),
+                Provenance {
+                    node_id: "ht".to_string(),
+                    node_label: "HT".to_string(),
+                    note: "test".to_string(),
+                    anchor: None,
+                },
+            );
+            elem.insert(
+                "priority",
+                TokenShape::Scalar(ScalarTy::String),
+                Provenance {
+                    node_id: "ht".to_string(),
+                    node_label: "HT".to_string(),
+                    note: "test".to_string(),
+                    anchor: None,
+                },
+            );
+            map.insert(
+                "tasks".to_string(),
+                Field {
+                    shape: TokenShape::Array(Box::new(elem)),
+                    prov: Provenance {
+                        node_id: "ht".to_string(),
+                        node_label: "HT".to_string(),
+                        note: "test".to_string(),
+                        anchor: None,
+                    },
+                },
+            );
+        }
+
+        let consumer = g
+            .nodes
+            .iter()
+            .find(|n| n.id == "sink")
+            .expect("sink node")
+            .clone();
+        let gref = GuardRef {
+            root: RefRoot::Qualified("ht".to_string()),
+            segs: vec![
+                "tasks".to_string(),
+                ITER_ALL_SEG.to_string(),
+                "priority".to_string(),
+            ],
+            lit: None,
+            referenced: "ht.tasks[*].priority".to_string(),
+        };
+        let res = resolve_ref(
+            &gref,
+            &consumer,
+            &bcx.slugs,
+            &g,
+            None,
+            &node_out,
+            &bcx.pos,
+        );
+        match res {
+            RefResolution::Borrow {
+                producer_id,
+                producer_path,
+                iter_boundary,
+                ..
+            } => {
+                assert_eq!(producer_id, "ht");
+                // The producer_path points at the parked array — `tasks`
+                // (or its physical path inside `data.`); the segments after
+                // `[*]` live in `iter_boundary`.
+                assert!(
+                    producer_path.ends_with("tasks"),
+                    "producer_path must end at the array field, got {producer_path}"
+                );
+                assert_eq!(iter_boundary, Some(vec!["priority".to_string()]));
+            }
+            other => panic!("expected Borrow with iter_boundary, got {other:?}"),
+        }
+    }
+}
+
+impl std::fmt::Debug for RefResolution {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RefResolution::Control => write!(f, "Control"),
+            RefResolution::Borrow {
+                producer_id,
+                producer_path,
+                iter_boundary,
+                ..
+            } => f
+                .debug_struct("Borrow")
+                .field("producer_id", producer_id)
+                .field("producer_path", producer_path)
+                .field("iter_boundary", iter_boundary)
+                .finish(),
+            RefResolution::Unresolved => write!(f, "Unresolved"),
+        }
     }
 }

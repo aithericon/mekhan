@@ -3163,6 +3163,36 @@ export interface components {
             downloads: components["schemas"]["DownloadItemConfig"][];
             /** @enum {string} */
             type: "download";
+        } | {
+            /**
+             * @description The sub-form schema rendered per element. Static — only the
+             *     *count* of repetitions is runtime; the shape is declared so
+             *     the compiler can borrow-check downstream consumers of the
+             *     Repeater's typed array output.
+             */
+            fields: components["schemas"]["TaskFieldConfig"][];
+            /**
+             * @description Optional per-element row label ref, e.g.
+             *     `extract.tasks[*].title`. Must share the same iteration prefix
+             *     as `items_ref`.
+             */
+            item_label_ref?: string | null;
+            /**
+             * @description Producer-namespaced ref carrying exactly one `[*]` boundary,
+             *     e.g. `extract.tasks[*]`. The pre-`[*]` segments address an
+             *     upstream parked array; iteration happens consumer-side.
+             */
+            items_ref: string;
+            /**
+             * @description Rhai-safe slug under which the Repeater's typed output is
+             *     addressable downstream as `<output_slug>.results`. Defaults to
+             *     the parent HumanTask's slug when empty; must be unique within
+             *     the graph (the compiler's existing slug-collision check
+             *     covers it).
+             */
+            output_slug: string;
+            /** @enum {string} */
+            type: "repeater";
         };
         TaskFieldConfig: {
             kind: components["schemas"]["TaskFieldKind"];

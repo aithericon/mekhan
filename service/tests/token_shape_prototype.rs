@@ -202,7 +202,7 @@ fn type_surface_still_works_before_publish() {
     assert!(
         dec.iter().any(|e| e.path == "review.invoice_amount"
             && e.producer_node == "review"
-            && e.ty == "Number"),
+            && e.ty.kind_label() == "Number"),
         "picker must offer review.invoice_amount at the decision, got: {:?}",
         dec.iter()
             .map(|e| (e.path.as_str(), e.producer_node.as_str()))
@@ -275,4 +275,87 @@ fn trigger_ingestion_rejects_file_as_scalar_string() {
         validate_token_against_port(initial, start, &good).is_ok(),
         "a valid uploaded file ref must pass ingestion"
     );
+}
+
+/// Feature A — nested picker drill-down. The `surface_types` endpoint now
+/// emits a recursive [`TyDescriptor`] tree per producer field instead of a
+/// single label, so the editor's `RefPicker` can drill into nested object
+/// fields (File envelopes' `document.url`, `.filename`, …) without
+/// emitting per-leaf entries. The container path is selectable (anchored
+/// File envelopes) while children are addressable through `ty.fields`.
+#[test]
+fn surface_types_emits_nested_tree_for_file_envelope() {
+    use mekhan_service::compiler::TyDescriptor;
+
+    // A minimal three-node graph: Start declares a `File` field, OCR
+    // automated step depends on it, End closes the loop. The picker scope
+    // at OCR must offer Start's `document` as a single root entry whose
+    // ty is an anchored Object carrying `{url, filename, content_type}`.
+    let json = r#"{
+      "nodes":[
+        {"id":"s","type":"start","slug":"start","position":{"x":0,"y":0},
+         "data":{"type":"start","label":"Start",
+                  "initial":{"id":"in","label":"Input","fields":[
+                    {"name":"document","label":"Doc","kind":"file","required":true}
+                  ]}}},
+        {"id":"ocr","type":"automated_step","slug":"ocr","position":{"x":0,"y":0},
+         "data":{"type":"automated_step","label":"OCR",
+                  "executionSpec":{"backendType":"kreuzberg","config":{"file":"{{ start.document }}"}},
+                  "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
+                  "deploymentModel":{"mode":"inline"}}},
+        {"id":"end","type":"end","position":{"x":0,"y":0},
+         "data":{"type":"end","label":"End"}}
+      ],
+      "edges":[
+        {"id":"e1","source":"s","target":"ocr","type":"sequence"},
+        {"id":"e2","source":"ocr","target":"end","type":"sequence"}
+      ]
+    }"#;
+    let graph: WorkflowGraph = serde_json::from_str(json).expect("deser graph");
+    let surface = surface_types(&graph);
+    assert!(surface.graph_ok, "graph must analyze");
+    let ocr_scope = surface.scopes.get("ocr").expect("ocr scope");
+
+    let document = ocr_scope
+        .iter()
+        .find(|e| e.path == "start.document")
+        .unwrap_or_else(|| {
+            panic!(
+                "start.document must be a single picker root carrying the file tree, got: {:?}",
+                ocr_scope.iter().map(|e| e.path.as_str()).collect::<Vec<_>>()
+            )
+        });
+
+    // The container itself is a pickable, anchored Object whose `selectable`
+    // flag is set (File precedent — the row body picks the FileRef, while the
+    // expander reveals `url`/`filename`/`content_type` as drill-into leaves).
+    let TyDescriptor::Object {
+        ref fields,
+        selectable,
+    } = document.ty
+    else {
+        panic!(
+            "start.document.ty must be Object, got {:?}",
+            document.ty.kind_label()
+        );
+    };
+    assert!(selectable, "file-anchored container must be selectable");
+    assert!(matches!(
+        fields.get("url"),
+        Some(TyDescriptor::Scalar { name }) if name == "String"
+    ));
+    assert!(matches!(
+        fields.get("filename"),
+        Some(TyDescriptor::Scalar { name }) if name == "String"
+    ));
+    assert!(matches!(
+        fields.get("content_type"),
+        Some(TyDescriptor::Scalar { name }) if name == "String"
+    ));
+
+    // No flat fan-out: nested paths live INSIDE `ty.fields` and are never
+    // emitted as their own picker roots. The picker walks the tree
+    // recursively to surface them.
+    assert!(!ocr_scope.iter().any(|e| e.path == "start.document.url"));
+    assert!(!ocr_scope.iter().any(|e| e.path == "start.document.filename"));
 }

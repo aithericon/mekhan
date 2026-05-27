@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { buildResourceScope } from './guard-scope';
+import {
+	buildResourceScope,
+	tyDescriptorLabel,
+	tyDescriptorToFieldKind,
+	type TyDescriptor
+} from './guard-scope';
 import type { ResourceSummary, ResourceTypeInfo } from '$lib/api/resources';
 
 const postgres: ResourceTypeInfo = {
@@ -99,5 +104,63 @@ describe('buildResourceScope', () => {
 		expect(out[0].nodeLabel).toBe('Local Postgres');
 		// …but qualified ref uses the path (what the compiler matches).
 		expect(out[0].qualified).toBe('f/team/local_pg.host');
+	});
+});
+
+describe('TyDescriptor helpers', () => {
+	const scalarString: TyDescriptor = { kind: 'scalar', name: 'String' };
+	const scalarNumber: TyDescriptor = { kind: 'scalar', name: 'Number' };
+	const fileEnvelope: TyDescriptor = {
+		kind: 'object',
+		selectable: true,
+		fields: {
+			url: scalarString,
+			filename: scalarString,
+			content_type: scalarString
+		}
+	};
+	const taskArray: TyDescriptor = {
+		kind: 'array',
+		element: {
+			kind: 'object',
+			selectable: false,
+			fields: { title: scalarString, priority: scalarString }
+		}
+	};
+
+	it('tyDescriptorLabel renders scalar names verbatim', () => {
+		expect(tyDescriptorLabel(scalarString)).toBe('String');
+		expect(tyDescriptorLabel(scalarNumber)).toBe('Number');
+	});
+
+	it('tyDescriptorLabel renders array<element>', () => {
+		expect(tyDescriptorLabel(taskArray)).toBe('array<{title, priority}>');
+	});
+
+	it('tyDescriptorLabel renders compact object form {a, b, …}', () => {
+		expect(tyDescriptorLabel(fileEnvelope)).toBe('{url, filename, content_type}');
+		const big: TyDescriptor = {
+			kind: 'object',
+			selectable: false,
+			fields: { a: scalarString, b: scalarString, c: scalarString, d: scalarString }
+		};
+		expect(tyDescriptorLabel(big)).toBe('{a, b, c, …}');
+	});
+
+	it('tyDescriptorLabel handles any / opaque / undefined', () => {
+		expect(tyDescriptorLabel({ kind: 'any' })).toBe('any');
+		expect(tyDescriptorLabel({ kind: 'opaque', name: 'Detail' })).toBe('Opaque(Detail)');
+		expect(tyDescriptorLabel(undefined)).toBe('unknown');
+	});
+
+	it('tyDescriptorToFieldKind maps scalars; collapses non-scalars to json', () => {
+		expect(tyDescriptorToFieldKind(scalarString)).toBe('text');
+		expect(tyDescriptorToFieldKind(scalarNumber)).toBe('number');
+		expect(tyDescriptorToFieldKind({ kind: 'scalar', name: 'Bool' })).toBe('bool');
+		expect(tyDescriptorToFieldKind({ kind: 'scalar', name: 'FileRef' })).toBe('file');
+		expect(tyDescriptorToFieldKind({ kind: 'scalar', name: 'Timestamp' })).toBe('timestamp');
+		expect(tyDescriptorToFieldKind(fileEnvelope)).toBe('json');
+		expect(tyDescriptorToFieldKind(taskArray)).toBe('json');
+		expect(tyDescriptorToFieldKind(undefined)).toBe('json');
 	});
 });

@@ -12,7 +12,7 @@ use crate::auth::AuthUser;
 use crate::compiler::{
     compile_to_air, compile_to_air_with_subworkflows_inline, generate_py_io_files,
     node_files_inline, node_files_storage_path, node_input_scopes, node_namespace_scopes,
-    node_output_fields,
+    node_output_fields, TyDescriptor,
 };
 use crate::handlers::template_tests::{run_test, RunContext};
 use crate::lifecycle::cleanup_net;
@@ -1421,12 +1421,19 @@ pub async fn compile_graph(
 /// One reachable, producer-attributed reference the guard picker should
 /// offer at a node. The single source of truth for editor scope —
 /// replaces the deleted client-side `computeScopes` reimplementation.
+///
+/// `ty` is the recursive [`TyDescriptor`] tree so the picker can drill into
+/// nested objects and array element shapes without additional calls; for
+/// File-anchored containers the tree's root carries `selectable: true` so
+/// the row is pickable as a whole while its children are individually
+/// pickable too.
 #[derive(serde::Serialize, utoipa::ToSchema)]
 pub struct ScopeEntryDto {
     /// What you'd type in a guard, e.g. `input.data.invoice_amount`.
     pub path: String,
-    /// Type label (`String`, `Number`, `Bool`, `Opaque(..)`, …).
-    pub ty: String,
+    /// Recursive type descriptor. Single source of truth for the picker's
+    /// nested drill-down and (later) array `[*]` iteration affordance.
+    pub ty: TyDescriptor,
     pub producer_node: String,
     pub producer_label: String,
     pub note: String,

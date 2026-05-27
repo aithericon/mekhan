@@ -54,7 +54,12 @@ pub fn scan_placeholders(raw: &str) -> Vec<PlaceholderRef> {
             if let (Some(PathSegment::Field(head)), Some(second)) = (segs.first(), segs.get(1)) {
                 let attr = match second {
                     PathSegment::Field(a) => a.clone(),
-                    PathSegment::Index(_) => {
+                    // Numeric `[N]` or wildcard `[*]` as the second segment
+                    // is not a slug-namespaced field access. The wildcard
+                    // case (Feature B) is handled by ref grammars, not by
+                    // text interpolation — skip and let the literal text
+                    // survive to runtime.
+                    PathSegment::Index(_) | PathSegment::IndexAll => {
                         rest = &after[close_rel + 2..];
                         continue;
                     }
@@ -109,6 +114,14 @@ mod tests {
         // `{{ start[0].x }}` — first non-head segment is an index, not a
         // field. Skip per the contract; the runtime degrades to `()`.
         assert!(pairs("{{ start[0].x }}").is_empty());
+    }
+
+    #[test]
+    fn skips_wildcard_as_second_segment() {
+        // Feature B: `{{ tasks[*].title }}` parses but is not a slug-
+        // namespaced field access — `[*]` is a ref-grammar construct, not
+        // a text interpolation. Skip; the literal text survives.
+        assert!(pairs("{{ tasks[*].title }}").is_empty());
     }
 
     #[test]
