@@ -820,12 +820,7 @@ fn apply_control_data_foundation(
     known_resources: &KnownResources,
     node_configs: &mut HashMap<String, serde_json::Value>,
 ) -> Result<(), CompileError> {
-    use crate::compiler::token_shape::{
-        analyze, ctrl_def_name, data_def_name, def_ref, dynamic_token_definition,
-    };
-    use aithericon_sdk::scenario::{ScenarioArc, ScenarioPort};
-
-    let report = analyze(graph)?;
+    let report = crate::compiler::token_shape::analyze(graph)?;
 
     // Parked-producer nodes: those whose interface published a `data_port`.
     let parked: Vec<(&str, &str)> = interfaces
@@ -833,12 +828,52 @@ fn apply_control_data_foundation(
         .filter_map(|(id, iface)| iface.data_port.as_deref().map(|p| (id.as_str(), p)))
         .collect();
 
-    // (a) Typed definitions for every parked producer's data + control
-    //     token. Data = the producer's full output shape (enforced);
-    //     control = an open object (small, dynamic `_loop_*` keys).
+    stage_typed_definitions(scenario, &report, &parked);
+    schema_split_places_and_yield(scenario, &parked);
+
+    // Plan every borrow phase in one shot. The unified `Borrow` shape
+    // (`compiler::borrow`) collapses the five formerly-separate phases —
+    // Decision/Loop guards, Python AutomatedStep `<slug>.<field>`,
+    // HumanTask `{{<slug>.<field>}}` placeholders, LLM and Kreuzberg
+    // `{{<slug>.<field>}}` config refs — into one `Vec<Borrow>`. The
+    // scanners (Python AST, HumanTask string walker, JSON-config
+    // walker, Rhai AST guard walker) stay per-surface; the rewrite
+    // dispatch is unified inside `apply_borrows`.
+    let unified_borrows =
+        crate::compiler::borrow::collect_borrows(graph, inline_sources, known_resources)?;
+
+    validate_python_output_fields(graph, &unified_borrows)?;
+
+    // Apply every borrow's rewrite + read-arc wiring. Handles guards,
+    // Python envelope staging, HumanTask substring rewriting, and LLM /
+    // Kreuzberg per-field staging in one pass. The backend arm also
+    // rewrites placeholders inside `node_configs` (the parked static
+    // config blobs) so the executor's `{{input:NAME}}` /
+    // `{{input_path:NAME}}` resolver finds the rewritten form when it
+    // downloads the blob and hands it to the backend.
+    crate::compiler::borrow::apply_borrows(scenario, interfaces, unified_borrows, node_configs);
+
+    align_decision_deadends(scenario, graph);
+    fill_missing_definitions(scenario);
+    hoist_join_any_data(scenario, graph, interfaces);
+
+    Ok(())
+}
+
+/// (a) Typed definitions for every parked producer's data + control
+/// token. Data = the producer's full output shape (enforced); control =
+/// an open object (small, dynamic `_loop_*` keys). Also seeds the
+/// `DynamicToken` definition every effect transition references.
+fn stage_typed_definitions(
+    scenario: &mut aithericon_sdk::scenario::ScenarioDefinition,
+    report: &crate::compiler::token_shape::ShapeReport,
+    parked: &[(&str, &str)],
+) {
+    use crate::compiler::token_shape::{ctrl_def_name, data_def_name, dynamic_token_definition};
+
     let (dyn_name, dyn_schema) = dynamic_token_definition();
     scenario.definitions.entry(dyn_name).or_insert(dyn_schema);
-    for (node_id, _) in &parked {
+    for (node_id, _) in parked {
         if let Some(shape) = report.node_out.get(*node_id) {
             scenario
                 .definitions
@@ -849,9 +884,19 @@ fn apply_control_data_foundation(
             serde_json::json!({ "type": "object", "additionalProperties": true }),
         );
     }
+}
 
-    // (b) Schema the split places + the yield transition's output ports.
-    for (node_id, data_place) in &parked {
+/// (b) Schema the split places (parked data + ctrl) and the yield
+/// transition's output ports for every parked producer. Read by the
+/// runtime `SchemaRegistry`; without these refs the engine treats the
+/// places as untyped pass-throughs.
+fn schema_split_places_and_yield(
+    scenario: &mut aithericon_sdk::scenario::ScenarioDefinition,
+    parked: &[(&str, &str)],
+) {
+    use crate::compiler::token_shape::{ctrl_def_name, data_def_name, def_ref};
+
+    for (node_id, data_place) in parked {
         let data_ref = def_ref(&data_def_name(node_id));
         let ctrl_ref = def_ref(&ctrl_def_name(node_id));
         let ctrl_place = format!("p_{node_id}_ctrl");
@@ -876,26 +921,20 @@ fn apply_control_data_foundation(
             }
         }
     }
+}
 
-    // (c) Plan every borrow phase in one shot. The unified `Borrow` shape
-    //     (`compiler::borrow`) collapses the five formerly-separate phases —
-    //     Decision/Loop guards, Python AutomatedStep `<slug>.<field>`,
-    //     HumanTask `{{<slug>.<field>}}` placeholders, LLM and Kreuzberg
-    //     `{{<slug>.<field>}}` config refs — into one `Vec<Borrow>`. The
-    //     scanners (Python AST, HumanTask string walker, JSON-config
-    //     walker, Rhai AST guard walker) stay per-surface; the rewrite
-    //     dispatch is unified inside `apply_borrows`.
-    let unified_borrows =
-        crate::compiler::borrow::collect_borrows(graph, inline_sources, known_resources)?;
-
-    // (c2-pre) Validate declared output.fields on every Python AutomatedStep
-    //      against (a) reserved runner globals (b) slugs this node actually
-    //      borrows. The runner sweeps declared output names from globals()
-    //      after exec(); without these guards, a field named `token` would
-    //      shadow the inbound control token, and a field colliding with a
-    //      borrowed upstream slug would silently re-export the input as
-    //      output. Mirror of runner.rs _RESERVED_GLOBALS (executor-backend) —
-    //      keep both lists in sync when adding new injected globals.
+/// (c2-pre) Validate declared `output.fields` on every Python
+/// AutomatedStep against (a) reserved runner globals and (b) slugs this
+/// node actually borrows. The runner sweeps declared output names from
+/// `globals()` after exec(); without these guards, a field named `token`
+/// would shadow the inbound control token, and a field colliding with a
+/// borrowed upstream slug would silently re-export the input as output.
+/// Mirror of runner.rs `_RESERVED_GLOBALS` (executor-backend) — keep
+/// both lists in sync when adding new injected globals.
+fn validate_python_output_fields(
+    graph: &crate::models::template::WorkflowGraph,
+    unified_borrows: &[crate::compiler::borrow::Borrow],
+) -> Result<(), CompileError> {
     const PY_RESERVED_GLOBALS: &[&str] = &[
         "token",
         "input",
@@ -916,16 +955,21 @@ fn apply_control_data_foundation(
         "os",
         "json",
     ];
-    let python_borrows_by_consumer: std::collections::HashMap<&str, Vec<&crate::compiler::borrow::Borrow>> = {
-        let mut m: std::collections::HashMap<&str, Vec<&crate::compiler::borrow::Borrow>> =
-            std::collections::HashMap::new();
-        for b in &unified_borrows {
-            if matches!(b.resolution, crate::compiler::borrow::BorrowResolution::PythonEnvelope) {
-                m.entry(b.consumer_node_id.as_str()).or_default().push(b);
-            }
+    let mut python_borrows_by_consumer: std::collections::HashMap<
+        &str,
+        Vec<&crate::compiler::borrow::Borrow>,
+    > = std::collections::HashMap::new();
+    for b in unified_borrows {
+        if matches!(
+            b.resolution,
+            crate::compiler::borrow::BorrowResolution::PythonEnvelope
+        ) {
+            python_borrows_by_consumer
+                .entry(b.consumer_node_id.as_str())
+                .or_default()
+                .push(b);
         }
-        m
-    };
+    }
     for node in &graph.nodes {
         let WorkflowNodeData::AutomatedStep {
             execution_spec,
@@ -957,45 +1001,38 @@ fn apply_control_data_foundation(
             }
         }
     }
-    drop(python_borrows_by_consumer);
+    Ok(())
+}
 
-    // Apply every borrow's rewrite + read-arc wiring. Handles guards,
-    // Python envelope staging, HumanTask substring rewriting, and LLM /
-    // Kreuzberg per-field staging in one pass. The backend arm also
-    // rewrites placeholders inside `node_configs` (the parked static
-    // config blobs) so the executor's `{{input:NAME}}` /
-    // `{{input_path:NAME}}` resolver finds the rewritten form when it
-    // downloads the blob and hands it to the backend.
-    crate::compiler::borrow::apply_borrows(
-        scenario,
-        interfaces,
-        unified_borrows,
-        node_configs,
-    );
+/// (c-deadend) Decision deadend enabling-time alignment. The Decision
+/// lowering emits one transition per branch + a default + an unguarded
+/// `t_<dec>_deadend` whose intent is "fire only when nothing else
+/// could." That priority intent breaks under the engine's selection
+/// rule (`evaluation::select_next_transition`): step 1 is *earliest
+/// enabling time wins*, and enabling time is the max `created_at` of all
+/// *consumed + read* tokens on the binding. Because deadend reads only
+/// the control-token place while branches/default also read the parked
+/// `p_<producer>_data`, deadend can end up with an *earlier* enabling
+/// time when the data token happens to be created after the ctrl token
+/// (a non-deterministic micro-race inside the producer's yield: the
+/// two are emitted from the same logic block but their `created_at`
+/// stamps depend on hash iteration order). Step 1 wins outright, so
+/// deadend fires even when a branch guard is true — caught live as
+/// 03-decision-routing failing for `score=40` but passing for `score=10`.
+///
+/// Fix: mirror the read-arcs (and corresponding `input_ports`) that the
+/// borrow read-arc synthesis added to a deadend's siblings onto the
+/// deadend itself. The deadend's guard/logic stays unchanged (it still
+/// `throw`s); the extra read-arcs only change its enabling time, so it
+/// now ties with the branches/default on step 1 and loses on step 2
+/// (specificity / `input_count`). Deadend's `priority(0)` is preserved
+/// as the final tiebreak when read-arcs alone don't disambiguate.
+fn align_decision_deadends(
+    scenario: &mut aithericon_sdk::scenario::ScenarioDefinition,
+    graph: &crate::models::template::WorkflowGraph,
+) {
+    use aithericon_sdk::scenario::{ScenarioArc, ScenarioPort};
 
-    // (c-deadend) Decision deadend enabling-time alignment. The Decision
-    //      lowering emits one transition per branch + a default + an unguarded
-    //      `t_<dec>_deadend` whose intent is "fire only when nothing else
-    //      could." That priority intent breaks under the engine's selection
-    //      rule (evaluation::select_next_transition): step 1 is *earliest
-    //      enabling time wins*, and enabling time is the max created_at of all
-    //      *consumed + read* tokens on the binding. Because deadend reads only
-    //      the control-token place while branches/default also read the parked
-    //      `p_<producer>_data`, deadend can end up with an *earlier* enabling
-    //      time when the data token happens to be created after the ctrl token
-    //      (a non-deterministic micro-race inside the producer's yield: the
-    //      two are emitted from the same logic block but their `created_at`
-    //      stamps depend on hash iteration order). Step 1 wins outright, so
-    //      deadend fires even when a branch guard is true — caught live as
-    //      03-decision-routing failing for score=40 but passing for score=10.
-    //
-    //      Fix: mirror the read-arcs (and corresponding input_ports) that the
-    //      (c) read-arc synthesis added to a deadend's siblings onto the
-    //      deadend itself. The deadend's guard/logic stays unchanged (it still
-    //      `throw`s); the extra read-arcs only change its enabling time, so
-    //      it now ties with the branches/default on step 1 and loses on step 2
-    //      (specificity / input_count). Deadend's `priority(0)` is preserved
-    //      as the final tiebreak when read-arcs alone don't disambiguate.
     for node in &graph.nodes {
         if !matches!(node.data, WorkflowNodeData::Decision { .. }) {
             continue;
@@ -1061,11 +1098,12 @@ fn apply_control_data_foundation(
             }
         }
     }
+}
 
-
-    // (d) Safety net: any pre-existing schema ref (effect tokens, DynamicToken)
-    //     not in `definitions` gets a permissive `{}` so the runtime
-    //     `SchemaRegistry` resolves every ref (unresolvable refs *fail*).
+/// (d) Safety net: any pre-existing schema ref (effect tokens,
+/// `DynamicToken`) not in `definitions` gets a permissive `{}` so the
+/// runtime `SchemaRegistry` resolves every ref (unresolvable refs *fail*).
+fn fill_missing_definitions(scenario: &mut aithericon_sdk::scenario::ScenarioDefinition) {
     let mut referenced: Vec<String> = Vec::new();
     for p in &scenario.places {
         if let Some(s) = &p.token_schema {
@@ -1087,30 +1125,35 @@ fn apply_control_data_foundation(
                 .or_insert(serde_json::json!({}));
         }
     }
+}
 
-    // (j) Join Any-mode data-pass-through. The `lower_join` Any branch
-    //     emits `#{ output: in_X, data: in_X }` so the parked data place
-    //     of the join carries the slim *control* token that arrived from
-    //     the upstream extractor — not the upstream's actual fields. A
-    //     downstream `<join_slug>.<field>` borrow (e.g.
-    //     `extraction.fields` in the doc-pipeline persist step) then
-    //     hits the Python runner with an envelope that has no `fields`
-    //     key → `AttributeError: '_AccessibleDict' object has no
-    //     attribute 'fields'`.
-    //
-    //     Fix here, post-merge: for every Join Any node, walk its
-    //     `t_<id>_join_<i>` branch transitions. For each, resolve the
-    //     upstream node id (the source of the edge that this branch
-    //     consumes via `p_<id>_in_<i>`), wire a read-arc into the
-    //     upstream's parked data place, and rewrite the Rhai to use
-    //     `data: <hoisted-upstream-data>`. Hoisting matches the borrow
-    //     planner's `producer_field_access_hoist` (AutomatedStep
-    //     parks under `detail.outputs`, HumanTask under `data`, others
-    //     flat), so the join's parked envelope mirrors the upstream
-    //     producer's flat field shape — exactly what
-    //     `<slug>.<field>` borrowers expect.
+/// (j) Join Any-mode data-pass-through. The `lower_join` Any branch
+/// emits `#{ output: in_X, data: in_X }` so the parked data place of
+/// the join carries the slim *control* token that arrived from the
+/// upstream extractor — not the upstream's actual fields. A downstream
+/// `<join_slug>.<field>` borrow (e.g. `extraction.fields` in the
+/// doc-pipeline persist step) then hits the Python runner with an
+/// envelope that has no `fields` key → `AttributeError:
+/// '_AccessibleDict' object has no attribute 'fields'`.
+///
+/// Fix here, post-merge: for every Join Any node, walk its
+/// `t_<id>_join_<i>` branch transitions. For each, resolve the upstream
+/// node id (the source of the edge that this branch consumes via
+/// `p_<id>_in_<i>`), wire a read-arc into the upstream's parked data
+/// place, and rewrite the Rhai to use `data: <hoisted-upstream-data>`.
+/// Hoisting matches the borrow planner's `producer_field_access_hoist`
+/// (AutomatedStep parks under `detail.outputs`, HumanTask under `data`,
+/// others flat), so the join's parked envelope mirrors the upstream
+/// producer's flat field shape — exactly what `<slug>.<field>`
+/// borrowers expect.
+fn hoist_join_any_data(
+    scenario: &mut aithericon_sdk::scenario::ScenarioDefinition,
+    graph: &crate::models::template::WorkflowGraph,
+    interfaces: &InterfaceRegistry,
+) {
+    use crate::models::template::JoinMode;
+
     for node in &graph.nodes {
-        use crate::models::template::{JoinMode, WorkflowNodeData};
         let WorkflowNodeData::Join { mode, .. } = &node.data else {
             continue;
         };
@@ -1204,8 +1247,6 @@ fn apply_control_data_foundation(
             }
         }
     }
-
-    Ok(())
 }
 
 #[cfg(test)]
