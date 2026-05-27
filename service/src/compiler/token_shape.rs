@@ -1581,8 +1581,6 @@ pub(crate) use crate::compiler::borrow::planners::automated_step::{
     automated_step_borrow_plan, AutomatedStepDataBorrow,
 };
 #[cfg(test)]
-pub(crate) use crate::compiler::borrow::planners::guard::ReadArcBind;
-#[cfg(test)]
 pub(crate) use crate::compiler::borrow::planners::human_task::human_task_borrow_plan;
 #[cfg(test)]
 pub(crate) use crate::compiler::borrow::planners::resource::automated_step_resource_borrow_plan;
