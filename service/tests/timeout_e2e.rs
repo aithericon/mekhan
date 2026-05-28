@@ -377,6 +377,84 @@ fn timeout_graph(duration_ms: u64) -> Value {
     })
 }
 
+/// `Start → Timeout(N ms) { body_in → wait (Delay) → review (HumanTask) → body_out }`
+///
+/// The HumanTask is NOT the body's entry node — it sits downstream of a short
+/// Delay, so it's genuinely *in between* the body entry and the completion
+/// arc. Both `wait` and `review` are `parent_id == "tmo"` body children, so
+/// the post-pass synthesizes a drain transition for each. When the timer
+/// wins, only `review`'s drain (`t_tmo_drain_review`) can fire — the Delay
+/// has already forwarded, so its in-flight place is empty and its drain
+/// (`t_tmo_drain_wait`) is starved. That asymmetry is the assertion: the
+/// cancel-pulse fan-out reclaims only live tokens.
+fn timeout_delay_then_human_graph(duration_ms: u64) -> Value {
+    let expr = duration_ms.to_string();
+    json!({
+        "nodes": [
+            { "id": "start", "type": "start", "position": { "x": 0, "y": 0 },
+              "data": { "type": "start", "label": "Start",
+                        "initial": { "id": "in", "label": "Input", "fields": [] } } },
+            { "id": "tmo", "type": "timeout", "position": { "x": 240, "y": 0 },
+              "data": { "type": "timeout", "label": "Race",
+                        "durationMsExpr": expr } },
+            // First body step — a short Delay. parent_id == "tmo".
+            { "id": "wait", "type": "delay", "slug": "wait",
+              "position": { "x": 340, "y": 80 },
+              "parentId": "tmo",
+              "data": { "type": "delay", "label": "Settle",
+                        "durationMsExpr": "50" } },
+            // The "in between" HumanTask — left pending when the timer wins.
+            { "id": "review", "type": "human_task", "slug": "review",
+              "position": { "x": 460, "y": 80 },
+              "parentId": "tmo",
+              "data": {
+                  "type": "human_task",
+                  "label": "Review",
+                  "taskTitle": "Review",
+                  "steps": [{
+                      "id": "step1", "title": "Confirm",
+                      "blocks": [
+                          { "type": "input", "field": {
+                              "name": "approved", "label": "Approved",
+                              "kind": "checkbox", "required": true } }
+                      ]
+                  }]
+              } },
+            { "id": "end_done", "type": "end", "position": { "x": 700, "y": -80 },
+              "data": { "type": "end", "label": "Done (body)",
+                        "resultMapping": [
+                            { "targetField": "branch", "expression": "\"done\"" }
+                        ] } },
+            { "id": "end_timeout", "type": "end", "position": { "x": 700, "y": 80 },
+              "data": { "type": "end", "label": "Done (timeout)",
+                        "resultMapping": [
+                            { "targetField": "branch", "expression": "\"timeout\"" }
+                        ] } }
+        ],
+        "edges": [
+            { "id": "e_in", "source": "start", "target": "tmo",
+              "targetHandle": "in", "type": "sequence" },
+            // tmo --body_in--> wait (enter the body at the Delay)
+            { "id": "e_body_in", "source": "tmo", "target": "wait",
+              "sourceHandle": "body_in", "targetHandle": "in",
+              "type": "sequence" },
+            // wait --> review (Delay forwards into the HumanTask)
+            { "id": "e_seq", "source": "wait", "target": "review",
+              "targetHandle": "in", "type": "sequence" },
+            // review --> tmo body_out (body completion back-edge)
+            { "id": "e_body_out", "source": "review", "target": "tmo",
+              "targetHandle": "body_out", "type": "loop_back" },
+            // tmo (default = done) --> end_done
+            { "id": "e_done", "source": "tmo", "target": "end_done",
+              "targetHandle": "in", "type": "sequence" },
+            // tmo --timeout--> end_timeout
+            { "id": "e_timeout", "source": "tmo", "target": "end_timeout",
+              "sourceHandle": "timeout", "targetHandle": "in",
+              "type": "sequence" }
+        ]
+    })
+}
+
 /// Body-wins: Timeout(60s) wrapping a HumanTask; complete the task
 /// immediately. Asserts the `done` branch fired AND the pending timer was
 /// cancelled (no `timeout` envelope, no second End).
@@ -539,6 +617,121 @@ async fn timeout_timer_wins_drains_body_human_task() {
         final_task_status, "cancelled",
         "timer-wins must flip the body task to `cancelled` via human.cancel.> listener: \
          got `{final_task_status}`"
+    );
+
+    cleanup_durables(&cleanup_nats).await;
+}
+
+/// Timer-wins with a multi-step body: `Timeout(3s) { wait (Delay) → review }`.
+/// The HumanTask `review` is the "in between" node — it's reached only after
+/// the body's leading Delay forwards, so it is NOT the body's entry. No task
+/// is ever completed: the body simply parks on `review` until the 3s timer
+/// wins. Asserts:
+///   - the `timeout` branch fires,
+///   - `review` is drained via `human_cancel` (`t_tmo_drain_review` +
+///     `t_tmo_drain_review_effect`),
+///   - the leading Delay's drain (`t_tmo_drain_wait`) NEVER fires — by the
+///     time the timer expires the Delay has long since forwarded, so its
+///     in-flight place is empty and its drain is starved. This proves the
+///     fan-out only reclaims live tokens, not already-departed siblings.
+///   - the projection flips `review` → `cancelled`.
+///
+/// The 3s window is generous: the leading Delay is 50ms, so `review` goes
+/// pending within a few hundred ms of body entry — well before the timer.
+#[tokio::test]
+async fn timeout_drains_mid_body_human_task() {
+    if !engine_available().await {
+        panic!(
+            "engine not available at {} — start the stack with `just dev up`",
+            engine_url()
+        );
+    }
+    let nats_url = engine_nats_url();
+    let (app, db) = common::test_app_with_petri_url(&nats_url, &engine_url()).await;
+    let prefix = format!("test_{}", Uuid::new_v4().simple());
+    let nats = MekhanNats::connect(&nats_url, None)
+        .await
+        .expect("nats")
+        .with_consumer_prefix(prefix);
+    let cleanup_nats = nats.clone();
+    let (_causality, _lifecycle, _cancel) = spawn_consumers(nats, db.clone()).await;
+
+    let id = publish_and_start(&app, timeout_delay_then_human_graph(3_000)).await;
+    let net_id = wait_for_net_id(&db, id, Duration::from_secs(10)).await;
+
+    // `review` goes pending after the ~50ms leading Delay. Confirm it appears
+    // (proving it's a genuine mid-body task), then do NOT complete it — let
+    // the 3s timer win and drain it.
+    let task_id = wait_for_pending_task(&db, &net_id, Duration::from_secs(15)).await;
+
+    let terminal = wait_for_terminal(&db, id, Duration::from_secs(20)).await;
+    assert_eq!(
+        terminal, "completed",
+        "timer-wins should complete the instance (the `timeout` branch routes \
+         to an End): final status was `{terminal}`"
+    );
+
+    let result = fetch_result(&db, id).await;
+    assert_eq!(
+        result["value"]["branch"],
+        json!("timeout"),
+        "timer wins should route to `timeout` branch: {result}"
+    );
+
+    let events_url = format!("{}/api/nets/{}/events?last=300", engine_url(), net_id);
+    let events = reqwest::get(&events_url)
+        .await
+        .expect("engine events fetch")
+        .json::<Value>()
+        .await
+        .expect("engine events parse");
+    let evs = events["events"].as_array().expect("events array");
+    let saw = |name: &str| -> bool {
+        evs.iter().any(|e| {
+            let ev = &e["event"];
+            ev.get("type").and_then(|t| t.as_str()).map_or(false, |t| {
+                (t == "TransitionFired" || t == "EffectCompleted")
+                    && ev.get("transition_id").and_then(|x| x.as_str()) == Some(name)
+            })
+        })
+    };
+    assert!(saw("t_tmo_timeout"), "timer must have won the race");
+    assert!(
+        saw("t_tmo_drain_review"),
+        "drain transition must have consumed the in-flight review HumanTaskAssigned token"
+    );
+    assert!(
+        saw("t_tmo_drain_review_effect"),
+        "human_cancel effect must have completed for review"
+    );
+    // The leading Delay forwarded long before the timer fired, so its
+    // in-flight place is empty — its drain must never fire. The cancel_pulse
+    // fan-out only reclaims live tokens.
+    assert!(
+        !saw("t_tmo_drain_wait"),
+        "the Delay already forwarded — its drain must NOT fire (no live token to reclaim)"
+    );
+
+    // Projection: review flips to `cancelled` once the cancel_listener sees
+    // the engine's `human.cancel.>` publish.
+    let task_cancelled_within = Duration::from_secs(5);
+    let task_start = std::time::Instant::now();
+    let final_task_status = loop {
+        let st = task_status(&db, &task_id).await;
+        if st != "pending" {
+            break st;
+        }
+        if task_start.elapsed() > task_cancelled_within {
+            panic!(
+                "review ({task_id}) still pending {task_cancelled_within:?} after engine \
+                 fired human_cancel — is the cancel_listener consuming human.cancel.>?"
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    };
+    assert_eq!(
+        final_task_status, "cancelled",
+        "mid-body review must flip to `cancelled` on timeout: got `{final_task_status}`"
     );
 
     cleanup_durables(&cleanup_nats).await;
