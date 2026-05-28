@@ -565,9 +565,11 @@ pub(crate) fn apply_agent_tool_wirings(
                 .map(|(_, p)| p.clone());
 
             // t_collect_<tn>: child success + state_in_tool → state.
-            // Appends a `role: tool` message to history with the
-            // child's output payload. State stays inside the agent —
-            // the workflow token (which the child may have stripped)
+            // Stages a `role: tool` message as the `pending` delta with the
+            // child's output payload. The transcript itself lives off-token:
+            // the next prepare_call ships `pending` as a staged input and the
+            // worker folds it into the cumulative blob. State stays inside the
+            // agent — the workflow token (which the child may have stripped)
             // is irrelevant once we have the tool result.
             if let Some(child_out) = child_default_out {
                 ctx.transition(
@@ -578,7 +580,7 @@ pub(crate) fn apply_agent_tool_wirings(
                 .auto_input("state", &wiring.p_state_in_tool)
                 .auto_output("state", &wiring.p_state)
                 .logic_rhai(format!(
-                    r#"let s = state; s.history.push(#{{ role: "tool", tool_call_id: s.pending_tool_call_id, content: result }}); s.message_count = s.message_count + 1; #{{ state: s }}"#
+                    r#"let s = state; s.pending = [#{{ role: "tool", tool_call_id: s.pending_tool_call_id, content: result }}]; s.message_count = s.message_count + 1; #{{ state: s }}"#
                 ))
                 .done();
             }
@@ -597,7 +599,7 @@ pub(crate) fn apply_agent_tool_wirings(
                         .auto_input("state", &wiring.p_state_in_tool)
                         .auto_output("state", &wiring.p_state)
                         .logic_rhai(format!(
-                            r#"let s = state; let msg = if type_of(err) == "map" && "message" in err {{ err.message }} else {{ "tool error" }}; s.history.push(#{{ role: "tool", tool_call_id: s.pending_tool_call_id, content: "tool '{tn}' failed: " + msg }}); s.message_count = s.message_count + 1; #{{ state: s }}"#
+                            r#"let s = state; let msg = if type_of(err) == "map" && "message" in err {{ err.message }} else {{ "tool error" }}; s.pending = [#{{ role: "tool", tool_call_id: s.pending_tool_call_id, content: "tool '{tn}' failed: " + msg }}]; s.message_count = s.message_count + 1; #{{ state: s }}"#
                         ))
                         .done();
                     }

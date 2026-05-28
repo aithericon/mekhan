@@ -250,6 +250,15 @@ impl ArtifactStore for OpenDalArtifactStore {
         Ok(())
     }
 
+    async fn put(&self, storage_path: &StoragePath, data: Vec<u8>) -> Result<(), StorageError> {
+        let remote_path = self.storage_path_to_remote(storage_path);
+        self.operator
+            .write(&remote_path, data)
+            .await
+            .map_err(opendal_err)?;
+        Ok(())
+    }
+
     async fn exists(&self, storage_path: &StoragePath) -> Result<bool, StorageError> {
         let remote_path = self.storage_path_to_remote(storage_path);
         self.operator

@@ -164,6 +164,15 @@ pub struct LlmConfig {
     #[serde(default)]
     pub history: Vec<ChatMessage>,
 
+    /// Turns produced since `history` was last persisted — for the agent
+    /// loop, the tool result (or synthetic feedback) the engine accumulated
+    /// on the token between LLM calls. Appended after `history` when
+    /// assembling the request; the off-token base (`history`) plus this
+    /// delta is what the worker persists as the next turn's cumulative
+    /// transcript blob. Empty for single-shot LLM steps.
+    #[serde(default)]
+    pub pending: Vec<ChatMessage>,
+
     /// Sampling temperature.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f64>,
@@ -224,6 +233,7 @@ mod tests {
                 tool_call_id: None,
                 tool_calls: vec![],
             }],
+            pending: vec![],
             temperature: Some(0.7),
             max_tokens: Some(1024),
             response_format: None,
@@ -290,6 +300,7 @@ mod tests {
             prompt: "Hello".into(),
             system_prompt: None,
             history: vec![],
+            pending: vec![],
             temperature: None,
             max_tokens: None,
             response_format: Some(ResponseFormat::Text),

@@ -127,7 +127,10 @@ impl CompletionRequest {
             messages.push(Message::text(Role::User, config.prompt.clone()));
         }
 
-        for msg in &config.history {
+        // `history` (persisted base) then `pending` (this turn's not-yet-
+        // persisted delta — the tool result the agent loop accumulated on the
+        // token between calls) land after the initial user prompt, in order.
+        for msg in config.history.iter().chain(config.pending.iter()) {
             messages.push(Message {
                 role: msg.role.clone(),
                 content: content_to_text(&msg.content),

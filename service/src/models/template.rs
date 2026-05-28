@@ -1502,13 +1502,15 @@ pub(crate) fn agent_extra_output_fields() -> Vec<PortField> {
             accept: None,
         },
         PortField {
-            name: "history".to_string(),
-            label: "Conversation history".to_string(),
-            kind: FieldKind::Json,
+            name: "history_ref".to_string(),
+            label: "Conversation transcript blob".to_string(),
+            kind: FieldKind::Text,
             required: false,
             options: None,
             description: Some(
-                "Array of `{role, content, …}` entries the agent sent + received.".to_string(),
+                "Storage key of the final cumulative transcript blob (the full \
+                 `{role, content, …}` conversation lives off-token in object storage)."
+                    .to_string(),
             ),
             accept: None,
         },

@@ -85,24 +85,26 @@ async fn main() -> anyhow::Result<()> {
     // Spawn lifecycle event listener (updates DB on NetCompleted/NetCancelled).
     // Triggers are wired in later once the dispatcher is built — see below.
 
-    // Spawn background cleanup sweep
-    tokio::spawn(lifecycle::start_cleanup_sweep(
-        config.cleanup.clone(),
-        db.clone(),
-        mekhan_nats.clone(),
-        petri.clone(),
-    ));
-
-    let yjs_persistence = YjsPersistence::new(db.clone());
-    let yjs_manager = Arc::new(YjsManager::new(yjs_persistence));
-    tracing::info!("Yjs collaboration manager initialized");
-
     let artifact_store = Arc::new(ArtifactStore::new(&config.s3));
     if let Err(e) = artifact_store.ensure_bucket().await {
         tracing::warn!("S3 bucket check failed (non-fatal): {e}");
     } else {
         tracing::info!("S3 artifact store ready (bucket: {})", config.s3.bucket);
     }
+
+    // Spawn background cleanup sweep (also GCs per-instance agent transcript
+    // blobs from the artifact store on the retention sweep).
+    tokio::spawn(lifecycle::start_cleanup_sweep(
+        config.cleanup.clone(),
+        db.clone(),
+        mekhan_nats.clone(),
+        petri.clone(),
+        artifact_store.clone(),
+    ));
+
+    let yjs_persistence = YjsPersistence::new(db.clone());
+    let yjs_manager = Arc::new(YjsManager::new(yjs_persistence));
+    tracing::info!("Yjs collaboration manager initialized");
 
     let artifact_s3 = config.artifact_s3.as_ref().map(|cfg| {
         Arc::new(ArtifactStore::new(cfg))

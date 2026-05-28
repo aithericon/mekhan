@@ -137,6 +137,15 @@ impl ArtifactStore for LocalArtifactStore {
         Ok(())
     }
 
+    async fn put(&self, storage_path: &StoragePath, data: Vec<u8>) -> Result<(), StorageError> {
+        let dest = self.storage_path_to_local(storage_path);
+        if let Some(parent) = dest.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        tokio::fs::write(&dest, data).await?;
+        Ok(())
+    }
+
     async fn exists(&self, storage_path: &StoragePath) -> Result<bool, StorageError> {
         let path = self.storage_path_to_local(storage_path);
         Ok(path.exists())
