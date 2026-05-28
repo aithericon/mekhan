@@ -399,7 +399,7 @@ impl ExecutorClient for ExecutorNatsClient {
 
     async fn cancel(&self, execution_id: &str) -> Result<(), ExecutorError> {
         // Cancel uses ephemeral core NATS (not JetStream) — fire-and-forget.
-        let subject = format!("executor.cancel.{}", execution_id);
+        let subject = aithericon_executor_domain::cancel_subject(execution_id);
 
         self.nats_client
             .publish(subject.clone(), Bytes::new())
