@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 /// See `docs/proposals/postgres-backend.md` (A1 spec § 2) for the full field
 /// reference.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 pub struct PostgresConfig {
     /// The parametrised SQL statement (use `$1`, `$2`, ... placeholders —
     /// **never** string-interpolated values).

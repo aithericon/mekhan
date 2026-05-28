@@ -1968,6 +1968,14 @@ export interface components {
             token_id: string;
             transition_name?: string | null;
         };
+        AnnotateConfig: {
+            annotations: {
+                [key: string]: unknown;
+            };
+            merge?: boolean;
+            path: string;
+            storage: components["schemas"]["StorageConfig"];
+        };
         /**
          * @description Request body for `POST /api/v1/templates/{id}/apply` — the GitOps path.
          *     The `graph` REPLACES the chain head wholesale (no CRDT merge); binary
@@ -2020,6 +2028,38 @@ export interface components {
             template_id: string;
         };
         /**
+         * @description One attachment. The compiler emits one of these per `attachments[]` entry
+         *     in the workflow config and pairs it with a synthesized `inputs[]` entry
+         *     that materializes the file into the run's staged-inputs directory.
+         */
+        AttachmentSpec: {
+            /** @description Filename the recipient sees in the mail client. */
+            filename: string;
+            /** @description Staged-input name where the bytes live (one of `RunContext.staged_inputs`). */
+            input_name: string;
+            /** @description Optional MIME override; otherwise inferred from `filename` extension. */
+            mime?: string | null;
+        };
+        /** @description Authentication configuration. */
+        AuthConfig: {
+            token?: string | null;
+            token_env?: string | null;
+            /** @enum {string} */
+            type: "bearer";
+        } | {
+            password?: string | null;
+            password_env?: string | null;
+            /** @enum {string} */
+            type: "basic";
+            username: string;
+        } | {
+            name: string;
+            /** @enum {string} */
+            type: "header";
+            value?: string | null;
+            value_env?: string | null;
+        };
+        /**
          * @description Frontend-visible metadata for one backend. Returned by `GET /api/v1/backends`.
          *
          *     The Svelte component map (`backend-panels.ts`) stays hand-written — TS
@@ -2030,6 +2070,13 @@ export interface components {
          *     `automated-ports.ts` ↔ `default_output_port()` drift hazard.
          */
         BackendDescriptor: {
+            /**
+             * @description Self-contained JSON Schema for this backend's `spec.config` shape
+             *     (`#/components/schemas/*` refs inlined). The SPA's generic
+             *     schema-driven form renders simple panels off this. `null` for
+             *     backends with no executor config type.
+             */
+            configSchema: unknown;
             /**
              * @description Whether this backend's declared output port fields drive a Rhai
              *     `outputs:` constant (mostly informational for the frontend).
@@ -2063,6 +2110,11 @@ export interface components {
             resourceChannel: components["schemas"]["ResourceChannel"];
             /** @description Whether the editor should show the Scheduled deployment toggle. */
             schedulable: boolean;
+            /**
+             * @description `config` field names that hold secrets (rendered masked by the
+             *     generic form).
+             */
+            secretFields: string[];
         };
         /**
          * @description Delay applied between automated-step retry attempts.
@@ -2146,6 +2198,22 @@ export interface components {
             total_bytes: number;
         };
         /**
+         * @description A single message in conversation history.
+         *
+         *     `content` is a JSON value, not a bare string, because tool-result
+         *     messages (`role: tool`) carry the structured tool output directly; the
+         *     adapters render it to the string each provider's wire format expects.
+         *     Text turns (system/user/assistant) carry a JSON string.
+         */
+        ChatMessage: {
+            content?: unknown;
+            role: components["schemas"]["Role"];
+            /** @description For `role: tool` — the id of the assistant tool call this answers. */
+            tool_call_id?: string | null;
+            /** @description For `role: assistant` — the tool calls the model emitted this turn. */
+            tool_calls?: components["schemas"]["LlmToolCall"][];
+        };
+        /**
          * @description Structured payload of a compile error for the editor. Returned as part of
          *     the publish API response so the frontend can highlight the offending
          *     node/edge inline instead of just showing a flat error string.
@@ -2174,6 +2242,11 @@ export interface components {
         };
         /** @enum {string} */
         CompletionStatus: "success" | "failure" | "cancelled" | "any";
+        /**
+         * @description Compression algorithm for streaming copy/move transfers.
+         * @enum {string}
+         */
+        Compression: "gzip" | "zstd";
         ConcurrencyPolicy: "allow" | "skip" | "queue" | {
             /**
              * @description Dedup by hashing the result of a Rhai `expression` over the event scope;
@@ -2192,6 +2265,14 @@ export interface components {
          * @enum {string}
          */
         ContextStrategy: "none" | "drop_oldest" | "summarize_oldest";
+        CopyConfig: {
+            compress?: null | components["schemas"]["Compression"];
+            decompress?: null | components["schemas"]["Compression"];
+            destination: string;
+            destination_storage?: null | components["schemas"]["StorageConfig"];
+            source: string;
+            source_storage: components["schemas"]["StorageConfig"];
+        };
         CreateInstanceRequest: {
             /**
              * @description Free-form audit metadata stored on the instance row. Unlike pre-typed-ports
@@ -2350,6 +2431,11 @@ export interface components {
             link_type: string;
             signal_key: string;
         };
+        DeleteConfig: {
+            ignore_missing?: boolean;
+            path: string;
+            storage: components["schemas"]["StorageConfig"];
+        };
         /**
          * @description Where an `AutomatedStep`'s job runs. Internally tagged on the wire:
          *     `{"mode":"inline"}` or `{"mode":"scheduled","jobTemplate":"...",
@@ -2377,6 +2463,28 @@ export interface components {
             handler: string;
             /** @enum {string} */
             kind: "engine_effect";
+        };
+        /** @description Configuration for the Docker execution backend. */
+        DockerConfig: {
+            /** @description Command to run in the container (Docker CMD). */
+            command?: string[];
+            /** @description Override the image entrypoint. */
+            entrypoint?: string[] | null;
+            /** @description Environment variables to set in the container. */
+            env?: {
+                [key: string]: string;
+            };
+            /** @description Additional volume mounts in "host:container" format. */
+            extra_volumes?: string[];
+            /** @description Docker image to use (e.g., "python:3.12-slim", "alpine:3.19"). */
+            image: string;
+            /** @description Docker network mode (e.g., "host", "bridge", "none"). */
+            network_mode?: string | null;
+            /** @description Image pull policy. */
+            pull_policy?: components["schemas"]["PullPolicy"];
+            /** @description Remove the container after execution (equivalent to --rm). */
+            remove_container?: boolean;
+            resource_limits?: null | components["schemas"]["ResourceLimits"];
         };
         /**
          * @description One entry in a `download` task block. Mirrors the frontend `DownloadItem`
@@ -2467,6 +2575,8 @@ export interface components {
              */
             entrypoint?: string | null;
         };
+        /** @enum {string} */
+        ExtractionMode: "single" | "batch";
         FailingTestInfo: {
             name: string;
             reason: string;
@@ -2498,6 +2608,29 @@ export interface components {
             /** @description Name of the target port field this mapping fills. */
             targetField: string;
         };
+        /** @description Tagged enum of all file operations. */
+        FileOpsConfig: (components["schemas"]["ProbeConfig"] & {
+            /** @enum {string} */
+            operation: "probe";
+        }) | (components["schemas"]["CopyConfig"] & {
+            /** @enum {string} */
+            operation: "copy";
+        }) | (components["schemas"]["MoveConfig"] & {
+            /** @enum {string} */
+            operation: "move";
+        }) | (components["schemas"]["DeleteConfig"] & {
+            /** @enum {string} */
+            operation: "delete";
+        }) | (components["schemas"]["AnnotateConfig"] & {
+            /** @enum {string} */
+            operation: "annotate";
+        }) | (components["schemas"]["ListConfig"] & {
+            /** @enum {string} */
+            operation: "list";
+        }) | (components["schemas"]["StatConfig"] & {
+            /** @enum {string} */
+            operation: "stat";
+        });
         /**
          * @description Response shape for `POST /api/v1/files/upload/{id}/{node_id}`.
          *
@@ -2648,6 +2781,45 @@ export interface components {
             status: string;
             title: string;
         };
+        /** @description Configuration for the HTTP request backend. */
+        HttpConfig: {
+            auth?: null | components["schemas"]["AuthConfig"];
+            /** @description Inline request body. Mutually exclusive with `body_from_input`. */
+            body?: unknown;
+            /** @description Name of a staged input file whose contents become the request body. */
+            body_from_input?: string | null;
+            /** @description Accept invalid TLS certificates (for dev/self-signed servers). */
+            danger_accept_invalid_certs?: boolean;
+            /** @description Expected success status codes. Empty means 2xx = success. */
+            expected_status_codes?: number[];
+            /** @description Whether to follow HTTP redirects (default: true). */
+            follow_redirects?: boolean;
+            /** @description Request headers. Template substitution supported in values. */
+            headers?: {
+                [key: string]: string;
+            };
+            /** @description Maximum response body size in bytes (default: 1 MB). */
+            max_response_bytes?: number;
+            /** @description HTTP method (default: GET). */
+            method?: components["schemas"]["HttpMethod"];
+            /** @description Maps declared output names to response field selectors. */
+            output_mapping?: {
+                [key: string]: string;
+            };
+            /** @description URL query parameters. Template substitution supported in values. */
+            query?: {
+                [key: string]: string;
+            };
+            /** @description How to interpret the response body. */
+            response_mode?: components["schemas"]["ResponseMode"];
+            /**
+             * Format: int64
+             * @description Request-level timeout in seconds.
+             */
+            timeout_secs?: number | null;
+            /** @description Target URL. Supports `{{variable}}` template substitution. */
+            url: string;
+        };
         /** @enum {string} */
         HttpMethod: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
         /**
@@ -2656,6 +2828,13 @@ export interface components {
          * @enum {string}
          */
         ImageDisplay: "single" | "grid" | "gallery";
+        /** @description An image to include with the user prompt. */
+        ImageInput: {
+            /** @description MIME type. If absent, guessed from file extension. */
+            media_type?: string | null;
+            /** @description Path to the image file (resolved from `{{input:NAME}}`). */
+            path: string;
+        };
         /**
          * @description Template-level instance concurrency policy. Read by the trigger
          *     dispatcher on fire and the lifecycle listener on instance terminal.
@@ -2727,6 +2906,27 @@ export interface components {
          * @enum {string}
          */
         JoinMode: "all" | "any";
+        /** @description Configuration for the Kreuzberg document extraction backend. */
+        KreuzbergConfig: {
+            /**
+             * @description For single mode: the staged input name containing the file to extract.
+             *     Defaults to `"file"` or the sole staged input if there is exactly one.
+             */
+            file?: string | null;
+            /**
+             * @description For batch mode: list of input names to extract.
+             *     If empty, all staged inputs are used.
+             */
+            files?: string[];
+            /** @description Force OCR even on text-based PDFs. */
+            force_ocr?: boolean;
+            /** @description Optional MIME type override. When absent, kreuzberg auto-detects. */
+            mime_type?: string | null;
+            /** @description Extraction mode: "single" (default) or "batch". */
+            mode?: components["schemas"]["ExtractionMode"];
+            ocr?: null | components["schemas"]["OcrSettings"];
+            pdf?: null | components["schemas"]["PdfSettings"];
+        };
         /** @description Lineage response: artifacts grouped by iteration/step. */
         LineageResponse: {
             process_id: string;
@@ -2739,6 +2939,12 @@ export interface components {
             /** Format: int64 */
             iteration?: number | null;
             step: string;
+        };
+        ListConfig: {
+            include_stat?: boolean;
+            limit?: number | null;
+            prefix: string;
+            storage: components["schemas"]["StorageConfig"];
         };
         /**
          * @description Emitted when a catalogue entry INSERT succeeds for a process-tagged
@@ -2792,6 +2998,75 @@ export interface components {
             timestamp: string;
             /** Format: double */
             value: number;
+        };
+        /** @description Configuration for the LLM backend. */
+        LlmConfig: {
+            /** @description API key. Falls back to provider-specific env var if absent. */
+            api_key?: string | null;
+            /** @description Base URL override (proxy, Azure, etc.). */
+            base_url?: string | null;
+            /** @description Prior conversation turns. */
+            history?: components["schemas"]["ChatMessage"][];
+            /**
+             * @description Images to include with the user prompt.
+             *     Each entry references a staged input file path (after `{{input:NAME}}` resolution).
+             */
+            images?: components["schemas"]["ImageInput"][];
+            /**
+             * Format: int64
+             * @description Maximum tokens to generate.
+             */
+            max_tokens?: number | null;
+            /** @description Model identifier (e.g. "gpt-4o", "claude-sonnet-4-20250514"). */
+            model: string;
+            /**
+             * @description Turns produced since `history` was last persisted — for the agent
+             *     loop, the tool result (or synthetic feedback) the engine accumulated
+             *     on the token between LLM calls. Appended after `history` when
+             *     assembling the request; the off-token base (`history`) plus this
+             *     delta is what the worker persists as the next turn's cumulative
+             *     transcript blob. Empty for single-shot LLM steps.
+             */
+            pending?: components["schemas"]["ChatMessage"][];
+            /** @description The user prompt to send to the LLM. */
+            prompt: string;
+            /** @description Which LLM provider to use. */
+            provider: components["schemas"]["Provider"];
+            /**
+             * @description Optional workspace resource name (e.g. `openai_prod`) the LLM step is
+             *     bound to. When set, the compiler emits a ResourceEnvelope borrow that
+             *     stages `<resource_alias>.json` into the run dir; the backend overlays
+             *     the resource's `api_key` / `base_url` / `organization` on top of any
+             *     per-step values, so the step's authoring surface stays clean.
+             */
+            resource_alias?: string | null;
+            response_format?: null | components["schemas"]["ResponseFormat"];
+            /** @description System prompt. */
+            system_prompt?: string | null;
+            /**
+             * Format: double
+             * @description Sampling temperature.
+             */
+            temperature?: number | null;
+            /**
+             * @description Tools the LLM may call. Populated by the agent compiler from
+             *     child node `tool_meta` + input ports; empty for single-shot LLM
+             *     `AutomatedStep`s. Adapters that don't support tool calls (Ollama
+             *     today) ignore this field gracefully.
+             */
+            tools?: components["schemas"]["ToolSchema"][];
+        };
+        /**
+         * @description A single tool invocation requested by an LLM in one turn.
+         *
+         *     Normalized across Anthropic / OpenAI / Ollama adapter shapes. The
+         *     `id` is provider-assigned and opaque to the platform; downstream
+         *     transitions match on `name` only.
+         */
+        LlmToolCall: {
+            arguments: unknown;
+            id: string;
+            name: string;
         };
         LogRow: {
             detail: unknown;
@@ -2879,6 +3154,14 @@ export interface components {
             /** Format: double */
             temperature?: number | null;
         };
+        MoveConfig: {
+            compress?: null | components["schemas"]["Compression"];
+            decompress?: null | components["schemas"]["Compression"];
+            destination: string;
+            destination_storage?: null | components["schemas"]["StorageConfig"];
+            source: string;
+            source_storage: components["schemas"]["StorageConfig"];
+        };
         /**
          * @description Multipart body wrapper for spec documentation. The runtime extractor is
          *     `axum::extract::Multipart`; this struct only exists so the spec shows the
@@ -2939,6 +3222,14 @@ export interface components {
             parksDataEnvelope: boolean;
             /** @description Snake-case wire tag — matches the variant's serde rename. */
             wireName: string;
+        };
+        OcrSettings: {
+            /** @description OCR backend: "tesseract" (default) or "paddle-ocr". */
+            backend?: string;
+            /** @description Enable table detection during OCR. */
+            enable_table_detection?: boolean;
+            /** @description Language code (ISO 639-3). Default: "eng". */
+            language?: string;
         };
         /**
          * @description Who owns the AutomatedStep's output port shape — the user (free
@@ -3180,6 +3471,10 @@ export interface components {
             /** Format: int64 */
             total_pages: number;
         };
+        PdfSettings: {
+            /** @description Passwords for encrypted PDFs (tried in order). */
+            passwords?: string[] | null;
+        };
         /**
          * @description Author-selected status for a `PhaseUpdate` control node. Serialized
          *     snake_case so it lands on the breadcrumb exactly as the executor
@@ -3232,6 +3527,90 @@ export interface components {
             x: number;
             /** Format: double */
             y: number;
+        };
+        /**
+         * @description Configuration for a single Postgres job.
+         *
+         *     Deserialised from `ExecutionSpec.config` at runtime by the executor;
+         *     validated against this shape at compile-time by the mekhan compiler.
+         *
+         *     See `docs/proposals/postgres-backend.md` (A1 spec § 2) for the full field
+         *     reference.
+         */
+        PostgresConfig: {
+            /**
+             * @description Ordered values bound to `$1`, `$2`, ...
+             *
+             *     Each entry is a JSON scalar (string / number / bool / null).
+             *     Arrays / objects are intentionally **not** supported by the initial
+             *     scope — they require explicit JSON-typed parameters and complicate the
+             *     type coercion path. A1 spec § 2 lists this as a follow-up.
+             */
+            params?: unknown[];
+            /**
+             * @description Which named connection pool to draw from. Resolved by the executor's
+             *     per-process `PostgresBackendsConfig.pools` map; when absent, the
+             *     `default_pool` from that map is used.
+             */
+            pool?: string | null;
+            /**
+             * @description Ordered list of column names expected in the result rows.
+             *
+             *     The backend verifies each column exists in the row description; an
+             *     unexpected or missing column is a `BackendError`.
+             */
+            projection: string[];
+            /**
+             * @description The parametrised SQL statement (use `$1`, `$2`, ... placeholders —
+             *     **never** string-interpolated values).
+             */
+            query: string;
+            /**
+             * @description Whether the transaction is read-only.
+             *
+             *     Initial scope hard-locks this to `true`; the backend rejects
+             *     `read_only = false` until an allow-list arrives in a later iteration.
+             */
+            read_only?: boolean;
+            /**
+             * Format: int64
+             * @description Maximum number of rows materialised.
+             *
+             *     If the query returns more, the backend fails closed.
+             */
+            row_limit?: number;
+            /**
+             * Format: int64
+             * @description Per-statement timeout in milliseconds (applied via
+             *     `SET LOCAL statement_timeout`).
+             *
+             *     Capped at the job-level `RunContext.timeout`.
+             */
+            statement_timeout_ms?: number;
+        };
+        ProbeConfig: {
+            include_statistics?: boolean;
+            path: string;
+            storage?: null | components["schemas"]["StorageConfig"];
+        };
+        /**
+         * @description Configuration for the process execution backend.
+         *
+         *     Spawns a local process with the given command and arguments.
+         */
+        ProcessConfig: {
+            /** @description Command-line arguments. */
+            args?: string[];
+            /** @description The command to run (e.g., "python3", "/usr/bin/train.sh"). */
+            command: string;
+            /** @description Environment variables to set. */
+            env?: {
+                [key: string]: string;
+            };
+            /** @description Whether to inherit the executor process's environment variables. */
+            inherit_env?: boolean;
+            /** @description Working directory. If None, inherits from the executor process. */
+            working_dir?: string | null;
         };
         ProcessDetail: components["schemas"]["HpiProcess"] & {
             /** Format: int64 */
@@ -3286,11 +3665,50 @@ export interface components {
             nodes: components["schemas"]["AncestryNode"][];
         };
         /**
+         * @description LLM provider selection. Wire format is lowercase (`"openai"`, `"anthropic"`,
+         *     `"ollama"`) to match how these vendors brand themselves and what the editor
+         *     emits. `open_ai` is accepted as a back-compat alias.
+         * @enum {string}
+         */
+        Provider: "openai" | "anthropic" | "ollama";
+        /**
          * @description Failure shape returned by the publication gate when one or more enabled
          *     tests block publish. Surfaces in the editor's `PublishGateModal`.
          */
         PublishGateBlockedResponse: {
             failing_tests: components["schemas"]["FailingTestInfo"][];
+        };
+        /**
+         * @description Image pull policy.
+         * @enum {string}
+         */
+        PullPolicy: "always" | "if_not_present" | "never";
+        /**
+         * @description Configuration for the Python execution backend.
+         *
+         *     The `script` field names the Python file to execute, relative to the inputs
+         *     directory. For inline code, use [`PythonConfig::inline_spec`] which stages
+         *     the code as a `Raw` input automatically.
+         */
+        PythonConfig: {
+            /** @description Additional environment variables. */
+            env?: {
+                [key: string]: string;
+            };
+            /** @description Whether to inherit the executor process's environment variables. */
+            inherit_env?: boolean;
+            /** @description Python command/binary to use (e.g., "python3", "python3.11"). */
+            python?: string;
+            /** @description Pip packages to install before execution. */
+            requirements?: string[];
+            /** @description Name of the Python script file in the inputs directory. */
+            script: string;
+            /** @description Whether to auto-install the aithericon SDK in the virtualenv. */
+            sdk?: boolean;
+            /** @description Whether to create an isolated virtualenv for this execution. */
+            virtualenv?: boolean;
+            /** @description Working directory (defaults to run_dir root). */
+            working_dir?: string | null;
         };
         /**
          * @description How a `POST /api/v1/triggers/{id}/fire` caller wants the response delivered.
@@ -3379,6 +3797,24 @@ export interface components {
             /** Format: date-time */
             updated_at: string;
         };
+        /** @description Resource limits for the container. */
+        ResourceLimits: {
+            /**
+             * Format: int64
+             * @description CPU quota in microseconds per cpu-period (100ms default period).
+             */
+            cpu_quota?: number | null;
+            /**
+             * Format: int64
+             * @description CPU shares (relative weight).
+             */
+            cpu_shares?: number | null;
+            /**
+             * Format: int64
+             * @description Memory limit in bytes.
+             */
+            memory_bytes?: number | null;
+        };
         /**
          * @description Compact list-row shape. Returned by `GET /api/v1/resources` — never carries
          *     per-version data (`public_config`, `vault_path`) so the list endpoint
@@ -3427,6 +3863,44 @@ export interface components {
             schema: unknown;
             secret_fields: string[];
         };
+        /** @description Response format constraint: `{"type":"text"}` or `{"type":"json_schema","schema":{...}}`. */
+        ResponseFormat: {
+            schema?: Record<string, never>;
+            type: string;
+        };
+        /**
+         * @description How to interpret the response body.
+         * @enum {string}
+         */
+        ResponseMode: "auto" | "json" | "text" | "discard";
+        /**
+         * @description Retry behaviour for transient storage errors (504, connection drops, etc.).
+         *
+         *     Wired into the OpenDAL `RetryLayer`, which only retries operations whose
+         *     errors return `is_temporary() == true` — non-transient failures (404,
+         *     403, etc.) are not retried.
+         *
+         *     Defaults are chosen to absorb a typical Hetzner / S3-compatible 504 burst
+         *     (~3 attempts spaced 200ms / 400ms+jitter / 800ms+jitter ≈ 2s total) without
+         *     blowing past a Slurm sbatch's wall-clock budget.
+         */
+        RetryConfig: {
+            /**
+             * Format: int32
+             * @description Maximum retry attempts (excluding the initial attempt). Default 3.
+             */
+            max_attempts?: number;
+            /**
+             * Format: int64
+             * @description Cap on backoff delay in milliseconds. Default 10_000 (10s).
+             */
+            max_delay_ms?: number;
+            /**
+             * Format: int64
+             * @description Initial backoff delay in milliseconds. Default 200.
+             */
+            min_delay_ms?: number;
+        };
         /**
          * @description Retry behaviour for an `AutomatedStep` whose execution fails or times out.
          *
@@ -3450,6 +3924,11 @@ export interface components {
              */
             maxRetries?: number;
         };
+        /**
+         * @description Message role.
+         * @enum {string}
+         */
+        Role: "system" | "user" | "assistant" | "tool";
         /**
          * @description Request body for `POST /api/v1/resources/{id}/rotate`. Always bumps
          *     version. The body carries the new config — the type cannot change at
@@ -3592,6 +4071,69 @@ export interface components {
             total_since_boot: number;
         };
         /**
+         * @description Configuration for the SMTP backend.
+         *
+         *     The backend receives this via `ExecutionSpec.config`. Recipient strings,
+         *     the subject line, the body sources, and the optional `from` override
+         *     are Tera templates rendered against a context built from staged input
+         *     files (`<slug>.json`) and the resolved `smtp` resource view.
+         *
+         *     The mekhan compiler **embeds the template source** directly in this
+         *     config (read from the per-node Yjs files at publish time). This keeps the
+         *     executor stateless about the editor's node-file storage and avoids a
+         *     second I/O path for template lookup. Attachments do go through the normal
+         *     `inputs[]` staging pipeline though — those are typically larger and
+         *     reference upstream-step outputs.
+         */
+        SmtpConfig: {
+            /**
+             * @description Attachments. Each entry references a staged input by `input_name`
+             *     (which the compiler synthesizes as `"_att_<idx>"`); `filename` is the
+             *     name the recipient sees and `mime` overrides the auto-detected type.
+             */
+            attachments?: components["schemas"]["AttachmentSpec"][];
+            /** @description Bcc addresses. */
+            bcc?: string[];
+            body_html?: null | components["schemas"]["TemplateSource"];
+            body_text?: null | components["schemas"]["TemplateSource"];
+            /** @description Cc addresses. */
+            cc?: string[];
+            /**
+             * @description When true, render templates + assemble MIME but do not connect to the
+             *     SMTP server. Outputs include the rendered subject/body for inspection.
+             */
+            dry_run?: boolean;
+            /**
+             * @description Optional From override. If absent, falls back to the SMTP resource's
+             *     `from_address` field. If both are absent, validation fails.
+             */
+            from?: string | null;
+            /**
+             * @description Resource alias inside the workflow — names the SMTP resource binding
+             *     the compiler stages as `<alias>.json` in the run directory. Required
+             *     for the backend to find transport credentials. Echoed here so the
+             *     Tera context can also expose the alias to templates that want it.
+             */
+            resource_alias?: string | null;
+            /** @description Subject template (Tera source). */
+            subject: components["schemas"]["TemplateSource"];
+            /**
+             * @description To addresses. Each entry is a Tera template; rendered values must
+             *     be RFC 5322 addresses. At least one recipient (To + Cc + Bcc combined)
+             *     is required.
+             */
+            to?: string[];
+            /**
+             * @description Optional extra string fields surfaced into the Tera context under
+             *     `vars.<key>`. Useful for static per-template constants (signing-off
+             *     name, support URL, …) the workflow author doesn't want to clutter
+             *     upstream node outputs with.
+             */
+            vars?: {
+                [key: string]: string;
+            };
+        };
+        /**
          * @description Git provenance recorded on a version published via `mekhan apply`.
          *     Serialized into the `workflow_templates.source_ref` JSONB column.
          */
@@ -3629,6 +4171,10 @@ export interface components {
             start_block_id: string;
             /** @description JSON object whose keys match the Start's `initial` port field names. */
             token: unknown;
+        };
+        StatConfig: {
+            path: string;
+            storage: components["schemas"]["StorageConfig"];
         };
         /**
          * @description Response shape for `GET /api/v1/instances/{id}/step-executions`.
@@ -3668,6 +4214,87 @@ export interface components {
             started_at?: string | null;
             /** @description `"pending" | "running" | "completed" | "failed" | "skipped"`. */
             status: string;
+        };
+        /**
+         * @description Which storage backend to use.
+         * @enum {string}
+         */
+        StorageBackend: "local" | "s3" | "gcs" | "azblob";
+        /**
+         * @description Configuration for a storage backend.
+         *
+         *     Used both at the executor level (global artifact store) and at the
+         *     per-input / per-output level for multi-backend staging.
+         *
+         *     # Environment variables (executor-level)
+         *
+         *     ```text
+         *     EXECUTOR_STORAGE_BACKEND=s3
+         *     EXECUTOR_STORAGE_ENDPOINT=https://s3.amazonaws.com
+         *     EXECUTOR_STORAGE_BUCKET=my-bucket
+         *     EXECUTOR_STORAGE_REGION=us-east-1
+         *     EXECUTOR_STORAGE_PREFIX=executor/
+         *     EXECUTOR_STORAGE_CREDENTIALS_ACCESS_KEY=AKIA...
+         *     EXECUTOR_STORAGE_CREDENTIALS_SECRET_KEY=wJa...
+         *     ```
+         *
+         *     # executor.toml
+         *
+         *     ```toml
+         *     [storage]
+         *     backend = "s3"
+         *     endpoint = "https://minio.internal:9000"
+         *     bucket = "artifacts"
+         *     region = "us-east-1"
+         *     prefix = "executor/"
+         *
+         *     [storage.credentials]
+         *     access_key = "minioadmin"
+         *     secret_key = "minioadmin"
+         *     ```
+         */
+        StorageConfig: {
+            /** @description Which backend to use. */
+            backend: components["schemas"]["StorageBackend"];
+            /** @description Bucket or container name (ignored for local). */
+            bucket?: string;
+            /** @description Credentials for the storage backend. */
+            credentials?: components["schemas"]["StorageCredentials"];
+            /** @description Endpoint URL. For S3: the S3 endpoint. For local: the root directory path. */
+            endpoint: string;
+            /** @description Path prefix within the bucket (e.g. "executor/"). */
+            prefix?: string;
+            /** @description Region (optional, for S3/GCS). */
+            region?: string | null;
+            /**
+             * @description Optional workspace resource binding (e.g. an `s3` resource). When
+             *     set, the executor's file-ops backend overlays `endpoint`, `region`,
+             *     `bucket`, and credentials from the resource envelope at run time —
+             *     per-step inline values still win on a field-by-field basis. Empty
+             *     or absent means "use the inline fields directly".
+             */
+            resource_alias?: string | null;
+            /**
+             * @description Retry behaviour for transient storage errors. Applied via OpenDAL's
+             *     `RetryLayer`, so only errors with `is_temporary() == true` are retried.
+             */
+            retry?: components["schemas"]["RetryConfig"];
+        };
+        /**
+         * @description Credentials for accessing a storage backend.
+         *
+         *     Loaded from environment variables (`EXECUTOR_STORAGE_CREDENTIALS_ACCESS_KEY`,
+         *     `EXECUTOR_STORAGE_CREDENTIALS_SECRET_KEY`) or from the `[storage.credentials]`
+         *     section in `executor.toml`.
+         *
+         *     Credential fields support `{{secret:KEY}}` patterns that are resolved
+         *     by the staging pipeline before use.
+         */
+        StorageCredentials: {
+            /** @description Access key (S3 access key ID, GCS HMAC key, Azure account name). */
+            access_key?: string;
+            /** @description Secret key (S3 secret access key, GCS HMAC secret, Azure account key). */
+            secret_key?: string;
         };
         TaskBlockConfig: {
             field: components["schemas"]["TaskFieldConfig"];
@@ -3866,6 +4493,17 @@ export interface components {
             graph: components["schemas"]["WorkflowGraph"];
         };
         /**
+         * @description One template source. Carries the source bytes inline plus a label used
+         *     for diagnostic messages ("error in subject.tera at line 3"). The label
+         *     is the original node-file name from the editor.
+         */
+        TemplateSource: {
+            /** @description Display name — typically the original node-file name (`subject.tera`). */
+            label: string;
+            /** @description Raw Tera template text. */
+            source: string;
+        };
+        /**
          * @description A test attached to a logical template family. `template_id` is the family
          *     root (the row's `id` when `base_template_id` is NULL, else the
          *     `base_template_id`), resolved by `handlers::template_tests::family_root`.
@@ -3962,6 +4600,16 @@ export interface components {
          * @enum {string}
          */
         ToolErrorPolicy: "feedback" | "bubble";
+        /**
+         * @description Tool schema declared by the agent compiler from a child node's input
+         *     port. Sent to the LLM provider in the request `tools` array.
+         */
+        ToolSchema: {
+            description: string;
+            /** @description JSON Schema object describing the tool's expected arguments. */
+            input_schema: unknown;
+            name: string;
+        };
         TriggerHistoryResponse: {
             history: components["schemas"]["FireResult"][];
         };

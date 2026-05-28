@@ -5921,6 +5921,32 @@
           }
         }
       },
+      "AnnotateConfig": {
+        "type": "object",
+        "required": [
+          "path",
+          "annotations",
+          "storage"
+        ],
+        "properties": {
+          "annotations": {
+            "type": "object",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "merge": {
+            "type": "boolean"
+          },
+          "path": {
+            "type": "string"
+          },
+          "storage": {
+            "$ref": "#/components/schemas/StorageConfig"
+          }
+        }
+      },
       "ApplyTemplateRequest": {
         "type": "object",
         "description": "Request body for `POST /api/v1/templates/{id}/apply` — the GitOps path.\nThe `graph` REPLACES the chain head wholesale (no CRDT merge); binary\nassets are uploaded out-of-band via the files endpoint before this call.",
@@ -6020,6 +6046,125 @@
           }
         }
       },
+      "AttachmentSpec": {
+        "type": "object",
+        "description": "One attachment. The compiler emits one of these per `attachments[]` entry\nin the workflow config and pairs it with a synthesized `inputs[]` entry\nthat materializes the file into the run's staged-inputs directory.",
+        "required": [
+          "filename",
+          "input_name"
+        ],
+        "properties": {
+          "filename": {
+            "type": "string",
+            "description": "Filename the recipient sees in the mail client."
+          },
+          "input_name": {
+            "type": "string",
+            "description": "Staged-input name where the bytes live (one of `RunContext.staged_inputs`)."
+          },
+          "mime": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional MIME override; otherwise inferred from `filename` extension."
+          }
+        }
+      },
+      "AuthConfig": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Bearer token: `Authorization: Bearer <token>`",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "token": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "token_env": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "bearer"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Basic auth: `Authorization: Basic base64(user:pass)`",
+            "required": [
+              "username",
+              "type"
+            ],
+            "properties": {
+              "password": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "password_env": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "basic"
+                ]
+              },
+              "username": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Custom header-based auth (e.g., `X-API-Key: <value>`)",
+            "required": [
+              "name",
+              "type"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "header"
+                ]
+              },
+              "value": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "value_env": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Authentication configuration."
+      },
       "BackendDescriptor": {
         "type": "object",
         "description": "Frontend-visible metadata for one backend. Returned by `GET /api/v1/backends`.\n\nThe Svelte component map (`backend-panels.ts`) stays hand-written — TS\ncan't import components dynamically from a JSON tag at runtime without\ndefeating Vite chunking — but every other per-backend constant\n(display name, icon, default config, default output fields, dispatch\nmode, resource channel) flows from here. This is what kills the\n`automated-ports.ts` ↔ `default_output_port()` drift hazard.",
@@ -6033,9 +6178,14 @@
           "resourceChannel",
           "schedulable",
           "consumesDeclaredOutputs",
-          "outputAuthoring"
+          "outputAuthoring",
+          "configSchema",
+          "secretFields"
         ],
         "properties": {
+          "configSchema": {
+            "description": "Self-contained JSON Schema for this backend's `spec.config` shape\n(`#/components/schemas/*` refs inlined). The SPA's generic\nschema-driven form renders simple panels off this. `null` for\nbackends with no executor config type."
+          },
           "consumesDeclaredOutputs": {
             "type": "boolean",
             "description": "Whether this backend's declared output port fields drive a Rhai\n`outputs:` constant (mostly informational for the frontend)."
@@ -6070,6 +6220,13 @@
           "schedulable": {
             "type": "boolean",
             "description": "Whether the editor should show the Scheduled deployment toggle."
+          },
+          "secretFields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "`config` field names that hold secrets (rendered masked by the\ngeneric form)."
           }
         }
       },
@@ -6308,6 +6465,33 @@
           }
         }
       },
+      "ChatMessage": {
+        "type": "object",
+        "description": "A single message in conversation history.\n\n`content` is a JSON value, not a bare string, because tool-result\nmessages (`role: tool`) carry the structured tool output directly; the\nadapters render it to the string each provider's wire format expects.\nText turns (system/user/assistant) carry a JSON string.",
+        "required": [
+          "role"
+        ],
+        "properties": {
+          "content": {},
+          "role": {
+            "$ref": "#/components/schemas/Role"
+          },
+          "tool_call_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For `role: tool` — the id of the assistant tool call this answers."
+          },
+          "tool_calls": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LlmToolCall"
+            },
+            "description": "For `role: assistant` — the tool calls the model emitted this turn."
+          }
+        }
+      },
       "CompileErrorView": {
         "type": "object",
         "description": "Structured payload of a compile error for the editor. Returned as part of\nthe publish API response so the frontend can highlight the offending\nnode/edge inline instead of just showing a flat error string.",
@@ -6382,6 +6566,14 @@
           "any"
         ]
       },
+      "Compression": {
+        "type": "string",
+        "description": "Compression algorithm for streaming copy/move transfers.",
+        "enum": [
+          "gzip",
+          "zstd"
+        ]
+      },
       "ConcurrencyPolicy": {
         "oneOf": [
           {
@@ -6442,6 +6634,55 @@
           "drop_oldest",
           "summarize_oldest"
         ]
+      },
+      "CopyConfig": {
+        "type": "object",
+        "required": [
+          "source",
+          "destination",
+          "source_storage"
+        ],
+        "properties": {
+          "compress": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Compression"
+              }
+            ]
+          },
+          "decompress": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Compression"
+              }
+            ]
+          },
+          "destination": {
+            "type": "string"
+          },
+          "destination_storage": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/StorageConfig"
+              }
+            ]
+          },
+          "source": {
+            "type": "string"
+          },
+          "source_storage": {
+            "$ref": "#/components/schemas/StorageConfig"
+          }
+        }
       },
       "CreateInstanceRequest": {
         "type": "object",
@@ -6816,6 +7057,24 @@
           }
         }
       },
+      "DeleteConfig": {
+        "type": "object",
+        "required": [
+          "path",
+          "storage"
+        ],
+        "properties": {
+          "ignore_missing": {
+            "type": "boolean"
+          },
+          "path": {
+            "type": "string"
+          },
+          "storage": {
+            "$ref": "#/components/schemas/StorageConfig"
+          }
+        }
+      },
       "DeploymentModel": {
         "oneOf": [
           {
@@ -6903,6 +7162,79 @@
           }
         ],
         "description": "Lowering mode — intrinsic to the backend, decided at the decl, NOT the\nstep. Orthogonal to `DeploymentModel` (Inline / Scheduled) which is a\nper-step author choice on any `ExecutorJob` backend."
+      },
+      "DockerConfig": {
+        "type": "object",
+        "description": "Configuration for the Docker execution backend.",
+        "required": [
+          "image"
+        ],
+        "properties": {
+          "command": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Command to run in the container (Docker CMD)."
+          },
+          "entrypoint": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Override the image entrypoint."
+          },
+          "env": {
+            "type": "object",
+            "description": "Environment variables to set in the container.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "extra_volumes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Additional volume mounts in \"host:container\" format."
+          },
+          "image": {
+            "type": "string",
+            "description": "Docker image to use (e.g., \"python:3.12-slim\", \"alpine:3.19\")."
+          },
+          "network_mode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Docker network mode (e.g., \"host\", \"bridge\", \"none\")."
+          },
+          "pull_policy": {
+            "$ref": "#/components/schemas/PullPolicy",
+            "description": "Image pull policy."
+          },
+          "remove_container": {
+            "type": "boolean",
+            "description": "Remove the container after execution (equivalent to --rm)."
+          },
+          "resource_limits": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ResourceLimits",
+                "description": "Optional resource limits for the container."
+              }
+            ]
+          }
+        }
       },
       "DownloadItemConfig": {
         "type": "object",
@@ -7131,6 +7463,13 @@
           }
         }
       },
+      "ExtractionMode": {
+        "type": "string",
+        "enum": [
+          "single",
+          "batch"
+        ]
+      },
       "FailingTestInfo": {
         "type": "object",
         "required": [
@@ -7190,6 +7529,158 @@
             "description": "Name of the target port field this mapping fills."
           }
         }
+      },
+      "FileOpsConfig": {
+        "oneOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ProbeConfig"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "operation"
+                ],
+                "properties": {
+                  "operation": {
+                    "type": "string",
+                    "enum": [
+                      "probe"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CopyConfig"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "operation"
+                ],
+                "properties": {
+                  "operation": {
+                    "type": "string",
+                    "enum": [
+                      "copy"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MoveConfig"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "operation"
+                ],
+                "properties": {
+                  "operation": {
+                    "type": "string",
+                    "enum": [
+                      "move"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/DeleteConfig"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "operation"
+                ],
+                "properties": {
+                  "operation": {
+                    "type": "string",
+                    "enum": [
+                      "delete"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AnnotateConfig"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "operation"
+                ],
+                "properties": {
+                  "operation": {
+                    "type": "string",
+                    "enum": [
+                      "annotate"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ListConfig"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "operation"
+                ],
+                "properties": {
+                  "operation": {
+                    "type": "string",
+                    "enum": [
+                      "list"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/StatConfig"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "operation"
+                ],
+                "properties": {
+                  "operation": {
+                    "type": "string",
+                    "enum": [
+                      "stat"
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        ],
+        "description": "Tagged enum of all file operations."
       },
       "FileUploadResponse": {
         "type": "object",
@@ -7669,6 +8160,109 @@
           }
         }
       },
+      "HttpConfig": {
+        "type": "object",
+        "description": "Configuration for the HTTP request backend.",
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "auth": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AuthConfig",
+                "description": "Authentication configuration."
+              }
+            ]
+          },
+          "body": {
+            "description": "Inline request body. Mutually exclusive with `body_from_input`."
+          },
+          "body_from_input": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Name of a staged input file whose contents become the request body."
+          },
+          "danger_accept_invalid_certs": {
+            "type": "boolean",
+            "description": "Accept invalid TLS certificates (for dev/self-signed servers)."
+          },
+          "expected_status_codes": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            },
+            "description": "Expected success status codes. Empty means 2xx = success."
+          },
+          "follow_redirects": {
+            "type": "boolean",
+            "description": "Whether to follow HTTP redirects (default: true)."
+          },
+          "headers": {
+            "type": "object",
+            "description": "Request headers. Template substitution supported in values.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "max_response_bytes": {
+            "type": "integer",
+            "description": "Maximum response body size in bytes (default: 1 MB).",
+            "minimum": 0
+          },
+          "method": {
+            "$ref": "#/components/schemas/HttpMethod",
+            "description": "HTTP method (default: GET)."
+          },
+          "output_mapping": {
+            "type": "object",
+            "description": "Maps declared output names to response field selectors.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "query": {
+            "type": "object",
+            "description": "URL query parameters. Template substitution supported in values.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "response_mode": {
+            "$ref": "#/components/schemas/ResponseMode",
+            "description": "How to interpret the response body."
+          },
+          "timeout_secs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Request-level timeout in seconds.",
+            "minimum": 0
+          },
+          "url": {
+            "type": "string",
+            "description": "Target URL. Supports `{{variable}}` template substitution."
+          }
+        }
+      },
       "HttpMethod": {
         "type": "string",
         "enum": [
@@ -7687,6 +8281,26 @@
           "grid",
           "gallery"
         ]
+      },
+      "ImageInput": {
+        "type": "object",
+        "description": "An image to include with the user prompt.",
+        "required": [
+          "path"
+        ],
+        "properties": {
+          "media_type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "MIME type. If absent, guessed from file extension."
+          },
+          "path": {
+            "type": "string",
+            "description": "Path to the image file (resolved from `{{input:NAME}}`)."
+          }
+        }
       },
       "InstanceConcurrencyPolicy": {
         "oneOf": [
@@ -7878,6 +8492,63 @@
           "any"
         ]
       },
+      "KreuzbergConfig": {
+        "type": "object",
+        "description": "Configuration for the Kreuzberg document extraction backend.",
+        "properties": {
+          "file": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For single mode: the staged input name containing the file to extract.\nDefaults to `\"file\"` or the sole staged input if there is exactly one."
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "For batch mode: list of input names to extract.\nIf empty, all staged inputs are used."
+          },
+          "force_ocr": {
+            "type": "boolean",
+            "description": "Force OCR even on text-based PDFs."
+          },
+          "mime_type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional MIME type override. When absent, kreuzberg auto-detects."
+          },
+          "mode": {
+            "$ref": "#/components/schemas/ExtractionMode",
+            "description": "Extraction mode: \"single\" (default) or \"batch\"."
+          },
+          "ocr": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/OcrSettings",
+                "description": "OCR configuration."
+              }
+            ]
+          },
+          "pdf": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PdfSettings",
+                "description": "PDF-specific options."
+              }
+            ]
+          }
+        }
+      },
       "LineageResponse": {
         "type": "object",
         "description": "Lineage response: artifacts grouped by iteration/step.",
@@ -7924,6 +8595,31 @@
           },
           "step": {
             "type": "string"
+          }
+        }
+      },
+      "ListConfig": {
+        "type": "object",
+        "required": [
+          "prefix",
+          "storage"
+        ],
+        "properties": {
+          "include_stat": {
+            "type": "boolean"
+          },
+          "limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "prefix": {
+            "type": "string"
+          },
+          "storage": {
+            "$ref": "#/components/schemas/StorageConfig"
           }
         }
       },
@@ -8082,6 +8778,131 @@
           "value": {
             "type": "number",
             "format": "double"
+          }
+        }
+      },
+      "LlmConfig": {
+        "type": "object",
+        "description": "Configuration for the LLM backend.",
+        "required": [
+          "provider",
+          "model",
+          "prompt"
+        ],
+        "properties": {
+          "api_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "API key. Falls back to provider-specific env var if absent."
+          },
+          "base_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Base URL override (proxy, Azure, etc.)."
+          },
+          "history": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChatMessage"
+            },
+            "description": "Prior conversation turns."
+          },
+          "images": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ImageInput"
+            },
+            "description": "Images to include with the user prompt.\nEach entry references a staged input file path (after `{{input:NAME}}` resolution)."
+          },
+          "max_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Maximum tokens to generate.",
+            "minimum": 0
+          },
+          "model": {
+            "type": "string",
+            "description": "Model identifier (e.g. \"gpt-4o\", \"claude-sonnet-4-20250514\")."
+          },
+          "pending": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChatMessage"
+            },
+            "description": "Turns produced since `history` was last persisted — for the agent\nloop, the tool result (or synthetic feedback) the engine accumulated\non the token between LLM calls. Appended after `history` when\nassembling the request; the off-token base (`history`) plus this\ndelta is what the worker persists as the next turn's cumulative\ntranscript blob. Empty for single-shot LLM steps."
+          },
+          "prompt": {
+            "type": "string",
+            "description": "The user prompt to send to the LLM."
+          },
+          "provider": {
+            "$ref": "#/components/schemas/Provider",
+            "description": "Which LLM provider to use."
+          },
+          "resource_alias": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional workspace resource name (e.g. `openai_prod`) the LLM step is\nbound to. When set, the compiler emits a ResourceEnvelope borrow that\nstages `<resource_alias>.json` into the run dir; the backend overlays\nthe resource's `api_key` / `base_url` / `organization` on top of any\nper-step values, so the step's authoring surface stays clean."
+          },
+          "response_format": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ResponseFormat",
+                "description": "Response format constraint. When set to `json_schema`, the provider\nwill use constrained decoding to guarantee valid JSON output."
+              }
+            ]
+          },
+          "system_prompt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "System prompt."
+          },
+          "temperature": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Sampling temperature."
+          },
+          "tools": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ToolSchema"
+            },
+            "description": "Tools the LLM may call. Populated by the agent compiler from\nchild node `tool_meta` + input ports; empty for single-shot LLM\n`AutomatedStep`s. Adapters that don't support tool calls (Ollama\ntoday) ignore this field gracefully."
+          }
+        }
+      },
+      "LlmToolCall": {
+        "type": "object",
+        "description": "A single tool invocation requested by an LLM in one turn.\n\nNormalized across Anthropic / OpenAI / Ollama adapter shapes. The\n`id` is provider-assigned and opaque to the platform; downstream\ntransitions match on `name` only.",
+        "required": [
+          "id",
+          "name",
+          "arguments"
+        ],
+        "properties": {
+          "arguments": {},
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
           }
         }
       },
@@ -8258,6 +9079,55 @@
           }
         }
       },
+      "MoveConfig": {
+        "type": "object",
+        "required": [
+          "source",
+          "destination",
+          "source_storage"
+        ],
+        "properties": {
+          "compress": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Compression"
+              }
+            ]
+          },
+          "decompress": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Compression"
+              }
+            ]
+          },
+          "destination": {
+            "type": "string"
+          },
+          "destination_storage": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/StorageConfig"
+              }
+            ]
+          },
+          "source": {
+            "type": "string"
+          },
+          "source_storage": {
+            "$ref": "#/components/schemas/StorageConfig"
+          }
+        }
+      },
       "MultipartFileUpload": {
         "type": "object",
         "description": "Multipart body wrapper for spec documentation. The runtime extractor is\n`axum::extract::Multipart`; this struct only exists so the spec shows the\nexpected field name and type.",
@@ -8373,6 +9243,23 @@
           "wireName": {
             "type": "string",
             "description": "Snake-case wire tag — matches the variant's serde rename."
+          }
+        }
+      },
+      "OcrSettings": {
+        "type": "object",
+        "properties": {
+          "backend": {
+            "type": "string",
+            "description": "OCR backend: \"tesseract\" (default) or \"paddle-ocr\"."
+          },
+          "enable_table_detection": {
+            "type": "boolean",
+            "description": "Enable table detection during OCR."
+          },
+          "language": {
+            "type": "string",
+            "description": "Language code (ISO 639-3). Default: \"eng\"."
           }
         }
       },
@@ -9090,6 +9977,21 @@
           }
         }
       },
+      "PdfSettings": {
+        "type": "object",
+        "properties": {
+          "passwords": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Passwords for encrypted PDFs (tried in order)."
+          }
+        }
+      },
       "PhaseUpdateStatus": {
         "type": "string",
         "description": "Author-selected status for a `PhaseUpdate` control node. Serialized\nsnake_case so it lands on the breadcrumb exactly as the executor\n`PhaseStatus` the causality consumer deserializes in `record_phase_event`\n(`aithericon_executor_domain::PhaseStatus`). `Pending` is intentionally\nomitted — an author explicitly marking a phase always means it is at least\nrunning.",
@@ -9183,6 +10085,121 @@
           "y": {
             "type": "number",
             "format": "double"
+          }
+        }
+      },
+      "PostgresConfig": {
+        "type": "object",
+        "description": "Configuration for a single Postgres job.\n\nDeserialised from `ExecutionSpec.config` at runtime by the executor;\nvalidated against this shape at compile-time by the mekhan compiler.\n\nSee `docs/proposals/postgres-backend.md` (A1 spec § 2) for the full field\nreference.",
+        "required": [
+          "query",
+          "projection"
+        ],
+        "properties": {
+          "params": {
+            "type": "array",
+            "items": {},
+            "description": "Ordered values bound to `$1`, `$2`, ...\n\nEach entry is a JSON scalar (string / number / bool / null).\nArrays / objects are intentionally **not** supported by the initial\nscope — they require explicit JSON-typed parameters and complicate the\ntype coercion path. A1 spec § 2 lists this as a follow-up."
+          },
+          "pool": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Which named connection pool to draw from. Resolved by the executor's\nper-process `PostgresBackendsConfig.pools` map; when absent, the\n`default_pool` from that map is used."
+          },
+          "projection": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Ordered list of column names expected in the result rows.\n\nThe backend verifies each column exists in the row description; an\nunexpected or missing column is a `BackendError`."
+          },
+          "query": {
+            "type": "string",
+            "description": "The parametrised SQL statement (use `$1`, `$2`, ... placeholders —\n**never** string-interpolated values)."
+          },
+          "read_only": {
+            "type": "boolean",
+            "description": "Whether the transaction is read-only.\n\nInitial scope hard-locks this to `true`; the backend rejects\n`read_only = false` until an allow-list arrives in a later iteration."
+          },
+          "row_limit": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Maximum number of rows materialised.\n\nIf the query returns more, the backend fails closed.",
+            "minimum": 0
+          },
+          "statement_timeout_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Per-statement timeout in milliseconds (applied via\n`SET LOCAL statement_timeout`).\n\nCapped at the job-level `RunContext.timeout`.",
+            "minimum": 0
+          }
+        }
+      },
+      "ProbeConfig": {
+        "type": "object",
+        "required": [
+          "path"
+        ],
+        "properties": {
+          "include_statistics": {
+            "type": "boolean"
+          },
+          "path": {
+            "type": "string"
+          },
+          "storage": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/StorageConfig",
+                "description": "Optional. When omitted (e.g. compiler-injected probes against the\nplatform's own object store), the executor falls back to its\nglobally-configured default storage — mirroring\n`InputSource::StoragePath { storage: Option<_> }`."
+              }
+            ]
+          }
+        }
+      },
+      "ProcessConfig": {
+        "type": "object",
+        "description": "Configuration for the process execution backend.\n\nSpawns a local process with the given command and arguments.",
+        "required": [
+          "command"
+        ],
+        "properties": {
+          "args": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Command-line arguments."
+          },
+          "command": {
+            "type": "string",
+            "description": "The command to run (e.g., \"python3\", \"/usr/bin/train.sh\")."
+          },
+          "env": {
+            "type": "object",
+            "description": "Environment variables to set.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "inherit_env": {
+            "type": "boolean",
+            "description": "Whether to inherit the executor process's environment variables."
+          },
+          "working_dir": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Working directory. If None, inherits from the executor process."
           }
         }
       },
@@ -9358,6 +10375,15 @@
           }
         }
       },
+      "Provider": {
+        "type": "string",
+        "description": "LLM provider selection. Wire format is lowercase (`\"openai\"`, `\"anthropic\"`,\n`\"ollama\"`) to match how these vendors brand themselves and what the editor\nemits. `open_ai` is accepted as a back-compat alias.",
+        "enum": [
+          "openai",
+          "anthropic",
+          "ollama"
+        ]
+      },
       "PublishGateBlockedResponse": {
         "type": "object",
         "description": "Failure shape returned by the publication gate when one or more enabled\ntests block publish. Surfaces in the editor's `PublishGateModal`.",
@@ -9370,6 +10396,68 @@
             "items": {
               "$ref": "#/components/schemas/FailingTestInfo"
             }
+          }
+        }
+      },
+      "PullPolicy": {
+        "type": "string",
+        "description": "Image pull policy.",
+        "enum": [
+          "always",
+          "if_not_present",
+          "never"
+        ]
+      },
+      "PythonConfig": {
+        "type": "object",
+        "description": "Configuration for the Python execution backend.\n\nThe `script` field names the Python file to execute, relative to the inputs\ndirectory. For inline code, use [`PythonConfig::inline_spec`] which stages\nthe code as a `Raw` input automatically.",
+        "required": [
+          "script"
+        ],
+        "properties": {
+          "env": {
+            "type": "object",
+            "description": "Additional environment variables.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "inherit_env": {
+            "type": "boolean",
+            "description": "Whether to inherit the executor process's environment variables."
+          },
+          "python": {
+            "type": "string",
+            "description": "Python command/binary to use (e.g., \"python3\", \"python3.11\")."
+          },
+          "requirements": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Pip packages to install before execution."
+          },
+          "script": {
+            "type": "string",
+            "description": "Name of the Python script file in the inputs directory."
+          },
+          "sdk": {
+            "type": "boolean",
+            "description": "Whether to auto-install the aithericon SDK in the virtualenv."
+          },
+          "virtualenv": {
+            "type": "boolean",
+            "description": "Whether to create an isolated virtualenv for this execution."
+          },
+          "working_dir": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Working directory (defaults to run_dir root)."
           }
         }
       },
@@ -9555,6 +10643,36 @@
           }
         }
       },
+      "ResourceLimits": {
+        "type": "object",
+        "description": "Resource limits for the container.",
+        "properties": {
+          "cpu_quota": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "CPU quota in microseconds per cpu-period (100ms default period)."
+          },
+          "cpu_shares": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "CPU shares (relative weight)."
+          },
+          "memory_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Memory limit in bytes."
+          }
+        }
+      },
       "ResourceSummary": {
         "type": "object",
         "description": "Compact list-row shape. Returned by `GET /api/v1/resources` — never carries\nper-version data (`public_config`, `vault_path`) so the list endpoint\nstays cheap to render.",
@@ -9653,6 +10771,55 @@
           }
         }
       },
+      "ResponseFormat": {
+        "type": "object",
+        "description": "Response format constraint: `{\"type\":\"text\"}` or `{\"type\":\"json_schema\",\"schema\":{...}}`.",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "schema": {
+            "type": "object"
+          },
+          "type": {
+            "type": "string"
+          }
+        }
+      },
+      "ResponseMode": {
+        "type": "string",
+        "description": "How to interpret the response body.",
+        "enum": [
+          "auto",
+          "json",
+          "text",
+          "discard"
+        ]
+      },
+      "RetryConfig": {
+        "type": "object",
+        "description": "Retry behaviour for transient storage errors (504, connection drops, etc.).\n\nWired into the OpenDAL `RetryLayer`, which only retries operations whose\nerrors return `is_temporary() == true` — non-transient failures (404,\n403, etc.) are not retried.\n\nDefaults are chosen to absorb a typical Hetzner / S3-compatible 504 burst\n(~3 attempts spaced 200ms / 400ms+jitter / 800ms+jitter ≈ 2s total) without\nblowing past a Slurm sbatch's wall-clock budget.",
+        "properties": {
+          "max_attempts": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Maximum retry attempts (excluding the initial attempt). Default 3.",
+            "minimum": 0
+          },
+          "max_delay_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Cap on backoff delay in milliseconds. Default 10_000 (10s).",
+            "minimum": 0
+          },
+          "min_delay_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Initial backoff delay in milliseconds. Default 200.",
+            "minimum": 0
+          }
+        }
+      },
       "RetryPolicy": {
         "type": "object",
         "description": "Retry behaviour for an `AutomatedStep` whose execution fails or times out.\n\nOn failure the compiler re-dispatches the job (a fresh executor submit)\nwhile `retries < max_retries`, optionally after a `backoff` delay, then\nroutes the exhausted token to the node's error output.",
@@ -9674,6 +10841,16 @@
             "minimum": 0
           }
         }
+      },
+      "Role": {
+        "type": "string",
+        "description": "Message role.",
+        "enum": [
+          "system",
+          "user",
+          "assistant",
+          "tool"
+        ]
       },
       "RotateResourceRequest": {
         "type": "object",
@@ -9918,6 +11095,97 @@
           }
         }
       },
+      "SmtpConfig": {
+        "type": "object",
+        "description": "Configuration for the SMTP backend.\n\nThe backend receives this via `ExecutionSpec.config`. Recipient strings,\nthe subject line, the body sources, and the optional `from` override\nare Tera templates rendered against a context built from staged input\nfiles (`<slug>.json`) and the resolved `smtp` resource view.\n\nThe mekhan compiler **embeds the template source** directly in this\nconfig (read from the per-node Yjs files at publish time). This keeps the\nexecutor stateless about the editor's node-file storage and avoids a\nsecond I/O path for template lookup. Attachments do go through the normal\n`inputs[]` staging pipeline though — those are typically larger and\nreference upstream-step outputs.",
+        "required": [
+          "subject"
+        ],
+        "properties": {
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AttachmentSpec"
+            },
+            "description": "Attachments. Each entry references a staged input by `input_name`\n(which the compiler synthesizes as `\"_att_<idx>\"`); `filename` is the\nname the recipient sees and `mime` overrides the auto-detected type."
+          },
+          "bcc": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Bcc addresses."
+          },
+          "body_html": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TemplateSource",
+                "description": "HTML body template (Tera source). When both `body_text` and\n`body_html` are set, the message is sent multipart/alternative."
+              }
+            ]
+          },
+          "body_text": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TemplateSource",
+                "description": "Plain-text body template (Tera source). Optional but at least one of\n`body_text` / `body_html` must be set."
+              }
+            ]
+          },
+          "cc": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Cc addresses."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "description": "When true, render templates + assemble MIME but do not connect to the\nSMTP server. Outputs include the rendered subject/body for inspection."
+          },
+          "from": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional From override. If absent, falls back to the SMTP resource's\n`from_address` field. If both are absent, validation fails."
+          },
+          "resource_alias": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Resource alias inside the workflow — names the SMTP resource binding\nthe compiler stages as `<alias>.json` in the run directory. Required\nfor the backend to find transport credentials. Echoed here so the\nTera context can also expose the alias to templates that want it."
+          },
+          "subject": {
+            "$ref": "#/components/schemas/TemplateSource",
+            "description": "Subject template (Tera source)."
+          },
+          "to": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "To addresses. Each entry is a Tera template; rendered values must\nbe RFC 5322 addresses. At least one recipient (To + Cc + Bcc combined)\nis required."
+          },
+          "vars": {
+            "type": "object",
+            "description": "Optional extra string fields surfaced into the Tera context under\n`vars.<key>`. Useful for static per-template constants (signing-off\nname, support URL, …) the workflow author doesn't want to clutter\nupstream node outputs with.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "SourceRef": {
         "type": "object",
         "description": "Git provenance recorded on a version published via `mekhan apply`.\nSerialized into the `workflow_templates.source_ref` JSONB column.",
@@ -9977,6 +11245,21 @@
           },
           "token": {
             "description": "JSON object whose keys match the Start's `initial` port field names."
+          }
+        }
+      },
+      "StatConfig": {
+        "type": "object",
+        "required": [
+          "path",
+          "storage"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "storage": {
+            "$ref": "#/components/schemas/StorageConfig"
           }
         }
       },
@@ -10040,6 +11323,78 @@
           "status": {
             "type": "string",
             "description": "`\"pending\" | \"running\" | \"completed\" | \"failed\" | \"skipped\"`."
+          }
+        }
+      },
+      "StorageBackend": {
+        "type": "string",
+        "description": "Which storage backend to use.",
+        "enum": [
+          "local",
+          "s3",
+          "gcs",
+          "azblob"
+        ]
+      },
+      "StorageConfig": {
+        "type": "object",
+        "description": "Configuration for a storage backend.\n\nUsed both at the executor level (global artifact store) and at the\nper-input / per-output level for multi-backend staging.\n\n# Environment variables (executor-level)\n\n```text\nEXECUTOR_STORAGE_BACKEND=s3\nEXECUTOR_STORAGE_ENDPOINT=https://s3.amazonaws.com\nEXECUTOR_STORAGE_BUCKET=my-bucket\nEXECUTOR_STORAGE_REGION=us-east-1\nEXECUTOR_STORAGE_PREFIX=executor/\nEXECUTOR_STORAGE_CREDENTIALS_ACCESS_KEY=AKIA...\nEXECUTOR_STORAGE_CREDENTIALS_SECRET_KEY=wJa...\n```\n\n# executor.toml\n\n```toml\n[storage]\nbackend = \"s3\"\nendpoint = \"https://minio.internal:9000\"\nbucket = \"artifacts\"\nregion = \"us-east-1\"\nprefix = \"executor/\"\n\n[storage.credentials]\naccess_key = \"minioadmin\"\nsecret_key = \"minioadmin\"\n```",
+        "required": [
+          "backend",
+          "endpoint"
+        ],
+        "properties": {
+          "backend": {
+            "$ref": "#/components/schemas/StorageBackend",
+            "description": "Which backend to use."
+          },
+          "bucket": {
+            "type": "string",
+            "description": "Bucket or container name (ignored for local)."
+          },
+          "credentials": {
+            "$ref": "#/components/schemas/StorageCredentials",
+            "description": "Credentials for the storage backend."
+          },
+          "endpoint": {
+            "type": "string",
+            "description": "Endpoint URL. For S3: the S3 endpoint. For local: the root directory path."
+          },
+          "prefix": {
+            "type": "string",
+            "description": "Path prefix within the bucket (e.g. \"executor/\")."
+          },
+          "region": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Region (optional, for S3/GCS)."
+          },
+          "resource_alias": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional workspace resource binding (e.g. an `s3` resource). When\nset, the executor's file-ops backend overlays `endpoint`, `region`,\n`bucket`, and credentials from the resource envelope at run time —\nper-step inline values still win on a field-by-field basis. Empty\nor absent means \"use the inline fields directly\"."
+          },
+          "retry": {
+            "$ref": "#/components/schemas/RetryConfig",
+            "description": "Retry behaviour for transient storage errors. Applied via OpenDAL's\n`RetryLayer`, so only errors with `is_temporary() == true` are retried."
+          }
+        }
+      },
+      "StorageCredentials": {
+        "type": "object",
+        "description": "Credentials for accessing a storage backend.\n\nLoaded from environment variables (`EXECUTOR_STORAGE_CREDENTIALS_ACCESS_KEY`,\n`EXECUTOR_STORAGE_CREDENTIALS_SECRET_KEY`) or from the `[storage.credentials]`\nsection in `executor.toml`.\n\nCredential fields support `{{secret:KEY}}` patterns that are resolved\nby the staging pipeline before use.",
+        "properties": {
+          "access_key": {
+            "type": "string",
+            "description": "Access key (S3 access key ID, GCS HMAC key, Azure account name)."
+          },
+          "secret_key": {
+            "type": "string",
+            "description": "Secret key (S3 secret access key, GCS HMAC secret, Azure account key)."
           }
         }
       },
@@ -10527,6 +11882,24 @@
           }
         }
       },
+      "TemplateSource": {
+        "type": "object",
+        "description": "One template source. Carries the source bytes inline plus a label used\nfor diagnostic messages (\"error in subject.tera at line 3\"). The label\nis the original node-file name from the editor.",
+        "required": [
+          "label",
+          "source"
+        ],
+        "properties": {
+          "label": {
+            "type": "string",
+            "description": "Display name — typically the original node-file name (`subject.tera`)."
+          },
+          "source": {
+            "type": "string",
+            "description": "Raw Tera template text."
+          }
+        }
+      },
       "TemplateTest": {
         "type": "object",
         "description": "A test attached to a logical template family. `template_id` is the family\nroot (the row's `id` when `base_template_id` is NULL, else the\n`base_template_id`), resolved by `handlers::template_tests::family_root`.",
@@ -10737,6 +12110,26 @@
           "feedback",
           "bubble"
         ]
+      },
+      "ToolSchema": {
+        "type": "object",
+        "description": "Tool schema declared by the agent compiler from a child node's input\nport. Sent to the LLM provider in the request `tools` array.",
+        "required": [
+          "name",
+          "description",
+          "input_schema"
+        ],
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "input_schema": {
+            "description": "JSON Schema object describing the tool's expected arguments."
+          },
+          "name": {
+            "type": "string"
+          }
+        }
       },
       "TriggerHistoryResponse": {
         "type": "object",

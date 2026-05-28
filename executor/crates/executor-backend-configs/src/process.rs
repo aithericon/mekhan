@@ -9,6 +9,7 @@ use aithericon_executor_domain::{
 ///
 /// Spawns a local process with the given command and arguments.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 pub struct ProcessConfig {
     /// The command to run (e.g., "python3", "/usr/bin/train.sh").
     pub command: String,

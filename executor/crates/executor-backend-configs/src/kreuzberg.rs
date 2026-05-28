@@ -13,6 +13,7 @@ use aithericon_executor_domain::ExecutorError;
 
 /// Configuration for the Kreuzberg document extraction backend.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 pub struct KreuzbergConfig {
     /// Extraction mode: "single" (default) or "batch".
     #[serde(default)]
@@ -46,6 +47,7 @@ pub struct KreuzbergConfig {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum ExtractionMode {
     #[default]
@@ -54,6 +56,7 @@ pub enum ExtractionMode {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 pub struct OcrSettings {
     /// OCR backend: "tesseract" (default) or "paddle-ocr".
     #[serde(default = "default_tesseract")]
@@ -69,6 +72,7 @@ pub struct OcrSettings {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 pub struct PdfSettings {
     /// Passwords for encrypted PDFs (tried in order).
     #[serde(default, skip_serializing_if = "Option::is_none")]

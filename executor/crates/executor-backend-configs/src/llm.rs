@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 /// `"ollama"`) to match how these vendors brand themselves and what the editor
 /// emits. `open_ai` is accepted as a back-compat alias.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum Provider {
     #[serde(alias = "open_ai")]
@@ -23,6 +24,7 @@ pub enum Provider {
 
 /// Message role.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum Role {
     System,
@@ -99,6 +101,36 @@ impl<'de> Deserialize<'de> for ResponseFormat {
     }
 }
 
+// `ResponseFormat` carries hand-rolled Serialize/Deserialize (tagged
+// `{"type": ...}` object), so it can't derive `ToSchema`. Provide the schema
+// by hand: an object with a required string `type` plus an optional `schema`
+// object (present only for the `json_schema` variant).
+#[cfg(feature = "schema")]
+impl utoipa::PartialSchema for ResponseFormat {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        use utoipa::openapi::schema::{ObjectBuilder, SchemaType, Type};
+        ObjectBuilder::new()
+            .schema_type(SchemaType::Type(Type::Object))
+            .description(Some(
+                "Response format constraint: `{\"type\":\"text\"}` or \
+                 `{\"type\":\"json_schema\",\"schema\":{...}}`.",
+            ))
+            .property(
+                "type",
+                ObjectBuilder::new().schema_type(SchemaType::Type(Type::String)),
+            )
+            .required("type")
+            .property(
+                "schema",
+                ObjectBuilder::new().schema_type(SchemaType::Type(Type::Object)),
+            )
+            .into()
+    }
+}
+
+#[cfg(feature = "schema")]
+impl utoipa::ToSchema for ResponseFormat {}
+
 /// A single message in conversation history.
 ///
 /// `content` is a JSON value, not a bare string, because tool-result
@@ -106,6 +138,7 @@ impl<'de> Deserialize<'de> for ResponseFormat {
 /// adapters render it to the string each provider's wire format expects.
 /// Text turns (system/user/assistant) carry a JSON string.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 pub struct ChatMessage {
     pub role: Role,
     #[serde(default)]
@@ -120,6 +153,7 @@ pub struct ChatMessage {
 
 /// An image to include with the user prompt.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 pub struct ImageInput {
     /// Path to the image file (resolved from `{{input:NAME}}`).
     pub path: String,
@@ -130,6 +164,7 @@ pub struct ImageInput {
 
 /// Configuration for the LLM backend.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 pub struct LlmConfig {
     /// Which LLM provider to use.
     pub provider: Provider,

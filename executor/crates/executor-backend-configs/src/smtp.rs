@@ -17,6 +17,7 @@ use aithericon_executor_domain::{ExecutionSpec, ExecutorError, InputDeclaration,
 /// `inputs[]` staging pipeline though — those are typically larger and
 /// reference upstream-step outputs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 pub struct SmtpConfig {
     /// To addresses. Each entry is a Tera template; rendered values must
     /// be RFC 5322 addresses. At least one recipient (To + Cc + Bcc combined)
@@ -80,6 +81,7 @@ pub struct SmtpConfig {
 /// for diagnostic messages ("error in subject.tera at line 3"). The label
 /// is the original node-file name from the editor.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 pub struct TemplateSource {
     /// Display name — typically the original node-file name (`subject.tera`).
     pub label: String,
@@ -100,6 +102,7 @@ impl TemplateSource {
 /// in the workflow config and pairs it with a synthesized `inputs[]` entry
 /// that materializes the file into the run's staged-inputs directory.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 pub struct AttachmentSpec {
     /// Filename the recipient sees in the mail client.
     pub filename: String,

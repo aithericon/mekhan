@@ -8,7 +8,7 @@ repository.workspace = true
 homepage.workspace = true
 
 [features]
-schema = ["dep:schemars", "aithericon-executor-storage-types/schema"]
+schema = ["dep:schemars", "dep:utoipa", "aithericon-executor-storage-types/schema"]
 
 [dependencies]
 aithericon-executor-storage-types = { workspace = true }
@@ -18,3 +18,4 @@ thiserror = { workspace = true }
 chrono = { workspace = true }
 humantime-serde = { workspace = true }
 schemars = { workspace = true, optional = true }
+utoipa = { workspace = true, optional = true }

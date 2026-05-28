@@ -7,6 +7,7 @@ use aithericon_executor_domain::{
 
 /// Configuration for the Docker execution backend.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 pub struct DockerConfig {
     /// Docker image to use (e.g., "python:3.12-slim", "alpine:3.19").
     pub image: String,
@@ -50,6 +51,7 @@ fn default_true() -> bool {
 
 /// Image pull policy.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum PullPolicy {
     Always,
@@ -60,6 +62,7 @@ pub enum PullPolicy {
 
 /// Resource limits for the container.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 pub struct ResourceLimits {
     /// Memory limit in bytes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
