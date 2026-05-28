@@ -56,6 +56,7 @@ use mekhan_service::causality::live::LiveBroadcasts;
 use mekhan_service::demos;
 use mekhan_service::lifecycle::start_lifecycle_listener;
 use mekhan_service::nats::MekhanNats;
+use mekhan_service::projections::step_executions::start_step_executions_ingest;
 
 fn engine_url() -> String {
     std::env::var("TEST_ENGINE_URL").unwrap_or_else(|_| "http://localhost:3030".to_string())
@@ -99,6 +100,7 @@ async fn cleanup_durables(nats: &MekhanNats) {
     for (stream_name, base) in [
         ("PETRI_GLOBAL", "mekhan-causality-ingest"),
         ("PETRI_GLOBAL", "mekhan-lifecycle"),
+        ("PETRI_GLOBAL", "mekhan-step-executions"),
     ] {
         if let Ok(stream) = nats.jetstream().get_stream(stream_name).await {
             let _ = stream
@@ -115,7 +117,10 @@ impl Drop for TaskHandle {
     }
 }
 
-async fn spawn_consumers(nats: MekhanNats, db: sqlx::PgPool) -> (TaskHandle, TaskHandle) {
+async fn spawn_consumers(
+    nats: MekhanNats,
+    db: sqlx::PgPool,
+) -> (TaskHandle, TaskHandle, TaskHandle) {
     let kv = nats
         .ensure_catalogue_subscriptions_kv()
         .await
@@ -144,8 +149,24 @@ async fn spawn_consumers(nats: MekhanNats, db: sqlx::PgPool) -> (TaskHandle, Tas
         .await;
     });
 
+    // Step-executions projector: materializes one `step_execution` row per
+    // (instance, node, iteration) from the engine event log. The
+    // Python-tool-contract test reads the `lookup_order` row to prove the
+    // tool actually ran (vs. failing with an AttributeError when the LLM
+    // emits the wrong arg key). `main.rs` spawns this in prod; tests must
+    // spawn it explicitly like the causality/lifecycle consumers above.
+    let s_nats = nats.clone();
+    let s_db = db.clone();
+    let step_exec = tokio::spawn(async move {
+        start_step_executions_ingest(s_nats, s_db).await;
+    });
+
     tokio::time::sleep(Duration::from_millis(200)).await;
-    (TaskHandle(causality.abort_handle()), TaskHandle(lifecycle.abort_handle()))
+    (
+        TaskHandle(causality.abort_handle()),
+        TaskHandle(lifecycle.abort_handle()),
+        TaskHandle(step_exec.abort_handle()),
+    )
 }
 
 fn demo_dir() -> std::path::PathBuf {
@@ -177,6 +198,126 @@ async fn wait_for_terminal_status(
             panic!("instance {id} did not reach terminal state within {timeout:?} (last: {st})");
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+}
+
+/// Load the shipped demo, POST a uniquely-named copy, publish it (compiles
+/// the agent-loop AIR + stages the Python `lookup_order` source to S3), and
+/// fire an instance with `customer_message`. Returns the new instance id.
+/// Shared by both live tests so the heavyweight create→publish→fire dance
+/// stays in one place; each test still drives its own instance (and so its
+/// own LLM round-trips) under its per-test consumer prefix.
+async fn publish_and_fire(app: &axum::Router, customer_message: &str) -> Uuid {
+    let demo = demos::load_demo(&demo_dir()).expect("load demos/09-agent-tool-loop");
+    assert_eq!(demo.metadata.name, "09 · Agent + Tool Loop");
+
+    let unique_name = format!("Agent Loop E2E {}", Uuid::new_v4().simple());
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/templates")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": unique_name,
+                        "graph": demo.graph,
+                        "files": demo.files,
+                        "author_id": Uuid::new_v4(),
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED, "create template");
+    let template_id: Uuid = body_json(resp.into_body()).await["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/templates/{template_id}/publish"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    let pub_body = body_json(resp.into_body()).await;
+    assert_eq!(status, StatusCode::OK, "publish: {pub_body}");
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/instances")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "template_id": template_id,
+                        "start_tokens": [{
+                            "start_block_id": "start",
+                            "token": { "customer_message": customer_message }
+                        }],
+                        "metadata": { "e2e": "agent_tool_loop" }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let s = resp.status();
+    let inst = body_json(resp.into_body()).await;
+    assert_eq!(s, StatusCode::CREATED, "create instance: {inst}");
+    inst["id"].as_str().unwrap().parse().unwrap()
+}
+
+/// Poll `step_execution` until the `lookup_order` Python tool node has at
+/// least one row, returning all its rows (one per loop iteration the LLM
+/// dispatched it). The step-executions projector is an async NATS consumer,
+/// so the row can lag the instance reaching `completed` by a few hundred ms
+/// — poll rather than read once. Panics on timeout so a missing projection
+/// (consumer not spawned, attribution regression) is caught loudly.
+async fn wait_for_step_execution(
+    db: &sqlx::PgPool,
+    instance_id: Uuid,
+    node_id: &str,
+    timeout: Duration,
+) -> Vec<(String, Option<Value>, Option<Value>)> {
+    let start = std::time::Instant::now();
+    loop {
+        let rows: Vec<(String, Option<Value>, Option<Value>)> = sqlx::query_as(
+            "SELECT status, outputs, error FROM step_execution \
+             WHERE instance_id = $1 AND node_id = $2 \
+             ORDER BY iteration_index",
+        )
+        .bind(instance_id)
+        .bind(node_id)
+        .fetch_all(db)
+        .await
+        .unwrap();
+        if !rows.is_empty() {
+            return rows;
+        }
+        if start.elapsed() > timeout {
+            panic!(
+                "no step_execution row for node '{node_id}' on instance \
+                 {instance_id} within {timeout:?} — the step-executions \
+                 projector saw no events attributed to that node (was the \
+                 tool ever dispatched? is the projector spawned?)"
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
     }
 }
 
@@ -212,96 +353,15 @@ async fn agent_tool_loop_demo_completes_with_tool_call() {
         .expect("nats")
         .with_consumer_prefix(prefix);
     let cleanup_nats = nats.clone();
-    let (_causality, _lifecycle) = spawn_consumers(nats, db.clone()).await;
+    let (_causality, _lifecycle, _step_exec) = spawn_consumers(nats, db.clone()).await;
 
-    // Load the demo from disk — same fixture the runtime seeder
-    // publishes at service startup. Drift between the shipped demo
-    // and the platform contract surfaces here as a publish failure or
-    // a `failed` instance, never on the user's first click.
-    let demo = demos::load_demo(&demo_dir()).expect("load demos/09-agent-tool-loop");
-    assert_eq!(demo.metadata.name, "09 · Agent + Tool Loop");
-
-    // POST a uniquely-named copy so the seeded singleton template
-    // (00000000-…-019) isn't disturbed and successive runs don't
-    // collide on the name index.
-    let unique_name = format!("Agent Loop E2E {}", Uuid::new_v4().simple());
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/v1/templates")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    json!({
-                        "name": unique_name,
-                        "graph": demo.graph,
-                        "files": demo.files,
-                        "author_id": Uuid::new_v4(),
-                    })
-                    .to_string(),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::CREATED, "create template");
-    let template_id: Uuid = body_json(resp.into_body()).await["id"]
-        .as_str()
-        .unwrap()
-        .parse()
-        .unwrap();
-
-    // Publish: compiles the agent loop AIR (parked state, dispatch/
-    // collect per tool, route guards). Stages the Python `lookup_order`
-    // source to S3 in the process.
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri(format!("/api/v1/templates/{template_id}/publish"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let status = resp.status();
-    let pub_body = body_json(resp.into_body()).await;
-    assert_eq!(status, StatusCode::OK, "publish: {pub_body}");
-
-    // Fire with a customer message naming a known order id. The Triage
-    // Agent's system prompt instructs the LLM to call lookup_order when
-    // it sees an order id — this is the signal that drives the loop into
-    // its tool-dispatch path.
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/v1/instances")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    json!({
-                        "template_id": template_id,
-                        "start_tokens": [{
-                            "start_block_id": "start",
-                            "token": {
-                                "customer_message": "Hi, where is my order ORD-42?"
-                            }
-                        }],
-                        "metadata": { "e2e": "agent_tool_loop" }
-                    })
-                    .to_string(),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let s = resp.status();
-    let inst = body_json(resp.into_body()).await;
-    assert_eq!(s, StatusCode::CREATED, "create instance: {inst}");
-    let instance_id: Uuid = inst["id"].as_str().unwrap().parse().unwrap();
+    // Create→publish→fire the shipped demo (drift between the disk
+    // fixture and the platform contract surfaces here as a publish
+    // failure or a `failed` instance, never on the user's first click).
+    // The customer message names a known order id; the Triage Agent's
+    // system prompt instructs the LLM to call lookup_order when it sees
+    // one — the signal that drives the loop into its tool-dispatch path.
+    let instance_id = publish_and_fire(&app, "Hi, where is my order ORD-42?").await;
 
     // Timeout budget: a 9B 4-bit model on M-series Apple Silicon
     // produces ~30-60 tokens/sec. Two LLM round-trips + one Python
@@ -370,6 +430,132 @@ async fn agent_tool_loop_demo_completes_with_tool_call() {
         !reply.trim().is_empty(),
         "agent reply was empty — final response did not propagate through \
          the End node's `agent.response` resultMapping. Result: {result}"
+    );
+
+    cleanup_durables(&cleanup_nats).await;
+}
+
+/// Python-tool-contract proof: the deterministic-on-the-Python-side
+/// companion to the loop test above.
+///
+/// The agent's `tools` handle targets a *Python* AutomatedStep
+/// (`lookup_order`). The compiler derives that tool's LLM-facing
+/// `input_schema` from the node's declared input port (`{ order_id:
+/// string }`) — `agent_loop_e2e::tool_input_schema_reflects_declared_input_port`
+/// pins that derivation offline. This test pins the *other half* of the
+/// contract, which only a live run can prove: that the LLM-emitted args
+/// actually reach the Python tool body and are readable as
+/// `input.<field>`.
+///
+/// The chain under test:
+///   schema (order_id) → LLM tool_call args {order_id: …}
+///     → t_agent_invoke_lookup_order deposits args at the child input
+///       → Python runner stages them as `input.json`, exposes `input.order_id`
+///         → user code `oid = input.order_id` (demos/09-…/nodes/lookup_order/main.py)
+///           → declared outputs (`status`, `eta`) swept from globals
+///
+/// The deterministic signal is the `lookup_order` row in `step_execution`:
+///   - `status = 'completed'` proves the Python body ran to exit WITHOUT an
+///     `AttributeError: '_AccessibleDict' object has no attribute 'order_id'`
+///     — i.e. the LLM used the schema-declared key and the runner promoted
+///     it. A wrong key (schema-derivation regression) would surface the
+///     AttributeError → `EffectFailed` → `status = 'failed'`, caught here.
+///   - `outputs.status` present proves the declared output port was swept
+///     and projected — the tool produced its contract, not just exited 0.
+///
+/// This holds regardless of *which* order id the LLM passes (ORD-42 →
+/// "In transit", an unknown id → "Unknown order id"): both are successful
+/// Python executions that read `input.order_id`. So the assertion is
+/// deterministic on the Python side even though the LLM is not — it pins
+/// the wiring + runner contract, not the model's choice of argument.
+#[tokio::test]
+async fn python_tool_reads_llm_args_as_input_field() {
+    if !engine_available().await {
+        panic!(
+            "engine not available at {} — start the stack with `just dev::up`",
+            engine_url()
+        );
+    }
+    if !ollama_available().await {
+        panic!(
+            "ollama not available at {} — start it with `just dev::up-ollama` \
+             (tool-capable model must be pulled; check `.dev/log/ollama.log`)",
+            ollama_url()
+        );
+    }
+
+    let nats_url = engine_nats_url();
+    let (app, db) = common::test_app_with_petri_url(&nats_url, &engine_url()).await;
+    let prefix = format!("test_{}", Uuid::new_v4().simple());
+    let nats = MekhanNats::connect(&nats_url, None)
+        .await
+        .expect("nats")
+        .with_consumer_prefix(prefix);
+    let cleanup_nats = nats.clone();
+    let (_causality, _lifecycle, _step_exec) = spawn_consumers(nats, db.clone()).await;
+
+    let instance_id = publish_and_fire(&app, "Hi, where is my order ORD-42?").await;
+
+    let terminal = wait_for_terminal_status(&db, instance_id, Duration::from_secs(300)).await;
+    assert_eq!(
+        terminal, "completed",
+        "instance ended `{terminal}` — the agent loop did not round-trip; \
+         the Python tool contract can't be evaluated. Check ollama + executor \
+         logs (.dev/log/{{ollama,executor}}.log)"
+    );
+
+    // The projector is an async consumer; allow it to catch up past the
+    // instance reaching `completed`.
+    let rows = wait_for_step_execution(
+        &db,
+        instance_id,
+        "lookup_order",
+        Duration::from_secs(30),
+    )
+    .await;
+
+    eprintln!("\n--- lookup_order step_execution rows ---\n{rows:#?}\n---\n");
+
+    // No iteration of the tool may have failed — an AttributeError from a
+    // mis-keyed arg (the failure mode this whole test exists to catch)
+    // surfaces as `EffectFailed` → status 'failed' with the Python
+    // traceback in `error`.
+    if let Some((_, _, error)) = rows.iter().find(|(st, _, _)| st == "failed") {
+        panic!(
+            "lookup_order tool ran but FAILED — the LLM-emitted args did not \
+             match the Python body's `input.<field>` reads. This is the \
+             `AttributeError: '_AccessibleDict' object has no attribute \
+             'order_id'` failure mode: either the derived tool input_schema \
+             drifted from the declared input port, or the runner stopped \
+             promoting `input.json` keys. error: {error:?}"
+        );
+    }
+
+    // At least one iteration must have completed, proving the args reached
+    // the Python body, `input.order_id` was readable, and the run exited 0.
+    let completed = rows.iter().find(|(st, _, _)| st == "completed");
+    let (_, outputs, _) = completed.unwrap_or_else(|| {
+        panic!(
+            "lookup_order has step_execution rows but none `completed` \
+             (statuses: {:?}) — the Python tool was dispatched but never \
+             finished cleanly; the `input.<field>` contract is unproven",
+            rows.iter().map(|(s, _, _)| s.as_str()).collect::<Vec<_>>()
+        )
+    });
+
+    // The declared `status` output must be present in the projected
+    // envelope — proves the Python runner swept the declared output port
+    // from globals (the tail end of the tool contract), not merely that
+    // the process exited 0.
+    let outputs = outputs
+        .as_ref()
+        .expect("completed lookup_order row must carry its parked output envelope");
+    let status_out = outputs.get("status").and_then(Value::as_str);
+    assert!(
+        status_out.is_some_and(|s| !s.trim().is_empty()),
+        "lookup_order completed but its `status` output is missing/empty — \
+         the Python body read `input.order_id` but the declared output sweep \
+         didn't project `status`. outputs: {outputs}"
     );
 
     cleanup_durables(&cleanup_nats).await;
