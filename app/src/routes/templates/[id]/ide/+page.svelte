@@ -10,6 +10,7 @@
 	import HumanTaskFormEditor from '$lib/components/ide/HumanTaskFormEditor.svelte';
 	import LlmStepIdeEditor from '$lib/components/ide/LlmStepIdeEditor.svelte';
 	import CreateInstanceDialog from '$lib/components/instances/CreateInstanceDialog.svelte';
+	import CopyButton from '$lib/components/ui/copy-button/CopyButton.svelte';
 	import { getSession, releaseSession } from '$lib/yjs/session-store';
 	import { YjsGraphBinding } from '$lib/yjs/graph-binding.svelte';
 	import {
@@ -319,9 +320,10 @@
 	/>
 
 	{#if error}
-		<div class="border-b border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">
-			{error}
-			<button type="button" class="ml-2 underline" onclick={() => (error = null)}>dismiss</button>
+		<div class="flex items-center gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">
+			<span class="flex-1">{error}</span>
+			<CopyButton text={error} title="Copy error" class="text-amber-700 hover:text-amber-900" />
+			<button type="button" class="underline" onclick={() => (error = null)}>dismiss</button>
 		</div>
 	{/if}
 

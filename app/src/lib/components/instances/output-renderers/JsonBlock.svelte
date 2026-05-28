@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Dialog } from 'bits-ui';
 	import { Button } from '$lib/components/ui/button';
+	import CopyButton from '$lib/components/ui/copy-button/CopyButton.svelte';
 	import Maximize2 from '@lucide/svelte/icons/maximize-2';
 	import X from '@lucide/svelte/icons/x';
 	import CodeEditor from '$lib/components/editor/panels/shared/CodeEditor.svelte';
@@ -31,16 +32,23 @@
 		minHeight="80px"
 		maxHeight="320px"
 	/>
-	<Button
-		variant="ghost"
-		size="icon"
-		class="absolute right-1.5 top-1.5 size-7 bg-card/80 backdrop-blur-sm hover:bg-card"
-		onclick={() => (maximized = true)}
-		title="Maximize"
-		aria-label="Maximize JSON view"
-	>
-		<Maximize2 class="size-3.5" />
-	</Button>
+	<div class="absolute right-1.5 top-1.5 flex items-center gap-1">
+		<CopyButton
+			text={text}
+			title="Copy JSON"
+			class="size-7 justify-center bg-card/80 backdrop-blur-sm hover:bg-card"
+		/>
+		<Button
+			variant="ghost"
+			size="icon"
+			class="size-7 bg-card/80 backdrop-blur-sm hover:bg-card"
+			onclick={() => (maximized = true)}
+			title="Maximize"
+			aria-label="Maximize JSON view"
+		>
+			<Maximize2 class="size-3.5" />
+		</Button>
+	</div>
 </div>
 
 <Dialog.Root bind:open={maximized}>
@@ -58,6 +66,7 @@
 				<Dialog.Description class="sr-only">
 					Full-screen JSON viewer with syntax highlighting.
 				</Dialog.Description>
+				<CopyButton text={text} title="Copy JSON" />
 				<Dialog.Close>
 					<Button variant="ghost" size="icon" aria-label="Close">
 						<X class="size-4" />

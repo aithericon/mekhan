@@ -4,6 +4,7 @@
 	import { Input } from '$lib/components/ui/input';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Checkbox } from '$lib/components/ui/checkbox';
+	import CopyButton from '$lib/components/ui/copy-button/CopyButton.svelte';
 	import ScrollText from '@lucide/svelte/icons/scroll-text';
 	import ChevronRight from '@lucide/svelte/icons/chevron-right';
 	import type { LogTailRow } from '$lib/api/client';
@@ -136,6 +137,28 @@
 		return out;
 	});
 
+	// Flatten the currently-visible (filtered + folded) log rows into a plain
+	// text dump for pasting into an AI chat. Computed lazily at click time;
+	// includes timestamp, level, source, message, the ×N repeat counter, and any
+	// structured detail so the paste carries the same context the UI shows.
+	function logsAsText(): string {
+		return folded
+			.map((log) => {
+				const parts = [
+					formatTimestamp(log.timestamp),
+					log.level.toUpperCase(),
+					log.source ? `[${log.source}]` : null,
+					log.message,
+					log.repeat > 1 ? `(×${log.repeat})` : null
+				].filter(Boolean);
+				let line = parts.join(' ');
+				const extra = rest(log);
+				if (extra) line += `\n  ${JSON.stringify(extra)}`;
+				return line;
+			})
+			.join('\n');
+	}
+
 	// Auto-scroll to bottom as new logs arrive, if follow-tail is on.
 	$effect(() => {
 		const _ = folded.length;
@@ -187,6 +210,15 @@
 			<Checkbox bind:checked={followTail} />
 			Follow tail
 		</label>
+
+		{#if folded.length > 0}
+			<CopyButton
+				getText={logsAsText}
+				label="Copy logs"
+				title={`Copy ${folded.length} visible log row${folded.length === 1 ? '' : 's'} as text`}
+				class="ml-auto"
+			/>
+		{/if}
 	</div>
 
 	<!-- Filters row -->
@@ -286,6 +318,9 @@
 	{/if}
 
 	{#if store.error}
-		<p class="text-sm text-red-500">{store.error}</p>
+		<p class="flex items-center gap-1.5 text-sm text-red-500">
+			<span>{store.error}</span>
+			<CopyButton text={store.error} title="Copy error" class="text-red-500/70 hover:text-red-500" />
+		</p>
 	{/if}
 </div>
