@@ -10,6 +10,31 @@ use aithericon_executor_domain::{
 };
 use aithericon_executor_storage::{ArtifactStore, StoragePath};
 
+/// Deserialize a resolved storage config from the `PlanSecretsHook`
+/// side-channel, if present.
+///
+/// `resolved` is the per-input/output JSON from `ctx.resolved_*_storage`;
+/// `None` means no secrets needed resolving and the caller should fall back to
+/// the raw `spec` view. `kind`/`name` only shape the error message (e.g.
+/// `("input", "data")`). Shared by `StageInputsHook` and the output-upload
+/// sweep so the deser + error wording stays in one place.
+#[cfg(feature = "opendal")]
+pub(crate) fn deserialize_resolved_storage(
+    resolved: Option<&serde_json::Value>,
+    kind: &str,
+    name: &str,
+) -> Result<Option<aithericon_executor_storage::StorageConfig>, ExecutorError> {
+    match resolved {
+        Some(json) => Some(serde_json::from_value(json.clone()).map_err(|e| {
+            ExecutorError::StagingFailed(format!(
+                "deserialize resolved storage config for {kind} '{name}': {e}"
+            ))
+        }))
+        .transpose(),
+        None => Ok(None),
+    }
+}
+
 /// A hook in the staging pipeline, called in order before backend.prepare().
 #[async_trait]
 pub trait StagingHook: Send + Sync + 'static {
@@ -381,22 +406,11 @@ impl StagingHook for StageInputsHook {
                             // still carries `{{secret:KEY}}` templates so we
                             // can't authenticate to the storage backend with
                             // the raw spec view when secrets are involved.
-                            let resolved_owned: Option<
-                                aithericon_executor_storage::StorageConfig,
-                            > = if let Some(resolved_json) =
-                                ctx.resolved_input_storage.get(&input.name)
-                            {
-                                Some(serde_json::from_value(resolved_json.clone()).map_err(
-                                    |e| {
-                                        ExecutorError::StagingFailed(format!(
-                                            "deserialize resolved storage config for input '{}': {e}",
-                                            input.name
-                                        ))
-                                    },
-                                )?)
-                            } else {
-                                None
-                            };
+                            let resolved_owned = deserialize_resolved_storage(
+                                ctx.resolved_input_storage.get(&input.name),
+                                "input",
+                                &input.name,
+                            )?;
                             let effective_config = resolved_owned.as_ref().unwrap_or(config);
 
                             let final_name = name_with_extension(&input.name, path);
