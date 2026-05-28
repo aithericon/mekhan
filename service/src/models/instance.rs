@@ -33,6 +33,26 @@ pub struct WorkflowInstance {
     /// instance whose event log seeded the test's fixture. Audit-only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_instance_id: Option<Uuid>,
+    /// SubWorkflow hierarchy: the instance that ran the SubWorkflow node whose
+    /// `spawn_net` effect created this child net. NULL for top-level
+    /// instances. See migration `20240130000000`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_instance_id: Option<Uuid>,
+    /// The SubWorkflow `WorkflowNode.id` in the parent graph that spawned this
+    /// child (the spawn transition is `t_{parent_node_id}_spawn`). NULL for
+    /// top-level instances.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_node_id: Option<String>,
+    /// Top-of-tree instance id (the parent's root, or the parent itself), so a
+    /// whole sub-workflow tree is reachable in one query. NULL for top-level
+    /// instances.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub root_instance_id: Option<Uuid>,
+    /// Parent net's spawn-event sequence; orders sibling children when a
+    /// Loop/Map spawns the same SubWorkflow node multiple times (one child per
+    /// iteration). NULL for top-level instances.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spawn_seq: Option<i64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]

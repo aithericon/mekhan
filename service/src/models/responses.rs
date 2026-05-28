@@ -5,6 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
+use uuid::Uuid;
 
 use crate::catalogue::model::CatalogueEntry;
 use crate::handlers::process_live::LogRow;
@@ -91,4 +92,33 @@ pub struct StepExecutionResponse {
     pub duration_ms: Option<i64>,
     /// `EffectFailed` payload (error_message, retryable, ...) for failed steps.
     pub error: Option<serde_json::Value>,
+}
+
+/// One spawned sub-workflow child run of a parent instance, returned by
+/// `GET /api/v1/instances/{id}/children`. A SubWorkflow node runs its child as
+/// a separate engine net; the causality ingest registers each spawn as a
+/// first-class child `workflow_instances` row (see migration
+/// `20240130000000`). A SubWorkflow inside a Loop/Map spawns one child per
+/// iteration, so multiple rows can share `parent_node_id` — ordered by
+/// `spawn_seq` (the spawn order, i.e. iteration order).
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct InstanceChild {
+    /// The child instance id (open `/instances/{id}` to drill in).
+    pub id: Uuid,
+    /// The SubWorkflow `WorkflowNode.id` in the parent graph that spawned this
+    /// child. Group children by this to attach them to a node on the canvas.
+    pub parent_node_id: Option<String>,
+    /// Parent net's spawn-event sequence; orders sibling children of the same
+    /// node (one per Loop/Map iteration).
+    pub spawn_seq: Option<i64>,
+    /// The child's resolved template id + version (its own graph to render).
+    pub template_id: Uuid,
+    pub template_version: i32,
+    /// Child template display name (JOINed from `workflow_templates`).
+    pub template_name: String,
+    /// `"created" | "running" | "completed" | "failed" | "cancelled"`.
+    pub status: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub started_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub completed_at: Option<chrono::DateTime<chrono::Utc>>,
 }

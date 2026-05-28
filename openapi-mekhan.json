@@ -1112,6 +1112,63 @@
         }
       }
     },
+    "/api/v1/instances/{id}/children": {
+      "get": {
+        "tags": [
+          "instances"
+        ],
+        "summary": "GET /api/v1/instances/:id/children",
+        "description": "Lists the sub-workflow child instances this instance spawned. A SubWorkflow\nnode runs its child as a separate engine net; the causality ingest\nregisters each spawn as a first-class child `workflow_instances` row\n(parent_instance_id = this instance). A SubWorkflow inside a Loop/Map spawns\none child per iteration, so multiple rows can share `parent_node_id` —\nordered by `spawn_seq` (spawn/iteration order). The instance graph view\ngroups these by `parent_node_id` to offer an \"Enter sub-workflow\" drill-in\non each SubWorkflow node.",
+        "operationId": "list_instance_children",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Parent instance id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sub-workflow child instances spawned by this instance",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/InstanceChild"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Instance not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/instances/{id}/events": {
       "get": {
         "tags": [
@@ -8498,6 +8555,75 @@
           }
         }
       },
+      "InstanceChild": {
+        "type": "object",
+        "description": "One spawned sub-workflow child run of a parent instance, returned by\n`GET /api/v1/instances/{id}/children`. A SubWorkflow node runs its child as\na separate engine net; the causality ingest registers each spawn as a\nfirst-class child `workflow_instances` row (see migration\n`20240130000000`). A SubWorkflow inside a Loop/Map spawns one child per\niteration, so multiple rows can share `parent_node_id` — ordered by\n`spawn_seq` (the spawn order, i.e. iteration order).",
+        "required": [
+          "id",
+          "template_id",
+          "template_version",
+          "template_name",
+          "status",
+          "created_at"
+        ],
+        "properties": {
+          "completed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The child instance id (open `/instances/{id}` to drill in)."
+          },
+          "parent_node_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The SubWorkflow `WorkflowNode.id` in the parent graph that spawned this\nchild. Group children by this to attach them to a node on the canvas."
+          },
+          "spawn_seq": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Parent net's spawn-event sequence; orders sibling children of the same\nnode (one per Loop/Map iteration)."
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string",
+            "description": "`\"created\" | \"running\" | \"completed\" | \"failed\" | \"cancelled\"`."
+          },
+          "template_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The child's resolved template id + version (its own graph to render)."
+          },
+          "template_name": {
+            "type": "string",
+            "description": "Child template display name (JOINed from `workflow_templates`)."
+          },
+          "template_version": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
       "InstanceConcurrencyPolicy": {
         "oneOf": [
           {
@@ -13107,8 +13233,31 @@
           "net_id": {
             "type": "string"
           },
+          "parent_instance_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "SubWorkflow hierarchy: the instance that ran the SubWorkflow node whose\n`spawn_net` effect created this child net. NULL for top-level\ninstances. See migration `20240130000000`."
+          },
+          "parent_node_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The SubWorkflow `WorkflowNode.id` in the parent graph that spawned this\nchild (the spawn transition is `t_{parent_node_id}_spawn`). NULL for\ntop-level instances."
+          },
           "result": {
             "description": "Structured result envelope (`{ ok: true, value }` /\n`{ ok: false, error: { reason, value } }`) declared by the workflow's\nEnd/Failure result binding. NULL until the instance reaches a terminal\nstate, and stays NULL for workflows with no result binding."
+          },
+          "root_instance_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Top-of-tree instance id (the parent's root, or the parent itself), so a\nwhole sub-workflow tree is reachable in one query. NULL for top-level\ninstances."
           },
           "source_instance_id": {
             "type": [
@@ -13117,6 +13266,14 @@
             ],
             "format": "uuid",
             "description": "Set when a test was promoted from this instance — points back at the\ninstance whose event log seeded the test's fixture. Audit-only."
+          },
+          "spawn_seq": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Parent net's spawn-event sequence; orders sibling children when a\nLoop/Map spawns the same SubWorkflow node multiple times (one child per\niteration). NULL for top-level instances."
           },
           "started_at": {
             "type": [
