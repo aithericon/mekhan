@@ -7,6 +7,11 @@
 
 set dotenv-load := true
 
+# Shared cargo recipes (build/check/fmt/lint/test/test-crate/clean).
+# engine's `build` historically targets only the core-engine binary crate.
+cargo_scope := "-p core-engine"
+import '../just/cargo.just'
+
 mod infra 'just/infra.just'
 mod demo 'just/demo.just'
 
@@ -17,10 +22,6 @@ default:
 # ============================================
 # Engine Commands
 # ============================================
-
-# Build the engine
-build:
-    cargo build -p core-engine
 
 # Run the engine
 run: (infra::nats-up)
@@ -41,14 +42,6 @@ trace-exporter-debug: (infra::nats-up)
 # ============================================
 # Testing
 # ============================================
-
-# Run all unit tests
-test:
-    cargo test --workspace
-
-# Run unit tests for a specific crate
-test-crate crate:
-    cargo test -p {{crate}}
 
 # Run NATS integration tests (shell-based end-to-end test)
 test-nats: (infra::nats-up)
@@ -217,22 +210,6 @@ test-integration: (infra::nats-up) test-nats-rust test-nats
 # ============================================
 # Development Utilities
 # ============================================
-
-# Check all code compiles
-check:
-    cargo check --workspace
-
-# Format all code
-fmt:
-    cargo fmt --all
-
-# Run clippy lints
-lint:
-    cargo clippy --workspace -- -D warnings
-
-# Clean build artifacts
-clean:
-    cargo clean
 
 # Clean everything including Docker
 clean-all: (infra::nats-down) (infra::nats-cleanup) clean
