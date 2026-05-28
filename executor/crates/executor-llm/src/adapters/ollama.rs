@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::ollama_subprocess::OllamaSubprocess;
 use crate::port::{
-    CompletionPort, CompletionRequest, CompletionResponse, LlmError, ResponseFormat, Role,
+    CompletionPort, CompletionRequest, CompletionResponse, LlmError, Message, ResponseFormat, Role,
 };
 
 /// HTTP-only adapter against an Ollama HTTP endpoint.
@@ -93,6 +93,25 @@ struct OllamaMessage {
     content: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     images: Option<Vec<String>>,
+    /// Assistant tool calls (Ollama `/api/chat` request shape:
+    /// `{function:{name, arguments}}`, arguments as a JSON object).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_calls: Option<Vec<OllamaReqToolCall>>,
+    /// `role: "tool"` result — the name of the tool that produced it.
+    /// Ollama matches results to calls by order; `tool_name` is advisory.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_name: Option<String>,
+}
+
+#[derive(Serialize)]
+struct OllamaReqToolCall {
+    function: OllamaReqToolCallFn,
+}
+
+#[derive(Serialize)]
+struct OllamaReqToolCallFn {
+    name: String,
+    arguments: serde_json::Value,
 }
 
 #[derive(Serialize)]
@@ -151,6 +170,7 @@ fn role_str(role: &Role) -> &'static str {
         Role::System => "system",
         Role::User => "user",
         Role::Assistant => "assistant",
+        Role::Tool => "tool",
     }
 }
 
@@ -164,12 +184,11 @@ fn parse_done_reason(reason: Option<&str>) -> LlmStopReason {
     }
 }
 
-async fn ollama_complete(
-    request: &CompletionRequest,
-    base_url: &str,
-) -> Result<CompletionResponse, LlmError> {
-    let messages: Vec<OllamaMessage> = request
-        .messages
+/// Map provider-agnostic messages to Ollama's `/api/chat` shape. Assistant
+/// turns carry `tool_calls` (arguments as a JSON object, unlike OpenAI's
+/// stringified form); `Role::Tool` results become `role: "tool"` messages.
+fn build_ollama_messages(messages: &[Message]) -> Vec<OllamaMessage> {
+    messages
         .iter()
         .map(|m| {
             let images = if m.images.is_empty() {
@@ -177,13 +196,39 @@ async fn ollama_complete(
             } else {
                 Some(m.images.iter().map(|img| img.base64.clone()).collect())
             };
+            let tool_calls = if m.tool_calls.is_empty() {
+                None
+            } else {
+                Some(
+                    m.tool_calls
+                        .iter()
+                        .map(|tc| OllamaReqToolCall {
+                            function: OllamaReqToolCallFn {
+                                name: tc.name.clone(),
+                                // Ollama takes arguments as a JSON object (not
+                                // a string like OpenAI) — pass through verbatim.
+                                arguments: tc.arguments.clone(),
+                            },
+                        })
+                        .collect(),
+                )
+            };
             OllamaMessage {
                 role: role_str(&m.role).to_string(),
                 content: m.content.clone(),
                 images,
+                tool_calls,
+                tool_name: None,
             }
         })
-        .collect();
+        .collect()
+}
+
+async fn ollama_complete(
+    request: &CompletionRequest,
+    base_url: &str,
+) -> Result<CompletionResponse, LlmError> {
+    let messages = build_ollama_messages(&request.messages);
 
     let format = match &request.response_format {
         ResponseFormat::JsonSchema { schema } => Some(schema),
@@ -445,6 +490,53 @@ mod tests {
         };
         assert_eq!(stop, LlmStopReason::ToolUse);
         assert_eq!(tcs[0].id, "ollama_tc_0");
+    }
+
+    #[test]
+    fn tool_turns_map_to_ollama_message_shape() {
+        use aithericon_executor_domain::LlmToolCall;
+        let messages = vec![
+            Message::text(Role::User, "where is ORD-42?".into()),
+            Message {
+                role: Role::Assistant,
+                content: String::new(),
+                images: vec![],
+                tool_call_id: None,
+                tool_calls: vec![LlmToolCall {
+                    id: "call_1".into(),
+                    name: "lookup_order".into(),
+                    arguments: json!({"order_id": "ORD-42"}),
+                }],
+            },
+            Message {
+                role: Role::Tool,
+                content: "{\"status\":\"In transit\"}".into(),
+                images: vec![],
+                tool_call_id: Some("call_1".into()),
+                tool_calls: vec![],
+            },
+        ];
+        let wire = serde_json::to_value(build_ollama_messages(&messages)).unwrap();
+        let msgs = wire.as_array().unwrap();
+        assert_eq!(msgs.len(), 3);
+
+        let assistant = &msgs[1];
+        assert_eq!(assistant["role"], "assistant");
+        // Ollama takes arguments as a JSON OBJECT, not a string.
+        assert_eq!(
+            assistant["tool_calls"][0]["function"]["name"],
+            "lookup_order"
+        );
+        assert_eq!(
+            assistant["tool_calls"][0]["function"]["arguments"]["order_id"],
+            "ORD-42"
+        );
+
+        let tool = &msgs[2];
+        assert_eq!(tool["role"], "tool");
+        assert_eq!(tool["content"], "{\"status\":\"In transit\"}");
+        // Plain user/text turns carry no tool_calls field.
+        assert!(msgs[0].get("tool_calls").is_none() || msgs[0]["tool_calls"].is_null());
     }
 
     #[test]

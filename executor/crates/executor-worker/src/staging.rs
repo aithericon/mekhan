@@ -247,6 +247,10 @@ impl StagingHook for FetchConfigHook {
         // up; deleted right after read so it never bleeds into artifacts.
         let blob_path = ctx.run_dir.root.join("__node_config.json");
         let storage_path = StoragePath(config_ref.storage_path.clone());
+        // Clone the overlay before the mutable borrow of `ctx.spec.config`
+        // below. Shallow-merged after the fetch so per-job, turn-varying
+        // fields (the agent loop's `history`) win over the static blob.
+        let overlay = config_ref.overlay.clone();
         self.store
             .download(&storage_path, &blob_path)
             .await
@@ -278,7 +282,23 @@ impl StagingHook for FetchConfigHook {
             "fetched static node config",
         );
         ctx.spec.config = resolved;
+        merge_config_overlay(&mut ctx.spec.config, overlay);
         Ok(ctx)
+    }
+}
+
+/// Shallow-merge a per-job overlay onto a fetched static config: top-level
+/// overlay keys replace the config's. Only object-on-object merges; any
+/// other shape (or `None`) is a no-op. The agent loop uses this to ship
+/// the turn-varying `history` inline while the large static config (system
+/// prompt, tool schemas) stays in object storage.
+fn merge_config_overlay(config: &mut serde_json::Value, overlay: Option<serde_json::Value>) {
+    if let Some(serde_json::Value::Object(over)) = overlay {
+        if let serde_json::Value::Object(base) = config {
+            for (k, v) in over {
+                base.insert(k, v);
+            }
+        }
     }
 }
 
@@ -859,6 +879,25 @@ mod tests {
             staged_events: vec![],
             backend_state: serde_json::Value::Null,
         }
+    }
+
+    #[test]
+    fn merge_config_overlay_replaces_top_level_keys() {
+        use serde_json::json;
+        // Overlay's `history` replaces the empty static one; other keys stay.
+        let mut cfg = json!({"model": "x", "history": [], "system_prompt": "s"});
+        merge_config_overlay(
+            &mut cfg,
+            Some(json!({"history": [{"role": "user", "content": "hi"}]})),
+        );
+        assert_eq!(cfg["history"].as_array().unwrap().len(), 1);
+        assert_eq!(cfg["model"], "x", "non-overlaid keys untouched");
+        assert_eq!(cfg["system_prompt"], "s");
+
+        // None overlay is a no-op.
+        let mut cfg2 = json!({"a": 1});
+        merge_config_overlay(&mut cfg2, None);
+        assert_eq!(cfg2["a"], 1);
     }
 
     #[tokio::test]

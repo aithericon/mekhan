@@ -356,6 +356,63 @@ fn route_dispatch_guard_bakes_in_max_turns() {
     );
 }
 
+/// Conversation memory (consume-mutate-produce): each turn `prepare_call`
+/// ships the accumulated `s.history` inline as a `config_ref` overlay,
+/// `route_dispatch` records the assistant `tool_calls` turn + stashes the
+/// pending call id, and `collect` emits a `role: "tool"` result keyed by
+/// that id (OpenAI tool-call protocol). Without this the model never sees
+/// the tool result and re-calls the tool every turn until max_turns.
+#[test]
+fn agent_threads_history_overlay_and_tool_call_id() {
+    let air = compile(
+        vec![
+            start_node("s"),
+            agent_node("a"),
+            tool_child("lookup_node", "a", "lookup"),
+            end_node("e"),
+        ],
+        vec![
+            edge("e1", "s", "a"),
+            edge("e2", "a", "e"),
+            tools_edge("et_lookup", "a", "lookup_node"),
+        ],
+    );
+    let logic_of = |id: &str| -> String {
+        air.get("transitions")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .find(|t| t.get("id").and_then(Value::as_str) == Some(id))
+            .unwrap_or_else(|| panic!("transition {id} present"))
+            .get("logic")
+            .and_then(|l| l.get("source"))
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| panic!("{id} has Rhai logic"))
+            .to_string()
+    };
+
+    let prepare = logic_of("t_a_prepare_call");
+    assert!(
+        prepare.contains("overlay") && prepare.contains("s.history"),
+        "prepare_call must overlay s.history onto config_ref so the LLM sees \
+         prior turns; got: {prepare}"
+    );
+
+    let dispatch = logic_of("t_a_route_dispatch_lookup");
+    assert!(
+        dispatch.contains("tool_calls:") && dispatch.contains("pending_tool_call_id"),
+        "dispatch must push an assistant tool_calls turn + stash the call id; \
+         got: {dispatch}"
+    );
+
+    let collect = logic_of("t_a_collect_lookup");
+    assert!(
+        collect.contains(r#"role: "tool""#)
+            && collect.contains("tool_call_id: s.pending_tool_call_id"),
+        "collect must emit a role:tool result carrying the tool_call_id; got: {collect}"
+    );
+}
+
 /// `stop_when` author-Rhai is baked into every route guard (final +
 /// dispatch + unknown) so any turn that satisfies the condition routes
 /// to final.

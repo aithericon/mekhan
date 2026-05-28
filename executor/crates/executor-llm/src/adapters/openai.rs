@@ -119,7 +119,32 @@ struct OpenAiFunctionDecl<'a> {
 #[derive(Serialize)]
 struct OpenAiMessage {
     role: String,
-    content: OpenAiContent,
+    /// Omitted for assistant turns that are pure tool calls (OpenAI allows
+    /// a null/absent content when `tool_calls` is present).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    content: Option<OpenAiContent>,
+    /// Assistant tool calls (one per tool the model invoked this turn).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_calls: Option<Vec<OpenAiReqToolCall>>,
+    /// `role: "tool"` result — the id of the assistant call it answers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_call_id: Option<String>,
+}
+
+/// Assistant-side tool call in the OpenAI request shape. `arguments` is a
+/// JSON-encoded STRING (OpenAI's contract), unlike the `serde_json::Value`
+/// the platform carries internally.
+#[derive(Serialize)]
+struct OpenAiReqToolCall {
+    id: String,
+    r#type: &'static str,
+    function: OpenAiReqToolCallFn,
+}
+
+#[derive(Serialize)]
+struct OpenAiReqToolCallFn {
+    name: String,
+    arguments: String,
 }
 
 /// Text-only messages serialize as a plain string; messages with images use
@@ -214,6 +239,7 @@ fn role_str(role: &Role) -> &'static str {
         Role::System => "system",
         Role::User => "user",
         Role::Assistant => "assistant",
+        Role::Tool => "tool",
     }
 }
 
@@ -406,18 +432,43 @@ fn build_request_body<'a>(
                 serde_json::to_string_pretty(schema).unwrap_or_else(|_| schema.to_string());
             messages.push(OpenAiMessage {
                 role: "system".into(),
-                content: OpenAiContent::Text(format!(
+                content: Some(OpenAiContent::Text(format!(
                     "Reply with a single JSON value that conforms to this JSON schema:\n\
                      {schema_pretty}\n\n\
                      Output JSON only — no prose, no markdown fences.",
-                )),
+                ))),
+                tool_calls: None,
+                tool_call_id: None,
             });
         }
     }
 
     messages.extend(request.messages.iter().map(|m| {
-        let content = if m.images.is_empty() {
-            OpenAiContent::Text(m.content.clone())
+        let tool_calls = if m.tool_calls.is_empty() {
+            None
+        } else {
+            Some(
+                m.tool_calls
+                    .iter()
+                    .map(|tc| OpenAiReqToolCall {
+                        id: tc.id.clone(),
+                        r#type: "function",
+                        function: OpenAiReqToolCallFn {
+                            name: tc.name.clone(),
+                            // OpenAI wants the arguments as a JSON-encoded string.
+                            arguments: serde_json::to_string(&tc.arguments)
+                                .unwrap_or_else(|_| "{}".to_string()),
+                        },
+                    })
+                    .collect(),
+            )
+        };
+        // Pure tool-call assistant turns omit content; everything else
+        // carries text (plus images as multi-part when present).
+        let content = if m.content.is_empty() && tool_calls.is_some() {
+            None
+        } else if m.images.is_empty() {
+            Some(OpenAiContent::Text(m.content.clone()))
         } else {
             let mut parts = vec![OpenAiContentPart::Text {
                 text: m.content.clone(),
@@ -429,11 +480,13 @@ fn build_request_body<'a>(
                     },
                 });
             }
-            OpenAiContent::Parts(parts)
+            Some(OpenAiContent::Parts(parts))
         };
         OpenAiMessage {
             role: role_str(&m.role).to_string(),
             content,
+            tool_calls,
+            tool_call_id: m.tool_call_id.clone(),
         }
     }));
 
@@ -502,11 +555,7 @@ mod tests {
     fn req_with_format(format: ResponseFormat) -> CompletionRequest {
         CompletionRequest {
             model: "gpt-4o-mini".into(),
-            messages: vec![Message {
-                role: Role::User,
-                content: "say hi".into(),
-                images: vec![],
-            }],
+            messages: vec![Message::text(Role::User, "say hi".into())],
             temperature: None,
             max_tokens: None,
             response_format: format,
@@ -577,6 +626,70 @@ mod tests {
             // No schema injection.
             assert_eq!(wire["messages"].as_array().unwrap().len(), 1);
         }
+    }
+
+    #[test]
+    fn tool_turns_serialize_to_openai_wire_shape() {
+        use aithericon_executor_domain::LlmToolCall;
+        let req = CompletionRequest {
+            model: "gpt-4o-mini".into(),
+            messages: vec![
+                Message::text(Role::System, "sys".into()),
+                Message::text(Role::User, "where is ORD-42?".into()),
+                // Assistant turn that is a pure tool call (no text).
+                Message {
+                    role: Role::Assistant,
+                    content: String::new(),
+                    images: vec![],
+                    tool_call_id: None,
+                    tool_calls: vec![LlmToolCall {
+                        id: "call_1".into(),
+                        name: "lookup_order".into(),
+                        arguments: json!({"order_id": "ORD-42"}),
+                    }],
+                },
+                // Tool result answering call_1.
+                Message {
+                    role: Role::Tool,
+                    content: "{\"status\":\"In transit\"}".into(),
+                    images: vec![],
+                    tool_call_id: Some("call_1".into()),
+                    tool_calls: vec![],
+                },
+            ],
+            temperature: None,
+            max_tokens: None,
+            response_format: ResponseFormat::Text,
+            tools: vec![],
+        };
+        let body = build_request_body(&req, JsonModeCapability::JsonSchema);
+        let wire = serde_json::to_value(&body).unwrap();
+        let msgs = wire["messages"].as_array().unwrap();
+        assert_eq!(msgs.len(), 4, "system, user, assistant, tool: {wire}");
+
+        let assistant = &msgs[2];
+        assert_eq!(assistant["role"], "assistant");
+        assert_eq!(assistant["tool_calls"][0]["id"], "call_1");
+        assert_eq!(assistant["tool_calls"][0]["type"], "function");
+        assert_eq!(
+            assistant["tool_calls"][0]["function"]["name"],
+            "lookup_order"
+        );
+        // OpenAI requires `arguments` as a JSON-encoded STRING, not an object.
+        let args = assistant["tool_calls"][0]["function"]["arguments"]
+            .as_str()
+            .expect("arguments must serialize as a string");
+        assert!(args.contains("ORD-42"), "args string carries the call: {args}");
+        // A pure tool-call assistant turn omits content entirely.
+        assert!(
+            assistant.get("content").map_or(true, |c| c.is_null()),
+            "pure tool-call assistant turn must omit content: {assistant}"
+        );
+
+        let tool = &msgs[3];
+        assert_eq!(tool["role"], "tool");
+        assert_eq!(tool["tool_call_id"], "call_1");
+        assert_eq!(tool["content"], "{\"status\":\"In transit\"}");
     }
 
     #[test]

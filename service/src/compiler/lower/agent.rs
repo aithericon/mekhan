@@ -295,8 +295,14 @@ fn lower_agent_loop(
     // stays slim; the executor's `FetchConfigHook` materialises it.
     let storage_key = cx.config_storage.key(&id);
     cx.node_configs.insert(id.clone(), llm_config);
+    // `overlay` carries the per-turn conversation history inline on the
+    // token; the executor's `FetchConfigHook` shallow-merges it onto the
+    // static config (system prompt + tool schemas) fetched from
+    // `storage_path`, so `config.history` reflects the accumulated
+    // transcript each turn. `s` is in scope where this is interpolated —
+    // the prepare_call logic binds `let s = state;` first.
     let config_ref_rhai = format!(
-        "#{{ \"storage_path\": \"{}\" }}",
+        "#{{ \"storage_path\": \"{}\", \"overlay\": #{{ \"history\": s.history }} }}",
         rhai_str_escape(&storage_key)
     );
 
@@ -381,7 +387,7 @@ fn lower_agent_loop(
         .auto_input("input", &p_input)
         .auto_output("state", &p_state)
         .logic_rhai(
-            r#"#{ state: #{ turn: 0, message_count: 0, total_tokens_in: 0, total_tokens_out: 0, history: [], input: input, final_response: () } }"#
+            r#"#{ state: #{ turn: 0, message_count: 0, total_tokens_in: 0, total_tokens_out: 0, history: [], pending_tool_call_id: (), input: input, final_response: () } }"#
                 .to_string(),
         )
         .done();
@@ -555,7 +561,7 @@ fn lower_agent_loop(
         // `call` is a Rhai reserved keyword (it's the indirect-call syntax
         // marker). Use `tcall` for the tool_calls[0] binding.
         .logic_rhai(format!(
-            r#"let s = response.state; {extract_tr} let tcall = tr.tool_calls[0]; let assistant_content = if type_of(tr.content) == "string" {{ tr.content }} else {{ "" }}; s.history.push(#{{ role: "assistant", content: assistant_content, tool_call_id: tcall.id, tool_name: "{tn}", tool_args: tcall.arguments }}); s.turn = s.turn + 1; s.message_count = s.message_count + 1; #{{ dispatch: #{{ call_id: tcall.id, tool_name: "{tn}", args: tcall.arguments }}, state_in_tool: s }}"#
+            r#"let s = response.state; {extract_tr} let tcall = tr.tool_calls[0]; let assistant_content = if type_of(tr.content) == "string" {{ tr.content }} else {{ "" }}; s.history.push(#{{ role: "assistant", content: assistant_content, tool_calls: [#{{ id: tcall.id, name: "{tn}", arguments: tcall.arguments }}] }}); s.pending_tool_call_id = tcall.id; s.turn = s.turn + 1; s.message_count = s.message_count + 1; #{{ dispatch: #{{ call_id: tcall.id, tool_name: "{tn}", args: tcall.arguments }}, state_in_tool: s }}"#
         ))
         .done();
     }
@@ -583,7 +589,7 @@ fn lower_agent_loop(
                     r#"let s = response.state; {extract_tr} let tc = if type_of(tr.tool_calls) == "array" {{ tr.tool_calls }} else {{ [] }}; let known = {known_names_rhai}; tc.len() > 0 && !(known.contains(tc[0].name)) && s.turn + 1 < {max_turns} && !({stop_when_expr})"#
                 ))
                 .logic_rhai(format!(
-                    r#"let s = response.state; {extract_tr} let tcall = tr.tool_calls[0]; s.history.push(#{{ role: "tool", tool_name: tcall.name, tool_call_id: tcall.id, content: "tool '" + tcall.name + "' not found — pick one of: " + {known_names_rhai} }}); s.turn = s.turn + 1; s.message_count = s.message_count + 1; #{{ state: s }}"#
+                    r#"let s = response.state; {extract_tr} let tcall = tr.tool_calls[0]; let assistant_content = if type_of(tr.content) == "string" {{ tr.content }} else {{ "" }}; s.history.push(#{{ role: "assistant", content: assistant_content, tool_calls: [#{{ id: tcall.id, name: tcall.name, arguments: tcall.arguments }}] }}); s.history.push(#{{ role: "tool", tool_call_id: tcall.id, content: "tool '" + tcall.name + "' not found — pick one of: " + {known_names_rhai} }}); s.turn = s.turn + 1; s.message_count = s.message_count + 1; #{{ state: s }}"#
                 ))
                 .done();
             }
