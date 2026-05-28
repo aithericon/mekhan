@@ -42,8 +42,8 @@ pub async fn run(server: &str, action: Action) -> Result<()> {
         let body = resp.text().await.unwrap_or_default();
         if status.as_u16() == 403 {
             anyhow::bail!(
-                "demo {verb} forbidden — requires admin of the default workspace \
-                 (set MEKHAN_CLI_TOKEN to an admin's PAT). Server said: {body}"
+                "demo {verb} forbidden — requires editor of the default workspace \
+                 (set MEKHAN_CLI_TOKEN to an editor's PAT). Server said: {body}"
             );
         }
         anyhow::bail!("demo {verb} failed ({status}): {body}");

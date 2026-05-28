@@ -3,10 +3,14 @@
 //! Both endpoints are destructive resets of the *seeded* demo families (rows
 //! the startup seeder created — `author_id = DEMO_SEEDER_AUTHOR_ID`). They
 //! cancel running instances, purge engine nets, and delete the families whole.
-//! Gated on `admin` of the **default** workspace, which is where seeded demos
-//! live (see `demos::DEMO_WORKSPACE_ID`); in `dev_noop` the dev user owns it,
-//! and in BFF the resolver auto-provisions members as `editor`, so an explicit
-//! `admin` keeps this an operator-only action.
+//!
+//! Gated on `editor` of the **default** workspace, which is where seeded demos
+//! live (see `demos::DEMO_WORKSPACE_ID`). Editor — not admin — because an
+//! editor can already delete and recreate each demo template individually via
+//! `gate_template_write` (also `Editor`): bulk reset/reseed grants no authority
+//! they lack. An `admin` gate would also be unsatisfiable in BFF single-org,
+//! where the resolver auto-provisions every real user as `editor` and the only
+//! owner of the default workspace is the synthetic dev-noop principal.
 
 use std::path::PathBuf;
 
@@ -17,17 +21,18 @@ use crate::demos::DemoResetReport;
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::AppState;
 
-/// Require `admin` of the default workspace — the home of seeded demos.
-async fn gate_demo_admin(state: &AppState, user: &AuthUser) -> Result<(), ApiError> {
-    match require_role(&state.db, user, uuid::Uuid::nil(), Role::Admin).await {
+/// Require at least `editor` of the default workspace — the home of seeded
+/// demos. See the module doc for why editor (not admin).
+async fn gate_demo_write(state: &AppState, user: &AuthUser) -> Result<(), ApiError> {
+    match require_role(&state.db, user, uuid::Uuid::nil(), Role::Editor).await {
         Ok(_) => Ok(()),
         Err(MembershipError::NotMember(_)) | Err(MembershipError::InsufficientRole { .. }) => {
             Err(ApiError::forbidden(
-                "demo reset requires admin of the default workspace",
+                "demo reset requires editor of the default workspace",
             ))
         }
         Err(MembershipError::TemplateNotFound(_)) => {
-            Err(ApiError::forbidden("demo reset requires admin"))
+            Err(ApiError::forbidden("demo reset requires editor"))
         }
         Err(MembershipError::Db(e)) => Err(ApiError::internal(e.to_string())),
     }
@@ -42,7 +47,7 @@ async fn gate_demo_admin(state: &AppState, user: &AuthUser) -> Result<(), ApiErr
     path = "/api/v1/admin/demos/reset",
     responses(
         (status = 200, description = "Seeded demos removed", body = DemoResetReport),
-        (status = 403, description = "Admin of the default workspace required", body = ErrorResponse),
+        (status = 403, description = "Editor of the default workspace required", body = ErrorResponse),
         (status = 500, description = "Server error", body = ErrorResponse),
     ),
     tag = "admin",
@@ -51,7 +56,7 @@ pub async fn reset_demos(
     State(state): State<AppState>,
     user: AuthUser,
 ) -> Result<Json<DemoResetReport>, ApiError> {
-    gate_demo_admin(&state, &user).await?;
+    gate_demo_write(&state, &user).await?;
     let report = crate::demos::purge_seeded(&state)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
@@ -68,7 +73,7 @@ pub async fn reset_demos(
     path = "/api/v1/admin/demos/reseed",
     responses(
         (status = 200, description = "Seeded demos purged and re-seeded", body = DemoResetReport),
-        (status = 403, description = "Admin of the default workspace required", body = ErrorResponse),
+        (status = 403, description = "Editor of the default workspace required", body = ErrorResponse),
         (status = 500, description = "Server error", body = ErrorResponse),
     ),
     tag = "admin",
@@ -77,7 +82,7 @@ pub async fn reseed_demos(
     State(state): State<AppState>,
     user: AuthUser,
 ) -> Result<Json<DemoResetReport>, ApiError> {
-    gate_demo_admin(&state, &user).await?;
+    gate_demo_write(&state, &user).await?;
     let root = PathBuf::from(&state.config.demos.dir);
     let report = crate::demos::reseed_all(&state, &root)
         .await

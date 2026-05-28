@@ -5453,7 +5453,7 @@ export interface operations {
                     "application/json": components["schemas"]["DemoResetReport"];
                 };
             };
-            /** @description Admin of the default workspace required */
+            /** @description Editor of the default workspace required */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -5491,7 +5491,7 @@ export interface operations {
                     "application/json": components["schemas"]["DemoResetReport"];
                 };
             };
-            /** @description Admin of the default workspace required */
+            /** @description Editor of the default workspace required */
             403: {
                 headers: {
                     [name: string]: unknown;

@@ -43,7 +43,7 @@
             }
           },
           "403": {
-            "description": "Admin of the default workspace required",
+            "description": "Editor of the default workspace required",
             "content": {
               "application/json": {
                 "schema": {
@@ -85,7 +85,7 @@
             }
           },
           "403": {
-            "description": "Admin of the default workspace required",
+            "description": "Editor of the default workspace required",
             "content": {
               "application/json": {
                 "schema": {

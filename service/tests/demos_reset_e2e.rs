@@ -84,7 +84,27 @@ async fn reset_removes_seeded_demos_and_requires_admin() {
     // Control: a real user's template (random author) must survive the reset.
     let keep_id = seed_template_in_workspace(&db, default_ws, "user template", "workspace").await;
 
-    // An editor of the default workspace is NOT enough — reset is admin-only.
+    // A viewer of the default workspace is NOT enough — reset needs editor.
+    seed_member(&db, default_ws, "viewer_user", "viewer").await;
+    let resp = app
+        .clone()
+        .oneshot(
+            req_as("viewer_user", Some(default_ws))
+                .method("POST")
+                .uri("/api/v1/admin/demos/reset")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN, "viewer must be forbidden");
+    assert!(
+        template_exists(&db, demo_id).await,
+        "forbidden request must not have deleted anything"
+    );
+
+    // An editor of the default workspace succeeds (same authority they already
+    // have to delete/recreate each demo template individually).
     seed_member(&db, default_ws, "editor_user", "editor").await;
     let resp = app
         .clone()
@@ -97,28 +117,9 @@ async fn reset_removes_seeded_demos_and_requires_admin() {
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::FORBIDDEN, "editor must be forbidden");
-    assert!(
-        template_exists(&db, demo_id).await,
-        "forbidden request must not have deleted anything"
-    );
-
-    // An admin of the default workspace succeeds.
-    seed_member(&db, default_ws, "admin_user", "admin").await;
-    let resp = app
-        .clone()
-        .oneshot(
-            req_as("admin_user", Some(default_ws))
-                .method("POST")
-                .uri("/api/v1/admin/demos/reset")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
     let status = resp.status();
     let body = body_json(resp.into_body()).await;
-    assert_eq!(status, StatusCode::OK, "admin reset: {body}");
+    assert_eq!(status, StatusCode::OK, "editor reset: {body}");
     assert!(
         body["familiesRemoved"].as_u64().unwrap() >= 1,
         "expected at least our fixture family removed, got {body}"
