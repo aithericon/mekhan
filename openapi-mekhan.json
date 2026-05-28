@@ -4706,7 +4706,7 @@
           "templates"
         ],
         "summary": "PATCH /api/v1/templates/{id}/visibility",
-        "description": "Flipping visibility is a tenancy decision (cross-workspace exposure) so\nit requires admin, not editor — even though it touches a template row.",
+        "description": "`public` is cross-workspace exposure — a tenancy decision, so it requires\nadmin. `workspace` and `private` are authoring-scope changes (a private\nsub-workflow is bound to its parent, never exposed beyond the workspace),\nso an editor building workflows can set them.",
         "operationId": "set_template_visibility",
         "parameters": [
           {
@@ -4745,7 +4745,7 @@
             }
           },
           "403": {
-            "description": "Admin role required",
+            "description": "Insufficient role (admin for public, editor otherwise)",
             "content": {
               "application/json": {
                 "schema": {

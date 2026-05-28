@@ -438,8 +438,10 @@ pub async fn set_template_tags(
 
 /// PATCH /api/v1/templates/{id}/visibility
 ///
-/// Flipping visibility is a tenancy decision (cross-workspace exposure) so
-/// it requires admin, not editor — even though it touches a template row.
+/// `public` is cross-workspace exposure — a tenancy decision, so it requires
+/// admin. `workspace` and `private` are authoring-scope changes (a private
+/// sub-workflow is bound to its parent, never exposed beyond the workspace),
+/// so an editor building workflows can set them.
 #[utoipa::path(
     patch,
     path = "/api/v1/templates/{id}/visibility",
@@ -448,7 +450,7 @@ pub async fn set_template_tags(
     responses(
         (status = 204, description = "Visibility updated"),
         (status = 400, description = "Invalid visibility value", body = ErrorResponse),
-        (status = 403, description = "Admin role required", body = ErrorResponse),
+        (status = 403, description = "Insufficient role (admin for public, editor otherwise)", body = ErrorResponse),
         (status = 404, description = "Template not found", body = ErrorResponse),
     ),
     tag = "templates",
@@ -471,7 +473,14 @@ pub async fn set_template_visibility(
     let workspace_id = template_workspace(&state.db, template_id)
         .await
         .map_err(map_to_api_error)?;
-    require_role(&state.db, &user, workspace_id, Role::Admin)
+    // Only `public` (cross-workspace exposure) is admin-gated; `workspace`
+    // and `private` are editor-level authoring decisions.
+    let need = if req.visibility == VISIBILITY_PUBLIC {
+        Role::Admin
+    } else {
+        Role::Editor
+    };
+    require_role(&state.db, &user, workspace_id, need)
         .await
         .map_err(map_to_api_error)?;
 

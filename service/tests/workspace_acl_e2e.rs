@@ -739,3 +739,50 @@ async fn create_instance_rejects_private() {
         "expected a private-specific rejection, got: {body}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// 13. An editor can mark a child `private` (authoring scope) but NOT `public`
+//     (cross-workspace exposure stays admin-gated).
+// ---------------------------------------------------------------------------
+#[tokio::test]
+async fn editor_can_privatize_but_not_publicize() {
+    let (app, db) = header_driven_app().await;
+
+    let ws = seed_workspace(&db, &format!("ws-editrole-{}", Uuid::new_v4().simple())).await;
+    seed_member(&db, ws, "ed", "editor").await;
+
+    let parent = seed_template_in_workspace(&db, ws, "parent", "workspace").await;
+    let child = seed_template_in_workspace(&db, ws, "child", "workspace").await;
+
+    // editor → private: allowed
+    let resp = app
+        .clone()
+        .oneshot(
+            req_as("ed", Some(ws))
+                .method("PATCH")
+                .uri(format!("/api/v1/templates/{child}/visibility"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({ "visibility": "private", "owner_template_id": parent.to_string() })
+                        .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT, "editor may privatize");
+
+    // editor → public: forbidden (admin-gated tenancy decision)
+    let resp = app
+        .oneshot(
+            req_as("ed", Some(ws))
+                .method("PATCH")
+                .uri(format!("/api/v1/templates/{child}/visibility"))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({ "visibility": "public" }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN, "editor may not publicize");
+}

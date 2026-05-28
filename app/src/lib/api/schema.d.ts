@@ -1533,8 +1533,10 @@ export interface paths {
         head?: never;
         /**
          * PATCH /api/v1/templates/{id}/visibility
-         * @description Flipping visibility is a tenancy decision (cross-workspace exposure) so
-         *     it requires admin, not editor — even though it touches a template row.
+         * @description `public` is cross-workspace exposure — a tenancy decision, so it requires
+         *     admin. `workspace` and `private` are authoring-scope changes (a private
+         *     sub-workflow is bound to its parent, never exposed beyond the workspace),
+         *     so an editor building workflows can set them.
          */
         patch: operations["set_template_visibility"];
         trace?: never;
@@ -8009,7 +8011,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Admin role required */
+            /** @description Insufficient role (admin for public, editor otherwise) */
             403: {
                 headers: {
                     [name: string]: unknown;
