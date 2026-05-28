@@ -303,4 +303,41 @@ mod tests {
         let deserialized: SubmitResult = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.scheduler_job_id, "nomad-alloc-abc123");
     }
+
+    #[test]
+    fn test_external_signal_roundtrip() {
+        let signal = ExternalSignal {
+            source: "nomad".to_string(),
+            signal_key: "train-alpha:0".to_string(),
+            payload: serde_json::json!({
+                "scheduler_job_id": "my-job/dispatch-123",
+                "job_status": "completed",
+                "exit_code": 0,
+            }),
+            timestamp: chrono::Utc::now(),
+            dedup_id: None,
+        };
+
+        let json = serde_json::to_string(&signal).unwrap();
+        let parsed: ExternalSignal = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed.source, "nomad");
+        assert_eq!(parsed.signal_key, "train-alpha:0");
+        assert_eq!(parsed.payload["job_status"], "completed");
+    }
+
+    #[test]
+    fn test_external_signal_null_payload() {
+        let signal = ExternalSignal {
+            source: "test".to_string(),
+            signal_key: "key".to_string(),
+            payload: serde_json::Value::Null,
+            timestamp: chrono::Utc::now(),
+            dedup_id: None,
+        };
+
+        let json = serde_json::to_string(&signal).unwrap();
+        let parsed: ExternalSignal = serde_json::from_str(&json).unwrap();
+        assert!(parsed.payload.is_null());
+    }
 }
