@@ -176,6 +176,13 @@ fn demo_dir() -> std::path::PathBuf {
         .join("demos/09-agent-tool-loop")
 }
 
+fn hello_world_dir() -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("service crate has a parent")
+        .join("demos/01-hello-world")
+}
+
 /// Poll the instance's persisted status until terminal. Panics on
 /// timeout so a hung loop is caught loudly.
 async fn wait_for_terminal_status(
@@ -430,6 +437,277 @@ async fn agent_tool_loop_demo_completes_with_tool_call() {
         !reply.trim().is_empty(),
         "agent reply was empty — final response did not propagate through \
          the End node's `agent.response` resultMapping. Result: {result}"
+    );
+
+    cleanup_durables(&cleanup_nats).await;
+}
+
+/// Create a template from a graph + files and publish it; return its id.
+/// Publishing compiles the AIR and — for a SubWorkflow parent — resolves
+/// each referenced child's AIR + Start contract (`resolve_subworkflow_air`).
+async fn create_and_publish<G: serde::Serialize, F: serde::Serialize>(
+    app: &axum::Router,
+    name: &str,
+    graph: &G,
+    files: &F,
+) -> Uuid {
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/templates")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": name,
+                        "graph": graph,
+                        "files": files,
+                        "author_id": Uuid::new_v4(),
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED, "create template '{name}'");
+    let template_id: Uuid = body_json(resp.into_body()).await["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/templates/{template_id}/publish"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    let pub_body = body_json(resp.into_body()).await;
+    assert_eq!(status, StatusCode::OK, "publish '{name}': {pub_body}");
+    template_id
+}
+
+async fn fire_customer_message(app: &axum::Router, template_id: Uuid, message: &str) -> Uuid {
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/instances")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "template_id": template_id,
+                        "start_tokens": [{
+                            "start_block_id": "start",
+                            "token": { "customer_message": message }
+                        }],
+                        "metadata": { "e2e": "agent_subworkflow_tool" }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let s = resp.status();
+    let inst = body_json(resp.into_body()).await;
+    assert_eq!(s, StatusCode::CREATED, "create instance: {inst}");
+    inst["id"].as_str().unwrap().parse().unwrap()
+}
+
+/// Parent agent graph whose `tools` handle targets a SubWorkflow node
+/// referencing `child_template_id` (a published `Start{name} → … → End`
+/// child). The agent has no per-node input declaration of its own — the
+/// tool's `input_schema` is derived entirely from the child's Start
+/// `initial` contract (`{ name }`), the whole point of this path.
+fn parent_agent_with_subworkflow_tool(child_template_id: Uuid) -> Value {
+    json!({
+        "nodes": [
+            {
+                "id": "start", "type": "start", "position": { "x": 0, "y": 80 },
+                "data": {
+                    "type": "start", "label": "Start",
+                    "initial": { "id": "in", "label": "Customer message", "fields": [
+                        { "name": "customer_message", "label": "Customer message",
+                          "kind": "textarea", "required": true }
+                    ] }
+                }
+            },
+            {
+                "id": "agent", "type": "agent",
+                "position": { "x": 320, "y": 80 }, "width": 440, "height": 360,
+                "data": {
+                    "type": "agent", "label": "Greeter Agent",
+                    "description": "Calls the greet sub-workflow tool with a name.",
+                    "model": {
+                        "provider": "ollama", "model": "qwen3.5:9b",
+                        "baseUrl": "http://localhost:11434", "temperature": 0
+                    },
+                    "systemPrompt": "You are a helpful assistant. To greet a person, \
+                        call the `greet` tool with their name. After the tool returns \
+                        a greeting, reply to the user with that greeting in one short \
+                        sentence.",
+                    "userPrompt": "{{ start.customer_message }}",
+                    "maxTurns": 4,
+                    "onToolError": "feedback"
+                }
+            },
+            {
+                "id": "greet_tool", "type": "sub_workflow",
+                "position": { "x": 320, "y": 520 },
+                "data": {
+                    "type": "sub_workflow", "label": "greet",
+                    "description": "Greets a person by name. Embeds the hello-world \
+                        child; the child's Start declares `name`, which becomes this \
+                        tool's input schema.",
+                    "templateId": child_template_id,
+                    "versionPin": { "mode": "latest" },
+                    "inputMapping": [],
+                    "output": { "id": "out", "label": "Greeting result", "fields": [
+                        { "name": "greeting", "label": "Greeting", "kind": "text",
+                          "required": true }
+                    ] }
+                }
+            },
+            {
+                "id": "end", "type": "end", "position": { "x": 820, "y": 80 },
+                "data": {
+                    "type": "end", "label": "Done",
+                    "resultMapping": [
+                        { "targetField": "reply", "expression": "agent.response" },
+                        { "targetField": "turns_used", "expression": "agent.turn" }
+                    ]
+                }
+            }
+        ],
+        "edges": [
+            { "id": "e1", "source": "start", "target": "agent",
+              "targetHandle": "in", "type": "sequence" },
+            { "id": "e2", "source": "agent", "target": "end",
+              "targetHandle": "in", "type": "sequence" },
+            { "id": "e3", "source": "agent", "target": "greet_tool",
+              "sourceHandle": "tools", "targetHandle": "in", "type": "tools" }
+        ]
+    })
+}
+
+/// SubWorkflow-as-tool proof: an agent whose `tools` handle targets a
+/// SubWorkflow node (a referenced `Start{name} → greet → End{greeting}`
+/// child). The LLM-facing tool schema comes from the *child's Start*
+/// `initial` contract — there is no per-node input declaration on the
+/// SubWorkflow reference. This is the runtime counterpart to
+/// `agent_loop_e2e::subworkflow_tool_input_schema_reflects_child_start`.
+///
+/// The chain under test:
+///   child Start{name} (user-declared)
+///     → resolve_subworkflow_air extracts it into ResolvedChild.input_contract
+///       → agent tool schema `{ name }` → LLM tool_call greet({name: …})
+///         → t_agent_invoke_greet deposits args at the SubWorkflow input
+///           → spawn_net spawns the hello-world child net, which greets
+///             → child reply → t_agent_collect_greet feeds it back into p_agent_state
+///               → turn 2: the LLM produces a final reply
+///
+/// Assertion mirrors the loop test: `completed` + `turns_used >= 2`. Two
+/// turns means the LLM emitted a tool call (turn 1), the child sub-workflow
+/// spawned + ran + replied (otherwise collect never fires and the loop
+/// stalls → caught by the timeout), and the LLM produced a final answer
+/// (turn 2). A subworkflow that failed to spawn or never replied would
+/// hang the instance, not complete it.
+#[tokio::test]
+async fn agent_subworkflow_tool_loop_completes() {
+    if !engine_available().await {
+        panic!(
+            "engine not available at {} — start the stack with `just dev::up`",
+            engine_url()
+        );
+    }
+    if !ollama_available().await {
+        panic!(
+            "ollama not available at {} — start it with `just dev::up-ollama`",
+            ollama_url()
+        );
+    }
+
+    let nats_url = engine_nats_url();
+    let (app, db) = common::test_app_with_petri_url(&nats_url, &engine_url()).await;
+    let prefix = format!("test_{}", Uuid::new_v4().simple());
+    let nats = MekhanNats::connect(&nats_url, None)
+        .await
+        .expect("nats")
+        .with_consumer_prefix(prefix);
+    let cleanup_nats = nats.clone();
+    let (_causality, _lifecycle, _step_exec) = spawn_consumers(nats, db.clone()).await;
+
+    // Publish the tool child first (Start{name} → greet → End{greeting}), so
+    // the parent's publish-time SubWorkflow resolution can find it + read its
+    // Start contract. Reuses the shipped 01-hello-world fixture as the child.
+    let child = demos::load_demo(&hello_world_dir()).expect("load demos/01-hello-world");
+    let child_id = create_and_publish(
+        &app,
+        &format!("Greet Child E2E {}", Uuid::new_v4().simple()),
+        &child.graph,
+        &child.files,
+    )
+    .await;
+
+    // Publish the parent agent that calls the child as a tool, then fire it.
+    let parent_graph = parent_agent_with_subworkflow_tool(child_id);
+    let parent_id = create_and_publish(
+        &app,
+        &format!("Greet Agent E2E {}", Uuid::new_v4().simple()),
+        &parent_graph,
+        &json!({}),
+    )
+    .await;
+    let instance_id = fire_customer_message(&app, parent_id, "Please greet Alice.").await;
+
+    let terminal = wait_for_terminal_status(&db, instance_id, Duration::from_secs(300)).await;
+    assert_eq!(
+        terminal, "completed",
+        "instance ended `{terminal}` — the agent did not round-trip through the \
+         SubWorkflow tool. Check ollama (.dev/log/ollama.log), the executor \
+         (.dev/log/executor.log: greet child spawned + ran?), and that the \
+         child sub-workflow published cleanly (Start/End boundary present)"
+    );
+
+    let result: Value =
+        sqlx::query_scalar("SELECT result FROM workflow_instances WHERE id = $1")
+            .bind(instance_id)
+            .fetch_one(&db)
+            .await
+            .expect("instance result must be present after `completed`");
+    eprintln!(
+        "\n--- agent subworkflow-tool final result ---\n{}\n---\n",
+        serde_json::to_string_pretty(&result).unwrap_or_default()
+    );
+    let payload = result.get("value").unwrap_or(&result);
+
+    let turns_used = payload
+        .get("turns_used")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    assert!(
+        turns_used >= 2,
+        "agent completed in {turns_used} turn(s) — the SubWorkflow tool was never \
+         called. Either the Ollama adapter dropped the tool plumbing, the LLM \
+         ignored the tool, or the agent compiler did not route a tools edge to a \
+         SubWorkflow callee. Full result: {result}"
+    );
+
+    let reply = payload.get("reply").and_then(|v| v.as_str()).unwrap_or("");
+    assert!(
+        !reply.trim().is_empty(),
+        "agent reply was empty — the final response did not propagate through the \
+         End node's `agent.response` resultMapping. Result: {result}"
     );
 
     cleanup_durables(&cleanup_nats).await;
