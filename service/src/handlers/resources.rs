@@ -56,8 +56,12 @@ use crate::AppState;
 /// path IS the head — the trailing-segment compromise would silently
 /// break renames and create ambiguity between two resources sharing
 /// the same trailing segment.
-static PATH_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^[a-z][a-z0-9_]*$").expect("PATH_REGEX must compile")
+/// Snake_case identifier grammar shared by resource `path`s and `kv` key
+/// names: both are dereferenced as `<head>.<field>` in workflow source and
+/// so must be valid identifiers (lowercase leading letter, then lowercase
+/// letters / digits / underscore).
+static IDENT_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^[a-z][a-z0-9_]*$").expect("IDENT_REGEX must compile")
 });
 
 /// Caller-implicit workspace: falls back to the user's session workspace
@@ -84,14 +88,8 @@ fn descriptor_or_400(
 /// Lists the user-supplied field names so the picker + resolver can
 /// iterate without unwrapping the Vault bundle. Underscore-prefixed so it
 /// can't collide with a real key name (real keys must match the same
-/// `[a-z][a-z0-9_]*` shape as resource paths, see [`KV_KEY_REGEX`]).
+/// `[a-z][a-z0-9_]*` shape as resource paths, see [`IDENT_REGEX`]).
 const KV_KEYS_FIELD: &str = "__kv_keys";
-
-/// Same shape as `PATH_REGEX` — key names must be valid identifiers
-/// because workflow code references them as `<path>.<key>`.
-static KV_KEY_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^[a-z][a-z0-9_]*$").expect("KV_KEY_REGEX must compile")
-});
 
 /// Split a raw config map into `(public, secret)` JsonMaps based on the
 /// descriptor's field lists. Strays (keys that match neither list) become
@@ -132,7 +130,7 @@ fn split_config(
                     "key '{KV_KEYS_FIELD}' is reserved",
                 )));
             }
-            if !KV_KEY_REGEX.is_match(&k) {
+            if !IDENT_REGEX.is_match(&k) {
                 bad_keys.push(k);
                 continue;
             }
@@ -429,7 +427,7 @@ pub async fn create_resource(
     user: AuthUser,
     Json(req): Json<CreateResourceRequest>,
 ) -> Result<(StatusCode, Json<ResourceSummary>), ApiError> {
-    if !PATH_REGEX.is_match(&req.path) {
+    if !IDENT_REGEX.is_match(&req.path) {
         return Err(ApiError::bad_request(format!(
             "path '{}' must be a snake_case identifier (e.g. `local_pg`): \
              lowercase letter first, then letters / digits / underscores. \
