@@ -68,8 +68,10 @@ impl ExecutionBackend for DockerBackend {
         // Pull image based on pull_policy
         container::ensure_image(&self.client, &config.image, config.pull_policy).await?;
 
-        // Mark that we've done docker-specific preparation
-        ctx.backend_state = serde_json::json!({ "docker_prepared": true });
+        // Cache the parsed config so execute() doesn't re-parse spec.config.
+        ctx.backend_state = serde_json::to_value(&config).map_err(|e| {
+            ExecutorError::Config(format!("failed to serialize docker config: {e}"))
+        })?;
 
         info!(image = %config.image, "docker image ready");
         Ok(ctx)
@@ -82,7 +84,10 @@ impl ExecutionBackend for DockerBackend {
         _event_stream: Option<std::sync::Arc<dyn aithericon_executor_backend::traits::EventStream>>,
         cancel: CancellationToken,
     ) -> Result<ExecutionResult, ExecutorError> {
-        let config = DockerConfig::from_spec(&run_context.spec)?;
+        let config: DockerConfig =
+            serde_json::from_value(run_context.backend_state.clone()).map_err(|e| {
+                ExecutorError::Config(format!("failed to deserialize docker config: {e}"))
+            })?;
         container::run_container(
             &self.client,
             &config,
