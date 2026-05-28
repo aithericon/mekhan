@@ -520,6 +520,128 @@ where
             projection,
         ));
 
+        // Register all effect handlers (scheduler/executor/human/process/
+        // timer/subworkflow/catalogue) configured on this registry.
+        self.register_effect_handlers(&service, net_id);
+
+        // Bind pre-dispatch hook runtime (chain + defer budgets) to this
+        // service. The chain is assembled from the registered builtin map +
+        // TOML config snapshot taken at freeze-time. Per-(net_id,
+        // transition_id) defer budgets live on the runtime — global counter
+        // is explicitly disallowed (spec § 11 trip-wire 4).
+        let chain = self.build_pre_dispatch_chain();
+        let chain_len = chain.len();
+        let rt = Arc::new(PreDispatchRuntime::new(net_id, chain));
+        service.set_pre_dispatch_runtime(rt);
+        if chain_len > 0 {
+            tracing::info!(
+                net_id = %net_id,
+                chain_len,
+                "Bound pre-dispatch hook chain"
+            );
+        }
+
+        let eval_notify = Arc::new(Notify::new());
+
+        // Woken nets (re-hydrated from NATS) already have topology and marking;
+        // they should resume in Running mode so eval fires on token injection.
+        // Fresh nets start Stopped until a scenario is loaded via the API.
+        let initial_mode = if service.get_topology().is_some() {
+            tracing::info!(net_id = %net_id, "Waking from hibernation — resuming in Running mode");
+            RunMode::Running
+        } else {
+            RunMode::Stopped
+        };
+        let run_mode = Arc::new(RwLock::new(initial_mode));
+        let adapter_scheduler = Arc::new(AdapterScheduler::new());
+        let (event_tx, _) = broadcast::channel::<SseSignal>(256);
+        let event_tx = Arc::new(event_tx);
+        let cancel_token = CancellationToken::new();
+
+        let instance = Arc::new(NetInstance {
+            net_id: net_id.to_string(),
+            service: service.clone(),
+            adapter_scheduler: adapter_scheduler.clone(),
+            run_mode: run_mode.clone(),
+            eval_notify: eval_notify.clone(),
+            event_tx: event_tx.clone(),
+            on_scenario_loaded: RwLock::new(Vec::new()),
+            cancel_token: cancel_token.clone(),
+        });
+
+        // Spawn evaluation loop for this net
+        spawn_net_evaluation_loop(
+            net_id.to_string(),
+            service,
+            adapter_scheduler,
+            eval_notify.clone(),
+            run_mode,
+            event_tx,
+            cancel_token.clone(),
+        );
+
+        // Consumer-driven eval notification: whenever the event consumer applies
+        // an event to the in-memory cache, wake the eval loop. This eliminates
+        // the race where a listener's notify_eval fires before the cache is
+        // updated, causing the eval loop to find no new work and go back to sleep.
+        {
+            let kick = eval_notify;
+            let mut rx = applied_rx;
+            let cancel = cancel_token;
+            let net_id_bridge = net_id.to_string();
+            tokio::spawn(async move {
+                tracing::info!(net_id = %net_id_bridge, "Consumer→eval bridge task started");
+                loop {
+                    tokio::select! {
+                        _ = cancel.cancelled() => {
+                            tracing::debug!(net_id = %net_id_bridge, "Consumer→eval bridge task cancelled");
+                            return;
+                        }
+                        r = rx.changed() => {
+                            if r.is_err() {
+                                tracing::debug!(net_id = %net_id_bridge, "Consumer→eval bridge: applied_rx closed");
+                                return;
+                            }
+                            let seq = *rx.borrow();
+                            tracing::debug!(net_id = %net_id_bridge, applied_seq = seq, "Consumer→eval bridge: kicking eval");
+                            kick.notify_one();
+                        }
+                    }
+                }
+            });
+        }
+
+        nets.insert(net_id.to_string(), instance.clone());
+        drop(nets);
+
+        // Track as known so it can be rehydrated after hibernation
+        self.known_nets.write().insert(net_id.to_string());
+
+        let on_create = self.on_create.clone();
+
+        tracing::info!(net_id = %net_id, "Created new net instance");
+
+        // Invoke the on-create callback (e.g., start bridge listener)
+        if let Some(callback) = on_create {
+            callback(&instance);
+        }
+
+        instance
+    }
+
+    /// Register every effect handler configured on this registry onto a
+    /// freshly created `service`.
+    ///
+    /// Extracted verbatim from `get_or_create` — covers the
+    /// scheduler/executor/human/process-lifecycle/timer/subworkflow/catalogue
+    /// handler sets. Feature-gated registrations (`nomad`, `slurm`,
+    /// `executor`, `executor-vault-secrets`, `catalogue`) are preserved
+    /// exactly. Process lifecycle handlers are always registered.
+    fn register_effect_handlers(
+        &self,
+        service: &std::sync::Arc<PetriNetService<E, T, S>>,
+        net_id: &str,
+    ) {
         // Register scheduler effect handlers if configured
         if let Some(ref cfg) = self.scheduler_config {
             let client: Arc<dyn SchedulerClient> = match &cfg.backend {
@@ -827,110 +949,6 @@ where
 
             tracing::info!(net_id = %net_id, "Registered catalogue effect handlers");
         }
-
-        // Bind pre-dispatch hook runtime (chain + defer budgets) to this
-        // service. The chain is assembled from the registered builtin map +
-        // TOML config snapshot taken at freeze-time. Per-(net_id,
-        // transition_id) defer budgets live on the runtime — global counter
-        // is explicitly disallowed (spec § 11 trip-wire 4).
-        let chain = self.build_pre_dispatch_chain();
-        let chain_len = chain.len();
-        let rt = Arc::new(PreDispatchRuntime::new(net_id, chain));
-        service.set_pre_dispatch_runtime(rt);
-        if chain_len > 0 {
-            tracing::info!(
-                net_id = %net_id,
-                chain_len,
-                "Bound pre-dispatch hook chain"
-            );
-        }
-
-        let eval_notify = Arc::new(Notify::new());
-
-        // Woken nets (re-hydrated from NATS) already have topology and marking;
-        // they should resume in Running mode so eval fires on token injection.
-        // Fresh nets start Stopped until a scenario is loaded via the API.
-        let initial_mode = if service.get_topology().is_some() {
-            tracing::info!(net_id = %net_id, "Waking from hibernation — resuming in Running mode");
-            RunMode::Running
-        } else {
-            RunMode::Stopped
-        };
-        let run_mode = Arc::new(RwLock::new(initial_mode));
-        let adapter_scheduler = Arc::new(AdapterScheduler::new());
-        let (event_tx, _) = broadcast::channel::<SseSignal>(256);
-        let event_tx = Arc::new(event_tx);
-        let cancel_token = CancellationToken::new();
-
-        let instance = Arc::new(NetInstance {
-            net_id: net_id.to_string(),
-            service: service.clone(),
-            adapter_scheduler: adapter_scheduler.clone(),
-            run_mode: run_mode.clone(),
-            eval_notify: eval_notify.clone(),
-            event_tx: event_tx.clone(),
-            on_scenario_loaded: RwLock::new(Vec::new()),
-            cancel_token: cancel_token.clone(),
-        });
-
-        // Spawn evaluation loop for this net
-        spawn_net_evaluation_loop(
-            net_id.to_string(),
-            service,
-            adapter_scheduler,
-            eval_notify.clone(),
-            run_mode,
-            event_tx,
-            cancel_token.clone(),
-        );
-
-        // Consumer-driven eval notification: whenever the event consumer applies
-        // an event to the in-memory cache, wake the eval loop. This eliminates
-        // the race where a listener's notify_eval fires before the cache is
-        // updated, causing the eval loop to find no new work and go back to sleep.
-        {
-            let kick = eval_notify;
-            let mut rx = applied_rx;
-            let cancel = cancel_token;
-            let net_id_bridge = net_id.to_string();
-            tokio::spawn(async move {
-                tracing::info!(net_id = %net_id_bridge, "Consumer→eval bridge task started");
-                loop {
-                    tokio::select! {
-                        _ = cancel.cancelled() => {
-                            tracing::debug!(net_id = %net_id_bridge, "Consumer→eval bridge task cancelled");
-                            return;
-                        }
-                        r = rx.changed() => {
-                            if r.is_err() {
-                                tracing::debug!(net_id = %net_id_bridge, "Consumer→eval bridge: applied_rx closed");
-                                return;
-                            }
-                            let seq = *rx.borrow();
-                            tracing::debug!(net_id = %net_id_bridge, applied_seq = seq, "Consumer→eval bridge: kicking eval");
-                            kick.notify_one();
-                        }
-                    }
-                }
-            });
-        }
-
-        nets.insert(net_id.to_string(), instance.clone());
-        drop(nets);
-
-        // Track as known so it can be rehydrated after hibernation
-        self.known_nets.write().insert(net_id.to_string());
-
-        let on_create = self.on_create.clone();
-
-        tracing::info!(net_id = %net_id, "Created new net instance");
-
-        // Invoke the on-create callback (e.g., start bridge listener)
-        if let Some(callback) = on_create {
-            callback(&instance);
-        }
-
-        instance
     }
 
     /// Insert a pre-built net instance.
