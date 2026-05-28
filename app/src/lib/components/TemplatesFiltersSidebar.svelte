@@ -1,12 +1,12 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
 	import FolderKanban from '@lucide/svelte/icons/folder-kanban';
 	import Tag from '@lucide/svelte/icons/tag';
 	import X from '@lucide/svelte/icons/x';
+	import Settings2 from '@lucide/svelte/icons/settings-2';
 	import { Button } from '$lib/components/ui/button';
-	import { Badge } from '$lib/components/ui/badge';
 	import { listProjects, listWorkspaceTags, type Project } from '$lib/api/client';
 	import { workspaces } from '$lib/workspaces/store.svelte';
+	import ManageProjectsDialog from '$lib/components/templates/ManageProjectsDialog.svelte';
 
 	interface Props {
 		projectId: string | null;
@@ -19,6 +19,12 @@
 	let projects = $state<Project[]>([]);
 	let tags = $state<string[]>([]);
 	let loading = $state(false);
+	let manageOpen = $state(false);
+
+	function refreshFilters() {
+		const ws = workspaces.active?.id;
+		if (ws) loadFilters(ws);
+	}
 
 	async function loadFilters(workspaceId: string) {
 		loading = true;
@@ -71,9 +77,22 @@
 		{/if}
 
 		<section>
-			<div class="mb-2 flex items-center gap-2 text-sm font-medium text-foreground">
-				<FolderKanban class="size-4 text-muted-foreground" />
-				Projects
+			<div class="mb-2 flex items-center justify-between gap-2">
+				<div class="flex items-center gap-2 text-sm font-medium text-foreground">
+					<FolderKanban class="size-4 text-muted-foreground" />
+					Projects
+				</div>
+				<Button
+					variant="ghost"
+					size="sm"
+					class="size-7 p-0 text-muted-foreground"
+					title="Manage projects"
+					aria-label="Manage projects"
+					onclick={() => (manageOpen = true)}
+					data-testid="btn-manage-projects"
+				>
+					<Settings2 class="size-4" />
+				</Button>
 			</div>
 			<ul class="space-y-0.5">
 				<li>
@@ -132,3 +151,5 @@
 		{/if}
 	</div>
 </aside>
+
+<ManageProjectsDialog bind:open={manageOpen} onChanged={refreshFilters} />

@@ -851,7 +851,14 @@ export interface paths {
         delete: operations["delete_project"];
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * PATCH /api/v1/projects/{id}
+         * @description Rename / re-describe a project. `slug` is immutable (it's the stable
+         *     filter key the templates list and OpenAPI bundle route hang off of), so
+         *     only `display_name` and `description` are mutable. Omitted fields are
+         *     left untouched via COALESCE.
+         */
+        patch: operations["update_project"];
         trace?: never;
     };
     "/api/v1/projects/{id}/templates": {
@@ -4021,6 +4028,14 @@ export interface components {
             };
         };
         /**
+         * @description Partial update for a project. Both fields optional — omitted fields are
+         *     left untouched (COALESCE). `slug` is immutable (stable filter key).
+         */
+        UpdateProjectRequest: {
+            description?: string | null;
+            display_name?: string | null;
+        };
+        /**
          * @description Request body for `PUT /api/v1/resources/{id}`. Either `display_name` or
          *     `config` (or both) may be set; if `config` is set the call bumps
          *     `latest_version` and writes a new vault_path. `display_name`-only
@@ -6179,6 +6194,51 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Editor role required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Project not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    update_project: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateProjectRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Project"];
+                };
             };
             /** @description Editor role required */
             403: {

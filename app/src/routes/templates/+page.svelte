@@ -30,8 +30,13 @@
 	import Activity from '@lucide/svelte/icons/activity';
 	import EllipsisVertical from '@lucide/svelte/icons/ellipsis-vertical';
 	import Search from '@lucide/svelte/icons/search';
+	import Settings from '@lucide/svelte/icons/settings';
+	import FolderInput from '@lucide/svelte/icons/folder-input';
 	import CreateInstanceDialog from '$lib/components/instances/CreateInstanceDialog.svelte';
 	import TemplatesFiltersSidebar from '$lib/components/TemplatesFiltersSidebar.svelte';
+	import TemplateSettingsPanel from '$lib/components/templates/TemplateSettingsPanel.svelte';
+	import AssignToProjectDialog from '$lib/components/templates/AssignToProjectDialog.svelte';
+	import { Sheet, SheetContent, SheetTitle } from '$lib/components/ui/sheet';
 
 	let templates = $state<TemplateSummary[]>([]);
 	let loading = $state(true);
@@ -42,6 +47,25 @@
 	let searchQuery = $state('');
 	let projectFilter = $state<string | null>(null);
 	let tagFilter = $state<string | null>(null);
+
+	// Per-card Settings sheet + Assign-to-project dialog. Each holds the
+	// target template so a single instance serves every card.
+	let settingsOpen = $state(false);
+	let settingsTemplate = $state<TemplateSummary | null>(null);
+	let assignOpen = $state(false);
+	let assignTemplate = $state<TemplateSummary | null>(null);
+
+	// Opening a bits-ui overlay from inside a closing dropdown races the
+	// dropdown's focus-return; defer to the next tick so the sheet/dialog
+	// keeps focus instead of being dismissed immediately.
+	function openSettings(t: TemplateSummary) {
+		settingsTemplate = t;
+		setTimeout(() => (settingsOpen = true), 0);
+	}
+	function openAssign(t: TemplateSummary) {
+		assignTemplate = t;
+		setTimeout(() => (assignOpen = true), 0);
+	}
 
 	function applyFilters(next: { projectId: string | null; tag: string | null }) {
 		projectFilter = next.projectId;
@@ -378,6 +402,21 @@
 											<DropdownMenuSeparator />
 										{/if}
 										<DropdownMenuItem
+											data-testid="btn-settings-template-{template.id}"
+											onSelect={() => openSettings(template)}
+										>
+											<Settings class="size-4" />
+											Settings
+										</DropdownMenuItem>
+										<DropdownMenuItem
+											data-testid="btn-assign-project-template-{template.id}"
+											onSelect={() => openAssign(template)}
+										>
+											<FolderInput class="size-4" />
+											Assign to project
+										</DropdownMenuItem>
+										<DropdownMenuSeparator />
+										<DropdownMenuItem
 											variant="destructive"
 											data-testid="btn-delete-template-{template.id}"
 											onSelect={() => handleDelete(template.id)}
@@ -466,4 +505,19 @@
 	bind:open={dialogOpen}
 	templateId={dialogTemplateId}
 	oncreated={onInstanceCreated}
+/>
+
+<Sheet.Root open={settingsOpen} onOpenChange={(o: boolean) => (settingsOpen = o)}>
+	<SheetContent class="w-full max-w-md p-0 sm:max-w-md">
+		<SheetTitle class="sr-only">Template settings</SheetTitle>
+		{#if settingsTemplate}
+			<TemplateSettingsPanel template={settingsTemplate} />
+		{/if}
+	</SheetContent>
+</Sheet.Root>
+
+<AssignToProjectDialog
+	bind:open={assignOpen}
+	templateId={assignTemplate?.id ?? null}
+	templateName={assignTemplate?.name}
 />

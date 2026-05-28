@@ -19,6 +19,7 @@ use crate::auth::{
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::workspace::{
     AttachTemplateRequest, CreateProjectRequest, Project, SetTagsRequest, SetVisibilityRequest,
+    UpdateProjectRequest,
 };
 use crate::AppState;
 
@@ -160,6 +161,50 @@ pub async fn delete_project(
         .execute(&state.db)
         .await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// PATCH /api/v1/projects/{id}
+///
+/// Rename / re-describe a project. `slug` is immutable (it's the stable
+/// filter key the templates list and OpenAPI bundle route hang off of), so
+/// only `display_name` and `description` are mutable. Omitted fields are
+/// left untouched via COALESCE.
+#[utoipa::path(
+    patch,
+    path = "/api/v1/projects/{id}",
+    params(("id" = Uuid, Path, description = "Project id")),
+    request_body = UpdateProjectRequest,
+    responses(
+        (status = 200, description = "Updated", body = Project),
+        (status = 403, description = "Editor role required", body = ErrorResponse),
+        (status = 404, description = "Project not found", body = ErrorResponse),
+    ),
+    tag = "projects",
+)]
+pub async fn update_project(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(project_id): Path<Uuid>,
+    Json(req): Json<UpdateProjectRequest>,
+) -> Result<Json<Project>, ApiError> {
+    let workspace_id = project_workspace(&state, project_id).await?;
+    require_role(&state.db, &user, workspace_id, Role::Editor)
+        .await
+        .map_err(map_to_api_error)?;
+
+    let project: Project = sqlx::query_as(
+        "UPDATE projects \
+            SET display_name = COALESCE($2, display_name), \
+                description  = COALESCE($3, description) \
+          WHERE id = $1 \
+         RETURNING id, workspace_id, slug, display_name, description, created_at, created_by",
+    )
+    .bind(project_id)
+    .bind(req.display_name.as_deref())
+    .bind(req.description.as_deref())
+    .fetch_one(&state.db)
+    .await?;
+    Ok(Json(project))
 }
 
 /// POST /api/v1/projects/{id}/templates
