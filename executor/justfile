@@ -15,9 +15,14 @@ run:
 run-debug:
     RUST_LOG=debug cargo run -p aithericon-executor-service
 
-# Start NATS JetStream via Docker
+# Start NATS JetStream via Docker.
+# Standalone container (own port 4222, default in executor config) — the
+# executor workspace ships no docker-compose, so unlike engine/root (which
+# delegate to `docker compose`) it runs NATS directly. Image tag pinned to
+# nats:2.12-alpine to match the engine/root compose; only the run mechanism
+# (standalone vs compose) differs.
 nats-up:
-    docker run -d --name executor-nats -p 4222:4222 nats:latest -js
+    docker run -d --name executor-nats -p 4222:4222 nats:2.12-alpine -js
 
 # Stop NATS
 nats-down:
