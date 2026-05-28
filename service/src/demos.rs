@@ -494,12 +494,19 @@ pub enum SeedOutcome {
 const DEMO_SEEDER_AUTHOR_ID: uuid::Uuid =
     uuid::uuid!("00000000-0000-0000-0000-000000000aaa");
 
-/// System-owned workspace that seeded demos belong to. Visibility=public on
-/// every row, so any authenticated user sees demos in `list_templates` via
-/// the cross-workspace public-read branch, without needing membership. Seeded
-/// in migration 20240123 alongside the default workspace.
-const DEMO_WORKSPACE_ID: uuid::Uuid =
-    uuid::uuid!("00000000-0000-0000-0000-0000000000de");
+/// Workspace that seeded demos belong to: the **default** workspace
+/// (`Uuid::nil()`, slug `default`), NOT the system-owned `demos` workspace.
+///
+/// Demos are meant to be first-class, *editable* starting points — the
+/// dev-noop user owns `default` (migration 20240123) and the BFF resolver
+/// auto-provisions every authenticated user as an `editor` of it
+/// (`ensure_default_workspace_membership`). So seeding here means a user can
+/// open a demo and publish edits without hitting `gate_template_write`'s
+/// membership check — which is exactly what a separate system-owned demos
+/// workspace prevented. Rows are still `visibility = 'public'` so users whose
+/// active workspace is some *other* tenant still discover them via the
+/// cross-workspace public-read branch in `list_templates`.
+const DEMO_WORKSPACE_ID: uuid::Uuid = uuid::Uuid::nil();
 
 /// Seed every demo under `root` into the running service. Idempotent:
 /// each demo's `demo.json::templateId` is the stable identifier — if
