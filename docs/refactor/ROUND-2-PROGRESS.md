@@ -7,7 +7,7 @@ Main stays pristine. Each lane = own worktree + branch, single-workspace. Merge 
 
 | Lane | Worktree | Branch | Agent ID | Scope | Status |
 |---|---|---|---|---|---|
-| EXEC | .claude/worktrees/r2-exec | refactor/r2-executor | a61b0fd9a436d000b | X1,X2,X3,X4,X5,X7,X8,X10 | running |
+| EXEC | (merged, wt force-removed) | refactor/r2-executor | a61b0fd9a436d000b | X1,X2,X3,X4,X5,X7,X8,X10(+X9) | ✅ MERGED — all 9 done, executor+engine check green |
 | SVC | .claude/worktrees/r2-svc | refactor/r2-service | ac5ad58ad9661cc2f | S2,S4,S5,S6,S9,S10,S11,S13,B1,B3 | running |
 | ENG | (merged, wt removed) | refactor/r2-engine | a19ef721464b9a36f | E2,E5,E6,E9,E11,B5 | ✅ MERGED — all 6 done (incl full E5), check+clippy green |
 | FE | (merged, wt removed) | refactor/r2-frontend | ad765f0d55556119a | P1,P2,P4,P5,P6,P7 | ✅ MERGED — all 6 done, check 0 errors, 92 vitest pass |
@@ -29,6 +29,13 @@ Main stays pristine. Each lane = own worktree + branch, single-workspace. Merge 
 - B2 cancel_subject() — cross-workspace (executor-domain + engine consumer + executor). Add helper, route all 3.
 - Batch 4 (A1/A2/A3 wire-types) — ONLY if it can be made fully green across all 3 binaries. Otherwise leave a writeup; do NOT merge half-done wire-type changes.
 - Final: full CI-parity pass, update the audit doc statuses, summarize for the user.
+
+## Pre-existing issues surfaced (NOT introduced by this round — verify on main, fix separately)
+- **executor clippy**: `collapsible_match` lint in `executor-domain/src/event.rs:251` blocks `clippy --workspace -- -D warnings` locally. Pre-existing + local-toolchain drift from nix-pinned CI. `cargo check` is clean.
+- **executor test compile**: `executor-service/tests/conformance_smtp.rs:333` calls `executor-smtp/src/template.rs:30` with 5 args, fn takes 4. Pre-existing (reproduces on main with round-2 changes stashed). Unrelated to X4 (which only touched `executor-backend-configs/src/smtp.rs`).
+
+## Incident (resolved): stray `git stash pop` in r2-exec
+The EXEC agent ran `git stash pop` while diagnosing the smtp test, which popped the user's pre-existing `stash@{0}: WIP on main` into the r2-exec worktree and left 4 app/ files conflicted. Resolution: verified `stash@{0}` fully intact (all 10 files), confirmed the r2-executor branch commits are executor-only (no contamination), merged the clean branch, force-removed the worktree (discarding only the redundant popped copy), re-confirmed `stash@{0}` still present. **No user WIP lost.**
 
 ## Notes / decisions
 - bypassPermissions for lane agents (unattended overnight).
