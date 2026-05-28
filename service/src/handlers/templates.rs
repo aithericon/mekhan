@@ -446,20 +446,10 @@ pub async fn get_template_bundle(
 
     gate_template_read(&state, &user, &existing)?;
 
-    let (graph, files) = match reconstruct_graph_from_ydoc(&state, id).await {
-        Ok(Some((g, f))) => (g, f),
-        Ok(None) => {
-            let g = serde_json::from_value(existing.graph.clone())
-                .map_err(|e| ApiError::internal(format!("invalid graph: {e}")))?;
-            (g, HashMap::new())
-        }
-        Err(e) => {
-            tracing::error!("failed to load Y.Doc for template {id}: {e}");
-            let g = serde_json::from_value(existing.graph.clone())
-                .map_err(|e| ApiError::internal(format!("invalid graph: {e}")))?;
-            (g, HashMap::new())
-        }
-    };
+    let (graph, files) = graph_with_ydoc_fallback(&state, id, existing.graph.clone(), |g| {
+        serde_json::from_value(g).map_err(|e| ApiError::internal(format!("invalid graph: {e}")))
+    })
+    .await?;
 
     Ok(Json(TemplateBundle { graph, files }))
 }
@@ -652,22 +642,11 @@ pub async fn publish_template(
     // Try to reconstruct graph + files from Y.Doc first (collaborative editing source of truth),
     // falling back to the DB graph column for legacy templates.
     let (graph, mut ydoc_files): (WorkflowGraph, HashMap<String, HashMap<String, String>>) =
-        match reconstruct_graph_from_ydoc(&state, id).await {
-            Ok(Some((g, f))) => (g, f),
-            Ok(None) => {
-                // No Y.Doc exists — fall back to DB graph
-                let g = serde_json::from_value(existing.graph.clone())
-                    .map_err(|e| ApiError::bad_request(format!("invalid graph: {e}")))?;
-                (g, HashMap::new())
-            }
-            Err(e) => {
-                tracing::error!("failed to load Y.Doc for template {id}: {e}");
-                // Fall back to DB graph
-                let g = serde_json::from_value(existing.graph.clone())
-                    .map_err(|e| ApiError::bad_request(format!("invalid graph: {e}")))?;
-                (g, HashMap::new())
-            }
-        };
+        graph_with_ydoc_fallback(&state, id, existing.graph.clone(), |g| {
+            serde_json::from_value(g)
+                .map_err(|e| ApiError::bad_request(format!("invalid graph: {e}")))
+        })
+        .await?;
 
     let publisher = PublishService::new(&state);
 
@@ -806,6 +785,36 @@ async fn reconstruct_graph_from_ydoc(
     .map_err(|e| format!("spawn_blocking: {e}"))??;
 
     Ok(Some(result))
+}
+
+/// Resolve the authored `(graph, files)` for a template, preferring the live
+/// Y.Doc (collaborative source of truth) and falling back to the persisted
+/// `graph` column ONLY when no Y.Doc exists (legacy templates).
+///
+/// A Y.Doc that exists but fails to reconstruct is surfaced as an error rather
+/// than silently serving the stale DB column — the previous per-call-site
+/// behavior (log + serve `existing.graph`) could publish / fork the wrong graph
+/// when collaborative edits hadn't been flushed to the column (they never are).
+///
+/// `parse_db_graph` decodes the `Ok(None)` legacy column, letting each caller
+/// keep its own invalid-graph contract (hard `internal`/`bad_request` error vs.
+/// the new-version path's silent `default_graph()` tolerance).
+async fn graph_with_ydoc_fallback<F>(
+    state: &AppState,
+    id: Uuid,
+    db_graph: serde_json::Value,
+    parse_db_graph: F,
+) -> Result<(WorkflowGraph, HashMap<String, HashMap<String, String>>), ApiError>
+where
+    F: FnOnce(serde_json::Value) -> Result<WorkflowGraph, ApiError>,
+{
+    match reconstruct_graph_from_ydoc(state, id).await {
+        Ok(Some((g, f))) => Ok((g, f)),
+        Ok(None) => Ok((parse_db_graph(db_graph)?, HashMap::new())),
+        Err(e) => Err(ApiError::internal(format!(
+            "failed to load Y.Doc for template {id}: {e}"
+        ))),
+    }
 }
 
 /// Mark a template row as no longer the latest in its version chain. Generic
@@ -961,24 +970,12 @@ pub async fn new_version(
     // + per-node files from the Y.Doc (same source of truth publish uses),
     // falling back to the column only for legacy templates with no Y.Doc.
     let (graph, files): (WorkflowGraph, HashMap<String, HashMap<String, String>>) =
-        match reconstruct_graph_from_ydoc(&state, id).await {
-            Ok(Some((g, f))) => (g, f),
-            Ok(None) => (
-                serde_json::from_value(existing.graph.clone())
-                    .unwrap_or_else(|_| WorkflowGraph::default_graph()),
-                HashMap::new(),
-            ),
-            Err(e) => {
-                tracing::error!(
-                    "failed to load source Y.Doc for new version of {id}: {e}"
-                );
-                (
-                    serde_json::from_value(existing.graph.clone())
-                        .unwrap_or_else(|_| WorkflowGraph::default_graph()),
-                    HashMap::new(),
-                )
-            }
-        };
+        graph_with_ydoc_fallback(&state, id, existing.graph.clone(), |g| {
+            // Legacy no-Y.Doc fork: an unparseable column degrades to a blank
+            // canvas rather than failing the new-version create.
+            Ok(serde_json::from_value(g).unwrap_or_else(|_| WorkflowGraph::default_graph()))
+        })
+        .await?;
     let graph_json =
         serde_json::to_value(&graph).map_err(|e| ApiError::internal(e.to_string()))?;
 
