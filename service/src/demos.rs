@@ -702,6 +702,135 @@ pub async fn seed_one(
     Ok(SeedOutcome::Seeded)
 }
 
+// ── Reset / reseed ────────────────────────────────────────────────────────────
+
+/// Tally of a [`purge_seeded`] / [`reseed_all`] run. Serializable so the admin
+/// HTTP endpoint hands it straight back to the operator / CLI.
+#[derive(Debug, Clone, Default, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DemoResetReport {
+    /// Distinct seeded template *families* (by base id) deleted.
+    pub families_removed: usize,
+    /// Workflow instances (across every version of those families) whose
+    /// engine nets were purged and DB rows deleted.
+    pub instances_purged: usize,
+    /// Bundled template-test rows removed alongside the families.
+    pub tests_removed: usize,
+    /// Demos freshly re-seeded. Only ever non-zero from [`reseed_all`].
+    pub seeded: usize,
+}
+
+/// Force-delete every seeded demo family — the destructive half of "reset
+/// demos to pristine". Mirrors `handlers::templates::delete_template`'s cascade
+/// but **without** its running-instance guard: this is a deliberate reset, so
+/// running instances are cancelled (engine net purged), not spared.
+///
+/// "Seeded" is `author_id = DEMO_SEEDER_AUTHOR_ID` — the synthetic actor every
+/// seeded v1 row carries (see [`DEMO_SEEDER_AUTHOR_ID`]). Each such row is
+/// resolved to its family *base* id and the family is deleted whole: instances
+/// (nets purged + rows dropped), every version in the chain (Y.Doc cascades via
+/// FK), in-memory triggers forgotten, and bundled template-tests removed
+/// (template_tests has no FK to cascade, so it is deleted explicitly).
+///
+/// Idempotent: a second call finds nothing and returns a zeroed report.
+pub async fn purge_seeded(
+    state: &crate::AppState,
+) -> Result<DemoResetReport, DemoSeedError> {
+    let mut report = DemoResetReport::default();
+
+    // Family base ids. Seeded v1 rows set `base_template_id = id`, so COALESCE
+    // collapses both NULL-base and self-base rows to the family root.
+    let bases: Vec<(uuid::Uuid,)> = sqlx::query_as(
+        "SELECT DISTINCT COALESCE(base_template_id, id) \
+           FROM workflow_templates WHERE author_id = $1",
+    )
+    .bind(DEMO_SEEDER_AUTHOR_ID)
+    .fetch_all(&state.db)
+    .await?;
+
+    let purge_events = state.config.cleanup.purge_events;
+
+    for (base,) in bases {
+        // Purge engine nets for every instance in the family, then drop the
+        // rows. Force: no running-instance guard.
+        let instances: Vec<(uuid::Uuid, String)> = sqlx::query_as(
+            "SELECT id, net_id FROM workflow_instances \
+              WHERE template_id IN \
+              (SELECT id FROM workflow_templates WHERE base_template_id = $1 OR id = $1)",
+        )
+        .bind(base)
+        .fetch_all(&state.db)
+        .await
+        .unwrap_or_default();
+
+        for (_iid, net_id) in &instances {
+            crate::lifecycle::cleanup_net(net_id, &state.nats, &state.petri, purge_events).await;
+        }
+
+        let del_inst = sqlx::query(
+            "DELETE FROM workflow_instances \
+              WHERE template_id IN \
+              (SELECT id FROM workflow_templates WHERE base_template_id = $1 OR id = $1)",
+        )
+        .bind(base)
+        .execute(&state.db)
+        .await?;
+        report.instances_purged += del_inst.rows_affected() as usize;
+
+        // Bundled tests key on the family root id (= base); no FK cascade.
+        let del_tests = sqlx::query("DELETE FROM template_tests WHERE template_id = $1")
+            .bind(base)
+            .execute(&state.db)
+            .await?;
+        report.tests_removed += del_tests.rows_affected() as usize;
+
+        // Capture version ids so their triggers can be forgotten post-delete
+        // (otherwise a deleted demo's triggers keep firing until restart).
+        let version_ids: Vec<(uuid::Uuid,)> = sqlx::query_as(
+            "SELECT id FROM workflow_templates WHERE base_template_id = $1 OR id = $1",
+        )
+        .bind(base)
+        .fetch_all(&state.db)
+        .await
+        .unwrap_or_default();
+
+        sqlx::query("DELETE FROM workflow_templates WHERE base_template_id = $1 OR id = $1")
+            .bind(base)
+            .execute(&state.db)
+            .await?;
+
+        for (vid,) in version_ids {
+            state.triggers.forget_template(vid);
+        }
+        report.families_removed += 1;
+    }
+
+    tracing::info!(
+        families = report.families_removed,
+        instances = report.instances_purged,
+        tests = report.tests_removed,
+        "purged seeded demos"
+    );
+    Ok(report)
+}
+
+/// Reset seeded demos to pristine: [`purge_seeded`] then [`seed_all`]. Because
+/// the purge runs first, the subsequent seed always recreates from disk (no
+/// idempotent skip), discarding any user edits — true "reset to factory".
+pub async fn reseed_all(
+    state: &crate::AppState,
+    root: &Path,
+) -> Result<DemoResetReport, DemoSeedError> {
+    let mut report = purge_seeded(state).await?;
+    let outcomes = seed_all(state, root).await?;
+    report.seeded = outcomes
+        .iter()
+        .filter(|(_, o)| matches!(o, SeedOutcome::Seeded))
+        .count();
+    tracing::info!(seeded = report.seeded, "reseeded demos");
+    Ok(report)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

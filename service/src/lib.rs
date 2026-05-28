@@ -160,6 +160,9 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::templates::io_stubs))
         .routes(routes!(handlers::templates::compile_graph))
         .routes(routes!(handlers::templates::analyze_graph))
+        // Admin: remove / reseed built-in demos
+        .routes(routes!(handlers::demos::reset_demos))
+        .routes(routes!(handlers::demos::reseed_demos))
         // Template tests
         .routes(routes!(
             handlers::template_tests::list_tests,

@@ -73,6 +73,7 @@ use utoipa::OpenApi;
         (name = "projects", description = "Workspace-scoped template grouping + tag/visibility surface + per-project OpenAPI bundle."),
         (name = "me", description = "Per-session preferences — active workspace switcher."),
         (name = "users", description = "Directory lookups — email → OIDC subject resolver for member admin."),
+        (name = "admin", description = "Operator-only maintenance — remove / reseed the built-in demo workflows."),
     ),
 )]
 pub struct ApiDoc;

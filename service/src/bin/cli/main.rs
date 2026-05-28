@@ -1,5 +1,6 @@
 mod apply;
 mod cancel;
+mod demos;
 mod diff;
 mod doc_ops;
 mod formats;
@@ -144,6 +145,17 @@ enum Commands {
         tail: Option<usize>,
     },
 
+    /// Remove / reseed the built-in demo workflows (operator maintenance).
+    ///
+    /// Both actions are destructive: they cancel running instances and purge
+    /// the engine nets of every *seeded* demo family. `reseed` then recreates
+    /// them from the server's on-disk demos directory, overwriting edits.
+    /// Requires admin of the default workspace (set `MEKHAN_CLI_TOKEN`).
+    Demos {
+        #[command(subcommand)]
+        action: DemosAction,
+    },
+
     /// Print the OpenAPI 3 spec to stdout (no DB or NATS required).
     /// Used by the frontend codegen pipeline to regenerate
     /// `app/src/lib/api/v1/schema.d.ts`.
@@ -164,6 +176,15 @@ enum Commands {
         #[arg(long)]
         include_disabled: bool,
     },
+}
+
+#[derive(Subcommand)]
+enum DemosAction {
+    /// Remove every seeded demo family (does not re-seed).
+    Reset,
+    /// Remove every seeded demo family, then re-seed from the server's
+    /// on-disk demos directory. Overwrites any user edits.
+    Reseed,
 }
 
 #[tokio::main]
@@ -209,6 +230,13 @@ async fn main() -> anyhow::Result<()> {
         Commands::Cancel { instance_id } => cancel::run(&cli.server, &instance_id).await,
         Commands::Logs { instance_id, tail } => {
             logs::run(&cli.server, &instance_id, tail).await
+        }
+        Commands::Demos { action } => {
+            let act = match action {
+                DemosAction::Reset => demos::Action::Reset,
+                DemosAction::Reseed => demos::Action::Reseed,
+            };
+            demos::run(&cli.server, act).await
         }
         Commands::Openapi => {
             let spec = mekhan_service::openapi_spec();

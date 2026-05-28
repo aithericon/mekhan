@@ -23,6 +23,90 @@
     }
   ],
   "paths": {
+    "/api/v1/admin/demos/reseed": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "POST /api/v1/admin/demos/reseed",
+        "description": "Reset seeded demos to pristine: remove every seeded family (force) then\nre-seed all demos from the configured on-disk demos directory. Overwrites\nany user edits — true \"reset to factory\".",
+        "operationId": "reseed_demos",
+        "responses": {
+          "200": {
+            "description": "Seeded demos purged and re-seeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DemoResetReport"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin of the default workspace required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/demos/reset": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "POST /api/v1/admin/demos/reset",
+        "description": "Remove every seeded demo family (cancelling running instances + purging\ntheir engine nets). Does **not** re-seed — use `reseed` for that.",
+        "operationId": "reset_demos",
+        "responses": {
+          "200": {
+            "description": "Seeded demos removed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DemoResetReport"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin of the default workspace required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/analyze": {
       "post": {
         "tags": [
@@ -6883,6 +6967,38 @@
           }
         }
       },
+      "DemoResetReport": {
+        "type": "object",
+        "description": "Tally of a [`purge_seeded`] / [`reseed_all`] run. Serializable so the admin\nHTTP endpoint hands it straight back to the operator / CLI.",
+        "required": [
+          "familiesRemoved",
+          "instancesPurged",
+          "testsRemoved",
+          "seeded"
+        ],
+        "properties": {
+          "familiesRemoved": {
+            "type": "integer",
+            "description": "Distinct seeded template *families* (by base id) deleted.",
+            "minimum": 0
+          },
+          "instancesPurged": {
+            "type": "integer",
+            "description": "Workflow instances (across every version of those families) whose\nengine nets were purged and DB rows deleted.",
+            "minimum": 0
+          },
+          "seeded": {
+            "type": "integer",
+            "description": "Demos freshly re-seeded. Only ever non-zero from [`reseed_all`].",
+            "minimum": 0
+          },
+          "testsRemoved": {
+            "type": "integer",
+            "description": "Bundled template-test rows removed alongside the families.",
+            "minimum": 0
+          }
+        }
+      },
       "DeploymentModel": {
         "oneOf": [
           {
@@ -12564,6 +12680,10 @@
     {
       "name": "users",
       "description": "Directory lookups — email → OIDC subject resolver for member admin."
+    },
+    {
+      "name": "admin",
+      "description": "Operator-only maintenance — remove / reseed the built-in demo workflows."
     }
   ]
 }

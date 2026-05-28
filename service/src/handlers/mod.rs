@@ -1,5 +1,6 @@
 pub mod auth_tokens;
 pub mod backends;
+pub mod demos;
 pub mod files;
 pub mod health;
 pub mod instances;

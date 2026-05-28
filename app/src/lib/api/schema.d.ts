@@ -4,6 +4,49 @@
  */
 
 export interface paths {
+    "/api/v1/admin/demos/reseed": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * POST /api/v1/admin/demos/reseed
+         * @description Reset seeded demos to pristine: remove every seeded family (force) then
+         *     re-seed all demos from the configured on-disk demos directory. Overwrites
+         *     any user edits — true "reset to factory".
+         */
+        post: operations["reseed_demos"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/demos/reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * POST /api/v1/admin/demos/reset
+         * @description Remove every seeded demo family (cancelling running instances + purging
+         *     their engine nets). Does **not** re-seed — use `reseed` for that.
+         */
+        post: operations["reset_demos"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/analyze": {
         parameters: {
             query?: never;
@@ -2374,6 +2417,23 @@ export interface components {
             signal_key: string;
         };
         /**
+         * @description Tally of a [`purge_seeded`] / [`reseed_all`] run. Serializable so the admin
+         *     HTTP endpoint hands it straight back to the operator / CLI.
+         */
+        DemoResetReport: {
+            /** @description Distinct seeded template *families* (by base id) deleted. */
+            familiesRemoved: number;
+            /**
+             * @description Workflow instances (across every version of those families) whose
+             *     engine nets were purged and DB rows deleted.
+             */
+            instancesPurged: number;
+            /** @description Demos freshly re-seeded. Only ever non-zero from [`reseed_all`]. */
+            seeded: number;
+            /** @description Bundled template-test rows removed alongside the families. */
+            testsRemoved: number;
+        };
+        /**
          * @description Where an `AutomatedStep`'s job runs. Internally tagged on the wire:
          *     `{"mode":"inline"}` or `{"mode":"scheduled","jobTemplate":"...",
          *     "resources":{...}}`. Keep the `mode` strings in lockstep with the
@@ -4674,6 +4734,82 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    reseed_demos: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Seeded demos purged and re-seeded */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DemoResetReport"];
+                };
+            };
+            /** @description Admin of the default workspace required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    reset_demos: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Seeded demos removed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DemoResetReport"];
+                };
+            };
+            /** @description Admin of the default workspace required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     analyze_graph: {
         parameters: {
             query?: never;

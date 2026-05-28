@@ -219,6 +219,22 @@ openapi:
     (cd app && pnpm run openapi:generate)
     echo "✓ openapi spec + schema regenerated"
 
+# Remove every seeded demo workflow (cancels running instances + purges nets).
+# Thin wrapper over `mekhan demos reset` → POST /api/v1/admin/demos/reset.
+# Requires mekhan running (`just dev`); dev_noop needs no token.
+demos-reset:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo run --quiet --bin mekhan -- --server http://localhost:13100 demos reset
+
+# Reset seeded demos to pristine: remove every seeded family, then re-seed
+# from ./demos. Overwrites any edits made via the editor. Wrapper over
+# `mekhan demos reseed` → POST /api/v1/admin/demos/reseed.
+demos-reseed:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo run --quiet --bin mekhan -- --server http://localhost:13100 demos reseed
+
 # ── Infra ────────────────────────────────────────────────────────────────────
 
 _infra-up:
