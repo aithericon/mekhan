@@ -17,14 +17,14 @@
 
 set -euo pipefail
 
-ZITADEL_HOST="${ZITADEL_HOST:-http://localhost:8080}"
+ZITADEL_HOST="${ZITADEL_HOST:-http://localhost:18080}"
 PAT_FILE="${PAT_FILE:-deploy/zitadel/pat/zitadel-admin-sa.pat}"
 
 PROJECT_NAME="${PROJECT_NAME:-Mekhan}"
 APP_NAME="${APP_NAME:-Mekhan SPA}"
 # BFF: the OIDC callback is handled by the Rust service, not a SPA route.
-REDIRECT_URI="${REDIRECT_URI:-http://localhost:5173/api/auth/callback}"
-POST_LOGOUT_URI="${POST_LOGOUT_URI:-http://localhost:5173/}"
+REDIRECT_URI="${REDIRECT_URI:-http://localhost:15173/api/auth/callback}"
+POST_LOGOUT_URI="${POST_LOGOUT_URI:-http://localhost:15173/}"
 
 # cargo's CWD depends on how you invoke it — from workspace root it picks up
 # ./mekhan.local.toml; from inside service/ it picks up ./mekhan.local.toml
@@ -284,7 +284,7 @@ broker_pat = "$broker_pat"
 # Local http dev: do not set the Secure cookie attribute (browsers drop
 # Secure cookies on plain http). Set true behind https in production.
 cookie_secure = false
-cors_origins = ["http://localhost:5173"]
+cors_origins = ["http://localhost:15173"]
 EOF
   echo "Wrote $cfg"
 done
@@ -294,7 +294,7 @@ cat <<EOF
 ────────────────────────────────────────────────────────────
 ✓ Zitadel local bootstrap complete.
 
-  Console:        http://localhost:8080/ui/console
+  Console:        http://localhost:18080/ui/console
   Admin login:    zitadel-admin@mekhan.localhost
   Admin password: Password1!
 
@@ -306,7 +306,7 @@ Next:
   cd service && cargo run            # picks up service/mekhan.local.toml (bff)
   cd app && pnpm dev                 # SPA needs no auth env in the BFF model
 
-  Then open http://localhost:5173 — you'll be redirected to Zitadel to log
+  Then open http://localhost:15173 — you'll be redirected to Zitadel to log
   in, and land back signed in with only an HttpOnly session cookie.
 
 GitOps machine token (CI \`mekhan apply\`):

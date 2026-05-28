@@ -27,8 +27,8 @@
 //! instance here, never on the user's first try.
 //!
 //! Requires:
-//!   - `just dev::up` (engine :3030, executor with `llm` feature, NATS :4333,
-//!     postgres :5439)
+//!   - `just dev::up` (engine :13030, executor with `llm` feature, NATS :14333,
+//!     postgres :15439)
 //!   - `just dev::up-ollama` (Ollama at :11434 with the model the demo
 //!     references — default `qwen3.5:9b`)
 //!
@@ -58,7 +58,7 @@ use mekhan_service::lifecycle::start_lifecycle_listener;
 use mekhan_service::nats::MekhanNats;
 
 fn engine_url() -> String {
-    std::env::var("TEST_ENGINE_URL").unwrap_or_else(|_| "http://localhost:3030".to_string())
+    std::env::var("TEST_ENGINE_URL").unwrap_or_else(|_| "http://localhost:13030".to_string())
 }
 
 fn engine_nats_url() -> String {

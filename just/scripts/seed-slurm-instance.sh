@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Seed a Scheduled-Slurm template + instance through the LIVE mekhan-service
-# (default :3100), so the UI at :5173 has a real workflow to inspect.
+# (default :13100), so the UI at :15173 has a real workflow to inspect.
 #
 # Mirrors the graph in service/tests/scheduled_slurm_e2e.rs but lands the row
 # in the live `mekhan` Postgres (the test uses an ephemeral fixture DB the UI
@@ -12,15 +12,15 @@
 #   just dev slurm-up    # Docker Slurm cluster + engine in SCHEDULER_BACKEND=slurm
 #
 # Usage:
-#   just/scripts/seed-slurm-instance.sh                # POSTs to localhost:3100
-#   MEKHAN_URL=http://other:3100 just/scripts/seed-slurm-instance.sh
+#   just/scripts/seed-slurm-instance.sh                # POSTs to localhost:13100
+#   MEKHAN_URL=http://other:13100 just/scripts/seed-slurm-instance.sh
 #   JOB_TEMPLATE=mekhan-executor-worker  just/scripts/seed-slurm-instance.sh
 #
 # On success, prints the template + instance UUIDs and the UI URLs.
 
 set -euo pipefail
 
-MEKHAN_URL="${MEKHAN_URL:-http://localhost:3100}"
+MEKHAN_URL="${MEKHAN_URL:-http://localhost:13100}"
 JOB_TEMPLATE="${JOB_TEMPLATE:-mekhan-executor-worker}"
 TEMPLATE_NAME="${TEMPLATE_NAME:-Scheduled-Slurm UI Seed}"
 
@@ -144,8 +144,8 @@ echo "  ✓ instance $instance_id ($status)"
 cat <<EOF
 
 Open in UI:
-  http://localhost:5173/instances/$instance_id
-  http://localhost:5173/templates/$template_id
+  http://localhost:15173/instances/$instance_id
+  http://localhost:15173/templates/$template_id
 
 Poll status:
   curl -sf $MEKHAN_URL/api/v1/instances/$instance_id | python3 -m json.tool

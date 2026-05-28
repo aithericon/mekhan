@@ -362,7 +362,7 @@ async fn build_authenticator(
             // origin if present, else assume same-origin localhost dev.
             let redirect_uri = std::env::var("MEKHAN__AUTH__REDIRECT_URI")
                 .ok()
-                .unwrap_or_else(|| "http://localhost:5173/api/auth/callback".to_string());
+                .unwrap_or_else(|| "http://localhost:15173/api/auth/callback".to_string());
 
             let oidc = OidcClient::discover(OidcConfig {
                 issuer_url,

@@ -8,7 +8,7 @@
 //!
 //! The lifecycle listener and the engine must share a NATS broker. Both the
 //! harness default and the `just dev` engine use the dev broker
-//! (`docker-compose.yml` maps `4333:4222`). Override with `ENGINE_NATS_URL`
+//! (`docker-compose.yml` maps `14333:4222`). Override with `ENGINE_NATS_URL`
 //! only if the engine was started against a non-default NATS.
 
 mod common;
@@ -30,7 +30,7 @@ use mekhan_service::nats::MekhanNats;
 
 /// Test engine URL (override with TEST_ENGINE_URL).
 fn engine_url() -> String {
-    std::env::var("TEST_ENGINE_URL").unwrap_or_else(|_| "http://localhost:3030".to_string())
+    std::env::var("TEST_ENGINE_URL").unwrap_or_else(|_| "http://localhost:13030".to_string())
 }
 
 /// Check if the petri-lab engine is reachable.

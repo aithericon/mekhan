@@ -3,7 +3,7 @@
 # zitadel container.
 #
 # Internal calls from `zitadel-login` to the core also come through here, so
-# we force the upstream Host header to `localhost:8080` — Zitadel's instance
+# we force the upstream Host header to `localhost:18080` — Zitadel's instance
 # resolver matches the request Host against ExternalDomain and would reject
 # `zitadel:8080`.
 :8080 {
@@ -17,8 +17,8 @@
 			# here too, where the original Host is `zitadel-proxy:8080` —
 			# pin both to the configured ExternalDomain so resolution works
 			# the same for browser + service-to-service traffic.
-			header_up Host localhost:8080
-			header_up X-Forwarded-Host localhost:8080
+			header_up Host localhost:18080
+			header_up X-Forwarded-Host localhost:18080
 			header_up X-Forwarded-Proto http
 		}
 	}

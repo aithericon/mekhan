@@ -231,7 +231,7 @@ variable "engine_image_repository" {
 }
 
 variable "engine_service_port" {
-  description = "Port the engine binary listens on. Must match PORT env var; mekhan-service hard-codes :3030 in default_petri_lab_url."
+  description = "Port the engine binary listens on. Must match PORT env var; mekhan-service hard-codes :13030 in default_petri_lab_url."
   type        = number
   default     = 3030
 }

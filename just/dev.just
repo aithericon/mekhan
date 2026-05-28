@@ -37,10 +37,10 @@ work_dir  := ".dev/work"
 executor_features := "docker,python,http,http-cancel,file-ops,opendal-s3,url-inputs,llm,kreuzberg,smtp,vault"
 
 # Local infra endpoints (also baked into service/mekhan.toml + engine env)
-nats_url     := "nats://localhost:4333"
-database_url := "postgres://mekhan:mekhan@localhost:5439/mekhan"
-s3_endpoint  := "http://localhost:9005"
-vault_addr   := "http://localhost:8200"
+nats_url     := "nats://localhost:14333"
+database_url := "postgres://mekhan:mekhan@localhost:15439/mekhan"
+s3_endpoint  := "http://localhost:19005"
+vault_addr   := "http://localhost:18200"
 vault_token  := "root"
 
 # ── Entrypoints ──────────────────────────────────────────────────────────────
@@ -256,7 +256,7 @@ _wait-infra:
     done
     echo "▶ waiting for nats…"
     for _ in $(seq 1 30); do
-      curl -sf http://localhost:8333/healthz >/dev/null 2>&1 && break
+      curl -sf http://localhost:18333/healthz >/dev/null 2>&1 && break
       sleep 1
     done
     echo "▶ waiting for rustfs…"
@@ -453,7 +453,7 @@ up-executor:
     [cancel]
     nats      = true
     http      = true
-    http_port = 3105
+    http_port = 13105
     EOF
 
     echo "▶ starting executor…"
@@ -525,7 +525,7 @@ up-engine scheduler="off":
       export SLURM_TEMPLATE_DIR="/opt/petri/templates"
     fi
 
-    echo "▶ starting engine on :3030…"
+    echo "▶ starting engine on :13030…"
     # VAULT_ADDR + VAULT_TOKEN flip the engine's `executor-vault-secrets`
     # path on: at job-submit time it scans the spec for secret-template
     # refs, resolves them via VaultSecretStore, and wraps them into a
@@ -540,11 +540,11 @@ up-engine scheduler="off":
       EXECUTOR_NAMESPACE="executor" \
       VAULT_ADDR="{{vault_addr}}" \
       VAULT_TOKEN="{{vault_token}}" \
-      PORT="3030" \
+      PORT="13030" \
       "${CARGO_TARGET_DIR:-$PWD/engine/target}/debug/core-engine" \
       > "{{log_dir}}/engine.log" 2>&1 &
     echo $! > "{{pid_dir}}/engine.pid"
-    echo "  ✓ engine (pid $(cat {{pid_dir}}/engine.pid))  http://localhost:3030  log: {{log_dir}}/engine.log"
+    echo "  ✓ engine (pid $(cat {{pid_dir}}/engine.pid))  http://localhost:13030  log: {{log_dir}}/engine.log"
 
 down-engine:
     @just dev::_kill engine
@@ -671,10 +671,10 @@ scheduler-up:
     just dev::up-engine nomad
     echo "▶ waiting for engine API…"
     for _ in $(seq 1 30); do
-      curl -sf http://localhost:3030/api/nets/metadata >/dev/null 2>&1 && break
+      curl -sf http://localhost:13030/api/nets/metadata >/dev/null 2>&1 && break
       sleep 1
     done
-    curl -sf http://localhost:3030/api/nets/metadata >/dev/null 2>&1 || {
+    curl -sf http://localhost:13030/api/nets/metadata >/dev/null 2>&1 || {
       echo "✗ engine did not come back (log: {{log_dir}}/engine.log)" >&2; exit 1; }
     sleep 2  # let the Nomad + executor watchers connect
 
@@ -690,7 +690,7 @@ scheduler-up:
     echo ""
     echo "✓ Nomad scheduler layer up:"
     echo "  nomad        → http://localhost:4646/ui"
-    echo "  scheduler-net + executor-net deployed & running on :3030"
+    echo "  scheduler-net + executor-net deployed & running on :13030"
     echo "  engine now started with SCHEDULER_BACKEND=nomad (Scheduled steps dispatch)"
     echo "  dev daemon executor PAUSED — Nomad worker is the sole consumer"
     echo "    of the 'executor' queue. Inline AutomatedSteps will NOT run"
@@ -794,7 +794,7 @@ slurm-up:
     cat > "$tpl" <<'TEMPLATE'
     #!/bin/bash
     #SBATCH --output=/tmp/petri-executor-%j.out
-    export EXECUTOR_NATS_URL=nats://host.docker.internal:4333
+    export EXECUTOR_NATS_URL=nats://host.docker.internal:14333
     export EXECUTOR_NAMESPACE=executor
     export EXECUTOR_SOURCE=nats_queue
     export EXECUTOR_LIFETIME=run_to_completion
@@ -806,7 +806,7 @@ slurm-up:
     export EXECUTOR_IDLE_TIMEOUT_SECS=15
     export AITHERICON_SDK_PATH=/opt/petri/aithericon-sdk
     export EXECUTOR_STORAGE__BACKEND=s3
-    export EXECUTOR_STORAGE__ENDPOINT=http://host.docker.internal:9005
+    export EXECUTOR_STORAGE__ENDPOINT=http://host.docker.internal:19005
     export EXECUTOR_STORAGE__BUCKET=mekhan-artifacts
     export EXECUTOR_STORAGE__REGION=us-east-1
     export EXECUTOR_STORAGE__CREDENTIALS__ACCESS_KEY=rustfsadmin
@@ -860,10 +860,10 @@ slurm-up:
     just dev::up-engine slurm
     echo "▶ waiting for engine API…"
     for _ in $(seq 1 30); do
-      curl -sf http://localhost:3030/api/nets/metadata >/dev/null 2>&1 && break
+      curl -sf http://localhost:13030/api/nets/metadata >/dev/null 2>&1 && break
       sleep 1
     done
-    curl -sf http://localhost:3030/api/nets/metadata >/dev/null 2>&1 || {
+    curl -sf http://localhost:13030/api/nets/metadata >/dev/null 2>&1 || {
       echo "✗ engine did not come back (log: {{log_dir}}/engine.log)" >&2; exit 1; }
     sleep 2  # let the Slurm + executor watchers connect
 
@@ -878,7 +878,7 @@ slurm-up:
     echo ""
     echo "✓ Slurm scheduler layer up:"
     echo "  slurm        → docker compose (login: ssh -p 2222 testuser@localhost)"
-    echo "  scheduler-net + executor-net deployed & running on :3030"
+    echo "  scheduler-net + executor-net deployed & running on :13030"
     echo "  engine now started with SCHEDULER_BACKEND=slurm (Scheduled steps dispatch)"
     echo "  dev daemon executor PAUSED — Slurm worker is the sole consumer"
     echo "    of the 'executor' queue. Inline AutomatedSteps will NOT run"
@@ -941,10 +941,10 @@ up-mekhan auth_mode="dev_noop":
         echo "  run: bash deploy/zitadel/bootstrap.sh" >&2
         exit 1
       fi
-      echo "▶ starting mekhan-service on :3100 (auth: BFF + Zitadel PAT introspection)…"
+      echo "▶ starting mekhan-service on :13100 (auth: BFF + Zitadel PAT introspection)…"
     else
       mode_assign="MEKHAN__AUTH__MODE=dev_noop"
-      echo "▶ starting mekhan-service on :3100 (auth: dev_noop — offline)…"
+      echo "▶ starting mekhan-service on :13100 (auth: dev_noop — offline)…"
     fi
     # VAULT_ADDR + VAULT_TOKEN promote the resource_store from the
     # in-memory placeholder (which loses secrets on every mekhan restart)
@@ -955,7 +955,8 @@ up-mekhan auth_mode="dev_noop":
       RUST_LOG="info,mekhan_service=debug" \
       MEKHAN__DATABASE_URL="{{database_url}}" \
       MEKHAN__NATS_URL="{{nats_url}}" \
-      MEKHAN__PETRI_LAB_URL="http://localhost:3030" \
+      MEKHAN__PORT="13100" \
+      MEKHAN__PETRI_LAB_URL="http://localhost:13030" \
       MEKHAN__S3__ENDPOINT="{{s3_endpoint}}" \
       MEKHAN__S3__ACCESS_KEY="rustfsadmin" \
       MEKHAN__S3__SECRET_KEY="rustfsadmin" \
@@ -967,7 +968,7 @@ up-mekhan auth_mode="dev_noop":
       "${CARGO_TARGET_DIR:-$PWD/target}/debug/mekhan-service" \
       > "{{log_dir}}/mekhan.log" 2>&1 &
     echo $! > "{{pid_dir}}/mekhan.pid"
-    echo "  ✓ mekhan-service (pid $(cat {{pid_dir}}/mekhan.pid))  http://localhost:3100  log: {{log_dir}}/mekhan.log"
+    echo "  ✓ mekhan-service (pid $(cat {{pid_dir}}/mekhan.pid))  http://localhost:13100  log: {{log_dir}}/mekhan.log"
 
 down-mekhan:
     @just dev::_kill mekhan
@@ -991,11 +992,11 @@ up-app:
     # dev user (no redirect, fully offline). Remove any stale env override a
     # previous (pre-BFF) `just dev` may have written so it can't shadow things.
     rm -f app/.env.development.local
-    echo "▶ starting SvelteKit dev server on :5173…"
-    nohup bash -c 'cd "$PWD/app" && exec pnpm run dev -- --host 0.0.0.0 --port 5173' \
+    echo "▶ starting SvelteKit dev server on :15173…"
+    nohup bash -c 'cd "$PWD/app" && exec pnpm run dev -- --host 0.0.0.0 --port 15173' \
       > "{{log_dir}}/app.log" 2>&1 &
     echo $! > "{{pid_dir}}/app.pid"
-    echo "  ✓ app (pid $(cat {{pid_dir}}/app.pid))  http://localhost:5173  log: {{log_dir}}/app.log"
+    echo "  ✓ app (pid $(cat {{pid_dir}}/app.pid))  http://localhost:15173  log: {{log_dir}}/app.log"
 
 down-app:
     @just dev::_kill app
@@ -1037,15 +1038,15 @@ _kill name:
 _summary auth="DISABLED (dev_noop) — every request is the dev user":
     @echo ""
     @echo "✓ dev stack up:"
-    @echo "  postgres   → localhost:5439              (db: mekhan / user: mekhan / pw: mekhan)"
-    @echo "  nats       → localhost:4333              (http monitor: http://localhost:8333)"
-    @echo "  rustfs     → http://localhost:9005       (console: http://localhost:9006 / admin: rustfsadmin)"
-    @echo "  vault      → http://localhost:8200       (dev mode; root token: root; KV v2 at secret/)"
+    @echo "  postgres   → localhost:15439             (db: mekhan / user: mekhan / pw: mekhan)"
+    @echo "  nats       → localhost:14333             (http monitor: http://localhost:18333)"
+    @echo "  rustfs     → http://localhost:19005      (console: http://localhost:19006 / admin: rustfsadmin)"
+    @echo "  vault      → http://localhost:18200      (dev mode; root token: root; KV v2 at secret/)"
     @echo "  ollama     → http://localhost:11434      (native /api/chat; up if installed, see just/dev.just::up-ollama)"
-    @echo "  executor   → daemon (NATS-driven)        (cancel: http://localhost:3105)"
-    @echo "  engine     → http://localhost:3030"
-    @echo "  mekhan     → http://localhost:3100"
-    @echo "  app (dev)  → http://localhost:5173"
+    @echo "  executor   → daemon (NATS-driven)        (cancel: http://localhost:13105)"
+    @echo "  engine     → http://localhost:13030"
+    @echo "  mekhan     → http://localhost:13100"
+    @echo "  app (dev)  → http://localhost:15173"
     @echo ""
     @echo "  auth       → {{auth}}"
     @echo ""

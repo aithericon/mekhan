@@ -16,11 +16,11 @@ export function createYjsSession(templateId: string): YjsSession {
 	// host (a reverse proxy will handle the WS upgrade).
 	//
 	// Why we rewrite `localhost` → `127.0.0.1` in dev:
-	// mekhan-service binds `0.0.0.0:3100` (IPv4 only). On macOS `localhost`
+	// mekhan-service binds `0.0.0.0:13100` (IPv4 only). On macOS `localhost`
 	// resolves to `::1` first, so Firefox's WebSocket tries IPv6, gets
 	// ECONNREFUSED, and waits ~10s before retrying IPv4 — that's the
 	// long "Reconnecting…" we measured in the browser trace (10.66s between
-	// `new WebSocket()` and `onopen` against `ws://localhost:3100/...`).
+	// `new WebSocket()` and `onopen` against `ws://localhost:13100/...`).
 	// Forcing the literal IPv4 address skips DNS and the handshake completes
 	// in ~10ms. (Chromium's WS happy-eyeballs is faster but not free either.)
 	let wsUrl: string;
@@ -28,13 +28,13 @@ export function createYjsSession(templateId: string): YjsSession {
 		if (import.meta.env.DEV) {
 			const host =
 				window.location.hostname === 'localhost' ? '127.0.0.1' : window.location.hostname;
-			wsUrl = `ws://${host}:3100/api/yjs`;
+			wsUrl = `ws://${host}:13100/api/yjs`;
 		} else {
 			const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
 			wsUrl = `${proto}//${window.location.host}/api/yjs`;
 		}
 	} else {
-		wsUrl = 'ws://127.0.0.1:3100/api/yjs';
+		wsUrl = 'ws://127.0.0.1:13100/api/yjs';
 	}
 
 	// BFF model: no token in the URL. Same-origin (prod) the `mekhan_session`

@@ -17,8 +17,8 @@ use utoipa::OpenApi;
     ),
     servers(
         (url = "/", description = "Same-origin BFF (production single-origin posture)."),
-        (url = "http://localhost:3100", description = "Local mekhan-service direct."),
-        (url = "http://localhost:5173", description = "SvelteKit dev server (proxies /api/* to mekhan).")
+        (url = "http://localhost:13100", description = "Local mekhan-service direct."),
+        (url = "http://localhost:15173", description = "SvelteKit dev server (proxies /api/* to mekhan).")
     ),
     components(
         // SSE event payload types — not referenced from any handler signature
