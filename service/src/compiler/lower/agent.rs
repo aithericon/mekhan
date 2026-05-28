@@ -295,15 +295,29 @@ fn lower_agent_loop(
     // stays slim; the executor's `FetchConfigHook` materialises it.
     let storage_key = cx.config_storage.key(&id);
     cx.node_configs.insert(id.clone(), llm_config);
-    // `overlay` carries the per-turn conversation history inline on the
-    // token; the executor's `FetchConfigHook` shallow-merges it onto the
-    // static config (system prompt + tool schemas) fetched from
-    // `storage_path`, so `config.history` reflects the accumulated
-    // transcript each turn. `s` is in scope where this is interpolated —
-    // the prepare_call logic binds `let s = state;` first.
+    // The conversation transcript lives OFF the token in per-turn S3 blobs
+    // (`instances/{instance_id}/{node}/turn-{N}.json`, cumulative through
+    // turn N's assistant message). The overlay carries only slim plumbing on
+    // EXISTING wire fields (so the engine needs no new typed field — no
+    // stale-engine field-drop): `history`/`pending` are `{{input:...}}`
+    // placeholders the backend's `resolve_inputs` fills from staged inputs
+    // (the base blob + this turn's delta), and `_history_write_key` is the
+    // per-turn key the worker writes the new cumulative transcript to after
+    // the model responds. `s` is in scope here — the prepare_call logic binds
+    // `let s = state;` first.
+    //
+    // The instance id comes from the `__INSTANCE_ID__` AIR sentinel
+    // (`parameterize_air` substitutes it at instance creation), NOT from the
+    // control token — so the key is correct regardless of the agent's
+    // position in the graph. Reading `input._instance_id` would be empty when
+    // the agent sits downstream of an AutomatedStep/SubWorkflow (their output
+    // is the executor envelope, not the control token), collapsing every such
+    // instance onto a shared instance-less key.
+    let storage_key_esc = rhai_str_escape(&storage_key);
+    let write_key_expr =
+        format!(r#""instances/__INSTANCE_ID__/{id}/turn-" + s.turn + ".json""#);
     let config_ref_rhai = format!(
-        "#{{ \"storage_path\": \"{}\", \"overlay\": #{{ \"history\": s.history }} }}",
-        rhai_str_escape(&storage_key)
+        r#"#{{ "storage_path": "{storage_key_esc}", "overlay": #{{ "history": "{{{{input:history}}}}", "pending": "{{{{input:pending}}}}", "_history_write_key": {write_key_expr} }} }}"#
     );
 
     // Quote the optional stop_when as a Rhai sub-expression. Empty/None
@@ -380,14 +394,18 @@ fn lower_agent_loop(
 
     // ----- t_enter: initialise state, hand to p_state -----
     // The parked envelope keeps the slim agent state: turn counter,
-    // accumulating token totals, conversation history (in-token Vec for
-    // v1), and `final_response` (set on the terminal turn). The user's
-    // inbound token rides through as `state.input`.
+    // accumulating token totals, the `pending` delta (non-assistant turns
+    // produced since the last LLM call — a tool result or feedback message,
+    // bounded), and `final_response` (set on the terminal turn). The full
+    // conversation transcript lives OFF the token in per-turn S3 blobs keyed
+    // by the `__INSTANCE_ID__` AIR sentinel (substituted at instance creation,
+    // so topology-independent) + turn. The user's inbound token rides through
+    // as `state.input`.
     ctx.transition(format!("t_{id}_enter"), format!("{label} - Enter Agent"))
         .auto_input("input", &p_input)
         .auto_output("state", &p_state)
         .logic_rhai(
-            r#"#{ state: #{ turn: 0, message_count: 0, total_tokens_in: 0, total_tokens_out: 0, history: [], pending_tool_call_id: (), input: input, final_response: () } }"#
+            r#"#{ state: #{ turn: 0, message_count: 0, total_tokens_in: 0, total_tokens_out: 0, pending: [], pending_tool_call_id: (), input: input, final_response: () } }"#
                 .to_string(),
         )
         .done();
@@ -421,8 +439,16 @@ fn lower_agent_loop(
     // <alias>.json — compiler must emit a ResourceEnvelope borrow for
     // this step". Mirrors the marker site in
     // `lower_automated_step::t_<id>_prepare`.
+    //
+    // Transcript I/O rides as declared job inputs (reusing `StageInputsHook`
+    // + `resolve_inputs`): `history` is the prior cumulative blob from the
+    // global store (turn N-1) — or an inline `[]` on turn 0 so
+    // `{{input:history}}` always resolves — and `pending` is this turn's
+    // not-yet-persisted delta. After copying `s.pending` into the job, we
+    // clear it on the parked state: the worker folds it into the turn-N blob
+    // (which next turn reads as its base), so it must not be re-sent.
     .logic_rhai(format!(
-        r#"let s = state; let d = #{{ }}; d.job_id = "{id}"; d.run = s.turn; d.retries = 0; d.max_retries = 0; let job_inputs = []; /*__BORROWED_INPUTS__*/ d.spec = #{{ "backend": "llm", "inputs": job_inputs, "outputs": [], "config_ref": {config_ref_rhai}, "stream_events": ["agent_turn", "metric", "log"] }}; d.metadata = #{{ "agent_node_id": "{id}" }}; #{{ job: d, state_in_flight: s }}"#
+        r#"let s = state; let d = #{{ }}; d.job_id = "{id}"; d.run = s.turn; d.retries = 0; d.max_retries = 0; let job_inputs = []; if s.turn > 0 {{ job_inputs.push(#{{ "name": "history", "source": #{{ "type": "storage_path", "path": "instances/__INSTANCE_ID__/{id}/turn-" + (s.turn - 1) + ".json" }} }}); }} else {{ job_inputs.push(#{{ "name": "history", "source": #{{ "type": "inline", "value": [] }} }}); }} job_inputs.push(#{{ "name": "pending", "source": #{{ "type": "inline", "value": s.pending }} }}); /*__BORROWED_INPUTS__*/ d.spec = #{{ "backend": "llm", "inputs": job_inputs, "outputs": [], "config_ref": {config_ref_rhai}, "stream_events": ["agent_turn", "metric", "log"] }}; d.metadata = #{{ "agent_node_id": "{id}" }}; s.pending = []; #{{ job: d, state_in_flight: s }}"#
     ))
     .done();
 
@@ -526,8 +552,10 @@ fn lower_agent_loop(
     // `output_ports()`'s call to `LLM_DECL.derive_output_port` declares.
     // Then we OVERRIDE `usage` with the per-turn-accumulated totals from
     // state (the executor's `usage` is just the last turn's count, the
-    // agent's is the conversation total) and add the four agent-specific
-    // extras (turn, history, final_response, input).
+    // agent's is the conversation total) and add the agent-specific extras
+    // (turn, history_ref, final_response, input). `history_ref` points at the
+    // final cumulative transcript blob (`…/turn-{N}.json`) rather than
+    // carrying the full conversation inline.
     ctx.transition(
         format!("t_{id}_route_final"),
         format!("{label} - Route: Final"),
@@ -538,7 +566,7 @@ fn lower_agent_loop(
         r#"let s = response.state; {extract_tr} let tc = if type_of(tr.tool_calls) == "array" {{ tr.tool_calls }} else {{ [] }}; tc.len() == 0 || s.turn + 1 >= {max_turns} || {stop_when_expr}"#
     ))
     .logic_rhai(format!(
-        r#"let s = response.state; {extract_tr} let outputs = outs; outputs.usage = #{{ input_tokens: s.total_tokens_in, output_tokens: s.total_tokens_out }}; outputs.turn = s.turn; outputs.history = s.history; outputs.final_response = tr; outputs.input = s.input; let env = #{{ execution_id: "agent-{id}", job_id: "{id}", run: s.turn, status: "succeeded", source: "agent_loop", detail: #{{ outputs: outputs, exit_code: 0 }} }}; #{{ final: env }}"#
+        r#"let s = response.state; {extract_tr} let outputs = outs; outputs.usage = #{{ input_tokens: s.total_tokens_in, output_tokens: s.total_tokens_out }}; outputs.turn = s.turn; outputs.history_ref = "instances/__INSTANCE_ID__/{id}/turn-" + s.turn + ".json"; outputs.final_response = tr; outputs.input = s.input; let env = #{{ execution_id: "agent-{id}", job_id: "{id}", run: s.turn, status: "succeeded", source: "agent_loop", detail: #{{ outputs: outputs, exit_code: 0 }} }}; #{{ final: env }}"#
     ))
     .done();
 
@@ -560,8 +588,14 @@ fn lower_agent_loop(
         ))
         // `call` is a Rhai reserved keyword (it's the indirect-call syntax
         // marker). Use `tcall` for the tool_calls[0] binding.
+        //
+        // The assistant turn (content + this tool_call) is NOT pushed here —
+        // the executor worker writes it to this turn's transcript blob from
+        // the model's `turn_result`. We only thread `pending_tool_call_id`
+        // (so the collect transition can tag the tool result) and bump the
+        // turn counter.
         .logic_rhai(format!(
-            r#"let s = response.state; {extract_tr} let tcall = tr.tool_calls[0]; let assistant_content = if type_of(tr.content) == "string" {{ tr.content }} else {{ "" }}; s.history.push(#{{ role: "assistant", content: assistant_content, tool_calls: [#{{ id: tcall.id, name: "{tn}", arguments: tcall.arguments }}] }}); s.pending_tool_call_id = tcall.id; s.turn = s.turn + 1; s.message_count = s.message_count + 1; #{{ dispatch: #{{ call_id: tcall.id, tool_name: "{tn}", args: tcall.arguments }}, state_in_tool: s }}"#
+            r#"let s = response.state; {extract_tr} let tcall = tr.tool_calls[0]; s.pending_tool_call_id = tcall.id; s.turn = s.turn + 1; s.message_count = s.message_count + 1; #{{ dispatch: #{{ call_id: tcall.id, tool_name: "{tn}", args: tcall.arguments }}, state_in_tool: s }}"#
         ))
         .done();
     }
@@ -588,8 +622,13 @@ fn lower_agent_loop(
                 .guard_rhai(format!(
                     r#"let s = response.state; {extract_tr} let tc = if type_of(tr.tool_calls) == "array" {{ tr.tool_calls }} else {{ [] }}; let known = {known_names_rhai}; tc.len() > 0 && !(known.contains(tc[0].name)) && s.turn + 1 < {max_turns} && !({stop_when_expr})"#
                 ))
+                // The assistant turn (with the bad tool_call) is already
+                // written to this turn's transcript blob by the worker; we
+                // only stage the synthetic `role: tool` not-found message as
+                // the `pending` delta so the next turn's request (and blob)
+                // include it after that assistant turn.
                 .logic_rhai(format!(
-                    r#"let s = response.state; {extract_tr} let tcall = tr.tool_calls[0]; let assistant_content = if type_of(tr.content) == "string" {{ tr.content }} else {{ "" }}; s.history.push(#{{ role: "assistant", content: assistant_content, tool_calls: [#{{ id: tcall.id, name: tcall.name, arguments: tcall.arguments }}] }}); s.history.push(#{{ role: "tool", tool_call_id: tcall.id, content: "tool '" + tcall.name + "' not found — pick one of: " + {known_names_rhai} }}); s.turn = s.turn + 1; s.message_count = s.message_count + 1; #{{ state: s }}"#
+                    r#"let s = response.state; {extract_tr} let tcall = tr.tool_calls[0]; s.pending = [#{{ role: "tool", tool_call_id: tcall.id, content: "tool '" + tcall.name + "' not found — pick one of: " + {known_names_rhai} }}]; s.turn = s.turn + 1; s.message_count = s.message_count + 1; #{{ state: s }}"#
                 ))
                 .done();
             }

@@ -1,13 +1,19 @@
 <script lang="ts">
 	import type { SubWorkflowNodeData } from '$lib/types/editor';
 	import type { components } from '$lib/api/schema';
-	import { listTemplates, type Template } from '$lib/api/client';
+	import {
+		listTemplates,
+		createTemplate,
+		setTemplateVisibility,
+		type Template
+	} from '$lib/api/client';
 	import * as Select from '$lib/components/ui/select';
 	import { Input } from '$lib/components/ui/input';
 	import { Button } from '$lib/components/ui/button';
 	import { FormField } from '$lib/components/ui/form-field';
 	import Plus from '@lucide/svelte/icons/plus';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
+	import Lock from '@lucide/svelte/icons/lock';
 	import PortsSection from './PortsSection.svelte';
 
 	type FieldMapping = components['schemas']['FieldMapping'];
@@ -27,6 +33,8 @@
 
 	let templates = $state<Template[]>([]);
 	let loadError = $state<string | null>(null);
+	let creating = $state(false);
+	let privacyBusy = $state(false);
 
 	// `listTemplates(published=true)` returns the latest published row per
 	// family; the stable family id we persist is `base_template_id ?? id`.
@@ -34,14 +42,26 @@
 		return t.base_template_id ?? t.id;
 	}
 
+	// The picker offers the workspace's public/shared templates PLUS this
+	// workflow's own private children (hidden from the catalogue, so fetched
+	// separately by owner). Private children of other workflows stay invisible.
 	$effect(() => {
 		let cancelled = false;
-		listTemplates(1, 100, undefined, true)
-			.then((res) => {
+		const owner = templateId;
+		Promise.all([
+			listTemplates(1, 100, undefined, true),
+			owner
+				? listTemplates(1, 100, undefined, true, undefined, undefined, owner)
+				: Promise.resolve({ items: [] as Template[] })
+		])
+			.then(([shared, mine]) => {
 				if (cancelled) return;
-				templates = (res.items ?? []).filter(
-					(t) => t.id !== templateId && familyId(t) !== templateId
-				);
+				const byFamily = new Map<string, Template>();
+				for (const t of [...(shared.items ?? []), ...(mine.items ?? [])]) {
+					if (t.id === templateId || familyId(t) === templateId) continue;
+					byFamily.set(familyId(t), t);
+				}
+				templates = [...byFamily.values()];
 			})
 			.catch((e) => {
 				if (!cancelled) loadError = String(e);
@@ -51,10 +71,60 @@
 		};
 	});
 
+	const selectedTemplate = $derived(
+		templates.find((t) => familyId(t) === data.templateId)
+	);
+	const selectedIsPrivate = $derived(selectedTemplate?.visibility === 'private');
+
 	const selectedName = $derived(
-		templates.find((t) => familyId(t) === data.templateId)?.name ??
+		selectedTemplate?.name ??
 			(data.templateId ? data.templateId.slice(0, 8) : 'Select a template…')
 	);
+
+	// Create a blank child template bound private to THIS workflow, point the
+	// node at it, and open it for editing in a new tab. New-tab (not goto)
+	// because the Yjs editor session is pinned at mount — cross-template
+	// editing needs a fresh page. The author publishes the child from its own
+	// tab before publishing this parent.
+	async function createPrivateChild() {
+		if (creating || !templateId) return;
+		creating = true;
+		loadError = null;
+		try {
+			const child = await createTemplate({ name: 'Untitled sub-workflow', description: '' });
+			await setTemplateVisibility(child.id, 'private', templateId);
+			pickTemplate(familyId(child));
+			templates = [
+				...templates,
+				{ ...child, visibility: 'private', owner_template_id: templateId }
+			];
+			window.open(`/templates/${child.id}`, '_blank');
+		} catch (e) {
+			loadError = String(e);
+		} finally {
+			creating = false;
+		}
+	}
+
+	// Retroactively scope an already-selected child to this workflow.
+	async function makePrivateToThisWorkflow() {
+		const fam = data.templateId;
+		if (!fam || !templateId || privacyBusy) return;
+		privacyBusy = true;
+		loadError = null;
+		try {
+			await setTemplateVisibility(fam, 'private', templateId);
+			templates = templates.map((t) =>
+				familyId(t) === fam
+					? { ...t, visibility: 'private', owner_template_id: templateId }
+					: t
+			);
+		} catch (e) {
+			loadError = String(e);
+		} finally {
+			privacyBusy = false;
+		}
+	}
 
 	const pinMode = $derived(data.versionPin?.mode ?? 'latest');
 	const pinnedVersion = $derived(
@@ -127,6 +197,43 @@
 			<p class="text-sm text-muted-foreground">
 				No other published templates. Publish a template first to call it here.
 			</p>
+		{/if}
+
+		{#if !readonly && templateId}
+			<div class="space-y-1.5 pt-1">
+				{#if data.templateId && selectedIsPrivate}
+					<span
+						class="flex items-center gap-1.5 text-sm text-muted-foreground"
+						data-testid="subworkflow-private-badge"
+					>
+						<Lock class="size-4" />
+						Private to this workflow
+					</span>
+				{:else if data.templateId}
+					<Button
+						variant="ghost"
+						size="sm"
+						class="w-full justify-start"
+						onclick={makePrivateToThisWorkflow}
+						disabled={privacyBusy}
+						data-testid="btn-make-subworkflow-private"
+					>
+						<Lock class="size-4" />
+						{privacyBusy ? 'Making private…' : 'Make private to this workflow'}
+					</Button>
+				{/if}
+				<Button
+					variant="outline"
+					size="sm"
+					class="w-full justify-start"
+					onclick={createPrivateChild}
+					disabled={creating}
+					data-testid="btn-create-private-subworkflow"
+				>
+					<Plus class="size-4" />
+					{creating ? 'Creating…' : 'Create private sub-workflow'}
+				</Button>
+			</div>
 		{/if}
 	</div>
 

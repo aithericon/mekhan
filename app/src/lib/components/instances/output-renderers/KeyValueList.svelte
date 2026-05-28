@@ -1,6 +1,7 @@
 <script lang="ts">
 	import PrimitiveValue from './PrimitiveValue.svelte';
 	import FileReference from './FileReference.svelte';
+	import StorageRefValue from './StorageRefValue.svelte';
 	import type { RendererProps } from './types';
 
 	let { value, ctx }: RendererProps = $props();
@@ -12,6 +13,15 @@
 			? Object.entries(value as Record<string, unknown>)
 			: []
 	);
+
+	// A string value that is an S3 object key the backend can serve at
+	// `/api/v1/files/{key}` — the agent's `history_ref`
+	// (`instances/{id}/{node}/turn-N.json`), a config blob, an artifact. The
+	// known-prefix anchor + no-whitespace keeps free-text content (an LLM
+	// `final_response` etc.) from matching.
+	function isStorageKey(v: unknown): boolean {
+		return typeof v === 'string' && /^(instances|templates|artifacts)\/\S+\.\w+$/.test(v);
+	}
 
 	function isPrimitive(v: unknown): boolean {
 		return v === null || v === undefined || typeof v !== 'object';
@@ -40,7 +50,9 @@
 	{#each entries as [key, v] (key)}
 		<dt class="font-mono text-sm text-muted-foreground" title={key}>{key}</dt>
 		<dd class="min-w-0 break-words">
-			{#if isPrimitive(v)}
+			{#if isStorageKey(v)}
+				<StorageRefValue value={v} {ctx} />
+			{:else if isPrimitive(v)}
 				<PrimitiveValue value={v} {ctx} />
 			{:else if isFileRef(v)}
 				<FileReference value={v} {ctx} />

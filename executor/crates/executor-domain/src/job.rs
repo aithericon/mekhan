@@ -125,8 +125,14 @@ pub struct ConfigRef {
     /// Per-job overlay shallow-merged onto the fetched static config by
     /// `FetchConfigHook` (overlay keys win). Lets a caller keep the large,
     /// stable config (prompts, tool schemas) in object storage while
-    /// shipping the slim, turn-varying parts inline on the token — the
-    /// agent loop uses this for `history`, which changes every turn.
+    /// shipping the slim, turn-varying parts inline on the token.
+    ///
+    /// The agent loop uses this to carry the per-turn transcript plumbing on
+    /// existing wire fields (so the engine needs no new typed field): it sets
+    /// `history`/`pending` to `{{input:...}}` placeholders that
+    /// `resolve_inputs` fills from staged inputs, and `_history_write_key` —
+    /// the per-turn blob key the worker writes the new cumulative transcript
+    /// to after the model responds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub overlay: Option<serde_json::Value>,
 }

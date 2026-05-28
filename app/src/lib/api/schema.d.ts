@@ -1383,6 +1383,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/templates/{id}/projects": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/v1/templates/{id}/projects
+         * @description Projects this template (by chain root) is currently attached to, within
+         *     its workspace. Read-gated like the tags endpoint so the assign dialog can
+         *     show membership and offer a detach toggle without a fan-out.
+         */
+        get: operations["list_template_projects"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/templates/{id}/publish": {
         parameters: {
             query?: never;
@@ -3031,6 +3053,13 @@ export interface components {
                 interface_json?: unknown;
                 is_latest: boolean;
                 name: string;
+                /**
+                 * Format: uuid
+                 * @description Owning parent family base id (`COALESCE(base_template_id, id)`), set
+                 *     only when `visibility == "private"`. A private sub-workflow may be
+                 *     embedded only by this family and never runs standalone.
+                 */
+                owner_template_id?: string | null;
                 /** Format: uuid */
                 parent_id?: string | null;
                 published: boolean;
@@ -3492,7 +3521,14 @@ export interface components {
             enabled: boolean;
         };
         SetVisibilityRequest: {
-            /** @description `workspace` (default) or `public`. */
+            /**
+             * Format: uuid
+             * @description Required when `visibility == "private"`: the owning parent family
+             *     (any version id; resolved to its base). Ignored otherwise. The
+             *     private sub-workflow may then be embedded only by that family.
+             */
+            owner_template_id?: string | null;
+            /** @description `workspace` (default), `public`, or `private`. */
             visibility: string;
         };
         SignalDispatch: {
@@ -4542,6 +4578,13 @@ export interface components {
             interface_json?: unknown;
             is_latest: boolean;
             name: string;
+            /**
+             * Format: uuid
+             * @description Owning parent family base id (`COALESCE(base_template_id, id)`), set
+             *     only when `visibility == "private"`. A private sub-workflow may be
+             *     embedded only by this family and never runs standalone.
+             */
+            owner_template_id?: string | null;
             /** Format: uuid */
             parent_id?: string | null;
             published: boolean;
@@ -7013,6 +7056,13 @@ export interface operations {
                 project_id?: string | null;
                 /** @description Restrict to templates carrying this tag in the user's workspace. */
                 tag?: string | null;
+                /**
+                 * @description Enumerate the private sub-workflow children owned by this parent
+                 *     family (`COALESCE(base_template_id, id)`). When supplied, the listing
+                 *     returns *only* those private children (they're otherwise hidden from
+                 *     the catalogue). When absent, private templates are excluded entirely.
+                 */
+                owner_template_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -7534,6 +7584,47 @@ export interface operations {
             };
             /** @description Server error */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_template_projects: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Template id (any version) */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Projects containing this template */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Project"][];
+                };
+            };
+            /** @description No read access */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Template not found */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

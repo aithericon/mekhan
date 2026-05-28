@@ -53,6 +53,10 @@ pub struct WorkflowTemplate {
     // frontend can render visibility badges and per-workspace filtering.
     pub workspace_id: Uuid,
     pub visibility: String,
+    /// Owning parent family base id (`COALESCE(base_template_id, id)`), set
+    /// only when `visibility == "private"`. A private sub-workflow may be
+    /// embedded only by this family and never runs standalone.
+    pub owner_template_id: Option<Uuid>,
 }
 
 // --- Visual editor data model (Section 2) ---
@@ -1502,13 +1506,15 @@ pub(crate) fn agent_extra_output_fields() -> Vec<PortField> {
             accept: None,
         },
         PortField {
-            name: "history".to_string(),
-            label: "Conversation history".to_string(),
-            kind: FieldKind::Json,
+            name: "history_ref".to_string(),
+            label: "Conversation transcript blob".to_string(),
+            kind: FieldKind::Text,
             required: false,
             options: None,
             description: Some(
-                "Array of `{role, content, …}` entries the agent sent + received.".to_string(),
+                "Storage key of the final cumulative transcript blob (the full \
+                 `{role, content, …}` conversation lives off-token in object storage)."
+                    .to_string(),
             ),
             accept: None,
         },
@@ -1937,6 +1943,11 @@ pub struct ListTemplatesQuery {
     pub project_id: Option<Uuid>,
     /// Restrict to templates carrying this tag in the user's workspace.
     pub tag: Option<String>,
+    /// Enumerate the private sub-workflow children owned by this parent
+    /// family (`COALESCE(base_template_id, id)`). When supplied, the listing
+    /// returns *only* those private children (they're otherwise hidden from
+    /// the catalogue). When absent, private templates are excluded entirely.
+    pub owner_template_id: Option<Uuid>,
 }
 
 fn default_page() -> i64 {

@@ -356,14 +356,19 @@ fn route_dispatch_guard_bakes_in_max_turns() {
     );
 }
 
-/// Conversation memory (consume-mutate-produce): each turn `prepare_call`
-/// ships the accumulated `s.history` inline as a `config_ref` overlay,
-/// `route_dispatch` records the assistant `tool_calls` turn + stashes the
-/// pending call id, and `collect` emits a `role: "tool"` result keyed by
-/// that id (OpenAI tool-call protocol). Without this the model never sees
-/// the tool result and re-calls the tool every turn until max_turns.
+/// Conversation memory (off-token transcript side-channel): the full
+/// transcript lives in per-turn S3 blobs, NOT on the token. Each turn
+/// `prepare_call` declares the prior cumulative blob + this turn's `pending`
+/// delta as job inputs (resolved into `config.history`/`config.pending` via
+/// `{{input:...}}`), carries the per-turn `_history_write_key` in the
+/// overlay, and CLEARS `s.pending` once shipped. `route_dispatch` only
+/// threads `pending_tool_call_id` + bumps the turn — the assistant turn is
+/// written by the executor worker from the model's `turn_result`. `collect`
+/// stages the `role: "tool"` result as the next `pending` delta (keyed by
+/// the call id). Without this the model never sees the tool result and
+/// re-calls the tool every turn until max_turns.
 #[test]
-fn agent_threads_history_overlay_and_tool_call_id() {
+fn agent_threads_transcript_off_token_via_inputs() {
     let air = compile(
         vec![
             start_node("s"),
@@ -392,24 +397,48 @@ fn agent_threads_history_overlay_and_tool_call_id() {
     };
 
     let prepare = logic_of("t_a_prepare_call");
+    // Transcript I/O rides as declared inputs + the existing overlay; the
+    // full conversation never travels on the token (no `s.history`).
     assert!(
-        prepare.contains("overlay") && prepare.contains("s.history"),
-        "prepare_call must overlay s.history onto config_ref so the LLM sees \
-         prior turns; got: {prepare}"
+        prepare.contains(r#""name": "history""#)
+            && prepare.contains(r#""name": "pending""#),
+        "prepare_call must declare `history` + `pending` job inputs; got: {prepare}"
+    );
+    assert!(
+        prepare.contains("{{input:history}}")
+            && prepare.contains("{{input:pending}}")
+            && prepare.contains("_history_write_key"),
+        "prepare_call overlay must carry the input placeholders + write key; \
+         got: {prepare}"
+    );
+    assert!(
+        prepare.contains("s.pending = []"),
+        "prepare_call must clear s.pending once shipped (the worker folds it \
+         into the turn blob); got: {prepare}"
+    );
+    assert!(
+        !prepare.contains("s.history"),
+        "the transcript must NOT travel on the token; got: {prepare}"
     );
 
     let dispatch = logic_of("t_a_route_dispatch_lookup");
     assert!(
-        dispatch.contains("tool_calls:") && dispatch.contains("pending_tool_call_id"),
-        "dispatch must push an assistant tool_calls turn + stash the call id; \
-         got: {dispatch}"
+        dispatch.contains("pending_tool_call_id") && dispatch.contains("s.turn = s.turn + 1"),
+        "dispatch must stash the call id + bump the turn; got: {dispatch}"
+    );
+    assert!(
+        !dispatch.contains(r#"role: "assistant""#),
+        "dispatch must NOT push the assistant turn — the worker writes it from \
+         the model result; got: {dispatch}"
     );
 
     let collect = logic_of("t_a_collect_lookup");
     assert!(
-        collect.contains(r#"role: "tool""#)
+        collect.contains("s.pending = [")
+            && collect.contains(r#"role: "tool""#)
             && collect.contains("tool_call_id: s.pending_tool_call_id"),
-        "collect must emit a role:tool result carrying the tool_call_id; got: {collect}"
+        "collect must stage a role:tool result as the pending delta carrying \
+         the tool_call_id; got: {collect}"
     );
 }
 

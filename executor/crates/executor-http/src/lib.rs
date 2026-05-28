@@ -87,18 +87,20 @@ pub struct HttpConfig {
     #[serde(default)]
     pub method: HttpMethod,
 
-    /// Target URL. Supports `{{variable}}` template substitution.
+    /// Target URL. Tera-templated: `{{ slug.field }}` (upstream outputs),
+    /// `{{ env.KEY }}` (env/secrets), `{{ metadata.* }}`.
     pub url: String,
 
-    /// Request headers. Template substitution supported in values.
+    /// Request headers. Values are Tera-templated (same context as `url`).
     #[serde(default)]
     pub headers: HashMap<String, String>,
 
-    /// URL query parameters. Template substitution supported in values.
+    /// URL query parameters. Values are Tera-templated (same context as `url`).
     #[serde(default)]
     pub query: HashMap<String, String>,
 
-    /// Inline request body. Mutually exclusive with `body_from_input`.
+    /// Inline request body. String leaves are Tera-templated (same context as
+    /// `url`). Mutually exclusive with `body_from_input`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body: Option<serde_json::Value>,
 
@@ -321,33 +323,22 @@ impl ExecutionBackend for HttpBackend {
             }
         }
 
-        // For URL/header/query/auth template resolution we need the env view
-        // with any resolved secret values overlaid on top of `env` (which
-        // still holds the unresolved `{{secret:KEY}}` templates).
+        // Auth tokens resolve from the merged env view (env overlaid with any
+        // plaintext secrets PlanSecretsHook produced for `{{secret:KEY}}`
+        // env templates). This is keyed lookup (`token_env`), not templating.
         let env_view = merged_env(&run_context);
-
-        // Resolve auth tokens from env
         config.resolve_auth(&env_view)?;
 
-        // Resolve templates in URL, headers, query params
-        let resolved_url = template::resolve(
-            &config.url,
-            &env_view,
-            &run_context.staged_inputs,
-            &run_context.metadata,
-        )?;
-        let resolved_headers = template::resolve_map(
-            &config.headers,
-            &env_view,
-            &run_context.staged_inputs,
-            &run_context.metadata,
-        )?;
-        let resolved_query = template::resolve_map(
-            &config.query,
-            &env_view,
-            &run_context.staged_inputs,
-            &run_context.metadata,
-        )?;
+        // Tera-render URL, header values, query-param values, and an inline
+        // body against the shared context: `{{ slug.field }}` upstream
+        // outputs, `{{ env.KEY }}` env/secrets, `{{ metadata.* }}`.
+        let tctx = template::build_context(&run_context)?;
+        let resolved_url = template::render(&config.url, &tctx, "url")?;
+        let resolved_headers = template::render_map(&config.headers, &tctx, "headers")?;
+        let resolved_query = template::render_map(&config.query, &tctx, "query")?;
+        if let Some(body) = config.body.take() {
+            config.body = Some(template::render_body(&body, &tctx)?);
+        }
 
         // Validate output_mapping selectors eagerly
         if !config.output_mapping.is_empty() {

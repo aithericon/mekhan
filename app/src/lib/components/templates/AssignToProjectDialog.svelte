@@ -3,61 +3,84 @@
 	import FolderKanban from '@lucide/svelte/icons/folder-kanban';
 	import Check from '@lucide/svelte/icons/check';
 	import LoaderCircle from '@lucide/svelte/icons/loader-circle';
-	import { listProjects, attachTemplateToProject, type Project } from '$lib/api/client';
+	import {
+		listProjects,
+		listTemplateProjects,
+		attachTemplateToProject,
+		detachTemplateFromProject,
+		type Project
+	} from '$lib/api/client';
 	import { workspaces } from '$lib/workspaces/store.svelte';
 
 	interface Props {
 		open: boolean;
+		/** Version id — used to attach and to look up current membership. */
 		templateId: string | null;
+		/** Chain-root id — required to detach (project_templates keys on it). */
+		baseTemplateId: string | null;
 		templateName?: string;
 	}
 
-	let { open = $bindable(), templateId, templateName }: Props = $props();
+	let { open = $bindable(), templateId, baseTemplateId, templateName }: Props = $props();
 
 	let projects = $state<Project[]>([]);
+	let assignedIds = $state<Set<string>>(new Set());
 	let loading = $state(false);
 	let error = $state<string | null>(null);
-	let attachingId = $state<string | null>(null);
-	let attachedIds = $state<Set<string>>(new Set());
+	let busyId = $state<string | null>(null);
 
-	async function loadProjects() {
+	async function load() {
 		const ws = workspaces.active?.id;
-		if (!ws) {
+		if (!ws || !templateId) {
 			projects = [];
+			assignedIds = new Set();
 			return;
 		}
 		loading = true;
 		error = null;
 		try {
-			projects = await listProjects(ws);
+			const [all, mine] = await Promise.all([
+				listProjects(ws),
+				listTemplateProjects(templateId)
+			]);
+			projects = all;
+			assignedIds = new Set(mine.map((p) => p.id));
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load projects';
 			projects = [];
+			assignedIds = new Set();
 		} finally {
 			loading = false;
 		}
 	}
 
-	// Reload + reset transient state each time the dialog opens.
 	$effect(() => {
-		if (open) {
-			attachedIds = new Set();
-			error = null;
-			loadProjects();
-		}
+		if (open) load();
 	});
 
-	async function assign(project: Project) {
-		if (!templateId || attachingId) return;
-		attachingId = project.id;
+	async function toggle(project: Project) {
+		if (!templateId || busyId) return;
+		const isAssigned = assignedIds.has(project.id);
+		if (isAssigned && !baseTemplateId) {
+			error = 'Cannot determine base template to remove from project';
+			return;
+		}
+		busyId = project.id;
 		error = null;
 		try {
-			await attachTemplateToProject(project.id, templateId);
-			attachedIds = new Set([...attachedIds, project.id]);
+			if (isAssigned) {
+				await detachTemplateFromProject(project.id, baseTemplateId!);
+				const next = new Set(assignedIds);
+				next.delete(project.id);
+				assignedIds = next;
+			} else {
+				await attachTemplateToProject(project.id, templateId);
+				assignedIds = new Set([...assignedIds, project.id]);
+			}
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to assign to project';
+			error = e instanceof Error ? e.message : 'Failed to update project';
 		} finally {
-			attachingId = null;
+			busyId = null;
 		}
 	}
 </script>
@@ -65,7 +88,7 @@
 <Command.Dialog
 	bind:open
 	title="Assign to project"
-	description={`Search projects and add ${templateName ?? 'this template'}.`}
+	description={`Add or remove ${templateName ?? 'this template'} from projects.`}
 	class="max-w-md"
 >
 	<Command.Input placeholder="Search projects…" data-testid="assign-project-search" />
@@ -78,18 +101,22 @@
 			<Command.Empty>No projects found. Create one in Manage projects.</Command.Empty>
 			<Command.Group heading="Projects">
 				{#each projects as p (p.id)}
+					{@const assigned = assignedIds.has(p.id)}
 					<Command.Item
 						value={p.id}
 						keywords={[p.display_name, p.slug]}
-						onSelect={() => assign(p)}
+						onSelect={() => toggle(p)}
 						data-testid={`assign-project-${p.slug}`}
 					>
 						<FolderKanban class="size-4 text-muted-foreground" />
 						<span class="flex-1 truncate">{p.display_name}</span>
-						{#if attachingId === p.id}
+						{#if busyId === p.id}
 							<LoaderCircle class="size-4 animate-spin text-muted-foreground" />
-						{:else if attachedIds.has(p.id)}
-							<Check class="size-4 text-green-600" data-testid={`assign-project-done-${p.slug}`} />
+						{:else if assigned}
+							<span class="flex items-center gap-1 text-xs text-green-600" data-testid={`assign-project-assigned-${p.slug}`}>
+								<Check class="size-4" />
+								Added
+							</span>
 						{/if}
 					</Command.Item>
 				{/each}

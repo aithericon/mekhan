@@ -83,6 +83,13 @@ pub trait ArtifactStore: Send + Sync + 'static {
         local_dest: &Path,
     ) -> Result<(), StorageError>;
 
+    /// Write raw bytes to an arbitrary storage path, overwriting any
+    /// existing object. Symmetric counterpart to `download` for callers
+    /// that hold the bytes in memory and choose the key themselves (the
+    /// agent loop's per-turn transcript blob). Unlike `upload`, the key is
+    /// not derived from `execution_id` — it's whatever the caller passes.
+    async fn put(&self, storage_path: &StoragePath, data: Vec<u8>) -> Result<(), StorageError>;
+
     /// Check if an artifact exists at the given storage path.
     async fn exists(&self, storage_path: &StoragePath) -> Result<bool, StorageError>;
 

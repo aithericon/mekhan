@@ -279,6 +279,7 @@ pub async fn start_cleanup_sweep(
     db: PgPool,
     nats: MekhanNats,
     petri: PetriClient,
+    s3: Arc<crate::s3::ArtifactStore>,
 ) {
     let interval_secs = config.sweep_interval_minutes * 60;
     let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
@@ -292,7 +293,7 @@ pub async fn start_cleanup_sweep(
 
     loop {
         interval.tick().await;
-        cleanup_finished_instances(&config, &db, &nats, &petri).await;
+        cleanup_finished_instances(&config, &db, &nats, &petri, &s3).await;
     }
 }
 
@@ -301,6 +302,7 @@ async fn cleanup_finished_instances(
     db: &PgPool,
     nats: &MekhanNats,
     petri: &PetriClient,
+    s3: &crate::s3::ArtifactStore,
 ) {
     let retention_interval = format!("{} hours", config.retention_hours);
 
@@ -331,6 +333,20 @@ async fn cleanup_finished_instances(
 
     for (instance_id, net_id) in &stale {
         cleanup_net(net_id, nats, petri, config.purge_events).await;
+
+        // GC per-instance agent transcript blobs (the off-token conversation
+        // side-channel, keyed by the bare instance id == `_instance_id` the
+        // compiler emits — note `net_id` is `mekhan-{instance_id}`, a
+        // different string). Best-effort: a failed delete must not block
+        // archival, and a no-op when the instance ran no agent nodes.
+        if let Err(e) = s3
+            .delete_prefix(&format!("instances/{instance_id}/"))
+            .await
+        {
+            tracing::warn!(
+                "cleanup: failed to delete transcript blobs for {instance_id}: {e}"
+            );
+        }
 
         // Update status to archived
         if let Err(e) = sqlx::query(

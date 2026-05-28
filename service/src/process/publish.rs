@@ -231,6 +231,11 @@ impl<'a> PublishService<'a> {
     /// registration. Republishing an existing template won't re-fire
     /// backfill because the dispatcher snapshots prior trigger ids.
     pub async fn register_triggers(&self, template: &WorkflowTemplate) -> usize {
+        // Private sub-workflows never run standalone, so their trigger nodes
+        // must never register — they'd dangle and fail at fire time.
+        if template.visibility == "private" {
+            return 0;
+        }
         self.state.triggers.register_template(template, true).await
     }
 }
@@ -496,6 +501,18 @@ pub async fn resolve_subworkflow_air(
 
         if !child.published {
             return Err(unresolved("child template is not published"));
+        }
+
+        // Private sub-workflows may be embedded only by their owning parent
+        // family. `owner_template_id` holds that family's base; any other
+        // parent (or an owner mismatch) is rejected at this parent's publish,
+        // ringing the offending node in the editor.
+        if child.visibility == "private" && child.owner_template_id != publishing_family {
+            let e = CompileError::SubWorkflowPrivateOwnershipViolation {
+                node_id: node.id.clone(),
+                template_id: template_id.to_string(),
+            };
+            return Err(ApiError::compile(e.to_string(), vec![e.to_view()]));
         }
 
         // Direct same-family self-reference guard (authoring mistake; would

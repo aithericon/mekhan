@@ -1,9 +1,14 @@
 //! HTTP backend declaration.
 //!
-//! Issues an HTTP request from the executor. No resource binding, no
-//! template/placeholder surfaces — Http's body is opaque bytes. Validates
-//! the editor config plus the `body` / `body_from_input` mutual exclusion
-//! and gates `body_from_input` against the node's attached files.
+//! Issues an HTTP request from the executor. No resource binding. The URL,
+//! header values, query-param values, and an inline `body`'s string leaves
+//! are `{{ slug.field }}` template surfaces — [`ref_scanner`] pulls those
+//! references out so the borrow planner synthesizes read-arcs and stages the
+//! producer envelopes, and the executor (`executor-http`) Tera-renders them
+//! against the same shared context SMTP uses. `body_from_input` (raw file
+//! body) is the exception — opaque bytes, no interpolation. Validates the
+//! editor config plus the `body` / `body_from_input` mutual exclusion and
+//! gates `body_from_input` against the node's attached files.
 //!
 //! `output_authoring: Derived`. The runtime emits a fixed five-field
 //! envelope (`status_code`, `body`, `headers`, `content_type`,
@@ -22,10 +27,11 @@ use aithericon_executor_backend_configs::http::HttpConfig;
 use aithericon_executor_domain::InputDeclaration;
 
 use crate::compiler::backend_configs::{require_node_file, stage_all_files};
+use crate::compiler::placeholder_refs::scan_placeholders;
 use crate::compiler::CompileError;
 use crate::models::template::{ExecutionBackendType, FieldKind, Port, PortField};
 
-use super::{BackendDecl, DefaultPortField, ValidationCtx, HTTP_META};
+use super::{BackendDecl, DefaultPortField, RefSite, ScanCtx, ValidationCtx, HTTP_META};
 
 /// Canonical fixed-output fields the executor always emits — mirrors
 /// `executor-http/src/response.rs:46-58`. Stays in sync with the deriver
@@ -65,7 +71,7 @@ pub static HTTP_DECL: BackendDecl = BackendDecl {
     default_output_fields: DEFAULT_OUTPUT_FIELDS,
     default_editor_config,
     validate,
-    ref_scanner: None,
+    ref_scanner: Some(ref_scanner),
     resource_alias_paths: &[],
     consumes_declared_outputs: false,
     pyi_introspection: false,
@@ -104,6 +110,68 @@ fn validate(
         require_node_file(name, "http config: body_from_input", ctx.node_files)?;
     }
     Ok((config.clone(), stage_all_files(ctx.node_files)))
+}
+
+/// Pull every `{{ <head>.<attr> }}` placeholder out of an HTTP step's
+/// config: the `url`, each `headers` / `query` string value, and every
+/// string leaf of an inline `body` (recursing through arrays/objects).
+///
+/// All sites are content sites — the executor Tera-renders the whole
+/// producer envelope into the template at request-build time — so the
+/// borrow shape is `Envelope` and `is_path_site` is inert. `body_from_input`
+/// is not scanned: it names a raw staged file, not a template surface.
+fn ref_scanner(ctx: &ScanCtx<'_>) -> Vec<RefSite> {
+    let mut out: Vec<RefSite> = Vec::new();
+    let Some(obj) = ctx.config.as_object() else {
+        return out;
+    };
+
+    if let Some(url) = obj.get("url").and_then(|v| v.as_str()) {
+        push_sites(&mut out, "url", url);
+    }
+    for field in ["headers", "query"] {
+        if let Some(map) = obj.get(field).and_then(|v| v.as_object()) {
+            for (k, v) in map {
+                if let Some(s) = v.as_str() {
+                    push_sites(&mut out, &format!("{field}.{k}"), s);
+                }
+            }
+        }
+    }
+    if let Some(body) = obj.get("body") {
+        scan_body(&mut out, body, "body");
+    }
+    out
+}
+
+/// Append a `RefSite` for every `{{ head.attr }}` placeholder in `text`.
+fn push_sites(out: &mut Vec<RefSite>, site_label: &str, text: &str) {
+    for r in scan_placeholders(text) {
+        out.push(RefSite {
+            head: r.head,
+            attr: r.attr,
+            is_path_site: false,
+            site_label: site_label.to_string(),
+        });
+    }
+}
+
+/// Recurse a JSON body, scanning every string leaf for placeholders.
+fn scan_body(out: &mut Vec<RefSite>, v: &Value, label: &str) {
+    match v {
+        Value::String(s) => push_sites(out, label, s),
+        Value::Array(items) => {
+            for (i, item) in items.iter().enumerate() {
+                scan_body(out, item, &format!("{label}[{i}]"));
+            }
+        }
+        Value::Object(obj) => {
+            for (k, val) in obj {
+                scan_body(out, val, &format!("{label}.{k}"));
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Derive the HTTP step's output port. Always emits the five canonical
@@ -190,5 +258,63 @@ mod tests {
         let cfg = json!({ "output_mapping": "not an object" });
         let port = derive_output_port(&cfg);
         assert_eq!(port.fields.len(), DEFAULT_OUTPUT_FIELDS.len());
+    }
+
+    fn scan(config: Value) -> Vec<(String, String)> {
+        let ctx = ScanCtx {
+            config: &config,
+            node_id: "n1",
+            inline_sources: &std::collections::HashMap::new(),
+            entrypoint: None,
+        };
+        ref_scanner(&ctx)
+            .into_iter()
+            .map(|r| (r.head, r.attr))
+            .collect()
+    }
+
+    #[test]
+    fn scans_url_headers_query_and_body() {
+        let cfg = json!({
+            "url": "https://api.example.com/{{ intake.id }}",
+            "headers": { "X-Vendor": "{{ review.vendor }}" },
+            "query": { "amt": "{{ review.amount }}" },
+            "body": {
+                "note": "for {{ intake.name }}",
+                "lines": ["{{ review.line_total }}"]
+            }
+        });
+        let mut got = scan(cfg);
+        got.sort();
+        assert_eq!(
+            got,
+            vec![
+                ("intake".into(), "id".into()),
+                ("intake".into(), "name".into()),
+                ("review".into(), "amount".into()),
+                ("review".into(), "line_total".into()),
+                ("review".into(), "vendor".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn ignores_env_and_bare_placeholders() {
+        // `env.KEY` is a real ref site too (head=env). Bare single-segment
+        // placeholders and `{{secret:...}}` are not slug.field pairs and are
+        // silently skipped by the shared scanner.
+        let cfg = json!({
+            "url": "https://{{ env.HOST }}/{{ bare }}/{{secret:p#k}}",
+        });
+        assert_eq!(scan(cfg), vec![("env".into(), "HOST".into())]);
+    }
+
+    #[test]
+    fn body_from_input_not_scanned() {
+        let cfg = json!({
+            "url": "https://api.example.com",
+            "body_from_input": "payload.json"
+        });
+        assert!(scan(cfg).is_empty());
     }
 }

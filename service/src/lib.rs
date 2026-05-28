@@ -283,6 +283,7 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
             handlers::projects::set_template_tags
         ))
         .routes(routes!(handlers::projects::set_template_visibility))
+        .routes(routes!(handlers::projects::list_template_projects))
         // Per-project OpenAPI bundle (Phase B) — synthesized webhook spec
         // for SDK generators + API doc viewers.
         .routes(routes!(handlers::openapi_bundle::project_openapi_bundle))
