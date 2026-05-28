@@ -55,6 +55,7 @@ use mekhan_service::causality::ingest::start_causality_ingest;
 use mekhan_service::causality::live::LiveBroadcasts;
 use mekhan_service::demos;
 use mekhan_service::lifecycle::start_lifecycle_listener;
+use mekhan_service::models::template::WorkflowNodeData;
 use mekhan_service::nats::MekhanNats;
 use mekhan_service::projections::step_executions::start_step_executions_ingest;
 
@@ -183,6 +184,13 @@ fn hello_world_dir() -> std::path::PathBuf {
         .join("demos/01-hello-world")
 }
 
+fn order_lookup_dir() -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("service crate has a parent")
+        .join("demos/08a-order-lookup")
+}
+
 /// Poll the instance's persisted status until terminal. Panics on
 /// timeout so a hung loop is caught loudly.
 async fn wait_for_terminal_status(
@@ -208,93 +216,53 @@ async fn wait_for_terminal_status(
     }
 }
 
-/// Load the shipped demo, POST a uniquely-named copy, publish it (compiles
-/// the agent-loop AIR + stages the Python `lookup_order` source to S3), and
-/// fire an instance with `customer_message`. Returns the new instance id.
-/// Shared by both live tests so the heavyweight create→publish→fire dance
-/// stays in one place; each test still drives its own instance (and so its
-/// own LLM round-trips) under its per-test consumer prefix.
+/// Publish the shipped 09 demo + its tool child and fire an instance with
+/// `customer_message`. Returns the new (parent) instance id.
+///
+/// 09's `lookup_order` tool is a SubWorkflow referencing the 08a-order-lookup
+/// child (Python). To stay self-contained (independent of the demo seeder),
+/// we publish the 08a child here, rewrite 09's SubWorkflow node to point at
+/// the freshly-published child id, then publish + fire 09. Shared by both
+/// 09-based live tests so the heavyweight dance stays in one place; each test
+/// still drives its own instance (and LLM round-trips) under its prefix.
 async fn publish_and_fire(app: &axum::Router, customer_message: &str) -> Uuid {
-    let demo = demos::load_demo(&demo_dir()).expect("load demos/09-agent-tool-loop");
+    // Tool child first — the SubWorkflow resolver needs it published.
+    let child = demos::load_demo(&order_lookup_dir()).expect("load demos/08a-order-lookup");
+    let child_id = create_and_publish(
+        app,
+        &format!("Order Lookup Child E2E {}", Uuid::new_v4().simple()),
+        &child.graph,
+        &child.files,
+    )
+    .await;
+
+    let mut demo = demos::load_demo(&demo_dir()).expect("load demos/09-agent-tool-loop");
     assert_eq!(demo.metadata.name, "09 · Agent + Tool Loop");
+    // Point the SubWorkflow tool node at the child we just published (the
+    // on-disk demo references the fixed seeded id; the test owns its child).
+    for node in &mut demo.graph.nodes {
+        if let WorkflowNodeData::SubWorkflow { template_id, .. } = &mut node.data {
+            *template_id = child_id;
+        }
+    }
 
-    let unique_name = format!("Agent Loop E2E {}", Uuid::new_v4().simple());
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/v1/templates")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    json!({
-                        "name": unique_name,
-                        "graph": demo.graph,
-                        "files": demo.files,
-                        "author_id": Uuid::new_v4(),
-                    })
-                    .to_string(),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::CREATED, "create template");
-    let template_id: Uuid = body_json(resp.into_body()).await["id"]
-        .as_str()
-        .unwrap()
-        .parse()
-        .unwrap();
+    let parent_id = create_and_publish(
+        app,
+        &format!("Agent Loop E2E {}", Uuid::new_v4().simple()),
+        &demo.graph,
+        &demo.files,
+    )
+    .await;
 
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri(format!("/api/v1/templates/{template_id}/publish"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let status = resp.status();
-    let pub_body = body_json(resp.into_body()).await;
-    assert_eq!(status, StatusCode::OK, "publish: {pub_body}");
-
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/v1/instances")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    json!({
-                        "template_id": template_id,
-                        "start_tokens": [{
-                            "start_block_id": "start",
-                            "token": { "customer_message": customer_message }
-                        }],
-                        "metadata": { "e2e": "agent_tool_loop" }
-                    })
-                    .to_string(),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let s = resp.status();
-    let inst = body_json(resp.into_body()).await;
-    assert_eq!(s, StatusCode::CREATED, "create instance: {inst}");
-    inst["id"].as_str().unwrap().parse().unwrap()
+    fire_customer_message(app, parent_id, customer_message).await
 }
 
-/// Poll `step_execution` until the `lookup_order` Python tool node has at
-/// least one row, returning all its rows (one per loop iteration the LLM
-/// dispatched it). The step-executions projector is an async NATS consumer,
-/// so the row can lag the instance reaching `completed` by a few hundred ms
-/// — poll rather than read once. Panics on timeout so a missing projection
-/// (consumer not spawned, attribution regression) is caught loudly.
+/// Poll `step_execution` until `node_id` has at least one row, returning all
+/// its rows (one per loop iteration the LLM dispatched it). The
+/// step-executions projector is an async NATS consumer, so the row can lag
+/// the instance reaching `completed` by a few hundred ms — poll rather than
+/// read once. Panics on timeout so a missing projection (consumer not
+/// spawned, attribution regression) is caught loudly.
 async fn wait_for_step_execution(
     db: &sqlx::PgPool,
     instance_id: Uuid,
@@ -388,9 +356,10 @@ async fn agent_tool_loop_demo_completes_with_tool_call() {
     );
 
     // Read the End-mapped result. `reply` is the agent's final response
-    // text; `turns_used` is the agent's loop turn counter. The Python
-    // tool body lives in demos/09-agent-tool-loop/nodes/lookup_order/
-    // main.py and returns the literal strings the LLM has access to.
+    // text; `turns_used` is the agent's loop turn counter. The tool's
+    // Python body lives in the child template
+    // (demos/08a-order-lookup/nodes/lookup_order/main.py) and returns the
+    // literal strings the LLM has access to via the sub-workflow result.
     let result: Value =
         sqlx::query_scalar("SELECT result FROM workflow_instances WHERE id = $1")
             .bind(instance_id)
@@ -713,39 +682,39 @@ async fn agent_subworkflow_tool_loop_completes() {
     cleanup_durables(&cleanup_nats).await;
 }
 
-/// Python-tool-contract proof: the deterministic-on-the-Python-side
-/// companion to the loop test above.
+/// Tool-contract proof: the deterministic-on-the-tool-side companion to the
+/// loop test above, for the SubWorkflow tool.
 ///
-/// The agent's `tools` handle targets a *Python* AutomatedStep
-/// (`lookup_order`). The compiler derives that tool's LLM-facing
-/// `input_schema` from the node's declared input port (`{ order_id:
-/// string }`) — `agent_loop_e2e::tool_input_schema_reflects_declared_input_port`
-/// pins that derivation offline. This test pins the *other half* of the
-/// contract, which only a live run can prove: that the LLM-emitted args
-/// actually reach the Python tool body and are readable as
-/// `input.<field>`.
+/// The agent's `tools` handle targets a *SubWorkflow* (`lookup_order` → the
+/// 08a-order-lookup child). The compiler derives that tool's LLM-facing
+/// `input_schema` from the *child's Start* `initial` contract (`{ order_id:
+/// string }`) — `agent_loop_e2e::subworkflow_tool_input_schema_reflects_child_start`
+/// pins that derivation offline. This test pins the *other half*, which only
+/// a live run can prove: that the LLM-emitted args reach the child's Python
+/// body as `input.order_id` and the result flows back as the tool result.
 ///
 /// The chain under test:
-///   schema (order_id) → LLM tool_call args {order_id: …}
-///     → t_agent_invoke_lookup_order deposits args at the child input
-///       → Python runner stages them as `input.json`, exposes `input.order_id`
-///         → user code `oid = input.order_id` (demos/09-…/nodes/lookup_order/main.py)
-///           → declared outputs (`status`, `eta`) swept from globals
+///   schema (order_id, from child Start) → LLM tool_call args {order_id: …}
+///     → t_agent_invoke_lookup_order deposits args at the SubWorkflow input
+///       → spawn_net spawns the child net; its Start passes order_id through
+///         → child Python `oid = input.order_id` (08a/nodes/lookup_order/main.py)
+///           → child End maps {status, eta} → reply → SubWorkflow join → data_port
 ///
-/// The deterministic signal is the `lookup_order` row in `step_execution`:
-///   - `status = 'completed'` proves the Python body ran to exit WITHOUT an
-///     `AttributeError: '_AccessibleDict' object has no attribute 'order_id'`
-///     — i.e. the LLM used the schema-declared key and the runner promoted
-///     it. A wrong key (schema-derivation regression) would surface the
-///     AttributeError → `EffectFailed` → `status = 'failed'`, caught here.
-///   - `outputs.status` present proves the declared output port was swept
-///     and projected — the tool produced its contract, not just exited 0.
+/// The child net has no `workflow_instances` row, so its Python step isn't
+/// projected directly. We assert instead on the *SubWorkflow node's* row on
+/// the parent (it has a `data_port`, so the projector records it). Signals:
+///   - `status = 'completed'` on the `lookup_order` SubWorkflow row proves the
+///     child spawned, ran, and replied — which requires the child Python to
+///     have read `input.order_id` and returned. A mis-keyed arg
+///     (`AttributeError`) fails the child net; since 08a routes no explicit
+///     `fail_out`, that stalls the loop → the instance times out (caught by
+///     `wait_for_terminal_status`) rather than completing.
+///   - `outputs.status` present proves the child's declared `status` output
+///     was mapped back through the SubWorkflow result, not just that it ran.
 ///
-/// This holds regardless of *which* order id the LLM passes (ORD-42 →
-/// "In transit", an unknown id → "Unknown order id"): both are successful
-/// Python executions that read `input.order_id`. So the assertion is
-/// deterministic on the Python side even though the LLM is not — it pins
-/// the wiring + runner contract, not the model's choice of argument.
+/// Deterministic on the tool side regardless of which order id the LLM passes
+/// (ORD-42 → "In transit"; unknown id → "Unknown order id" — both successful
+/// child runs that read `input.order_id`).
 #[tokio::test]
 async fn python_tool_reads_llm_args_as_input_field() {
     if !engine_available().await {
@@ -794,46 +763,46 @@ async fn python_tool_reads_llm_args_as_input_field() {
 
     eprintln!("\n--- lookup_order step_execution rows ---\n{rows:#?}\n---\n");
 
-    // No iteration of the tool may have failed — an AttributeError from a
-    // mis-keyed arg (the failure mode this whole test exists to catch)
-    // surfaces as `EffectFailed` → status 'failed' with the Python
-    // traceback in `error`.
+    // No iteration of the tool may have failed — a child-net failure (e.g.
+    // an AttributeError from a mis-keyed arg) that explicitly routed to the
+    // SubWorkflow's error path surfaces as status 'failed' here.
     if let Some((_, _, error)) = rows.iter().find(|(st, _, _)| st == "failed") {
         panic!(
-            "lookup_order tool ran but FAILED — the LLM-emitted args did not \
-             match the Python body's `input.<field>` reads. This is the \
+            "lookup_order SubWorkflow tool ran but FAILED — the child net \
+             errored. The likely cause is the LLM-emitted args not matching \
+             the child Python's `input.<field>` reads (the \
              `AttributeError: '_AccessibleDict' object has no attribute \
-             'order_id'` failure mode: either the derived tool input_schema \
-             drifted from the declared input port, or the runner stopped \
-             promoting `input.json` keys. error: {error:?}"
+             'order_id'` mode), i.e. the derived tool input_schema drifted \
+             from the child's Start contract. error: {error:?}"
         );
     }
 
-    // At least one iteration must have completed, proving the args reached
-    // the Python body, `input.order_id` was readable, and the run exited 0.
+    // At least one iteration must have completed, proving the LLM args reached
+    // the child net, its Python read `input.order_id`, and the result flowed
+    // back through the SubWorkflow's data_port.
     let completed = rows.iter().find(|(st, _, _)| st == "completed");
     let (_, outputs, _) = completed.unwrap_or_else(|| {
         panic!(
-            "lookup_order has step_execution rows but none `completed` \
-             (statuses: {:?}) — the Python tool was dispatched but never \
-             finished cleanly; the `input.<field>` contract is unproven",
+            "lookup_order SubWorkflow has step_execution rows but none \
+             `completed` (statuses: {:?}) — the tool was dispatched but the \
+             child never replied cleanly; the `input.<field>` contract is \
+             unproven",
             rows.iter().map(|(s, _, _)| s.as_str()).collect::<Vec<_>>()
         )
     });
 
-    // The declared `status` output must be present in the projected
-    // envelope — proves the Python runner swept the declared output port
-    // from globals (the tail end of the tool contract), not merely that
-    // the process exited 0.
+    // The declared `status` output must be present in the SubWorkflow result
+    // — proves the child's Python read `input.order_id` and its declared
+    // `status` output was mapped back, not merely that the child ran.
     let outputs = outputs
         .as_ref()
-        .expect("completed lookup_order row must carry its parked output envelope");
+        .expect("completed lookup_order row must carry its sub-workflow result envelope");
     let status_out = outputs.get("status").and_then(Value::as_str);
     assert!(
         status_out.is_some_and(|s| !s.trim().is_empty()),
         "lookup_order completed but its `status` output is missing/empty — \
-         the Python body read `input.order_id` but the declared output sweep \
-         didn't project `status`. outputs: {outputs}"
+         the child ran but the declared `status` didn't map back through the \
+         SubWorkflow result. outputs: {outputs}"
     );
 
     cleanup_durables(&cleanup_nats).await;

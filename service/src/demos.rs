@@ -1219,14 +1219,21 @@ mod tests {
         );
     }
 
-    /// The 09-agent-tool-loop demo (Start → Agent[+ python tool child] → End)
-    /// must parse + compile cleanly. Pins the agent loop path: with
+    /// The 09-agent-tool-loop demo (Start → Agent → End, tool = a SubWorkflow
+    /// child) must parse + compile cleanly. Pins the agent loop path: with
     /// `maxTurns: 4` + a tool child the compiler takes `lower_agent_loop`
     /// (NOT the degenerate single-shot path), so the resulting AIR must
-    /// carry the loop scaffold's signature places + transitions.
+    /// carry the loop scaffold's signature places + transitions. The tool is
+    /// now a SubWorkflow, so the bare `compile_to_air` can't resolve it (like
+    /// 06-subworkflow) — feed a stub child AIR via `SubWorkflowAir`. The loop
+    /// markers come from the agent + the slugified tool label (`lookup_order`),
+    /// independent of the child's contents.
     #[test]
     fn agent_tool_loop_demo_loads_and_compiles() {
-        use crate::compiler::{compile_to_air, node_files_inline};
+        use crate::compiler::{
+            compile_to_air_with_subworkflows_inline, node_files_inline, ResolvedChild,
+            SubWorkflowAir,
+        };
 
         let root = repo_root().join("demos");
         let demo = load_demo(&root.join("09-agent-tool-loop"))
@@ -1237,12 +1244,30 @@ mod tests {
             "00000000-0000-0000-0000-000000000019"
         );
 
+        // Stub the SubWorkflow tool child ("lookup_order" node) — only its
+        // presence matters for the loop-marker assertions below.
+        let mut sub_air = SubWorkflowAir::new();
+        sub_air.insert(
+            "lookup_order".to_string(),
+            ResolvedChild {
+                air: serde_json::json!({
+                    "name": "child-stub", "places": [], "transitions": [],
+                    "groups": [], "mock_adapters": [], "definitions": {}, "requirements": []
+                }),
+                resolved_version: 1,
+                template_id: "00000000-0000-0000-0000-00000000008a".to_string(),
+                input_contract: crate::models::template::Port::empty_input(),
+            },
+        );
+
         let files = node_files_inline(&demo.files);
-        let air = compile_to_air(
+        let air = compile_to_air_with_subworkflows_inline(
             &demo.graph,
             &demo.metadata.name,
             demo.metadata.description.as_deref().unwrap_or(""),
             &files,
+            &demo.files,
+            &sub_air,
         )
         .unwrap_or_else(|e| panic!("09-agent-tool-loop must compile to AIR: {e:?}"));
 

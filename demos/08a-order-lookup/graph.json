@@ -1,0 +1,73 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "position": { "x": 40, "y": 120 },
+      "data": {
+        "type": "start",
+        "label": "Start",
+        "initial": {
+          "id": "in",
+          "label": "Order lookup args",
+          "fields": [
+            {
+              "name": "order_id",
+              "label": "Order ID",
+              "kind": "text",
+              "required": true,
+              "description": "The order id to look up (e.g. ORD-42)."
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "lookup_order",
+      "type": "automated_step",
+      "position": { "x": 320, "y": 120 },
+      "data": {
+        "type": "automated_step",
+        "label": "Look up order",
+        "description": "Reads `input.order_id` (a Start field) and returns a mock shipping status. A real implementation would query a database / shipping API here.",
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": [],
+            "virtualenv": false,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Status",
+          "fields": [
+            { "name": "status", "label": "Shipping status", "kind": "text", "required": true },
+            { "name": "eta",    "label": "Estimated arrival", "kind": "text", "required": false }
+          ]
+        }
+      }
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "position": { "x": 620, "y": 120 },
+      "data": {
+        "type": "end",
+        "label": "Done",
+        "resultMapping": [
+          { "targetField": "status", "expression": "lookup_order.status" },
+          { "targetField": "eta",    "expression": "lookup_order.eta" }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    { "id": "e_start_lookup", "source": "start",        "target": "lookup_order", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_lookup_end",   "source": "lookup_order", "target": "end",          "targetHandle": "in", "type": "sequence" }
+  ]
+}

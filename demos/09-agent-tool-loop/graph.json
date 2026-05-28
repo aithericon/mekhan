@@ -32,7 +32,7 @@
       "data": {
         "type": "agent",
         "label": "Triage Agent",
-        "description": "Reads the customer's message and decides whether to look up an order. The system prompt tells the LLM that the `lookup_order` tool exists; the agent loop's compiler emits the per-tool dispatch transitions automatically from this node's children with `toolMeta` set.",
+        "description": "Reads the customer's message and decides whether to look up an order. The `lookup_order` tool is wired via the `tools` handle to a SubWorkflow node; the agent compiler derives the tool's input schema from that child's Start contract and emits the dispatch/collect transitions automatically.",
         "model": {
           "provider": "ollama",
           "model": "qwen3.5:9b",
@@ -47,43 +47,18 @@
     },
     {
       "id": "lookup_order",
-      "type": "automated_step",
+      "type": "sub_workflow",
       "position": { "x": 820, "y": 460 },
-      "toolMeta": {
-        "toolName": "lookup_order",
-        "toolDescription": "Look up an order's current shipping status by id. Pass the order id as a string."
-      },
       "data": {
-        "type": "automated_step",
-        "label": "lookup_order tool",
-        "description": "Python tool the agent can call. Reads `input.order_id` (the argument the LLM emitted in its tool call) and returns a mock status. Real implementations would query a database / external API here.",
-        "executionSpec": {
-          "backendType": "python",
-          "entrypoint": "main.py",
-          "config": {
-            "python": "python3",
-            "requirements": [],
-            "virtualenv": false,
-            "sdk": true,
-            "inherit_env": true,
-            "env": {}
-          }
-        },
-        "input": {
-          "id": "in",
-          "label": "Tool args",
-          "fields": [
-            {
-              "name": "order_id",
-              "label": "Order ID",
-              "kind": "text",
-              "required": true
-            }
-          ]
-        },
+        "type": "sub_workflow",
+        "label": "lookup_order",
+        "description": "The order-lookup tool, realized as a sub-workflow (the 08a-order-lookup child template). The child's Start declares `order_id`, and THAT Start contract is what the agent compiler turns into this tool's LLM-facing input schema — there is no input declaration on this node itself. The child runs a Python lookup and returns `status`/`eta`, mapped back here as the tool result the agent feeds to its next turn.",
+        "templateId": "00000000-0000-0000-0000-00000000008a",
+        "versionPin": { "mode": "latest" },
+        "inputMapping": [],
         "output": {
           "id": "out",
-          "label": "Status",
+          "label": "Order status",
           "fields": [
             { "name": "status", "label": "Shipping status", "kind": "text", "required": true },
             { "name": "eta",    "label": "Estimated arrival", "kind": "text", "required": false }
