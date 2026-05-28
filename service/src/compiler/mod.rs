@@ -2,7 +2,7 @@ pub mod backend_configs;
 pub(crate) mod borrow;
 mod compile;
 mod error;
-mod graph;
+pub(crate) mod graph;
 pub mod interface;
 pub(crate) mod lower;
 mod pyio;
@@ -17,7 +17,7 @@ pub mod rhai_scope;
 pub mod subworkflow;
 pub mod token_shape;
 pub mod well_known;
-mod validate;
+pub(crate) mod validate;
 mod wire;
 
 pub use compile::{

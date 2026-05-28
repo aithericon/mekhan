@@ -114,167 +114,224 @@ pub(crate) fn validate(graph: &WorkflowGraph, wg: &WorkflowDiGraph) -> Result<()
         ));
     }
 
-    // Validate loop blocks
+    // Per-node structural validation. Each variant's rule lives behind its
+    // `NodeDecl::validate` hook (one `validate_<kind>` free fn per rule-bearing
+    // variant, below) — the dispatcher walks every node and calls through.
+    // Pushing this into the registry means a future variant with a structural
+    // rule can't be silently skipped: it either declares a `validate` hook or
+    // trips the `validate_or_token_shape_hook_for_rule_bearing_kinds`
+    // conformance test. Variants with no per-node rule have `validate: None`
+    // and are a cheap no-op here.
     for node in &graph.nodes {
-        if let WorkflowNodeData::Loop {
-            max_iterations,
-            loop_condition,
-            accumulators,
-            ..
-        } = &node.data
-        {
-            if *max_iterations <= 0 {
-                return Err(CompileError::Validation(format!(
-                    "loop '{}' must have max_iterations > 0",
-                    node.id
-                )));
-            }
-            if loop_condition.trim().is_empty() {
-                return Err(CompileError::Validation(format!(
-                    "loop '{}' must have a non-empty condition",
-                    node.id
-                )));
-            }
-            // Accumulator validation: var is a valid Rhai identifier, not the
-            // reserved `iteration`, unique within the loop, and init/merge_expr
-            // parse as Rhai (reusing the same `parse_guard` surface used for
-            // loop_condition). init/merge_expr borrows (`<slug>.<var>`,
-            // `<body_slug>.<field>`) are resolved later by the read-arc pass.
-            let mut seen: HashSet<&str> = HashSet::new();
-            for acc in accumulators {
-                if !is_rhai_ident(&acc.var) {
-                    return Err(CompileError::LoopAccumulatorVarInvalid {
-                        node_id: node.id.clone(),
-                        var: acc.var.clone(),
-                    });
-                }
-                if acc.var == "iteration" {
-                    return Err(CompileError::LoopAccumulatorVarReserved {
-                        node_id: node.id.clone(),
-                        var: acc.var.clone(),
-                    });
-                }
-                if !seen.insert(acc.var.as_str()) {
-                    return Err(CompileError::LoopAccumulatorDuplicateVar {
-                        node_id: node.id.clone(),
-                        var: acc.var.clone(),
-                    });
-                }
-                for expr in [&acc.init, &acc.merge_expr] {
-                    crate::compiler::rhai_scope::parse_guard(expr).map_err(|error| {
-                        CompileError::LoopAccumulatorExprUnparseable {
-                            node_id: node.id.clone(),
-                            var: acc.var.clone(),
-                            error,
-                        }
-                    })?;
-                }
+        if let Some(decl) = crate::nodes::lookup_by_variant(&node.data) {
+            if let Some(f) = decl.validate {
+                f(node, graph, wg)?;
             }
         }
     }
 
-    // Validate Delay / Timeout duration expressions are non-empty (parse +
-    // ref-resolution happens in `validate_guards` below alongside other
-    // Rhai surfaces). For Timeout, also require a body: at least one
-    // outgoing edge with sourceHandle="body_in" AND at least one incoming
-    // edge with targetHandle="body_out" — same shape as Loop's body.
-    for node in &graph.nodes {
-        match &node.data {
-            WorkflowNodeData::Delay {
-                duration_ms_expr, ..
-            } => {
-                if duration_ms_expr.trim().is_empty() {
-                    return Err(CompileError::Validation(format!(
-                        "delay '{}' must have a non-empty durationMsExpr",
-                        node.id
-                    )));
+    Ok(())
+}
+
+// ── Per-variant structural validation (registry hooks) ──────────────────────
+// One `pub(crate) fn validate_<kind>` per variant carrying a per-node rule,
+// referenced by the matching `NodeDecl::validate`. Bodies are byte-identical to
+// the pre-refactor per-node loops in `validate`. They live here (not in
+// `nodes/<kind>.rs`) so they keep using `CompileError` + `WorkflowDiGraph`
+// directly — mirroring how the `lower_*` fns live in `compiler/lower/`.
+
+/// Loop: `max_iterations > 0` and a non-empty `loop_condition`.
+pub(crate) fn validate_loop(
+    node: &WorkflowNode,
+    _graph: &WorkflowGraph,
+    _wg: &WorkflowDiGraph<'_>,
+) -> Result<(), CompileError> {
+    let WorkflowNodeData::Loop {
+        max_iterations,
+        loop_condition,
+        accumulators,
+        ..
+    } = &node.data
+    else {
+        unreachable!("validate_loop on non-Loop variant");
+    };
+    if *max_iterations <= 0 {
+        return Err(CompileError::Validation(format!(
+            "loop '{}' must have max_iterations > 0",
+            node.id
+        )));
+    }
+    if loop_condition.trim().is_empty() {
+        return Err(CompileError::Validation(format!(
+            "loop '{}' must have a non-empty condition",
+            node.id
+        )));
+    }
+    // Accumulator validation: var is a valid Rhai identifier, not the
+    // reserved `iteration`, unique within the loop, and init/merge_expr
+    // parse as Rhai (reusing the same `parse_guard` surface used for
+    // loop_condition). init/merge_expr borrows (`<slug>.<var>`,
+    // `<body_slug>.<field>`) are resolved later by the read-arc pass.
+    let mut seen: HashSet<&str> = HashSet::new();
+    for acc in accumulators {
+        if !is_rhai_ident(&acc.var) {
+            return Err(CompileError::LoopAccumulatorVarInvalid {
+                node_id: node.id.clone(),
+                var: acc.var.clone(),
+            });
+        }
+        if acc.var == "iteration" {
+            return Err(CompileError::LoopAccumulatorVarReserved {
+                node_id: node.id.clone(),
+                var: acc.var.clone(),
+            });
+        }
+        if !seen.insert(acc.var.as_str()) {
+            return Err(CompileError::LoopAccumulatorDuplicateVar {
+                node_id: node.id.clone(),
+                var: acc.var.clone(),
+            });
+        }
+        for expr in [&acc.init, &acc.merge_expr] {
+            crate::compiler::rhai_scope::parse_guard(expr).map_err(|error| {
+                CompileError::LoopAccumulatorExprUnparseable {
+                    node_id: node.id.clone(),
+                    var: acc.var.clone(),
+                    error,
                 }
-            }
-            WorkflowNodeData::Timeout {
-                duration_ms_expr, ..
-            } => {
-                if duration_ms_expr.trim().is_empty() {
-                    return Err(CompileError::Validation(format!(
-                        "timeout '{}' must have a non-empty durationMsExpr",
-                        node.id
-                    )));
-                }
-                let has_body_in = graph.edges.iter().any(|e| {
-                    e.source == node.id
-                        && e.source_handle.as_deref() == Some("body_in")
-                });
-                let has_body_out = graph.edges.iter().any(|e| {
-                    e.target == node.id
-                        && e.target_handle.as_deref() == Some("body_out")
-                });
-                if !has_body_in || !has_body_out {
-                    return Err(CompileError::Validation(format!(
-                        "timeout '{}' requires a body — wire its body_in output \
-                         and a body completion back to body_out",
-                        node.id
-                    )));
-                }
-            }
-            _ => {}
+            })?;
         }
     }
+    Ok(())
+}
 
-    // Decision.defaultBranch is a free string on the wire (forward-compat
-    // for future multi-default decisions), but today the editor's
-    // `DecisionNode.svelte` hardcodes the Otherwise xyflow Handle id to
-    // `DEFAULT_BRANCH_HANDLE_ID`, so any other value would render as a
-    // floating edge in the UI even though the compiler would happily lower
-    // it. Reject at publish so hand-authored JSON can't silently produce a
-    // graph the editor won't render correctly.
-    for node in &graph.nodes {
-        if let WorkflowNodeData::Decision { default_branch: Some(db), .. } = &node.data {
-            if db != DEFAULT_BRANCH_HANDLE_ID {
-                return Err(CompileError::Validation(format!(
-                    "decision '{}' defaultBranch must be exactly \"{}\", got \"{}\"",
-                    node.id, DEFAULT_BRANCH_HANDLE_ID, db
-                )));
-            }
-        }
+/// Delay: non-empty `durationMsExpr` (parse + ref-resolution happens in
+/// `validate_guards` alongside other Rhai surfaces).
+pub(crate) fn validate_delay(
+    node: &WorkflowNode,
+    _graph: &WorkflowGraph,
+    _wg: &WorkflowDiGraph<'_>,
+) -> Result<(), CompileError> {
+    let WorkflowNodeData::Delay {
+        duration_ms_expr, ..
+    } = &node.data
+    else {
+        unreachable!("validate_delay on non-Delay variant");
+    };
+    if duration_ms_expr.trim().is_empty() {
+        return Err(CompileError::Validation(format!(
+            "delay '{}' must have a non-empty durationMsExpr",
+            node.id
+        )));
     }
+    Ok(())
+}
 
-    // ParallelSplit must have >= 2 outgoing edges
-    for node in &graph.nodes {
-        if matches!(node.data, WorkflowNodeData::ParallelSplit { .. }) {
-            let idx = wg.indices[node.id.as_str()];
-            let out_count = wg.full.edges_directed(idx, Direction::Outgoing).count();
-            if out_count < 2 {
-                return Err(CompileError::Validation(format!(
-                    "parallel split '{}' must have at least 2 outgoing edges, found {out_count}",
-                    node.id
-                )));
-            }
-        }
+/// Timeout: non-empty `durationMsExpr`, plus a body — at least one outgoing
+/// edge with `sourceHandle="body_in"` AND at least one incoming edge with
+/// `targetHandle="body_out"` (same shape as Loop's body).
+pub(crate) fn validate_timeout(
+    node: &WorkflowNode,
+    graph: &WorkflowGraph,
+    _wg: &WorkflowDiGraph<'_>,
+) -> Result<(), CompileError> {
+    let WorkflowNodeData::Timeout {
+        duration_ms_expr, ..
+    } = &node.data
+    else {
+        unreachable!("validate_timeout on non-Timeout variant");
+    };
+    if duration_ms_expr.trim().is_empty() {
+        return Err(CompileError::Validation(format!(
+            "timeout '{}' must have a non-empty durationMsExpr",
+            node.id
+        )));
     }
-
-    // Unmerged fan-in: a work node (Automated/Human) with >1 incoming edge
-    // isn't a synchronizing join — its single input place has multiple
-    // producers, so the step *fires once per arriving token* with only that
-    // token's data, not a merge. This is legal Petri, rarely the intent.
-    // Warn (don't fail — existing graphs rely on it); the editor surfaces the
-    // same caveat per-node in the step reference panel.
-    for node in &graph.nodes {
-        if matches!(
-            node.data,
-            WorkflowNodeData::AutomatedStep { .. } | WorkflowNodeData::HumanTask { .. }
-        ) {
-            let idx = wg.indices[node.id.as_str()];
-            let in_count = wg.full.edges_directed(idx, Direction::Incoming).count();
-            if in_count > 1 {
-                tracing::warn!(
-                    node = %node.id,
-                    incoming = in_count,
-                    "unmerged fan-in: '{}' has {in_count} incoming edges and is not a Parallel Join; it will run once per upstream token (no merge). Insert a Parallel Join to combine inputs.",
-                    node.id
-                );
-            }
-        }
+    let has_body_in = graph
+        .edges
+        .iter()
+        .any(|e| e.source == node.id && e.source_handle.as_deref() == Some("body_in"));
+    let has_body_out = graph
+        .edges
+        .iter()
+        .any(|e| e.target == node.id && e.target_handle.as_deref() == Some("body_out"));
+    if !has_body_in || !has_body_out {
+        return Err(CompileError::Validation(format!(
+            "timeout '{}' requires a body — wire its body_in output \
+             and a body completion back to body_out",
+            node.id
+        )));
     }
+    Ok(())
+}
 
+/// Decision: `defaultBranch` must equal `DEFAULT_BRANCH_HANDLE_ID` when set.
+/// The wire allows a free string (forward-compat for multi-default decisions),
+/// but today `DecisionNode.svelte` hardcodes the Otherwise handle id, so any
+/// other value renders as a floating edge in the UI even though the compiler
+/// would happily lower it. Reject at publish so hand-authored JSON can't
+/// silently produce a graph the editor won't render correctly.
+pub(crate) fn validate_decision(
+    node: &WorkflowNode,
+    _graph: &WorkflowGraph,
+    _wg: &WorkflowDiGraph<'_>,
+) -> Result<(), CompileError> {
+    let WorkflowNodeData::Decision {
+        default_branch: Some(db),
+        ..
+    } = &node.data
+    else {
+        // No default branch set, or non-Decision (the dispatcher only routes
+        // Decision nodes here) — nothing to check.
+        return Ok(());
+    };
+    if db != DEFAULT_BRANCH_HANDLE_ID {
+        return Err(CompileError::Validation(format!(
+            "decision '{}' defaultBranch must be exactly \"{}\", got \"{}\"",
+            node.id, DEFAULT_BRANCH_HANDLE_ID, db
+        )));
+    }
+    Ok(())
+}
+
+/// ParallelSplit must have >= 2 outgoing edges.
+pub(crate) fn validate_parallel_split(
+    node: &WorkflowNode,
+    _graph: &WorkflowGraph,
+    wg: &WorkflowDiGraph<'_>,
+) -> Result<(), CompileError> {
+    let idx = wg.indices[node.id.as_str()];
+    let out_count = wg.full.edges_directed(idx, Direction::Outgoing).count();
+    if out_count < 2 {
+        return Err(CompileError::Validation(format!(
+            "parallel split '{}' must have at least 2 outgoing edges, found {out_count}",
+            node.id
+        )));
+    }
+    Ok(())
+}
+
+/// Unmerged fan-in warning shared by AutomatedStep + HumanTask: a work node
+/// with >1 incoming edge isn't a synchronizing join — its single input place
+/// has multiple producers, so the step *fires once per arriving token* with
+/// only that token's data, not a merge. Legal Petri, rarely the intent. Warn
+/// (don't fail — existing graphs rely on it); the editor surfaces the same
+/// caveat per-node in the step reference panel.
+pub(crate) fn warn_unmerged_fan_in(
+    node: &WorkflowNode,
+    _graph: &WorkflowGraph,
+    wg: &WorkflowDiGraph<'_>,
+) -> Result<(), CompileError> {
+    let idx = wg.indices[node.id.as_str()];
+    let in_count = wg.full.edges_directed(idx, Direction::Incoming).count();
+    if in_count > 1 {
+        tracing::warn!(
+            node = %node.id,
+            incoming = in_count,
+            "unmerged fan-in: '{}' has {in_count} incoming edges and is not a Parallel Join; it will run once per upstream token (no merge). Insert a Parallel Join to combine inputs.",
+            node.id
+        );
+    }
     Ok(())
 }
 
@@ -539,40 +596,14 @@ pub(crate) fn validate_guards<'a>(
         // `input.<path>` in transition *logic* just like guards do, so they
         // get the same syntax check + shape-aware resolution (the read-arc
         // synthesis phase rebinds them onto the owning parked data place).
-        let sources: Vec<&str> = match &node.data {
-            WorkflowNodeData::Decision { conditions, .. } => conditions
-                .iter()
-                .map(|c| c.guard.as_str())
-                .filter(|s| !s.trim().is_empty())
-                .collect(),
-            WorkflowNodeData::Loop { loop_condition, .. }
-                if !loop_condition.trim().is_empty() =>
-            {
-                vec![loop_condition.as_str()]
-            }
-            WorkflowNodeData::End { result_mapping, .. } => result_mapping
-                .iter()
-                .map(|m| m.expression.as_str())
-                .filter(|s| !s.trim().is_empty())
-                .collect(),
-            WorkflowNodeData::Failure {
-                error_result_mapping,
-                ..
-            } => error_result_mapping
-                .iter()
-                .map(|m| m.expression.as_str())
-                .filter(|s| !s.trim().is_empty())
-                .collect(),
-            WorkflowNodeData::Delay {
-                duration_ms_expr, ..
-            }
-            | WorkflowNodeData::Timeout {
-                duration_ms_expr, ..
-            } if !duration_ms_expr.trim().is_empty() => {
-                vec![duration_ms_expr.as_str()]
-            }
-            _ => continue,
-        };
+        //
+        // The set of Rhai-bearing sources per variant is centralized in
+        // `crate::nodes::guard_rhai_sources` — the single source of truth
+        // shared with `token_shape::analyze`. A new Rhai-bearing variant that
+        // forgets an arm there fails the build (the match is exhaustive, no
+        // wildcard) and the `guard_rhai_sources` conformance test in
+        // `nodes/mod.rs`. `guard_rhai_sources` already filters empties.
+        let sources = crate::nodes::guard_rhai_sources(&node.data);
         for src in sources {
             rhai_scope::parse_guard(src).map_err(|message| CompileError::GuardSyntax {
                 node_id: node.id.clone(),

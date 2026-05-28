@@ -36,6 +36,8 @@ pub(crate) static LOOP_DECL: NodeDecl = NodeDecl {
     output_ports: output_ports,
     wiring_logic: None,
     yjs_encode: yjs_encode as YjsEncodeFn,
+    validate: Some(crate::compiler::validate::validate_loop),
+    token_shape: Some(crate::compiler::token_shape::analyze::out_shape_loop),
 };
 
 fn input_ports(_data: &WorkflowNodeData) -> Vec<Port> {

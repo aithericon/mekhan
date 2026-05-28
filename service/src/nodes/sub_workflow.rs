@@ -38,6 +38,8 @@ pub(crate) static SUB_WORKFLOW_DECL: NodeDecl = NodeDecl {
     output_ports: output_ports,
     wiring_logic: None,
     yjs_encode: yjs_encode as YjsEncodeFn,
+    validate: None,
+    token_shape: Some(crate::compiler::token_shape::analyze::out_shape_sub_workflow),
 };
 
 fn input_ports(_data: &WorkflowNodeData) -> Vec<Port> {
