@@ -1,6 +1,6 @@
 {
   "definitions": {
-    "Ctrl__ask": {
+    "Ctrl__review": {
       "additionalProperties": true,
       "type": "object"
     },
@@ -8,7 +8,7 @@
       "additionalProperties": true,
       "type": "object"
     },
-    "Data__ask": {
+    "Data__review": {
       "additionalProperties": true,
       "properties": {
         "_instance_id": {
@@ -32,15 +32,15 @@
         "data": {
           "additionalProperties": true,
           "properties": {
-            "favorite_color": {
+            "approved": {
               "type": [
-                "string",
+                "boolean",
                 "null"
               ]
             },
-            "would_recommend": {
+            "comment": {
               "type": [
-                "boolean",
+                "string",
                 "null"
               ]
             }
@@ -60,6 +60,12 @@
           ]
         },
         "place": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "request_id": {
           "type": [
             "string",
             "null"
@@ -106,6 +112,12 @@
           ]
         },
         "_process_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "request_id": {
           "type": [
             "string",
             "null"
@@ -842,63 +854,163 @@
   "description": "",
   "groups": [
     {
-      "id": "grp_ask",
-      "name": "Ask Operator"
+      "id": "grp_review",
+      "name": "Reviewer Decision"
+    },
+    {
+      "id": "grp_sla",
+      "name": "Review SLA"
     }
   ],
-  "name": "02 · Human Form",
+  "name": "10 · Delay & Timeout",
   "places": [
     {
-      "id": "p_ask_active",
-      "name": "Ask Operator - Active",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
-      "id": "p_ask_ctrl",
-      "name": "Ask Operator - Control Token",
-      "token_schema": "#/definitions/Ctrl__ask",
-      "type": "state"
-    },
-    {
-      "id": "p_ask_data",
-      "name": "Ask Operator - Parked Data (write-once)",
-      "token_schema": "#/definitions/Data__ask",
-      "type": "state"
-    },
-    {
-      "id": "p_ask_errors",
-      "name": "Ask Operator - Errors",
-      "token_schema": "#/definitions/EffectError",
-      "type": "state"
-    },
-    {
-      "id": "p_ask_input",
-      "name": "Ask Operator - Input",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
-      "id": "p_ask_output",
-      "name": "Ask Operator - Output",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
-      "id": "p_ask_signal",
-      "name": "Ask Operator - Signal",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "signal"
-    },
-    {
-      "id": "p_end_completed",
-      "name": "Recorded - Completed",
+      "id": "p_end_done_completed",
+      "name": "Done (in SLA) - Completed",
       "token_schema": "#/definitions/DynamicToken",
       "type": "terminal"
     },
     {
-      "id": "p_end_result",
-      "name": "Recorded - Result",
+      "id": "p_end_done_result",
+      "name": "Done (in SLA) - Result",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_end_timeout_completed",
+      "name": "Done (SLA expired) - Completed",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "terminal"
+    },
+    {
+      "id": "p_end_timeout_result",
+      "name": "Done (SLA expired) - Result",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_review_active",
+      "name": "Reviewer Decision - Active",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_review_ctrl",
+      "name": "Reviewer Decision - Control Token",
+      "token_schema": "#/definitions/Ctrl__review",
+      "type": "state"
+    },
+    {
+      "id": "p_review_data",
+      "name": "Reviewer Decision - Parked Data (write-once)",
+      "token_schema": "#/definitions/Data__review",
+      "type": "state"
+    },
+    {
+      "id": "p_review_errors",
+      "name": "Reviewer Decision - Errors",
+      "token_schema": "#/definitions/EffectError",
+      "type": "state"
+    },
+    {
+      "id": "p_review_input",
+      "name": "Reviewer Decision - Input",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_review_output",
+      "name": "Reviewer Decision - Output",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_review_signal",
+      "name": "Reviewer Decision - Signal",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "signal"
+    },
+    {
+      "id": "p_sla_body_in",
+      "name": "Review SLA - Body In",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_sla_body_out",
+      "name": "Review SLA - Body Out",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_sla_cancel_input",
+      "name": "Review SLA - Timer Cancel Request",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_sla_cancel_pulse",
+      "name": "Review SLA - Cancel Body Pulse",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "signal"
+    },
+    {
+      "id": "p_sla_cancelled",
+      "name": "Review SLA - Timer Cancelled (ack)",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_sla_done_out",
+      "name": "Review SLA - Done Output",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_sla_drain_review_done",
+      "name": "Review SLA - Cancel review (acked)",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_sla_drain_review_input",
+      "name": "Review SLA - Cancel review (request)",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_sla_effect_errors",
+      "name": "Review SLA - Effect Errors",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_sla_input",
+      "name": "Review SLA - Input",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_sla_scheduled",
+      "name": "Review SLA - Scheduled (race token)",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_sla_sig_timeout",
+      "name": "Review SLA - Timer Fired",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "signal"
+    },
+    {
+      "id": "p_sla_timeout_out",
+      "name": "Review SLA - Timeout Output",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_sla_timer_data",
+      "name": "Review SLA - Timer Data",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
@@ -943,6 +1055,7 @@
     {
       "category": "human",
       "handler_ids": [
+        "human_cancel",
         "human_task"
       ]
     },
@@ -952,25 +1065,28 @@
         "process_complete",
         "process_start"
       ]
+    },
+    {
+      "category": "timer",
+      "handler_ids": [
+        "timer_cancel",
+        "timer_schedule"
+      ]
     }
   ],
   "transitions": [
     {
-      "guard": {
-        "source": "signal.task_id == state.task_id",
-        "type": "rhai"
-      },
-      "id": "t_ask_finalize",
+      "id": "t_edge_e_body_in",
       "input_ports": [
         {
           "cardinality": "single",
-          "name": "state",
+          "name": "input",
           "schema_ref": "#/definitions/DynamicToken"
         },
         {
           "cardinality": "single",
-          "name": "signal",
-          "schema_ref": "#/definitions/DynamicToken"
+          "name": "d_start",
+          "schema_ref": "#/definitions/Data__start"
         }
       ],
       "input_schema": {
@@ -983,25 +1099,26 @@
       },
       "inputs": [
         {
-          "place": "p_ask_active",
-          "port": "state",
+          "place": "p_sla_body_in",
+          "port": "input",
           "weight": 1
         },
         {
-          "place": "p_ask_signal",
-          "port": "signal",
+          "place": "p_start_data",
+          "port": "d_start",
+          "read": true,
           "weight": 1
         }
       ],
       "logic": {
-        "source": "let result = state; let keys = signal.keys(); for key in keys { result[key] = signal[key]; } #{ done: result }",
+        "source": "fn __pluck(__r, __segs) { for __s in __segs { let __t = type_of(__r); if __t == \"map\" && type_of(__s) == \"string\" { __r = __r[__s]; continue; } if __t == \"array\" && type_of(__s) == \"i64\" && __s >= 0 && __s < __r.len() { __r = __r[__s]; continue; } return (); } __r } let d = input; d.title = (\"\" + \"Review \" + (__pluck(d_start, [\"request_id\"]))); d.instructions_mdsvex = \"\"; d.steps = [#{\"blocks\": [#{\"field\": #{\"kind\": \"checkbox\", \"label\": \"Approved\", \"name\": \"approved\", \"required\": true}, \"type\": \"input\"}, #{\"field\": #{\"kind\": \"textarea\", \"label\": \"Comment\", \"name\": \"comment\", \"required\": false}, \"type\": \"input\"}], \"id\": \"step1\", \"title\": \"Approve / Reject\"}]; #{ output: d }",
         "type": "rhai"
       },
-      "name": "Ask Operator - Finalize",
+      "name": "Review SLA -> Reviewer Decision",
       "output_ports": [
         {
           "cardinality": "single",
-          "name": "done",
+          "name": "output",
           "schema_ref": "#/definitions/DynamicToken"
         }
       ],
@@ -1015,92 +1132,18 @@
       },
       "outputs": [
         {
-          "place": "p_ask_output",
-          "port": "done",
+          "place": "p_review_input",
+          "port": "output",
           "weight": 1
         }
       ]
     },
     {
-      "caused_signals": [
-        "p_ask_signal"
-      ],
-      "effect_config": {
-        "place": "p_ask_signal"
-      },
-      "id": "t_ask_request",
+      "id": "t_edge_e_body_out",
       "input_ports": [
         {
           "cardinality": "single",
-          "name": "task",
-          "schema_ref": "#/definitions/HumanTaskRequest"
-        }
-      ],
-      "input_schema": {
-        "properties": {
-          "HumanTaskRequest": {
-            "$ref": "#/definitions/HumanTaskRequest"
-          }
-        },
-        "type": "object"
-      },
-      "inputs": [
-        {
-          "place": "p_ask_input",
-          "port": "task",
-          "weight": 1
-        }
-      ],
-      "logic": {
-        "config": {
-          "place": "p_ask_signal"
-        },
-        "handler_id": "human_task",
-        "type": "effect"
-      },
-      "name": "Ask Operator - Request Human Task",
-      "output_ports": [
-        {
-          "cardinality": "single",
-          "name": "assigned",
-          "schema_ref": "#/definitions/HumanTaskAssigned"
-        },
-        {
-          "cardinality": "single",
-          "name": "_error",
-          "schema_ref": "#/definitions/EffectError"
-        }
-      ],
-      "output_schema": {
-        "properties": {
-          "EffectError": {
-            "$ref": "#/definitions/EffectError"
-          },
-          "HumanTaskAssigned": {
-            "$ref": "#/definitions/HumanTaskAssigned"
-          }
-        },
-        "type": "object"
-      },
-      "outputs": [
-        {
-          "place": "p_ask_active",
-          "port": "assigned",
-          "weight": 1
-        },
-        {
-          "place": "p_ask_errors",
-          "port": "_error",
-          "weight": 1
-        }
-      ]
-    },
-    {
-      "id": "t_ask_yield",
-      "input_ports": [
-        {
-          "cardinality": "single",
-          "name": "tok",
+          "name": "input",
           "schema_ref": "#/definitions/DynamicToken"
         }
       ],
@@ -1114,26 +1157,21 @@
       },
       "inputs": [
         {
-          "place": "p_ask_output",
-          "port": "tok",
+          "place": "p_review_ctrl",
+          "port": "input",
           "weight": 1
         }
       ],
       "logic": {
-        "source": "let d = tok; let c = #{}; for k in d.keys() { if k.starts_with(\"_\") || k == \"task_id\" || k == \"status\" { c[k] = d[k]; } } #{ data: d, ctrl: c }",
+        "source": "#{ output: input }",
         "type": "rhai"
       },
-      "name": "Ask Operator - Yield (park data, forward control)",
+      "name": "Reviewer Decision -> Review SLA",
       "output_ports": [
         {
           "cardinality": "single",
-          "name": "data",
-          "schema_ref": "#/definitions/Data__ask"
-        },
-        {
-          "cardinality": "single",
-          "name": "ctrl",
-          "schema_ref": "#/definitions/Ctrl__ask"
+          "name": "output",
+          "schema_ref": "#/definitions/DynamicToken"
         }
       ],
       "output_schema": {
@@ -1146,19 +1184,14 @@
       },
       "outputs": [
         {
-          "place": "p_ask_data",
-          "port": "data",
-          "weight": 1
-        },
-        {
-          "place": "p_ask_ctrl",
-          "port": "ctrl",
+          "place": "p_sla_body_out",
+          "port": "output",
           "weight": 1
         }
       ]
     },
     {
-      "id": "t_edge_e_start_ask",
+      "id": "t_edge_e_start_sla",
       "input_ports": [
         {
           "cardinality": "single",
@@ -1182,10 +1215,10 @@
         }
       ],
       "logic": {
-        "source": "let d = input; d.title = \"Quick Survey\"; d.instructions_mdsvex = \"Tell us your favorite color and whether you'd recommend this demo. Steps render in order; required fields gate the **Complete** button.\"; d.steps = [#{\"blocks\": [#{\"field\": #{\"kind\": \"text\", \"label\": \"Favorite Color\", \"name\": \"favorite_color\", \"placeholder\": \"e.g. cerulean\", \"required\": true}, \"type\": \"input\"}], \"id\": \"step-pick\", \"title\": \"Pick Your Color\"}, #{\"blocks\": [#{\"field\": #{\"kind\": \"checkbox\", \"label\": \"Would you recommend this demo to a colleague?\", \"name\": \"would_recommend\", \"required\": false}, \"type\": \"input\"}], \"id\": \"step-recommend\", \"title\": \"Feedback\"}]; #{ output: d }",
+        "source": "#{ output: input }",
         "type": "rhai"
       },
-      "name": "Start -> Ask Operator",
+      "name": "Start -> Review SLA",
       "output_ports": [
         {
           "cardinality": "single",
@@ -1203,14 +1236,14 @@
       },
       "outputs": [
         {
-          "place": "p_ask_input",
+          "place": "p_sla_input",
           "port": "output",
           "weight": 1
         }
       ]
     },
     {
-      "id": "t_end_proc_complete",
+      "id": "t_end_done_proc_complete",
       "input_ports": [
         {
           "cardinality": "single",
@@ -1239,7 +1272,7 @@
           "weight": 1
         },
         {
-          "place": "p_end_result",
+          "place": "p_end_done_result",
           "port": "done",
           "weight": 1
         }
@@ -1248,7 +1281,7 @@
         "handler_id": "process_complete",
         "type": "effect"
       },
-      "name": "Recorded - Complete Process",
+      "name": "Done (in SLA) - Complete Process",
       "output_ports": [
         {
           "cardinality": "single",
@@ -1266,14 +1299,14 @@
       },
       "outputs": [
         {
-          "place": "p_end_completed",
+          "place": "p_end_done_completed",
           "port": "completed",
           "weight": 1
         }
       ]
     },
     {
-      "id": "t_end_result_shape",
+      "id": "t_end_done_result_shape",
       "input_ports": [
         {
           "cardinality": "single",
@@ -1282,8 +1315,8 @@
         },
         {
           "cardinality": "single",
-          "name": "d_ask",
-          "schema_ref": "#/definitions/Data__ask"
+          "name": "d_start",
+          "schema_ref": "#/definitions/Data__start"
         }
       ],
       "input_schema": {
@@ -1296,22 +1329,22 @@
       },
       "inputs": [
         {
-          "place": "p_ask_ctrl",
+          "place": "p_sla_done_out",
           "port": "input",
           "weight": 1
         },
         {
-          "place": "p_ask_data",
-          "port": "d_ask",
+          "place": "p_start_data",
+          "port": "d_start",
           "read": true,
           "weight": 1
         }
       ],
       "logic": {
-        "source": "let __rv0 = (d_ask.data.favorite_color); let __rv1 = (d_ask.data.would_recommend); let __rv = #{ \"favorite_color\": __rv0, \"would_recommend\": __rv1 }; let __out = input; if \"exit_code\" in __out { } else { __out.exit_code = #{ ok: true, value: __rv }; } #{ result: __out }",
+        "source": "let __rv0 = (\"reviewed\"); let __rv1 = (d_start.request_id); let __rv = #{ \"outcome\": __rv0, \"request_id\": __rv1 }; let __out = input; if \"exit_code\" in __out { } else { __out.exit_code = #{ ok: true, value: __rv }; } #{ result: __out }",
         "type": "rhai"
       },
-      "name": "Recorded - Result",
+      "name": "Done (in SLA) - Result",
       "output_ports": [
         {
           "cardinality": "single",
@@ -1329,8 +1362,794 @@
       },
       "outputs": [
         {
-          "place": "p_end_result",
+          "place": "p_end_done_result",
           "port": "result",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "t_end_timeout_proc_complete",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "process",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "done",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_start_process",
+          "port": "process",
+          "read": true,
+          "weight": 1
+        },
+        {
+          "place": "p_end_timeout_result",
+          "port": "done",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "handler_id": "process_complete",
+        "type": "effect"
+      },
+      "name": "Done (SLA expired) - Complete Process",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "completed",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_end_timeout_completed",
+          "port": "completed",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "t_end_timeout_result_shape",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "input",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "d_start",
+          "schema_ref": "#/definitions/Data__start"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_sla_timeout_out",
+          "port": "input",
+          "weight": 1
+        },
+        {
+          "place": "p_start_data",
+          "port": "d_start",
+          "read": true,
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "let __rv0 = (\"sla_expired\"); let __rv1 = (d_start.request_id); let __rv = #{ \"outcome\": __rv0, \"request_id\": __rv1 }; let __out = input; if \"exit_code\" in __out { } else { __out.exit_code = #{ ok: true, value: __rv }; } #{ result: __out }",
+        "type": "rhai"
+      },
+      "name": "Done (SLA expired) - Result",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "result",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_end_timeout_result",
+          "port": "result",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "guard": {
+        "source": "signal.task_id == state.task_id",
+        "type": "rhai"
+      },
+      "id": "t_review_finalize",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "state",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "signal",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_review_active",
+          "port": "state",
+          "weight": 1
+        },
+        {
+          "place": "p_review_signal",
+          "port": "signal",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "let result = state; let keys = signal.keys(); for key in keys { result[key] = signal[key]; } #{ done: result }",
+        "type": "rhai"
+      },
+      "name": "Reviewer Decision - Finalize",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "done",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_review_output",
+          "port": "done",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "caused_signals": [
+        "p_review_signal"
+      ],
+      "effect_config": {
+        "place": "p_review_signal"
+      },
+      "id": "t_review_request",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "task",
+          "schema_ref": "#/definitions/HumanTaskRequest"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "HumanTaskRequest": {
+            "$ref": "#/definitions/HumanTaskRequest"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_review_input",
+          "port": "task",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "config": {
+          "place": "p_review_signal"
+        },
+        "handler_id": "human_task",
+        "type": "effect"
+      },
+      "name": "Reviewer Decision - Request Human Task",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "assigned",
+          "schema_ref": "#/definitions/HumanTaskAssigned"
+        },
+        {
+          "cardinality": "single",
+          "name": "_error",
+          "schema_ref": "#/definitions/EffectError"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "EffectError": {
+            "$ref": "#/definitions/EffectError"
+          },
+          "HumanTaskAssigned": {
+            "$ref": "#/definitions/HumanTaskAssigned"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_review_active",
+          "port": "assigned",
+          "weight": 1
+        },
+        {
+          "place": "p_review_errors",
+          "port": "_error",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "t_review_yield",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "tok",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_review_output",
+          "port": "tok",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "let d = tok; let c = #{}; for k in d.keys() { if k.starts_with(\"_\") || k == \"task_id\" || k == \"status\" { c[k] = d[k]; } } #{ data: d, ctrl: c }",
+        "type": "rhai"
+      },
+      "name": "Reviewer Decision - Yield (park data, forward control)",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "data",
+          "schema_ref": "#/definitions/Data__review"
+        },
+        {
+          "cardinality": "single",
+          "name": "ctrl",
+          "schema_ref": "#/definitions/Ctrl__review"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_review_data",
+          "port": "data",
+          "weight": 1
+        },
+        {
+          "place": "p_review_ctrl",
+          "port": "ctrl",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "t_sla_body_done",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "body_out",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "scheduled",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_sla_body_out",
+          "port": "body_out",
+          "weight": 1
+        },
+        {
+          "place": "p_sla_scheduled",
+          "port": "scheduled",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{ done: body_out, cancel: #{ timer_correlation_id: scheduled.timer_correlation_id, target_place_id: scheduled.target_place_id } }",
+        "type": "rhai"
+      },
+      "name": "Review SLA - Body Done (race win)",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "done",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "cancel",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_sla_done_out",
+          "port": "done",
+          "weight": 1
+        },
+        {
+          "place": "p_sla_cancel_input",
+          "port": "cancel",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "t_sla_cancel",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "timer",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_sla_cancel_input",
+          "port": "timer",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "handler_id": "timer_cancel",
+        "type": "effect"
+      },
+      "name": "Review SLA - Cancel Pending Timer",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "cancelled",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "_error",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_sla_cancelled",
+          "port": "cancelled",
+          "weight": 1
+        },
+        {
+          "place": "p_sla_effect_errors",
+          "port": "_error",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "t_sla_drain_review",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "token",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "pulse",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_review_active",
+          "port": "token",
+          "weight": 1
+        },
+        {
+          "place": "p_sla_cancel_pulse",
+          "port": "pulse",
+          "read": true,
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{ task: #{ task_id: token.task_id, place: \"p_review_signal\" } }",
+        "type": "rhai"
+      },
+      "name": "Review SLA - Drain review on timeout",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "task",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_sla_drain_review_input",
+          "port": "task",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "t_sla_drain_review_effect",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "task",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_sla_drain_review_input",
+          "port": "task",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "handler_id": "human_cancel",
+        "type": "effect"
+      },
+      "name": "Review SLA - Cancel Effect review",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "cancelled",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "_error",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_sla_drain_review_done",
+          "port": "cancelled",
+          "weight": 1
+        },
+        {
+          "place": "p_sla_effect_errors",
+          "port": "_error",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "t_sla_prep",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "input",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_sla_input",
+          "port": "input",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "let __i = input; #{ timer: #{ delay_ms: (30000), target_place_id: \"p_sla_sig_timeout\", payload: __i }, body: __i }",
+        "type": "rhai"
+      },
+      "name": "Review SLA - Prep",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "timer",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "body",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_sla_timer_data",
+          "port": "timer",
+          "weight": 1
+        },
+        {
+          "place": "p_sla_body_in",
+          "port": "body",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "caused_signals": [
+        "p_sla_sig_timeout"
+      ],
+      "id": "t_sla_schedule",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "timer",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_sla_timer_data",
+          "port": "timer",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "handler_id": "timer_schedule",
+        "type": "effect"
+      },
+      "name": "Review SLA - Schedule Timer",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "scheduled",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "_error",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_sla_scheduled",
+          "port": "scheduled",
+          "weight": 1
+        },
+        {
+          "place": "p_sla_effect_errors",
+          "port": "_error",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "t_sla_timeout",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "scheduled",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "sig",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_sla_scheduled",
+          "port": "scheduled",
+          "weight": 1
+        },
+        {
+          "place": "p_sla_sig_timeout",
+          "port": "sig",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{ out: scheduled.payload, pulse: #{ timer_correlation_id: scheduled.timer_correlation_id } }",
+        "type": "rhai"
+      },
+      "name": "Review SLA - Timeout (race win)",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "out",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "pulse",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_sla_timeout_out",
+          "port": "out",
+          "weight": 1
+        },
+        {
+          "place": "p_sla_cancel_pulse",
+          "port": "pulse",
           "weight": 1
         }
       ]
@@ -1422,7 +2241,7 @@
         }
       ],
       "logic": {
-        "source": "let d = input; d._process_name = \"Survey Response\"; #{ output: d }",
+        "source": "let d = input; d._process_name = \"Review with SLA\"; #{ output: d }",
         "type": "rhai"
       },
       "name": "Start - Derive Process Name",
