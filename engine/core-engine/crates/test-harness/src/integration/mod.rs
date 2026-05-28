@@ -11,6 +11,8 @@ mod context;
 #[cfg(test)]
 mod cross_net;
 #[cfg(test)]
+mod resource_pool;
+#[cfg(test)]
 mod tests;
 
 // Integration test exports
