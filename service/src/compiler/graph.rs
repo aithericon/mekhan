@@ -12,7 +12,9 @@ use std::collections::HashMap;
 ///
 /// Two graphs share the same `NodeIndex` values:
 /// - `full`: all edges (for wiring and reachability queries)
-/// - `dag`: loop_back edges removed (for topological sort and cycle detection)
+/// - `dag`: back-edges removed (for topological sort and cycle detection)
+///   — both explicit `loop_back` edges and any edge into a `body_out`
+///   handle, which is the body-return arc of a Loop/Timeout container.
 pub(crate) struct WorkflowDiGraph<'a> {
     pub(crate) full: DiGraph<&'a WorkflowNode, &'a WorkflowEdge>,
     pub(crate) dag: DiGraph<&'a WorkflowNode, &'a WorkflowEdge>,
@@ -55,7 +57,14 @@ impl<'a> WorkflowDiGraph<'a> {
                 ))
             })?;
             full.add_edge(src, tgt, edge);
-            if edge.edge_type != "loop_back" {
+            // A body-return arc is a back-edge regardless of how it was
+            // authored: the JSON demos tag it `loop_back`, but an edge drawn
+            // in the editor onto a Loop/Timeout `body_out` handle arrives as
+            // a plain `sequence`. Either form closes the body cycle, so both
+            // are excluded from the DAG used for topo-sort + cycle detection.
+            let is_back_edge = edge.edge_type == "loop_back"
+                || edge.target_handle.as_deref() == Some("body_out");
+            if !is_back_edge {
                 dag.add_edge(src, tgt, edge);
             }
         }

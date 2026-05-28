@@ -311,13 +311,20 @@
 		// accordingly so the engine + visualisation can render it
 		// distinctly from a regular data flow.
 		const isToolsEdge = connection.sourceHandle === 'tools';
+		// An edge dropped on a Loop/Timeout `body_out` handle is the body
+		// return arc — it closes the container's body cycle, so it must be
+		// stamped `loop_back` (excluded from the compiler DAG + rendered
+		// animated). Without this the edge persists as a plain `sequence`
+		// and the cycle detector rejects the graph ("cycle in non-loop edges").
+		const isBodyReturn = connection.targetHandle === 'body_out';
 		const newEdge: Edge = {
 			id: edgeId,
 			source: connection.source!,
 			target: connection.target!,
 			sourceHandle: connection.sourceHandle,
 			targetHandle: connection.targetHandle,
-			type: 'deletable'
+			type: 'deletable',
+			animated: isBodyReturn
 		};
 		edges = [...edges, newEdge];
 
@@ -331,7 +338,7 @@
 				// wire. Fall back to "in" when xyflow returns null (user dropped
 				// on the node body without a specific handle).
 				targetHandle: connection.targetHandle ?? 'in',
-				type: isToolsEdge ? 'tools' : 'sequence'
+				type: isToolsEdge ? 'tools' : isBodyReturn ? 'loop_back' : 'sequence'
 			});
 		} else {
 			serializeAndEmit();

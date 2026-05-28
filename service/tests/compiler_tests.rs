@@ -3998,6 +3998,54 @@ fn timeout_node_compiles_with_body_in_body_out_race_and_drain() {
     assert!(src.contains("delay_ms: (10000)"));
 }
 
+/// Regression: a body-return edge drawn in the editor arrives as a plain
+/// `sequence` edge (only the JSON demos hand-author `loop_back`). It still
+/// targets the `body_out` handle, which the cycle detector must treat as a
+/// back-edge — otherwise the Timeout body reads as a cycle and the graph is
+/// rejected with "cycle detected in non-loop edges".
+#[test]
+fn timeout_body_out_sequence_edge_is_not_a_cycle() {
+    let mut human = human_task_node_with_field("h", "approved", TaskFieldKind::Checkbox);
+    human.parent_id = Some("t".to_string());
+
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            timeout_node("t", "10000"),
+            human,
+            end_node("e_done"),
+            end_node("e_to"),
+        ],
+        edges: vec![
+            edge("e_in", "s", "t"),
+            edge_with_handle("e_body_in", "t", "h", "body_in"),
+            // Body return as a plain `sequence` edge — exactly what the
+            // editor's onConnect used to emit before it learned to stamp
+            // body_out edges loop_back. The compiler must still exclude it
+            // from the cycle-detection DAG via the target handle.
+            WorkflowEdge {
+                id: "e_body_out".to_string(),
+                source: "h".to_string(),
+                target: "t".to_string(),
+                source_handle: None,
+                target_handle: Some("body_out".to_string()),
+                label: None,
+                edge_type: "sequence".to_string(),
+            },
+            edge("e_done", "t", "e_done"),
+            edge_with_handle("e_to", "t", "e_to", "timeout"),
+        ],
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+    };
+
+    let air = compile_to_air(&graph, "timeout_seq_body_out", "", &std::collections::HashMap::new())
+        .expect("body_out edge typed `sequence` must not trip the cycle detector");
+    assert!(has_transition(&air, "t_t_body_done"), "race join still emitted");
+    assert!(has_transition(&air, "t_t_drain_h"), "body drain still synthesized");
+}
+
 #[test]
 fn timeout_without_body_is_rejected_at_validate() {
     let graph = WorkflowGraph {
