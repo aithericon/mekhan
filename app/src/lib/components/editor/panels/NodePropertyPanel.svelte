@@ -9,6 +9,8 @@
 	import AutomatedStepSection from './property-sections/AutomatedStepSection.svelte';
 	import DecisionNodeSection from './property-sections/DecisionNodeSection.svelte';
 	import LoopNodeSection from './property-sections/LoopNodeSection.svelte';
+	import DelayNodeSection from './property-sections/DelayNodeSection.svelte';
+	import TimeoutNodeSection from './property-sections/TimeoutNodeSection.svelte';
 	import DerivedPortsSection from './property-sections/DerivedPortsSection.svelte';
 	import TriggerNodeSection from './property-sections/TriggerNodeSection.svelte';
 	import RetryPolicySection from './property-sections/RetryPolicySection.svelte';
@@ -138,6 +140,8 @@
 		'automated_step',
 		'decision',
 		'loop',
+		'delay',
+		'timeout',
 		'phase_update',
 		'progress_update',
 		'failure',
@@ -302,6 +306,10 @@
 			<DecisionNodeSection {data} {readonly} {onchange} {scope} {resourceScope} />
 		{:else if data.type === 'loop'}
 			<LoopNodeSection {data} {readonly} {onchange} {scope} {resourceScope} />
+		{:else if data.type === 'delay'}
+			<DelayNodeSection {data} {readonly} {onchange} {scope} {resourceScope} />
+		{:else if data.type === 'timeout'}
+			<TimeoutNodeSection {data} {readonly} {onchange} {scope} {resourceScope} />
 		{:else if data.type === 'trigger'}
 			<TriggerNodeSection {data} {readonly} {onchange} {nodeId} {binding} />
 		{:else if data.type === 'parallel_split'}
@@ -337,7 +345,7 @@
 		     and AutomatedStep already render an editable PortsSection inside
 		     their own section. End/Scope have no derived outputs to show
 		     until a port editor lands for them. -->
-		{#if data.type === 'human_task' || data.type === 'decision' || data.type === 'loop' || data.type === 'parallel_split' || data.type === 'join' || data.type === 'scope' || data.type === 'phase_update' || data.type === 'progress_update' || data.type === 'failure' || data.type === 'agent'}
+		{#if data.type === 'human_task' || data.type === 'decision' || data.type === 'loop' || data.type === 'delay' || data.type === 'timeout' || data.type === 'parallel_split' || data.type === 'join' || data.type === 'scope' || data.type === 'phase_update' || data.type === 'progress_update' || data.type === 'failure' || data.type === 'agent'}
 			<DerivedPortsSection
 				ports={outputPortsFor(data)}
 				title="Outputs"
@@ -348,7 +356,9 @@
 							? 'from branches'
 							: data.type === 'agent'
 								? 'from agent loop'
-								: 'pass-through'
+								: data.type === 'timeout'
+									? 'done + timeout'
+									: 'pass-through'
 				}
 			/>
 		{/if}

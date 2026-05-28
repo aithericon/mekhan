@@ -34,8 +34,17 @@ export function outputPortsFor(data: WorkflowNodeData): Port[] {
 			return [deriveHumanTaskOutputPort(data)];
 		case 'decision':
 			return deriveDecisionOutputPorts(data);
+		case 'timeout':
+			// Two fixed outputs: `out` (done — body finished in time) and
+			// `timeout` (deadline won). Pass-through envelope, no declared
+			// fields (the inbound token rides through unchanged).
+			return [
+				{ id: 'out', label: 'Done', fields: [] },
+				{ id: 'timeout', label: 'Timed out', fields: [] }
+			];
 		case 'parallel_split':
 		case 'loop':
+		case 'delay':
 		case 'scope':
 		case 'phase_update':
 		case 'progress_update':
@@ -43,7 +52,8 @@ export function outputPortsFor(data: WorkflowNodeData): Port[] {
 		case 'trigger':
 			// Triggers "wear the shape" of the target port — the editor resolves
 			// it at render time via the outgoing edge. Statically we expose an
-			// empty pass-through port so handles render correctly.
+			// empty pass-through port so handles render correctly. Delay is the
+			// same: it forwards the inbound token unchanged on its one output.
 			return [{ id: 'out', label: 'Output', fields: [] }];
 		case 'join':
 			// Join carries an explicit output Port whose fields describe what
@@ -67,6 +77,8 @@ export function inputPortsFor(data: WorkflowNodeData): Port[] {
 		case 'parallel_split':
 		case 'join':
 		case 'loop':
+		case 'delay':
+		case 'timeout':
 		case 'scope':
 		case 'phase_update':
 		case 'progress_update':

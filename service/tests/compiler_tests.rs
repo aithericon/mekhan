@@ -4035,3 +4035,79 @@ fn delay_with_empty_duration_expr_is_rejected() {
         .expect_err("must reject empty durationMsExpr");
     assert!(format!("{err}").contains("durationMsExpr"));
 }
+
+/// A `durationMsExpr` may borrow an upstream parked producer field — same
+/// read-arc synthesis as a Loop condition. Here the delay is driven off a
+/// HumanTask's `amount` field: the borrow pass must rewrite `rev.amount` to
+/// `d_rev.amount` in the prep transition and add a non-consuming read-arc on
+/// the producer's `p_rev_data` place.
+#[test]
+fn delay_duration_borrows_upstream_parked_field() {
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            human_task_node_with_field("rev", "amount", TaskFieldKind::Number),
+            delay_node("d", "rev.amount"),
+            end_node("e"),
+        ],
+        edges: vec![
+            edge("e1", "s", "rev"),
+            edge("e2", "rev", "d"),
+            edge("e3", "d", "e"),
+        ],
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+    };
+    let air = compile_to_air(&graph, "delay_borrow", "", &std::collections::HashMap::new())
+        .expect("delay borrowing an upstream field should compile");
+
+    // The prep transition's embedded duration was rewritten to the read-arc
+    // variable form.
+    // HumanTask hoists output under `data`, so the rewritten ref carries the
+    // hoist segment: `rev.amount` → `d_rev.data.amount`.
+    let prep = get_transition(&air, "t_d_prep").expect("prep transition");
+    let src = prep["logic"]["source"].as_str().unwrap();
+    assert!(
+        src.contains("d_rev.data.amount"),
+        "duration ref must be rewritten to the producer read-arc var: {src}"
+    );
+
+    // A non-consuming read-arc on the producer's parked data place backs it.
+    let read_arc = prep["inputs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["place"] == "p_rev_data");
+    assert!(
+        read_arc.map(|a| a["read"] == true).unwrap_or(false),
+        "expected a read-arc on p_rev_data for the borrowed duration; inputs: {:?}",
+        prep["inputs"]
+    );
+}
+
+/// An unresolvable ref in a `durationMsExpr` must be rejected at compile
+/// time — before this arm was added to `guard_readarc_plan`, Delay/Timeout
+/// were skipped entirely, so a typo'd ref silently compiled and only failed
+/// at runtime when the prep Rhai couldn't resolve it.
+#[test]
+fn delay_duration_with_unresolved_ref_is_rejected() {
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            delay_node("d", "ghost.field"),
+            end_node("e"),
+        ],
+        edges: vec![edge("e1", "s", "d"), edge("e2", "d", "e")],
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+    };
+    let err = compile_to_air(&graph, "delay_ghost", "", &std::collections::HashMap::new())
+        .expect_err("must reject a duration referencing an unknown producer");
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("ghost") || msg.to_lowercase().contains("unresolved"),
+        "error should name the unresolved ref: {msg}"
+    );
+}

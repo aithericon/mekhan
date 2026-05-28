@@ -516,6 +516,18 @@ pub fn analyze(graph: &WorkflowGraph) -> Result<ShapeReport, CompileError> {
             {
                 vec![("loop".to_string(), loop_condition.as_str())]
             }
+            // Delay/Timeout duration expressions borrow upstream refs just
+            // like a Loop condition — re-validate against the real shape so
+            // an unresolved `<slug>.<field>` in the duration surfaces as an
+            // inline editor diagnostic, not a runtime failure.
+            WorkflowNodeData::Delay {
+                duration_ms_expr, ..
+            }
+            | WorkflowNodeData::Timeout {
+                duration_ms_expr, ..
+            } if !duration_ms_expr.trim().is_empty() => {
+                vec![("duration".to_string(), duration_ms_expr.as_str())]
+            }
             _ => continue,
         };
         let in_shape = match node_in.get(&node.id) {

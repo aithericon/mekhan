@@ -450,6 +450,20 @@ pub(crate) fn guard_readarc_plan(
                 .map(|m| m.expression.clone())
                 .filter(|s| !s.trim().is_empty())
                 .collect(),
+            // Delay/Timeout `durationMsExpr` is embedded verbatim in the
+            // `t_{id}_prep` transition logic, so it borrows upstream
+            // `<slug>.<field>` refs exactly like a Loop condition does.
+            // `apply_guard_borrows` walks `t_{id}_*` and finds the ref in
+            // prep's logic; without this arm no read-arc is synthesized and
+            // a ref-driven duration fails at runtime.
+            WorkflowNodeData::Delay {
+                duration_ms_expr, ..
+            }
+            | WorkflowNodeData::Timeout {
+                duration_ms_expr, ..
+            } if !duration_ms_expr.trim().is_empty() => {
+                vec![duration_ms_expr.clone()]
+            }
             _ => continue,
         };
         let in_shape = report.node_in.get(&node.id);
