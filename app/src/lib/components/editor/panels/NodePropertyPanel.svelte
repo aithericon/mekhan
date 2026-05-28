@@ -18,6 +18,7 @@
 	} from '$lib/editor/guard-scope';
 	import type { ResourceTypeInfo, ResourceSummary } from '$lib/api/resources';
 	import { outputPortsFor } from '$lib/editor/derived-ports';
+	import { sanitizeSlug } from '$lib/editor/sanitize-slug';
 	import { Input } from '$lib/components/ui/input';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { FormField } from '$lib/components/ui/form-field';
@@ -60,16 +61,6 @@
 	//    a node-level prop (not in `data`), so it round-trips through the Yjs
 	//    binding. Blank ⇒ the compiler derives a deterministic default from
 	//    the node id (shown as the placeholder).
-	function sanitizeSlug(raw: string): string {
-		const s = raw
-			.trim()
-			.toLowerCase()
-			.replace(/[^a-z0-9_]+/g, '_')
-			.replace(/_+/g, '_')
-			.replace(/^_+|_+$/g, '');
-		if (!s) return 'node';
-		return /^[a-z]/.test(s) ? s : `n_${s}`;
-	}
 
 	const currentNode = $derived(binding?.graph.nodes.find((n) => n.id === nodeId));
 	const slugValue = $derived(currentNode?.slug ?? '');

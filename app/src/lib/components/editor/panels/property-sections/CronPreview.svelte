@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { previewCron } from '$lib/api/client';
 
 	let { schedule, timezone }: { schedule: string; timezone: string } = $props();
 
@@ -36,19 +37,7 @@
 		}
 		pending = true;
 		try {
-			// We hit the preview endpoint directly with fetch — adding a typed
-			// wrapper to client.ts isn't worth it for a single editor helper.
-			const res = await fetch('/api/v1/triggers/preview/cron', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ schedule: s, timezone: tz, count: 5 })
-			});
-			if (!res.ok) {
-				error = `Preview failed: ${res.status}`;
-				upcoming = [];
-				return;
-			}
-			const body = await res.json();
+			const body = await previewCron({ schedule: s, timezone: tz, count: 5 });
 			if (body.error) {
 				error = body.error;
 				upcoming = [];
@@ -57,7 +46,7 @@
 				upcoming = body.upcoming ?? [];
 			}
 		} catch (e) {
-			error = String(e);
+			error = e instanceof Error ? e.message : String(e);
 			upcoming = [];
 		} finally {
 			pending = false;

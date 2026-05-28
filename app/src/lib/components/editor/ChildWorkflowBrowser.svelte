@@ -15,6 +15,7 @@
 		type Project
 	} from '$lib/api/client';
 	import { workspaces } from '$lib/workspaces/store.svelte';
+	import { familyId } from '$lib/editor/template-utils';
 
 	interface Props {
 		open: boolean;
@@ -39,10 +40,6 @@
 	let tag = $state<string | null>(null);
 	let search = $state('');
 	let publishedOnly = $state(false);
-
-	function familyId(t: Template): string {
-		return t.base_template_id ?? t.id;
-	}
 
 	// Projects + tags load once per open.
 	$effect(() => {

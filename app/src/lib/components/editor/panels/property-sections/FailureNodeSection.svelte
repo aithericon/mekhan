@@ -15,6 +15,7 @@
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import InsertRefButton from './InsertRefButton.svelte';
 	import RefPicker from './RefPicker.svelte';
+	import { appendSnippet } from '$lib/editor/append-snippet';
 
 	type FieldMapping = components['schemas']['FieldMapping'];
 
@@ -30,8 +31,7 @@
 	const errorMappings = $derived(data.errorResultMapping ?? []);
 
 	function appendToFailureMessage(snippet: string) {
-		const curr = data.failureMessage ?? '';
-		onchange({ ...data, failureMessage: curr ? `${curr} ${snippet}` : snippet });
+		onchange({ ...data, failureMessage: appendSnippet(data.failureMessage, snippet) });
 	}
 
 	function setErrorMappings(next: FieldMapping[]) {
@@ -136,9 +136,8 @@
 						disabled={readonly}
 						placeholder="Insert ref…"
 						onpick={(e) => {
-							const curr = mapping.expression ?? '';
 							updateErrorMapping(i, {
-								expression: curr ? `${curr} ${e.qualified}` : e.qualified
+								expression: appendSnippet(mapping.expression, e.qualified)
 							});
 						}}
 					/>

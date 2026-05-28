@@ -9,6 +9,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import StepEditor from './human-task/StepEditor.svelte';
 	import InsertRefButton from './InsertRefButton.svelte';
+	import { appendSnippet } from '$lib/editor/append-snippet';
 
 	type Props = {
 		data: HumanTaskNodeData;
@@ -29,10 +30,9 @@
 	}: Props = $props();
 
 	function appendToInstructions(snippet: string) {
-		const curr = data.instructionsMdsvex ?? '';
 		onchange({
 			...data,
-			instructionsMdsvex: curr ? `${curr} ${snippet}` : snippet
+			instructionsMdsvex: appendSnippet(data.instructionsMdsvex, snippet)
 		});
 	}
 

@@ -5,6 +5,7 @@
 	import * as Select from '$lib/components/ui/select';
 	import type { ScopeEntry } from '$lib/editor/guard-scope';
 	import InsertRefButton from '../InsertRefButton.svelte';
+	import { appendSnippet } from '$lib/editor/append-snippet';
 
 	type Props = {
 		severity: 'info' | 'warning' | 'error' | 'success';
@@ -31,7 +32,7 @@
 	}: Props = $props();
 
 	function appendToContent(snippet: string) {
-		onchange({ severity, title, content: content ? `${content} ${snippet}` : snippet });
+		onchange({ severity, title, content: appendSnippet(content, snippet) });
 	}
 
 	// ui-allow: semantic callout severity colors — no theme token for info/warning/success
