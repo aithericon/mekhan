@@ -168,6 +168,67 @@ fn loop_graph() -> Value {
     })
 }
 
+/// `Start → Loop(max=3, "lp.iteration < 3", body=PhaseUpdate) → End` with TWO
+/// fold accumulators carried across iterations in the loop's parked envelope:
+///   - `sum`     (init 5, merge `lp.sum + lp.iteration`) — exercises a
+///     cross-field read of the prior iteration counter within the same envelope.
+///   - `product` (init 1, merge `lp.product * 10`)       — a pure self-fold.
+///
+/// continue fires at prior iteration values 0,1,2 (same cascade as
+/// `loop_iterates_and_exits`), so:
+///   sum     = 5 + 0 + 1 + 2 = 8
+///   product = 1 * 10 * 10 * 10 = 1000
+///   final_count (lp.iteration at exit) = 3
+/// The End `resultMapping` reads `lp.sum`/`lp.product` — proving the
+/// accumulators are downstream-borrowable via the standard read-arc synthesis,
+/// exactly like `lp.iteration`.
+fn accumulator_loop_graph() -> Value {
+    json!({
+        "nodes": [
+            { "id": "start", "type": "start", "position": { "x": 0, "y": 0 },
+              "data": { "type": "start", "label": "Start",
+                        "initial": { "id": "in", "label": "Input", "fields": [] } } },
+            { "id": "lp", "type": "loop", "position": { "x": 240, "y": 0 },
+              "data": { "type": "loop", "label": "Fold",
+                        "maxIterations": 3,
+                        "loopCondition": "lp.iteration < 3",
+                        "accumulators": [
+                            { "var": "sum", "init": "5",
+                              "mergeExpr": "lp.sum + lp.iteration" },
+                            { "var": "product", "init": "1",
+                              "mergeExpr": "lp.product * 10" }
+                        ] } },
+            { "id": "body", "type": "phase_update",
+              "position": { "x": 360, "y": 80 },
+              "parentId": "lp",
+              "data": { "type": "phase_update", "label": "Body",
+                        "phaseName": "iteration",
+                        "status": "running" } },
+            { "id": "end", "type": "end", "position": { "x": 480, "y": 0 },
+              "data": { "type": "end", "label": "Done",
+                        "resultMapping": [
+                            { "targetField": "final_count",
+                              "expression": "lp.iteration" },
+                            { "targetField": "total",
+                              "expression": "lp.sum" },
+                            { "targetField": "product",
+                              "expression": "lp.product" }
+                        ] } }
+        ],
+        "edges": [
+            { "id": "e1", "source": "start", "target": "lp",
+              "targetHandle": "in", "type": "sequence" },
+            { "id": "e_body_in", "source": "lp", "target": "body",
+              "sourceHandle": "body_in", "targetHandle": "in",
+              "type": "sequence" },
+            { "id": "e_body_out", "source": "body", "target": "lp",
+              "targetHandle": "body_out", "type": "loop_back" },
+            { "id": "e2", "source": "lp", "target": "end",
+              "targetHandle": "in", "type": "sequence" }
+        ]
+    })
+}
+
 async fn fetch_result(db: &sqlx::PgPool, id: Uuid) -> Value {
     sqlx::query_scalar::<_, Option<Value>>(
         "SELECT result FROM workflow_instances WHERE id = $1",
@@ -269,5 +330,38 @@ async fn loop_iterates_and_exits() {
     assert_eq!(
         result["value"]["final_count"], json!(3),
         "loop should have iterated 3 times before exiting: {result}"
+    );
+}
+
+#[tokio::test]
+async fn loop_accumulator_folds_across_iterations() {
+    if !engine_available().await {
+        panic!(
+            "engine not available at {} — start the stack with `just dev up`",
+            engine_url()
+        );
+    }
+    let nats_url = engine_nats_url();
+    let (app, db) = common::test_app_with_petri_url(&nats_url, &engine_url()).await;
+    let nats = MekhanNats::connect(&nats_url, None).await.expect("nats");
+    let _lifecycle = spawn_lifecycle(nats, db.clone()).await;
+
+    let id = publish_and_start(&app, accumulator_loop_graph()).await;
+    wait_for_completion(&db, id, Duration::from_secs(30)).await;
+
+    let result = fetch_result(&db, id).await;
+    // Fold state survived all three iterations and is readable in the End
+    // mapping: sum = 5+0+1+2, product = 1*10*10*10, count = 3.
+    assert_eq!(
+        result["value"]["final_count"], json!(3),
+        "loop should have iterated 3 times: {result}"
+    );
+    assert_eq!(
+        result["value"]["total"], json!(8),
+        "sum accumulator should fold to 5+0+1+2=8: {result}"
+    );
+    assert_eq!(
+        result["value"]["product"], json!(1000),
+        "product accumulator should fold to 1*10^3=1000: {result}"
     );
 }
