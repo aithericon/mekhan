@@ -23,6 +23,35 @@ use crate::{
 
 use std::sync::Arc;
 
+use crate::binding::TokenBinding;
+
+/// Collect the read-arc inputs for an effect from a binding.
+///
+/// These are the entries in `port_inputs` that arrived via non-consuming
+/// read arcs (named in `read_port_names`). Shared by the live and replay
+/// effect-firing paths so they cannot drift.
+fn collect_read_inputs(binding: &TokenBinding) -> HashMap<String, JsonValue> {
+    binding
+        .read_port_names
+        .iter()
+        .filter_map(|name| {
+            binding
+                .port_inputs
+                .get(name)
+                .map(|v| (name.clone(), v.clone()))
+        })
+        .collect()
+}
+
+/// Select the process-step label for an effect, preferring the
+/// `started` step and falling back to the `completed` step.
+fn select_process_step(transition: &Transition) -> Option<String> {
+    transition
+        .process_step_started
+        .clone()
+        .or_else(|| transition.process_step_completed.clone())
+}
+
 /// Resolve a bridge target field.
 ///
 /// - `$params.key` → look up from net parameters (set at net creation time)
@@ -494,20 +523,8 @@ async fn fire_effect_transition<E: EventRepository, T: TopologyRepository, S: St
 
             // Build effect input with resolved config
             // Extract read_inputs: entries from port_inputs that came via read arcs
-            let read_inputs: HashMap<String, serde_json::Value> = binding
-                .read_port_names
-                .iter()
-                .filter_map(|name| {
-                    binding
-                        .port_inputs
-                        .get(name)
-                        .map(|v| (name.clone(), v.clone()))
-                })
-                .collect();
-            let process_step = transition
-                .process_step_started
-                .clone()
-                .or_else(|| transition.process_step_completed.clone());
+            let read_inputs = collect_read_inputs(&binding);
+            let process_step = select_process_step(transition);
 
             // ============================================================
             // Pre-dispatch hook chain (spec § 2-9). Live mode only.
@@ -833,25 +850,12 @@ async fn fire_effect_transition<E: EventRepository, T: TopologyRepository, S: St
                     {
                         let handlers = effect_handlers.read().unwrap();
                         if let Some(handler) = handlers.get(handler_id) {
-                            let replay_read_inputs: HashMap<String, serde_json::Value> = binding
-                                .read_port_names
-                                .iter()
-                                .filter_map(|name| {
-                                    binding
-                                        .port_inputs
-                                        .get(name)
-                                        .map(|v| (name.clone(), v.clone()))
-                                })
-                                .collect();
                             let effect_input = EffectInput {
                                 transition_id: transition_id.clone(),
                                 inputs: binding.port_inputs.clone(),
                                 config: transition.effect_config.clone(),
-                                read_inputs: replay_read_inputs,
-                                process_step: transition
-                                    .process_step_started
-                                    .clone()
-                                    .or_else(|| transition.process_step_completed.clone()),
+                                read_inputs: collect_read_inputs(&binding),
+                                process_step: select_process_step(transition),
                             };
                             handler.replay(&effect_input, effect_result);
                         }
