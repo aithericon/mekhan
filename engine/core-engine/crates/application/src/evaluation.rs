@@ -413,14 +413,13 @@ pub(crate) async fn evaluate_until_quiescent<
                             }),
                         });
                     }
-                    // Pre-dispatch soft outcomes — marking unchanged, audit
-                    // events already emitted by `fire_effect_transition`.
-                    // Stop this evaluation pass; a future pass (triggered by
-                    // new tokens / timers / next eval-notify) can re-attempt.
-                    Err(
-                        ServiceError::PreDispatchRejected { .. }
-                        | ServiceError::PreDispatchDeferred { .. },
-                    ) => {
+                    // Pre-dispatch Defer — marking unchanged, audit event
+                    // already emitted by `fire_effect_transition`. Stop this
+                    // pass; a future pass (triggered by new tokens / timers /
+                    // next eval-notify) can re-attempt. The defer budget in
+                    // `firing.rs` caps how many times a Defer can recur before
+                    // it escalates to Reject.
+                    Err(ServiceError::PreDispatchDeferred { .. }) => {
                         return Ok(EvaluateResult {
                             steps_executed,
                             transitions_fired,
@@ -428,6 +427,43 @@ pub(crate) async fn evaluate_until_quiescent<
                             events: events_generated,
                             terminal_reached: None,
                             failure_reached: None,
+                        });
+                    }
+                    // Pre-dispatch Reject — TERMINAL per spec § 6 ("the first
+                    // hook returning Reject wins"). The previous treatment as
+                    // a soft retryable outcome produced an infinite busy-loop:
+                    // hook errors with `fail_open=false` → Reject → audit
+                    // event appended → consumer→eval bridge re-kicks →
+                    // re-fire → same Reject → … (200+/s, 286% CPU per stuck
+                    // net). Reject must fail the net so the driver emits
+                    // NetFailed and tears it down.
+                    Err(ServiceError::PreDispatchRejected {
+                        transition_id: tid,
+                        hook_name,
+                        reason,
+                    }) => {
+                        let synthesized = format!(
+                            "Pre-dispatch hook '{}' rejected transition {}: {}",
+                            hook_name, tid, reason
+                        );
+                        tracing::warn!(
+                            transition_id = %tid,
+                            hook = %hook_name,
+                            reason = %reason,
+                            "{}",
+                            synthesized
+                        );
+                        return Ok(EvaluateResult {
+                            steps_executed,
+                            transitions_fired,
+                            final_state: EvaluateFinalState::Quiescent,
+                            events: events_generated,
+                            terminal_reached: None,
+                            failure_reached: Some(FailureInfo {
+                                transition_id: tid,
+                                reason: synthesized,
+                                retryable: false,
+                            }),
                         });
                     }
                     // Non-permanent, non-soft errors (e.g. a benign
