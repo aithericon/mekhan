@@ -854,3 +854,42 @@ async fn get_template_tags_honors_read_gate() {
     let body = body_json(resp.into_body()).await;
     assert_eq!(body, json!(["confidential"]));
 }
+
+/// Regression for the deployed-instance 403: a fresh principal must be
+/// auto-provisioned as an EDITOR of the `default` workspace on first resolve,
+/// not just a viewer of `demos`. Without this, real users can't edit the
+/// templates migration 20240124 moved into `default`.
+#[tokio::test]
+async fn resolver_auto_provisions_default_membership_as_editor() {
+    use mekhan_service::auth::resolver::DbPrincipalResolver;
+    use mekhan_service::auth::{PrincipalResolver, VerifiedClaims};
+
+    let db = common::create_test_db().await;
+    let resolver = DbPrincipalResolver::new(db.clone());
+    let claims = VerifiedClaims {
+        subject: "fresh-editor".to_string(),
+        issuer: "test".to_string(),
+        audience: vec!["mekhan".into()],
+        expires_at: i64::MAX,
+        extra: Default::default(),
+    };
+    let user = resolver.resolve(claims).await.expect("resolve");
+
+    let (default_id,): (Uuid,) =
+        sqlx::query_as("SELECT id FROM workspaces WHERE slug = 'default'")
+            .fetch_one(&db)
+            .await
+            .unwrap();
+    let role: Option<(String,)> = sqlx::query_as(
+        "SELECT role FROM workspace_members WHERE workspace_id = $1 AND user_id = $2",
+    )
+    .bind(default_id)
+    .bind(user.subject_as_uuid())
+    .fetch_optional(&db)
+    .await
+    .unwrap();
+    assert_eq!(role.map(|(r,)| r), Some("editor".to_string()));
+
+    // And the picked active workspace prefers `default` over `demos`.
+    assert_eq!(user.workspace_id, Some(default_id));
+}
