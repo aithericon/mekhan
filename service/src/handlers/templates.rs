@@ -96,7 +96,7 @@ pub async fn create_template(
 ) -> Result<(StatusCode, Json<WorkflowTemplate>), ApiError> {
     let id = Uuid::new_v4();
     let graph = req.graph.unwrap_or_else(WorkflowGraph::default_graph);
-    let graph_json = serde_json::to_value(&graph).unwrap();
+    let graph_json = serde_json::to_value(&graph).map_err(|e| ApiError::internal(e.to_string()))?;
     let description = req.description.unwrap_or_default();
 
     // Anchor the new template in the caller's workspace. Falls back to the
@@ -495,10 +495,10 @@ pub async fn update_template(
 
     let name = req.name.unwrap_or(existing.name);
     let description = req.description.unwrap_or(existing.description);
-    let graph = req
-        .graph
-        .map(|g| serde_json::to_value(&g).unwrap())
-        .unwrap_or(existing.graph);
+    let graph = match req.graph {
+        Some(g) => serde_json::to_value(&g).map_err(|e| ApiError::internal(e.to_string()))?,
+        None => existing.graph,
+    };
 
     let template = sqlx::query_as::<_, WorkflowTemplate>(
         r#"
