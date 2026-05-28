@@ -78,7 +78,7 @@ async fn apply_air(app: &axum::Router, body: String) -> axum::http::Response<Bod
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/templates/apply-air")
+                .uri("/api/v1/templates/apply-air")
                 .header("content-type", "application/json")
                 .body(Body::from(body))
                 .unwrap(),
@@ -154,7 +154,7 @@ async fn apply_air_registers_trigger_in_dispatcher() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/api/triggers")
+                .uri("/api/v1/triggers")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -224,7 +224,7 @@ async fn apply_air_re_apply_bumps_version_and_re_registers_trigger() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/api/triggers")
+                .uri("/api/v1/triggers")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -295,7 +295,7 @@ async fn fire_pre_air_trigger_passes_graph_walk_gate() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/triggers/trg_fire/fire")
+                .uri("/api/v1/triggers/trg_fire/fire")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({ "payload": {}, "reply_mode": "nowait" }).to_string(),
