@@ -1109,6 +1109,14 @@ export async function detachTemplateFromProject(
 	throw new ApiError(res.response.status, res.error as Record<string, unknown> | string | undefined);
 }
 
+export async function getTemplateTags(templateId: string): Promise<string[]> {
+	return unwrap(
+		await client.GET('/api/v1/templates/{id}/tags', {
+			params: { path: { id: templateId } }
+		})
+	);
+}
+
 export async function setTemplateTags(templateId: string, tags: string[]): Promise<string[]> {
 	return unwrap(
 		await client.PUT('/api/v1/templates/{id}/tags', {

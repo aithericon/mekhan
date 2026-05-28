@@ -732,3 +732,125 @@ async fn resolver_auto_provisions_demos_membership() {
     .unwrap();
     assert_eq!(row.map(|(r,)| r), Some("viewer".to_string()));
 }
+
+// -- B4: read a single template's tags (powers the settings editor) ----------
+
+/// Set tags via PUT, then read them back via GET — the editor opens by
+/// fetching the current set so a full-replace PUT doesn't clobber labels the
+/// author can't see.
+#[tokio::test]
+async fn get_template_tags_round_trips_after_put() {
+    let (app, db) = header_driven_app().await;
+    let ws = seed_workspace(&db, &format!("ws-{}", Uuid::new_v4().simple())).await;
+    seed_member(&db, ws, "alice", "owner").await;
+    let tid = seed_template_with_webhook(&db, ws, "tagged", "hook", "POST", &["x"]).await;
+
+    // PUT in unsorted order with a blank that must be dropped.
+    let resp = app
+        .clone()
+        .oneshot(
+            req_as("alice", Some(ws))
+                .method("PUT")
+                .uri(format!("/api/v1/templates/{tid}/tags"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({ "tags": ["beta", "alpha", "  "] }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "put tags");
+
+    // GET returns them sorted, blank dropped.
+    let resp = app
+        .clone()
+        .oneshot(
+            req_as("alice", Some(ws))
+                .method("GET")
+                .uri(format!("/api/v1/templates/{tid}/tags"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "get tags");
+    let body = body_json(resp.into_body()).await;
+    let tags: Vec<&str> = body
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t.as_str().unwrap())
+        .collect();
+    assert_eq!(tags, vec!["alpha", "beta"]);
+}
+
+/// The GET read gate composes with `can_read_template`: a non-member is
+/// rejected on a workspace-scoped template but allowed once it's public.
+#[tokio::test]
+async fn get_template_tags_honors_read_gate() {
+    let (app, db) = header_driven_app().await;
+    let ws_a = seed_workspace(&db, &format!("ws-a-{}", Uuid::new_v4().simple())).await;
+    let ws_b = seed_workspace(&db, &format!("ws-b-{}", Uuid::new_v4().simple())).await;
+    seed_member(&db, ws_a, "alice", "owner").await;
+    seed_member(&db, ws_b, "bob", "owner").await;
+    let tid = seed_template_with_webhook(&db, ws_a, "secret", "hook", "POST", &["x"]).await;
+
+    // Alice tags it.
+    app.clone()
+        .oneshot(
+            req_as("alice", Some(ws_a))
+                .method("PUT")
+                .uri(format!("/api/v1/templates/{tid}/tags"))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({ "tags": ["confidential"] }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    // Bob (member of ws_b only) can't read tags while it's workspace-scoped.
+    let resp = app
+        .clone()
+        .oneshot(
+            req_as("bob", Some(ws_b))
+                .method("GET")
+                .uri(format!("/api/v1/templates/{tid}/tags"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN, "non-member rejected");
+
+    // Alice flips it public (admin-gated; she's owner).
+    let resp = app
+        .clone()
+        .oneshot(
+            req_as("alice", Some(ws_a))
+                .method("PATCH")
+                .uri(format!("/api/v1/templates/{tid}/visibility"))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({ "visibility": "public" }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT, "flip public");
+
+    // Now Bob's read succeeds and sees the tag.
+    let resp = app
+        .clone()
+        .oneshot(
+            req_as("bob", Some(ws_b))
+                .method("GET")
+                .uri(format!("/api/v1/templates/{tid}/tags"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "public read allowed");
+    let body = body_json(resp.into_body()).await;
+    assert_eq!(body, json!(["confidential"]));
+}

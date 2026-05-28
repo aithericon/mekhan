@@ -243,6 +243,48 @@ pub async fn detach_template(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// GET /api/v1/templates/{id}/tags
+///
+/// Tags currently on this template's version chain. Read-gated (viewer or
+/// public): populates the tag editor on the template detail page so a full
+/// replace via PUT starts from the existing set rather than clobbering it.
+#[utoipa::path(
+    get,
+    path = "/api/v1/templates/{id}/tags",
+    params(("id" = Uuid, Path, description = "Template id (any version)")),
+    responses(
+        (status = 200, description = "Tags on this template", body = Vec<String>),
+        (status = 403, description = "No read access", body = ErrorResponse),
+        (status = 404, description = "Template not found", body = ErrorResponse),
+    ),
+    tag = "templates",
+)]
+pub async fn get_template_tags(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(template_id): Path<Uuid>,
+) -> Result<Json<Vec<String>>, ApiError> {
+    if !can_read_template(&state.db, &user, template_id)
+        .await
+        .map_err(map_to_api_error)?
+    {
+        return Err(ApiError::forbidden("no read access to this template"));
+    }
+    let workspace_id = template_workspace(&state.db, template_id)
+        .await
+        .map_err(map_to_api_error)?;
+    let base_id = template_base_id(&state, template_id).await?;
+    let tags: Vec<(String,)> = sqlx::query_as(
+        "SELECT tag FROM template_tags \
+          WHERE workspace_id = $1 AND base_template_id = $2 ORDER BY tag",
+    )
+    .bind(workspace_id)
+    .bind(base_id)
+    .fetch_all(&state.db)
+    .await?;
+    Ok(Json(tags.into_iter().map(|(t,)| t).collect()))
+}
+
 /// PUT /api/v1/templates/{id}/tags — full replace.
 #[utoipa::path(
     put,
