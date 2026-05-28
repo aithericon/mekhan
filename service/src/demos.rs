@@ -508,6 +508,37 @@ const DEMO_SEEDER_AUTHOR_ID: uuid::Uuid =
 /// cross-workspace public-read branch in `list_templates`.
 const DEMO_WORKSPACE_ID: uuid::Uuid = uuid::Uuid::nil();
 
+/// Slug + display name of the project that groups every seeded demo. Projects
+/// are a non-ACL grouping inside a workspace (see migration 20240125), so this
+/// is purely organizational: it keeps the built-in demos collected under one
+/// heading in the default workspace instead of scattered among user templates.
+/// `UNIQUE (workspace_id, slug)` makes the slug the idempotency key.
+const DEMO_PROJECT_SLUG: &str = "demos";
+const DEMO_PROJECT_DISPLAY_NAME: &str = "Demos";
+const DEMO_PROJECT_DESCRIPTION: &str = "Built-in example workflows seeded by mekhan-service.";
+
+/// Upsert the demo project in the default workspace and return its id. Keyed
+/// on `(workspace_id, slug)`; `ON CONFLICT DO UPDATE` keeps the display name /
+/// description fresh and guarantees a `RETURNING id` even on the conflict path.
+async fn ensure_demo_project(state: &crate::AppState) -> Result<uuid::Uuid, DemoSeedError> {
+    let (id,): (uuid::Uuid,) = sqlx::query_as(
+        "INSERT INTO projects (workspace_id, slug, display_name, description, created_by) \
+              VALUES ($1, $2, $3, $4, $5) \
+         ON CONFLICT (workspace_id, slug) \
+              DO UPDATE SET display_name = EXCLUDED.display_name, \
+                            description = EXCLUDED.description \
+         RETURNING id",
+    )
+    .bind(DEMO_WORKSPACE_ID)
+    .bind(DEMO_PROJECT_SLUG)
+    .bind(DEMO_PROJECT_DISPLAY_NAME)
+    .bind(DEMO_PROJECT_DESCRIPTION)
+    .bind(DEMO_SEEDER_AUTHOR_ID)
+    .fetch_one(&state.db)
+    .await?;
+    Ok(id)
+}
+
 /// Seed every demo under `root` into the running service. Idempotent:
 /// each demo's `demo.json::templateId` is the stable identifier — if
 /// a row with that id already exists, the seeder leaves it (logging
@@ -641,6 +672,31 @@ pub async fn seed_one(
     .bind(DEMO_WORKSPACE_ID)
     .fetch_one(&state.db)
     .await?;
+
+    // Group the demo under the shared "Demos" project. Keyed on
+    // `base_template_id` (= `template_id` here, since this is v1), so the
+    // attachment follows the live `is_latest` version automatically.
+    // Best-effort: a grouping failure must not fail the seed.
+    match ensure_demo_project(state).await {
+        Ok(project_id) => {
+            if let Err(e) = sqlx::query(
+                "INSERT INTO project_templates (project_id, base_template_id, added_by) \
+                      VALUES ($1, $2, $3) \
+                 ON CONFLICT (project_id, base_template_id) DO NOTHING",
+            )
+            .bind(project_id)
+            .bind(template_id)
+            .bind(DEMO_SEEDER_AUTHOR_ID)
+            .execute(&state.db)
+            .await
+            {
+                tracing::warn!(template_id = %template_id, error = %e, "attach demo to project failed (skipped)");
+            }
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "ensure demo project failed — demo seeded without project grouping");
+        }
+    }
 
     // Initialize Y.Doc so the web editor sees the same graph + files the
     // executor will run. Non-fatal on failure (the executor reads AIR
@@ -783,6 +839,14 @@ pub async fn purge_seeded(
             .execute(&state.db)
             .await?;
         report.tests_removed += del_tests.rows_affected() as usize;
+
+        // Project grouping keys on base_template_id with no FK to templates,
+        // so detach explicitly (leaves the now-empty "Demos" project in place
+        // for the next reseed to reuse).
+        sqlx::query("DELETE FROM project_templates WHERE base_template_id = $1")
+            .bind(base)
+            .execute(&state.db)
+            .await?;
 
         // Capture version ids so their triggers can be forgotten post-delete
         // (otherwise a deleted demo's triggers keep firing until restart).
