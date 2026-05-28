@@ -1,4 +1,6 @@
+import type { Component } from 'svelte';
 import type { NodeTypes } from '@xyflow/svelte';
+import type { NodeKind } from '$lib/types/editor';
 import StartNode from './StartNode.svelte';
 import EndNode from './EndNode.svelte';
 import HumanTaskNode from './HumanTaskNode.svelte';
@@ -17,22 +19,29 @@ import TriggerNode from './TriggerNode.svelte';
 import SubWorkflowNode from './SubWorkflowNode.svelte';
 import AgentNode from './AgentNode.svelte';
 
-export const nodeTypes: NodeTypes = {
-	start: StartNode as any,
-	end: EndNode as any,
-	human_task: HumanTaskNode as any,
-	automated_step: AutomatedStepNode as any,
-	decision: DecisionNode as any,
-	parallel_split: ParallelSplitNode as any,
-	join: JoinNode as any,
-	loop: LoopNode as any,
-	scope: ScopeNode as any,
-	phase_update: PhaseUpdateNode as any,
-	progress_update: ProgressUpdateNode as any,
-	failure: FailureNode as any,
-	delay: DelayNode as any,
-	timeout: TimeoutNode as any,
-	trigger: TriggerNode as any,
-	sub_workflow: SubWorkflowNode as any,
-	agent: AgentNode as any
-};
+// Compile-time exhaustiveness: `satisfies Record<NodeKind, Component>` makes a
+// missing or spurious node kind a build error (NodeKind is the canonical
+// 17-kind union derived from the generated OpenAPI schema). The trailing
+// `as NodeTypes` cast hands xyflow its own (looser, internal-node-typed)
+// registry shape without losing the key-level exhaustiveness check.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export const nodeTypes = {
+	start: StartNode,
+	end: EndNode,
+	human_task: HumanTaskNode,
+	automated_step: AutomatedStepNode,
+	decision: DecisionNode,
+	parallel_split: ParallelSplitNode,
+	join: JoinNode,
+	loop: LoopNode,
+	scope: ScopeNode,
+	phase_update: PhaseUpdateNode,
+	progress_update: ProgressUpdateNode,
+	failure: FailureNode,
+	delay: DelayNode,
+	timeout: TimeoutNode,
+	trigger: TriggerNode,
+	sub_workflow: SubWorkflowNode,
+	agent: AgentNode
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+} satisfies Record<NodeKind, Component<any>> as unknown as NodeTypes;

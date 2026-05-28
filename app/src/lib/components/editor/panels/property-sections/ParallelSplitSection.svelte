@@ -8,10 +8,16 @@
 
 	type Props = {
 		data: ParallelSplitNodeData;
+		readonly?: boolean;
+		onchange: (data: ParallelSplitNodeData) => void;
 		binding?: YjsGraphBinding;
 		nodeId?: string;
 	};
 
+	// `readonly`/`onchange` are part of the uniform section contract (every
+	// section receives them via the NodePropertyPanel registry dispatch).
+	// ParallelSplit has no editable config — it duplicates the input to every
+	// outgoing edge — so they're accepted but unused.
 	let { binding, nodeId }: Props = $props();
 
 	const targets = $derived.by(() => {

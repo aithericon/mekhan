@@ -2,28 +2,13 @@
 	import type { WorkflowNodeData } from '$lib/types/editor';
 	import type { YjsGraphBinding } from '$lib/yjs/graph-binding.svelte';
 	import X from '@lucide/svelte/icons/x';
-	import Pencil from '@lucide/svelte/icons/pencil';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
-	import StartNodeSection from './property-sections/StartNodeSection.svelte';
-	import HumanTaskSection from './property-sections/HumanTaskSection.svelte';
-	import AutomatedStepSection from './property-sections/AutomatedStepSection.svelte';
-	import DecisionNodeSection from './property-sections/DecisionNodeSection.svelte';
-	import LoopNodeSection from './property-sections/LoopNodeSection.svelte';
-	import DelayNodeSection from './property-sections/DelayNodeSection.svelte';
-	import TimeoutNodeSection from './property-sections/TimeoutNodeSection.svelte';
 	import DerivedPortsSection from './property-sections/DerivedPortsSection.svelte';
-	import TriggerNodeSection from './property-sections/TriggerNodeSection.svelte';
-	import RetryPolicySection from './property-sections/RetryPolicySection.svelte';
-	import ParallelSplitSection from './property-sections/ParallelSplitSection.svelte';
-	import JoinSection from './property-sections/JoinSection.svelte';
-	import ScopeSection from './property-sections/ScopeSection.svelte';
-	import PhaseUpdateNodeSection from './property-sections/PhaseUpdateNodeSection.svelte';
-	import ProgressUpdateNodeSection from './property-sections/ProgressUpdateNodeSection.svelte';
-	import FailureNodeSection from './property-sections/FailureNodeSection.svelte';
-	import EndNodeSection from './property-sections/EndNodeSection.svelte';
-	import SubWorkflowSection from './property-sections/SubWorkflowSection.svelte';
-	import AgentNodeSection from './property-sections/AgentNodeSection.svelte';
 	import InScopeRefsSection from './property-sections/InScopeRefsSection.svelte';
+	import {
+		NODE_PROPERTY_SECTIONS,
+		type SectionProps
+	} from '$lib/editor/node-property-sections';
 	import {
 		fetchNodeScopes,
 		loadResourceTypes,
@@ -33,7 +18,6 @@
 	} from '$lib/editor/guard-scope';
 	import type { ResourceTypeInfo, ResourceSummary } from '$lib/api/resources';
 	import { outputPortsFor } from '$lib/editor/derived-ports';
-	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { FormField } from '$lib/components/ui/form-field';
@@ -178,6 +162,12 @@
 			.catch(() => {});
 	});
 	const resourceScope = $derived(buildResourceScope(workspaceResources, resourceTypes));
+
+	// Single exhaustive dispatch: pick the section component for this node kind.
+	// Capitalized so the template treats it as a component. The registry's
+	// `Record<NodeKind, Component<SectionProps>>` typing makes a missing/spurious
+	// kind a compile error in `node-property-sections.ts`.
+	const SectionComponent = $derived(NODE_PROPERTY_SECTIONS[data.type]);
 </script>
 
 <div
@@ -272,65 +262,24 @@
 			<InScopeRefsSection {scope} {resourceScope} {incomingCount} />
 		{/if}
 
-		<!-- Type-specific sections -->
-		{#if data.type === 'start'}
-			<StartNodeSection {data} {readonly} {onchange} {binding} {nodeId} {scope} {onselectnode} />
-		{:else if data.type === 'human_task'}
-			{#if templateId && nodeId}
-				<div class="space-y-3">
-					<div class="rounded-lg border border-border bg-muted/30 p-3">
-						<p class="text-sm text-muted-foreground">
-							{data.steps.length} step{data.steps.length !== 1 ? 's' : ''} configured
-						</p>
-						{#if data.taskTitle}
-							<p class="mt-1 truncate text-sm font-medium text-foreground">{data.taskTitle}</p>
-						{/if}
-					</div>
-					<Button
-						variant="outline"
-						size="sm"
-						class="w-full"
-						href="/templates/{templateId}/ide?node={nodeId}"
-					>
-						<Pencil class="size-3.5" />
-						Edit Task Form
-					</Button>
-				</div>
-			{:else}
-				<HumanTaskSection {data} {readonly} {onchange} {scope} />
-			{/if}
-		{:else if data.type === 'automated_step'}
-			<AutomatedStepSection {data} {readonly} {onchange} {binding} {nodeId} {templateId} {scope} />
-			<RetryPolicySection {data} {readonly} {onchange} />
-		{:else if data.type === 'decision'}
-			<DecisionNodeSection {data} {readonly} {onchange} {scope} {resourceScope} />
-		{:else if data.type === 'loop'}
-			<LoopNodeSection {data} {readonly} {onchange} {scope} {resourceScope} />
-		{:else if data.type === 'delay'}
-			<DelayNodeSection {data} {readonly} {onchange} {scope} {resourceScope} />
-		{:else if data.type === 'timeout'}
-			<TimeoutNodeSection {data} {readonly} {onchange} {scope} {resourceScope} />
-		{:else if data.type === 'trigger'}
-			<TriggerNodeSection {data} {readonly} {onchange} {nodeId} {binding} />
-		{:else if data.type === 'parallel_split'}
-			<ParallelSplitSection {data} {binding} {nodeId} />
-		{:else if data.type === 'join'}
-			<JoinSection {data} {readonly} {onchange} {binding} {nodeId} />
-		{:else if data.type === 'scope'}
-			<ScopeSection {data} {binding} {nodeId} />
-		{:else if data.type === 'phase_update'}
-			<PhaseUpdateNodeSection {data} {readonly} {onchange} {scope} />
-		{:else if data.type === 'progress_update'}
-			<ProgressUpdateNodeSection {data} {readonly} {onchange} {scope} />
-		{:else if data.type === 'failure'}
-			<FailureNodeSection {data} {readonly} {onchange} {scope} />
-		{:else if data.type === 'end'}
-			<EndNodeSection {data} {readonly} {onchange} {scope} />
-		{:else if data.type === 'sub_workflow'}
-			<SubWorkflowSection {data} {readonly} {onchange} {templateId} {scope} />
-		{:else if data.type === 'agent'}
-			<AgentNodeSection {data} {readonly} {onchange} {binding} {nodeId} {scope} />
-		{/if}
+		<!-- Type-specific section — single dispatch through the exhaustive
+		     `NODE_PROPERTY_SECTIONS` registry (Record<NodeKind, Component>).
+		     Every section receives the same `SectionProps` superset and reads
+		     only what it needs. A missing/spurious kind is a compile error in
+		     `node-property-sections.ts`. -->
+		<SectionComponent
+			{...{
+				data,
+				readonly,
+				onchange,
+				binding,
+				nodeId,
+				templateId,
+				scope,
+				resourceScope,
+				onselectnode
+			} satisfies SectionProps}
+		/>
 
 		<!-- Tool tagging (deleted): there's no separate ToolMetaSection
 		     anymore. Any node wired to an Agent's `tools` source handle is
