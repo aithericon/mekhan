@@ -107,10 +107,17 @@ impl EffectHandler for HumanTaskHandler {
             )));
         }
 
-        // Ensure task_id is set if not provided
-        if request.task_id.is_none() {
-            request.task_id = Some(uuid::Uuid::new_v4().to_string());
-        }
+        // Always mint a fresh task_id. A human-task dispatch is always a new
+        // assignment, so it must NOT inherit identity from the upstream control
+        // token. The control-token model whitelists `task_id` as a slim by-value
+        // key (see compiler token_shape/surface.rs), and the human-task yield
+        // emits a token carrying it — so a chained HumanTask would otherwise see
+        // `request.task_id == Some(<prior task's id>)` and reuse it. That
+        // collapses sequential tasks to one runtime identity (BFF projection
+        // ON CONFLICT (id) DO NOTHING drops the second; completion/cancel
+        // correlation keys on task_id become ambiguous). No legitimate caller
+        // supplies a task_id, so unconditionally overwriting is safe.
+        request.task_id = Some(uuid::Uuid::new_v4().to_string());
 
         // Always use the client's scoped net_id — the client is created per-net
         // and is the authoritative source for routing.

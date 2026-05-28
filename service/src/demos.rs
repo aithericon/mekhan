@@ -1379,6 +1379,66 @@ mod tests {
         );
     }
 
+    #[test]
+    fn http_call_demo_loads_and_compiles_with_borrow() {
+        use crate::compiler::compile_to_air_with_subworkflows_and_interfaces;
+        use crate::compiler::node_files_inline;
+        use crate::compiler::resource_refs::KnownResources;
+        use crate::compiler::SubWorkflowAir;
+        use std::collections::HashMap;
+
+        let root = repo_root().join("demos");
+        let demo = load_demo(&root.join("11-http-call")).expect("11-http-call must load");
+        assert_eq!(demo.metadata.name, "11 · HTTP Call");
+        assert_eq!(
+            demo.metadata.template_id,
+            "00000000-0000-0000-0000-000000000022"
+        );
+
+        let files = node_files_inline(&demo.files);
+        // HTTP binds no workspace resource — empty known map, like any
+        // resource-free step.
+        let known = KnownResources::new();
+        let inline: HashMap<String, HashMap<String, String>> = HashMap::new();
+        let (air, _iface) = compile_to_air_with_subworkflows_and_interfaces(
+            &demo.graph,
+            &demo.metadata.name,
+            demo.metadata.description.as_deref().unwrap_or(""),
+            &files,
+            &inline,
+            &SubWorkflowAir::new(),
+            &known,
+        )
+        .unwrap_or_else(|e| panic!("11-http-call must compile to AIR: {e:?}"));
+
+        let call_prepare = air
+            .get("transitions")
+            .and_then(|t| t.as_array())
+            .expect("transitions")
+            .iter()
+            .find(|t| t.get("id").and_then(|v| v.as_str()) == Some("httpcall/prepare"))
+            .expect("httpcall/prepare exists");
+        let logic_node = call_prepare.get("logic").expect("httpcall/prepare logic");
+        let source = logic_node
+            .get("Rhai")
+            .and_then(|l| l.get("source"))
+            .and_then(|s| s.as_str())
+            .or_else(|| logic_node.get("source").and_then(|s| s.as_str()))
+            .expect("Rhai source");
+
+        // The HTTP step's `{{ intake.username }}` / `{{ intake.topic }}`
+        // references (in url/header/query/body) must synthesize a read-arc
+        // that stages the intake producer envelope as `intake.json`.
+        assert!(
+            source.contains("intake.json"),
+            "compiled AIR must stage intake.json for the HTTP Tera context; source:\n{source}"
+        );
+        assert!(
+            source.contains("\"http\""),
+            "compiled AIR must carry the http backend discriminator"
+        );
+    }
+
     /// The learning-path demos (`01-` … `06-`) all parse through the same
     /// types the live `/api/v1/templates` consumer expects. A break here
     /// catches a regression in `WorkflowNodeData` shape against the

@@ -401,6 +401,50 @@ mailhog-down:
       echo "  · mailhog not running"
     fi
 
+# ── httpbin (local HTTP echo server) ─────────────────────────────────────────
+#
+# go-httpbin is a tiny static-binary echo service. The HTTP executor backend
+# (and the `11-http-call` demo) point at it so `{{ slug.field }}` borrows in a
+# request URL/headers/query/body can be exercised end-to-end with no internet:
+#   • Host port:  13110  → container :8080
+#   • /anything/<path>   echoes method, url, args, headers, and JSON body back
+#
+# Requires Docker (idempotent: a pre-existing container is detected + reused).
+#
+# Env:
+#   HTTPBIN_TAG  — image tag (default `mccutchen/go-httpbin:v2.15.0`)
+httpbin-up:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    tag="${HTTPBIN_TAG:-mccutchen/go-httpbin:v2.15.0}"
+    container="mekhan-httpbin"
+    if docker ps --format '{{{{.Names}}}}' | grep -Fxq "$container"; then
+      echo "  ✓ httpbin already running (container: $container)"
+      echo "    echo   http://localhost:13110/anything/<path>"
+      exit 0
+    fi
+    if docker ps -a --format '{{{{.Names}}}}' | grep -Fxq "$container"; then
+      docker start "$container" >/dev/null
+    else
+      echo "▶ starting httpbin (image: $tag) — echo :13110"
+      docker run -d --rm --name "$container" \
+        -p 13110:8080 \
+        "$tag" >/dev/null
+    fi
+    echo "  ✓ httpbin up"
+    echo "    echo   http://localhost:13110/anything/<path>  (used by the 11-http-call demo)"
+
+httpbin-down:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    container="mekhan-httpbin"
+    if docker ps --format '{{{{.Names}}}}' | grep -Fxq "$container"; then
+      docker stop "$container" >/dev/null
+      echo "  ✓ httpbin stopped"
+    else
+      echo "  · httpbin not running"
+    fi
+
 # ── Executor (aithericon-executor-service, daemon mode) ──────────────────────
 
 up-executor:
