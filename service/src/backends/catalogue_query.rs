@@ -62,6 +62,8 @@ pub static CATALOGUE_QUERY_DECL: BackendDecl = BackendDecl {
     // mismatch the handler's output at runtime.
     output_authoring: super::OutputAuthoring::Fixed,
     derive_output_port: None,
+    config_schema_fn: super::no_config_schema,
+    secret_fields: &[],
 };
 
 /// Seed config the editor inserts when a step's backend is first set to

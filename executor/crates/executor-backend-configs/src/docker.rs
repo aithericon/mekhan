@@ -7,6 +7,7 @@ use aithericon_executor_domain::{
 
 /// Configuration for the Docker execution backend.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 pub struct DockerConfig {
     /// Docker image to use (e.g., "python:3.12-slim", "alpine:3.19").
     pub image: String,
@@ -25,6 +26,7 @@ pub struct DockerConfig {
 
     /// Image pull policy.
     #[serde(default)]
+    #[cfg_attr(feature = "schema", schema(default = "if_not_present"))]
     pub pull_policy: PullPolicy,
 
     /// Optional resource limits for the container.
@@ -41,6 +43,7 @@ pub struct DockerConfig {
 
     /// Remove the container after execution (equivalent to --rm).
     #[serde(default = "default_true")]
+    #[cfg_attr(feature = "schema", schema(default = true))]
     pub remove_container: bool,
 }
 
@@ -50,6 +53,7 @@ fn default_true() -> bool {
 
 /// Image pull policy.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum PullPolicy {
     Always,
@@ -60,6 +64,7 @@ pub enum PullPolicy {
 
 /// Resource limits for the container.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 pub struct ResourceLimits {
     /// Memory limit in bytes.
     #[serde(default, skip_serializing_if = "Option::is_none")]

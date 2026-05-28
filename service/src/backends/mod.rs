@@ -47,6 +47,105 @@ pub mod process;
 pub mod python;
 pub mod smtp;
 
+/// Build a self-contained JSON Schema for a `ToSchema` config type `T`.
+///
+/// utoipa's `PartialSchema::schema()` gives the type's own schema, but any
+/// nested type appears as a `{"$ref": "#/components/schemas/<Name>"}`. We
+/// resolve those against the full `ApiDoc` components map (every config
+/// sub-type is registered there) and inline them recursively so the value
+/// the SPA receives on `BackendDescriptor.config_schema` needs no second
+/// lookup. Cycle-guarded + depth-capped, mirroring
+/// `compiler::schema_refs::inline_refs` (that one inlines `#/definitions/*`;
+/// utoipa emits `#/components/schemas/*`, hence a sibling resolver here).
+pub fn self_contained_config_schema<T: utoipa::PartialSchema>() -> Value {
+    const COMPONENTS_PREFIX: &str = "#/components/schemas/";
+    const DEPTH_CAP: usize = 64;
+
+    // The full document's component schemas — every backend config type and
+    // its sub-types are registered in `crate::openapi::ApiDoc`.
+    use utoipa::OpenApi as _;
+    let doc = serde_json::to_value(crate::openapi::ApiDoc::openapi())
+        .expect("ApiDoc serialization cannot fail");
+    let components = doc
+        .get("components")
+        .and_then(|c| c.get("schemas"))
+        .and_then(|s| s.as_object())
+        .cloned()
+        .unwrap_or_default();
+
+    let mut root =
+        serde_json::to_value(T::schema()).expect("schema serialization cannot fail");
+
+    fn inline(
+        value: &mut Value,
+        components: &serde_json::Map<String, Value>,
+        in_flight: &mut std::collections::HashSet<String>,
+        depth: usize,
+        prefix: &str,
+    ) {
+        if depth > DEPTH_CAP {
+            return;
+        }
+        // A node carrying a `{"$ref": "#/components/schemas/<name>"}`. utoipa
+        // emits the ref alongside sibling keys (e.g. a field's `description`),
+        // so we don't require the ref to be the sole key — we resolve it and
+        // merge any siblings (description wins over the definition's own).
+        let ref_name = value
+            .as_object()
+            .and_then(|m| m.get("$ref"))
+            .and_then(|r| r.as_str())
+            .and_then(|r| r.strip_prefix(prefix))
+            .map(str::to_string);
+        if let Some(name) = ref_name {
+            if let Some(def) = components.get(&name) {
+                if in_flight.insert(name.clone()) {
+                    let mut resolved = def.clone();
+                    inline(&mut resolved, components, in_flight, depth + 1, prefix);
+                    in_flight.remove(&name);
+                    // Carry over sibling keys from the ref site (notably the
+                    // field-level `description`) onto the resolved schema.
+                    if let (Some(resolved_obj), Some(site)) =
+                        (resolved.as_object_mut(), value.as_object())
+                    {
+                        for (k, v) in site {
+                            if k != "$ref" {
+                                resolved_obj
+                                    .entry(k.clone())
+                                    .or_insert_with(|| v.clone());
+                            }
+                        }
+                    }
+                    *value = resolved;
+                }
+            }
+            return;
+        }
+        match value {
+            Value::Object(map) => {
+                for (_, v) in map.iter_mut() {
+                    inline(v, components, in_flight, depth + 1, prefix);
+                }
+            }
+            Value::Array(arr) => {
+                for v in arr.iter_mut() {
+                    inline(v, components, in_flight, depth + 1, prefix);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut in_flight = std::collections::HashSet::new();
+    inline(&mut root, &components, &mut in_flight, 0, COMPONENTS_PREFIX);
+    root
+}
+
+/// `config_schema_fn` for backends with no executor config type (engine
+/// effects like `catalogue_query`). Returns JSON `null`.
+pub fn no_config_schema() -> Value {
+    Value::Null
+}
+
 /// Per-backend declaration. Stored in a `&'static` slice so the registry has
 /// zero runtime cost and trivially serializes the metadata subset for
 /// `GET /api/v1/backends`.
@@ -114,6 +213,19 @@ pub struct BackendDecl {
     /// called from the `POST /api/v1/backends/{name}/derive-output`
     /// endpoint and (potentially) compile-time validation hooks.
     pub derive_output_port: Option<DeriveOutputFn>,
+    /// Produce the self-contained JSON Schema for this backend's
+    /// `spec.config` shape (all `#/components/schemas/*` refs inlined).
+    /// Surfaced on `BackendDescriptor.config_schema` so the SPA's generic
+    /// schema-driven config form can render simple panels without a
+    /// hand-written widget map. Mirrors `default_editor_config` as a
+    /// fn pointer. Returns `Value::Null` for backends with no executor
+    /// config type (e.g. the engine-effect `catalogue_query`).
+    pub config_schema_fn: fn() -> Value,
+    /// Field names within `config` that hold secrets (api keys, passwords).
+    /// The generic form renders these with a masked widget. Empty when the
+    /// backend carries no inline secret (credentials usually flow through a
+    /// bound workspace resource instead).
+    pub secret_fields: &'static [&'static str],
 }
 
 impl BackendDecl {
@@ -383,6 +495,14 @@ pub struct BackendDescriptor {
     /// Who owns the output port shape — user (free), backend (fixed), or
     /// derived from config. Drives the editor's port-section rendering.
     pub output_authoring: OutputAuthoring,
+    /// Self-contained JSON Schema for this backend's `spec.config` shape
+    /// (`#/components/schemas/*` refs inlined). The SPA's generic
+    /// schema-driven form renders simple panels off this. `null` for
+    /// backends with no executor config type.
+    pub config_schema: Value,
+    /// `config` field names that hold secrets (rendered masked by the
+    /// generic form).
+    pub secret_fields: Vec<String>,
 }
 
 impl BackendDecl {
@@ -406,6 +526,8 @@ impl BackendDecl {
             schedulable: self.meta.schedulable,
             consumes_declared_outputs: self.consumes_declared_outputs,
             output_authoring: self.output_authoring,
+            config_schema: (self.config_schema_fn)(),
+            secret_fields: self.secret_fields.iter().map(|s| s.to_string()).collect(),
         }
     }
 }
@@ -454,5 +576,68 @@ mod tests {
     fn descriptors_includes_smtp() {
         let all = descriptors();
         assert!(all.iter().any(|d| d.name == "smtp"));
+    }
+
+    /// Walk a JSON value and assert no `#/components/schemas/*` ref survives.
+    fn assert_no_component_refs(v: &Value, ctx: &str) {
+        match v {
+            Value::Object(map) => {
+                if let Some(r) = map.get("$ref").and_then(|r| r.as_str()) {
+                    assert!(
+                        !r.starts_with("#/components/schemas/"),
+                        "{ctx}: unresolved ref {r}"
+                    );
+                }
+                for (_, child) in map {
+                    assert_no_component_refs(child, ctx);
+                }
+            }
+            Value::Array(arr) => {
+                for child in arr {
+                    assert_no_component_refs(child, ctx);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn config_schemas_are_self_contained() {
+        for d in descriptors() {
+            if d.config_schema.is_null() {
+                continue; // engine-effect backends (catalogue_query) carry no config
+            }
+            assert!(
+                d.config_schema.is_object(),
+                "{}: config_schema should be a schema object",
+                d.name
+            );
+            assert_no_component_refs(&d.config_schema, &d.name);
+        }
+    }
+
+    #[test]
+    fn nested_config_types_inline() {
+        // file_ops references StorageConfig (which nests StorageCredentials /
+        // RetryConfig / StorageBackend); http references AuthConfig. If
+        // inlining is wired correctly these resolve to inline objects, not
+        // dangling refs — covered by `config_schemas_are_self_contained`, but
+        // assert the nested types are non-trivially present too.
+        let file_ops = descriptors()
+            .into_iter()
+            .find(|d| d.name == "file_ops")
+            .expect("file_ops registered");
+        let s = serde_json::to_string(&file_ops.config_schema).unwrap();
+        // StorageConfig's `backend` / `credentials` leaves survive inlining.
+        assert!(s.contains("credentials"), "StorageConfig should be inlined");
+
+        let llm = descriptors()
+            .into_iter()
+            .find(|d| d.name == "llm")
+            .expect("llm registered");
+        assert!(
+            llm.secret_fields.iter().any(|f| f == "api_key"),
+            "llm must flag api_key as secret"
+        );
     }
 }

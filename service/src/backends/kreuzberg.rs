@@ -84,7 +84,13 @@ pub static KREUZBERG_DECL: BackendDecl = BackendDecl {
     validate_ref_kind: accept_any_ref_kind,
     output_authoring: super::OutputAuthoring::Derived,
     derive_output_port: Some(derive_output_port),
+    config_schema_fn: config_schema,
+    secret_fields: &[],
 };
+
+fn config_schema() -> Value {
+    super::self_contained_config_schema::<KreuzbergConfig>()
+}
 
 /// Seed config the editor inserts when a step's backend is first set to
 /// Kreuzberg. Mirrors `AutomatedStepSection.svelte::defaultConfigs.kreuzberg`.

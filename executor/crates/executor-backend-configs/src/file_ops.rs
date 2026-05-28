@@ -13,6 +13,7 @@ use aithericon_executor_storage_types::StorageConfig;
 
 /// Compression algorithm for streaming copy/move transfers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum Compression {
     /// Gzip (RFC 1952). Produces files with magic bytes `1f 8b`.
@@ -23,6 +24,7 @@ pub enum Compression {
 
 /// Tagged enum of all file operations.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 #[serde(tag = "operation", rename_all = "snake_case")]
 pub enum FileOpsConfig {
     Probe(ProbeConfig),
@@ -43,6 +45,7 @@ impl FileOpsConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 pub struct ProbeConfig {
     pub path: String,
     #[serde(default)]
@@ -56,6 +59,7 @@ pub struct ProbeConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 pub struct CopyConfig {
     pub source: String,
     pub destination: String,
@@ -69,6 +73,7 @@ pub struct CopyConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 pub struct MoveConfig {
     pub source: String,
     pub destination: String,
@@ -82,6 +87,7 @@ pub struct MoveConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 pub struct DeleteConfig {
     pub path: String,
     #[serde(default)]
@@ -90,6 +96,7 @@ pub struct DeleteConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 pub struct AnnotateConfig {
     pub path: String,
     pub annotations: HashMap<String, serde_json::Value>,
@@ -99,6 +106,7 @@ pub struct AnnotateConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 pub struct ListConfig {
     pub prefix: String,
     #[serde(default)]
@@ -109,6 +117,7 @@ pub struct ListConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 pub struct StatConfig {
     pub path: String,
     pub storage: StorageConfig,

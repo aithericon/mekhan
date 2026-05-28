@@ -54,7 +54,13 @@ pub static PROCESS_DECL: BackendDecl = BackendDecl {
     validate_ref_kind: super::accept_any_ref_kind,
     output_authoring: super::OutputAuthoring::Fixed,
     derive_output_port: None,
+    config_schema_fn: config_schema,
+    secret_fields: &[],
 };
+
+fn config_schema() -> Value {
+    super::self_contained_config_schema::<ProcessConfig>()
+}
 
 /// Seed config the editor inserts when a step's backend is first set to
 /// Process. Mirrors `AutomatedStepSection.svelte::defaultConfigs.process`.

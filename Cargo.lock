@@ -48,6 +48,7 @@ dependencies = [
  "aithericon-executor-storage-types",
  "serde",
  "serde_json",
+ "utoipa",
 ]
 
 [[package]]
@@ -61,6 +62,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+ "utoipa",
 ]
 
 [[package]]
@@ -69,6 +71,7 @@ version = "0.1.0"
 dependencies = [
  "schemars",
  "serde",
+ "utoipa",
 ]
 
 [[package]]
@@ -2713,6 +2716,7 @@ dependencies = [
  "aithericon-backends",
  "aithericon-executor-backend-configs",
  "aithericon-executor-domain",
+ "aithericon-executor-storage-types",
  "aithericon-resources",
  "aithericon-sdk",
  "anyhow",

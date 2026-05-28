@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 /// Which storage backend to use.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema, utoipa::ToSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum StorageBackend {
     /// Local filesystem (default).
@@ -25,7 +25,7 @@ pub enum StorageBackend {
 /// Credential fields support `{{secret:KEY}}` patterns that are resolved
 /// by the staging pipeline before use.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema, utoipa::ToSchema))]
 pub struct StorageCredentials {
     /// Access key (S3 access key ID, GCS HMAC key, Azure account name).
     #[serde(default)]
@@ -46,7 +46,7 @@ pub struct StorageCredentials {
 /// (~3 attempts spaced 200ms / 400ms+jitter / 800ms+jitter ≈ 2s total) without
 /// blowing past a Slurm sbatch's wall-clock budget.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema, utoipa::ToSchema))]
 pub struct RetryConfig {
     /// Maximum retry attempts (excluding the initial attempt). Default 3.
     #[serde(default = "default_retry_max_attempts")]
@@ -113,7 +113,7 @@ impl Default for RetryConfig {
 /// secret_key = "minioadmin"
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema, utoipa::ToSchema))]
 pub struct StorageConfig {
     /// Which backend to use.
     pub backend: StorageBackend,

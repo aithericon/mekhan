@@ -25,6 +25,7 @@
 
 use serde_json::{json, Value};
 
+use aithericon_executor_backend_configs::python::PythonConfig;
 use aithericon_executor_domain::InputDeclaration;
 
 use crate::compiler::backend_configs::EditorPythonConfig;
@@ -60,7 +61,16 @@ pub static PYTHON_DECL: BackendDecl = BackendDecl {
     validate_ref_kind: accept_any_ref_kind,
     output_authoring: super::OutputAuthoring::Free,
     derive_output_port: None,
+    // Executor `spec.config` wire shape. The editor's Python panel works in
+    // its own `EditorPythonConfig` shape (inline code + requirements); this
+    // schema describes the compiled wire contract, surfaced for completeness.
+    config_schema_fn: config_schema,
+    secret_fields: &[],
 };
+
+fn config_schema() -> Value {
+    super::self_contained_config_schema::<PythonConfig>()
+}
 
 /// Seed config the editor inserts when a step's backend is first set to
 /// Python. Mirrors `AutomatedStepSection.svelte::defaultConfigs.python`.

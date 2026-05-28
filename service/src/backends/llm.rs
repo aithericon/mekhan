@@ -80,7 +80,13 @@ pub static LLM_DECL: BackendDecl = BackendDecl {
     validate_ref_kind,
     output_authoring: OutputAuthoring::Derived,
     derive_output_port: Some(derive_output_port),
+    config_schema_fn: config_schema,
+    secret_fields: &["api_key"],
 };
+
+fn config_schema() -> Value {
+    super::self_contained_config_schema::<LlmConfig>()
+}
 
 /// Seed config the editor inserts when a step's backend is first set to
 /// LLM. Mirrors `AutomatedStepSection.svelte::defaultConfigs.llm`.

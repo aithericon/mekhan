@@ -1,9 +1,11 @@
 <script lang="ts">
-	import KeyValueEditor from '../../shared/KeyValueEditor.svelte';
-	import StringListEditor from '../../shared/StringListEditor.svelte';
-	import { Input } from '$lib/components/ui/input';
-	import { Checkbox } from '$lib/components/ui/checkbox';
-	import { FormField } from '$lib/components/ui/form-field';
+	// Process backend config panel. Fully schema-driven: the field set, types,
+	// and widgets come from the backend registry's `configSchema` (the
+	// executor `ProcessConfig` JSON Schema) via the shared SchemaForm. No
+	// hand-written field ladder — adding a field to `ProcessConfig` surfaces
+	// it here automatically.
+	import SchemaForm from '../../shared/SchemaForm.svelte';
+	import { getCachedBackend } from '$lib/editor/backend-registry.svelte';
 
 	type Props = {
 		config: Record<string, unknown>;
@@ -12,59 +14,14 @@
 	};
 
 	let { config, readonly = false, onchange }: Props = $props();
+
+	const descriptor = $derived(getCachedBackend('process'));
+	const schema = $derived((descriptor?.configSchema ?? null) as Record<string, unknown> | null);
+	const secretFields = $derived(descriptor?.secretFields ?? []);
 </script>
 
-<FormField label="Command" for="process-command">
-	<Input
-		id="process-command"
-		type="text"
-		value={(config.command as string) ?? ''}
-		placeholder="e.g. python3"
-		disabled={readonly}
-		oninput={(e) => onchange({ ...config, command: (e.currentTarget as HTMLInputElement).value })}
-		class="font-mono"
-	/>
-</FormField>
-
-<div class="space-y-1.5">
-	<span class="text-sm font-medium text-muted-foreground">Arguments</span>
-	<StringListEditor
-		items={(config.args as string[]) ?? []}
-		{readonly}
-		placeholder="Argument"
-		onchange={(args) => onchange({ ...config, args })}
-	/>
-</div>
-
-<FormField label="Working Directory (optional)" for="process-workdir">
-	<Input
-		id="process-workdir"
-		type="text"
-		value={(config.working_dir as string) ?? ''}
-		placeholder="/data"
-		disabled={readonly}
-		oninput={(e) =>
-			onchange({ ...config, working_dir: (e.currentTarget as HTMLInputElement).value || undefined })}
-		class="font-mono"
-	/>
-</FormField>
-
-<label class="flex items-center gap-1.5 text-sm text-muted-foreground">
-	<Checkbox
-		checked={(config.inherit_env as boolean) ?? true}
-		disabled={readonly}
-		onCheckedChange={(v) => onchange({ ...config, inherit_env: v })}
-	/>
-	Inherit environment
-</label>
-
-<div class="space-y-1.5">
-	<span class="text-sm font-medium text-muted-foreground">Environment Variables</span>
-	<KeyValueEditor
-		entries={(config.env as Record<string, unknown>) ?? {}}
-		{readonly}
-		keyPlaceholder="VAR_NAME"
-		valuePlaceholder="value"
-		onchange={(env) => onchange({ ...config, env })}
-	/>
-</div>
+{#if schema}
+	<SchemaForm {schema} value={config} {secretFields} {readonly} coerceNumbers {onchange} />
+{:else}
+	<p class="text-sm text-muted-foreground">Loading backend schema…</p>
+{/if}
