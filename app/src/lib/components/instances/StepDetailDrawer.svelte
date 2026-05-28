@@ -5,6 +5,7 @@
 	import { Dialog } from 'bits-ui';
 	import X from '@lucide/svelte/icons/x';
 	import Settings2 from '@lucide/svelte/icons/settings-2';
+	import CopyButton from '$lib/components/ui/copy-button/CopyButton.svelte';
 	import type { StepExecution, WorkflowNode } from '$lib/api/client';
 	import type { NodeInterface } from '$lib/types/node-interface';
 	import { nodeKindMeta } from './node-kind-meta';
@@ -139,6 +140,10 @@
 				</div>
 
 				<div class="flex shrink-0 items-center gap-1">
+					<CopyButton
+						getText={() => pretty(step)}
+						title="Copy the full step execution as JSON"
+					/>
 					{#if node}
 						<Button
 							variant="ghost"
@@ -199,7 +204,10 @@
 
 				{#if step.error}
 					<section>
-						<h3 class="text-sm font-semibold text-destructive mb-2">Error</h3>
+						<div class="mb-2 flex items-center gap-2">
+							<h3 class="text-sm font-semibold text-destructive">Error</h3>
+							<CopyButton text={pretty(step.error)} title="Copy error" class="text-destructive/70 hover:text-destructive" />
+						</div>
 						<pre class="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm font-mono whitespace-pre-wrap break-words text-destructive">{pretty(step.error)}</pre>
 					</section>
 				{/if}
@@ -297,6 +305,9 @@
 						Read-only view of the node as published with the template.
 					</Dialog.Description>
 				</div>
+				{#if node}
+					<CopyButton getText={() => pretty(node)} title="Copy node configuration as JSON" />
+				{/if}
 				<Dialog.Close>
 					<Button variant="ghost" size="icon" aria-label="Close">
 						<X class="size-4" />

@@ -30,6 +30,7 @@
 		type FailingTestInfo
 	} from '$lib/api/client';
 	import { compileErrors } from '$lib/editor/compile-errors.svelte';
+	import CopyButton from '$lib/components/ui/copy-button/CopyButton.svelte';
 	import { buildAssertionScope } from '$lib/editor/assertion-scope';
 	import { getSession, releaseSession } from '$lib/yjs/session-store';
 	import { YjsGraphBinding } from '$lib/yjs/graph-binding.svelte';
@@ -311,11 +312,19 @@
 		/>
 
 		{#if error}
-			<div class="border-b border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">
-				{error}
+			<div class="flex items-center gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">
+				<span class="flex-1">{error}</span>
+				<CopyButton
+					getText={() =>
+						compileErrors.errors.length > 0
+							? `${error}\n\n${JSON.stringify(compileErrors.errors, null, 2)}`
+							: (error ?? '')}
+					title="Copy error (with compile diagnostics) as JSON"
+					class="text-amber-700 hover:text-amber-900"
+				/>
 				<button
 					type="button"
-					class="ml-2 underline"
+					class="underline"
 					onclick={() => (error = null)}>dismiss</button
 				>
 			</div>
