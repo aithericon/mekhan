@@ -277,9 +277,13 @@ impl<'a> ConfigStorage<'a> {
     pub fn key(&self, node_id: &str) -> String {
         match self.key_fn {
             Some(f) => f(self.template_id, self.version, node_id),
-            None => format!(
-                "templates/{}/v{}/{}/node-config.json",
-                self.template_id, self.version, node_id
+            // Single source of truth for the default key shape; the publish-time
+            // upload (`ArtifactStore::upload_node_config`) mints the same key so
+            // the compile-time Rhai literal and the actual blob path agree.
+            None => crate::s3::ArtifactStore::node_config_key(
+                self.template_id,
+                self.version,
+                node_id,
             ),
         }
     }

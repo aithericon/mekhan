@@ -413,7 +413,7 @@ pub async fn promote_instance_to_test(
     let graph: WorkflowGraph = serde_json::from_value(template.graph.clone())
         .map_err(|e| ApiError::internal(format!("template graph invalid: {e}")))?;
 
-    let family = template.base_template_id.unwrap_or(template.id);
+    let family = template.chain_root_id();
 
     // Best-effort start_tokens extraction. The caller can override; otherwise
     // pull tokens deposited on Start-block data places. The compiler emits
