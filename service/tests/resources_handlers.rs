@@ -35,6 +35,7 @@ use mekhan_service::catalogue::repository::PgCatalogueRepository;
 use mekhan_service::causality::live::LiveBroadcasts;
 use mekhan_service::nats::MekhanNats;
 use mekhan_service::petri::client::PetriClient;
+use mekhan_service::handlers::resources::vault_path_for;
 use mekhan_service::s3::ArtifactStore;
 use mekhan_service::triggers::TriggerDispatcher;
 use mekhan_service::yjs::manager::YjsManager;
@@ -240,7 +241,7 @@ async fn create_persists_public_config_and_writes_secret_via_store() {
     .fetch_one(&db)
     .await
     .unwrap();
-    let vault_path = format!("aithericon/resources/{workspace_id}/{id}/v1");
+    let vault_path = vault_path_for(workspace_id, id, 1);
     let secrets = store
         .get_version(&vault_path)
         .await
@@ -397,8 +398,8 @@ async fn update_bumps_version_and_writes_new_vault_path() {
     .fetch_one(&db)
     .await
     .unwrap();
-    let v1 = format!("aithericon/resources/{workspace_id}/{id}/v1");
-    let v2 = format!("aithericon/resources/{workspace_id}/{id}/v2");
+    let v1 = vault_path_for(workspace_id, id, 1);
+    let v2 = vault_path_for(workspace_id, id, 2);
     assert!(store.get_version(&v1).await.is_some(), "v1 must remain");
     let v2_secrets = store.get_version(&v2).await.expect("v2 was written");
     assert_eq!(v2_secrets["password"], "new-secret");
@@ -507,7 +508,7 @@ async fn rotate_bumps_version_without_changing_schema() {
     .fetch_one(&db)
     .await
     .unwrap();
-    let v2 = format!("aithericon/resources/{workspace_id}/{id}/v2");
+    let v2 = vault_path_for(workspace_id, id, 2);
     let secrets = store.get_version(&v2).await.expect("v2 was written");
     assert_eq!(secrets["password"], "rotated-secret");
 }

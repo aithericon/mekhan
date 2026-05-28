@@ -215,7 +215,10 @@ fn split_config(
 }
 
 /// Compose the launcher-deterministic vault path for a given version.
-fn vault_path_for(workspace_id: Uuid, resource_id: Uuid, version: i32) -> String {
+///
+/// Exposed so integration tests can derive the same path the handlers write
+/// to instead of re-spelling the `aithericon/resources/{ws}/{id}/v{n}` literal.
+pub fn vault_path_for(workspace_id: Uuid, resource_id: Uuid, version: i32) -> String {
     format!("aithericon/resources/{workspace_id}/{resource_id}/v{version}")
 }
 
