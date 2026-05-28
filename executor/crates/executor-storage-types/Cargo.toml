@@ -10,10 +10,11 @@ homepage.workspace = true
 [dependencies]
 serde = { workspace = true }
 schemars = { workspace = true, optional = true }
+utoipa = { workspace = true, optional = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
 
 [features]
 default = []
-schema = ["dep:schemars"]
+schema = ["dep:schemars", "dep:utoipa"]

@@ -7,6 +7,7 @@ use aithericon_executor_domain::{
 
 /// HTTP method.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 #[serde(rename_all = "UPPERCASE")]
 pub enum HttpMethod {
     #[default]
@@ -21,6 +22,7 @@ pub enum HttpMethod {
 
 /// Authentication configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AuthConfig {
     /// Bearer token: `Authorization: Bearer <token>`
@@ -50,6 +52,7 @@ pub enum AuthConfig {
 
 /// How to interpret the response body.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum ResponseMode {
     /// Try JSON (if Content-Type matches), otherwise text.
@@ -65,6 +68,7 @@ pub enum ResponseMode {
 
 /// Configuration for the HTTP request backend.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 pub struct HttpConfig {
     /// HTTP method (default: GET).
     #[serde(default)]
@@ -92,6 +96,16 @@ pub struct HttpConfig {
     /// Authentication configuration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth: Option<AuthConfig>,
+
+    /// Workspace resource alias supplying the auth secret. When set, the
+    /// HTTP backend reads `<auth_resource>.json` (ConfigOverlay channel) and
+    /// fills the secret of whichever `auth` scheme is selected:
+    /// `http_bearer.token` → `Bearer{token}`, `http_basic.{username,password}`
+    /// → `Basic{..}`, `http_api_key.{header_name,value}` → `Header{name,value}`.
+    /// Per-step inline values and env-var fallbacks still win over the
+    /// resource when both are present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_resource: Option<String>,
 
     /// Request-level timeout in seconds.
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -11,6 +11,7 @@ use aithericon_executor_domain::{
 /// directory. For inline code, use [`PythonConfig::inline_spec`] which stages
 /// the code as a `Raw` input automatically.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 pub struct PythonConfig {
     /// Name of the Python script file in the inputs directory.
     pub script: String,

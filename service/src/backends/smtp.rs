@@ -53,7 +53,15 @@ pub static SMTP_DECL: BackendDecl = BackendDecl {
     // simply resolve to null in downstream consumers, which is acceptable.
     output_authoring: super::OutputAuthoring::Fixed,
     derive_output_port: None,
+    config_schema_fn: config_schema,
+    // SMTP credentials come from the bound workspace resource (`<alias>.json`),
+    // never inline in `config` — nothing flat to mask.
+    secret_fields: &[],
 };
+
+fn config_schema() -> Value {
+    super::self_contained_config_schema::<SmtpConfig>()
+}
 
 /// Seed config the editor inserts when a step's backend is first set to
 /// SMTP. Mirrors `AutomatedStepSection.svelte::defaultConfigs.smtp`.

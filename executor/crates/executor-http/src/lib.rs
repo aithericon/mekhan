@@ -112,6 +112,13 @@ pub struct HttpConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth: Option<AuthConfig>,
 
+    /// Workspace resource alias supplying the auth secret (ConfigOverlay
+    /// channel). When set, [`HttpConfig::overlay_auth_resource`] reads
+    /// `<auth_resource>.json` and fills the selected `auth` scheme's missing
+    /// secret. See the field docs on the `executor-backend-configs` mirror.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_resource: Option<String>,
+
     /// Request-level timeout in seconds. Falls back to `RunContext.timeout`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_secs: Option<u64>,
@@ -192,6 +199,66 @@ impl HttpConfig {
             return Err(ExecutorError::Config(
                 "http config: body and body_from_input are mutually exclusive".into(),
             ));
+        }
+        Ok(())
+    }
+
+    /// Overlay the auth secret from a bound workspace resource.
+    ///
+    /// Reads `<auth_resource>.json` (the ConfigOverlay channel — staged
+    /// untyped because the file carries no type tag) and fills the secret of
+    /// whichever `auth` scheme is selected, plus the public `username` /
+    /// header `name` when those are blank. Per-step inline values win — a
+    /// field already set is left untouched, so this only *backfills*. The
+    /// env-var fallback (`resolve_auth`) runs afterward, so precedence is
+    /// inline > resource > env var.
+    ///
+    /// No-ops when `auth_resource` is unset, when no `auth` scheme is
+    /// selected, or when the resource lacks the expected field (the picker
+    /// constrains kind↔scheme, but a hand-edited config stays permissive).
+    fn overlay_auth_resource(&mut self, run_context: &RunContext) -> Result<(), ExecutorError> {
+        let Some(alias) = self.auth_resource.clone() else {
+            return Ok(());
+        };
+        let Some(auth) = self.auth.as_mut() else {
+            return Ok(());
+        };
+        let envelope =
+            aithericon_executor_backend::load_resource_envelope(run_context, &alias)?;
+        let field = |k: &str| {
+            envelope
+                .get(k)
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        };
+        match auth {
+            AuthConfig::Bearer { token, .. } => {
+                if token.is_none() {
+                    *token = field("token");
+                }
+            }
+            AuthConfig::Basic {
+                username, password, ..
+            } => {
+                if password.is_none() {
+                    *password = field("password");
+                }
+                if username.is_empty() {
+                    if let Some(u) = field("username") {
+                        *username = u;
+                    }
+                }
+            }
+            AuthConfig::Header { name, value, .. } => {
+                if value.is_none() {
+                    *value = field("value");
+                }
+                if name.is_empty() {
+                    if let Some(n) = field("header_name") {
+                        *name = n;
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -322,6 +389,12 @@ impl ExecutionBackend for HttpBackend {
                 )));
             }
         }
+
+        // Backfill the auth secret from a bound workspace resource (if any)
+        // BEFORE the env-var fallback, so precedence is inline > resource >
+        // env var. The resource file is staged plaintext by the time prepare
+        // runs (PlanSecretsHook resolved its `{{secret:...}}` templates).
+        config.overlay_auth_resource(&run_context)?;
 
         // Auth tokens resolve from the merged env view (env overlaid with any
         // plaintext secrets PlanSecretsHook produced for `{{secret:KEY}}`
