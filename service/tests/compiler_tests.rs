@@ -632,6 +632,7 @@ fn loop_produces_enter_continue_exit() {
                     // read-arc on `p_lp_data` for the continue/exit transitions
                     // (pre-wired by `lower_loop`).
                     loop_condition: "lp.iteration < 5".to_string(),
+                    accumulators: vec![],
                 },
                 parent_id: None,
                 width: None,
@@ -778,6 +779,7 @@ fn loop_with_zero_iterations_fails() {
                     description: None,
                     max_iterations: 0,
                     loop_condition: "true".to_string(),
+                    accumulators: vec![],
                 },
                 parent_id: None,
                 width: None,
@@ -812,6 +814,7 @@ fn loop_with_empty_condition_fails() {
                     description: None,
                     max_iterations: 3,
                     loop_condition: "  ".to_string(),
+                    accumulators: vec![],
                 },
                 parent_id: None,
                 width: None,
@@ -2089,6 +2092,7 @@ fn loop_condition_can_reference_iteration_local() {
             description: None,
             max_iterations: 5,
             loop_condition: "lp.iteration < 3".to_string(),
+            accumulators: vec![],
         },
         parent_id: None,
         width: None,
@@ -2177,6 +2181,274 @@ fn loop_condition_can_reference_iteration_local() {
         result.is_ok(),
         "loop_condition should be able to reference its own iteration counter: {:?}",
         result.err()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Loop accumulators (fold/scan state carried across iterations)
+// ---------------------------------------------------------------------------
+
+/// Build `s -> lp(body=AutomatedStep "body" producing field `value`) -> d -> {ea, eb}`.
+/// The loop `lp` carries the given accumulators; the downstream Decision `d`
+/// guard references `lp.<down_ref>` so we can prove the borrow resolves via a
+/// synthesized read-arc into the parked `p_lp_data`.
+fn loop_with_accumulators_graph(
+    accumulators: Vec<mekhan_service::models::template::LoopAccumulator>,
+    down_guard: &str,
+) -> WorkflowGraph {
+    use mekhan_service::models::template::{FieldKind, Port, PortField};
+
+    let loop_node = WorkflowNode {
+        id: "lp".to_string(),
+        node_type: "loop".to_string(),
+        slug: None,
+        position: pos(),
+        data: WorkflowNodeData::Loop {
+            label: "Fold".to_string(),
+            description: None,
+            max_iterations: 5,
+            loop_condition: "lp.iteration < 5".to_string(),
+            accumulators,
+        },
+        parent_id: None,
+        width: None,
+        height: None,
+    };
+    // Body is an AutomatedStep declaring an output field `value: Number` so
+    // `body.value` in a merge_expr resolves to a real producer field.
+    let body_node = WorkflowNode {
+        id: "body".to_string(),
+        node_type: "automated_step".to_string(),
+        slug: None,
+        position: pos(),
+        data: WorkflowNodeData::AutomatedStep {
+            label: "Body".to_string(),
+            description: None,
+            execution_spec: ExecutionSpecConfig {
+                backend_type: ExecutionBackendType::Docker,
+                entrypoint: None,
+                config: serde_json::json!({"image": "alpine:latest"}),
+            },
+            input: Port::empty_input(),
+            output: Port {
+                id: "out".to_string(),
+                label: "Output".to_string(),
+                fields: vec![PortField {
+                    name: "value".to_string(),
+                    label: "Value".to_string(),
+                    kind: FieldKind::Number,
+                    required: true,
+                    options: None,
+                    description: None,
+                    accept: None,
+                }],
+            },
+            retry_policy: Default::default(),
+            deployment_model: Default::default(),
+        },
+        parent_id: Some("lp".to_string()),
+        width: None,
+        height: None,
+    };
+    let body_in_edge = WorkflowEdge {
+        id: "e_body_in".to_string(),
+        source: "lp".to_string(),
+        target: "body".to_string(),
+        source_handle: Some("body_in".to_string()),
+        target_handle: Some("in".to_string()),
+        label: None,
+        edge_type: "sequence".to_string(),
+    };
+    let body_out_edge = WorkflowEdge {
+        id: "e_body_out".to_string(),
+        source: "body".to_string(),
+        target: "lp".to_string(),
+        source_handle: None,
+        target_handle: Some("body_out".to_string()),
+        label: None,
+        edge_type: "loop_back".to_string(),
+    };
+    WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            loop_node,
+            body_node,
+            decision_with_guard("d", down_guard),
+            end_node("ea"),
+            end_node("eb"),
+        ],
+        edges: vec![
+            edge("e_in", "s", "lp"),
+            body_in_edge,
+            body_out_edge,
+            edge("e_out", "lp", "d"),
+            edge_with_handle("e_yes", "d", "ea", "cond_yes"),
+            edge_with_handle("e_no", "d", "eb", "default"),
+        ],
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+    }
+}
+
+fn acc(
+    var: &str,
+    init: &str,
+    merge: &str,
+) -> mekhan_service::models::template::LoopAccumulator {
+    mekhan_service::models::template::LoopAccumulator {
+        var: var.to_string(),
+        init: init.to_string(),
+        merge_expr: merge.to_string(),
+    }
+}
+
+#[test]
+fn loop_fold_accumulator_emits_in_enter_and_continue() {
+    // FOLD: total starts at 0, sums the body's `value` each iteration. The
+    // downstream Decision references `lp.total` — proving the accumulator is
+    // (a) emitted in the parked `data` map in BOTH enter+continue logic, and
+    // (b) borrowable downstream via a synthesized read-arc into `p_lp_data`.
+    let graph = loop_with_accumulators_graph(
+        vec![acc("total", "0", "lp.total + body.value")],
+        "lp.total > 10",
+    );
+    let air =
+        compile_to_air(&graph, "loop-fold", "", &std::collections::HashMap::new()).expect("compiles");
+
+    let enter = get_transition(&air, "t_lp_enter").unwrap();
+    let enter_src = enter["logic"]["source"].as_str().unwrap();
+    assert!(
+        enter_src.contains("iteration: 0") && enter_src.contains("total: (0)"),
+        "enter logic should init the accumulator alongside iteration: {enter_src}"
+    );
+
+    let cont = get_transition(&air, "t_lp_continue").unwrap();
+    let cont_src = cont["logic"]["source"].as_str().unwrap();
+    assert!(
+        cont_src.contains("iteration:") && cont_src.contains("total: ("),
+        "continue logic should refold the accumulator alongside iteration: {cont_src}"
+    );
+    // The prior-value borrow `lp.total` and body output `body.value` are
+    // rewritten by the (c) read-arc synthesis pass against the parked envelope
+    // binding (`d_lp`). We only assert the parked binding is referenced — the
+    // raw `lp.`/`body.` slug forms must NOT survive in the emitted logic.
+    assert!(
+        cont_src.contains("d_lp.total"),
+        "continue merge_expr's prior-value borrow should be rewritten to the parked binding: {cont_src}"
+    );
+
+    // Downstream `lp.total` borrow resolved: a read-arc into p_lp_data must be
+    // present on the decision branch transition that holds the guard (a
+    // GuardUnresolved would have failed compile above). Assert the read-arc
+    // explicitly to lock the load-bearing reuse claim.
+    let t_branch = get_transition(&air, "t_d_branch_0").unwrap();
+    let arcs: Vec<&str> = t_branch["inputs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["place"].as_str().unwrap())
+        .collect();
+    assert!(
+        arcs.contains(&"p_lp_data"),
+        "downstream decision should read-arc the loop's parked data place for `lp.total`: {arcs:?}"
+    );
+    // And the guard ref was rewritten to the parked binding `d_lp.total`.
+    let guard_src = t_branch["guard"]["source"].as_str().unwrap();
+    assert!(
+        guard_src.contains("d_lp.total"),
+        "downstream `lp.total` guard ref should be rewritten to the parked binding: {guard_src}"
+    );
+}
+
+#[test]
+fn loop_collect_accumulator_compiles() {
+    // COLLECT: items starts as [] and appends `[body.value]` each iteration.
+    let graph = loop_with_accumulators_graph(
+        vec![acc("items", "[]", "lp.items + [body.value]")],
+        "lp.iteration > 0",
+    );
+    let air = compile_to_air(&graph, "loop-collect", "", &std::collections::HashMap::new())
+        .expect("collect accumulator compiles");
+
+    let enter = get_transition(&air, "t_lp_enter").unwrap();
+    let enter_src = enter["logic"]["source"].as_str().unwrap();
+    assert!(
+        enter_src.contains("items: ([])"),
+        "enter logic should init items as []: {enter_src}"
+    );
+    let cont = get_transition(&air, "t_lp_continue").unwrap();
+    let cont_src = cont["logic"]["source"].as_str().unwrap();
+    assert!(
+        cont_src.contains("d_lp.items"),
+        "continue merge_expr should refold items off the parked binding: {cont_src}"
+    );
+}
+
+#[test]
+fn loop_accumulator_reserved_var_fails() {
+    let graph = loop_with_accumulators_graph(
+        vec![acc("iteration", "0", "lp.iteration + 1")],
+        "lp.iteration > 3",
+    );
+    let err = compile_to_air(&graph, "loop-reserved", "", &std::collections::HashMap::new())
+        .expect_err("`iteration` is reserved");
+    assert_eq!(err.kind(), "loop_accumulator_var_reserved", "got: {err:?}");
+}
+
+#[test]
+fn loop_accumulator_unparseable_merge_expr_fails() {
+    let graph = loop_with_accumulators_graph(
+        vec![acc("total", "0", "lp.total + (body.value")],
+        "lp.iteration > 0",
+    );
+    let err = compile_to_air(&graph, "loop-bad-merge", "", &std::collections::HashMap::new())
+        .expect_err("garbage merge_expr should not parse");
+    assert_eq!(err.kind(), "loop_accumulator_expr_unparseable", "got: {err:?}");
+}
+
+#[test]
+fn loop_accumulator_invalid_var_fails() {
+    let graph = loop_with_accumulators_graph(
+        vec![acc("1bad", "0", "1bad + 1")],
+        "lp.iteration > 0",
+    );
+    let err = compile_to_air(&graph, "loop-bad-var", "", &std::collections::HashMap::new())
+        .expect_err("non-identifier var should fail");
+    assert_eq!(err.kind(), "loop_accumulator_var_invalid", "got: {err:?}");
+}
+
+#[test]
+fn loop_accumulator_duplicate_var_fails() {
+    let graph = loop_with_accumulators_graph(
+        vec![acc("total", "0", "lp.total + 1"), acc("total", "0", "lp.total + 2")],
+        "lp.iteration > 0",
+    );
+    let err = compile_to_air(&graph, "loop-dup", "", &std::collections::HashMap::new())
+        .expect_err("duplicate var should fail");
+    assert_eq!(err.kind(), "loop_accumulator_duplicate_var", "got: {err:?}");
+}
+
+#[test]
+fn loop_without_accumulators_unchanged() {
+    // Regression: a loop with NO accumulators emits the exact same enter/continue
+    // parked-data logic as before this feature (`#{ iteration: 0 }` /
+    // `#{ iteration: <slug>.iteration + 1 }`).
+    let graph = loop_with_accumulators_graph(vec![], "lp.iteration > 0");
+    let air = compile_to_air(&graph, "loop-none", "", &std::collections::HashMap::new())
+        .expect("no-accumulator loop compiles");
+
+    let enter = get_transition(&air, "t_lp_enter").unwrap();
+    assert_eq!(
+        enter["logic"]["source"].as_str().unwrap(),
+        "#{ body: input, data: #{ iteration: 0 } }",
+        "no-accumulator enter logic must be byte-identical to pre-feature output"
+    );
+    let cont = get_transition(&air, "t_lp_continue").unwrap();
+    assert_eq!(
+        cont["logic"]["source"].as_str().unwrap(),
+        "#{ body: input, data: #{ iteration: d_lp.iteration + 1 } }",
+        "no-accumulator continue logic must be byte-identical to pre-feature output"
     );
 }
 
@@ -2382,6 +2654,7 @@ fn loop_exposes_outer_out_and_body_in_handles() {
         description: None,
         max_iterations: 5,
         loop_condition: "true".into(),
+        accumulators: vec![],
     };
     let out_ports = lp.output_ports();
     let outs: Vec<&str> = out_ports.iter().map(|p| p.id.as_str()).collect();
@@ -2410,6 +2683,7 @@ fn empty_loop_fails_with_loop_empty_error() {
                     description: None,
                     max_iterations: 3,
                     loop_condition: "true".to_string(),
+                    accumulators: vec![],
                 },
                 parent_id: None,
                 width: None,

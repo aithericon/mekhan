@@ -13,6 +13,7 @@
 use crate::compiler::interface::NodeKind;
 use crate::models::template::{Port, WorkflowNodeData};
 use crate::nodes::{NodeDecl, YjsEncodeFn};
+use crate::yjs::persistence::json_value_to_any;
 
 pub(crate) static LOOP_DECL: NodeDecl = NodeDecl {
     wire_name: "loop",
@@ -78,6 +79,7 @@ fn yjs_encode(
     let WorkflowNodeData::Loop {
         max_iterations,
         loop_condition,
+        accumulators,
         ..
     } = data
     else {
@@ -85,4 +87,12 @@ fn yjs_encode(
     };
     config.insert(txn, "maxIterations", *max_iterations as f64);
     config.insert(txn, "loopCondition", loop_condition.clone());
+    // Accumulators serialize as a yrs array of maps {var, init, mergeExpr}
+    // (camelCase via the `LoopAccumulator` serde rename), mirroring how
+    // `decision::yjs_encode` encodes its `conditions` array.
+    if !accumulators.is_empty() {
+        let accs_val =
+            serde_json::to_value(accumulators).unwrap_or(serde_json::Value::Array(vec![]));
+        config.insert(txn, "accumulators", json_value_to_any(&accs_val));
+    }
 }

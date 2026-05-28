@@ -414,6 +414,33 @@ pub enum CompileError {
         node_id: String,
         output_slug: String,
     },
+
+    // --- Loop accumulator (fold/scan state) guards. Each accumulator var
+    //     becomes a parked field in the loop's `p_<id>_data` envelope and is
+    //     addressed downstream as `<loop_slug>.<var>`; the init/merge_expr are
+    //     emitted verbatim into the enter/continue transition logic. Reject
+    //     malformed declarations at publish so the editor can ring the loop.
+    /// Accumulator `var` is not a valid Rhai identifier (`[A-Za-z_][A-Za-z0-9_]*`).
+    #[error(
+        "loop '{node_id}': accumulator var '{var}' is not a valid Rhai identifier ([A-Za-z_][A-Za-z0-9_]*)"
+    )]
+    LoopAccumulatorVarInvalid { node_id: String, var: String },
+
+    /// Accumulator `var` is `iteration` — reserved for the loop's own counter.
+    #[error("loop '{node_id}': accumulator var '{var}' is reserved (the loop iteration counter)")]
+    LoopAccumulatorVarReserved { node_id: String, var: String },
+
+    /// Two accumulators on the same loop declare the same `var`.
+    #[error("loop '{node_id}': duplicate accumulator var '{var}'")]
+    LoopAccumulatorDuplicateVar { node_id: String, var: String },
+
+    /// An accumulator's `init` or `merge_expr` does not parse as Rhai.
+    #[error("loop '{node_id}': accumulator '{var}' has an unparseable expression: {error}")]
+    LoopAccumulatorExprUnparseable {
+        node_id: String,
+        var: String,
+        error: String,
+    },
 }
 
 impl CompileError {
@@ -463,6 +490,10 @@ impl CompileError {
             Self::RepeaterItemsRefNotArray { .. } => "repeater_items_ref_not_array",
             Self::RepeaterOutputSlugInvalid { .. } => "repeater_output_slug_invalid",
             Self::RepeaterNested { .. } => "repeater_nested",
+            Self::LoopAccumulatorVarInvalid { .. } => "loop_accumulator_var_invalid",
+            Self::LoopAccumulatorVarReserved { .. } => "loop_accumulator_var_reserved",
+            Self::LoopAccumulatorDuplicateVar { .. } => "loop_accumulator_duplicate_var",
+            Self::LoopAccumulatorExprUnparseable { .. } => "loop_accumulator_expr_unparseable",
         }
     }
 
@@ -513,6 +544,10 @@ impl CompileError {
             | Self::RepeaterItemsRefNotArray { node_id, .. }
             | Self::RepeaterOutputSlugInvalid { node_id, .. }
             | Self::RepeaterNested { node_id, .. }
+            | Self::LoopAccumulatorVarInvalid { node_id, .. }
+            | Self::LoopAccumulatorVarReserved { node_id, .. }
+            | Self::LoopAccumulatorDuplicateVar { node_id, .. }
+            | Self::LoopAccumulatorExprUnparseable { node_id, .. }
             | Self::WorkspaceResourceUnknown { node_id, .. } => Some(node_id),
             _ => None,
         }

@@ -68,6 +68,7 @@ fn parse_step_block(block: &hcl::Block) -> Result<DslStep> {
         default_branch: get_attr_str(body, "default_branch"),
         max_iterations: get_attr_i64(body, "max_iterations").map(|v| v as i32),
         loop_condition: get_attr_str(body, "loop_condition"),
+        accumulators: Vec::new(),
         children: get_attr_string_array(body, "children").unwrap_or_default(),
         width: get_attr_f64(body, "width"),
         height: get_attr_f64(body, "height"),

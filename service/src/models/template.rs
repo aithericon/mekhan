@@ -353,6 +353,13 @@ pub enum WorkflowNodeData {
         max_iterations: i32,
         #[serde(rename = "loopCondition")]
         loop_condition: String,
+        /// Optional fold/scan state carried across iterations. Each is an
+        /// additional field in the loop's parked `p_<id>_data` envelope
+        /// (alongside `iteration`): initialized in the enter transition,
+        /// re-folded write-once-per-iteration in the continue transition.
+        /// Downstream blocks read them via `<loop_slug>.<var>` borrows.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        accumulators: Vec<LoopAccumulator>,
     },
     #[serde(rename = "scope")]
     Scope {
@@ -1384,6 +1391,31 @@ pub struct Port {
     pub fields: Vec<PortField>,
 }
 
+/// One fold/scan slot on a [`WorkflowNodeData::Loop`]. Lives as an additional
+/// field in the loop's parked `p_<id>_data` envelope (the iteration counter
+/// generalized): `init` is evaluated once in the enter transition, `merge_expr`
+/// is re-evaluated write-once-per-iteration in the continue transition. Both
+/// are Rhai expressions. `merge_expr` may reference the prior accumulator value
+/// as `<loop_slug>.<var>` and the body's output as `<body_slug>.<field>` — the
+/// standard read-arc synthesis resolves those borrows automatically.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct LoopAccumulator {
+    /// Rhai identifier the accumulator is addressed by, both inside the loop's
+    /// own continue transition (`<loop_slug>.<var>`) and downstream. Must not
+    /// be `iteration` (reserved) and must be unique within the loop.
+    pub var: String,
+    /// Rhai expression evaluated in the enter transition scope (the entering
+    /// workflow token is bound as `input`). Keep simple — e.g. `"0"`, `"[]"`,
+    /// `"#{}"`.
+    pub init: String,
+    /// Rhai expression evaluated in the continue transition scope, producing the
+    /// next accumulator value. References the prior value as `<loop_slug>.<var>`
+    /// and body output as `<body_slug>.<field>`.
+    #[serde(rename = "mergeExpr")]
+    pub merge_expr: String,
+}
+
 impl Port {
     /// Empty input port — used as the deserialization default for `Start.initial`
     /// and similar so existing templates load unchanged.
@@ -2028,8 +2060,8 @@ pub mod dsl {
     use super::{
         default_join_output_port, default_max_turns, default_output_port, default_terminal_port,
         BranchCondition, ContextStrategy, DeploymentModel, ExecutionBackendType,
-        ExecutionSpecConfig, JoinMode, MergeStrategy, ModelRef, Port, RetryPolicy, TaskBlockConfig,
-        TaskStepConfig, ToolErrorPolicy, WorkflowNode, WorkflowNodeData,
+        ExecutionSpecConfig, JoinMode, LoopAccumulator, MergeStrategy, ModelRef, Port, RetryPolicy,
+        TaskBlockConfig, TaskStepConfig, ToolErrorPolicy, WorkflowNode, WorkflowNodeData,
     };
     use serde::{Deserialize, Serialize};
 
@@ -2092,6 +2124,9 @@ pub mod dsl {
 
         #[serde(skip_serializing_if = "Option::is_none")]
         pub loop_condition: Option<String>,
+
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pub accumulators: Vec<LoopAccumulator>,
 
         // scope
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -2390,6 +2425,7 @@ pub mod dsl {
                         description: step.description.clone(),
                         max_iterations: max_iter,
                         loop_condition: condition,
+                        accumulators: step.accumulators.clone(),
                     })
                 }
                 "scope" => Ok(WorkflowNodeData::Scope {
@@ -2432,6 +2468,7 @@ pub mod dsl {
                 default_branch: None,
                 max_iterations: None,
                 loop_condition: None,
+                accumulators: Vec::new(),
                 children: Vec::new(),
                 width: node.width,
                 height: node.height,
@@ -2556,10 +2593,12 @@ pub mod dsl {
                 WorkflowNodeData::Loop {
                     max_iterations,
                     loop_condition,
+                    accumulators,
                     ..
                 } => {
                     step.max_iterations = Some(*max_iterations);
                     step.loop_condition = Some(loop_condition.clone());
+                    step.accumulators = accumulators.clone();
                 }
                 WorkflowNodeData::PhaseUpdate { .. }
                 | WorkflowNodeData::ProgressUpdate { .. }

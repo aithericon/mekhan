@@ -377,7 +377,7 @@ fn out_shape(node: &WorkflowNode, in_shape: &TokenShape) -> TokenShape {
         // expressions in `loopCondition` / guards / End mappings reference it
         // as `input.<slug>.iteration` (or `<slug>.iteration` for the
         // slug-borrow rewrite path).
-        WorkflowNodeData::Loop { .. } => {
+        WorkflowNodeData::Loop { accumulators, .. } => {
             let mut o = in_shape.clone();
             let mut ns = TokenShape::object();
             ns.insert(
@@ -385,10 +385,19 @@ fn out_shape(node: &WorkflowNode, in_shape: &TokenShape) -> TokenShape {
                 TokenShape::Scalar(ScalarTy::Number),
                 Provenance::new(node, "loop iteration counter (declared producer field)"),
             );
+            // Each accumulator is an additional parked field. `init` is opaque
+            // Rhai (could be any JSON shape), so the declared shape is `Any`.
+            for acc in accumulators {
+                ns.insert(
+                    &acc.var,
+                    TokenShape::Any,
+                    Provenance::new(node, "loop accumulator (declared producer field)"),
+                );
+            }
             o.insert(
                 &node.slug(),
                 ns,
-                Provenance::new(node, "loop namespace (`<slug>.iteration`)"),
+                Provenance::new(node, "loop namespace (`<slug>.iteration` + accumulators)"),
             );
             o
         }

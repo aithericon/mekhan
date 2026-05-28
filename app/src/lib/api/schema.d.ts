@@ -2896,6 +2896,35 @@ export interface components {
         LogsTailResponse: {
             logs: components["schemas"]["LogRow"][];
         };
+        /**
+         * @description One fold/scan slot on a [`WorkflowNodeData::Loop`]. Lives as an additional
+         *     field in the loop's parked `p_<id>_data` envelope (the iteration counter
+         *     generalized): `init` is evaluated once in the enter transition, `merge_expr`
+         *     is re-evaluated write-once-per-iteration in the continue transition. Both
+         *     are Rhai expressions. `merge_expr` may reference the prior accumulator value
+         *     as `<loop_slug>.<var>` and the body's output as `<body_slug>.<field>` — the
+         *     standard read-arc synthesis resolves those borrows automatically.
+         */
+        LoopAccumulator: {
+            /**
+             * @description Rhai expression evaluated in the enter transition scope (the entering
+             *     workflow token is bound as `input`). Keep simple — e.g. `"0"`, `"[]"`,
+             *     `"#{}"`.
+             */
+            init: string;
+            /**
+             * @description Rhai expression evaluated in the continue transition scope, producing the
+             *     next accumulator value. References the prior value as `<loop_slug>.<var>`
+             *     and body output as `<body_slug>.<field>`.
+             */
+            mergeExpr: string;
+            /**
+             * @description Rhai identifier the accumulator is addressed by, both inside the loop's
+             *     own continue transition (`<loop_slug>.<var>`) and downstream. Must not
+             *     be `iteration` (reserved) and must be unique within the loop.
+             */
+            var: string;
+        };
         ManualTrigger: {
             /**
              * @description Form schema for the "Run with parameters" dialog. Reuses the same
@@ -4476,6 +4505,14 @@ export interface components {
             /** @enum {string} */
             type: "join";
         } | {
+            /**
+             * @description Optional fold/scan state carried across iterations. Each is an
+             *     additional field in the loop's parked `p_<id>_data` envelope
+             *     (alongside `iteration`): initialized in the enter transition,
+             *     re-folded write-once-per-iteration in the continue transition.
+             *     Downstream blocks read them via `<loop_slug>.<var>` borrows.
+             */
+            accumulators?: components["schemas"]["LoopAccumulator"][];
             description?: string | null;
             label: string;
             loopCondition: string;
