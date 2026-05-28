@@ -1,6 +1,8 @@
 //! HTTP backend declaration.
 //!
-//! Issues an HTTP request from the executor. No resource binding. The URL,
+//! Issues an HTTP request from the executor. Optionally binds an auth
+//! credential via `auth_resource` (ConfigOverlay; see [`RESOURCE_ALIAS_PATHS`]).
+//! The URL,
 //! header values, query-param values, and an inline `body`'s string leaves
 //! are `{{ slug.field }}` template surfaces — [`ref_scanner`] pulls those
 //! references out so the borrow planner synthesizes read-arcs and stages the
@@ -65,6 +67,13 @@ const DEFAULT_OUTPUT_FIELDS: &[DefaultPortField] = &[
     },
 ];
 
+/// Auth secret binding. `auth_resource` names a workspace `http_bearer` /
+/// `http_basic` / `http_api_key` resource; the channel is
+/// `ResourceChannel::ConfigOverlay` (set on `HTTP_META`), so executor-http's
+/// `prepare()` reads `<alias>.json` and fills the selected `auth` scheme's
+/// secret. Structurally identical to LLM's binding.
+const RESOURCE_ALIAS_PATHS: &[&[&str]] = &[&["auth_resource"]];
+
 pub static HTTP_DECL: BackendDecl = BackendDecl {
     meta: &HTTP_META,
     backend_type: ExecutionBackendType::Http,
@@ -72,7 +81,7 @@ pub static HTTP_DECL: BackendDecl = BackendDecl {
     default_editor_config,
     validate,
     ref_scanner: Some(ref_scanner),
-    resource_alias_paths: &[],
+    resource_alias_paths: RESOURCE_ALIAS_PATHS,
     consumes_declared_outputs: false,
     pyi_introspection: false,
     borrow_shape: super::BorrowShape::Envelope,

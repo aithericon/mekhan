@@ -45,7 +45,7 @@ pub struct BackendMeta {
     pub schedulable: bool,
     /// How a resolved resource envelope reaches the running backend.
     /// `None` for backends that don't bind workspace resources at all
-    /// (Process, Docker, Http, CatalogueQuery today).
+    /// (Process, Docker, CatalogueQuery today).
     pub resource_channel: ResourceChannel,
 }
 
@@ -91,7 +91,10 @@ pub const HTTP_META: BackendMeta = BackendMeta {
     icon: "globe",
     dispatch_mode: DispatchMode::ExecutorJob,
     schedulable: true,
-    resource_channel: ResourceChannel::None,
+    // LLM-style: the backend's `prepare()` reads `<auth_resource>.json` and
+    // fills the selected `AuthConfig` scheme's secret. Resource kinds:
+    // `http_bearer` / `http_basic` / `http_api_key`.
+    resource_channel: ResourceChannel::ConfigOverlay,
 };
 
 pub const LLM_META: BackendMeta = BackendMeta {

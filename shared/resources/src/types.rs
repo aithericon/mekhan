@@ -12,7 +12,9 @@
 //!
 //! **Wire names** (stored in the DB and emitted on the API surface) are
 //! locked in here:
-//! - `"postgres"`, `"openai"`, `"slack"`, `"s3"`, `"google_oauth"`.
+//! - `"postgres"`, `"openai"`, `"anthropic"`, `"http_bearer"`,
+//!   `"http_basic"`, `"http_api_key"`, `"slack"`, `"smtp"`, `"s3"`,
+//!   `"google_oauth"`, `"kv"`.
 //!
 //! These names are hard to change once shipped (DB rows reference them; the
 //! workflow YAML embeds them; the frontend filter dropdowns key off them).
@@ -70,6 +72,29 @@ pub struct OpenAI {
     pub base_url: Option<String>,
 }
 
+/// Anthropic API credentials + endpoint binding. Mirrors [`OpenAI`]'s shape
+/// minus the org id: `api_key` is the only secret, `base_url` lives on the
+/// resource so a corp proxy / Bedrock-Anthropic shim is paired with its key
+/// once and reused across every step that points at it.
+///
+/// The LLM backend's resource overlay is provider-agnostic — it reads
+/// `api_key` + `base_url` from the staged `<alias>.json` regardless of
+/// resource type (`executor-llm/src/backend.rs::overlay_resource`) — so this
+/// kind needs no executor change. Bind it on an LLM step whose `provider` is
+/// `anthropic`. See [[project_llm_resource_binding]].
+#[derive(ResourceType, Serialize, Deserialize, schemars::JsonSchema)]
+#[resource(name = "anthropic", display_name = "Anthropic", icon = "lucide-sparkles")]
+pub struct Anthropic {
+    #[resource(secret)]
+    pub api_key: String,
+    /// Optional base URL override for Anthropic-compatible endpoints — a
+    /// corporate proxy, a Bedrock/Vertex shim, or an internal gateway.
+    /// Absent → the LLM backend uses the vendor default
+    /// (`https://api.anthropic.com`).
+    #[serde(default)]
+    pub base_url: Option<String>,
+}
+
 /// Slack webhook target — v1 only supports incoming-webhook posting. Bot-
 /// token / OAuth Slack flows land in v2.
 #[derive(ResourceType, Serialize, Deserialize, schemars::JsonSchema)]
@@ -79,6 +104,54 @@ pub struct Slack {
     /// a secret because the path component carries the auth material.
     #[resource(secret)]
     pub webhook_url: String,
+}
+
+// ─── HTTP auth credentials ───────────────────────────────────────────────────
+//
+// Three kinds mirroring the HTTP node's `AuthConfig` variants
+// (`executor-backend-configs/src/http.rs`): Bearer / Basic / Header. The
+// HTTP backend binds one via `auth_resource` (ConfigOverlay channel) and
+// fills the *selected* scheme's missing secret from the resource at run
+// time — the scheme stays in the step config because the staged
+// `<alias>.json` carries no type tag, so the executor can't infer it.
+//
+// Field names match the `AuthConfig` variant they feed: `http_bearer.token`
+// → `Bearer{token}`, `http_basic.{username,password}` → `Basic{..}`,
+// `http_api_key.{header_name,value}` → `Header{name,value}`. The frontend
+// picker filters resources by the scheme the author selected, so a mismatched
+// kind never reaches publish.
+
+/// Bearer-token credential for the HTTP node's `Bearer` auth scheme.
+/// Pairs with a step whose `auth.type = "bearer"`.
+#[derive(ResourceType, Serialize, Deserialize, schemars::JsonSchema)]
+#[resource(name = "http_bearer", display_name = "Bearer Token", icon = "lucide-key-round")]
+pub struct HttpBearer {
+    /// Sent as `Authorization: Bearer <token>`.
+    #[resource(secret)]
+    pub token: String,
+}
+
+/// Username/password credential for the HTTP node's `Basic` auth scheme.
+/// Pairs with a step whose `auth.type = "basic"`. `username` is public
+/// (it's not a secret); only `password` lands in Vault.
+#[derive(ResourceType, Serialize, Deserialize, schemars::JsonSchema)]
+#[resource(name = "http_basic", display_name = "Basic Auth", icon = "lucide-key-round")]
+pub struct HttpBasic {
+    pub username: String,
+    #[resource(secret)]
+    pub password: String,
+}
+
+/// API-key-in-header credential for the HTTP node's `Header` auth scheme.
+/// Pairs with a step whose `auth.type = "header"`. `header_name` is public
+/// (e.g. `X-API-Key`); the `value` is the secret.
+#[derive(ResourceType, Serialize, Deserialize, schemars::JsonSchema)]
+#[resource(name = "http_api_key", display_name = "API Key", icon = "lucide-key")]
+pub struct HttpApiKey {
+    /// Header to set, e.g. `X-API-Key`.
+    pub header_name: String,
+    #[resource(secret)]
+    pub value: String,
 }
 
 /// SMTP relay credentials. Covers the common transactional-mail surface:

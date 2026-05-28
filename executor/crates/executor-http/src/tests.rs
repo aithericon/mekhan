@@ -47,6 +47,7 @@ fn http_config_full_roundtrip() {
         query: HashMap::from([("page".into(), "1".into())]),
         body: Some(serde_json::json!({"key": "value"})),
         body_from_input: None,
+        auth_resource: None,
         auth: Some(AuthConfig::Bearer {
             token: None,
             token_env: Some("API_TOKEN".into()),
@@ -113,6 +114,7 @@ fn http_config_into_spec() {
         query: HashMap::new(),
         body: None,
         body_from_input: None,
+        auth_resource: None,
         auth: None,
         timeout_secs: None,
         follow_redirects: true,
@@ -137,6 +139,7 @@ fn validate_empty_url() {
         query: HashMap::new(),
         body: None,
         body_from_input: None,
+        auth_resource: None,
         auth: None,
         timeout_secs: None,
         follow_redirects: true,
@@ -159,6 +162,7 @@ fn validate_body_and_body_from_input_conflict() {
         body: Some(serde_json::json!("data")),
         body_from_input: Some("input.json".into()),
         auth: None,
+        auth_resource: None,
         timeout_secs: None,
         follow_redirects: true,
         expected_status_codes: vec![],
@@ -225,6 +229,7 @@ fn resolve_auth_bearer_from_env() {
         query: HashMap::new(),
         body: None,
         body_from_input: None,
+        auth_resource: None,
         auth: Some(AuthConfig::Bearer {
             token: None,
             token_env: Some("MY_TOKEN".into()),
@@ -258,6 +263,7 @@ fn resolve_auth_missing_env_var() {
         query: HashMap::new(),
         body: None,
         body_from_input: None,
+        auth_resource: None,
         auth: Some(AuthConfig::Bearer {
             token: None,
             token_env: Some("MISSING_VAR".into()),
