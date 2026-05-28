@@ -230,8 +230,30 @@ impl Clockmaster {
             let drift_ms = now_ms.saturating_sub(timer.expires_at_ms);
 
             // Convert to ISO 8601
-            let scheduled_at_dt = Utc.timestamp_millis_opt(timer.expires_at_ms as i64).unwrap();
-            let triggered_at_dt = Utc.timestamp_millis_opt(now_ms as i64).unwrap();
+            let scheduled_at_dt = match Utc.timestamp_millis_opt(timer.expires_at_ms as i64).single() {
+                Some(dt) => dt,
+                None => {
+                    error!(
+                        net_id = %timer.net_id,
+                        place_id = %timer.place_id,
+                        expires_at_ms = timer.expires_at_ms,
+                        "Timer scheduled_at timestamp out of range; skipping fire"
+                    );
+                    return;
+                }
+            };
+            let triggered_at_dt = match Utc.timestamp_millis_opt(now_ms as i64).single() {
+                Some(dt) => dt,
+                None => {
+                    error!(
+                        net_id = %timer.net_id,
+                        place_id = %timer.place_id,
+                        now_ms = now_ms,
+                        "Timer triggered_at timestamp out of range; skipping fire"
+                    );
+                    return;
+                }
+            };
 
             info!(
                 net_id = %timer.net_id, 
@@ -258,7 +280,13 @@ impl Clockmaster {
             };
 
             let signal_subject = format!("{}.{}.{}", prefix, timer.net_id, timer.place_id);
-            let payload = serde_json::to_vec(&signal).unwrap();
+            let payload = match serde_json::to_vec(&signal) {
+                Ok(p) => p,
+                Err(e) => {
+                    error!(error = %e, "Failed to serialize timer signal; skipping fire");
+                    return;
+                }
+            };
 
             match js.publish(signal_subject, payload.into()).await {
                 Ok(ack_future) => {
