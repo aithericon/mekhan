@@ -1259,3 +1259,54 @@ async function parseErrorBody(res: Response): Promise<Record<string, unknown> | 
 		return text;
 	}
 }
+
+// ── Triggers ─────────────────────────────────────────────────────────────────
+
+export type TriggerView = components['schemas']['TriggerView'];
+export type TriggerListResponse = components['schemas']['TriggerListResponse'];
+export type TriggerHistoryResponse = components['schemas']['TriggerHistoryResponse'];
+export type SourceScopeResponse = components['schemas']['SourceScopeResponse'];
+export type ScopeVar = components['schemas']['ScopeVar'];
+export type CronPreviewRequest = components['schemas']['CronPreviewRequest'];
+export type CronPreviewResponse = components['schemas']['CronPreviewResponse'];
+export type SetTriggerEnabledRequest = components['schemas']['SetTriggerEnabledRequest'];
+
+/** GET /api/v1/triggers — returns all registered trigger views. */
+export async function listTriggers(): Promise<TriggerListResponse> {
+	return unwrap(await client.GET('/api/v1/triggers', {}));
+}
+
+/** GET /api/v1/triggers/{node_id}/history */
+export async function getTriggerHistory(nodeId: string): Promise<TriggerHistoryResponse> {
+	return unwrap(
+		await client.GET('/api/v1/triggers/{node_id}/history', {
+			params: { path: { node_id: nodeId } }
+		})
+	);
+}
+
+/** GET /api/v1/triggers/source-scope?kind=... */
+export async function getTriggerSourceScope(kind: string): Promise<SourceScopeResponse> {
+	return unwrap(
+		await client.GET('/api/v1/triggers/source-scope', {
+			params: { query: { kind } }
+		})
+	);
+}
+
+/** POST /api/v1/triggers/preview/cron */
+export async function previewCron(body: CronPreviewRequest): Promise<CronPreviewResponse> {
+	return unwrap(
+		await client.POST('/api/v1/triggers/preview/cron', { body })
+	);
+}
+
+/** PATCH /api/v1/triggers/{node_id}/enabled */
+export async function setTriggerEnabled(nodeId: string, enabled: boolean): Promise<TriggerView> {
+	return unwrap(
+		await client.PATCH('/api/v1/triggers/{node_id}/enabled', {
+			params: { path: { node_id: nodeId } },
+			body: { enabled }
+		})
+	);
+}
