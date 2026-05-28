@@ -1309,6 +1309,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/templates/{id}/io-contract": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/v1/templates/{id}/io-contract
+         * @description Resolve a child template family (by base id or any version-row id) per the
+         *     optional `version` pin — the SAME resolution `resolve_subworkflow_air` uses
+         *     at publish — and return its derived SubWorkflow contract. The editor's
+         *     preview therefore cannot drift from the contract frozen into the parent.
+         */
+        get: operations["get_io_contract"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/templates/{id}/io-stubs": {
         parameters: {
             query?: never;
@@ -3864,6 +3887,18 @@ export interface components {
                 };
             };
             graph: components["schemas"]["WorkflowGraph"];
+        };
+        /**
+         * @description SubWorkflow input/output contract derived from a child template's graph.
+         *     Mirrors exactly what the publish path freezes (see
+         *     [`crate::compiler::derive_child_io`]): `input` is the child's Start
+         *     `initial` port, `output` is the union of its End `result_mapping` targets
+         *     (Json-typed). The SubWorkflow editor reads this to render fixed, read-only
+         *     ports and one input-mapping row per child Start field.
+         */
+        TemplateIoContract: {
+            input: components["schemas"]["Port"];
+            output: components["schemas"]["Port"];
         };
         /**
          * @description A test attached to a logical template family. `template_id` is the family
@@ -7441,6 +7476,53 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Template not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    get_io_contract: {
+        parameters: {
+            query?: {
+                /**
+                 * @description Pin to a specific child version. Omit for the family's latest published
+                 *     row (matches a SubWorkflow node's `versionPin: latest`).
+                 */
+                version?: number | null;
+            };
+            header?: never;
+            path: {
+                /** @description Child template family id (base or any version row) */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Derived SubWorkflow input/output contract */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TemplateIoContract"];
                 };
             };
             /** @description Template not found */

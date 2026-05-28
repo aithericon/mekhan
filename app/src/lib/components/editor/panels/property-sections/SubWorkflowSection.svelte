@@ -1,23 +1,27 @@
 <script lang="ts">
 	import type { SubWorkflowNodeData } from '$lib/types/editor';
 	import type { components } from '$lib/api/schema';
+	import type { ScopeEntry } from '$lib/editor/guard-scope';
 	import {
 		listTemplates,
 		createTemplate,
 		setTemplateVisibility,
+		getTemplateIoContract,
 		type Template
 	} from '$lib/api/client';
+	import { untrack } from 'svelte';
 	import * as Select from '$lib/components/ui/select';
 	import { Input } from '$lib/components/ui/input';
 	import { Button } from '$lib/components/ui/button';
 	import { FormField } from '$lib/components/ui/form-field';
 	import Plus from '@lucide/svelte/icons/plus';
-	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import Lock from '@lucide/svelte/icons/lock';
-	import PortsSection from './PortsSection.svelte';
+	import DerivedPortsSection from './DerivedPortsSection.svelte';
+	import RefPicker from './RefPicker.svelte';
 
 	type FieldMapping = components['schemas']['FieldMapping'];
 	type Port = components['schemas']['Port'];
+	type PortField = components['schemas']['PortField'];
 
 	type Props = {
 		data: SubWorkflowNodeData;
@@ -27,14 +31,23 @@
 		 *  template can't trivially call itself (the backend also rejects a
 		 *  same-family self-reference at publish). */
 		templateId?: string;
+		/** In-scope refs for the input-mapping RefPickers. */
+		scope?: ScopeEntry[];
 	};
 
-	let { data, readonly = false, onchange, templateId }: Props = $props();
+	let { data, readonly = false, onchange, templateId, scope = [] }: Props = $props();
 
 	let templates = $state<Template[]>([]);
 	let loadError = $state<string | null>(null);
 	let creating = $state(false);
 	let privacyBusy = $state(false);
+
+	// The child's derived contract: input fields (from its Start `initial`
+	// port) drive the fixed mapping rows; output (union of its End
+	// `result_mapping`) is shown read-only and persisted onto `data.output` so
+	// the borrow resolver / variable picker see the child's true return shape.
+	let inputFields = $state<PortField[]>([]);
+	let contractError = $state<string | null>(null);
 
 	// `listTemplates(published=true)` returns the latest published row per
 	// family; the stable family id we persist is `base_template_id ?? id`.
@@ -136,6 +149,73 @@
 	);
 	const mappings = $derived<FieldMapping[]>(data.inputMapping ?? []);
 
+	// Fetch the child's derived io-contract whenever the picked template or
+	// version pin changes, and reconcile it onto the node:
+	//   - persist `data.output` (read-only) so the variable picker / borrow
+	//     resolver surface the child's result fields,
+	//   - drive the fixed input rows from `input.fields`,
+	//   - prune any input_mapping rows whose target field no longer exists in
+	//     the child's Start contract.
+	// Debounced + seq-guarded (mirrors AutomatedStepSection's derived effect)
+	// so a quick re-pin doesn't apply a stale contract. Server-authoritative:
+	// the editor never derives locally, so this preview can't drift from what
+	// publish freezes. On fetch failure we surface the error and leave the
+	// existing mapping/output untouched (no destructive prune on transients).
+	let deriveTimer: ReturnType<typeof setTimeout> | null = null;
+	let deriveSeq = 0;
+	$effect(() => {
+		const fam = data.templateId;
+		const version = data.versionPin?.mode === 'pinned' ? data.versionPin.version : undefined;
+		if (!fam) {
+			inputFields = [];
+			contractError = null;
+			return;
+		}
+		if (deriveTimer) clearTimeout(deriveTimer);
+		const seq = ++deriveSeq;
+		deriveTimer = setTimeout(() => {
+			getTemplateIoContract(fam, version)
+				.then((c) => {
+					if (seq !== deriveSeq) return;
+					contractError = null;
+					untrack(() => {
+						inputFields = c.input.fields ?? [];
+						const patch: Partial<SubWorkflowNodeData> = {};
+						if (!portsEqual(data.output, c.output)) {
+							patch.output = c.output;
+						}
+						if (!readonly) {
+							const valid = new Set(inputFields.map((f) => f.name));
+							const pruned = mappings.filter((m) => valid.has(m.targetField));
+							if (pruned.length !== mappings.length) {
+								patch.inputMapping = pruned;
+							}
+						}
+						if (Object.keys(patch).length > 0) {
+							onchange({ ...data, ...patch });
+						}
+					});
+				})
+				.catch((e) => {
+					if (seq !== deriveSeq) return;
+					contractError = String(e);
+					inputFields = [];
+				});
+		}, 250);
+	});
+
+	function portsEqual(a: Port | undefined, b: Port): boolean {
+		if (!a) return false;
+		if (a.id !== b.id || a.label !== b.label) return false;
+		const af = a.fields ?? [];
+		const bf = b.fields ?? [];
+		if (af.length !== bf.length) return false;
+		for (let i = 0; i < af.length; i++) {
+			if (af[i].name !== bf[i].name || af[i].kind !== bf[i].kind) return false;
+		}
+		return true;
+	}
+
 	function pickTemplate(famId: string) {
 		onchange({ ...data, templateId: famId });
 	}
@@ -152,21 +232,23 @@
 		onchange({ ...data, versionPin: { mode: 'pinned', version: v } });
 	}
 
-	function addMapping() {
-		onchange({ ...data, inputMapping: [...mappings, { targetField: '', expression: '' }] });
+	// Input wiring is fixed to the child's Start fields: the target field is
+	// locked, only the expression is authored. An empty expression drops the
+	// row (that child field falls through unmapped); a non-empty one upserts it.
+	function exprFor(fieldName: string): string {
+		return mappings.find((m) => m.targetField === fieldName)?.expression ?? '';
 	}
 
-	function updateMapping(i: number, patch: Partial<FieldMapping>) {
-		const next = mappings.map((m, idx) => (idx === i ? { ...m, ...patch } : m));
+	function setExpr(fieldName: string, expression: string) {
+		let next: FieldMapping[];
+		if (expression.trim() === '') {
+			next = mappings.filter((m) => m.targetField !== fieldName);
+		} else if (mappings.some((m) => m.targetField === fieldName)) {
+			next = mappings.map((m) => (m.targetField === fieldName ? { ...m, expression } : m));
+		} else {
+			next = [...mappings, { targetField: fieldName, expression }];
+		}
 		onchange({ ...data, inputMapping: next });
-	}
-
-	function removeMapping(i: number) {
-		onchange({ ...data, inputMapping: mappings.filter((_, idx) => idx !== i) });
-	}
-
-	function setOutput(port: Port) {
-		onchange({ ...data, output: port });
 	}
 </script>
 
@@ -278,71 +360,58 @@
 		</p>
 	</div>
 
-	<!-- Input mapping: parent token → child Start input -->
+	{#if contractError}
+		<p class="rounded-md border border-dashed border-destructive/40 p-2 text-sm text-destructive">
+			Couldn't read the child's contract: {contractError}. Publish the child template,
+			then reopen this panel.
+		</p>
+	{/if}
+
+	<!-- Input mapping: fixed to the child's Start fields. The target field is
+	     locked; only the expression (a Rhai borrow) is authored. -->
 	<div class="space-y-1.5">
-		<div class="flex items-center justify-between">
-			<span class="text-sm font-medium text-muted-foreground">Input mapping</span>
-			{#if !readonly}
-				<Button
-					variant="ghost"
-					size="sm"
-					data-testid="btn-add-subworkflow-mapping"
-					onclick={addMapping}
-				>
-					<Plus class="size-3.5" /> Add
-				</Button>
-			{/if}
-		</div>
-		{#if mappings.length === 0}
+		<span class="text-sm font-medium text-muted-foreground">Input mapping</span>
+		{#if !data.templateId}
+			<p class="text-sm text-muted-foreground">Pick a child template to map its inputs.</p>
+		{:else if inputFields.length === 0}
 			<p class="text-sm text-muted-foreground">
-				No mapping — the inbound token is passed to the child unchanged.
+				The child declares no Start fields — the inbound token is passed through
+				unchanged.
 			</p>
+		{:else}
+			{#each inputFields as field (field.name)}
+				<div class="space-y-1 rounded-md border border-border/60 bg-muted/20 p-2">
+					<div class="flex items-center justify-between">
+						<span
+							class="font-mono text-sm text-foreground"
+							data-testid="subworkflow-input-field"
+						>
+							{field.name}
+						</span>
+						<span class="text-sm text-muted-foreground">
+							{field.kind}{field.required ? ' • required' : ''}
+						</span>
+					</div>
+					<RefPicker
+						{scope}
+						disabled={readonly}
+						selected={exprFor(field.name) || undefined}
+						placeholder="Pick source field…"
+						onpick={(entry) => setExpr(field.name, entry.qualified)}
+					/>
+					<Input
+						class="font-mono"
+						placeholder="Rhai expression (e.g. input.amount)"
+						value={exprFor(field.name)}
+						disabled={readonly}
+						data-testid="input-subworkflow-map-expr"
+						oninput={(e) => setExpr(field.name, (e.currentTarget as HTMLInputElement).value)}
+					/>
+				</div>
+			{/each}
 		{/if}
-		{#each mappings as m, i (i)}
-			<div class="flex items-center gap-1.5">
-				<Input
-					class="flex-1"
-					placeholder="child field"
-					value={m.targetField}
-					disabled={readonly}
-					data-testid="input-subworkflow-map-field"
-					oninput={(e) =>
-						updateMapping(i, {
-							targetField: (e.currentTarget as HTMLInputElement).value
-						})}
-				/>
-				<Input
-					class="flex-1"
-					placeholder="Rhai expression (e.g. input.amount)"
-					value={m.expression}
-					disabled={readonly}
-					data-testid="input-subworkflow-map-expr"
-					oninput={(e) =>
-						updateMapping(i, {
-							expression: (e.currentTarget as HTMLInputElement).value
-						})}
-				/>
-				{#if !readonly}
-					<button
-						type="button"
-						class="rounded-md p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-						title="Remove mapping"
-						aria-label="Remove mapping"
-						onclick={() => removeMapping(i)}
-					>
-						<Trash2 class="size-4" />
-					</button>
-				{/if}
-			</div>
-		{/each}
 	</div>
 
-	<!-- Declared result shape, mapped back at the join -->
-	<PortsSection
-		port={outputPort}
-		{readonly}
-		title="Result"
-		emptyHint="No fields declared — the child's terminal result passes through unchanged."
-		onchange={setOutput}
-	/>
+	<!-- Result: derived from the child's End result mapping, read-only. -->
+	<DerivedPortsSection ports={[outputPort]} title="Result" derivedFrom="Child End" />
 </div>

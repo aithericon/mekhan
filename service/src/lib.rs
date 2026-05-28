@@ -149,6 +149,7 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
             handlers::templates::delete_template
         ))
         .routes(routes!(handlers::templates::get_template_bundle))
+        .routes(routes!(handlers::templates::get_io_contract))
         .routes(routes!(handlers::templates::publish_template))
         .routes(routes!(handlers::templates::new_version))
         .routes(routes!(handlers::templates::apply_template))

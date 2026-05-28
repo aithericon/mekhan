@@ -444,6 +444,11 @@ pub fn merged_identifier_scope(
 /// `<slug>.<field>` borrows. Covers:
 ///
 /// - **AutomatedStep** — explicit `output.fields` declared in the editor.
+/// - **SubWorkflow** — `output.fields` derived from the referenced child's End
+///   `result_mapping` (see `derive_child_io`). At publish the field is
+///   reconciled from the resolved child (`compile_artifacts`), so the borrow
+///   resolver sees the child's true return contract; in the editor it reflects
+///   the snapshot the panel keeps fresh via the `io-contract` endpoint.
 /// - **Loop** — synthetic `iteration: number` parked in `p_<loop>_data` by
 ///   `t_<id>_enter`; downstream nodes (including the body) read it through the
 ///   same `<slug>.<field>` mental model as any other producer, resolved by the
@@ -454,7 +459,8 @@ pub fn node_output_fields(
     let mut out: HashMap<String, std::collections::BTreeMap<String, FieldKind>> = HashMap::new();
     for node in &graph.nodes {
         match &node.data {
-            WorkflowNodeData::AutomatedStep { output, .. } => {
+            WorkflowNodeData::AutomatedStep { output, .. }
+            | WorkflowNodeData::SubWorkflow { output, .. } => {
                 if output.fields.is_empty() {
                     continue;
                 }

@@ -4005,6 +4005,73 @@
         }
       }
     },
+    "/api/v1/templates/{id}/io-contract": {
+      "get": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "GET /api/v1/templates/{id}/io-contract",
+        "description": "Resolve a child template family (by base id or any version-row id) per the\noptional `version` pin — the SAME resolution `resolve_subworkflow_air` uses\nat publish — and return its derived SubWorkflow contract. The editor's\npreview therefore cannot drift from the contract frozen into the parent.",
+        "operationId": "get_io_contract",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Child template family id (base or any version row)",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "version",
+            "in": "query",
+            "description": "Pin to a specific child version. Omit for the family's latest published\nrow (matches a SubWorkflow node's `versionPin: latest`).",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Derived SubWorkflow input/output contract",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateIoContract"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Template not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/templates/{id}/io-stubs": {
       "get": {
         "tags": [
@@ -10524,6 +10591,22 @@
           },
           "graph": {
             "$ref": "#/components/schemas/WorkflowGraph"
+          }
+        }
+      },
+      "TemplateIoContract": {
+        "type": "object",
+        "description": "SubWorkflow input/output contract derived from a child template's graph.\nMirrors exactly what the publish path freezes (see\n[`crate::compiler::derive_child_io`]): `input` is the child's Start\n`initial` port, `output` is the union of its End `result_mapping` targets\n(Json-typed). The SubWorkflow editor reads this to render fixed, read-only\nports and one input-mapping row per child Start field.",
+        "required": [
+          "input",
+          "output"
+        ],
+        "properties": {
+          "input": {
+            "$ref": "#/components/schemas/Port"
+          },
+          "output": {
+            "$ref": "#/components/schemas/Port"
           }
         }
       },

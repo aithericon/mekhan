@@ -21,8 +21,8 @@ use uuid::Uuid;
 use mekhan_service::catalogue::subscriptions::SubscriptionManager;
 use mekhan_service::lifecycle::start_lifecycle_listener;
 use mekhan_service::models::template::{
-    default_subworkflow_output_port, Port, Position, VersionPin, WorkflowEdge,
-    WorkflowGraph, WorkflowNode, WorkflowNodeData,
+    default_subworkflow_output_port, FieldKind, FieldMapping, Port, PortField, Position,
+    VersionPin, WorkflowEdge, WorkflowGraph, WorkflowNode, WorkflowNodeData,
 };
 use mekhan_service::nats::MekhanNats;
 
@@ -93,6 +93,51 @@ fn subworkflow(id: &str, child_family: Uuid, pin: VersionPin) -> WorkflowNode {
         width: None,
         height: None,
     }
+}
+
+fn text_field(name: &str) -> PortField {
+    PortField {
+        name: name.to_string(),
+        label: name.to_string(),
+        kind: FieldKind::Text,
+        required: false,
+        options: None,
+        description: None,
+        accept: None,
+    }
+}
+
+fn fm(target: &str, expr: &str) -> FieldMapping {
+    FieldMapping {
+        target_field: target.to_string(),
+        expression: expr.to_string(),
+    }
+}
+
+/// Start node with a typed `initial` port (the child's input contract).
+fn start_with(id: &str, fields: Vec<PortField>) -> WorkflowNode {
+    let mut n = start(id);
+    if let WorkflowNodeData::Start { initial, .. } = &mut n.data {
+        *initial = Port { id: "in".to_string(), label: "Input".to_string(), fields };
+    }
+    n
+}
+
+/// End node with a `result_mapping` (defines the workflow's return contract).
+fn end_with(id: &str, result_mapping: Vec<FieldMapping>) -> WorkflowNode {
+    let mut n = end(id);
+    if let WorkflowNodeData::End { result_mapping: rm, .. } = &mut n.data {
+        *rm = result_mapping;
+    }
+    n
+}
+
+/// SubWorkflow node with an explicit `slug` so downstream borrows can address
+/// its derived result as `<slug>.<field>`.
+fn subworkflow_slugged(id: &str, slug: &str, child_family: Uuid, pin: VersionPin) -> WorkflowNode {
+    let mut n = subworkflow(id, child_family, pin);
+    n.slug = Some(slug.to_string());
+    n
 }
 
 fn edge(id: &str, source: &str, target: &str) -> WorkflowEdge {
@@ -362,6 +407,169 @@ async fn private_subworkflow_embeddable_only_by_owner() {
             .unwrap()
             .contains("subworkflow_private_ownership_violation"),
         "expected private ownership violation, got: {body}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 1b. Fixed (derived) ports: input ← child Start, output ← child End mapping
+// ---------------------------------------------------------------------------
+
+/// Publish a child `Start([message]) → End(result_mapping: invoice_amount,
+/// status)` and return its family id. The child's input contract is `message`;
+/// its output contract is `{invoice_amount, status}`.
+async fn publish_io_child(app: &axum::Router, tag: &str) -> Uuid {
+    let s = format!("{tag}s");
+    let e = format!("{tag}e");
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_with(&s, vec![text_field("message")]),
+            end_with(
+                &e,
+                vec![
+                    fm("invoice_amount", "input.message"),
+                    fm("status", "input.message"),
+                ],
+            ),
+        ],
+        edges: vec![edge("ce", &s, &e)],
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+    };
+    let id = create_with_graph(app, "IO Child", &graph).await;
+    publish(app, id).await;
+    id
+}
+
+async fn get_io_contract(app: &axum::Router, family: Uuid, version: Option<i32>) -> Value {
+    let uri = match version {
+        Some(v) => format!("/api/v1/templates/{family}/io-contract?version={v}"),
+        None => format!("/api/v1/templates/{family}/io-contract"),
+    };
+    let resp = app
+        .clone()
+        .oneshot(Request::builder().method("GET").uri(uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let status = resp.status();
+    let body = body_json(resp.into_body()).await;
+    assert_eq!(status, StatusCode::OK, "io-contract: {body}");
+    body
+}
+
+fn field_names(port: &Value) -> Vec<String> {
+    port["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["name"].as_str().unwrap().to_string())
+        .collect()
+}
+
+/// The `io-contract` endpoint derives input from the child's Start `initial`
+/// port and output from the union of its End `result_mapping` targets — both
+/// for the `latest` resolution and a pinned version. This is the SAME
+/// `derive_child_io` the publish path uses, so the editor preview matches.
+#[tokio::test]
+async fn io_contract_endpoint_derives_input_and_output() {
+    let (app, _db) = common::test_app().await;
+    let child = publish_io_child(&app, "ioc").await;
+
+    let latest = get_io_contract(&app, child, None).await;
+    assert_eq!(field_names(&latest["input"]), vec!["message"], "input ← Start.initial");
+    assert_eq!(
+        field_names(&latest["output"]),
+        vec!["invoice_amount", "status"],
+        "output ← End result_mapping targets"
+    );
+    // Output fields are Json (untyped escape hatch — result_mapping carries no kind).
+    assert!(
+        latest["output"]["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|f| f["kind"] == "json"),
+        "derived output fields are Json-typed"
+    );
+
+    // Pinned v1 resolves to the same contract (only one version exists).
+    let pinned = get_io_contract(&app, child, Some(1)).await;
+    assert_eq!(field_names(&pinned["output"]), vec!["invoice_amount", "status"]);
+}
+
+/// The keystone of this feature: a SubWorkflow node's output port is DERIVED
+/// from the child's End `result_mapping` (not hand-authored), so a downstream
+/// node can borrow `<slug>.<field>` against the child's true return shape. The
+/// parent here leaves its SubWorkflow `output` at the empty default and still
+/// borrows `sub.invoice_amount` in its End — which only resolves because the
+/// publish path reconciles the derived contract before compiling and
+/// `node_output_fields` surfaces it to the read-arc planner.
+#[tokio::test]
+async fn subworkflow_output_derived_and_borrowable() {
+    let (app, _db) = common::test_app().await;
+    let child = publish_io_child(&app, "der").await;
+
+    let parent_graph = WorkflowGraph {
+        nodes: vec![
+            start("ps"),
+            subworkflow_slugged("sub", "sub", child, VersionPin::Latest),
+            end_with("pe", vec![fm("out_amount", "sub.invoice_amount")]),
+        ],
+        edges: vec![edge("pe1", "ps", "sub"), edge("pe2", "sub", "pe")],
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+    };
+    let parent = create_with_graph(&app, "Borrowing Parent", &parent_graph).await;
+    let body = publish(&app, parent).await;
+
+    // Publish succeeded ⇒ `sub.invoice_amount` resolved against the derived
+    // output and a read-arc was synthesized. The compiled join also unwraps
+    // the declared field, so the field name appears in the parent AIR.
+    let air = serde_json::to_string(&body["air_json"]).unwrap();
+    assert!(
+        air.contains("invoice_amount"),
+        "parent AIR must reference the derived child output field"
+    );
+}
+
+/// The negative: borrowing a field the child does NOT return is rejected at
+/// publish. This proves the derived output is *exactly* the child's End
+/// `result_mapping` targets — not a permissive pass-through that swallows any
+/// field name.
+#[tokio::test]
+async fn subworkflow_borrow_of_undeclared_child_field_rejected() {
+    let (app, _db) = common::test_app().await;
+    let child = publish_io_child(&app, "neg").await;
+
+    let parent_graph = WorkflowGraph {
+        nodes: vec![
+            start("ps"),
+            subworkflow_slugged("sub", "sub", child, VersionPin::Latest),
+            end_with("pe", vec![fm("bogus", "sub.does_not_exist")]),
+        ],
+        edges: vec![edge("pe1", "ps", "sub"), edge("pe2", "sub", "pe")],
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+    };
+    let parent = create_with_graph(&app, "Bad Borrow Parent", &parent_graph).await;
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/templates/{parent}/publish"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::BAD_REQUEST,
+        "borrowing an undeclared child field must fail to publish"
     );
 }
 

@@ -175,6 +175,15 @@ pub struct ResolvedChild {
     /// agent falls back to a permissive object schema. Extracted from the
     /// child's high-level graph at resolution time (`resolve_subworkflow_air`).
     pub input_contract: Port,
+    /// The child's **output contract** — a `Result` Port whose fields are the
+    /// union of every End node's `result_mapping` target field (Json-typed),
+    /// i.e. exactly what the child returns as `exit_code.value`. Derived (with
+    /// [`input_contract`](Self::input_contract)) via
+    /// [`crate::compiler::derive_child_io`]. The publish path reconciles this
+    /// onto the SubWorkflow node's `output` port so the join, `output_ports`,
+    /// and the borrow resolver all read the true contract; the editor reads it
+    /// via the `io-contract` endpoint. Empty fields ⇒ opaque pass-through.
+    pub output_contract: Port,
 }
 
 /// Per-`SubWorkflow`-node resolved child AIR. Empty for every compile path
@@ -4033,6 +4042,7 @@ mod tests {
                 resolved_version: 1,
                 template_id: child_id.to_string(),
                 input_contract: Port::empty_input(),
+                output_contract: Port::empty_input(),
             },
         );
 

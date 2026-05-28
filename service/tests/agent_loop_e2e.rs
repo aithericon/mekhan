@@ -1024,6 +1024,7 @@ fn sub_air_with_contract(
             resolved_version: 1,
             template_id: child_template_id.to_string(),
             input_contract,
+            output_contract: Port::empty_input(),
         },
     );
     sa

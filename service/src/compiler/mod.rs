@@ -30,7 +30,9 @@ pub use error::{CompileError, CompileErrorView};
 pub use interface::{InterfaceRegistry, NodeInterface, NodeKind, OutputKey};
 pub use lower::{node_files_inline, node_files_storage_path, ConfigStorage};
 pub use pyio::generate_py_io_files;
-pub use subworkflow::{make_child_callable, CHILD_FAIL_OUT, CHILD_INBOX, CHILD_REPLY_OUT};
+pub use subworkflow::{
+    derive_child_io, make_child_callable, CHILD_FAIL_OUT, CHILD_INBOX, CHILD_REPLY_OUT,
+};
 pub use token_shape::{
     analyze as analyze_token_shapes, node_namespace_scopes, surface_types, ScopeEntry,
     ShapeDiagnostic, ShapeReport, TyDescriptor, TypeSurface,

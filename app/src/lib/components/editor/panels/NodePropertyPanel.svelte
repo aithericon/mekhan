@@ -327,7 +327,7 @@
 		{:else if data.type === 'end'}
 			<EndNodeSection {data} {readonly} {onchange} {scope} />
 		{:else if data.type === 'sub_workflow'}
-			<SubWorkflowSection {data} {readonly} {onchange} {templateId} />
+			<SubWorkflowSection {data} {readonly} {onchange} {templateId} {scope} />
 		{:else if data.type === 'agent'}
 			<AgentNodeSection {data} {readonly} {onchange} {binding} {nodeId} {scope} />
 		{/if}

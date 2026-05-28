@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 use crate::auth::{require_role, AuthUser, MembershipError, Role};
 use crate::compiler::{
-    compile_to_air, compile_to_air_with_subworkflows_inline, generate_py_io_files,
+    compile_to_air, compile_to_air_with_subworkflows_inline, derive_child_io, generate_py_io_files,
     node_files_inline, node_files_storage_path, node_input_scopes, node_namespace_scopes,
     node_output_fields, TyDescriptor,
 };
@@ -19,8 +19,8 @@ use crate::lifecycle::cleanup_net;
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::template::{
     ApplyTemplateRequest, CompileRequest, CreateTemplateRequest, ExecutionBackendType,
-    ListTemplatesQuery, PaginatedResponse, UpdateTemplateRequest, WorkflowGraph, WorkflowNodeData,
-    WorkflowTemplate,
+    ListTemplatesQuery, PaginatedResponse, Port, UpdateTemplateRequest, WorkflowGraph,
+    WorkflowNodeData, WorkflowTemplate,
 };
 use crate::models::template_test::{FailingTestInfo, PublishGateBlockedResponse, TemplateTest};
 use crate::process::publish::{resolve_subworkflow_air, CompiledArtifacts, PublishService};
@@ -356,6 +356,77 @@ pub async fn get_template(
 
     gate_template_read(&state, &user, &template)?;
     Ok(Json(template))
+}
+
+/// SubWorkflow input/output contract derived from a child template's graph.
+/// Mirrors exactly what the publish path freezes (see
+/// [`crate::compiler::derive_child_io`]): `input` is the child's Start
+/// `initial` port, `output` is the union of its End `result_mapping` targets
+/// (Json-typed). The SubWorkflow editor reads this to render fixed, read-only
+/// ports and one input-mapping row per child Start field.
+#[derive(serde::Serialize, utoipa::ToSchema)]
+pub struct TemplateIoContract {
+    pub input: Port,
+    pub output: Port,
+}
+
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+pub struct IoContractQuery {
+    /// Pin to a specific child version. Omit for the family's latest published
+    /// row (matches a SubWorkflow node's `versionPin: latest`).
+    pub version: Option<i32>,
+}
+
+/// GET /api/v1/templates/{id}/io-contract
+///
+/// Resolve a child template family (by base id or any version-row id) per the
+/// optional `version` pin — the SAME resolution `resolve_subworkflow_air` uses
+/// at publish — and return its derived SubWorkflow contract. The editor's
+/// preview therefore cannot drift from the contract frozen into the parent.
+#[utoipa::path(
+    get,
+    path = "/api/v1/templates/{id}/io-contract",
+    params(
+        ("id" = Uuid, Path, description = "Child template family id (base or any version row)"),
+        IoContractQuery,
+    ),
+    responses(
+        (status = 200, description = "Derived SubWorkflow input/output contract", body = TemplateIoContract),
+        (status = 404, description = "Template not found", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse),
+    ),
+    tag = "templates",
+)]
+pub async fn get_io_contract(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<Uuid>,
+    Query(q): Query<IoContractQuery>,
+) -> Result<Json<TemplateIoContract>, ApiError> {
+    let child = match q.version {
+        None => sqlx::query_as::<_, WorkflowTemplate>(
+            "SELECT * FROM workflow_templates \
+             WHERE (base_template_id = $1 OR id = $1) AND is_latest = TRUE",
+        )
+        .bind(id),
+        Some(v) => sqlx::query_as::<_, WorkflowTemplate>(
+            "SELECT * FROM workflow_templates \
+             WHERE (base_template_id = $1 OR id = $1) AND version = $2",
+        )
+        .bind(id)
+        .bind(v),
+    }
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .ok_or_else(|| ApiError::not_found("template not found"))?;
+
+    gate_template_read(&state, &user, &child)?;
+
+    let graph: WorkflowGraph = serde_json::from_value(child.graph)
+        .map_err(|e| ApiError::internal(format!("child graph is invalid: {e}")))?;
+    let (input, output) = derive_child_io(&graph);
+    Ok(Json(TemplateIoContract { input, output }))
 }
 
 /// Authoring bundle for a template — graph plus inline per-node files. This

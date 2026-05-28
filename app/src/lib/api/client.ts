@@ -232,6 +232,29 @@ export async function getTemplate(id: string): Promise<Template> {
 	);
 }
 
+export type TemplateIoContract = components['schemas']['TemplateIoContract'];
+
+/**
+ * Derived SubWorkflow input/output contract for a child template family,
+ * resolved per version pin (latest when `version` omitted). The same
+ * derivation the publish path freezes — see backend `derive_child_io`. The
+ * SubWorkflow editor uses `input.fields` to render fixed per-field mapping
+ * rows and `output` as a read-only derived port.
+ */
+export async function getTemplateIoContract(
+	familyId: string,
+	version?: number
+): Promise<TemplateIoContract> {
+	return unwrap(
+		await client.GET('/api/v1/templates/{id}/io-contract', {
+			params: {
+				path: { id: familyId },
+				query: version != null ? { version } : {}
+			}
+		})
+	);
+}
+
 export async function createTemplate(data: CreateTemplateRequest): Promise<Template> {
 	return unwrap(await client.POST('/api/v1/templates', { body: data }));
 }

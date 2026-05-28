@@ -1264,6 +1264,7 @@ mod tests {
                 resolved_version: 1,
                 template_id: "00000000-0000-0000-0000-00000000008a".to_string(),
                 input_contract: crate::models::template::Port::empty_input(),
+                output_contract: crate::models::template::Port::empty_input(),
             },
         );
 
