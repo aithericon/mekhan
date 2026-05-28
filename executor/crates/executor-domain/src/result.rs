@@ -78,6 +78,55 @@ pub enum ExecutionOutcome {
     Cancelled,
 }
 
+impl ExecutionResult {
+    /// Construct a result for an execution cancelled via its
+    /// `CancellationToken`. Backends share this so the early-return arm of
+    /// their `select!` is identical: only the wall-clock `duration`, the run
+    /// directory, an optional `stderr_tail` note, and an optional `progress`
+    /// snapshot vary.
+    pub fn cancelled(
+        duration: Duration,
+        run_dir: Option<RunDirectory>,
+        stderr_tail: Option<String>,
+        progress: Option<Progress>,
+    ) -> Self {
+        Self {
+            outcome: ExecutionOutcome::Cancelled,
+            duration,
+            stdout_tail: None,
+            stderr_tail,
+            artifact_manifest: None,
+            outputs: HashMap::new(),
+            progress,
+            run_dir,
+            metrics: None,
+            logs: None,
+        }
+    }
+
+    /// Construct a result for an execution that exceeded its timeout. See
+    /// [`ExecutionResult::cancelled`] for the rationale.
+    pub fn timed_out(
+        duration: Duration,
+        run_dir: Option<RunDirectory>,
+        stderr_tail: Option<String>,
+        progress: Option<Progress>,
+    ) -> Self {
+        Self {
+            outcome: ExecutionOutcome::TimedOut,
+            duration,
+            stdout_tail: None,
+            stderr_tail,
+            artifact_manifest: None,
+            outputs: HashMap::new(),
+            progress,
+            run_dir,
+            metrics: None,
+            logs: None,
+        }
+    }
+}
+
 impl ExecutionOutcome {
     /// Whether this outcome should be reported as Completed (vs Failed/TimedOut/Cancelled).
     pub fn to_status(&self) -> crate::ExecutionStatus {

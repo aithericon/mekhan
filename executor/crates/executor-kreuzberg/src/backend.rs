@@ -140,32 +140,20 @@ async fn execute_single(
     // Three-way select: cancellation, timeout, or extraction.
     tokio::select! { biased;
         _ = cancel.cancelled() => {
-            Ok(ExecutionResult {
-                outcome: ExecutionOutcome::Cancelled,
-                duration: start.elapsed(),
-                stdout_tail: None,
-                stderr_tail: Some("execution cancelled".into()),
-                artifact_manifest: None,
-                outputs: HashMap::new(),
-                progress: None,
-                run_dir: Some(run_context.run_dir.clone()),
-                metrics: None,
-                logs: None,
-            })
+            Ok(ExecutionResult::cancelled(
+                start.elapsed(),
+                Some(run_context.run_dir.clone()),
+                Some("execution cancelled".into()),
+                None,
+            ))
         },
         _ = tokio::time::sleep(run_context.timeout) => {
-            Ok(ExecutionResult {
-                outcome: ExecutionOutcome::TimedOut,
-                duration: start.elapsed(),
-                stdout_tail: None,
-                stderr_tail: Some(format!("timed out after {:?}", run_context.timeout)),
-                artifact_manifest: None,
-                outputs: HashMap::new(),
-                progress: None,
-                run_dir: Some(run_context.run_dir.clone()),
-                metrics: None,
-                logs: None,
-            })
+            Ok(ExecutionResult::timed_out(
+                start.elapsed(),
+                Some(run_context.run_dir.clone()),
+                Some(format!("timed out after {:?}", run_context.timeout)),
+                None,
+            ))
         },
         result = kreuzberg::extract_file(&path_str, mime, &extraction_config) => {
             let duration = start.elapsed();
@@ -281,14 +269,11 @@ async fn execute_batch(
     for (idx, (name, path)) in targets.iter().enumerate() {
         // Check cancellation before each file.
         if cancel.is_cancelled() {
-            return Ok(ExecutionResult {
-                outcome: ExecutionOutcome::Cancelled,
-                duration: start.elapsed(),
-                stdout_tail: None,
-                stderr_tail: Some("execution cancelled".into()),
-                artifact_manifest: None,
-                outputs: HashMap::new(),
-                progress: Some(Progress {
+            return Ok(ExecutionResult::cancelled(
+                start.elapsed(),
+                Some(run_context.run_dir.clone()),
+                Some("execution cancelled".into()),
+                Some(Progress {
                     fraction: idx as f64 / total as f64,
                     message: Some(format!("cancelled after {idx}/{total} files")),
                     current_step: idx as u64,
@@ -296,22 +281,16 @@ async fn execute_batch(
                     phases: vec![],
                     updated_at: Utc::now(),
                 }),
-                run_dir: Some(run_context.run_dir.clone()),
-                metrics: None,
-                logs: None,
-            });
+            ));
         }
 
         // Check timeout.
         if start.elapsed() >= run_context.timeout {
-            return Ok(ExecutionResult {
-                outcome: ExecutionOutcome::TimedOut,
-                duration: start.elapsed(),
-                stdout_tail: None,
-                stderr_tail: Some(format!("timed out after {:?}", run_context.timeout)),
-                artifact_manifest: None,
-                outputs: HashMap::new(),
-                progress: Some(Progress {
+            return Ok(ExecutionResult::timed_out(
+                start.elapsed(),
+                Some(run_context.run_dir.clone()),
+                Some(format!("timed out after {:?}", run_context.timeout)),
+                Some(Progress {
                     fraction: idx as f64 / total as f64,
                     message: Some(format!("timed out after {idx}/{total} files")),
                     current_step: idx as u64,
@@ -319,10 +298,7 @@ async fn execute_batch(
                     phases: vec![],
                     updated_at: Utc::now(),
                 }),
-                run_dir: Some(run_context.run_dir.clone()),
-                metrics: None,
-                logs: None,
-            });
+            ));
         }
 
         let path_str = path.to_string_lossy().to_string();
