@@ -94,6 +94,17 @@ impl PrincipalResolver for DbPrincipalResolver {
         // project listings without an admin step. Viewer role: read-only.
         ensure_system_workspace_membership(&self.db, user_id).await?;
 
+        // Auto-membership in the `default` workspace as editor. The deployed
+        // instance is single-org: migration 20240124 backfilled every
+        // pre-existing (non-demo) template into `default`, but 20240123 seeded
+        // only the dev-noop user as a member there. Without this step real
+        // (Zitadel) principals land in `demos` alone (viewer) and get a 403
+        // editing any migrated template. Editor — not owner/admin — so write
+        // access to templates is granted while tenancy actions (visibility,
+        // member admin) stay gated. A future multi-org cut would scope this to
+        // the org-bound workspace instead.
+        ensure_default_workspace_membership(&self.db, user_id).await?;
+
         // Path 1: known Zitadel org → look up the bound workspace, auto-
         // provision membership idempotently, return that workspace.
         if let Some(ref zitadel_org_id) = user.org_id {
@@ -126,6 +137,21 @@ async fn ensure_system_workspace_membership(db: &PgPool, user_id: Uuid) -> Resul
     .map_err(|e| AuthError::Internal(format!("system workspace lookup: {e}")))?;
     for (ws_id,) in rows {
         upsert_member(db, ws_id, user_id, "viewer").await?;
+    }
+    Ok(())
+}
+
+/// Idempotently upsert the caller as an editor of the `default` workspace.
+/// See the call site for the single-org rationale. No-ops if `default` is
+/// absent (it is seeded by migration 20240123, so that only happens in a
+/// half-migrated DB).
+async fn ensure_default_workspace_membership(db: &PgPool, user_id: Uuid) -> Result<(), AuthError> {
+    let row: Option<(Uuid,)> = sqlx::query_as("SELECT id FROM workspaces WHERE slug = 'default'")
+        .fetch_optional(db)
+        .await
+        .map_err(|e| AuthError::Internal(format!("default workspace lookup: {e}")))?;
+    if let Some((ws_id,)) = row {
+        upsert_member(db, ws_id, user_id, DEFAULT_AUTOPROVISION_ROLE).await?;
     }
     Ok(())
 }
