@@ -27,6 +27,10 @@ pub(crate) static HUMAN_TASK_DECL: NodeDecl = NodeDecl {
     // the human-task effect fires.
     wiring_logic: Some(build_human_task_injection_logic),
     yjs_encode: yjs_encode as YjsEncodeFn,
+    // The unmerged-fan-in warning (shared with AutomatedStep) — never errors,
+    // just `tracing::warn!`s when this work node has >1 incoming edge.
+    validate: Some(crate::compiler::validate::warn_unmerged_fan_in),
+    token_shape: Some(crate::compiler::token_shape::analyze::out_shape_human_task),
 };
 
 fn input_ports(_data: &WorkflowNodeData) -> Vec<Port> {

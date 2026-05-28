@@ -19,9 +19,11 @@
 use serde::Serialize;
 use utoipa::ToSchema;
 
+use crate::compiler::graph::WorkflowDiGraph;
 use crate::compiler::lower::LoweringCtx;
+use crate::compiler::token_shape::TokenShape;
 use crate::compiler::{CompileError, NodeKind};
-use crate::models::template::{Port, WorkflowNode, WorkflowNodeData};
+use crate::models::template::{Port, WorkflowGraph, WorkflowNode, WorkflowNodeData};
 
 pub mod agent;
 pub mod automated_step;
@@ -100,11 +102,42 @@ pub(crate) struct NodeDecl {
     /// path uses unified serde over a flat-merged JSON object, so no
     /// `yjs_decode` is needed.
     pub yjs_encode: YjsEncodeFn,
+
+    // ── Structural validation + token-shape (registry-driven coverage) ───
+    /// Per-variant structural validation run by `compiler/validate.rs::validate`.
+    /// `Some` only for variants carrying a per-node structural rule (Loop's
+    /// `max_iterations`/condition, Delay/Timeout duration + body, Decision's
+    /// `defaultBranch`, ParallelSplit fan-out, the AutomatedStep/HumanTask
+    /// unmerged-fan-in warning). Pure pass-through / control-flow variants keep
+    /// `None`. Takes the full graph + digraph because some checks count incident
+    /// edges (`ParallelSplit`, `Timeout` body). Pushing this into the registry
+    /// means a future variant with a structural rule can't be silently skipped
+    /// — the dispatcher walks every node through `decl.validate`.
+    pub validate: Option<ValidateFn>,
+    /// Per-variant outbound token-shape derivation — the single arm of
+    /// `compiler/token_shape/analyze.rs::out_shape`. Returns the shape this
+    /// variant emits downstream given the inbound shape. EVERY variant declares
+    /// this (the previous `out_shape` match was exhaustive); a missing hook on a
+    /// new variant now fails the `token_shape_hook_declared_for_every_variant`
+    /// conformance test instead of silently defaulting to a pass-through.
+    pub token_shape: Option<TokenShapeFn>,
 }
 
 /// Per-variant lowering function pointer. Same signature as the existing
 /// `NodeLowering::lower` impl bodies in `compiler/lower/<variant>.rs`.
 pub(crate) type LowerFn = fn(&mut LoweringCtx) -> Result<(), CompileError>;
+
+/// Per-variant structural validation function pointer. Same shape as one arm of
+/// the per-node loops in `compiler/validate.rs::validate`. Receives the node,
+/// the owning graph (for edge inspection — `Timeout` body handles) and the
+/// pre-built [`WorkflowDiGraph`] (for incident-edge counts — `ParallelSplit`).
+pub(crate) type ValidateFn =
+    fn(&WorkflowNode, &WorkflowGraph, &WorkflowDiGraph<'_>) -> Result<(), CompileError>;
+
+/// Per-variant outbound token-shape function pointer. Identical signature to the
+/// pre-refactor `out_shape(node, in_shape)` free fn in
+/// `compiler/token_shape/analyze.rs`.
+pub(crate) type TokenShapeFn = fn(&WorkflowNode, &TokenShape) -> TokenShape;
 
 /// YJS-side config encoder. Writes the variant's per-config fields into
 /// the supplied `Y.Map` under the surrounding transaction. Mirrors one
@@ -170,6 +203,57 @@ pub(crate) fn lookup_by_variant(data: &WorkflowNodeData) -> Option<&'static Node
         WorkflowNodeData::SubWorkflow { .. } => "sub_workflow",
     };
     NODES.iter().copied().find(|d| d.wire_name == tag)
+}
+
+/// The author-written Rhai expressions a variant carries that the compiler
+/// must syntax-check and resolve `input.<path>` refs against. The **single**
+/// source of truth for "which fields on this variant are Rhai-bearing" —
+/// both `validate::validate_guards` (publish-time syntax check) and
+/// `token_shape::analyze` (editor-time shape re-validation) dispatch through
+/// here so they can't drift.
+///
+/// Empties (after trimming) are filtered so callers get only the live
+/// expressions. The `match` is exhaustive: a new variant with a Rhai-bearing
+/// field that forgets an arm is a build failure (no `_ =>` wildcard that
+/// silently returns nothing — every variant is named).
+pub(crate) fn guard_rhai_sources(data: &WorkflowNodeData) -> Vec<&str> {
+    let raw: Vec<&str> = match data {
+        WorkflowNodeData::Decision { conditions, .. } => {
+            conditions.iter().map(|c| c.guard.as_str()).collect()
+        }
+        WorkflowNodeData::Loop { loop_condition, .. } => vec![loop_condition.as_str()],
+        WorkflowNodeData::End { result_mapping, .. } => {
+            result_mapping.iter().map(|m| m.expression.as_str()).collect()
+        }
+        WorkflowNodeData::Failure {
+            error_result_mapping,
+            ..
+        } => error_result_mapping
+            .iter()
+            .map(|m| m.expression.as_str())
+            .collect(),
+        WorkflowNodeData::Delay {
+            duration_ms_expr, ..
+        }
+        | WorkflowNodeData::Timeout {
+            duration_ms_expr, ..
+        } => vec![duration_ms_expr.as_str()],
+        // Non-Rhai-bearing variants. Named exhaustively (no wildcard) so a
+        // future variant that grows a guard/expression field can't slip
+        // through with an empty list.
+        WorkflowNodeData::Start { .. }
+        | WorkflowNodeData::HumanTask { .. }
+        | WorkflowNodeData::AutomatedStep { .. }
+        | WorkflowNodeData::Agent { .. }
+        | WorkflowNodeData::ParallelSplit { .. }
+        | WorkflowNodeData::Join { .. }
+        | WorkflowNodeData::Scope { .. }
+        | WorkflowNodeData::PhaseUpdate { .. }
+        | WorkflowNodeData::ProgressUpdate { .. }
+        | WorkflowNodeData::Trigger { .. }
+        | WorkflowNodeData::SubWorkflow { .. } => vec![],
+    };
+    raw.into_iter().filter(|s| !s.trim().is_empty()).collect()
 }
 
 /// Look up by wire name (snake_case tag). Symmetric to `backends::lookup` —
@@ -530,6 +614,213 @@ mod tests {
         // Scope is a structural boundary, not a data producer.
         assert!(!decl.parks_data_envelope);
         assert!(decl.lower.is_some());
+    }
+
+    // ── Registry-coverage conformance (Workstream C) ────────────────────────
+    // These pin that the per-node-kind logic moved into the registry stays
+    // exhaustive: a future variant that forgets its `token_shape` /
+    // structural-rule / guard-source wiring fails HERE (a test failure) instead
+    // of silently defaulting at runtime (the original bug class — token shape
+    // defaulting to a pass-through, a structural rule getting skipped).
+
+    /// EVERY variant must declare a `token_shape` hook. The pre-refactor
+    /// `out_shape` match was exhaustive (every variant had an arm, even if it
+    /// was the shared pass-through); the registry must preserve that — a `None`
+    /// here would make `analyze::out_shape` panic on that variant at runtime.
+    #[test]
+    fn token_shape_hook_declared_for_every_variant() {
+        for decl in NODES {
+            assert!(
+                decl.token_shape.is_some(),
+                "node `{}` has no token_shape hook — `analyze::out_shape` would \
+                 panic on it; every variant must declare one (use \
+                 `out_shape_passthrough` for pure routing/marker nodes)",
+                decl.wire_name
+            );
+        }
+    }
+
+    /// Every kind whose data carries guard / Rhai-bearing fields must surface
+    /// those expressions through `guard_rhai_sources` — the single source of
+    /// truth shared by `validate_guards` (publish-time syntax+ref check) and
+    /// `token_shape::analyze` (editor shape re-validation). Built from a
+    /// representative instance of each Rhai-bearing variant so a future variant
+    /// that grows a guard field but forgets its `guard_rhai_sources` arm trips
+    /// here (and the exhaustive match in `guard_rhai_sources` itself fails the
+    /// build first).
+    #[test]
+    fn guard_rhai_sources_surfaces_every_rhai_bearing_variant() {
+        use crate::models::template::{BranchCondition, FieldMapping};
+
+        // Decision — conditions[].guard
+        let decision = WorkflowNodeData::Decision {
+            label: "d".to_string(),
+            description: None,
+            conditions: vec![BranchCondition {
+                edge_id: "b1".to_string(),
+                label: "Yes".to_string(),
+                guard: "x > 1".to_string(),
+            }],
+            default_branch: None,
+        };
+        assert_eq!(guard_rhai_sources(&decision), vec!["x > 1"]);
+
+        // Loop — loop_condition
+        let loop_ = WorkflowNodeData::Loop {
+            label: "l".to_string(),
+            description: None,
+            max_iterations: 3,
+            loop_condition: "i < 3".to_string(),
+        };
+        assert_eq!(guard_rhai_sources(&loop_), vec!["i < 3"]);
+
+        // End — result_mapping[].expression
+        let end = WorkflowNodeData::End {
+            label: "e".to_string(),
+            description: None,
+            terminal: crate::models::template::default_terminal_port(),
+            result_mapping: vec![FieldMapping {
+                target_field: "ok".to_string(),
+                expression: "input.amount".to_string(),
+            }],
+        };
+        assert_eq!(guard_rhai_sources(&end), vec!["input.amount"]);
+
+        // Failure — error_result_mapping[].expression
+        let failure = WorkflowNodeData::Failure {
+            label: "f".to_string(),
+            description: None,
+            failure_message: None,
+            error_result_mapping: vec![FieldMapping {
+                target_field: "err".to_string(),
+                expression: "input.reason".to_string(),
+            }],
+        };
+        assert_eq!(guard_rhai_sources(&failure), vec!["input.reason"]);
+
+        // Delay — duration_ms_expr
+        let delay = WorkflowNodeData::Delay {
+            label: "dl".to_string(),
+            description: None,
+            duration_ms_expr: "1000".to_string(),
+        };
+        assert_eq!(guard_rhai_sources(&delay), vec!["1000"]);
+
+        // Timeout — duration_ms_expr
+        let timeout = WorkflowNodeData::Timeout {
+            label: "to".to_string(),
+            description: None,
+            duration_ms_expr: "5000".to_string(),
+        };
+        assert_eq!(guard_rhai_sources(&timeout), vec!["5000"]);
+
+        // Empties are filtered (blank guard surfaces nothing).
+        let blank = WorkflowNodeData::Loop {
+            label: "l".to_string(),
+            description: None,
+            max_iterations: 1,
+            loop_condition: "   ".to_string(),
+        };
+        assert!(guard_rhai_sources(&blank).is_empty());
+    }
+
+    /// Every kind that carries a guard/Rhai-bearing field or a per-node
+    /// structural rule must declare *at least one* registry coverage hook:
+    /// a `validate` hook (structural rule) OR a non-empty `guard_rhai_sources`
+    /// (Rhai surface the guard passes check). This is the load-bearing
+    /// "forgotten kind fails the build" assertion — it ties the per-variant
+    /// data shape to the registry so a new rule-bearing variant can't ship
+    /// without wiring.
+    #[test]
+    fn rule_bearing_kinds_declare_a_coverage_hook() {
+        use crate::models::template::{
+            default_automated_input_port, default_automated_output_port, default_terminal_port,
+            BranchCondition, ExecutionBackendType, ExecutionSpecConfig, FieldMapping, RetryPolicy,
+        };
+
+        // One representative of each variant carrying a guard/Rhai field or a
+        // per-node structural rule. (Variants with neither — Start, Scope,
+        // Join, PhaseUpdate, ProgressUpdate, SubWorkflow, Trigger — are
+        // legitimately `validate: None` + empty sources and are excluded.)
+        let rule_bearing: Vec<WorkflowNodeData> = vec![
+            // Structural rule (validate hook):
+            WorkflowNodeData::Loop {
+                label: "l".to_string(),
+                description: None,
+                max_iterations: 1,
+                loop_condition: "true".to_string(),
+            },
+            WorkflowNodeData::Delay {
+                label: "d".to_string(),
+                description: None,
+                duration_ms_expr: "1".to_string(),
+            },
+            WorkflowNodeData::Timeout {
+                label: "t".to_string(),
+                description: None,
+                duration_ms_expr: "1".to_string(),
+            },
+            WorkflowNodeData::Decision {
+                label: "dc".to_string(),
+                description: None,
+                conditions: vec![BranchCondition {
+                    edge_id: "b".to_string(),
+                    label: "Y".to_string(),
+                    guard: "true".to_string(),
+                }],
+                default_branch: None,
+            },
+            WorkflowNodeData::ParallelSplit {
+                label: "ps".to_string(),
+                description: None,
+            },
+            WorkflowNodeData::AutomatedStep {
+                label: "a".to_string(),
+                description: None,
+                execution_spec: ExecutionSpecConfig {
+                    backend_type: ExecutionBackendType::Python,
+                    entrypoint: Some("m.py".to_string()),
+                    config: serde_json::json!({}),
+                },
+                input: default_automated_input_port(),
+                output: default_automated_output_port(),
+                retry_policy: RetryPolicy::default(),
+                deployment_model: Default::default(),
+            },
+            // Rhai-bearing only (no structural validate hook — covered by
+            // guard_rhai_sources / validate_guards):
+            WorkflowNodeData::End {
+                label: "e".to_string(),
+                description: None,
+                terminal: default_terminal_port(),
+                result_mapping: vec![FieldMapping {
+                    target_field: "ok".to_string(),
+                    expression: "input.x".to_string(),
+                }],
+            },
+            WorkflowNodeData::Failure {
+                label: "f".to_string(),
+                description: None,
+                failure_message: None,
+                error_result_mapping: vec![FieldMapping {
+                    target_field: "e".to_string(),
+                    expression: "input.r".to_string(),
+                }],
+            },
+        ];
+
+        for data in &rule_bearing {
+            let decl = lookup_by_variant(data).expect("registered");
+            let has_validate = decl.validate.is_some();
+            let has_rhai = !guard_rhai_sources(data).is_empty();
+            assert!(
+                has_validate || has_rhai,
+                "node `{}` carries a guard/Rhai field or structural rule but \
+                 declares neither a `validate` hook nor a `guard_rhai_sources` \
+                 arm — a forgotten coverage hook",
+                decl.wire_name
+            );
+        }
     }
 
     #[test]
