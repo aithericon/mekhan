@@ -2480,10 +2480,13 @@ export interface components {
             image: string;
             /** @description Docker network mode (e.g., "host", "bridge", "none"). */
             network_mode?: string | null;
-            /** @description Image pull policy. */
-            pull_policy?: components["schemas"]["PullPolicy"];
-            /** @description Remove the container after execution (equivalent to --rm). */
-            remove_container?: boolean;
+            /** @default if_not_present */
+            pull_policy: components["schemas"]["PullPolicy"];
+            /**
+             * @description Remove the container after execution (equivalent to --rm).
+             * @default true
+             */
+            remove_container: boolean;
             resource_limits?: null | components["schemas"]["ResourceLimits"];
         };
         /**
@@ -3607,8 +3610,11 @@ export interface components {
             env?: {
                 [key: string]: string;
             };
-            /** @description Whether to inherit the executor process's environment variables. */
-            inherit_env?: boolean;
+            /**
+             * @description Whether to inherit the executor process's environment variables.
+             * @default true
+             */
+            inherit_env: boolean;
             /** @description Working directory. If None, inherits from the executor process. */
             working_dir?: string | null;
         };

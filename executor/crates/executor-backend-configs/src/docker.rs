@@ -26,6 +26,7 @@ pub struct DockerConfig {
 
     /// Image pull policy.
     #[serde(default)]
+    #[cfg_attr(feature = "schema", schema(default = "if_not_present"))]
     pub pull_policy: PullPolicy,
 
     /// Optional resource limits for the container.
@@ -42,6 +43,7 @@ pub struct DockerConfig {
 
     /// Remove the container after execution (equivalent to --rm).
     #[serde(default = "default_true")]
+    #[cfg_attr(feature = "schema", schema(default = true))]
     pub remove_container: bool,
 }
 

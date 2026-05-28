@@ -28,6 +28,7 @@ pub struct ProcessConfig {
 
     /// Whether to inherit the executor process's environment variables.
     #[serde(default = "default_true")]
+    #[cfg_attr(feature = "schema", schema(default = true))]
     pub inherit_env: bool,
 }
 

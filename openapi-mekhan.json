@@ -7216,12 +7216,18 @@
             "description": "Docker network mode (e.g., \"host\", \"bridge\", \"none\")."
           },
           "pull_policy": {
-            "$ref": "#/components/schemas/PullPolicy",
-            "description": "Image pull policy."
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PullPolicy",
+                "description": "Image pull policy."
+              }
+            ],
+            "default": "if_not_present"
           },
           "remove_container": {
             "type": "boolean",
-            "description": "Remove the container after execution (equivalent to --rm)."
+            "description": "Remove the container after execution (equivalent to --rm).",
+            "default": true
           },
           "resource_limits": {
             "oneOf": [
@@ -10192,7 +10198,8 @@
           },
           "inherit_env": {
             "type": "boolean",
-            "description": "Whether to inherit the executor process's environment variables."
+            "description": "Whether to inherit the executor process's environment variables.",
+            "default": true
           },
           "working_dir": {
             "type": [

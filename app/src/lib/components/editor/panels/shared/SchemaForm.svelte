@@ -33,6 +33,10 @@
 		/** For `object`: nested sub-schema (a map-of-strings via
 		 *  `additionalProperties`, or a fixed-shape object via `properties`). */
 		objectSchema: Record<string, unknown> | null;
+		/** JSON-Schema `default` for this property (`undefined` if none). Used as
+		 *  the effective value when the bound config has the key absent — keeps
+		 *  the widget in sync with the backend's serde default. */
+		default: unknown;
 	};
 
 	function pickPrimitive(t: unknown): JsonType {
@@ -87,7 +91,8 @@
 				enumOptions: Array.isArray(p.enum) ? (p.enum as string[]) : null,
 				description: typeof p.description === 'string' ? p.description : null,
 				itemType,
-				objectSchema
+				objectSchema,
+				default: 'default' in p ? p.default : undefined
 			});
 		}
 		return out;
@@ -149,6 +154,20 @@
 		if (v === null || v === undefined) return '';
 		return String(v);
 	}
+
+	/**
+	 * Effective display value for a field: the bound config value when present,
+	 * otherwise the schema's `default` (so a freshly created step shows the
+	 * backend's serde default rather than a type-zero). Secret fields never
+	 * carry a default — leave them blank. Does not mutate the config: the
+	 * default only drives what the widget shows until the user touches it.
+	 */
+	function effective(f: FieldSpec): unknown {
+		const v = value[f.name];
+		if (v !== undefined && v !== null) return v;
+		if (f.isSecret) return v;
+		return f.default;
+	}
 </script>
 
 {#each fieldSpecs as f (f.name)}
@@ -203,12 +222,12 @@
 			{#if f.enumOptions}
 				<Select.Root
 					type="single"
-					value={asString(value[f.name])}
+					value={asString(effective(f))}
 					onValueChange={(v) => set(f.name, v ?? '')}
 					disabled={readonly}
 				>
 					<Select.Trigger class="w-full text-sm">
-						{asString(value[f.name]) || '— select —'}
+						{asString(effective(f)) || '— select —'}
 					</Select.Trigger>
 					<Select.Content>
 						{#each f.enumOptions as opt (opt)}
@@ -219,7 +238,7 @@
 			{:else if f.jsonType === 'boolean' && booleanWidget === 'checkbox'}
 				<label class="flex items-center gap-1.5 text-sm text-muted-foreground">
 					<Checkbox
-						checked={(value[f.name] as boolean) ?? false}
+						checked={(effective(f) as boolean) ?? false}
 						disabled={readonly}
 						onCheckedChange={(v) => set(f.name, v)}
 					/>
@@ -228,12 +247,12 @@
 			{:else if f.jsonType === 'boolean'}
 				<Select.Root
 					type="single"
-					value={asString(value[f.name])}
+					value={asString(effective(f))}
 					onValueChange={(v) => set(f.name, v ?? '')}
 					disabled={readonly}
 				>
 					<Select.Trigger class="w-full text-sm">
-						{asString(value[f.name]) || '— select —'}
+						{asString(effective(f)) || '— select —'}
 					</Select.Trigger>
 					<Select.Content>
 						<Select.Item value="true" label="true" />
@@ -243,7 +262,7 @@
 			{:else if f.jsonType === 'integer' || f.jsonType === 'number'}
 				<Input
 					type="number"
-					value={asString(value[f.name])}
+					value={asString(effective(f))}
 					placeholder={f.isSecret ? secretPlaceholder : undefined}
 					disabled={readonly}
 					oninput={(e) => {
@@ -272,7 +291,7 @@
 			{:else}
 				<Input
 					type="text"
-					value={asString(value[f.name])}
+					value={asString(effective(f))}
 					disabled={readonly}
 					oninput={(e) => {
 						const raw = (e.currentTarget as HTMLInputElement).value;
