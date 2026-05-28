@@ -547,7 +547,7 @@ pub async fn resolve_subworkflow_air(
 
         // Direct same-family self-reference guard (authoring mistake; would
         // also grow the embedded snapshot unboundedly across republishes).
-        let child_family = child.base_template_id.unwrap_or(child.id);
+        let child_family = child.chain_root_id();
         if publishing_family == Some(child_family) {
             let e = CompileError::SubWorkflowCycle {
                 chain: vec![node.id.clone()],

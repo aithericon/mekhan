@@ -545,7 +545,7 @@ pub async fn delete_template(
 
     gate_template_write(&state, &user, &existing).await?;
 
-    let base_id = existing.base_template_id.unwrap_or(existing.id);
+    let base_id = existing.chain_root_id();
 
     if existing.published {
         // Check for running instances across all versions in this chain
@@ -686,7 +686,7 @@ pub async fn publish_template(
             &existing.description,
             id,
             existing.version,
-            Some(existing.base_template_id.unwrap_or(existing.id)),
+            Some(existing.chain_root_id()),
             &mut ydoc_files,
             principal_id,
             existing.workspace_id,
@@ -878,7 +878,7 @@ async fn insert_published_version<'e, E>(
 where
     E: sqlx::PgExecutor<'e>,
 {
-    let base_id = src.base_template_id.unwrap_or(src.id);
+    let base_id = src.chain_root_id();
     sqlx::query_as::<_, WorkflowTemplate>(
         r#"
         INSERT INTO workflow_templates
@@ -953,7 +953,7 @@ pub async fn new_version(
 
     let new_id = Uuid::new_v4();
     let new_version = existing.version + 1;
-    let base_id = existing.base_template_id.unwrap_or(existing.id);
+    let base_id = existing.chain_root_id();
 
     // The authored workflow lives in the *source's Y.Doc*, not the `graph`
     // column — publish/edit never write the column back, so copying
@@ -1102,7 +1102,7 @@ pub async fn apply_template(
     //    nothing is written until the compile has passed.
     let existing = require_template(&state.db, id).await?;
 
-    let base_id = existing.base_template_id.unwrap_or(existing.id);
+    let base_id = existing.chain_root_id();
     let latest = latest_in_chain(&state.db, base_id).await?;
 
     let mode = apply_mode(&latest).map_err(ApiError::conflict)?;
@@ -1135,7 +1135,7 @@ pub async fn apply_template(
             &latest.description,
             target_id,
             target_version,
-            Some(latest.base_template_id.unwrap_or(latest.id)),
+            Some(latest.chain_root_id()),
             &mut files_map,
             user.subject_as_uuid(),
             // Apply (no-version-bump) hits the same workspace as the latest
@@ -1271,7 +1271,7 @@ pub async fn list_versions(
     // First find the base_template_id for this template
     let existing = require_template(&state.db, id).await?;
 
-    let base_id = existing.base_template_id.unwrap_or(existing.id);
+    let base_id = existing.chain_root_id();
 
     let versions = sqlx::query_as::<_, WorkflowTemplate>(
         "SELECT * FROM workflow_templates WHERE base_template_id = $1 ORDER BY version DESC",
@@ -1313,7 +1313,7 @@ pub async fn get_latest(
 ) -> Result<Json<WorkflowTemplate>, ApiError> {
     let existing = require_template(&state.db, id).await?;
 
-    let base_id = existing.base_template_id.unwrap_or(existing.id);
+    let base_id = existing.chain_root_id();
     let latest = latest_in_chain(&state.db, base_id).await?;
     Ok(Json(latest))
 }
@@ -1366,6 +1366,7 @@ pub async fn compile_preview(
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let existing = require_template(&state.db, id).await?;
+    let publishing_family = Some(existing.chain_root_id());
 
     let graph: WorkflowGraph = serde_json::from_value(existing.graph)
         .map_err(|e| ApiError::bad_request(format!("invalid graph: {e}")))?;
@@ -1382,7 +1383,6 @@ pub async fn compile_preview(
     // planner so the preview AIR matches what publish would emit.
     let files = node_files_storage_path(id, existing.version, &ydoc_files);
 
-    let publishing_family = Some(existing.base_template_id.unwrap_or(existing.id));
     let sub_air = resolve_subworkflow_air(&state, publishing_family, &graph).await?;
 
     let air = compile_to_air_with_subworkflows_inline(
@@ -1643,7 +1643,7 @@ async fn run_publish_gate(
     graph: &WorkflowGraph,
     created_by: Uuid,
 ) -> Result<Vec<FailingTestInfo>, ApiError> {
-    let family = existing.base_template_id.unwrap_or(existing.id);
+    let family = existing.chain_root_id();
 
     let tests: Vec<TemplateTest> = sqlx::query_as::<_, TemplateTest>(
         "SELECT * FROM template_tests \
