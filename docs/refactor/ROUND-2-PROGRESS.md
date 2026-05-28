@@ -25,10 +25,16 @@ Main stays pristine. Each lane = own worktree + branch, single-workspace. Merge 
 5. If green, keep. If broken, fix forward or revert the merge; note it here.
 6. `git worktree remove <wt>` to reclaim disk after a clean merge.
 
-## Wave 2 (orchestrator, after lanes merge)
-- B2 cancel_subject() — cross-workspace (executor-domain + engine consumer + executor). Add helper, route all 3.
-- Batch 4 (A1/A2/A3 wire-types) — ONLY if it can be made fully green across all 3 binaries. Otherwise leave a writeup; do NOT merge half-done wire-type changes.
-- Final: full CI-parity pass, update the audit doc statuses, summarize for the user.
+## Wave 2 (orchestrator) — DONE
+- ✅ **B2 cancel_subject()** — `cancel_subject` + `cancel_subject_filter` added to executor-domain, all 3 sites routed (engine CancelClient, worker NatsCancelListener, test harness), unit test added. executor + engine check green; 55 executor-domain tests pass.
+- ⏸️ **Batch 4 (A1/A2/A3 wire-types) — DEFERRED to a writeup** (per the "only if fully green across all 3 binaries, else writeup" rule). Reasons: 3-binary rebuild/restart/republish risk + a concurrent session was actively editing the exact service/compiler files A2 touches. Concrete handoff plan appended to the bottom of `2026-05-28-code-smell-audit.md`.
+- ✅ Audit doc updated with the round-2 outcome table + Batch-4 handoff.
+
+## Final state
+- **27 findings resolved** this round across 6 lanes (incl. B2). All workspaces `cargo check` clean; FE svelte-check 0 errors + 92 vitest; engine clippy clean.
+- Branch: **`refactor/code-smell-round-2-int`** (in worktree `.claude/worktrees/r2-integrate`).
+- Clippy caveats (pre-existing, local-toolchain drift, NOT from this round): executor `collapsible_match` in `executor-domain/src/event.rs`; service ~35 `redundant_field_names`/`useless_format` in `nodes/*` + `compiler/lower`. Touched code is clippy-clean.
+- Not run (need live stack / Docker / NATS): service `tests/*` integration, executor testcontainer suites — compile-checked only.
 
 ## Pre-existing issues surfaced (NOT introduced by this round — verify on main, fix separately)
 - **executor clippy**: `collapsible_match` lint in `executor-domain/src/event.rs:251` blocks `clippy --workspace -- -D warnings` locally. Pre-existing + local-toolchain drift from nix-pinned CI. `cargo check` is clean.
