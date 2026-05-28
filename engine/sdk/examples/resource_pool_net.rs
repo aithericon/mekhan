@@ -20,27 +20,35 @@
 //!
 //! ```text
 //! [claim_inbox: bridge_in] + [pool] ─(t_grant)─▶ [grant_outbox: reply "grant"]
-//!                                              + [in_use]   (held, tagged grant_id)
-//!                                              + [lease_arm]
+//!     (consumes one capacity token; emits ONLY the bridge reply → no taint)
 //!
-//! [lease_arm] ─(ctx.delay LEASE_MS)─▶ [lease_scheduled] ──(timer fires)──▶ [lease_expired]
+//! [register_inbox: bridge_in] ─(t_register)─▶ [in_use]   (CLEAN hold, grant_id+gpu_id)
+//!     (the holder echoes its grant over a plain bridge once granted)
 //!
 //! [release_inbox: bridge_in] + [in_use]   ─(t_release, correlate grant_id)─▶ [pool] + [done]
 //! [lease_expired: signal]    + [in_use]   ─(t_reap,    correlate grant_id)─▶ [pool] + [done]
 //! ```
 //!
-//! `lease_expired` is a plain signal place here: reaping is driven by a
-//! journaled signal token, never a wall clock — which is exactly what keeps it
-//! replay-safe. In M2 a durable lease timer (`ctx.delay`) armed at grant time
-//! feeds that signal in production; the M1 verification of the pure semantics
-//! (conservation, mutex, crash-reap, replay determinism) lives in
-//! `core-engine/crates/test-harness/tests/resource_pool.rs`.
+//! Why the split grant / register: a transition that consumes the routed claim
+//! taints every internal output it produces with the claim's reply routing
+//! (`firing.rs::route_output_tokens`). If `t_grant` also produced the `in_use`
+//! hold, recycling capacity from that hold would carry a stale "grant" channel
+//! that collides with the next claim and wedges the pool. So `t_grant` emits
+//! only the bridge reply, and the hold is registered separately over a clean
+//! bridge — keeping every recycled capacity token clean. See docs/14.
+//!
+//! `lease_expired` is a plain signal place: reaping is driven by a journaled
+//! signal token, never a wall clock, which keeps it replay-safe. In production a
+//! durable lease timer (`ctx.delay`) armed at register time feeds that signal;
+//! the pure-semantics verification (conservation, mutex, crash-reap, replay
+//! determinism) lives in `core-engine/crates/test-harness/tests/resource_pool.rs`
+//! and the cross-net contention proof in
+//! `core-engine/crates/test-harness/src/integration/resource_pool.rs`.
 //!
 //! Deployed standalone this net seeds the pool with POOL_CAPACITY units and is
-//! driven interactively: bridge claims into `claim_inbox`, then inject
-//! `release_inbox` / `lease_expired` signals (`aithericon inject ...`) to free
-//! capacity. M2 wires real instance nets to `claim_inbox` / `release_inbox`
-//! over the cross-net bridge so multiple instances genuinely contend.
+//! driven by instance nets that bridge claims into `claim_inbox`, register into
+//! `register_inbox`, and release into `release_inbox`; inject `lease_expired`
+//! (`aithericon inject ...`) to simulate a crashed holder.
 //!
 //! ## Deploy
 //!
@@ -66,8 +74,8 @@ struct Capacity {
 }
 
 /// A claim request arriving from an instance net. `grant_id` correlates the
-/// later release/reap back to the right hold; the instance mints it and echoes
-/// it on release.
+/// later registration/release/reap back to the right hold; the instance mints
+/// it and echoes it.
 #[token]
 struct ClaimRequest {
     grant_id: String,
@@ -80,7 +88,18 @@ struct Grant {
     gpu_id: String,
 }
 
-/// Held capacity, tagged with who holds it.
+/// Hold registration: the holder echoes its grant back over a PLAIN bridge once
+/// it has the grant. Because this token never carried reply routing, consuming
+/// the resulting `in_use` hold keeps the recycled capacity token CLEAN — the
+/// crux that avoids the reply-routing taint (see docs/14).
+#[token]
+struct HoldReg {
+    grant_id: String,
+    gpu_id: String,
+}
+
+/// Held capacity, tagged with who holds it. Lives in `in_use` for observability
+/// and as the reap/release correlation target.
 #[token]
 struct Hold {
     grant_id: String,
@@ -106,13 +125,14 @@ struct Freed {
 // ---------------------------------------------------------------------------
 
 fn definition(ctx: &mut Context) {
-    // Shared capacity. Seeded with POOL_CAPACITY distinct units.
+    // Shared capacity. Seeded with POOL_CAPACITY distinct CLEAN units.
     let pool = ctx.state::<Capacity>("pool", "GPU Pool");
     let in_use = ctx.state::<Hold>("in_use", "In Use");
     let done = ctx.state::<Freed>("done", "Freed Units");
 
-    // Cross-net inboxes: instance nets bridge claim/release requests here.
+    // Cross-net inboxes: instance nets bridge claim / register / release here.
     let claim_inbox = ctx.bridge_in::<ClaimRequest>("claim_inbox", "Claim Inbox");
+    let register_inbox = ctx.bridge_in::<HoldReg>("register_inbox", "Register Inbox");
     let release_inbox = ctx.bridge_in::<ReleaseRequest>("release_inbox", "Release Inbox");
 
     // Grant reply channel: routes the grant back to the requesting instance via
@@ -125,22 +145,27 @@ fn definition(ctx: &mut Context) {
 
     // t_grant — claim admission. Fires only when a claim AND free capacity are
     // both present; otherwise the claim waits in `claim_inbox` (backpressure).
+    // Emits ONLY the bridge grant reply: a transition that consumed the routed
+    // claim would taint any internal output it produced with the claim's reply
+    // routing, so we deliberately record NO local hold here (see docs/14). The
+    // hold is registered separately over a clean bridge.
     ctx.scope("Grant", |ctx| {
         ctx.transition("t_grant", "Grant Capacity")
             .auto_input("claim", &claim_inbox)
             .auto_input("cap", &pool)
             .auto_output("grant", &grant_outbox)
-            .auto_output("hold", &in_use)
-            .logic(
-                r#"#{
-                    grant: #{ grant_id: claim.grant_id, gpu_id: cap.gpu_id },
-                    hold:  #{ grant_id: claim.grant_id, gpu_id: cap.gpu_id }
-                }"#,
-            );
+            .logic(r#"#{ grant: #{ grant_id: claim.grant_id, gpu_id: cap.gpu_id } }"#);
     });
 
-    // t_release — body finished: return capacity, matched to the hold by
-    // grant_id. Fire-and-forget from the instance's perspective.
+    // t_register — record the hold. The holder echoes its grant over a PLAIN
+    // bridge, so the token (and therefore the `in_use` hold) carries no reply
+    // routing; consuming it in t_release/t_reap keeps the recycled capacity clean.
+    ctx.transition("t_register", "Register Hold")
+        .auto_input("reg", &register_inbox)
+        .auto_output("hold", &in_use)
+        .logic(r#"#{ hold: #{ grant_id: reg.grant_id, gpu_id: reg.gpu_id } }"#);
+
+    // t_release — body finished: return capacity, matched to the hold by grant_id.
     ctx.scope("Release", |ctx| {
         ctx.transition("t_release", "Release Capacity")
             .auto_input("req", &release_inbox)
