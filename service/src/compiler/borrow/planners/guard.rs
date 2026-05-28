@@ -15,7 +15,7 @@ use crate::compiler::borrow::ctx::BorrowContext;
 use crate::compiler::error::CompileError;
 use crate::compiler::graph::WorkflowDiGraph;
 use crate::compiler::token_shape::{
-    analyze, collect_scope_roots, is_control_leaf, is_loop_node, is_parked_producer,
+    analyze, collect_scope_roots, is_control_leaf, is_loop_node, is_map_node, is_parked_producer,
     scalar_satisfies, scan_dotted_refs, topo_pos, LitTy, ScopeEntry, ShapeDiagnostic, SlugIndex,
     TokenShape,
 };
@@ -57,7 +57,7 @@ pub(crate) fn guard_refs(src: &str) -> Vec<GuardRef> {
             .collect();
     let mut out = Vec::new();
     for (root, segs, lit) in scan_dotted_refs(src) {
-        let referenced = format!("{root}.{}", segs.join("."));
+        let referenced = render_referenced(&root, &segs);
         if root == "input" {
             out.push(GuardRef {
                 root: RefRoot::Input,
@@ -65,7 +65,15 @@ pub(crate) fn guard_refs(src: &str) -> Vec<GuardRef> {
                 lit,
                 referenced,
             });
-        } else if legit.contains(&(root.clone(), segs[0].clone())) {
+        } else if legit.contains(&(root.clone(), segs[0].clone()))
+            || segs.first().map(|s| s == "[*]").unwrap_or(false)
+        {
+            // A `<slug>[*].<field>` collection ref (first segment is the `[*]`
+            // sentinel) is admitted directly: `extract_qualified_refs` can't
+            // see it (the `[` breaks its `<ident>.<field>` chain), but the `[*]`
+            // boundary is unambiguous — no Rhai local can be written that way.
+            // `resolve_ref` decides whether it binds (Array-typed parked
+            // producer) or errors.
             out.push(GuardRef {
                 root: RefRoot::Qualified(root),
                 segs,
@@ -76,6 +84,24 @@ pub(crate) fn guard_refs(src: &str) -> Vec<GuardRef> {
         // else: a Rhai local / keyword / string / comment — not scope.
     }
     out
+}
+
+/// Reconstruct the exact source substring for a scanned ref so the read-arc
+/// rewrite (`replace_word_boundary`) targets it byte-for-byte. The `[*]`
+/// collection sentinel binds tightly to the preceding token with NO dot
+/// (`mymap[*].field`, `mymap.rows[*].field`); every other segment is
+/// dot-joined.
+fn render_referenced(root: &str, segs: &[String]) -> String {
+    let mut s = root.to_string();
+    for seg in segs {
+        if seg == "[*]" {
+            s.push_str("[*]");
+        } else {
+            s.push('.');
+            s.push_str(seg);
+        }
+    }
+    s
 }
 
 /// Outcome of resolving one [`GuardRef`] against the borrow-reachable model.
@@ -95,6 +121,10 @@ pub(crate) enum RefResolution {
     /// Nothing the compiler can bind (non-control `input.*`, unknown slug,
     /// non-upstream / non-parked producer, or unknown field).
     Unresolved,
+    /// A `<map_slug>.<field>` reference borrows a Map producer without the
+    /// required `[*]` collection boundary. Carries the offending slug so the
+    /// caller can raise the precise `CompileError::MapRefMissingStar`.
+    MapMissingStar { map_slug: String },
 }
 
 /// The single resolver shared by `reachable_scope`, `check_guard` and
@@ -141,6 +171,21 @@ pub(crate) fn resolve_ref(
             }
         }
         RefRoot::Qualified(root) => {
+            // Map body-item namespace (`<itemVar>.<field>`). A node whose
+            // `parent_id` is a Map runs once per scattered element; the scatter
+            // stamps `#{ <itemVar>: <element>, .. }` ONTO each body token
+            // (namespace-on-token, v1). So `<itemVar>.<field>` is genuinely
+            // token-resident inside the body — resolve as Control (no read-arc,
+            // no parked producer). This is checked BEFORE slug resolution
+            // because `<itemVar>` is intentionally NOT a node slug.
+            if let Some(parent) = consumer.parent_id.as_deref() {
+                if graph.nodes.iter().any(|n| {
+                    n.id == parent
+                        && matches!(&n.data, WorkflowNodeData::Map { item_var, .. } if item_var == root)
+                }) {
+                    return RefResolution::Control;
+                }
+            }
             let Some(prod_id) = slugs.node_for(root).map(str::to_string) else {
                 return RefResolution::Unresolved;
             };
@@ -217,6 +262,49 @@ pub(crate) fn resolve_ref(
             }
             if !is_parked_producer(graph, &prod_id) {
                 return RefResolution::Unresolved;
+            }
+            // Map producers park a gathered ARRAY at `p_<map>_data` (shaped
+            // `#{ output: [<elements>] }` by `t_<map>_gather` → `split_outputs`).
+            // They are borrowable ONLY through a `[*]` collection boundary:
+            //   `mymap[*].field`  → `d_mymap.output.map(|__e| __e.field)`
+            //   `mymap[*]`        → `d_mymap.output`            (whole array)
+            // A bare `mymap.field` (no `[*]`) addresses a scalar that doesn't
+            // exist — surface `MapMissingStar` so the caller raises the precise
+            // `MapRefMissingStar`. The `[*]` sentinel is always `segs[0]` for a
+            // Map ref (the slug-rooted scanner emits `mymap[*]...` as root +
+            // leading `[*]` segment).
+            if is_map_node(graph, &prod_id) {
+                let star_at = gref.segs.iter().position(|s| s == "[*]");
+                let Some(star_idx) = star_at else {
+                    return RefResolution::MapMissingStar {
+                        map_slug: root.clone(),
+                    };
+                };
+                // Segments AFTER `[*]` address each element; segments BEFORE it
+                // would address into the parked envelope before iteration — v1
+                // only supports the top-level gathered array, so `[*]` must be
+                // the first segment.
+                if star_idx != 0 {
+                    return RefResolution::Unresolved;
+                }
+                let tail = &gref.segs[star_idx + 1..];
+                let producer_path = if tail.is_empty() {
+                    // Whole gathered array.
+                    "output".to_string()
+                } else {
+                    // Project each element to the addressed sub-path.
+                    let elem_path = tail.join(".");
+                    format!("output.map(|__e| __e.{elem_path})")
+                };
+                let label = node_out
+                    .get(&prod_id)
+                    .and_then(|s| s.find_by_leaf(root).map(|(_, _, p)| p.node_label))
+                    .unwrap_or_else(|| "map".to_string());
+                return RefResolution::Borrow {
+                    producer_id: prod_id,
+                    producer_path,
+                    producer_label: label,
+                };
             }
             let Some(shape) = node_out.get(&prod_id) else {
                 return RefResolution::Unresolved;
@@ -401,7 +489,11 @@ pub(crate) fn check_guard(
                     }
                 }
             }
-            RefResolution::Unresolved => {
+            RefResolution::Unresolved | RefResolution::MapMissingStar { .. } => {
+                // MapMissingStar surfaces inline as a plain unresolved-path
+                // diagnostic (the editor highlights the ref); the hard
+                // `MapRefMissingStar` error is raised at publish in
+                // `guard_readarc_plan`.
                 out.push(ShapeDiagnostic::UnresolvedGuardPath {
                     node_id: node.id.clone(),
                     node_label: node.data.label().to_string(),
@@ -509,6 +601,14 @@ pub(crate) fn guard_readarc_plan(
             } if !duration_ms_expr.trim().is_empty() => {
                 vec![duration_ms_expr.clone()]
             }
+            // Map `itemsRef` is embedded verbatim in `t_<map>_scatter`'s logic
+            // (`let __src = <itemsRef>; ...`), borrowing the upstream collection
+            // exactly like a Loop condition borrows its counter. Without this
+            // arm no read-arc into the producer's parked place is synthesized
+            // and the scatter resolves `__src` to `()` → zero items.
+            WorkflowNodeData::Map { items_ref, .. } if !items_ref.trim().is_empty() => {
+                vec![items_ref.clone()]
+            }
             _ => continue,
         };
         let in_shape = report.node_in.get(&node.id);
@@ -540,6 +640,15 @@ pub(crate) fn guard_readarc_plan(
                         producer_node: producer_id,
                         producer_path,
                     }),
+                    // A Map borrow without the `[*]` collection boundary — hard
+                    // error with the precise guidance (`use <slug>[*].<field>`).
+                    RefResolution::MapMissingStar { map_slug } => {
+                        return Err(CompileError::MapRefMissingStar {
+                            node_id: node.id.clone(),
+                            map_slug,
+                            ref_value: gref.referenced.clone(),
+                        });
+                    }
                     // Unbindable — hard error (publish blocks; the editor sees
                     // the matching `UnresolvedGuardPath` via `analyze`).
                     RefResolution::Unresolved => {

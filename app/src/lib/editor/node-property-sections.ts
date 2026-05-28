@@ -29,6 +29,7 @@ import DecisionNodeSection from '$lib/components/editor/panels/property-sections
 import ParallelSplitSection from '$lib/components/editor/panels/property-sections/ParallelSplitSection.svelte';
 import JoinSection from '$lib/components/editor/panels/property-sections/JoinSection.svelte';
 import LoopNodeSection from '$lib/components/editor/panels/property-sections/LoopNodeSection.svelte';
+import MapNodeSection from '$lib/components/editor/panels/property-sections/MapNodeSection.svelte';
 import ScopeSection from '$lib/components/editor/panels/property-sections/ScopeSection.svelte';
 import PhaseUpdateNodeSection from '$lib/components/editor/panels/property-sections/PhaseUpdateNodeSection.svelte';
 import ProgressUpdateNodeSection from '$lib/components/editor/panels/property-sections/ProgressUpdateNodeSection.svelte';
@@ -76,6 +77,7 @@ const SECTIONS = {
 	parallel_split: ParallelSplitSection,
 	join: JoinSection,
 	loop: LoopNodeSection,
+	map: MapNodeSection,
 	scope: ScopeSection,
 	phase_update: PhaseUpdateNodeSection,
 	progress_update: ProgressUpdateNodeSection,

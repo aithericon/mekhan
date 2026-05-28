@@ -9,6 +9,7 @@ import DecisionNode from './DecisionNode.svelte';
 import ParallelSplitNode from './ParallelSplitNode.svelte';
 import JoinNode from './JoinNode.svelte';
 import LoopNode from './LoopNode.svelte';
+import MapNode from './MapNode.svelte';
 import ScopeNode from './ScopeNode.svelte';
 import PhaseUpdateNode from './PhaseUpdateNode.svelte';
 import ProgressUpdateNode from './ProgressUpdateNode.svelte';
@@ -34,6 +35,7 @@ export const nodeTypes = {
 	parallel_split: ParallelSplitNode,
 	join: JoinNode,
 	loop: LoopNode,
+	map: MapNode,
 	scope: ScopeNode,
 	phase_update: PhaseUpdateNode,
 	progress_update: ProgressUpdateNode,

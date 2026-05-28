@@ -4433,3 +4433,825 @@ fn delay_duration_with_unresolved_ref_is_rejected() {
         "error should name the unresolved ref: {msg}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Map node (dynamic data-parallel map-reduce)
+// ---------------------------------------------------------------------------
+
+/// Start node whose `initial` port declares a single `items` field — the
+/// upstream collection a Map scatters over (`start.items`).
+fn start_node_with_items(id: &str) -> WorkflowNode {
+    use mekhan_service::models::template::{FieldKind, PortField};
+    let mut n = start_node(id);
+    // Explicit slug so `itemsRef = "start.items"` resolves to this producer.
+    n.slug = Some("start".to_string());
+    if let WorkflowNodeData::Start { initial, .. } = &mut n.data {
+        *initial = Port {
+            id: "in".to_string(),
+            label: "Input".to_string(),
+            fields: vec![PortField {
+                name: "items".to_string(),
+                label: "Items".to_string(),
+                kind: FieldKind::Json,
+                required: true,
+                options: None,
+                description: None,
+                accept: None,
+            }],
+        };
+    }
+    n
+}
+
+/// A Map node with `items_ref` / `result_var` and an optional declared element
+/// `output` port (drives the `<slug>[*].<field>` borrow surface).
+fn map_node(id: &str, slug: &str, items_ref: &str, result_var: &str) -> WorkflowNode {
+    use mekhan_service::models::template::{FieldKind, PortField};
+    WorkflowNode {
+        id: id.to_string(),
+        node_type: "map".to_string(),
+        slug: Some(slug.to_string()),
+        position: pos(),
+        data: WorkflowNodeData::Map {
+            label: "Map".to_string(),
+            description: None,
+            items_ref: items_ref.to_string(),
+            item_var: "item".to_string(),
+            result_var: result_var.to_string(),
+            output: Some(Port {
+                id: "out".to_string(),
+                label: "Element".to_string(),
+                fields: vec![PortField {
+                    name: "score".to_string(),
+                    label: "Score".to_string(),
+                    kind: FieldKind::Number,
+                    required: true,
+                    options: None,
+                    description: None,
+                    accept: None,
+                }],
+            }),
+        },
+        parent_id: None,
+        width: None,
+        height: None,
+    }
+}
+
+/// A body child (PhaseUpdate pass-through) parented to a Map.
+fn map_body_phase(id: &str, parent: &str) -> WorkflowNode {
+    WorkflowNode {
+        id: id.to_string(),
+        node_type: "phase_update".to_string(),
+        slug: None,
+        position: pos(),
+        data: WorkflowNodeData::PhaseUpdate {
+            label: "Body".to_string(),
+            description: None,
+            phase_name: "per-item".to_string(),
+            status: PhaseUpdateStatus::default(),
+            message: None,
+        },
+        parent_id: Some(parent.to_string()),
+        width: None,
+        height: None,
+    }
+}
+
+/// The two body-attach edges (Loop/Map pattern): map → body via `body_in`
+/// source handle, body → map via `body_out` target handle (`loop_back`).
+fn map_body_edges(map_id: &str, body_id: &str) -> (WorkflowEdge, WorkflowEdge) {
+    let body_in = WorkflowEdge {
+        id: format!("e_{map_id}_body_in"),
+        source: map_id.to_string(),
+        target: body_id.to_string(),
+        source_handle: Some("body_in".to_string()),
+        target_handle: Some("in".to_string()),
+        label: None,
+        edge_type: "sequence".to_string(),
+    };
+    let body_out = WorkflowEdge {
+        id: format!("e_{map_id}_body_out"),
+        source: body_id.to_string(),
+        target: map_id.to_string(),
+        source_handle: None,
+        target_handle: Some("body_out".to_string()),
+        label: None,
+        edge_type: "loop_back".to_string(),
+    };
+    (body_in, body_out)
+}
+
+/// A Start→Map(body)→End graph lowers the scatter/gather sub-net: the scatter
+/// transition has a Batch OUTPUT port into `p_<map>_items`, and the gather
+/// transition's `results` input arc carries `count_from` + `correlate_on`.
+#[test]
+fn map_lowers_scatter_gather() {
+    let (body_in, body_out) = map_body_edges("mp", "body");
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node_with_items("s"),
+            map_node("mp", "mymap", "start.items", "score"),
+            map_body_phase("body", "mp"),
+            end_node("e"),
+        ],
+        edges: vec![
+            edge("e1", "s", "mp"),
+            body_in,
+            body_out,
+            edge("e2", "mp", "e"),
+        ],
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+    };
+
+    let air = compile_to_air(&graph, "map_test", "", &std::collections::HashMap::new())
+        .expect("Start→Map(body)→End should compile");
+
+    // Core sub-net places + transitions.
+    assert!(has_place(&air, "p_mp_items"), "expected scattered-items place");
+    assert!(has_place(&air, "p_mp_count"), "expected coordinator place");
+    assert!(has_place(&air, "p_mp_results"), "expected results place");
+    assert!(
+        has_place(&air, "p_mp_data"),
+        "expected parked gathered-collection place"
+    );
+    assert!(has_transition(&air, "t_mp_scatter"), "expected scatter");
+    assert!(has_transition(&air, "t_mp_gather"), "expected gather");
+    assert!(has_group(&air, "grp_mp"), "expected map group");
+
+    // (1) Scatter has a Batch OUTPUT port wired to p_mp_items.
+    let t_scatter = get_transition(&air, "t_mp_scatter").expect("scatter transition");
+    let items_port = t_scatter["output_ports"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["name"] == "items")
+        .expect("scatter must declare an `items` output port");
+    assert_eq!(
+        items_port["cardinality"], "batch",
+        "scatter `items` port must be Batch (data-dependent fan-out); got {items_port:?}"
+    );
+    let items_out_arc = t_scatter["outputs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["place"] == "p_mp_items");
+    assert!(
+        items_out_arc.is_some(),
+        "scatter must emit on p_mp_items; outputs: {:?}",
+        t_scatter["outputs"]
+    );
+
+    // (2) Gather's `results` input arc carries the counted-barrier fields.
+    let t_gather = get_transition(&air, "t_mp_gather").expect("gather transition");
+    let results_arc = t_gather["inputs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["place"] == "p_mp_results")
+        .expect("gather must consume p_mp_results");
+    assert_eq!(
+        results_arc["count_from"], "count.expected",
+        "gather results arc must count from the coordinator; got {results_arc:?}"
+    );
+    assert_eq!(
+        results_arc["correlate_on"], "__map_id",
+        "gather results arc must correlate on __map_id; got {results_arc:?}"
+    );
+    // The coordinator is a non-consuming read arc.
+    let count_arc = t_gather["inputs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["place"] == "p_mp_count")
+        .expect("gather must read p_mp_count");
+    assert_eq!(
+        count_arc["read"], true,
+        "coordinator arc must be a non-consuming read; got {count_arc:?}"
+    );
+
+    // (3) Scatter reads `start.items` through a synthesized read-arc into the
+    //     producer's parked place (itemsRef borrow), rewritten to the d_<s> var.
+    let scatter_logic = t_scatter["logic"]["source"].as_str().unwrap();
+    assert!(
+        scatter_logic.contains("d_s.items"),
+        "itemsRef `start.items` must be rewritten to the producer read-arc var; got: {scatter_logic}"
+    );
+    let items_read_arc = t_scatter["inputs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["place"] == "p_s_data");
+    assert!(
+        items_read_arc.map(|a| a["read"] == true).unwrap_or(false),
+        "expected a read-arc on p_s_data for the itemsRef borrow; inputs: {:?}",
+        t_scatter["inputs"]
+    );
+}
+
+/// A downstream End mapping referencing `<map_slug>[*].<field>` compiles and
+/// gets a read-arc into `p_<map>_data`, with the ref rewritten to a per-element
+/// `.map(...)` projection over the parked gathered collection.
+#[test]
+fn map_output_collection_resolves() {
+    use mekhan_service::models::template::FieldMapping;
+
+    let (body_in, body_out) = map_body_edges("mp", "body");
+    let mut end = end_node("e");
+    if let WorkflowNodeData::End { result_mapping, .. } = &mut end.data {
+        *result_mapping = vec![FieldMapping {
+            target_field: "scores".to_string(),
+            expression: "mymap[*].score".to_string(),
+        }];
+    }
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node_with_items("s"),
+            map_node("mp", "mymap", "start.items", "score"),
+            map_body_phase("body", "mp"),
+            end,
+        ],
+        edges: vec![
+            edge("e1", "s", "mp"),
+            body_in,
+            body_out,
+            edge("e2", "mp", "e"),
+        ],
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+    };
+
+    let air = compile_to_air(&graph, "map_collect_test", "", &std::collections::HashMap::new())
+        .expect("End mapping over `mymap[*].score` should compile");
+
+    // The End result-shape transition holds the rewritten projection.
+    let t_end = get_transition(&air, "t_e_result_shape").expect("End result-shape transition");
+    let logic = t_end["logic"]["source"].as_str().unwrap();
+    assert!(
+        logic.contains("d_mp.output.map("),
+        "`mymap[*].score` must be rewritten to a per-element map over the parked \
+         collection; got: {logic}"
+    );
+    // The read-arc into the Map's parked data place backs the borrow.
+    let read_arc = t_end["inputs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["place"] == "p_mp_data");
+    assert!(
+        read_arc.map(|a| a["read"] == true).unwrap_or(false),
+        "expected a read-arc on p_mp_data for the `[*]` collection borrow; inputs: {:?}",
+        t_end["inputs"]
+    );
+}
+
+/// A bare `<map_slug>.<field>` (no `[*]`) is a hard error — a Map parks a
+/// collection, so the scalar form addresses nothing.
+#[test]
+fn map_ref_without_star_is_rejected() {
+    use mekhan_service::models::template::FieldMapping;
+
+    let (body_in, body_out) = map_body_edges("mp", "body");
+    let mut end = end_node("e");
+    if let WorkflowNodeData::End { result_mapping, .. } = &mut end.data {
+        *result_mapping = vec![FieldMapping {
+            target_field: "scores".to_string(),
+            // Missing the `[*]` boundary.
+            expression: "mymap.score".to_string(),
+        }];
+    }
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node_with_items("s"),
+            map_node("mp", "mymap", "start.items", "score"),
+            map_body_phase("body", "mp"),
+            end,
+        ],
+        edges: vec![
+            edge("e1", "s", "mp"),
+            body_in,
+            body_out,
+            edge("e2", "mp", "e"),
+        ],
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+    };
+
+    let err = compile_to_air(&graph, "map_nostar_test", "", &std::collections::HashMap::new())
+        .expect_err("a bare `mymap.score` must be rejected");
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("[*]") || msg.to_lowercase().contains("collection boundary"),
+        "error should explain the missing `[*]` boundary: {msg}"
+    );
+}
+
+/// A body node reading `item.<field>` resolves (namespace-on-token, v1): the
+/// scatter stamps `<itemVar>` onto each body token, so a body Decision guard
+/// `item.<field>` resolves as token-resident (Control) — it compiles and the
+/// ref is NOT rejected nor rewritten to a parked read-arc.
+#[test]
+fn map_body_item_resolves() {
+    let (body_in, body_out) = map_body_edges("mp", "dec");
+    // Body Decision: parent_id == map; one guard reads `item.score`. Both
+    // branches route to a phase_update that flows back to body_out so the
+    // body sub-graph is closed.
+    let dec = WorkflowNode {
+        id: "dec".to_string(),
+        node_type: "decision".to_string(),
+        slug: None,
+        position: pos(),
+        data: WorkflowNodeData::Decision {
+            label: "Per-item check".to_string(),
+            description: None,
+            conditions: vec![BranchCondition {
+                edge_id: "cond_hi".to_string(),
+                label: "High".to_string(),
+                guard: "item.score > 5".to_string(),
+            }],
+            default_branch: Some("default".to_string()),
+        },
+        parent_id: Some("mp".to_string()),
+        width: None,
+        height: None,
+    };
+    let mut merge = map_body_phase("merge", "mp");
+    merge.id = "merge".to_string();
+
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node_with_items("s"),
+            map_node("mp", "mymap", "start.items", "score"),
+            dec,
+            merge,
+            end_node("e"),
+        ],
+        edges: vec![
+            edge("e1", "s", "mp"),
+            body_in,
+            edge_with_handle("e_hi", "dec", "merge", "cond_hi"),
+            edge_with_handle("e_def", "dec", "merge", "default"),
+            body_out, // merge → mp (body_out) is wired below; replace target
+            edge("e2", "mp", "e"),
+        ],
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+    };
+    // The shared `map_body_edges` body_out edge was minted for `dec`; rewire it
+    // to leave the body from `merge` instead.
+    let mut graph = graph;
+    for ed in &mut graph.edges {
+        if ed.id == "e_mp_body_out" {
+            ed.source = "merge".to_string();
+        }
+    }
+
+    let air = compile_to_air(&graph, "map_item_test", "", &std::collections::HashMap::new())
+        .expect("a body Decision reading `item.score` should compile");
+
+    // The body Decision's first branch transition keeps the `item.score`
+    // reference verbatim — it is token-resident (Control), NOT rewritten to a
+    // `d_<producer>` read-arc and NOT rejected as unresolved.
+    let t_branch = get_transition(&air, "t_dec_branch_0").expect("body branch_0 transition");
+    let guard = t_branch["guard"]["source"].as_str().unwrap();
+    assert!(
+        guard.contains("item.score"),
+        "body `item.score` must stay token-resident (Control), not be rewritten; got: {guard}"
+    );
+    // No read-arc was synthesized for the item namespace (it rides the token).
+    let has_item_readarc = t_branch["inputs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|a| a["read"] == true);
+    assert!(
+        !has_item_readarc,
+        "body item ref must not synthesize a read-arc; inputs: {:?}",
+        t_branch["inputs"]
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Map node — Phase 3 validation failure paths
+// ---------------------------------------------------------------------------
+
+use mekhan_service::compiler::CompileError;
+
+/// A Start whose `items` field is declared with a scalar kind — used to drive
+/// the `MapItemsRefNotArray` reject (the scatter can only fan out a collection).
+fn start_node_with_scalar_items(id: &str, kind: mekhan_service::models::template::FieldKind) -> WorkflowNode {
+    use mekhan_service::models::template::PortField;
+    let mut n = start_node(id);
+    n.slug = Some("start".to_string());
+    if let WorkflowNodeData::Start { initial, .. } = &mut n.data {
+        *initial = Port {
+            id: "in".to_string(),
+            label: "Input".to_string(),
+            fields: vec![PortField {
+                name: "items".to_string(),
+                label: "Items".to_string(),
+                kind,
+                required: true,
+                options: None,
+                description: None,
+                accept: None,
+            }],
+        };
+    }
+    n
+}
+
+/// Build a Start→Map(body)→End graph from a pre-built Start + Map (so each
+/// failure-path test only varies the field under test). The body is a single
+/// PhaseUpdate parented to the map.
+fn map_graph(start: WorkflowNode, map: WorkflowNode) -> WorkflowGraph {
+    let map_id = map.id.clone();
+    let (body_in, body_out) = map_body_edges(&map_id, "body");
+    WorkflowGraph {
+        nodes: vec![
+            start,
+            map,
+            map_body_phase("body", &map_id),
+            end_node("e"),
+        ],
+        edges: vec![
+            edge("e1", "s", &map_id),
+            body_in,
+            body_out,
+            edge("e2", &map_id, "e"),
+        ],
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+    }
+}
+
+/// An empty Map body (no `parent_id == map.id` children, hence no body_in/
+/// body_out edges) is rejected — `MapEmpty`, the publish-time mirror of the
+/// lowering gate (Loop pattern).
+#[test]
+fn map_empty_body_is_rejected() {
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node_with_items("s"),
+            map_node("mp", "mymap", "start.items", "score"),
+            end_node("e"),
+        ],
+        edges: vec![edge("e1", "s", "mp"), edge("e2", "mp", "e")],
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+    };
+    let err = compile_to_air(&graph, "map_empty", "", &std::collections::HashMap::new())
+        .expect_err("a Map with no body must be rejected");
+    let msg = format!("{err}");
+    assert!(
+        msg.to_lowercase().contains("body") || msg.to_lowercase().contains("requires a body"),
+        "error should explain the missing body: {msg}"
+    );
+}
+
+/// A `resultVar` that isn't a valid Rhai identifier (`9bad`) is rejected with
+/// the precise `MapResultVarInvalid` variant.
+#[test]
+fn map_invalid_result_var_is_rejected() {
+    let graph = map_graph(
+        start_node_with_items("s"),
+        map_node("mp", "mymap", "start.items", "9bad"),
+    );
+    let err = compile_to_air(&graph, "map_bad_var", "", &std::collections::HashMap::new())
+        .expect_err("a non-identifier resultVar must be rejected");
+    match err {
+        CompileError::MapResultVarInvalid { node_id, result_var } => {
+            assert_eq!(node_id, "mp");
+            assert_eq!(result_var, "9bad");
+        }
+        other => panic!("expected MapResultVarInvalid, got: {other:?}"),
+    }
+}
+
+/// `itemsRef` naming an unknown producer slug → `MapItemsRefUnresolved`.
+#[test]
+fn map_items_ref_unknown_slug_is_rejected() {
+    let graph = map_graph(
+        start_node_with_items("s"),
+        map_node("mp", "mymap", "nonesuch.items", "score"),
+    );
+    let err = compile_to_air(&graph, "map_unresolved", "", &std::collections::HashMap::new())
+        .expect_err("an itemsRef into an unknown slug must be rejected");
+    match err {
+        CompileError::MapItemsRefUnresolved { node_id, slug, .. } => {
+            assert_eq!(node_id, "mp");
+            assert_eq!(slug, "nonesuch");
+        }
+        other => panic!("expected MapItemsRefUnresolved, got: {other:?}"),
+    }
+}
+
+/// `itemsRef` resolving to a scalar (non-array, non-Json) producer field →
+/// `MapItemsRefNotArray`. A `Text`-kind `start.items` is a scalar string, not
+/// a collection.
+#[test]
+fn map_items_ref_scalar_is_rejected() {
+    use mekhan_service::models::template::FieldKind;
+    let graph = map_graph(
+        start_node_with_scalar_items("s", FieldKind::Text),
+        map_node("mp", "mymap", "start.items", "score"),
+    );
+    let err = compile_to_air(&graph, "map_notarray", "", &std::collections::HashMap::new())
+        .expect_err("an itemsRef onto a scalar field must be rejected");
+    match err {
+        CompileError::MapItemsRefNotArray { node_id, ref_value, .. } => {
+            assert_eq!(node_id, "mp");
+            assert_eq!(ref_value, "start.items");
+        }
+        other => panic!("expected MapItemsRefNotArray, got: {other:?}"),
+    }
+}
+
+/// A Json-kind `itemsRef` is accepted (opaque — the producer declared
+/// arbitrary JSON the executor delivers as an array at runtime); the canonical
+/// `start_node_with_items` fixture already declares `items: Json`, so a plain
+/// Start→Map(body)→End compiles. Guards the Json escape-hatch branch.
+#[test]
+fn map_items_ref_json_compiles() {
+    let graph = map_graph(
+        start_node_with_items("s"),
+        map_node("mp", "mymap", "start.items", "score"),
+    );
+    compile_to_air(&graph, "map_json_items", "", &std::collections::HashMap::new())
+        .expect("a Json-kind itemsRef must be accepted (deferred to runtime)");
+}
+
+/// A Map nested inside another Map (inner's `parent_id` is the outer Map) is
+/// rejected in v1 with `MapNested`.
+#[test]
+fn map_nested_inside_map_is_rejected() {
+    // Outer map `mp` with an inner map `mp2` as its body child. The inner map
+    // has its own body (a phase_update) and body edges.
+    let mut inner = map_node("mp2", "innermap", "start.items", "score");
+    inner.parent_id = Some("mp".to_string());
+
+    let (outer_body_in, outer_body_out) = map_body_edges("mp", "mp2");
+    let (inner_body_in, inner_body_out) = map_body_edges("mp2", "inner_body");
+
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node_with_items("s"),
+            map_node("mp", "mymap", "start.items", "score"),
+            inner,
+            map_body_phase("inner_body", "mp2"),
+            end_node("e"),
+        ],
+        edges: vec![
+            edge("e1", "s", "mp"),
+            outer_body_in,
+            outer_body_out,
+            inner_body_in,
+            inner_body_out,
+            edge("e2", "mp", "e"),
+        ],
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+    };
+    let err = compile_to_air(&graph, "map_nested", "", &std::collections::HashMap::new())
+        .expect_err("a Map nested inside a Map must be rejected");
+    match err {
+        CompileError::MapNested { node_id, outer_id } => {
+            assert_eq!(node_id, "mp2");
+            assert_eq!(outer_id, "mp");
+        }
+        other => panic!("expected MapNested, got: {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Map node — Phase 4: realistic end-to-end shape + AIR stability snapshot
+// ---------------------------------------------------------------------------
+
+/// A body AutomatedStep whose declared `output` port carries the `<resultVar>`
+/// field the collect transition lifts (`body.score`). Parented to a Map, it is
+/// the per-element worker: it reads `item.<field>` (token-resident, no borrow)
+/// and produces the result the gather reduces. Mirrors `auto_node` but with a
+/// custom output port + a Map parent.
+fn map_body_auto(id: &str, parent: &str) -> WorkflowNode {
+    use mekhan_service::models::template::{FieldKind, PortField};
+    WorkflowNode {
+        id: id.to_string(),
+        node_type: "automated_step".to_string(),
+        slug: None,
+        position: pos(),
+        data: WorkflowNodeData::AutomatedStep {
+            label: "Score Item".to_string(),
+            description: None,
+            execution_spec: ExecutionSpecConfig {
+                backend_type: ExecutionBackendType::Docker,
+                entrypoint: None,
+                config: json!({"image": "alpine:latest"}),
+            },
+            input: mekhan_service::models::template::Port::empty_input(),
+            // Declare the per-element result field the Map collects.
+            output: Port {
+                id: "out".to_string(),
+                label: "Output".to_string(),
+                fields: vec![PortField {
+                    name: "score".to_string(),
+                    label: "Score".to_string(),
+                    kind: FieldKind::Number,
+                    required: true,
+                    options: None,
+                    description: None,
+                    accept: None,
+                }],
+            },
+            retry_policy: Default::default(),
+            deployment_model: Default::default(),
+        },
+        parent_id: Some(parent.to_string()),
+        width: None,
+        height: None,
+    }
+}
+
+/// The realistic Map: scatter a Start-provided array, run a body AutomatedStep
+/// per element producing `<resultVar>`, gather into a collection, and have a
+/// downstream End read the gathered `<map_slug>[*].<field>`. This is the
+/// canonical authoring shape the frontend phase materializes.
+///
+/// Beyond the focused sub-net tests, this asserts the ENTIRE P2 AIR contract in
+/// one place so the lowering's emitted topology is stable: every place +
+/// transition the handoff documents must be present, the scatter Batch output /
+/// gather counted barrier must carry the engine-primitive fields, the parked
+/// `p_mp_data` must back the interface data-port, and the downstream collection
+/// borrow must rewrite to a per-element projection over that parked place.
+#[test]
+fn map_end_to_end_air_shape_is_stable() {
+    use mekhan_service::models::template::FieldMapping;
+
+    let (body_in, body_out) = map_body_edges("mp", "worker");
+    let mut end = end_node("e");
+    if let WorkflowNodeData::End { result_mapping, .. } = &mut end.data {
+        *result_mapping = vec![FieldMapping {
+            target_field: "scores".to_string(),
+            expression: "mymap[*].score".to_string(),
+        }];
+    }
+
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node_with_items("s"),
+            map_node("mp", "mymap", "start.items", "score"),
+            map_body_auto("worker", "mp"),
+            end,
+        ],
+        edges: vec![
+            edge("e1", "s", "mp"),
+            body_in,
+            body_out,
+            edge("e2", "mp", "e"),
+        ],
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+    };
+
+    let air = compile_to_air(&graph, "map_e2e", "a realistic map-reduce", &std::collections::HashMap::new())
+        .expect("Start→Map(AutomatedStep body)→End reading the collection should compile");
+
+    // (1) Every documented Map place is present (P2 handoff "AIR SHAPE
+    //     EMITTED"). These names are part of the borrow contract — the picker,
+    //     read-arc synthesis, and frontend all key off them, so they must not
+    //     drift.
+    for place in [
+        "p_mp_input",
+        "p_mp_items",
+        "p_mp_body_in",
+        "p_mp_body_out",
+        "p_mp_count",
+        "p_mp_results",
+        "p_mp_gathered",
+        "p_mp_data",
+        "p_mp_output",
+    ] {
+        assert!(has_place(&air, place), "missing Map place {place}");
+    }
+
+    // (2) Every documented Map transition is present.
+    for t in [
+        "t_mp_scatter",
+        "t_mp_dispatch",
+        "t_mp_body_noop",
+        "t_mp_collect",
+        "t_mp_gather",
+        "t_mp_emit",
+    ] {
+        assert!(has_transition(&air, t), "missing Map transition {t}");
+    }
+    assert!(has_group(&air, "grp_mp"), "expected Map group");
+
+    // (3) Scatter: Batch output `items` + Single `count`, reading the itemsRef
+    //     producer via a synthesized read-arc (rewritten to `d_s.items`).
+    let t_scatter = get_transition(&air, "t_mp_scatter").expect("scatter");
+    let items_port = t_scatter["output_ports"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["name"] == "items")
+        .expect("scatter `items` output port");
+    assert_eq!(items_port["cardinality"], "batch", "items must be Batch");
+    let scatter_logic = t_scatter["logic"]["source"].as_str().unwrap();
+    assert!(
+        scatter_logic.contains("d_s.items"),
+        "itemsRef must be rewritten to the producer read-arc var; got: {scatter_logic}"
+    );
+    assert!(
+        scatter_logic.contains("\"__map_id\": \"mp\"") && scatter_logic.contains("__map_idx"),
+        "each item token must be stamped with __map_id + __map_idx; got: {scatter_logic}"
+    );
+    assert!(
+        t_scatter["inputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a["place"] == "p_s_data" && a["read"] == true),
+        "scatter must read-arc the itemsRef producer place; inputs: {:?}",
+        t_scatter["inputs"]
+    );
+
+    // (4) Collect lifts the body's `<resultVar>` into the per-element result,
+    //     carrying the correlation keys.
+    let t_collect = get_transition(&air, "t_mp_collect").expect("collect");
+    let collect_logic = t_collect["logic"]["source"].as_str().unwrap();
+    assert!(
+        collect_logic.contains("body.score")
+            && collect_logic.contains("body.__map_idx")
+            && collect_logic.contains("body.__map_id"),
+        "collect must lift body.<resultVar> + carry correlation keys; got: {collect_logic}"
+    );
+
+    // (5) Gather: counted barrier — `results` arc carries count_from +
+    //     correlate_on, the coordinator arc is a non-consuming read.
+    let t_gather = get_transition(&air, "t_mp_gather").expect("gather");
+    let results_arc = t_gather["inputs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["place"] == "p_mp_results")
+        .expect("gather consumes p_mp_results");
+    assert_eq!(results_arc["count_from"], "count.expected");
+    assert_eq!(results_arc["correlate_on"], "__map_id");
+    assert_eq!(
+        t_gather["inputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["place"] == "p_mp_count")
+            .expect("gather reads p_mp_count")["read"],
+        true,
+        "coordinator arc must be a non-consuming read"
+    );
+
+    // (6) Body wiring: the AutomatedStep worker's terminal edge feeds
+    //     `p_mp_body_out`, and the dispatch hop bridges `p_mp_items` →
+    //     `p_mp_body_in` (the documented one-extra-hop deviation).
+    let t_dispatch = get_transition(&air, "t_mp_dispatch").expect("dispatch");
+    assert!(
+        t_dispatch["inputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a["place"] == "p_mp_items")
+            && t_dispatch["outputs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|a| a["place"] == "p_mp_body_in"),
+        "dispatch must bridge p_mp_items → p_mp_body_in; got in {:?} out {:?}",
+        t_dispatch["inputs"],
+        t_dispatch["outputs"]
+    );
+
+    // (7) Downstream `mymap[*].score` resolves to a per-element projection over
+    //     the parked gathered collection, backed by a read-arc on p_mp_data.
+    let t_end = get_transition(&air, "t_e_result_shape").expect("End result-shape");
+    let end_logic = t_end["logic"]["source"].as_str().unwrap();
+    assert!(
+        end_logic.contains("d_mp.output.map("),
+        "`mymap[*].score` must rewrite to a per-element projection; got: {end_logic}"
+    );
+    assert!(
+        t_end["inputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a["place"] == "p_mp_data" && a["read"] == true),
+        "End must read-arc the Map's parked collection; inputs: {:?}",
+        t_end["inputs"]
+    );
+}

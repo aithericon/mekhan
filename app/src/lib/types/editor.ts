@@ -53,6 +53,7 @@ export type DecisionNodeData = Extract<SchemaWorkflowNodeData, { type: 'decision
 export type ParallelSplitNodeData = Extract<SchemaWorkflowNodeData, { type: 'parallel_split' }>;
 export type JoinNodeData = Extract<SchemaWorkflowNodeData, { type: 'join' }>;
 export type LoopNodeData = Extract<SchemaWorkflowNodeData, { type: 'loop' }>;
+export type MapNodeData = Extract<SchemaWorkflowNodeData, { type: 'map' }>;
 export type ScopeNodeData = Extract<SchemaWorkflowNodeData, { type: 'scope' }>;
 export type PhaseUpdateNodeData = Extract<SchemaWorkflowNodeData, { type: 'phase_update' }>;
 export type ProgressUpdateNodeData = Extract<SchemaWorkflowNodeData, { type: 'progress_update' }>;
@@ -144,6 +145,15 @@ export function createDefaultNodeData(type: WorkflowNodeType): SchemaWorkflowNod
 				maxIterations: 3,
 				loopCondition: 'true',
 				accumulators: []
+			};
+		case 'map':
+			return {
+				type: 'map',
+				label: 'Map',
+				itemsRef: '',
+				itemVar: 'item',
+				resultVar: '',
+				output: { id: 'out', label: 'Element', fields: [] }
 			};
 		case 'scope':
 			return { type: 'scope', label: 'Scope' };

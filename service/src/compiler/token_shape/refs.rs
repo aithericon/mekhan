@@ -65,6 +65,17 @@ pub(crate) fn scan_dotted_refs(src: &str) -> Vec<(String, Vec<String>, Option<Li
         }
         let root: String = bytes[rs..i].iter().collect();
         let mut segs = Vec::new();
+        // A `[*]` collection boundary may appear immediately after the root
+        // (`mymap[*].field`) or after any field segment. It is captured as a
+        // literal `[*]` sentinel segment so the resolver can distinguish a
+        // collection borrow (Map / Repeater Array producer) from a plain
+        // scalar borrow. Only a single `[*]` is recognized — nested iteration
+        // is unsupported (validated elsewhere). Numeric `[n]` indices are NOT
+        // scanned here (guards don't index by position).
+        if i + 2 < bytes.len() && bytes[i] == '[' && bytes[i + 1] == '*' && bytes[i + 2] == ']' {
+            segs.push("[*]".to_string());
+            i += 3;
+        }
         while i < bytes.len() && bytes[i] == '.' {
             i += 1;
             let start = i;
@@ -73,6 +84,13 @@ pub(crate) fn scan_dotted_refs(src: &str) -> Vec<(String, Vec<String>, Option<Li
             }
             if i > start {
                 segs.push(bytes[start..i].iter().collect::<String>());
+                // A `[*]` boundary may also follow a field segment
+                // (`mymap.rows[*].field`). Capture it the same way.
+                if i + 2 < bytes.len() && bytes[i] == '[' && bytes[i + 1] == '*' && bytes[i + 2] == ']'
+                {
+                    segs.push("[*]".to_string());
+                    i += 3;
+                }
             } else {
                 break;
             }

@@ -7,8 +7,8 @@ use crate::compiler::interface::InterfaceRegistry;
 use crate::compiler::lower::{expand_node, ConfigStorage, NodeFiles, NodePorts, PostProcess};
 use crate::compiler::resource_refs::KnownResources;
 use crate::compiler::validate::{
-    validate, validate_edges_typed, validate_guards, validate_repeaters, validate_schema_refs,
-    validate_triggers,
+    validate, validate_edges_typed, validate_guards, validate_maps, validate_repeaters,
+    validate_schema_refs, validate_triggers,
 };
 use crate::compiler::wire::{apply_merges, resolve_aliases, wire_edge};
 use crate::compiler::CompileError;
@@ -555,6 +555,11 @@ pub(crate) fn compile_to_scenario_and_interfaces_with_configs(
 ///   `<slug>.<field>[*]…` ref is well-formed, the producer's array shape
 ///   matches, and the `output_slug` is valid. MUST run after
 ///   `validate_guards` (relies on per-node shapes) and before lowering.
+/// - `validate_maps` (Map node) — each Map's `itemsRef` resolves to an array
+///   on a known parked producer. Needs the per-node shapes (`analyze`) like
+///   `validate_repeaters`, but runs BEFORE `validate_guards` so its precise
+///   `MapItemsRef*` errors win over the guard pass's generic `GuardUnresolved`
+///   (which would otherwise fire first on the itemsRef read-arc).
 fn run_validations(
     graph: &WorkflowGraph,
     wg: &WorkflowDiGraph<'_>,
@@ -562,6 +567,14 @@ fn run_validations(
 ) -> Result<(), CompileError> {
     validate(graph, wg)?;
     validate_edges_typed(graph)?;
+    // `validate_maps` runs BEFORE `validate_guards`: the guard read-arc plan
+    // already scans each Map's `itemsRef` (a synthesized read-arc into the
+    // producer's parked place) and would surface an unknown-slug `itemsRef` as
+    // a generic `GuardUnresolved`. Running the Map-specific pass first yields
+    // the precise `MapItemsRefUnresolved` / `MapItemsRefNotArray` (the latter
+    // is NOT caught by the guard pass at all — it resolves any field, array or
+    // not). It still needs the per-node shapes from `analyze`, available here.
+    validate_maps(graph)?;
     validate_guards(graph, wg)?;
     validate_triggers(graph)?;
     crate::compiler::resource_refs::validate_resource_refs(known_resources, graph)?;

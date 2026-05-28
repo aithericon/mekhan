@@ -31,10 +31,20 @@ pub struct QualifiedRef {
 
 /// Syntax-check a Rhai guard. Returns a stable error string usable directly
 /// in `CompileError::GuardSyntax`.
+///
+/// The `[*]` collection-boundary sentinel (`<map_slug>[*].<field>` /
+/// `<ht_slug>.<repeater>[*].<field>`) is a borrow-grammar annotation, NOT
+/// runtime Rhai — the read-arc synthesis rewrites it into a real `.map(...)`
+/// projection over the producer's parked collection AFTER validation. So we
+/// strip the sentinel here before the syntax check (`mymap[*].score` →
+/// `mymap.score`, which is valid Rhai); the separate `scan_dotted_refs`
+/// scanner still sees the `[*]` for ref resolution. `[*]` only ever appears in
+/// a borrow ref position, so collapsing it can't mask a genuine syntax error.
 pub fn parse_guard(source: &str) -> Result<(), String> {
+    let normalized = source.replace("[*]", "");
     let engine = rhai::Engine::new();
     engine
-        .compile(source)
+        .compile(&normalized)
         .map(|_| ())
         .map_err(|e| e.to_string())
 }

@@ -5191,6 +5191,28 @@ export interface components {
             type: "scope";
         } | {
             description?: string | null;
+            /**
+             * @description Identifier the per-item element is bound to on each body token.
+             *     Body guards / Python read `<item_var>.<field>`. Defaults to `item`.
+             */
+            itemVar?: string;
+            /**
+             * @description Producer-namespaced reference to the array to scatter, carrying
+             *     exactly one `[*]` boundary at iteration time (resolved through the
+             *     Repeater items-ref machinery), e.g. `extract.tasks`.
+             */
+            itemsRef: string;
+            label: string;
+            output?: null | components["schemas"]["Port"];
+            /**
+             * @description Field on each body output token whose value becomes the gathered
+             *     element (the per-iteration result the reduce collects).
+             */
+            resultVar: string;
+            /** @enum {string} */
+            type: "map";
+        } | {
+            description?: string | null;
             label: string;
             /** @description Optional phase message. Supports `{{ field }}` placeholders. */
             message?: string | null;

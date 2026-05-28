@@ -265,6 +265,98 @@ pub(crate) fn validate_timeout(
     Ok(())
 }
 
+/// Map: non-empty `itemsRef` + `resultVar`, plus a body — at least one
+/// outgoing edge with `sourceHandle="body_in"` AND at least one incoming edge
+/// with `targetHandle="body_out"` (same body-attach shape as Loop/Timeout).
+/// The structural body-presence check here is the publish-time mirror of the
+/// `MapEmpty` lowering gate (which counts `parent_id == map.id` children).
+pub(crate) fn validate_map(
+    node: &WorkflowNode,
+    graph: &WorkflowGraph,
+    _wg: &WorkflowDiGraph<'_>,
+) -> Result<(), CompileError> {
+    let WorkflowNodeData::Map {
+        items_ref,
+        result_var,
+        ..
+    } = &node.data
+    else {
+        unreachable!("validate_map on non-Map variant");
+    };
+    if items_ref.trim().is_empty() {
+        return Err(CompileError::Validation(format!(
+            "map '{}' must have a non-empty itemsRef",
+            node.id
+        )));
+    }
+    if result_var.trim().is_empty() {
+        return Err(CompileError::Validation(format!(
+            "map '{}' must have a non-empty resultVar",
+            node.id
+        )));
+    }
+    // `resultVar` is interpolated as a Rhai field access in `t_<id>_collect`
+    // (`body.<resultVar>`) — a non-identifier name would emit unparseable
+    // logic deep in lowering. Reject at publish with a precise error (mirrors
+    // Loop's accumulator-var check).
+    if !is_rhai_ident(result_var.trim()) {
+        return Err(CompileError::MapResultVarInvalid {
+            node_id: node.id.clone(),
+            result_var: result_var.clone(),
+        });
+    }
+    // Nested map-reduce is unsupported in v1: the gather barrier correlates on
+    // a single `__map_id` and the `<slug>[*].<field>` borrow surface only
+    // describes one collection level. Reject a Map whose `parent_id` chain
+    // reaches another Map ancestor.
+    if let Some(outer_id) = enclosing_map(graph, node) {
+        return Err(CompileError::MapNested {
+            node_id: node.id.clone(),
+            outer_id,
+        });
+    }
+    let has_body_in = graph
+        .edges
+        .iter()
+        .any(|e| e.source == node.id && e.source_handle.as_deref() == Some("body_in"));
+    let has_body_out = graph
+        .edges
+        .iter()
+        .any(|e| e.target == node.id && e.target_handle.as_deref() == Some("body_out"));
+    if !has_body_in || !has_body_out {
+        return Err(CompileError::Validation(format!(
+            "map '{}' requires a body — wire its body_in output \
+             and a body completion back to body_out",
+            node.id
+        )));
+    }
+    Ok(())
+}
+
+/// Walk `node`'s `parent_id` chain and return the id of the first `Map`
+/// ancestor, if any. Used to reject nested Map-in-Map (v1). Defends against a
+/// malformed cyclic `parent_id` chain with a bounded walk.
+fn enclosing_map(graph: &WorkflowGraph, node: &WorkflowNode) -> Option<String> {
+    let by_id: HashMap<&str, &WorkflowNode> =
+        graph.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+    let mut current = node.parent_id.as_deref();
+    let mut guard = 0usize;
+    while let Some(pid) = current {
+        guard += 1;
+        if guard > graph.nodes.len() + 1 {
+            break; // cyclic parent_id — bail rather than loop forever
+        }
+        let Some(parent) = by_id.get(pid) else {
+            break;
+        };
+        if matches!(parent.data, WorkflowNodeData::Map { .. }) {
+            return Some(parent.id.clone());
+        }
+        current = parent.parent_id.as_deref();
+    }
+    None
+}
+
 /// Decision: `defaultBranch` must equal `DEFAULT_BRANCH_HANDLE_ID` when set.
 /// The wire allows a free string (forward-compat for multi-default decisions),
 /// but today `DecisionNode.svelte` hardcodes the Otherwise handle id, so any
@@ -1148,6 +1240,125 @@ pub(crate) fn validate_repeaters(graph: &WorkflowGraph) -> Result<(), CompileErr
                         });
                     }
                 }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+// --- Map itemsRef shape validation ---
+
+/// Walk every Map node and confirm its `itemsRef` resolves to an ARRAY on a
+/// known parked producer. The scatter transition fans the resolved collection
+/// out into one token per element, so a non-array (or unresolved) `itemsRef`
+/// is a hard reject. Runs after `validate_guards` (needs the per-node shapes
+/// from `analyze`) and before lowering, mirroring `validate_repeaters`.
+///
+/// `itemsRef` is a plain `<slug>.<field>…` reference (NOT a `[*]` ref — the
+/// `[*]` boundary applies to *downstream* borrows of the Map's gathered
+/// output, never to its input collection). Resolution reuses the same
+/// `find_by_leaf` + dotted-descent walk as the Repeater pre-`[*]` path.
+pub(crate) fn validate_maps(graph: &WorkflowGraph) -> Result<(), CompileError> {
+    use crate::compiler::token_shape::{analyze, is_parked_producer, slug_index, TokenShape};
+
+    // Short-circuit when the graph has no Map nodes at all — avoids paying for
+    // the analyze pass on graphs that don't use the Map primitive.
+    if !graph
+        .nodes
+        .iter()
+        .any(|n| matches!(n.data, WorkflowNodeData::Map { .. }))
+    {
+        return Ok(());
+    }
+
+    let report = analyze(graph)?;
+    let slugs = slug_index(graph)?;
+
+    for node in &graph.nodes {
+        let WorkflowNodeData::Map { items_ref, .. } = &node.data else {
+            continue;
+        };
+        // Empty `itemsRef` is already rejected by `validate_map`; skip here so
+        // the structural error wins (clearer message, no shape work).
+        let raw = items_ref.trim();
+        if raw.is_empty() {
+            continue;
+        }
+
+        // Parse `<slug>.<path>…`. At least `<slug>.<field>` (one dot).
+        let Some((head, rest)) = raw.split_once('.') else {
+            return Err(CompileError::MapItemsRefUnresolved {
+                node_id: node.id.clone(),
+                ref_value: items_ref.clone(),
+                slug: raw.to_string(),
+                available: slugs.all_slugs().iter().map(|s| s.to_string()).collect(),
+            });
+        };
+        let segs: Vec<&str> = rest.split('.').collect();
+        if head.is_empty() || segs.iter().any(|s| s.is_empty()) {
+            return Err(CompileError::MapItemsRefUnresolved {
+                node_id: node.id.clone(),
+                ref_value: items_ref.clone(),
+                slug: head.to_string(),
+                available: slugs.all_slugs().iter().map(|s| s.to_string()).collect(),
+            });
+        }
+
+        let Some(prod_id) = slugs.node_for(head).map(str::to_string) else {
+            return Err(CompileError::MapItemsRefUnresolved {
+                node_id: node.id.clone(),
+                ref_value: items_ref.clone(),
+                slug: head.to_string(),
+                available: slugs.all_slugs().iter().map(|s| s.to_string()).collect(),
+            });
+        };
+        if !is_parked_producer(graph, &prod_id) {
+            return Err(CompileError::MapItemsRefUnresolved {
+                node_id: node.id.clone(),
+                ref_value: items_ref.clone(),
+                slug: head.to_string(),
+                available: slugs.all_slugs().iter().map(|s| s.to_string()).collect(),
+            });
+        }
+
+        // Resolve the field path against the producer's outbound shape, using
+        // `find_by_leaf` for the first segment (maps the author's leaf to the
+        // physical parked path, e.g. HumanTask's `data.<field>`) + literal
+        // descent thereafter — identical to the Repeater pre-`[*]` walk.
+        let shape = report.node_out.get(&prod_id);
+        let resolved = shape.and_then(|s| {
+            let (phys, _ty, _prov) = s.find_by_leaf(segs[0])?;
+            let mut path: Vec<String> = phys.split('.').map(str::to_string).collect();
+            for extra in &segs[1..] {
+                path.push((*extra).to_string());
+            }
+            s.resolve(&path).map(|(t, _)| t.clone())
+        });
+
+        match resolved {
+            Some(TokenShape::Array(_))
+            | Some(TokenShape::Any)
+            | Some(TokenShape::Opaque(_))
+            | Some(TokenShape::Scalar(crate::compiler::token_shape::ScalarTy::Json)) => {
+                // Array (canonical), or Any/Opaque/Json (opaque — the producer
+                // declared arbitrary JSON the executor delivers as an array at
+                // runtime). Accept; defer the strict shape to runtime.
+            }
+            Some(other) => {
+                return Err(CompileError::MapItemsRefNotArray {
+                    node_id: node.id.clone(),
+                    ref_value: items_ref.clone(),
+                    actual_kind: other.kind_label(),
+                });
+            }
+            None => {
+                return Err(CompileError::MapItemsRefUnresolved {
+                    node_id: node.id.clone(),
+                    ref_value: items_ref.clone(),
+                    slug: head.to_string(),
+                    available: slugs.all_slugs().iter().map(|s| s.to_string()).collect(),
+                });
             }
         }
     }

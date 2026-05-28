@@ -164,6 +164,74 @@ pub enum CompileError {
     #[error("loop '{node_id}' has no body — add at least one node inside the loop container")]
     LoopEmpty { node_id: String },
 
+    /// Map has no body — no child node has `parent_id == map.id`. A Map with
+    /// nothing to run per element is a config error; wire at least one node
+    /// inside the map container.
+    #[error("map '{node_id}' has no body — add at least one node inside the map container")]
+    MapEmpty { node_id: String },
+
+    /// A `<map_slug>.<field>` reference omits the required `[*]` collection
+    /// boundary. A Map parks a gathered ARRAY at `p_<id>_data`; downstream
+    /// borrows must iterate it as `<map_slug>[*].<field>`. A bare
+    /// `<map_slug>.<field>` would address a scalar that doesn't exist.
+    #[error(
+        "node '{node_id}': reference '{ref_value}' borrows map producer '{map_slug}' \
+         without the required `[*]` collection boundary — use `{map_slug}[*].<field>`"
+    )]
+    MapRefMissingStar {
+        node_id: String,
+        map_slug: String,
+        ref_value: String,
+    },
+
+    /// A Map's `resultVar` is not a valid Rhai identifier
+    /// (`[A-Za-z_][A-Za-z0-9_]*`). Required because the gather transition
+    /// projects each body token's `<resultVar>` field into the result
+    /// collection (`#{ value: body.<resultVar>, … }`); a malformed name
+    /// would produce a Rhai syntax error deep in the emitted logic.
+    #[error(
+        "map '{node_id}': resultVar '{result_var}' is not a valid Rhai identifier ([A-Za-z_][A-Za-z0-9_]*)"
+    )]
+    MapResultVarInvalid { node_id: String, result_var: String },
+
+    /// A Map node is nested inside another Map (its `parent_id` chain reaches
+    /// a Map ancestor). v1 forbids nested map-reduce: the gather barrier's
+    /// `__map_id` correlation key and the namespace-on-token item injection
+    /// assume a single scatter scope, and the `<slug>[*].<field>` borrow
+    /// surface only describes one level of collection. Use a SubWorkflow as
+    /// the body if you need a second fan-out.
+    #[error(
+        "map '{node_id}' is nested inside map '{outer_id}' — nested map-reduce is not supported in v1"
+    )]
+    MapNested { node_id: String, outer_id: String },
+
+    /// A Map's `itemsRef` parses + resolves to a known producer field, but
+    /// that field's declared shape is not an array — the scatter can only
+    /// fan out over a collection. Mirrors `RepeaterItemsRefNotArray`;
+    /// `Any`/`Opaque`/`Json` are accepted (deferred to runtime).
+    #[error(
+        "map '{node_id}': itemsRef '{ref_value}' resolves to {actual_kind}, not an array — map can only scatter a collection"
+    )]
+    MapItemsRefNotArray {
+        node_id: String,
+        ref_value: String,
+        actual_kind: String,
+    },
+
+    /// A Map's `itemsRef` either doesn't parse as `<slug>.<field>…`, names a
+    /// `<slug>` that isn't a parked producer in the graph, or the field path
+    /// doesn't land on the producer's outbound shape. Mirrors
+    /// `RepeaterRefUnresolved`.
+    #[error(
+        "map '{node_id}': itemsRef '{ref_value}' is unresolved (slug: '{slug}', candidates: {available:?})"
+    )]
+    MapItemsRefUnresolved {
+        node_id: String,
+        ref_value: String,
+        slug: String,
+        available: Vec<String>,
+    },
+
     /// A node wired as an agent tool (target of an edge with
     /// `source_handle == "tools"`) has an incoming `WorkflowEdge` from
     /// somewhere other than the agent's tools handle. Tools are dispatched
@@ -473,6 +541,12 @@ impl CompileError {
             }
             Self::SubWorkflowDepthExceeded { .. } => "subworkflow_depth_exceeded",
             Self::LoopEmpty { .. } => "loop_empty",
+            Self::MapEmpty { .. } => "map_empty",
+            Self::MapRefMissingStar { .. } => "map_ref_missing_star",
+            Self::MapResultVarInvalid { .. } => "map_result_var_invalid",
+            Self::MapNested { .. } => "map_nested",
+            Self::MapItemsRefNotArray { .. } => "map_items_ref_not_array",
+            Self::MapItemsRefUnresolved { .. } => "map_items_ref_unresolved",
             Self::ToolChildHasIncomingEdge { .. } => "tool_child_has_incoming_edge",
             Self::OutputFieldShadowsReserved { .. } => "output_field_shadows_reserved",
             Self::OutputFieldShadowsInput { .. } => "output_field_shadows_input",
@@ -529,6 +603,12 @@ impl CompileError {
             | Self::SubWorkflowPrivateOwnershipViolation { node_id, .. }
             | Self::SubWorkflowDepthExceeded { node_id, .. }
             | Self::LoopEmpty { node_id }
+            | Self::MapEmpty { node_id }
+            | Self::MapRefMissingStar { node_id, .. }
+            | Self::MapResultVarInvalid { node_id, .. }
+            | Self::MapNested { node_id, .. }
+            | Self::MapItemsRefNotArray { node_id, .. }
+            | Self::MapItemsRefUnresolved { node_id, .. }
             | Self::ToolChildHasIncomingEdge {
                 child_id: node_id, ..
             }
