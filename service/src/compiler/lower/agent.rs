@@ -305,9 +305,17 @@ fn lower_agent_loop(
     // per-turn key the worker writes the new cumulative transcript to after
     // the model responds. `s` is in scope here — the prepare_call logic binds
     // `let s = state;` first.
+    //
+    // The instance id comes from the `__INSTANCE_ID__` AIR sentinel
+    // (`parameterize_air` substitutes it at instance creation), NOT from the
+    // control token — so the key is correct regardless of the agent's
+    // position in the graph. Reading `input._instance_id` would be empty when
+    // the agent sits downstream of an AutomatedStep/SubWorkflow (their output
+    // is the executor envelope, not the control token), collapsing every such
+    // instance onto a shared instance-less key.
     let storage_key_esc = rhai_str_escape(&storage_key);
     let write_key_expr =
-        format!(r#""instances/" + s.instance_id + "/{id}/turn-" + s.turn + ".json""#);
+        format!(r#""instances/__INSTANCE_ID__/{id}/turn-" + s.turn + ".json""#);
     let config_ref_rhai = format!(
         r#"#{{ "storage_path": "{storage_key_esc}", "overlay": #{{ "history": "{{{{input:history}}}}", "pending": "{{{{input:pending}}}}", "_history_write_key": {write_key_expr} }} }}"#
     );
@@ -389,15 +397,15 @@ fn lower_agent_loop(
     // accumulating token totals, the `pending` delta (non-assistant turns
     // produced since the last LLM call — a tool result or feedback message,
     // bounded), and `final_response` (set on the terminal turn). The full
-    // conversation transcript lives OFF the token in per-turn S3 blobs
-    // keyed by `instance_id` + turn; `instance_id` is captured here from the
-    // inbound control token (`_instance_id`, injected at instance creation).
-    // The user's inbound token rides through as `state.input`.
+    // conversation transcript lives OFF the token in per-turn S3 blobs keyed
+    // by the `__INSTANCE_ID__` AIR sentinel (substituted at instance creation,
+    // so topology-independent) + turn. The user's inbound token rides through
+    // as `state.input`.
     ctx.transition(format!("t_{id}_enter"), format!("{label} - Enter Agent"))
         .auto_input("input", &p_input)
         .auto_output("state", &p_state)
         .logic_rhai(
-            r#"#{ state: #{ turn: 0, message_count: 0, total_tokens_in: 0, total_tokens_out: 0, pending: [], pending_tool_call_id: (), instance_id: input._instance_id, input: input, final_response: () } }"#
+            r#"#{ state: #{ turn: 0, message_count: 0, total_tokens_in: 0, total_tokens_out: 0, pending: [], pending_tool_call_id: (), input: input, final_response: () } }"#
                 .to_string(),
         )
         .done();
@@ -440,7 +448,7 @@ fn lower_agent_loop(
     // clear it on the parked state: the worker folds it into the turn-N blob
     // (which next turn reads as its base), so it must not be re-sent.
     .logic_rhai(format!(
-        r#"let s = state; let d = #{{ }}; d.job_id = "{id}"; d.run = s.turn; d.retries = 0; d.max_retries = 0; let job_inputs = []; if s.turn > 0 {{ job_inputs.push(#{{ "name": "history", "source": #{{ "type": "storage_path", "path": "instances/" + s.instance_id + "/{id}/turn-" + (s.turn - 1) + ".json" }} }}); }} else {{ job_inputs.push(#{{ "name": "history", "source": #{{ "type": "inline", "value": [] }} }}); }} job_inputs.push(#{{ "name": "pending", "source": #{{ "type": "inline", "value": s.pending }} }}); /*__BORROWED_INPUTS__*/ d.spec = #{{ "backend": "llm", "inputs": job_inputs, "outputs": [], "config_ref": {config_ref_rhai}, "stream_events": ["agent_turn", "metric", "log"] }}; d.metadata = #{{ "agent_node_id": "{id}" }}; s.pending = []; #{{ job: d, state_in_flight: s }}"#
+        r#"let s = state; let d = #{{ }}; d.job_id = "{id}"; d.run = s.turn; d.retries = 0; d.max_retries = 0; let job_inputs = []; if s.turn > 0 {{ job_inputs.push(#{{ "name": "history", "source": #{{ "type": "storage_path", "path": "instances/__INSTANCE_ID__/{id}/turn-" + (s.turn - 1) + ".json" }} }}); }} else {{ job_inputs.push(#{{ "name": "history", "source": #{{ "type": "inline", "value": [] }} }}); }} job_inputs.push(#{{ "name": "pending", "source": #{{ "type": "inline", "value": s.pending }} }}); /*__BORROWED_INPUTS__*/ d.spec = #{{ "backend": "llm", "inputs": job_inputs, "outputs": [], "config_ref": {config_ref_rhai}, "stream_events": ["agent_turn", "metric", "log"] }}; d.metadata = #{{ "agent_node_id": "{id}" }}; s.pending = []; #{{ job: d, state_in_flight: s }}"#
     ))
     .done();
 
@@ -558,7 +566,7 @@ fn lower_agent_loop(
         r#"let s = response.state; {extract_tr} let tc = if type_of(tr.tool_calls) == "array" {{ tr.tool_calls }} else {{ [] }}; tc.len() == 0 || s.turn + 1 >= {max_turns} || {stop_when_expr}"#
     ))
     .logic_rhai(format!(
-        r#"let s = response.state; {extract_tr} let outputs = outs; outputs.usage = #{{ input_tokens: s.total_tokens_in, output_tokens: s.total_tokens_out }}; outputs.turn = s.turn; outputs.history_ref = "instances/" + s.instance_id + "/{id}/turn-" + s.turn + ".json"; outputs.final_response = tr; outputs.input = s.input; let env = #{{ execution_id: "agent-{id}", job_id: "{id}", run: s.turn, status: "succeeded", source: "agent_loop", detail: #{{ outputs: outputs, exit_code: 0 }} }}; #{{ final: env }}"#
+        r#"let s = response.state; {extract_tr} let outputs = outs; outputs.usage = #{{ input_tokens: s.total_tokens_in, output_tokens: s.total_tokens_out }}; outputs.turn = s.turn; outputs.history_ref = "instances/__INSTANCE_ID__/{id}/turn-" + s.turn + ".json"; outputs.final_response = tr; outputs.input = s.input; let env = #{{ execution_id: "agent-{id}", job_id: "{id}", run: s.turn, status: "succeeded", source: "agent_loop", detail: #{{ outputs: outputs, exit_code: 0 }} }}; #{{ final: env }}"#
     ))
     .done();
 
