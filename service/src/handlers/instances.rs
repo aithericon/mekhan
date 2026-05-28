@@ -234,8 +234,7 @@ pub async fn get_instance(
     )
     .bind(id)
     .fetch_optional(&state.db)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?
+    .await?
     .ok_or_else(|| ApiError::not_found("instance not found"))?;
 
     Ok(Json(instance))
@@ -272,8 +271,7 @@ pub async fn stream_instance(
     )
     .bind(id)
     .fetch_optional(&state.db)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    .await?;
     let (net_id, status, db_result) =
         row.ok_or_else(|| ApiError::not_found("instance not found"))?;
 
@@ -426,8 +424,7 @@ pub async fn get_instance_state(
     )
     .bind(id)
     .fetch_optional(&state.db)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?
+    .await?
     .ok_or_else(|| ApiError::not_found("instance not found"))?;
 
     // 1. Fetch events from JetStream (source of truth)
@@ -510,8 +507,7 @@ pub async fn get_instance_events(
     )
     .bind(id)
     .fetch_optional(&state.db)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?
+    .await?
     .ok_or_else(|| ApiError::not_found("instance not found"))?;
 
     let events = fetch_events(&state.nats, &instance.net_id)
@@ -561,8 +557,7 @@ pub async fn list_step_executions(
         sqlx::query_as("SELECT id FROM workflow_instances WHERE id = $1")
             .bind(id)
             .fetch_optional(&state.db)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?;
+            .await?;
     if instance_exists.is_none() {
         return Err(ApiError::not_found("instance not found"));
     }
@@ -588,8 +583,7 @@ pub async fn list_step_executions(
     )
     .bind(id)
     .fetch_all(&state.db)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    .await?;
 
     let response: Vec<StepExecutionResponse> = rows
         .into_iter()
@@ -651,8 +645,7 @@ pub async fn cancel_instance(
     )
     .bind(id)
     .fetch_optional(&state.db)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?
+    .await?
     .ok_or_else(|| ApiError::not_found("instance not found"))?;
 
     if instance.status == "completed" || instance.status == "cancelled" {
@@ -678,8 +671,7 @@ pub async fn cancel_instance(
     )
     .bind(id)
     .fetch_one(&state.db)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    .await?;
 
     Ok(Json(instance))
 }

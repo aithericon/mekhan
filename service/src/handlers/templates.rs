@@ -404,8 +404,7 @@ pub async fn get_io_contract(
         .bind(v),
     }
     .fetch_optional(&state.db)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?
+    .await?
     .ok_or_else(|| ApiError::not_found("template not found"))?;
 
     gate_template_read(&state, &user, &child)?;
@@ -818,8 +817,7 @@ where
     sqlx::query("UPDATE workflow_templates SET is_latest = FALSE WHERE id = $1")
         .bind(id)
         .execute(exec)
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+        .await?;
     Ok(())
 }
 
@@ -924,8 +922,7 @@ async fn latest_in_chain(
     )
     .bind(base_id)
     .fetch_optional(pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?
+    .await?
     .ok_or_else(|| ApiError::not_found("template chain not found"))
 }
 
@@ -989,8 +986,7 @@ pub async fn new_version(
     let mut tx = state
         .db
         .begin()
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+        .await?;
 
     // Mark old version as not latest
     mark_not_latest(&mut *tx, id).await?;
@@ -1021,9 +1017,7 @@ pub async fn new_version(
         ApiError::internal(e.to_string())
     })?;
 
-    tx.commit()
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    tx.commit().await?;
 
     // The previous version is now superseded (is_latest = FALSE). Its triggers
     // must stop firing immediately, not linger in the in-memory dispatcher
@@ -1185,8 +1179,7 @@ pub async fn apply_template(
     let mut tx = state
         .db
         .begin()
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+        .await?;
 
     let applied = match mode {
         ApplyMode::Seed => {
@@ -1216,9 +1209,7 @@ pub async fn apply_template(
         }
     };
 
-    tx.commit()
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    tx.commit().await?;
 
     tracing::info!(
         template_id = %applied.id,
@@ -1661,8 +1652,7 @@ async fn run_publish_gate(
     )
     .bind(family)
     .fetch_all(&state.db)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    .await?;
 
     if tests.is_empty() {
         return Ok(Vec::new());

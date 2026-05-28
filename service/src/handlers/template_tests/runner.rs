@@ -274,8 +274,7 @@ pub async fn run_test(
             sqlx::query_as("SELECT status FROM workflow_instances WHERE id = $1")
                 .bind(instance.id)
                 .fetch_optional(&state.db)
-                .await
-                .map_err(|e| ApiError::internal(e.to_string()))?;
+                .await?;
         if let Some((status,)) = row {
             if matches!(status.as_str(), "completed" | "failed" | "cancelled") {
                 break status;
@@ -449,8 +448,7 @@ async fn persist_run(
     .bind(refresh_scope)
     .bind(&final_scope)
     .execute(&state.db)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    .await?;
 
     Ok(run)
 }
@@ -512,8 +510,7 @@ pub(super) async fn build_scope(
         sqlx::query_as("SELECT result FROM workflow_instances WHERE id = $1")
             .bind(instance_id)
             .fetch_optional(db)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?;
+            .await?;
     let result = row.and_then(|(r,)| r).unwrap_or(Value::Null);
 
     // Node-id → author slug, so we can key per-step output by slug for
@@ -530,8 +527,7 @@ pub(super) async fn build_scope(
     )
     .bind(instance_id)
     .fetch_all(db)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    .await?;
 
     let mut steps = serde_json::Map::new();
     for (node_id, outputs) in rows {
