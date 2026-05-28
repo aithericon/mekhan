@@ -190,10 +190,30 @@ pub(crate) fn resolve_ref(
             if prod_id == consumer.id {
                 return RefResolution::Unresolved;
             }
-            let up = pos.get(&prod_id).copied().unwrap_or(usize::MAX);
-            let me = pos.get(&consumer.id).copied().unwrap_or(0);
-            if up >= me {
-                return RefResolution::Unresolved;
+            // EXCEPTION: a Loop accumulator's `merge_expr` (emitted into the
+            // loop's `t_<id>_continue` logic) borrows the CURRENT iteration's
+            // body output (`<body_slug>.<field>`). The body is the loop's child
+            // (`parent_id == loop.id`), so it sits *downstream* of the loop in
+            // topo order — the strict-upstream check below would reject it. But
+            // at continue-time the body has already produced its parked output,
+            // so the read-arc into `p_<body>_data` is sound. Allow the borrow
+            // when the consumer is a Loop and the producer is one of its body
+            // children. (Only reachable via the accumulator scan; loop_condition
+            // borrows of body output were already valid for the same reason and
+            // simply weren't expressible before.)
+            let producer_is_body_child = is_loop_node(graph, &consumer.id)
+                && graph
+                    .nodes
+                    .iter()
+                    .find(|n| n.id == prod_id)
+                    .and_then(|n| n.parent_id.as_deref())
+                    == Some(consumer.id.as_str());
+            if !producer_is_body_child {
+                let up = pos.get(&prod_id).copied().unwrap_or(usize::MAX);
+                let me = pos.get(&consumer.id).copied().unwrap_or(0);
+                if up >= me {
+                    return RefResolution::Unresolved;
+                }
             }
             if !is_parked_producer(graph, &prod_id) {
                 return RefResolution::Unresolved;
@@ -429,10 +449,35 @@ pub(crate) fn guard_readarc_plan(
                 .filter(|c| !c.guard.trim().is_empty())
                 .map(|c| c.guard.clone())
                 .collect(),
-            WorkflowNodeData::Loop { loop_condition, .. }
-                if !loop_condition.trim().is_empty() =>
-            {
-                vec![loop_condition.clone()]
+            WorkflowNodeData::Loop {
+                loop_condition,
+                accumulators,
+                ..
+            } => {
+                // loop_condition borrows resolve into the loop's own parked
+                // counter (`lp.iteration`) or strictly-upstream producers, same
+                // as a Decision guard. Accumulator `merge_expr`s are emitted
+                // verbatim into the `t_<id>_continue` transition logic and
+                // borrow the PRIOR accumulator value (`<loop_slug>.<var>`) plus
+                // body output (`<body_slug>.<field>`); both resolve here so the
+                // (c) read-arc pass rewrites them onto the parked envelope. The
+                // consumer node is the loop itself, so `apply_guard_borrows`
+                // walks `t_<id>_*` (incl. `t_<id>_continue`) for the rewrite.
+                // `init` is intentionally NOT scanned — v1 keeps it simple
+                // (no upstream borrows), evaluated in the enter scope.
+                let mut srcs: Vec<String> = Vec::new();
+                if !loop_condition.trim().is_empty() {
+                    srcs.push(loop_condition.clone());
+                }
+                for a in accumulators {
+                    if !a.merge_expr.trim().is_empty() {
+                        srcs.push(a.merge_expr.clone());
+                    }
+                }
+                if srcs.is_empty() {
+                    continue;
+                }
+                srcs
             }
             // Result-mapping expressions (End/Failure, added on main)
             // reference `input.<path>` in transition logic — same shape

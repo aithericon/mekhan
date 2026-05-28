@@ -421,6 +421,7 @@ mod tests {
             description: None,
             max_iterations: 10,
             loop_condition: "false".to_string(),
+            accumulators: vec![],
         };
         let decl = lookup_by_variant(&data).expect("loop registered");
         assert_eq!(decl.wire_name, "loop");

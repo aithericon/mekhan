@@ -8210,6 +8210,29 @@
           }
         }
       },
+      "LoopAccumulator": {
+        "type": "object",
+        "description": "One fold/scan slot on a [`WorkflowNodeData::Loop`]. Lives as an additional\nfield in the loop's parked `p_<id>_data` envelope (the iteration counter\ngeneralized): `init` is evaluated once in the enter transition, `merge_expr`\nis re-evaluated write-once-per-iteration in the continue transition. Both\nare Rhai expressions. `merge_expr` may reference the prior accumulator value\nas `<loop_slug>.<var>` and the body's output as `<body_slug>.<field>` — the\nstandard read-arc synthesis resolves those borrows automatically.",
+        "required": [
+          "var",
+          "init",
+          "mergeExpr"
+        ],
+        "properties": {
+          "init": {
+            "type": "string",
+            "description": "Rhai expression evaluated in the enter transition scope (the entering\nworkflow token is bound as `input`). Keep simple — e.g. `\"0\"`, `\"[]\"`,\n`\"#{}\"`."
+          },
+          "mergeExpr": {
+            "type": "string",
+            "description": "Rhai expression evaluated in the continue transition scope, producing the\nnext accumulator value. References the prior value as `<loop_slug>.<var>`\nand body output as `<body_slug>.<field>`."
+          },
+          "var": {
+            "type": "string",
+            "description": "Rhai identifier the accumulator is addressed by, both inside the loop's\nown continue transition (`<loop_slug>.<var>`) and downstream. Must not\nbe `iteration` (reserved) and must be unique within the loop."
+          }
+        }
+      },
       "ManualTrigger": {
         "type": "object",
         "properties": {
@@ -11925,6 +11948,13 @@
               "type"
             ],
             "properties": {
+              "accumulators": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/LoopAccumulator"
+                },
+                "description": "Optional fold/scan state carried across iterations. Each is an\nadditional field in the loop's parked `p_<id>_data` envelope\n(alongside `iteration`): initialized in the enter transition,\nre-folded write-once-per-iteration in the continue transition.\nDownstream blocks read them via `<loop_slug>.<var>` borrows."
+              },
               "description": {
                 "type": [
                   "string",

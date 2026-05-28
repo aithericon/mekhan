@@ -119,6 +119,7 @@ pub(crate) fn validate(graph: &WorkflowGraph, wg: &WorkflowDiGraph) -> Result<()
         if let WorkflowNodeData::Loop {
             max_iterations,
             loop_condition,
+            accumulators,
             ..
         } = &node.data
         {
@@ -133,6 +134,41 @@ pub(crate) fn validate(graph: &WorkflowGraph, wg: &WorkflowDiGraph) -> Result<()
                     "loop '{}' must have a non-empty condition",
                     node.id
                 )));
+            }
+            // Accumulator validation: var is a valid Rhai identifier, not the
+            // reserved `iteration`, unique within the loop, and init/merge_expr
+            // parse as Rhai (reusing the same `parse_guard` surface used for
+            // loop_condition). init/merge_expr borrows (`<slug>.<var>`,
+            // `<body_slug>.<field>`) are resolved later by the read-arc pass.
+            let mut seen: HashSet<&str> = HashSet::new();
+            for acc in accumulators {
+                if !is_rhai_ident(&acc.var) {
+                    return Err(CompileError::LoopAccumulatorVarInvalid {
+                        node_id: node.id.clone(),
+                        var: acc.var.clone(),
+                    });
+                }
+                if acc.var == "iteration" {
+                    return Err(CompileError::LoopAccumulatorVarReserved {
+                        node_id: node.id.clone(),
+                        var: acc.var.clone(),
+                    });
+                }
+                if !seen.insert(acc.var.as_str()) {
+                    return Err(CompileError::LoopAccumulatorDuplicateVar {
+                        node_id: node.id.clone(),
+                        var: acc.var.clone(),
+                    });
+                }
+                for expr in [&acc.init, &acc.merge_expr] {
+                    crate::compiler::rhai_scope::parse_guard(expr).map_err(|error| {
+                        CompileError::LoopAccumulatorExprUnparseable {
+                            node_id: node.id.clone(),
+                            var: acc.var.clone(),
+                            error,
+                        }
+                    })?;
+                }
             }
         }
     }
@@ -470,9 +506,14 @@ pub fn node_output_fields(
                 }
                 out.insert(node.id.clone(), fields);
             }
-            WorkflowNodeData::Loop { .. } => {
+            WorkflowNodeData::Loop { accumulators, .. } => {
                 let mut fields = std::collections::BTreeMap::new();
                 fields.insert("iteration".to_string(), FieldKind::Number);
+                // Accumulators are opaque-Rhai parked fields: `Json` escape
+                // hatch (mirrors the `TokenShape::Any` declared shape).
+                for acc in accumulators {
+                    fields.insert(acc.var.clone(), FieldKind::Json);
+                }
                 out.insert(node.id.clone(), fields);
             }
             _ => continue,
