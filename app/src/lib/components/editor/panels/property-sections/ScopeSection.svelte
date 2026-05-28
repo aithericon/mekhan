@@ -7,10 +7,16 @@
 
 	type Props = {
 		data: ScopeNodeData;
+		readonly?: boolean;
+		onchange: (data: ScopeNodeData) => void;
 		binding?: YjsGraphBinding;
 		nodeId?: string;
 	};
 
+	// `readonly`/`onchange` are part of the uniform section contract (every
+	// section receives them via the NodePropertyPanel registry dispatch).
+	// Scope is a pure visual grouping with no runtime config, so they're
+	// accepted but unused.
 	let { binding, nodeId }: Props = $props();
 
 	const children = $derived.by(() => {

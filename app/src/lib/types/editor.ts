@@ -35,6 +35,13 @@ export type {
 } from '$lib/api/client';
 
 export type WorkflowNodeType = SchemaWorkflowNodeData['type'];
+/**
+ * Canonical discriminant union of every workflow node kind, derived from the
+ * generated OpenAPI schema. Use this for exhaustive `Record<NodeKind, …>`
+ * registries (node renderers, property-panel sections) so adding/removing a
+ * kind in the Rust DTO surfaces as a compile error on the frontend.
+ */
+export type NodeKind = WorkflowNodeType;
 export type WorkflowEdgeType = 'sequence' | 'conditional' | 'loop_back';
 
 // Per-variant aliases extracted from the schema's discriminated union.
