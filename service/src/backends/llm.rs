@@ -119,12 +119,11 @@ fn validate(
         validate_placeholders(sys, ctx.node_id, "llm", "system_prompt")?;
     }
     for (i, m) in parsed.history.iter().enumerate() {
-        validate_placeholders(
-            &m.content,
-            ctx.node_id,
-            "llm",
-            &format!("history[{i}].content"),
-        )?;
+        // `content` is a JSON value (tool-result turns carry structured
+        // output); only text turns can hold `{{...}}` placeholders.
+        if let Some(s) = m.content.as_str() {
+            validate_placeholders(s, ctx.node_id, "llm", &format!("history[{i}].content"))?;
+        }
     }
     for (i, img) in parsed.images.iter().enumerate() {
         let site = format!("images[{i}].path");

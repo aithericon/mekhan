@@ -271,7 +271,10 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
             handlers::projects::list_projects,
             handlers::projects::create_project
         ))
-        .routes(routes!(handlers::projects::delete_project))
+        .routes(routes!(
+            handlers::projects::delete_project,
+            handlers::projects::update_project
+        ))
         .routes(routes!(handlers::projects::attach_template))
         .routes(routes!(handlers::projects::detach_template))
         // Template tags + visibility (Phase A2; GET added Phase B).

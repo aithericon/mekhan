@@ -6,7 +6,7 @@
 //! the JSON shape — drift between authoring and execution is a build error,
 //! not a runtime surprise.
 
-use aithericon_executor_domain::ToolSchema;
+use aithericon_executor_domain::{LlmToolCall, ToolSchema};
 use serde::{Deserialize, Serialize};
 
 /// LLM provider selection. Wire format is lowercase (`"openai"`, `"anthropic"`,
@@ -28,6 +28,9 @@ pub enum Role {
     System,
     User,
     Assistant,
+    /// A tool/function result fed back to the model. Carries the
+    /// `tool_call_id` of the assistant call it answers (OpenAI protocol).
+    Tool,
 }
 
 /// How to constrain the response format. Serialized as a tagged object:
@@ -97,10 +100,22 @@ impl<'de> Deserialize<'de> for ResponseFormat {
 }
 
 /// A single message in conversation history.
+///
+/// `content` is a JSON value, not a bare string, because tool-result
+/// messages (`role: tool`) carry the structured tool output directly; the
+/// adapters render it to the string each provider's wire format expects.
+/// Text turns (system/user/assistant) carry a JSON string.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub role: Role,
-    pub content: String,
+    #[serde(default)]
+    pub content: serde_json::Value,
+    /// For `role: tool` — the id of the assistant tool call this answers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+    /// For `role: assistant` — the tool calls the model emitted this turn.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_calls: Vec<LlmToolCall>,
 }
 
 /// An image to include with the user prompt.
@@ -206,6 +221,8 @@ mod tests {
             history: vec![ChatMessage {
                 role: Role::User,
                 content: "Hi".into(),
+                tool_call_id: None,
+                tool_calls: vec![],
             }],
             temperature: Some(0.7),
             max_tokens: Some(1024),

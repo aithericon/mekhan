@@ -1077,6 +1077,18 @@ export async function createProject(
 	);
 }
 
+export async function updateProject(
+	projectId: string,
+	body: { display_name?: string; description?: string }
+): Promise<Project> {
+	return unwrap(
+		await client.PATCH('/api/v1/projects/{id}', {
+			params: { path: { id: projectId } },
+			body
+		})
+	);
+}
+
 export async function deleteProject(projectId: string): Promise<void> {
 	const res = await client.DELETE('/api/v1/projects/{id}', {
 		params: { path: { id: projectId } }

@@ -121,6 +121,14 @@ fn default_empty_object() -> serde_json::Value {
 pub struct ConfigRef {
     /// Storage key inside the global artifact bucket.
     pub storage_path: String,
+
+    /// Per-job overlay shallow-merged onto the fetched static config by
+    /// `FetchConfigHook` (overlay keys win). Lets a caller keep the large,
+    /// stable config (prompts, tool schemas) in object storage while
+    /// shipping the slim, turn-varying parts inline on the token — the
+    /// agent loop uses this for `history`, which changes every turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overlay: Option<serde_json::Value>,
 }
 
 /// Declaration of an input file to be staged before execution.
