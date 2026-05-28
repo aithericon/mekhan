@@ -1121,6 +1121,14 @@ export async function detachTemplateFromProject(
 	throw new ApiError(res.response.status, res.error as Record<string, unknown> | string | undefined);
 }
 
+export async function listTemplateProjects(templateId: string): Promise<Project[]> {
+	return unwrap(
+		await client.GET('/api/v1/templates/{id}/projects', {
+			params: { path: { id: templateId } }
+		})
+	);
+}
+
 export async function getTemplateTags(templateId: string): Promise<string[]> {
 	return unwrap(
 		await client.GET('/api/v1/templates/{id}/tags', {

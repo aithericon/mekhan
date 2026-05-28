@@ -519,5 +519,6 @@
 <AssignToProjectDialog
 	bind:open={assignOpen}
 	templateId={assignTemplate?.id ?? null}
+	baseTemplateId={assignTemplate ? (assignTemplate.base_template_id ?? assignTemplate.id) : null}
 	templateName={assignTemplate?.name}
 />

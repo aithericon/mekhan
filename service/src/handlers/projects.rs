@@ -330,6 +330,47 @@ pub async fn get_template_tags(
     Ok(Json(tags.into_iter().map(|(t,)| t).collect()))
 }
 
+/// GET /api/v1/templates/{id}/projects
+///
+/// Projects this template (by chain root) is currently attached to, within
+/// its workspace. Read-gated like the tags endpoint so the assign dialog can
+/// show membership and offer a detach toggle without a fan-out.
+#[utoipa::path(
+    get,
+    path = "/api/v1/templates/{id}/projects",
+    params(("id" = Uuid, Path, description = "Template id (any version)")),
+    responses(
+        (status = 200, description = "Projects containing this template", body = Vec<Project>),
+        (status = 403, description = "No read access", body = ErrorResponse),
+        (status = 404, description = "Template not found", body = ErrorResponse),
+    ),
+    tag = "templates",
+)]
+pub async fn list_template_projects(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(template_id): Path<Uuid>,
+) -> Result<Json<Vec<Project>>, ApiError> {
+    if !can_read_template(&state.db, &user, template_id)
+        .await
+        .map_err(map_to_api_error)?
+    {
+        return Err(ApiError::forbidden("no read access to this template"));
+    }
+    let base_id = template_base_id(&state, template_id).await?;
+    let rows: Vec<Project> = sqlx::query_as(
+        "SELECT p.id, p.workspace_id, p.slug, p.display_name, p.description, p.created_at, p.created_by \
+           FROM projects p \
+           JOIN project_templates pt ON pt.project_id = p.id \
+          WHERE pt.base_template_id = $1 \
+          ORDER BY p.created_at",
+    )
+    .bind(base_id)
+    .fetch_all(&state.db)
+    .await?;
+    Ok(Json(rows))
+}
+
 /// PUT /api/v1/templates/{id}/tags — full replace.
 #[utoipa::path(
     put,
